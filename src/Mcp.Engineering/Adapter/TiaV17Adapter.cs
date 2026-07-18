@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Contracts;
 using Contracts.Engineering;
+using Mcp.Engineering.Export;
 using Mcp.Engineering.Openness;
 using Mcp.Engineering.Sessions;
 using Siemens.Engineering;
@@ -224,14 +225,34 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         lock (_gate)
         {
             var plc = PlcSoftwareResolver.Resolve(RequireProject(), null);
-            var block = BlockEnumerator.Find(plc.BlockGroup, blockName);
-            if (!block.IsConsistent)
-            {
-                throw new AdapterException("BLOCK_INCONSISTENT",
-                    $"Block '{blockName}' is inconsistent. Compile it first before export.");
-            }
+            var (block, groupPath) = BlockEnumerator.FindWithPath(plc.BlockGroup, blockName);
             Directory.CreateDirectory(outputDir);
-            return ExportCore(block, outputDir);
+            try
+            {
+                if (!block.IsConsistent)
+                {
+                    throw new AdapterException("BLOCK_INCONSISTENT",
+                        $"Block '{blockName}' is inconsistent. Compile it first before export.");
+                }
+                var result = ExportCore(block, outputDir);
+                ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, result));
+                return result;
+            }
+            catch (Exception ex)
+            {
+                // Even a failed single export leaves a Failed record in the manifest (§5.2 evidence).
+                // Never mask the original error with a manifest-write failure.
+                var failed = new ExportResult
+                {
+                    BlockName = block.Name,
+                    Success = false,
+                    Error = ex.Message,
+                    ExportedAt = DateTime.Now,
+                };
+                try { ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, failed)); }
+                catch { }
+                throw;
+            }
         }
     }
 
@@ -243,31 +264,39 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var results = new List<ExportResult>();
             foreach (var plc in plcs)
             {
+                // Multi-PLC: per-PLC subfolder, each its own export root with its own metadata.json.
                 var dir = plcs.Count > 1 ? Path.Combine(outputDir, Sanitize(plc.Name)) : outputDir;
                 Directory.CreateDirectory(dir);
-                foreach (var (block, _) in BlockEnumerator.Enumerate(plc.BlockGroup))
+                var exportStartedUtc = DateTimeOffset.UtcNow;
+                var records = new List<ExportMetadataRecord>();
+                foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
                 {
+                    ExportResult result;
                     try
                     {
-                        results.Add(ExportCore(block, dir));
+                        result = ExportCore(block, dir);
                     }
                     catch (Exception ex)
                     {
-                        results.Add(new ExportResult
+                        result = new ExportResult
                         {
                             BlockName = block.Name,
                             Success = false,
                             Error = ex.Message,
                             ExportedAt = DateTime.Now,
-                        });
+                        };
                     }
+                    results.Add(result);
+                    records.Add(ExportManifest.CreateRecord(block, groupPath, dir, result));
                 }
+                ExportManifest.WriteAll(dir, exportStartedUtc, records);
             }
             return results.ToArray();
         }
     }
 
-    private static ExportResult ExportCore(PlcBlock block, string outputDir)
+    /// <summary>Exports into &lt;exportRoot&gt;/Blocks/ or &lt;exportRoot&gt;/DB/ (created as needed), depending on the block category.</summary>
+    private static ExportResult ExportCore(PlcBlock block, string exportRoot)
     {
         if (!block.IsConsistent)
         {
@@ -280,7 +309,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             };
         }
 
-        var path = Path.Combine(outputDir, $"{Sanitize(block.Name)} [{TypeCode(block)}{block.Number}].xml");
+        var dir = Path.Combine(exportRoot, ExportManifest.FolderFor(ExportManifest.CategoryOf(block)));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"{Sanitize(block.Name)} [{TypeCode(block)}{block.Number}].xml");
+        // V17 PlcBlock.Export refuses to overwrite an existing file (verified 2026-07-18) —
+        // replace our own previous export.
+        if (File.Exists(path))
+            File.Delete(path);
         block.Export(new FileInfo(path), ExportOptions.WithDefaults);
         return new ExportResult
         {

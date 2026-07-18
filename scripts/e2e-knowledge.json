@@ -1,0 +1,68 @@
+[
+  { "tool": "get_schema", "args": {} },
+  {
+    "tool": "ingest_source",
+    "args": {
+      "exportRoot": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo"
+    }
+  },
+  {
+    "tool": "query",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "sql": "SELECT kind, COUNT(*) AS count FROM graph_nodes GROUP BY kind ORDER BY kind;"
+    }
+  },
+  {
+    "tool": "query",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "sql": "SELECT type, COUNT(*) AS count FROM graph_edges GROUP BY type ORDER BY type;"
+    }
+  },
+  {
+    "tool": "query",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "sql": "SELECT e.from_node_id AS network, e.to_node_id AS symbol FROM graph_edges e WHERE e.type = 'READS' AND e.from_node_id = 'network:Main:1' ORDER BY symbol;"
+    }
+  },
+  {
+    "tool": "query",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "sql": "SELECT group_concat(id, char(10)) AS node_ids FROM (SELECT id FROM graph_nodes ORDER BY id);",
+      "maxRows": 1
+    }
+  },
+  {
+    "tool": "query",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "sql": "SELECT group_concat(id, char(10)) AS edge_ids FROM (SELECT id FROM graph_edges ORDER BY id);",
+      "maxRows": 1
+    }
+  },
+  {
+    "tool": "ingest_source",
+    "args": {
+      "exportRoot": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo"
+    }
+  },
+  {
+    "tool": "query",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "sql": "SELECT group_concat(id, char(10)) AS node_ids FROM (SELECT id FROM graph_nodes ORDER BY id);",
+      "maxRows": 1
+    }
+  },
+  {
+    "tool": "query",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "sql": "SELECT group_concat(id, char(10)) AS edge_ids FROM (SELECT id FROM graph_edges ORDER BY id);",
+      "maxRows": 1
+    }
+  }
+]

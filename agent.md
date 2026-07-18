@@ -4,7 +4,7 @@
 
 Windows desktop app that assists PLC programming work, starting with Siemens TIA Portal V17. The app is decomposed into independent MCP servers (one per capability domain) so any MCP-compatible client can call each server individually. Each MCP hosts pluggable platform adapters behind a shared contract.
 
-**MVP (Phase 1):** AI-generated network comments — understand project context, generate per-network comments via DeepSeek, user reviews, comments written back into the TIA project.
+**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 — AI-generated network comments over the MCP chain — is split into steps; step 1 (mcp-knowledge ingest) design: `buildnote/plan/mcp-knowledge.md`.
 
 ## Tech Stack
 
@@ -38,7 +38,7 @@ AgentAssistPlcDev.sln
 ├── src/
 │   ├── Contracts/                 netstandard2.0 — shared DTOs + platform interfaces
 │   ├── Mcp.Engineering/           net48 — TIA Openness adapter
-│   ├── Mcp.KnowledgeStore/        net8  — SQLite generation & query
+│   ├── Mcp.Knowledge/             net8  — SQLite knowledge graph from exported XML
 │   ├── Mcp.SourceEditor/          net8  — block XML parse/edit/generate
 │   ├── Mcp.Simulation/            net48 — PLCSIM Advanced adapter (Phase 5)
 │   ├── Mcp.VersionControl/        net8  — git operations
@@ -58,7 +58,7 @@ AgentAssistPlcDev.sln
 
 1. **No useless prefixes on project names.** Names are scoped by what a thing IS within the solution, not by what the solution is called. Every project already belongs to this solution — repeating the app name as a prefix (`PlcAi.Contracts`, `PlcAi.Agent`) adds nothing. `Mcp.Engineering` is good (tells you it's an MCP server + domain). `PlcAi.Mcp.Engineering` is not. If removing a prefix would make the name ambiguous, keep it; otherwise cut it.
 
-2. **MCP naming convention:** `<domain>_<action>[_<noun>]`, e.g. `list_sessions`, `ingest_source`. Annotate tools with `readOnlyHint` or `destructiveHint`. Return structured JSON. Test each MCP server standalone with MCP Inspector before UI integration.
+2. **MCP naming convention:** plain `verb_noun` (no per-server prefix), e.g. `list_sessions`, `ingest_source`. Annotate tools with `readOnlyHint` or `destructiveHint`. Return structured JSON. Test each MCP server standalone with MCP Inspector before UI integration.
 
 3. **Openness dependency:** TIA Portal V17 DLLs at `C:\Program Files\Siemens\Automation\Portal V17\PublicAPI\V17\`. Windows user must be in "Siemens TIA Openness" group.
 
@@ -78,34 +78,34 @@ AgentAssistPlcDev.sln
 ## Key Files
 
 - `buildnote/plan/initialLaunch_20260717.md` — full phased build plan with exit criteria (source of truth for architecture decisions)
-- `buildnote/plan/mcp-engineering.md` — Phase 0–1 detailed design for the engineering MCP server
+- `buildnote/plan/mcp-engineering.md` — Phase 0–1 detailed design for the engineering MCP server (complete 2026-07-18)
+- `buildnote/plan/mcp-knowledge.md` — Phase 2 step 1 detailed design for the knowledge MCP server
 - `agent.md` — this file; concise rules and context for AI agents
 - `%APPDATA%/PlcAiAssistant/config.json` — local config (git-ignored)
 
-## MCP Server Inventory (MVP)
+## MCP Server Inventory
 
-
-| Server          | Tool Prefix | Key Tools                                                                                                                 |
-| --------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Engineering     | `eng_`      | `list_sessions`, `connect`, `list_blocks`, `export_block`, `import_block` (destructive), `get_block_status`, `disconnect` |
-| Knowledge Store | `db_`       | `ingest_source`, `get_block`, `get_network`, `search`, `query` (read-only SQL), `schema`                                  |
-| Source Editor   | `src_`      | `parse_block`, `insert_network_comment`, `diff`, `validate`                                                               |
-| Version Control | `vc_`       | `init`, `snapshot`, `log`, `diff`, `restore` (destructive)                                                                |
-| Simulation      | `sim_`      | (Phase 4) instance lifecycle, tag I/O, cycle control                                                                      |
-
+| Server | Phase | Key Tools |
+| ------ | ----- | --------- |
+| Engineering | 1 (done) | `check_environment`, `list_sessions`, `connect`, `disconnect`, `save_project`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `import_block` (destructive), `compile_block`, `compile_plc` |
+| Knowledge | 2, step 1 | `ingest_source`, `query` (read-only SQL), `get_schema`; later steps add `get_block`, `get_network`, `search` |
+| Source Editor | 2, step 4 | `parse_block`, `insert_network_comment`, `diff`, `validate` |
+| Version Control | 2, step 5 | `init`, `snapshot`, `log`, `diff`, `restore` (destructive) |
+| Simulation | 5 | instance lifecycle, tag I/O, cycle control |
 
 ## Phase Sequence
 
 
 | Phase | What                                            | Exit Criteria                                                                 |
 | ----- | ----------------------------------------------- | ----------------------------------------------------------------------------- |
-| 0     | Scaffold + 2 spikes (MCP+net48, XML round-trip) | Both spikes pass; solution builds; Inspector calls skeleton server            |
-| 1     | AI network comments end-to-end                  | Comments visible in TIA; block logic unchanged; git snapshot; LLM audit trail |
-| 2     | Program understanding &amp; Q&amp;A             | Chat answers verifiable against DB                                            |
-| 3     | AI-assisted modification &amp; generation       | AI-modified block round-trips and compiles                                    |
-| 4     | PLCSIM simulation                               | Modified block runs in simulation; assertion passes                           |
-| 5     | Version control depth                           | Full history browsable/diffable in-app                                        |
-| 6     | Platform expansion (Rockwell) + hardening       | Installer, multi-platform adapters                                            |
+| 0     | Scaffold + 2 spikes (MCP+net48, XML round-trip) | DONE 2026-07-17 — both spikes passed; solution builds; Inspector calls skeleton server |
+| 1     | mcp-engineering complete                        | DONE 2026-07-18 — full tool surface verified E2E (headless + attached)        |
+| 2     | AI network comments over the MCP chain — split into steps: knowledge ingest → tag/UDT export+import → knowledge depth → source-editor → version-control → agent → WPF UI | Comments visible in TIA; block logic unchanged; git snapshot; LLM audit trail |
+| 3     | Program understanding &amp; Q&amp;A             | Chat answers verifiable against DB                                            |
+| 4     | AI-assisted modification &amp; generation       | AI-modified block round-trips and compiles                                    |
+| 5     | PLCSIM simulation                               | Modified block runs in simulation; assertion passes                           |
+| 6     | Version control depth                           | Full history browsable/diffable in-app                                        |
+| 7     | Platform expansion (Rockwell) + hardening       | Installer, multi-platform adapters                                            |
 
 
 ## Notes for AI Agents

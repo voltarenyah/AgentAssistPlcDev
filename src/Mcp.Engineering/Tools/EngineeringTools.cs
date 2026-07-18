@@ -62,16 +62,16 @@ public sealed class EngineeringTools
         => Invoke(() => _adapter.ListBlocks(plcName));
 
     [McpServerTool(Name = "export_block")]
-    [Description("Export a single block to an XML file in outputDir (read-only w.r.t. the project).")]
+    [Description("Export a single block to XML under outputDir/Blocks|DB and upsert its record in outputDir/metadata.json (read-only w.r.t. the project).")]
     public CallToolResult ExportBlock(
         [Description("Block name as listed by list_blocks.")] string blockName,
-        [Description("Output directory for the XML file.")] string outputDir)
+        [Description("Export root directory.")] string outputDir)
         => Invoke(() => _adapter.ExportBlock(blockName, outputDir));
 
     [McpServerTool(Name = "export_all_blocks")]
-    [Description("Export every PLC block to XML under outputDir (per-PLC subfolder when multiple PLCs).")]
+    [Description("Export every PLC block to XML under outputDir (Blocks/ and DB/ subfolders; per-PLC subfolder when multiple PLCs) and write a metadata.json manifest per export root.")]
     public CallToolResult ExportAllBlocks(
-        [Description("Output directory for the XML files.")] string outputDir)
+        [Description("Export root directory for the XML files.")] string outputDir)
         => Invoke(() => _adapter.ExportAllBlocks(outputDir));
 
     [McpServerTool(Name = "import_block")]

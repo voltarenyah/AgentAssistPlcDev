@@ -34,8 +34,8 @@ C:\Users\Ansel\orca\projects\AgentAssistPlcDev\
 │   │                              (IEngineeringPlatform, ISimulationPlatform)
 │   ├── Mcp.Engineering/     net48 — MCP server: engineering software interface
 │   │                              Adapter: TiaV17Adapter (Openness). Future: TiaV18+, RockwellL5x
-│   ├── Mcp.KnowledgeStore/  net8  — MCP server: SQLite generation & query
-│   │                              (Microsoft.Data.Sqlite)
+│   ├── Mcp.Knowledge/       net8  — MCP server: SQLite knowledge graph built
+│   │                              from exported XML (Microsoft.Data.Sqlite)
 │   ├── Mcp.SourceEditor/    net8  — MCP server: source parse/edit/generate/diff/validate
 │   │                              (TIA block XML first; L5X + SCL/ST generation later)
 │   ├── Mcp.Simulation/      net48 — MCP server: simulation (Phase 5)
@@ -53,7 +53,7 @@ C:\Users\Ansel\orca\projects\AgentAssistPlcDev\
 Naming convention: tools use a plain verb_noun pattern (no per-server prefix). Each tool annotated (`readOnlyHint`/`destructiveHint`), structured JSON output, actionable error messages. Each server tested standalone with MCP Inspector before UI integration.
 
 - **mcp-engineering** (Phase 1): `check_environment`, `list_sessions`, `connect`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `import_block` (destructive), `compile_block`, `compile_plc`, `save_project`, `disconnect`
-- **mcp-knowledge-store** (Phase 2): `db_ingest_source`, `db_get_block`, `db_get_network`, `db_search`, `db_query` (read-only SQL), `db_schema`
+- **mcp-knowledge** (Phase 2, split — design: `buildnote/plan/mcp-knowledge.md`): step 1 ships `ingest_source`, `query` (read-only SQL), `get_schema`; later steps add `get_block`, `get_network`, `search`
 - **mcp-source-editor** (Phase 2): `src_parse_block`, `src_insert_network_comment`, `src_diff`, `src_validate` (well-formedness + TIA schema sanity checks)
 - **mcp-version-control** (Phase 2): `vc_init`, `vc_snapshot`, `vc_log`, `vc_diff`, `vc_restore` (destructive)
 - **mcp-simulation** (Phase 5): `sim_list_instances`, `sim_create_instance`, `sim_power`, `sim_set_state`, `sim_read_tag`, `sim_write_tag`, `sim_run_assertion`
@@ -66,7 +66,7 @@ Naming convention: tools use a plain verb_noun pattern (no per-server prefix). E
 
 ---
 
-## Phase 0 — Scaffold & two de-risking spikes
+## Phase 0 — Scaffold & two de-risking spikes (DONE 2026-07-17)
 
 - Create solution/projects as above; git init with `.gitignore` (config, `*.db`, exported source working dirs)
 - **Spike A (MCP+net48):** minimal `mcp-engineering` skeleton — C# MCP SDK server on net48, referencing `Siemens.Engineering.dll`, answering one stdio tool call (`list_sessions`) from MCP Inspector. Proves the riskiest combination before anything is built on it.
@@ -74,7 +74,7 @@ Naming convention: tools use a plain verb_noun pattern (no per-server prefix). E
 - Env-check tool shared by UI and engineering MCP: user group, DLL paths, attach to running TIA process
 - **Exit criteria:** both spikes pass on this machine; solution builds; Inspector can call the skeleton server
 
-## Phase 1 — mcp-engineering complete
+## Phase 1 — mcp-engineering complete (DONE 2026-07-18)
 
 Deliver a fully functional TIA V17 engineering adapter behind the MCP protocol, verified end-to-end with MCP Inspector. This is the foundation everything else builds on — all downstream MCP servers, the agent, and the UI consume engineering as a dependency.
 
@@ -106,19 +106,20 @@ Deliver a fully functional TIA V17 engineering adapter behind the MCP protocol, 
 
 - **mcp-engineering** (TIA V17 adapter): `check_environment`, `list_sessions`, `connect`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `import_block` (destructive), `compile_block`, `compile_plc`, `save_project`, `disconnect`
 
-(Other MCP servers — knowledge-store, source-editor, version-control, simulation — are scoped to their respective phases below.)
+(Other MCP servers — knowledge, source-editor, version-control, simulation — are scoped to their respective phases below.)
 
-## Phase 2 — AI network comments over the MCP chain
+## Phase 2 — AI network comments over the MCP chain (split into steps, 2026-07-18)
 
-Build the remaining MCP servers needed for the AI comment-generation workflow, the agent that orchestrates them, and a basic WPF UI. Assumes Phase 1 mcp-engineering is complete and usable.
+Reviewed as too aggressive for one phase — split into small, independently verifiable steps. Assumes Phase 1 mcp-engineering is complete and usable.
 
-1. **mcp-knowledge-store (MVP schema):** `projects`, `blocks`, `networks`, `tags`, `llm_runs` (full prompt/response audit). Ingest exported XML → queryable rows.
-2. **mcp-source-editor (MVP):** parse block XML into Block/Network model; insert/replace only the comment node (round-trip safe); `src_validate` before any import.
-3. **mcp-version-control (MVP):** `vc_snapshot` of the working folder before every write-back.
-4. **Agent:** DeepSeek client + MCP client host; comment-generation workflow: pull block context via `db_get_block`/`db_get_network` (interface tags, network instructions, neighboring titles) → DeepSeek returns strict JSON `{network_number, comment}` per network → map to `src_insert_network_comment` edits.
-5. **WPF UI (MVP flow):** Connect to TIA → block tree → select blocks → "Generate comments" → review grid (network #, generated comment, editable, accept/reject) → "Apply" (triggers `vc_snapshot` → XML edit → `src_validate` → `eng_import_block` → re-export verify) → result log. Chat panel can be minimal/hidden in MVP.
-6. **Dry-run mode:** produce the commented XML + diff on disk without importing.
-- **Exit criteria:** on a real test project, generated comments are applied to an FB/FC and visible in TIA V17 editors, block logic byte-identical, pre-write snapshot exists in git, and every LLM call is auditable in `llm_runs`
+1. **mcp-knowledge — ingest** (renamed from `mcp-knowledge-store`; detailed design: `buildnote/plan/mcp-knowledge.md`): crawl the export folder filled by mcp-engineering, build the SQLite knowledge graph (4-table graph schema adopted from the PlcSourceExporter reference — supersedes the earlier relational `projects`/`blocks`/`networks`/`tags` sketch). Tools: `ingest_source`, `query` (read-only SQL), `get_schema`.
+2. **Engineering export of tag tables & UDTs** + knowledge import of them.
+3. **mcp-knowledge depth:** network logic text (`logicStatements`, SCL-like translation) + query helpers `get_block`, `get_network`, `search`.
+4. **mcp-source-editor (MVP):** parse block XML into Block/Network model; insert/replace only the comment node (round-trip safe); `src_validate` before any import.
+5. **mcp-version-control (MVP):** `vc_snapshot` of the working folder before every write-back.
+6. **Agent:** DeepSeek client + MCP client host; comment-generation workflow: pull block context via knowledge queries (interface tags, network instructions, neighboring titles) → DeepSeek returns strict JSON `{network_number, comment}` per network → map to `src_insert_network_comment` edits. `llm_runs` audit table (full prompt/response) lands here.
+7. **WPF UI (MVP flow):** Connect to TIA → block tree → select blocks → "Generate comments" → review grid (network #, generated comment, editable, accept/reject) → "Apply" (triggers `vc_snapshot` → XML edit → `src_validate` → `import_block` → re-export verify) → result log. Chat panel can be minimal/hidden in MVP. Dry-run mode: produce the commented XML + diff on disk without importing.
+- **Exit criteria (unchanged):** on a real test project, generated comments are applied to an FB/FC and visible in TIA V17 editors, block logic byte-identical, pre-write snapshot exists in git, and every LLM call is auditable in `llm_runs`
 
 ## Phase 3 — Program understanding & Q&A
 

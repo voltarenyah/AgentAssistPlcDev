@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned: same MCP SDK version as Mcp.Engineering (API churn between versions). -->
+    <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
+    <!-- Generic host for the MCP server; aligned with Mcp.Engineering. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
+    <!-- SQLite storage for the property graph; bundle_e_sqlite3 handles native loading on net8. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

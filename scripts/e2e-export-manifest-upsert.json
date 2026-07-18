@@ -1,0 +1,19 @@
+[
+  {
+    "tool": "connect",
+    "args": {
+      "projectPath": "C:\\Users\\Ansel\\Documents\\Automation\\V17\\AgentAssistProgramming\\TestPLCExportDemo\\TestPLCExportDemo.ap17",
+      "withUI": false
+    },
+    "timeout": 360000
+  },
+  {
+    "tool": "export_block",
+    "args": {
+      "blockName": "Main",
+      "outputDir": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo"
+    },
+    "timeout": 120000
+  },
+  { "tool": "disconnect" }
+]
