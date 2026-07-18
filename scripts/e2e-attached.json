@@ -1,0 +1,12 @@
+[
+  {
+    "tool": "connect",
+    "argsFrom": "firstSession",
+    "projectPathContains": "TestPLCExportDemo",
+    "timeout": 180000
+  },
+  { "tool": "get_project_info" },
+  { "tool": "list_blocks" },
+  { "tool": "disconnect" },
+  { "tool": "list_sessions" }
+]

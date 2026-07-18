@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Hard constraint: TIA Openness assemblies load only on .NET Framework (agent.md). -->
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- net48 + netstandard2.0 dependency closure needs generated binding redirects. -->
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned: MCP SDK is 0.x/1.x-era with API churn; netstandard2.0 lib confirmed present in this version. -->
+    <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
+    <!-- Generic host for the MCP server; version aligned with the SDK's own extensions dependencies. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
+    <!-- Lets the project build on machines without the .NET Framework 4.8 targeting pack. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Contracts\Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- net48 framework assembly: local-group membership check for check_environment. -->
+    <Reference Include="System.DirectoryServices.AccountManagement" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Openness is not on NuGet. Compile-time reference only (Private=false): at runtime the
+         AppDomain.AssemblyResolve handler (Openness/OpennessAssemblyResolver.cs) redirects
+         loading to the registry-registered PublicAPI path. -->
+    <Reference Include="Siemens.Engineering">
+      <HintPath>C:\Program Files\Siemens\Automation\Portal V17\PublicAPI\V17\Siemens.Engineering.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

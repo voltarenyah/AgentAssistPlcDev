@@ -1,0 +1,45 @@
+[
+  {
+    "tool": "connect",
+    "args": {
+      "projectPath": "C:\\Users\\Ansel\\Documents\\Automation\\V17\\AgentAssistProgramming\\TestPLCExportDemo\\TestPLCExportDemo.ap17",
+      "withUI": false
+    },
+    "timeout": 240000
+  },
+  { "tool": "get_project_info" },
+  { "tool": "list_blocks" },
+  {
+    "tool": "import_block",
+    "args": {
+      "blockName": "FC_LAD_SimulateCylinder_Call",
+      "xmlFilePath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\spike\\FC_spikemod.xml"
+    },
+    "timeout": 120000
+  },
+  {
+    "tool": "compile_block",
+    "args": { "blockName": "FC_LAD_SimulateCylinder_Call" },
+    "timeout": 300000
+  },
+  {
+    "tool": "export_block",
+    "args": {
+      "blockName": "FC_LAD_SimulateCylinder_Call",
+      "outputDir": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\spike\\reexport2"
+    },
+    "timeout": 120000
+  },
+  { "tool": "compile_plc", "timeout": 300000 },
+  {
+    "tool": "import_block",
+    "args": {
+      "blockName": "FC_LAD_SimulateCylinder_Call",
+      "xmlFilePath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\FC_LAD_SimulateCylinder_Call [FC1].xml"
+    },
+    "timeout": 120000
+  },
+  { "tool": "compile_plc", "timeout": 300000 },
+  { "tool": "save_project", "timeout": 180000 },
+  { "tool": "disconnect" }
+]

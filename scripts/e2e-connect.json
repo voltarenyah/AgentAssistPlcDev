@@ -1,0 +1,13 @@
+[
+  { "tool": "check_environment" },
+  {
+    "tool": "connect",
+    "args": {
+      "projectPath": "C:\\Users\\Ansel\\Documents\\Automation\\V17\\AgentAssistProgramming\\TestPLCExportDemo\\TestPLCExportDemo.ap17",
+      "withUI": false
+    },
+    "timeout": 240000
+  },
+  { "tool": "list_sessions" },
+  { "tool": "disconnect" }
+]
