@@ -20,7 +20,7 @@ Nothing else is in scope: no LLM audit tables, no source editing, no git, no UI.
 2. **Port code, don't reference.** `PlcSourceExporter.Core` is netstandard2.0 with only `Microsoft.Data.Sqlite` as a dependency, so its parser/persistence code ports to net8 almost verbatim. We **copy and adapt** the needed files into `src/Mcp.Knowledge/` (provenance note in each file header) rather than adding a cross-repo project reference — this solution stays self-contained.
 3. ~~**Crawl by root element, not `metadata.json`.**~~ **SUPERSEDED 2026-07-18 (stage 3):** mcp-engineering now writes a PlcSourceExporter-compatible `metadata.json` (schema "1.0") into its export roots, so the importer is **manifest-first**: when `<exportRoot>/metadata.json` exists, components are dispatched from the manifest (the previously unported `ImportExportRoot`/`LoadExportedComponents`/`IsProgramBlockCategory` were ported in stage 3); the root-element crawl remains as the fallback for manifest-less folders (legacy exports). Manifest mode adds reconciliation warnings: Exported-but-missing file, and on-disk `*.xml` not referenced by the manifest (catches legacy flat files and `spike/` copies). Malformed manifest → `MANIFEST_INVALID` error (loud over silent fallback).
 4. **Rebuild-only ingest.** Delete-all + bulk insert in one transaction, same as the reference. Incremental re-ingest remains a Phase-3 item (`initialLaunch` §Phase 3).
-5. **Scope = what engineering exports today.** mcp-engineering Phase 1 exports blocks only (OB/FB/FC/DB, including instance DBs). Tag-table and UDT import paths are **not** ported now; they land in the same step that adds tag/UDT export to mcp-engineering (§13). The dispatch is designed so those categories slot in without schema changes.
+5. **Scope = what engineering exports today.** mcp-engineering Phase 1 exports blocks only (OB/FB/FC/DB, including instance DBs). Tag-table and UDT import paths are **not** ported now; they land in the same step that adds tag/UDT export to mcp-engineering (§13). The dispatch is designed so those categories slot in without schema changes. **(2026-07-18, stage 4: the knowledge-side import of `Tags`/`UDT` categories and `SW.Tags.PlcTagTable`/`SW.Types.PlcStruct` root elements is now ported and wired into both ingest paths; engineering-side export lands in parallel.)**
 6. **`logicStatements` (SCL-like network text) deferred.** It comes from `ProgramBlockLogicYamlWriter.cs` (2 097 lines, the largest file). Network nodes already carry title + reads/writes/calls without it; it ports in the step that builds `get_block`/`get_network` for the comment workflow.
 7. **Tool surface this step = 3 tools** (`ingest_source`, `query`, `get_schema`), following the shipped mcp-engineering convention of plain verb_noun names with no server prefix.
 
@@ -77,12 +77,12 @@ graph_edge_properties(edge_id TEXT, name TEXT, value TEXT, PK(edge_id, name))
 -- + indices on kind, name, type, from_node_id, to_node_id
 ```
 
-Vocabulary produced by this step (subset of the reference; UDT/tag kinds arrive later):
+Vocabulary produced by this step (subset of the reference; ~~UDT/tag kinds arrive later~~ **updated 2026-07-18, stage 4:** UDT/tag kinds now produced):
 
-- **Node kinds:** `Project`, `OB`, `FB`, `FC`, `Network`, `Instruction` (calls), `Variable` (symbols), `Global DB`, `Instance DB`, `DB Member`, `Data Type`
-- **Edge types:** `CONTAINS`, `CALLS`, `READS`, `WRITES`, `HAS_TYPE`, `INSTANCE_OF`, `EXECUTES_BEFORE`, `EXECUTES_AFTER`
-- **ID patterns:** `block:{Name}`, `network:{Block}:{Index}`, `instruction:{Block}:{N}:call:{Seq}`, `symbol:{Name}`, `db:{Name}`, `db-member:{Db}:{Path}`, `type:{Name}` — deterministic: the same export always yields the same IDs.
-- Reference behaviours kept: placeholder `block:{B}` node (`declaredByReference: true`) when a callee wasn't exported; symbol dedup by name; execution-order edges between consecutive networks.
+- **Node kinds:** `Project`, `OB`, `FB`, `FC`, `Network`, `Instruction` (calls), `Variable` (symbols), `Global DB`, `Instance DB`, `DB Member`, `Data Type`, `UDT`, `UDT Member`, `PLC Tag`, `IO Address`
+- **Edge types:** `CONTAINS`, `CALLS`, `READS`, `WRITES`, `HAS_TYPE`, `INSTANCE_OF`, `CONNECTED_TO`, `EXECUTES_BEFORE`, `EXECUTES_AFTER`
+- **ID patterns:** `block:{Name}`, `network:{Block}:{Index}`, `instruction:{Block}:{N}:call:{Seq}`, `symbol:{Name}`, `db:{Name}`, `db-member:{Db}:{Path}`, `type:{Name}`, `udt:{Name}`, `udt-member:{Udt}:{Path}`, `tag:{Table}:{Name}:{Address}`, `io:{Address}` — deterministic: the same export always yields the same IDs.
+- Reference behaviours kept: placeholder `block:{B}` node (`declaredByReference: true`) when a callee wasn't exported; symbol dedup by name; execution-order edges between consecutive networks; UDT import flattens **first-level members only** (reference behaviour — nested struct members are not expanded); tag tables get no project `CONTAINS` edge.
 
 `get_schema` returns the DDL plus this vocabulary (port of the reference `AGENT_SQLITE_GUIDE.md` essence) so agents can self-serve.
 
@@ -201,7 +201,7 @@ tests/Mcp.Knowledge.Tests/
 ## 13. Remaining Phase 2 steps (the split, for roadmap context)
 
 1. **mcp-knowledge ingest** ← this document
-2. Engineering exports tag tables + UDTs; knowledge imports them (`TagTable.cs` / `UdtTypeTable.cs` port)
+2. Engineering exports tag tables + UDTs; knowledge imports them (`TagTable.cs` / `UdtTypeTable.cs` port) — **knowledge side DONE 2026-07-18 (stage 4)**; engineering-side `export_tag_tables`/`export_udts` in parallel at that date
 3. `logicStatements` port + knowledge query helpers (`get_block`, `get_network`, `search`)
 4. mcp-source-editor MVP (parse/comment-edit/validate)
 5. mcp-version-control MVP (`vc_snapshot` before write-back)

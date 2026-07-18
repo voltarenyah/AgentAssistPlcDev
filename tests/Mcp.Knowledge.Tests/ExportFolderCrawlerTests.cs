@@ -52,15 +52,9 @@ public sealed class ExportFolderCrawlerTests
     }
 
     [Fact]
-    public void SkipsDeferredUnsupportedAndMalformedFilesWithWarnings()
+    public void SkipsUnsupportedAndMalformedFilesWithWarnings()
     {
         using var tree = new TempExportTree();
-        tree.AddText("Udt [UDT1].xml", """
-            <Document><SW.Types.PlcStruct ID="0"><AttributeList><Name>UDT_Motor</Name></AttributeList></SW.Types.PlcStruct></Document>
-            """);
-        tree.AddText("Default tags.xml", """
-            <Document><SW.Tags.PlcTagTable ID="0"><AttributeList><Name>Default tag table</Name></AttributeList></SW.Tags.PlcTagTable></Document>
-            """);
         tree.AddText("Hardware.xml", """
             <Document><SW.HW.Device ID="0"><AttributeList><Name>PLC_1</Name></AttributeList></SW.HW.Device></Document>
             """);
@@ -69,14 +63,32 @@ public sealed class ExportFolderCrawlerTests
 
         var result = ExportFolderCrawler.Import(tree.Root);
 
-        Assert.Equal(5, result.FilesFound);
+        Assert.Equal(3, result.FilesFound);
         Assert.Equal(0, result.FilesImported);
-        Assert.Equal(5, result.Warnings.Count);
-        Assert.Contains(result.Warnings, warning => warning.Contains("Udt [UDT1].xml") && warning.Contains("deferred"));
-        Assert.Contains(result.Warnings, warning => warning.Contains("Default tags.xml") && warning.Contains("deferred"));
+        Assert.Equal(3, result.Warnings.Count);
         Assert.Contains(result.Warnings, warning => warning.Contains("Hardware.xml") && warning.Contains("unsupported root element"));
         Assert.Contains(result.Warnings, warning => warning.Contains("NotTia.xml") && warning.Contains("no SW.* content element"));
         Assert.Contains(result.Warnings, warning => warning.Contains("Broken.xml") && warning.Contains("malformed XML"));
+    }
+
+    [Fact]
+    public void ClassifiesUdtAndTagTableRootElements()
+    {
+        using var tree = new TempExportTree();
+        tree.AddText("UDT_Motor.xml", """
+            <Document><SW.Types.PlcStruct ID="0"><AttributeList><Name>UDT_Motor</Name></AttributeList></SW.Types.PlcStruct></Document>
+            """);
+        tree.AddText("Default tag table.xml", """
+            <Document><SW.Tags.PlcTagTable ID="0"><AttributeList><Name>Default tag table</Name></AttributeList><ObjectList><SW.Tags.PlcTag ID="1" CompositionName="Tags"><AttributeList><DataTypeName>Bool</DataTypeName><LogicalAddress>%M0.0</LogicalAddress><Name>MotorRunning</Name></AttributeList></SW.Tags.PlcTag></ObjectList></SW.Tags.PlcTagTable></Document>
+            """);
+
+        var result = ExportFolderCrawler.Import(tree.Root);
+
+        Assert.Equal(2, result.FilesFound);
+        Assert.Equal(2, result.FilesImported);
+        Assert.Empty(result.Warnings);
+        Assert.Equal(SemanticNodeKind.UserDataType, result.Graph.GetNode("udt:UDT_Motor").Kind);
+        Assert.Equal(SemanticNodeKind.PlcTag, result.Graph.GetNode("tag:Default tag table:MotorRunning:%M0.0").Kind);
     }
 
     [Fact]

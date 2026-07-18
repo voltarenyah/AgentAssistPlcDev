@@ -72,6 +72,9 @@ Note: `Siemens.Engineering.SW.Software` is NOT FOUND — the software base class
     `IsConsistent:Boolean` (XML: "True if block and used data is consistent"), `IsKnowHowProtected:Boolean`,
     `MemoryLayout`, `CompileDate:DateTime`, `ModifiedDate`, `InterfaceModifiedDate`, `CodeModifiedDate`,
     `HeaderAuthor/HeaderFamily/HeaderName/HeaderVersion`.
+  - **Correction 2026-07-18** (re-dumped with `scripts/Dump-OpennessApi.ps1`): the property list above is
+    incomplete — `PlcBlock` also declares `CreationDate:DateTime`, `ParameterModified:DateTime`,
+    `StructureModified:DateTime`.
   - **No `Type`/`BlockType` property** — block kind is the concrete .NET subclass (`FB`, `FC`, `OB`, ...),
     not a property. (A `BlockType` enum exists — `Undef, FB, SFB, UDT, FBT, SDT` — but no member on `PlcBlock` exposes it.)
   - Methods: `void Export(FileInfo path, ExportOptions exportOptions)` (XML: "Simatic ML export of a Plc block"),
@@ -153,6 +156,34 @@ What exists is open-only, one-directional:
   `ProjectBase.ShowHwEditor(Siemens.Engineering.HW.View)`.
 
 Confirmed: the V17 Openness API cannot enumerate, focus-check, or close open editors.
+
+## 9. Tag tables & PLC data types / UDTs (dumped 2026-07-18)
+
+Namespaces: `Siemens.Engineering.SW.Tags` / `Siemens.Engineering.SW.Types`. Both object kinds export
+with the same signature as blocks: `void Export(FileInfo path, ExportOptions exportOptions)`
+(declared directly on `PlcTagTable` / `PlcType`).
+
+`Siemens.Engineering.SW.Tags`:
+
+- `PlcTagTableGroup`: `TagTables:PlcTagTableComposition`, `Groups:PlcTagTableUserGroupComposition`,
+  `Name:String`. `PlcTagTableSystemGroup : PlcTagTableGroup` (declares nothing relevant);
+  `PlcTagTableUserGroup : PlcTagTableGroup` (adds `Delete()`, re-declares `Name`).
+  Nesting: recurse through `group.Groups` (same pattern as block groups, §3).
+- `PlcTagTable`: `Name:String`, `IsDefault:Boolean`, `ModifiedTimeStamp:DateTime`
+  (**note the name — not `ModifiedDate`**; it is the table's modified timestamp),
+  `Tags:PlcTagComposition`, `UserConstants`, `SystemConstants`,
+  `Export(FileInfo, ExportOptions)`, `Delete()`, `ShowInEditor()`, `GetService<T>()`.
+  **No `IsConsistent`, no `IsKnowHowProtected`, no `CreationDate`, no `Number`.**
+
+`Siemens.Engineering.SW.Types`:
+
+- `PlcTypeGroup`: `Types:PlcTypeComposition`, `Groups:PlcTypeUserGroupComposition`, `Name:String`.
+  `PlcTypeSystemGroup : PlcTypeGroup` adds `SystemTypeGroups:PlcSystemTypeGroupComposition`
+  (system/library types — not user UDTs); `PlcTypeUserGroup : PlcTypeGroup` (adds `Delete()`).
+- `PlcType` (a UDT): `Name:String`, `IsConsistent:Boolean`, `IsKnowHowProtected:Boolean`,
+  `CreationDate:DateTime`, `ModifiedDate:DateTime`, `InterfaceModifiedDate:DateTime`,
+  `Export(FileInfo, ExportOptions)`, `Delete()`, `ShowInEditor()`, `GetService<T>()`.
+  **No `CodeModifiedDate`, no `Number`, no `ProgrammingLanguage`.**
 
 ## Key findings
 

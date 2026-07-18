@@ -1,8 +1,5 @@
-using System;
 using System.IO;
 using System.Linq;
-using System.Text;
-using System.Text.Json;
 using Mcp.Knowledge.Graph;
 using Mcp.Knowledge.Tools;
 using Xunit;
@@ -18,10 +15,10 @@ public sealed class ManifestImportTests
         tree.AddFixture(FixtureFiles.MainObPath, Path.Combine("Blocks", "Main [OB1].xml"));
         tree.AddFixture(FixtureFiles.SimulateCylinderFcPath, Path.Combine("Blocks", "FC_LAD_SimulateCylinder_Call [FC1].xml"));
         tree.AddFixture(FixtureFiles.GlobalDataDbPath, Path.Combine("DB", "GlobalData [DB1].xml"));
-        WriteManifest(tree,
-            Component("Main", "OB", @"Blocks\Main [OB1].xml", "Program blocks/Main"),
-            Component("FC_LAD_SimulateCylinder_Call", "FC", @"Blocks\FC_LAD_SimulateCylinder_Call [FC1].xml", "Program blocks/FC_LAD_SimulateCylinder_Call"),
-            Component("GlobalData", "DB", @"DB\GlobalData [DB1].xml", "Program blocks/GlobalData"));
+        ManifestFixtures.Write(tree,
+            ManifestFixtures.Component("Main", "OB", @"Blocks\Main [OB1].xml", "Program blocks/Main"),
+            ManifestFixtures.Component("FC_LAD_SimulateCylinder_Call", "FC", @"Blocks\FC_LAD_SimulateCylinder_Call [FC1].xml", "Program blocks/FC_LAD_SimulateCylinder_Call"),
+            ManifestFixtures.Component("GlobalData", "DB", @"DB\GlobalData [DB1].xml", "Program blocks/GlobalData"));
 
         var result = ToolResults.OkJson(new KnowledgeTools().IngestSource(tree.Root, null));
 
@@ -59,9 +56,9 @@ public sealed class ManifestImportTests
         tree.AddFixture(FixtureFiles.MainObPath, Path.Combine("Blocks", "Main [OB1].xml"));
         // On disk but not referenced by the manifest (legacy flat layout / spike copies situation).
         tree.AddFixture(FixtureFiles.GlobalDataDbPath, "legacy [DB9].xml");
-        WriteManifest(tree,
-            Component("Main", "OB", @"Blocks\Main [OB1].xml", "Program blocks/Main"),
-            Component("GhostFc", "FC", @"Blocks\Ghost [FC9].xml", "Program blocks/GhostFc"));
+        ManifestFixtures.Write(tree,
+            ManifestFixtures.Component("Main", "OB", @"Blocks\Main [OB1].xml", "Program blocks/Main"),
+            ManifestFixtures.Component("GhostFc", "FC", @"Blocks\Ghost [FC9].xml", "Program blocks/GhostFc"));
 
         var result = ToolResults.OkJson(new KnowledgeTools().IngestSource(tree.Root, null));
 
@@ -80,26 +77,28 @@ public sealed class ManifestImportTests
     }
 
     [Fact]
-    public void ManifestModeSkipsDeferredUdtAndTagEntries()
+    public void ManifestModeImportsUdtAndTagEntries()
     {
         using var tree = new TempExportTree();
         tree.AddFixture(FixtureFiles.MainObPath, Path.Combine("Blocks", "Main [OB1].xml"));
         tree.AddText(Path.Combine("Types", "UDT_Motor.xml"),
             """<Document><SW.Types.PlcStruct ID="0"><AttributeList><Name>UDT_Motor</Name></AttributeList></SW.Types.PlcStruct></Document>""");
         tree.AddText(Path.Combine("Tags", "Default tag table.xml"),
-            """<Document><SW.Tags.PlcTagTable ID="0"><AttributeList><Name>Default tag table</Name></AttributeList></SW.Tags.PlcTagTable></Document>""");
-        WriteManifest(tree,
-            Component("Main", "OB", @"Blocks\Main [OB1].xml", "Program blocks/Main"),
-            Component("UDT_Motor", "UDT", @"Types\UDT_Motor.xml", "PLC data types/UDT_Motor"),
-            Component("Default tag table", "Tags", @"Tags\Default tag table.xml", "PLC tags/Default tag table"));
+            """<Document><SW.Tags.PlcTagTable ID="0"><AttributeList><Name>Default tag table</Name></AttributeList><ObjectList><SW.Tags.PlcTag ID="1" CompositionName="Tags"><AttributeList><DataTypeName>Bool</DataTypeName><LogicalAddress>%M0.0</LogicalAddress><Name>MotorRunning</Name></AttributeList></SW.Tags.PlcTag></ObjectList></SW.Tags.PlcTagTable></Document>""");
+        ManifestFixtures.Write(tree,
+            ManifestFixtures.Component("Main", "OB", @"Blocks\Main [OB1].xml", "Program blocks/Main"),
+            ManifestFixtures.Component("UDT_Motor", "UDT", @"Types\UDT_Motor.xml", "PLC data types/UDT_Motor"),
+            ManifestFixtures.Component("Default tag table", "Tags", @"Tags\Default tag table.xml", "PLC tags/Default tag table"));
 
         var result = ToolResults.OkJson(new KnowledgeTools().IngestSource(tree.Root, null));
 
-        Assert.Equal(1, result.GetProperty("filesImported").GetInt32());
-        var warnings = result.GetProperty("warnings").EnumerateArray().Select(item => item.GetString()!).ToArray();
-        Assert.Equal(2, warnings.Length);
-        Assert.Contains(warnings, warning => warning.Contains("UDT import is deferred"));
-        Assert.Contains(warnings, warning => warning.Contains("tag-table import is deferred"));
+        Assert.Equal(3, result.GetProperty("filesImported").GetInt32());
+        Assert.Equal(0, result.GetProperty("warnings").GetArrayLength());
+
+        var graph = SqliteSemanticGraphStore.Load(result.GetProperty("dbPath").GetString()!);
+        Assert.Equal(SemanticNodeKind.UserDataType, graph.GetNode("udt:UDT_Motor").Kind);
+        Assert.Equal(SemanticNodeKind.PlcTag, graph.GetNode("tag:Default tag table:MotorRunning:%M0.0").Kind);
+        Assert.Equal(SemanticNodeKind.IoAddress, graph.GetNode("io:%M0.0").Kind);
     }
 
     [Fact]
@@ -107,8 +106,8 @@ public sealed class ManifestImportTests
     {
         using var tree = new TempExportTree();
         tree.AddFixture(FixtureFiles.MainObPath, Path.Combine("Blocks", "Main [OB1].xml"));
-        WriteManifest(tree,
-            Component("Main", "OB", "Blocks/Main [OB1].xml", "Program blocks/Main"));
+        ManifestFixtures.Write(tree,
+            ManifestFixtures.Component("Main", "OB", "Blocks/Main [OB1].xml", "Program blocks/Main"));
 
         var result = ToolResults.OkJson(new KnowledgeTools().IngestSource(tree.Root, null));
 
@@ -142,45 +141,5 @@ public sealed class ManifestImportTests
 
         Assert.Equal("crawl", result.GetProperty("source").GetString());
         Assert.Equal(1, result.GetProperty("filesImported").GetInt32());
-    }
-
-    private static void WriteManifest(TempExportTree tree, params object[] components)
-    {
-        var manifest = new
-        {
-            schemaVersion = "1.0",
-            exportStartedUtc = "2026-07-18T08:00:00.0000000+00:00",
-            exportFinishedUtc = "2026-07-18T08:00:01.0000000+00:00",
-            exportRoot = tree.Root,
-            components,
-        };
-        tree.AddText(
-            "metadata.json",
-            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
-    }
-
-    // Realistic component entry, modeled on the D:/PEI_SinoARP example manifest.
-    private static object Component(string name, string category, string exportedFile, string sourcePath)
-    {
-        return new
-        {
-            id = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{category}|{sourcePath}")).TrimEnd('=').Replace('+', '-').Replace('/', '_'),
-            name,
-            sourcePath,
-            category,
-            folder = category == "DB" ? "DB" : "Blocks",
-            siemensTypeName = category,
-            status = "Exported",
-            exportedFile,
-            message = (string?)null,
-            programmingLanguage = "LAD",
-            tiaIdentifier = name,
-            number = 1,
-            isKnowHowProtected = false,
-            creationDate = "2026-07-18T05:00:00.0000000+00:00",
-            modifiedDate = "2026-07-18T06:00:00.0000000+00:00",
-            codeModifiedDate = "2026-07-18T06:00:00.0000000+00:00",
-            interfaceModifiedDate = "2026-07-18T06:00:00.0000000+00:00",
-        };
     }
 }

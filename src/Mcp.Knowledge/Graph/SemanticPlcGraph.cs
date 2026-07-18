@@ -2,7 +2,8 @@
 // Adaptations vs the reference:
 // - Dropped the metadata.json crawl (ImportExportRoot/WriteSqlite/LoadExportedComponents/IsProgramBlockCategory);
 //   stage 2 adds a root-element folder crawler in Import/ instead.
-// - Dropped UDT/tag-table import (ImportUdtXml/ImportTagTableXml) — deferred per buildnote/plan/mcp-knowledge.md §2.5.
+// - Dropped UDT/tag-table import initially (ImportUdtXml/ImportTagTableXml) — ported back in stage 4
+//   (2026-07-18) together with UdtId/UdtMemberId/IoAddressId (UdtId internal for the CONTAINS wiring).
 // - Dropped the logicStatements enrichment in ImportBlockXml (ProgramBlockLogicYamlWriter is not ported yet).
 // - Dropped PlcSemanticGraphQueries, NativeSqliteRuntime (net8 + Microsoft.Data.Sqlite loads e_sqlite3 itself),
 //   SemanticPlcModelWriter and SemanticGraphEnumerableExtensions.
@@ -389,6 +390,89 @@ public static class TiaXmlSemanticGraphImporter
         }
     }
 
+    // Ported in stage 4 (was deferred in stage 1): UDT import via UdtTypeTableBuilder.
+    public static void ImportUdtXml(string xml, string sourceFile, string sourcePath, SemanticPlcGraph graph)
+    {
+        if (graph == null)
+        {
+            throw new ArgumentNullException(nameof(graph));
+        }
+
+        var rows = UdtTypeTableBuilder.ParseRows(xml, sourceFile, sourcePath);
+        foreach (var row in rows)
+        {
+            if (string.Equals(row.Kind, "Type", StringComparison.OrdinalIgnoreCase))
+            {
+                graph.UpsertNode(new SemanticGraphNode(
+                    UdtId(row.Name),
+                    SemanticNodeKind.UserDataType,
+                    row.Name,
+                    new Dictionary<string, string>
+                    {
+                        ["folderPath"] = row.SourcePath,
+                        ["sourceFile"] = row.SourceFile
+                    }));
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(row.DataType))
+            {
+                continue;
+            }
+
+            var memberId = UdtMemberId(row.ParentType, row.Path);
+            graph.UpsertNode(new SemanticGraphNode(
+                memberId,
+                SemanticNodeKind.UserDataTypeMember,
+                row.Name,
+                new Dictionary<string, string>
+                {
+                    ["path"] = row.Path,
+                    ["folderPath"] = row.SourcePath,
+                    ["sourceFile"] = row.SourceFile
+                }));
+            graph.UpsertNode(new SemanticGraphNode(TypeId(row.DataType), SemanticNodeKind.DataType, row.DataType));
+            AddEdge(graph, UdtId(row.ParentType), memberId, SemanticRelationshipType.Contains);
+            AddEdge(graph, memberId, TypeId(row.DataType), SemanticRelationshipType.HasType);
+        }
+    }
+
+    // Ported in stage 4 (was deferred in stage 1): PLC tag-table import via TagTableBuilder.
+    public static void ImportTagTableXml(string xml, string sourceFile, string sourcePath, SemanticPlcGraph graph)
+    {
+        if (graph == null)
+        {
+            throw new ArgumentNullException(nameof(graph));
+        }
+
+        foreach (var row in TagTableBuilder.ParseRows(xml, sourceFile, sourcePath))
+        {
+            graph.UpsertNode(new SemanticGraphNode(
+                row.Id,
+                SemanticNodeKind.PlcTag,
+                row.Name,
+                new Dictionary<string, string>
+                {
+                    ["tagTable"] = row.TagTable,
+                    ["logicalAddress"] = row.LogicalAddress,
+                    ["folderPath"] = row.TagTableSourcePath,
+                    ["sourceFile"] = row.SourceFile
+                }));
+            if (!string.IsNullOrWhiteSpace(row.DataType))
+            {
+                graph.UpsertNode(new SemanticGraphNode(TypeId(row.DataType), SemanticNodeKind.DataType, row.DataType));
+                AddEdge(graph, row.Id, TypeId(row.DataType), SemanticRelationshipType.HasType);
+            }
+
+            if (!string.IsNullOrWhiteSpace(row.LogicalAddress))
+            {
+                var addressId = IoAddressId(row.LogicalAddress);
+                graph.UpsertNode(new SemanticGraphNode(addressId, SemanticNodeKind.IoAddress, row.LogicalAddress));
+                AddEdge(graph, row.Id, addressId, SemanticRelationshipType.ConnectedTo);
+            }
+        }
+    }
+
     private static void ImportDbMember(XElement member, string dbName, string parentNodeId, string parentPath, SemanticPlcGraph graph)
     {
         var name = ((string?)member.Attribute("Name"))?.Trim() ?? string.Empty;
@@ -538,6 +622,21 @@ public static class TiaXmlSemanticGraphImporter
     internal static string DbId(string name)
     {
         return $"db:{name}";
+    }
+
+    internal static string UdtId(string name)
+    {
+        return $"udt:{name}";
+    }
+
+    private static string UdtMemberId(string udtName, string path)
+    {
+        return $"udt-member:{udtName}:{path}";
+    }
+
+    private static string IoAddressId(string address)
+    {
+        return $"io:{address}";
     }
 
     private static string DbMemberId(string dbName, string path)

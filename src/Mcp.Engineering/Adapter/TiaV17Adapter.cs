@@ -8,6 +8,8 @@ using Siemens.Engineering;
 using Siemens.Engineering.Compiler;
 using Siemens.Engineering.SW;
 using Siemens.Engineering.SW.Blocks;
+using Siemens.Engineering.SW.Tags;
+using Siemens.Engineering.SW.Types;
 
 namespace Mcp.Engineering.Adapter;
 
@@ -289,7 +291,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     results.Add(result);
                     records.Add(ExportManifest.CreateRecord(block, groupPath, dir, result));
                 }
-                ExportManifest.WriteAll(dir, exportStartedUtc, records);
+                ExportManifest.WriteAll(dir, exportStartedUtc, records, ExportManifest.BlockCategories);
             }
             return results.ToArray();
         }
@@ -326,6 +328,159 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             Success = true,
             ExportedAt = DateTime.Now,
         };
+    }
+
+    public ExportResult[] ExportTagTables(string outputDir, string? plcName)
+    {
+        lock (_gate)
+        {
+            return ExportObjects(
+                outputDir,
+                plcName,
+                plc => TagTableEnumerator.Enumerate(plc.TagTableGroup),
+                ExportTagTableCore,
+                (table, groupPath, root, result) => ExportManifest.CreateRecord(
+                    table.Name, "Tags", table.GetType().Name, groupPath, root, result,
+                    modifiedDate: ReadTagTableModified(table)));
+        }
+    }
+
+    public ExportResult[] ExportUdts(string outputDir, string? plcName)
+    {
+        lock (_gate)
+        {
+            return ExportObjects(
+                outputDir,
+                plcName,
+                plc => PlcTypeEnumerator.Enumerate(plc.TypeGroup),
+                ExportUdtCore,
+                (type, groupPath, root, result) =>
+                {
+                    var (khp, created, modified, interfaceModified) = ReadTypeMetadata(type);
+                    return ExportManifest.CreateRecord(
+                        type.Name, "UDT", type.GetType().Name, groupPath, root, result,
+                        isKnowHowProtected: khp,
+                        creationDate: created,
+                        modifiedDate: modified,
+                        interfaceModifiedDate: interfaceModified);
+                });
+        }
+    }
+
+    /// <summary>Shared export loop for tag tables and UDTs: per-PLC export root (subfolder when
+    /// multiple PLCs), one manifest upsert per object. exportCore converts per-object failures
+    /// into Failed results — it never throws for them.</summary>
+    private ExportResult[] ExportObjects<TObject>(
+        string outputDir,
+        string? plcName,
+        Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
+        Func<TObject, string, ExportResult> exportCore,
+        Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord)
+    {
+        var project = RequireProject();
+        var plcs = plcName is null
+            ? PlcSoftwareResolver.FindAll(project)
+            : new[] { PlcSoftwareResolver.Resolve(project, plcName) };
+        var results = new List<ExportResult>();
+        foreach (var plc in plcs)
+        {
+            // Multi-PLC: per-PLC subfolder, each its own export root with its own metadata.json.
+            var dir = plcs.Count > 1 ? Path.Combine(outputDir, Sanitize(plc.Name)) : outputDir;
+            Directory.CreateDirectory(dir);
+            foreach (var (item, groupPath) in enumerate(plc))
+            {
+                var result = exportCore(item, dir);
+                results.Add(result);
+                ExportManifest.Upsert(dir, createRecord(item, groupPath, dir, result));
+            }
+        }
+        return results.ToArray();
+    }
+
+    private static ExportResult ExportTagTableCore(PlcTagTable table, string exportRoot)
+    {
+        var dir = Path.Combine(exportRoot, ExportManifest.FolderFor("Tags"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"{Sanitize(table.Name)}.xml");
+        try
+        {
+            // V17 Export refuses to overwrite an existing file (verified for blocks 2026-07-18) —
+            // replace our own previous export.
+            if (File.Exists(path))
+                File.Delete(path);
+            table.Export(new FileInfo(path), ExportOptions.WithDefaults);
+        }
+        catch (Exception ex)
+        {
+            return Failure(table.Name, "Tags", ex.Message);
+        }
+        return new ExportResult
+        {
+            BlockName = table.Name,
+            BlockType = "Tags",
+            Path = path,
+            Success = true,
+            ExportedAt = DateTime.Now,
+        };
+    }
+
+    private static ExportResult ExportUdtCore(PlcType type, string exportRoot)
+    {
+        if (!type.IsConsistent)
+        {
+            return Failure(type.Name, "UDT",
+                $"UDT '{type.Name}' is inconsistent. Compile it first before export.");
+        }
+        var dir = Path.Combine(exportRoot, ExportManifest.FolderFor("UDT"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"{Sanitize(type.Name)}.xml");
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+            type.Export(new FileInfo(path), ExportOptions.WithDefaults);
+        }
+        catch (Exception ex)
+        {
+            return Failure(type.Name, "UDT", ex.Message);
+        }
+        return new ExportResult
+        {
+            BlockName = type.Name,
+            BlockType = "UDT",
+            Path = path,
+            Success = true,
+            ExportedAt = DateTime.Now,
+        };
+    }
+
+    private static ExportResult Failure(string name, string kind, string error) => new()
+    {
+        BlockName = name,
+        BlockType = kind,
+        Success = false,
+        Error = error,
+        ExportedAt = DateTime.Now,
+    };
+
+    /// <summary>PlcTagTable exposes only ModifiedTimeStamp (openness-v17-api-surface.md §9); guarded like block metadata.</summary>
+    private static DateTimeOffset? ReadTagTableModified(PlcTagTable table)
+    {
+        try { return table.ModifiedTimeStamp; } catch { return null; }
+    }
+
+    /// <summary>PlcType metadata (openness-v17-api-surface.md §9); guarded like block metadata.</summary>
+    private static (bool? Khp, DateTimeOffset? Created, DateTimeOffset? Modified, DateTimeOffset? InterfaceModified)
+        ReadTypeMetadata(PlcType type)
+    {
+        try
+        {
+            return (type.IsKnowHowProtected, type.CreationDate, type.ModifiedDate, type.InterfaceModifiedDate);
+        }
+        catch
+        {
+            return (null, null, null, null);
+        }
     }
 
     private static string TypeCode(PlcBlock block) => block.GetType().Name switch

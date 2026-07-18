@@ -74,6 +74,20 @@ public sealed class EngineeringTools
         [Description("Export root directory for the XML files.")] string outputDir)
         => Invoke(() => _adapter.ExportAllBlocks(outputDir));
 
+    [McpServerTool(Name = "export_tag_tables")]
+    [Description("Export every PLC tag table to XML under outputDir/Tags (recursing nested groups) and upsert one metadata.json record per table. Per-PLC subfolder when the project has multiple PLCs, unless plcName is given.")]
+    public CallToolResult ExportTagTables(
+        [Description("Export root directory.")] string outputDir,
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
+        => Invoke(() => _adapter.ExportTagTables(outputDir, plcName));
+
+    [McpServerTool(Name = "export_udts")]
+    [Description("Export every PLC data type (UDT) to XML under outputDir/UDT (recursing nested groups) and upsert one metadata.json record per type. Per-PLC subfolder when the project has multiple PLCs, unless plcName is given.")]
+    public CallToolResult ExportUdts(
+        [Description("Export root directory.")] string outputDir,
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
+        => Invoke(() => _adapter.ExportUdts(outputDir, plcName));
+
     [McpServerTool(Name = "import_block")]
     [Description("Import a modified block XML back into the project (DESTRUCTIVE: overwrites the block). Caller must validate the XML and snapshot the working folder first.")]
     public CallToolResult ImportBlock(

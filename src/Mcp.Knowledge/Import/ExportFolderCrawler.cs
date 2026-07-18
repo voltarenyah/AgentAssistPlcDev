@@ -114,20 +114,30 @@ public static class ExportFolderCrawler
         foreach (var winner in winners.OrderBy(candidate => candidate.RelativeFile, StringComparer.Ordinal))
         {
             var sourcePath = Path.GetDirectoryName(winner.RelativeFile) ?? string.Empty;
-            if (winner.Category != null)
+            switch (winner.Kind)
             {
-                TiaXmlSemanticGraphImporter.ImportBlockXml(
-                    winner.Xml,
-                    new ProgramBlockComponent(winner.Name, winner.Category, sourcePath, winner.RelativeFile),
-                    graph);
-                TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                    graph, project.Id, TiaXmlSemanticGraphImporter.BlockId(winner.Name), SemanticRelationshipType.Contains);
-            }
-            else
-            {
-                TiaXmlSemanticGraphImporter.ImportDbXml(winner.Xml, winner.RelativeFile, sourcePath, graph);
-                TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                    graph, project.Id, TiaXmlSemanticGraphImporter.DbId(winner.Name), SemanticRelationshipType.Contains);
+                case ImportKind.ProgramBlock:
+                    TiaXmlSemanticGraphImporter.ImportBlockXml(
+                        winner.Xml,
+                        new ProgramBlockComponent(winner.Name, winner.Category!, sourcePath, winner.RelativeFile),
+                        graph);
+                    TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                        graph, project.Id, TiaXmlSemanticGraphImporter.BlockId(winner.Name), SemanticRelationshipType.Contains);
+                    break;
+                case ImportKind.DataBlock:
+                    TiaXmlSemanticGraphImporter.ImportDbXml(winner.Xml, winner.RelativeFile, sourcePath, graph);
+                    TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                        graph, project.Id, TiaXmlSemanticGraphImporter.DbId(winner.Name), SemanticRelationshipType.Contains);
+                    break;
+                case ImportKind.Udt:
+                    TiaXmlSemanticGraphImporter.ImportUdtXml(winner.Xml, winner.RelativeFile, sourcePath, graph);
+                    TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                        graph, project.Id, TiaXmlSemanticGraphImporter.UdtId(winner.Name), SemanticRelationshipType.Contains);
+                    break;
+                case ImportKind.TagTable:
+                    // Reference behaviour: tag tables get no project CONTAINS edge (tags float freely).
+                    TiaXmlSemanticGraphImporter.ImportTagTableXml(winner.Xml, winner.RelativeFile, sourcePath, graph);
+                    break;
             }
 
             imported++;
@@ -172,26 +182,15 @@ public static class ExportFolderCrawler
         }
 
         var rootElement = contentRoot.Name.LocalName;
-        switch (rootElement)
+        var kind = rootElement switch
         {
-            case "SW.Types.PlcStruct":
-                warnings.Add($"skipped {relativeFile}: UDT import is deferred to a later step");
-                return null;
-            case "SW.Tags.PlcTagTable":
-                warnings.Add($"skipped {relativeFile}: tag-table import is deferred to a later step");
-                return null;
-        }
-
-        var isProgramBlock =
-            rootElement == "SW.Blocks.OB" ||
-            rootElement == "SW.Blocks.FB" ||
-            rootElement == "SW.Blocks.FC";
-        var isDataBlock =
-            rootElement == "SW.Blocks.GlobalDB" ||
-            rootElement == "SW.Blocks.InstanceDB" ||
-            rootElement == "SW.Blocks.ArrayDB" ||
-            rootElement == "SW.Blocks.DB";
-        if (!isProgramBlock && !isDataBlock)
+            "SW.Blocks.OB" or "SW.Blocks.FB" or "SW.Blocks.FC" => ImportKind.ProgramBlock,
+            "SW.Blocks.GlobalDB" or "SW.Blocks.InstanceDB" or "SW.Blocks.ArrayDB" or "SW.Blocks.DB" => ImportKind.DataBlock,
+            "SW.Types.PlcStruct" => ImportKind.Udt,
+            "SW.Tags.PlcTagTable" => ImportKind.TagTable,
+            _ => ImportKind.Unsupported,
+        };
+        if (kind == ImportKind.Unsupported)
         {
             warnings.Add($"skipped {relativeFile}: unsupported root element '{rootElement}'");
             return null;
@@ -209,7 +208,8 @@ public static class ExportFolderCrawler
             xml,
             name,
             rootElement,
-            isProgramBlock ? rootElement.Substring(ProgramBlockPrefix.Length) : null,
+            kind,
+            kind == ImportKind.ProgramBlock ? rootElement.Substring(ProgramBlockPrefix.Length) : null,
             relativeFile.Count(character => character == '/' || character == '\\'));
     }
 
@@ -224,14 +224,24 @@ public static class ExportFolderCrawler
             .Trim() ?? string.Empty;
     }
 
+    private enum ImportKind
+    {
+        Unsupported,
+        ProgramBlock,
+        DataBlock,
+        Udt,
+        TagTable,
+    }
+
     private sealed class ImportCandidate
     {
-        public ImportCandidate(string relativeFile, string xml, string name, string rootElement, string? category, int depth)
+        public ImportCandidate(string relativeFile, string xml, string name, string rootElement, ImportKind kind, string? category, int depth)
         {
             RelativeFile = relativeFile;
             Xml = xml;
             Name = name;
             RootElement = rootElement;
+            Kind = kind;
             Category = category;
             Depth = depth;
             Identity = rootElement + "\n" + name;
@@ -245,7 +255,9 @@ public static class ExportFolderCrawler
 
         public string RootElement { get; }
 
-        /// <summary>Block category (OB/FB/FC) for program blocks; null for data blocks.</summary>
+        public ImportKind Kind { get; }
+
+        /// <summary>Block category (OB/FB/FC) for program blocks; null otherwise.</summary>
         public string? Category { get; }
 
         public int Depth { get; }

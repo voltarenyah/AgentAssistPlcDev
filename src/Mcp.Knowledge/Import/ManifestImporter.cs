@@ -141,13 +141,18 @@ public static class ManifestImporter
 
             if (string.Equals(category, "UDT", StringComparison.OrdinalIgnoreCase))
             {
-                warnings.Add($"skipped {relativeFile}: UDT import is deferred to a later step");
+                TiaXmlSemanticGraphImporter.ImportUdtXml(xml, relativeFile, component.SourcePath ?? string.Empty, graph);
+                TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                    graph, project.Id, TiaXmlSemanticGraphImporter.UdtId(name), SemanticRelationshipType.Contains);
+                imported++;
                 continue;
             }
 
             if (string.Equals(category, "Tags", StringComparison.OrdinalIgnoreCase))
             {
-                warnings.Add($"skipped {relativeFile}: tag-table import is deferred to a later step");
+                // Reference behaviour: tag tables get no project CONTAINS edge (tags float freely).
+                TiaXmlSemanticGraphImporter.ImportTagTableXml(xml, relativeFile, component.SourcePath ?? string.Empty, graph);
+                imported++;
                 continue;
             }
 

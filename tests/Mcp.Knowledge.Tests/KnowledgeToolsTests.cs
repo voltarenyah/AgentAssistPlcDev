@@ -29,11 +29,16 @@ public sealed class KnowledgeToolsTests
         Assert.Contains("Network", nodeKinds);
         Assert.Contains("Global DB", nodeKinds);
         Assert.Contains("Instance DB", nodeKinds);
+        Assert.Contains("UDT", nodeKinds);
+        Assert.Contains("UDT Member", nodeKinds);
+        Assert.Contains("PLC Tag", nodeKinds);
+        Assert.Contains("IO Address", nodeKinds);
 
         var edgeTypes = root.GetProperty("edgeTypes").EnumerateArray().Select(item => item.GetString()).ToArray();
         Assert.Contains("CALLS", edgeTypes);
         Assert.Contains("HAS_TYPE", edgeTypes);
         Assert.Contains("INSTANCE_OF", edgeTypes);
+        Assert.Contains("CONNECTED_TO", edgeTypes);
 
         Assert.NotEmpty(root.GetProperty("exampleQueries").EnumerateArray());
     }

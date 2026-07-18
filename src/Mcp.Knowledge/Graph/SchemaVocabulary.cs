@@ -20,6 +20,10 @@ public static class SchemaVocabulary
         SemanticNodeKind.InstanceDataBlock,
         SemanticNodeKind.DataBlockMember,
         SemanticNodeKind.DataType,
+        SemanticNodeKind.UserDataType,
+        SemanticNodeKind.UserDataTypeMember,
+        SemanticNodeKind.PlcTag,
+        SemanticNodeKind.IoAddress,
     };
 
     public static readonly IReadOnlyList<string> EdgeTypes = new[]
@@ -30,6 +34,7 @@ public static class SchemaVocabulary
         SemanticRelationshipType.Writes,
         SemanticRelationshipType.HasType,
         SemanticRelationshipType.InstanceOf,
+        SemanticRelationshipType.ConnectedTo,
         SemanticRelationshipType.ExecutesBefore,
         SemanticRelationshipType.ExecutesAfter,
     };
@@ -111,5 +116,41 @@ public static class SchemaVocabulary
         new SchemaExampleQuery(
             "Instance DB to FB relationship",
             "SELECT db.name AS instance_db, fb.name AS function_block\nFROM graph_edges e\nJOIN graph_nodes db ON db.id = e.from_node_id\nJOIN graph_nodes fb ON fb.id = e.to_node_id\nWHERE e.type = 'INSTANCE_OF'\nORDER BY db.name;"),
+        new SchemaExampleQuery(
+            "PLC tags connected to IO addresses",
+            """
+            SELECT
+              tag.name AS tag_name,
+              address.name AS io_address,
+              dtype.name AS data_type
+            FROM graph_edges connected
+            JOIN graph_nodes tag ON tag.id = connected.from_node_id
+            JOIN graph_nodes address ON address.id = connected.to_node_id
+            LEFT JOIN graph_edges typed
+              ON typed.from_node_id = tag.id AND typed.type = 'HAS_TYPE'
+            LEFT JOIN graph_nodes dtype ON dtype.id = typed.to_node_id
+            WHERE connected.type = 'CONNECTED_TO'
+              AND tag.kind = 'PLC Tag'
+              AND address.kind = 'IO Address'
+            ORDER BY address.name, tag.name;
+            """),
+        new SchemaExampleQuery(
+            "UDT members and data types",
+            """
+            SELECT
+              udt.name AS udt_name,
+              member.name AS member_name,
+              dtype.name AS data_type
+            FROM graph_edges contains
+            JOIN graph_nodes udt ON udt.id = contains.from_node_id
+            JOIN graph_nodes member ON member.id = contains.to_node_id
+            LEFT JOIN graph_edges typed
+              ON typed.from_node_id = member.id AND typed.type = 'HAS_TYPE'
+            LEFT JOIN graph_nodes dtype ON dtype.id = typed.to_node_id
+            WHERE contains.type = 'CONTAINS'
+              AND udt.kind = 'UDT'
+              AND member.kind = 'UDT Member'
+            ORDER BY udt.name, member.name;
+            """),
     };
 }
