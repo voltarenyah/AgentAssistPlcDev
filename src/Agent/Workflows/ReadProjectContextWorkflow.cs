@@ -1,9 +1,9 @@
 using System.Diagnostics;
-using App.Mcp;
+using Agent.Mcp;
 using Contracts.Engineering;
 using Contracts.Knowledge;
 
-namespace App.Workflows;
+namespace Agent.Workflows;
 
 /// <summary>
 /// The Read Project Context orchestration (buildnote/plan/app.md §4): one workflow, two triggers —
@@ -28,7 +28,7 @@ public sealed class ReadProjectContextWorkflow
         var info = await Timed("Reading project info", () =>
             engineering.CallAsync<ProjectInfo>("get_project_info", new { }, cancellationToken));
         var projectName = string.IsNullOrWhiteSpace(info.Name) ? "unknown" : info.Name!;
-        var exportRoot = AppSettings.ResolveExportRoot(projectName);
+        var exportRoot = AssistantPaths.ResolveExportRoot(projectName);
         Log($"Export root: {exportRoot}");
 
         cancellationToken.ThrowIfCancellationRequested();

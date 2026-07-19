@@ -1,4 +1,4 @@
-namespace App.Mcp;
+namespace Agent.Mcp;
 
 /// <summary>An MCP tool returned isError=true with the servers' structured { code, message, remediation } payload.</summary>
 public sealed class ToolCallException : Exception

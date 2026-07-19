@@ -3,7 +3,7 @@ using System.Text.Json;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
-namespace App.Mcp;
+namespace Agent.Mcp;
 
 /// <summary>
 /// One MCP server child process over stdio (buildnote/plan/app.md §2.7).
@@ -48,6 +48,19 @@ public sealed class McpServerConnection : IMcpToolCaller, IAsyncDisposable
             StandardErrorLines = line => StderrLine?.Invoke($"[{serverName}] {line}"),
         });
         client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken);
+    }
+
+    /// <summary>Lists the server's tools (name, description, JSON input schema) for building an agent tool catalog.</summary>
+    public async Task<IReadOnlyList<(string Name, string? Description, JsonElement InputSchema)>> ListToolsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (client == null)
+        {
+            throw new InvalidOperationException($"MCP server '{serverName}' is not started.");
+        }
+
+        var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
+        return tools.Select(tool => (tool.Name, tool.Description, tool.JsonSchema)).ToArray();
     }
 
     public async Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)

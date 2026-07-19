@@ -1,6 +1,6 @@
 using Contracts.Knowledge;
 
-namespace App.Workflows;
+namespace Agent.Workflows;
 
 /// <summary>Aggregate result of one Read Project Context run (buildnote/plan/app.md §4).</summary>
 public sealed class ReadProjectContextResult

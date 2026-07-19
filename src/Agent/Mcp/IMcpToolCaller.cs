@@ -1,4 +1,4 @@
-namespace App.Mcp;
+namespace Agent.Mcp;
 
 /// <summary>
 /// Single seam for all MCP tool traffic (buildnote/plan/app.md §2.7).

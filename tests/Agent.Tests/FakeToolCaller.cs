@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using App.Mcp;
+using Agent.Mcp;
 
-namespace App.Tests;
+namespace Agent.Tests;
 
 /// <summary>Scripted <see cref="IMcpToolCaller"/>: queued responses per tool, every call recorded.</summary>
 internal sealed class FakeToolCaller : IMcpToolCaller
@@ -36,7 +36,7 @@ internal sealed class FakeToolCaller : IMcpToolCaller
             CallArgs[tool] = list;
         }
 
-        list.Add(args);
+        list.Add(args is System.Text.Json.JsonElement element ? element.Clone() : args);
         cancellationToken.ThrowIfCancellationRequested();
         if (!scripts.TryGetValue(tool, out var queue) || queue.Count == 0)
         {

@@ -1,8 +1,11 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows;
+using Agent;
+using Agent.Chat;
+using Agent.Mcp;
+using Agent.Workflows;
 using App.Logging;
-using App.Mcp;
-using App.Workflows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Contracts.Engineering;
@@ -17,6 +20,13 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 {
     private McpHost? host;
     private CancellationTokenSource? runCancellation;
+    private string? connectedProjectName;
+    private string? knowledgeDbPath;
+
+    public MainViewModel()
+    {
+        Chat = new ChatViewModel(BuildRuntimeContext);
+    }
 
     [ObservableProperty]
     private string environmentStatus = "—";
@@ -50,6 +60,9 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public ObservableCollection<string> Warnings { get; } = new();
 
+    /// <summary>DeepSeek chat panel (configured once the servers are up and the tool catalog is built).</summary>
+    public ChatViewModel Chat { get; }
+
     /// <summary>Called once from MainWindow.Loaded: resolve settings, start servers, run the env check.</summary>
     public async Task InitializeAsync()
     {
@@ -59,10 +72,21 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             var settings = AppSettings.Load();
             ReportLog($"Engineering server: {settings.EngineeringServerPath}");
             ReportLog($"Knowledge server: {settings.KnowledgeServerPath}");
-            host = new McpHost(settings);
+            host = new McpHost(settings.EngineeringServerPath, settings.KnowledgeServerPath);
             host.ServerLog += ReportLog;
             await host.StartAsync();
             ServerStatus = "Servers running";
+
+            try
+            {
+                var catalog = await McpToolCatalog.BuildAsync(host);
+                ReportLog($"agent: {catalog.Tools.Count} MCP tools exposed to DeepSeek (import_block excluded)");
+                Chat.Configure(settings, catalog);
+            }
+            catch (Exception ex)
+            {
+                ReportLog($"ERROR building agent tool catalog (chat disabled): {ex.Message}");
+            }
 
             var env = await host.Engineering.CallAsync<EnvCheckResult>("check_environment", new { });
             EnvironmentStatus = env.UserInOpennessGroup
@@ -147,6 +171,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             await host.Engineering.CallAsync<object>("disconnect", new { });
+            connectedProjectName = null;
+            knowledgeDbPath = null;
             ConnectionStatus = "Not connected";
             ReportLog("Disconnected.");
         }
@@ -173,6 +199,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
             var result = await workflow.RunAsync(runCancellation.Token);
 
             DbPath = result.DbPath;
+            connectedProjectName = result.ProjectName;
+            knowledgeDbPath = result.DbPath;
             IngestSummary =
                 $"{result.ProjectName}: {result.BlocksExported} blocks, {result.TagTablesExported} tag tables, {result.UdtsExported} UDTs → " +
                 $"{result.Ingest.Nodes} nodes / {result.Ingest.Edges} edges in {result.Ingest.DurationMs} ms";
@@ -227,6 +255,8 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             var info = await host!.Engineering.CallAsync<ConnectionInfo>("connect", args);
+            connectedProjectName = info.ProjectName;
+            RefreshKnowledgeDbPath();
             ConnectionStatus = info.ProjectName != null
                 ? $"Connected: {info.ProjectName} ({(info.Attached ? "attached" : "headless")})"
                 : $"Connected ({(info.Attached ? "attached" : "headless")}, no project open?)";
@@ -240,6 +270,39 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             ReportLog($"ERROR: {ex}");
         }
+    }
+
+    /// <summary>Points the chat context at the connected project's knowledge db when it already exists on disk.</summary>
+    private void RefreshKnowledgeDbPath()
+    {
+        if (connectedProjectName == null)
+        {
+            knowledgeDbPath = null;
+            return;
+        }
+
+        var candidate = AssistantPaths.ResolveKnowledgeDbPath(connectedProjectName);
+        knowledgeDbPath = File.Exists(candidate) ? candidate : null;
+        if (knowledgeDbPath != null)
+        {
+            ReportLog($"Knowledge db found for '{connectedProjectName}': {knowledgeDbPath}");
+        }
+    }
+
+    /// <summary>Runtime context block for the agent's system prompt, rebuilt before every turn.</summary>
+    private string BuildRuntimeContext()
+    {
+        var lines = new List<string> { $"TIA connection: {ConnectionStatus}" };
+        if (connectedProjectName != null)
+        {
+            lines.Add($"Project: {connectedProjectName}");
+            lines.Add($"Export root: {AssistantPaths.ResolveExportRoot(connectedProjectName)}");
+        }
+
+        lines.Add(knowledgeDbPath != null
+            ? $"Knowledge db (use this dbPath for the knowledge tools): {knowledgeDbPath}"
+            : "Knowledge db: none known for this session — the user must press \"Read Project Context\" first, or attach to a project whose knowledge base already exists on disk.");
+        return string.Join('\n', lines);
     }
 
     private void ReportLog(string line)

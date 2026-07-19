@@ -1,8 +1,14 @@
 <Window x:Class="App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="PLC AI Assistant" Height="640" Width="1024"
+        xmlns:app="clr-namespace:App"
+        xmlns:vm="clr-namespace:App.ViewModels"
+        Title="PLC AI Assistant" Height="640" Width="1200"
         Loaded="OnLoaded" Closed="OnClosed">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <app:InverseBooleanToVisibilityConverter x:Key="InvBoolToVis" />
+    </Window.Resources>
     <DockPanel Margin="8">
 
         <!-- Status strip -->
@@ -15,13 +21,13 @@
         </Border>
 
         <!-- Log -->
-        <GroupBox Header="Log" DockPanel.Dock="Bottom" Height="220" Margin="0,6,0,0">
+        <GroupBox Header="Log" DockPanel.Dock="Bottom" Height="180" Margin="0,6,0,0">
             <ListBox ItemsSource="{Binding LogLines}" FontFamily="Consolas" FontSize="11" />
         </GroupBox>
 
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="420" />
+                <ColumnDefinition Width="400" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
@@ -44,7 +50,7 @@
                             <Button Content="Disconnect" Command="{Binding DisconnectCommand}" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                            <TextBox Text="{Binding ProjectPathInput, UpdateSourceTrigger=PropertyChanged}" Width="290" Margin="0,0,4,0" />
+                            <TextBox Text="{Binding ProjectPathInput, UpdateSourceTrigger=PropertyChanged}" Width="270" Margin="0,0,4,0" />
                             <Button Content="Open headless" Command="{Binding ConnectHeadlessCommand}" />
                         </StackPanel>
                     </StackPanel>
@@ -63,24 +69,144 @@
                 </GroupBox>
             </StackPanel>
 
-            <!-- Right: ingest summary -->
-            <Grid Grid.Column="1">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <GroupBox Header="Nodes by kind" Grid.Column="0" Margin="0,0,3,0" Padding="4">
-                    <DataGrid ItemsSource="{Binding NodeKinds}" AutoGenerateColumns="False" IsReadOnly="True">
+            <!-- Right: tabs — Chat first so the conversation always gets the full width -->
+            <TabControl Grid.Column="1">
+
+                <TabItem Header="Chat">
+                    <Grid Margin="4">
+
+                        <!-- Key setup (first run / change key) -->
+                        <StackPanel Visibility="{Binding Chat.ShowKeySetup, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="DeepSeek API key" FontWeight="Bold" Margin="0,0,0,4" />
+                            <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,6"
+                                       Text="Stored once in %APPDATA%\PlcAiAssistant\config.json. Get a key at platform.deepseek.com." />
+                            <PasswordBox x:Name="ApiKeyBox" Margin="0,0,0,6" MaxWidth="420" HorizontalAlignment="Left" />
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Save key" Padding="12,2" Margin="0,0,4,0"
+                                        Command="{Binding Chat.SaveApiKeyCommand}"
+                                        CommandParameter="{Binding ElementName=ApiKeyBox}" />
+                                <Button Content="Keep current key" Padding="8,2"
+                                        Visibility="{Binding Chat.IsKeyConfigured, Converter={StaticResource BoolToVis}}"
+                                        Command="{Binding Chat.KeepKeyCommand}" />
+                            </StackPanel>
+                            <ListBox ItemsSource="{Binding Chat.Messages}" Margin="0,8,0,0" BorderThickness="0" Background="Transparent">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:ChatViewModel+ChatEntry}">
+                                        <TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="11" Foreground="Gray" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </StackPanel>
+
+                        <!-- Chat -->
+                        <DockPanel Visibility="{Binding Chat.ShowKeySetup, Converter={StaticResource InvBoolToVis}}">
+                            <StackPanel DockPanel.Dock="Top">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                    <TextBlock Text="{Binding Chat.KeyStatus}" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <Button Content="Change key" Command="{Binding Chat.ChangeKeyCommand}" Margin="0,0,4,0" Padding="6,0" />
+                                    <Button Content="Clear" Command="{Binding Chat.ClearCommand}" Margin="0,0,4,0" Padding="6,0" />
+                                    <Button Content="Export" Command="{Binding Chat.ExportChatCommand}" Padding="6,0"
+                                            ToolTip="Write the full session (system prompt, tools, messages, tool results, token usage) to an .md file under %LOCALAPPDATA%\PlcAiAssistant\chat-exports" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                    <ComboBox ItemsSource="{Binding Chat.AvailableModels}" SelectedItem="{Binding Chat.SelectedModel}"
+                                              Width="140" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                    <CheckBox Content="thinking" IsChecked="{Binding Chat.ThinkingEnabled}" VerticalAlignment="Center" Margin="0,0,2,0"
+                                              ToolTip="Chain-of-thought before the answer (reasoning_content). temperature/top_p have no effect while enabled." />
+                                    <ComboBox ItemsSource="{Binding Chat.AvailableEfforts}" SelectedItem="{Binding Chat.SelectedEffort}"
+                                              Width="56" Margin="0,0,6,0" VerticalAlignment="Center"
+                                              IsEnabled="{Binding Chat.ThinkingEnabled}" ToolTip="reasoning_effort" />
+                                    <TextBlock Text="temp" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,2,0"
+                                               ToolTip="temperature 0–2 (only with thinking off)" />
+                                    <TextBox Text="{Binding Chat.TemperatureText}" Width="36" Margin="0,0,6,0"
+                                             IsEnabled="{Binding Chat.NotThinking}" />
+                                    <TextBlock Text="top_p" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,2,0"
+                                               ToolTip="top_p 0–1 (only with thinking off)" />
+                                    <TextBox Text="{Binding Chat.TopPText}" Width="36" Margin="0,0,6,0"
+                                             IsEnabled="{Binding Chat.NotThinking}" />
+                                    <Button Content="Apply" Command="{Binding Chat.ApplySettingsCommand}" Padding="8,0" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <Grid DockPanel.Dock="Bottom" Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="ChatInputBox" Grid.Column="0" AcceptsReturn="True" MinHeight="40"
+                                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                         PreviewKeyDown="OnChatInputPreviewKeyDown"
+                                         Text="{Binding Chat.InputText, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button Grid.Column="1" Content="Send" Margin="4,0,0,0" Padding="10,0" FontWeight="Bold"
+                                        Command="{Binding Chat.SendCommand}" IsEnabled="{Binding Chat.IsBusy, Converter={StaticResource InvBoolToVis}}" />
+                                <Button Grid.Column="2" Content="Cancel" Margin="4,0,0,0" Padding="6,0"
+                                        Command="{Binding Chat.CancelCommand}" IsEnabled="{Binding Chat.IsBusy, Converter={StaticResource BoolToVis}}" />
+                            </Grid>
+
+                            <ListBox x:Name="ChatMessages" ItemsSource="{Binding Chat.Messages}" BorderThickness="0"
+                                     ScrollViewer.CanContentScroll="False"
+                                     ScrollViewer.ScrollChanged="OnChatScrollChanged">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="Padding" Value="0,2" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:ChatViewModel+ChatEntry}">
+                                        <Border CornerRadius="4" Padding="6,4" Margin="0,1">
+                                            <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+                                        </Border>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding Kind}" Value="user">
+                                                <Setter Property="Border.Background" Value="#FFDCE8F7" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="assistant">
+                                                <Setter Property="Border.Background" Value="#FFEFEFEF" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="thinking">
+                                                <Setter Property="TextBlock.FontStyle" Value="Italic" />
+                                                <Setter Property="TextBlock.Foreground" Value="#FF6A6A6A" />
+                                                <Setter Property="Border.BorderThickness" Value="3,0,0,0" />
+                                                <Setter Property="Border.BorderBrush" Value="#FFB9C4D0" />
+                                                <Setter Property="Border.CornerRadius" Value="0,4,4,0" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="tool">
+                                                <Setter Property="TextBlock.FontFamily" Value="Consolas" />
+                                                <Setter Property="TextBlock.FontSize" Value="10.5" />
+                                                <Setter Property="TextBlock.Foreground" Value="Gray" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="error">
+                                                <Setter Property="Border.Background" Value="#FFF8DCDC" />
+                                                <Setter Property="TextBlock.Foreground" Value="#FF9A1C1C" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="info">
+                                                <Setter Property="TextBlock.Foreground" Value="Gray" />
+                                                <Setter Property="TextBlock.FontStyle" Value="Italic" />
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </DockPanel>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Nodes by kind">
+                    <DataGrid ItemsSource="{Binding NodeKinds}" AutoGenerateColumns="False" IsReadOnly="True" Margin="4">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Kind" Binding="{Binding Key}" Width="*" />
-                            <DataGridTextColumn Header="Count" Binding="{Binding Value}" Width="60" />
+                            <DataGridTextColumn Header="Count" Binding="{Binding Value}" Width="80" />
                         </DataGrid.Columns>
                     </DataGrid>
-                </GroupBox>
-                <GroupBox Header="Warnings" Grid.Column="1" Margin="3,0,0,0" Padding="4">
-                    <ListBox ItemsSource="{Binding Warnings}" />
-                </GroupBox>
-            </Grid>
+                </TabItem>
+
+                <TabItem Header="Warnings">
+                    <ListBox ItemsSource="{Binding Warnings}" Margin="4" />
+                </TabItem>
+
+            </TabControl>
         </Grid>
     </DockPanel>
 </Window>

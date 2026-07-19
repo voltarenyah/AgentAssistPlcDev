@@ -153,7 +153,7 @@ public sealed class KnowledgeTools
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = statement;
-        using var reader = command.ExecuteReader();
+        using var reader = ExecuteWithSchemaHint(command, connection);
 
         var columns = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
         var rows = new List<object?[]>();
@@ -177,6 +177,40 @@ public sealed class KnowledgeTools
         }
 
         return new { columns, rows, truncated };
+    }
+
+    /// <summary>
+    /// Executes the reader; on SQLite errors (e.g. "no such table" — the model often guesses table
+    /// names) returns a structured error whose remediation lists the tables actually present, so an
+    /// agent can correct the statement in its next round instead of giving up.
+    /// </summary>
+    private static SqliteDataReader ExecuteWithSchemaHint(SqliteCommand command, SqliteConnection connection)
+    {
+        try
+        {
+            return command.ExecuteReader();
+        }
+        catch (SqliteException ex)
+        {
+            throw new KnowledgeToolException(
+                "QUERY_INVALID_SQL",
+                ex.Message,
+                $"Check the statement against get_schema (ddl + exampleQueries). Tables in this db: {ReadTableNames(connection)}.");
+        }
+    }
+
+    private static string ReadTableNames(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;";
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read())
+        {
+            names.Add(reader.GetString(0));
+        }
+
+        return string.Join(", ", names);
     }
 
     private static string ValidateReadOnlyStatement(string sql)

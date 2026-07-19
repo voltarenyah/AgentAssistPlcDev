@@ -1,15 +1,15 @@
-namespace App.Mcp;
+namespace Agent.Mcp;
 
 /// <summary>
 /// Owns the MCP server child processes for the app session (engineering + knowledge).
-/// When the Agent (Phase 2 step 6) lands, Mcp/ + Workflows/ move to a shared net8 library (buildnote/plan/app.md §2.3).
+/// Lives in the shared Agent library per buildnote/plan/app.md §2.3 (moved from App when step 6 landed).
 /// </summary>
 public sealed class McpHost : IAsyncDisposable
 {
-    public McpHost(AppSettings settings)
+    public McpHost(string engineeringServerPath, string knowledgeServerPath)
     {
-        Engineering = new McpServerConnection("engineering", settings.EngineeringServerPath);
-        Knowledge = new McpServerConnection("knowledge", settings.KnowledgeServerPath);
+        Engineering = new McpServerConnection("engineering", engineeringServerPath);
+        Knowledge = new McpServerConnection("knowledge", knowledgeServerPath);
         Engineering.StderrLine += line => ServerLog?.Invoke(line);
         Knowledge.StderrLine += line => ServerLog?.Invoke(line);
     }

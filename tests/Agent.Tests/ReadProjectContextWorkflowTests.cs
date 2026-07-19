@@ -2,13 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using App.Mcp;
-using App.Workflows;
+using Agent.Mcp;
+using Agent.Workflows;
 using Contracts.Engineering;
 using Contracts.Knowledge;
 using Xunit;
 
-namespace App.Tests;
+namespace Agent.Tests;
 
 public sealed class ReadProjectContextWorkflowTests
 {

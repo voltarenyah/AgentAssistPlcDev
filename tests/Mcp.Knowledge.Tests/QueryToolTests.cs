@@ -71,6 +71,21 @@ public sealed class QueryToolTests : IDisposable
     }
 
     [Fact]
+    public void MissingTableReturnsSchemaHint()
+    {
+        var error = ToolResults.ErrorJson(new KnowledgeTools().Query(
+            _dbPath,
+            "SELECT * FROM networks WHERE kind = 'Network';",
+            null));
+
+        Assert.Equal("QUERY_INVALID_SQL", error.GetProperty("code").GetString());
+        Assert.Contains("no such table", error.GetProperty("message").GetString());
+        var remediation = error.GetProperty("remediation").GetString();
+        Assert.Contains("get_schema", remediation);
+        Assert.Contains("graph_nodes", remediation);
+    }
+
+    [Fact]
     public void RejectsMissingDatabase()
     {
         var missing = Path.Combine(Path.GetTempPath(), "Mcp.Knowledge.Tests", "missing", "nope.db");

@@ -4,7 +4,7 @@
 
 Windows desktop app that assists PLC programming work, starting with Siemens TIA Portal V17. The app is decomposed into independent MCP servers (one per capability domain) so any MCP-compatible client can call each server individually. Each MCP hosts pluggable platform adapters behind a shared contract.
 
-**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 in steps: mcp-knowledge (ingest + tags/UDTs + knowledge depth) done 2026-07-18 (`buildnote/plan/mcp-knowledge.md`); WPF App step 7a — read-only shell + "Read Project Context" — in progress (`buildnote/plan/app.md`).
+**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 in steps: mcp-knowledge (ingest + tags/UDTs + knowledge depth) done 2026-07-18 (`buildnote/plan/mcp-knowledge.md`); App step 7a — read-only shell + "Read Project Context" — done 2026-07-19 (`buildnote/plan/app.md`); step 6 chat slice — DeepSeek agent chat + MCP tool calling + first-run API key UI — done 2026-07-19 (`buildnote/plan/agent.md`).
 
 ## Tech Stack
 
@@ -42,7 +42,7 @@ AgentAssistPlcDev.sln
 │   ├── Mcp.SourceEditor/          net8  — block XML parse/edit/generate
 │   ├── Mcp.Simulation/            net48 — PLCSIM Advanced adapter (Phase 5)
 │   ├── Mcp.VersionControl/        net8  — git operations
-│   ├── Agent/                     net8  — DeepSeek client + MCP host
+│   ├── Agent/                     net8  — MCP host + workflows + DeepSeek chat client + tool-calling loop
 │   └── App/                       net8-windows — WPF UI shell
 └── tests/
 ```
@@ -62,7 +62,7 @@ AgentAssistPlcDev.sln
 
 3. **Openness dependency:** TIA Portal V17 DLLs at `C:\Program Files\Siemens\Automation\Portal V17\PublicAPI\V17\`. Windows user must be in "Siemens TIA Openness" group.
 
-4. **DeepSeek config:** API key stored in `%APPDATA%/PlcAiAssistant/config.json` (git-ignored). Endpoint: `https://api.deepseek.com` (OpenAI-compatible).
+4. **DeepSeek config:** API key entered once in the App chat panel (first-run setup); stored as `deepSeekApiKey` in `%APPDATA%/PlcAiAssistant/config.json` (git-ignored), never logged. Chat parameters adjustable in the UI and persisted: `deepSeekModel` (default `deepseek-v4-flash`; `deepseek-chat`/`deepseek-reasoner` retired 2026-07-24), `deepSeekThinkingEnabled` (default true), `deepSeekReasoningEffort` (`high`/`max`), `deepSeekTemperature`/`deepSeekTopP` (only effective with thinking off). `deepSeekBaseUrl` default `https://api.deepseek.com` (OpenAI-compatible). The agent exposes all MCP tools except `import_block` (see rule 6).
 
 5. **Platform expansion:** Adapter contracts should be written generically from the start. Rockwell ControlLogix (L5X XML) is the planned second platform.
 
@@ -81,6 +81,7 @@ AgentAssistPlcDev.sln
 - `buildnote/plan/mcp-engineering.md` — Phase 0–1 detailed design for the engineering MCP server (complete 2026-07-18)
 - `buildnote/plan/mcp-knowledge.md` — Phase 2 step 1 detailed design for the knowledge MCP server
 - `buildnote/plan/app.md` — Phase 2 step 7a design for the WPF App (read-only shell + Read Project Context)
+- `buildnote/plan/agent.md` — Phase 2 step 6 chat slice: DeepSeek client, tool catalog (import_block excluded), AgentLoop, first-run key UI
 - `agent.md` — this file; concise rules and context for AI agents
 - `%APPDATA%/PlcAiAssistant/config.json` — local config (git-ignored)
 
