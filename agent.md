@@ -4,7 +4,7 @@
 
 Windows desktop app that assists PLC programming work, starting with Siemens TIA Portal V17. The app is decomposed into independent MCP servers (one per capability domain) so any MCP-compatible client can call each server individually. Each MCP hosts pluggable platform adapters behind a shared contract.
 
-**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 — AI-generated network comments over the MCP chain — is split into steps; mcp-knowledge (step 1 + knowledge depth: `logicStatements`, `get_block`/`get_network`/`search`) done 2026-07-18; design: `buildnote/plan/mcp-knowledge.md`.
+**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 in steps: mcp-knowledge (ingest + tags/UDTs + knowledge depth) done 2026-07-18 (`buildnote/plan/mcp-knowledge.md`); WPF App step 7a — read-only shell + "Read Project Context" — in progress (`buildnote/plan/app.md`).
 
 ## Tech Stack
 
@@ -80,6 +80,7 @@ AgentAssistPlcDev.sln
 - `buildnote/plan/initialLaunch_20260717.md` — full phased build plan with exit criteria (source of truth for architecture decisions)
 - `buildnote/plan/mcp-engineering.md` — Phase 0–1 detailed design for the engineering MCP server (complete 2026-07-18)
 - `buildnote/plan/mcp-knowledge.md` — Phase 2 step 1 detailed design for the knowledge MCP server
+- `buildnote/plan/app.md` — Phase 2 step 7a design for the WPF App (read-only shell + Read Project Context)
 - `agent.md` — this file; concise rules and context for AI agents
 - `%APPDATA%/PlcAiAssistant/config.json` — local config (git-ignored)
 

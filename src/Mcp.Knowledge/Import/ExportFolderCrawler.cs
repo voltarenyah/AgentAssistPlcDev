@@ -37,7 +37,7 @@ public static class ExportFolderCrawler
 {
     private const string ProgramBlockPrefix = "SW.Blocks.";
 
-    public static ExportFolderImportResult Import(string exportRoot)
+    public static ExportFolderImportResult Import(string exportRoot, Action<string>? progress = null)
     {
         if (string.IsNullOrWhiteSpace(exportRoot))
         {
@@ -50,8 +50,8 @@ public static class ExportFolderCrawler
         }
 
         return File.Exists(Path.Combine(exportRoot, ManifestImporter.MetadataFileName))
-            ? ManifestImporter.Import(exportRoot)
-            : ImportByCrawl(exportRoot);
+            ? ManifestImporter.Import(exportRoot, progress)
+            : ImportByCrawl(exportRoot, progress);
     }
 
     internal static SemanticGraphNode CreateProjectNode(string exportRoot, string fullRoot)
@@ -69,7 +69,7 @@ public static class ExportFolderCrawler
             new Dictionary<string, string> { ["exportRoot"] = exportRoot });
     }
 
-    private static ExportFolderImportResult ImportByCrawl(string exportRoot)
+    private static ExportFolderImportResult ImportByCrawl(string exportRoot, Action<string>? progress)
     {
         var fullRoot = Path.GetFullPath(exportRoot);
         var relativeFiles = Directory
@@ -141,6 +141,10 @@ public static class ExportFolderCrawler
             }
 
             imported++;
+            if (progress != null && (imported % 100 == 0 || imported == winners.Count))
+            {
+                progress($"ingest_source: {imported}/{winners.Count} files (crawl)");
+            }
         }
 
         return new ExportFolderImportResult(graph, relativeFiles.Length, imported, warnings, "crawl");

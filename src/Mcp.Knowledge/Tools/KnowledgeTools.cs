@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using Contracts.Knowledge;
 using Mcp.Knowledge.Graph;
 using Mcp.Knowledge.Import;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -20,6 +22,13 @@ public sealed class KnowledgeTools
     private const int DefaultSearchMaxRows = 50;
     private const int HardSearchMaxRows = 200;
     private const int SearchSnippetMaxLength = 300;
+
+    private readonly ILogger<KnowledgeTools>? _logger;
+
+    public KnowledgeTools(ILogger<KnowledgeTools>? logger = null)
+    {
+        _logger = logger;
+    }
 
     [McpServerTool(Name = "get_schema")]
     [Description("SQLite property-graph schema of the PLC knowledge base: table DDL, node kinds, edge types and example read-only queries (read-only, static content).")]
@@ -70,7 +79,7 @@ public sealed class KnowledgeTools
         [Description("Maximum matches to return (default 50, hard cap 200).")] int? maxRows = null)
         => Invoke(() => SearchGraph(dbPath, text, kind, maxRows));
 
-    private static object Ingest(string exportRoot, string? dbPath)
+    private object Ingest(string exportRoot, string? dbPath)
     {
         if (string.IsNullOrWhiteSpace(exportRoot) || !Directory.Exists(exportRoot))
         {
@@ -81,7 +90,9 @@ public sealed class KnowledgeTools
         }
 
         var stopwatch = Stopwatch.StartNew();
-        var import = ExportFolderCrawler.Import(exportRoot);
+        var import = ExportFolderCrawler.Import(
+            exportRoot,
+            progress: message => _logger?.LogInformation("{IngestProgress}", message));
         if (import.FilesImported == 0)
         {
             var details = import.Warnings.Count == 0
@@ -105,17 +116,17 @@ public sealed class KnowledgeTools
             byKind[group.Key] = group.Count();
         }
 
-        return new
+        return new IngestResult
         {
-            dbPath = targetPath,
-            source = import.Source,
-            filesFound = import.FilesFound,
-            filesImported = import.FilesImported,
-            nodes = import.Graph.Nodes.Count,
-            edges = import.Graph.Edges.Count,
-            byKind,
-            warnings = import.Warnings,
-            durationMs = stopwatch.ElapsedMilliseconds,
+            DbPath = targetPath,
+            Source = import.Source,
+            FilesFound = import.FilesFound,
+            FilesImported = import.FilesImported,
+            Nodes = import.Graph.Nodes.Count,
+            Edges = import.Graph.Edges.Count,
+            ByKind = byKind,
+            Warnings = import.Warnings.ToList(),
+            DurationMs = stopwatch.ElapsedMilliseconds,
         };
     }
 

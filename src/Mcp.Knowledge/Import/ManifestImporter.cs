@@ -55,7 +55,7 @@ public static class ManifestImporter
         PropertyNameCaseInsensitive = true,
     };
 
-    public static ExportFolderImportResult Import(string exportRoot)
+    public static ExportFolderImportResult Import(string exportRoot, Action<string>? progress = null)
     {
         var fullRoot = Path.GetFullPath(exportRoot);
         var warnings = new List<string>();
@@ -89,8 +89,15 @@ public static class ManifestImporter
         graph.UpsertNode(project);
 
         var imported = 0;
+        var processed = 0;
         foreach (var component in components)
         {
+            processed++;
+            if (progress != null && (processed % 100 == 0 || processed == components.Length))
+            {
+                progress($"ingest_source: {processed}/{components.Length} files (manifest)");
+            }
+
             var relativeFile = NormalizeSeparators(component.ExportedFile!);
             if (!File.Exists(Path.Combine(fullRoot, relativeFile)))
             {

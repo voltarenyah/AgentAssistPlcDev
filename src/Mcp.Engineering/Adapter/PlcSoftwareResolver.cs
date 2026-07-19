@@ -17,7 +17,19 @@ internal static class PlcSoftwareResolver
         var result = new List<PlcSoftware>();
         foreach (Device device in project.Devices)
             Collect(device, result);
+        // Grouped devices are NOT part of project.Devices (2026-07-19: the Sino_PEI PLC sits in the
+        // PEI_SinoARP device group and was invisible to enumeration) — traverse groups recursively.
+        foreach (DeviceUserGroup group in project.DeviceGroups)
+            CollectGroup(group, result);
         return result;
+    }
+
+    private static void CollectGroup(DeviceUserGroup group, List<PlcSoftware> result)
+    {
+        foreach (Device device in group.Devices)
+            Collect(device, result);
+        foreach (DeviceUserGroup child in group.Groups)
+            CollectGroup(child, result);
     }
 
     private static void Collect(HardwareObject node, List<PlcSoftware> result)

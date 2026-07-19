@@ -1,0 +1,86 @@
+<Window x:Class="App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PLC AI Assistant" Height="640" Width="1024"
+        Loaded="OnLoaded" Closed="OnClosed">
+    <DockPanel Margin="8">
+
+        <!-- Status strip -->
+        <Border DockPanel.Dock="Top" BorderBrush="Gray" BorderThickness="0,0,0,1" Padding="0,0,0,6" Margin="0,0,0,6">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding ServerStatus}" FontWeight="Bold" Margin="0,0,16,0" />
+                <TextBlock Text="{Binding EnvironmentStatus}" Margin="0,0,16,0" />
+                <TextBlock Text="{Binding ConnectionStatus}" />
+            </StackPanel>
+        </Border>
+
+        <!-- Log -->
+        <GroupBox Header="Log" DockPanel.Dock="Bottom" Height="220" Margin="0,6,0,0">
+            <ListBox ItemsSource="{Binding LogLines}" FontFamily="Consolas" FontSize="11" />
+        </GroupBox>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="420" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left: sessions + read project context -->
+            <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                <GroupBox Header="TIA sessions" Padding="4">
+                    <StackPanel>
+                        <Button Content="Refresh sessions" Command="{Binding RefreshSessionsCommand}" HorizontalAlignment="Left" Margin="0,0,0,4" />
+                        <DataGrid ItemsSource="{Binding Sessions}" SelectedItem="{Binding SelectedSession}"
+                                  AutoGenerateColumns="False" IsReadOnly="True" Height="120"
+                                  SelectionMode="Single" SelectionUnit="FullRow">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Id" Binding="{Binding Id}" Width="50" />
+                                <DataGridTextColumn Header="Mode" Binding="{Binding Mode}" Width="70" />
+                                <DataGridTextColumn Header="Project" Binding="{Binding ProjectPath}" Width="*" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <Button Content="Attach selected" Command="{Binding ConnectSelectedCommand}" Margin="0,0,4,0" />
+                            <Button Content="Disconnect" Command="{Binding DisconnectCommand}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <TextBox Text="{Binding ProjectPathInput, UpdateSourceTrigger=PropertyChanged}" Width="290" Margin="0,0,4,0" />
+                            <Button Content="Open headless" Command="{Binding ConnectHeadlessCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="Project context" Padding="4" Margin="0,6,0,0">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Read Project Context" Command="{Binding ReadProjectContextCommand}"
+                                    FontWeight="Bold" Padding="12,4" Margin="0,0,4,0" />
+                            <Button Content="Cancel" Command="{Binding CancelRunCommand}" IsEnabled="{Binding IsBusy}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding IngestSummary}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                        <TextBlock Text="{Binding DbPath}" TextWrapping="Wrap" Foreground="Gray" Margin="0,2,0,0" />
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+
+            <!-- Right: ingest summary -->
+            <Grid Grid.Column="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <GroupBox Header="Nodes by kind" Grid.Column="0" Margin="0,0,3,0" Padding="4">
+                    <DataGrid ItemsSource="{Binding NodeKinds}" AutoGenerateColumns="False" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Kind" Binding="{Binding Key}" Width="*" />
+                            <DataGridTextColumn Header="Count" Binding="{Binding Value}" Width="60" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </GroupBox>
+                <GroupBox Header="Warnings" Grid.Column="1" Margin="3,0,0,0" Padding="4">
+                    <ListBox ItemsSource="{Binding Warnings}" />
+                </GroupBox>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</Window>

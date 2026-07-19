@@ -4,6 +4,7 @@ using Contracts.Engineering;
 using Mcp.Engineering.Export;
 using Mcp.Engineering.Openness;
 using Mcp.Engineering.Sessions;
+using Microsoft.Extensions.Logging;
 using Siemens.Engineering;
 using Siemens.Engineering.Compiler;
 using Siemens.Engineering.SW;
@@ -22,11 +23,17 @@ namespace Mcp.Engineering.Adapter;
 public sealed class TiaV17Adapter : IEngineeringPlatform
 {
     private readonly object _gate = new();
+    private readonly ILogger<TiaV17Adapter> _logger;
     private TiaPortal? _portal;
     private Project? _project;
 
     /// <summary>True when we started the portal process (open mode); false when attached to a user's session.</summary>
     private bool _ownsPortal;
+
+    public TiaV17Adapter(ILogger<TiaV17Adapter> logger)
+    {
+        _logger = logger;
+    }
 
     public EnvCheckResult CheckEnvironment() => EnvironmentChecker.Check();
 
@@ -104,12 +111,22 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
 
         _ownsPortal = false;
+        // A project that is still loading shows as an empty Projects collection for a while —
+        // same bounded retry as the attach acquisition above before declaring failure.
+        for (var attempt = 1; attempt <= 3 && _portal!.Projects.Count == 0; attempt++)
+        {
+            if (attempt < 3)
+            {
+                Thread.Sleep(TimeSpan.FromSeconds(5));
+            }
+        }
+
         if (_portal!.Projects.Count == 0)
         {
             _portal.Dispose();
             _portal = null;
             throw new AdapterException("PROJECT_NOT_FOUND", "TIA is running but no project is open.",
-                "Open a project in that TIA session, or connect with projectPath instead.");
+                "Open a project in that TIA session (or connect with projectPath instead). If the project is still loading, retry once TIA shows it fully loaded; if it is open in a different TIA version, attach to that session instead.");
         }
 
         _project = _portal.Projects[0];
@@ -271,8 +288,12 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 Directory.CreateDirectory(dir);
                 var exportStartedUtc = DateTimeOffset.UtcNow;
                 var records = new List<ExportMetadataRecord>();
-                foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
+                var blocks = BlockEnumerator.Enumerate(plc.BlockGroup).ToArray();
+                _logger.LogInformation("export_all_blocks: {Count} blocks to export ({Plc})", blocks.Length, plc.Name);
+                var index = 0;
+                foreach (var (block, groupPath) in blocks)
                 {
+                    index++;
                     ExportResult result;
                     try
                     {
@@ -288,9 +309,20 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                             ExportedAt = DateTime.Now,
                         };
                     }
+
+                    if (!result.Success)
+                    {
+                        _logger.LogWarning("export_all_blocks: FAILED {Block} — {Error}", block.Name, result.Error);
+                    }
+                    else if (index % 25 == 0 || index == blocks.Length)
+                    {
+                        _logger.LogInformation("export_all_blocks: {Index}/{Total} ({Plc})", index, blocks.Length, plc.Name);
+                    }
+
                     results.Add(result);
                     records.Add(ExportManifest.CreateRecord(block, groupPath, dir, result));
                 }
+
                 ExportManifest.WriteAll(dir, exportStartedUtc, records, ExportManifest.BlockCategories);
             }
             return results.ToArray();
@@ -337,6 +369,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             return ExportObjects(
                 outputDir,
                 plcName,
+                "export_tag_tables",
                 plc => TagTableEnumerator.Enumerate(plc.TagTableGroup),
                 ExportTagTableCore,
                 (table, groupPath, root, result) => ExportManifest.CreateRecord(
@@ -352,6 +385,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             return ExportObjects(
                 outputDir,
                 plcName,
+                "export_udts",
                 plc => PlcTypeEnumerator.Enumerate(plc.TypeGroup),
                 ExportUdtCore,
                 (type, groupPath, root, result) =>
@@ -373,6 +407,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     private ExportResult[] ExportObjects<TObject>(
         string outputDir,
         string? plcName,
+        string label,
         Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
         Func<TObject, string, ExportResult> exportCore,
         Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord)
@@ -387,9 +422,22 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             // Multi-PLC: per-PLC subfolder, each its own export root with its own metadata.json.
             var dir = plcs.Count > 1 ? Path.Combine(outputDir, Sanitize(plc.Name)) : outputDir;
             Directory.CreateDirectory(dir);
-            foreach (var (item, groupPath) in enumerate(plc))
+            var items = enumerate(plc).ToArray();
+            _logger.LogInformation("{Label}: {Count} objects to export ({Plc})", label, items.Length, plc.Name);
+            var index = 0;
+            foreach (var (item, groupPath) in items)
             {
+                index++;
                 var result = exportCore(item, dir);
+                if (!result.Success)
+                {
+                    _logger.LogWarning("{Label}: FAILED {Name} — {Error}", label, result.BlockName, result.Error);
+                }
+                else if (index % 25 == 0 || index == items.Length)
+                {
+                    _logger.LogInformation("{Label}: {Index}/{Total} ({Plc})", label, index, items.Length, plc.Name);
+                }
+
                 results.Add(result);
                 ExportManifest.Upsert(dir, createRecord(item, groupPath, dir, result));
             }

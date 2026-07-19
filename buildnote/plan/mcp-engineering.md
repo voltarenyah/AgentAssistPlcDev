@@ -146,6 +146,7 @@ TiaV17Adapter.AttachToSession(sessionId)
 
 - **When to use:** user has TIA open and is actively working; the adapter is a helper, not a driver.
 - **Risk:** user can close the project or TIA while attached → `ObjectDisposedException`. Adapter must catch and re-query.
+- **(2026-07-19 fix):** the project lookup now tolerates a still-loading project — `Projects.Count == 0` is retried (3 × 5 s, same bounded pattern as the attach acquisition) before `PROJECT_NOT_FOUND` is thrown; the remediation text also names the wrong-version/wrong-process cases.
 - Phase 1 attaches using the V17 Openness assembly only. Other TIA versions (V18+) require their own adapter assembly (§13.7); multi-version attach is out of scope for Phase 1.
 - Exact API names (`GetProcesses` / `Attach`, current-project access) are verified in the API pass, §15 step 3.
 

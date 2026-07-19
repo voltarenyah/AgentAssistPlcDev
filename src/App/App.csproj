@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ApplicationDefinition is auto-detected by the file name App.xaml only; ours is AppShell.xaml. -->
+    <Page Remove="AppShell.xaml" />
+    <ApplicationDefinition Include="AppShell.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- MCP stdio client; in SDK 1.4.x the client types live in .Core. Same pin as the servers. -->
+    <PackageReference Include="ModelContextProtocol.Core" Version="1.4.1" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Contracts\Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

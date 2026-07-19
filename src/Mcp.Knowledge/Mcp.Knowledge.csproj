@@ -17,4 +17,9 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Shared result DTOs (IngestResult) for the App consumer (buildnote/plan/app.md §2.2). -->
+    <ProjectReference Include="..\Contracts\Contracts.csproj" />
+  </ItemGroup>
+
 </Project>
