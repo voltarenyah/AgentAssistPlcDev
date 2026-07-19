@@ -1,7 +1,7 @@
 // Graph importer tests for the ported TiaXmlSemanticGraphImporter.
 // Adapted from PlcSourceExporter (tests/PlcSourceExporter.Core.Tests/SemanticPlcGraphTests.cs):
-// logicStatements assertions dropped (writer not ported), UDT/tag cases dropped (not in scope),
-// expectations re-derived from the real V17 fixtures in Fixtures/.
+// UDT/tag cases re-derived from the real V17 fixtures in Fixtures/; logicStatements assertions
+// re-enabled in stage 5 with the ProgramBlockLogicYamlWriter port.
 using System;
 using System.IO;
 using System.Linq;
@@ -163,6 +163,42 @@ public sealed class SemanticPlcGraphTests
             edge.Type == SemanticRelationshipType.HasType &&
             edge.FromNodeId == "db-member:MotorFbInstance:Setpoint" &&
             edge.ToNodeId == "type:Real");
+    }
+
+    [Fact]
+    public void EnrichesNetworkNodesWithLogicStatements()
+    {
+        var graph = new SemanticPlcGraph();
+        TiaXmlSemanticGraphImporter.ImportBlockXml(
+            FixtureFiles.ReadAllText(FixtureFiles.MainObPath),
+            new ProgramBlockComponent("Main", "OB", "Program blocks/Main", "Main [OB1].xml"),
+            graph);
+        TiaXmlSemanticGraphImporter.ImportBlockXml(
+            FixtureFiles.ReadAllText(FixtureFiles.SimulateCylinderFcPath),
+            new ProgramBlockComponent(
+                "FC_LAD_SimulateCylinder_Call",
+                "FC",
+                "Program blocks/FC_LAD_SimulateCylinder_Call",
+                "FC_LAD_SimulateCylinder_Call [FC1].xml"),
+            graph);
+
+        // Translated LAD networks carry newline-delimited SCL-like statements.
+        var network1 = graph.GetNode("network:Main:1");
+        Assert.Equal(
+            "FC_LAD_SimulateCylinder_Call(btn_forward := Btn_ForwardCommand, btn_backward := Btn_BackwardCommand, outputGoForwardPos => CylinderGoForwardPos, outputGoBackwardPos => CylinderGoBackwardPos, io_Cylinder@ForwardPos => Cylinder@ForwardPos, io_Cylinder@BackwardPos => Cylinder@ForwardPos);\nCylinderGoForwardPos := FC_LAD_SimulateCylinder_Call.OUTPUTGOFORWARDPOS;\nCylinderGoBackwardPos := FC_LAD_SimulateCylinder_Call.OUTPUTGOBACKWARDPOS;",
+            network1.Properties["logicStatements"]);
+
+        // Empty networks do not get the property.
+        Assert.False(graph.GetNode("network:Main:2").Properties.ContainsKey("logicStatements"));
+        Assert.False(graph.GetNode("network:FC_LAD_SimulateCylinder_Call:7").Properties.ContainsKey("logicStatements"));
+
+        // Translated statements survive the SQLite round-trip.
+        var dbPath = TempDbPath();
+        SqliteSemanticGraphStore.Save(dbPath, graph);
+        var loaded = SqliteSemanticGraphStore.Load(dbPath);
+        Assert.Equal(
+            network1.Properties["logicStatements"],
+            loaded.GetNode("network:Main:1").Properties["logicStatements"]);
     }
 
     [Fact]

@@ -64,5 +64,35 @@
       "sql": "SELECT group_concat(id, char(10)) AS edge_ids FROM (SELECT id FROM graph_edges ORDER BY id);",
       "maxRows": 1
     }
+  },
+  {
+    "tool": "get_block",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "block": "Main"
+    }
+  },
+  {
+    "tool": "get_network",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "block": "FB_LAD_SimulateCylinder",
+      "networkIndex": 3
+    }
+  },
+  {
+    "tool": "search",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "text": "CylinderMovementSimulate"
+    }
+  },
+  {
+    "tool": "search",
+    "args": {
+      "dbPath": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo\\plc-knowledge.db",
+      "text": "btn_forward",
+      "kind": "Network"
+    }
   }
 ]

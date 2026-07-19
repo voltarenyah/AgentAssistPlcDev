@@ -4,7 +4,8 @@
 //   stage 2 adds a root-element folder crawler in Import/ instead.
 // - Dropped UDT/tag-table import initially (ImportUdtXml/ImportTagTableXml) — ported back in stage 4
 //   (2026-07-18) together with UdtId/UdtMemberId/IoAddressId (UdtId internal for the CONTAINS wiring).
-// - Dropped the logicStatements enrichment in ImportBlockXml (ProgramBlockLogicYamlWriter is not ported yet).
+// - logicStatements enrichment in ImportBlockXml landed in stage 5 (2026-07-18) with the
+//   ProgramBlockLogicYamlWriter port (Parsing/ProgramBlockLogicYamlWriter.cs).
 // - Dropped PlcSemanticGraphQueries, NativeSqliteRuntime (net8 + Microsoft.Data.Sqlite loads e_sqlite3 itself),
 //   SemanticPlcModelWriter and SemanticGraphEnumerableExtensions.
 // - EnsureSqliteInitialized no longer extracts an embedded native DLL; it only calls SQLitePCL.Batteries_V2.Init().
@@ -215,8 +216,7 @@ public static class TiaXmlSemanticGraphImporter
             }));
 
         var parsed = ProgramSemanticReferenceBuilder.Parse(xml, component);
-        // Adaptation: the reference enriches network nodes with `logicStatements` from
-        // ProgramBlockLogicYamlWriter here; that writer is not ported (buildnote/plan/mcp-knowledge.md §2.6).
+        var logicStatementsByCompileUnitId = ProgramBlockLogicYamlWriter.GetNetworkStatementTextByCompileUnitId(xml, component);
         ProgramNetworkRecord? previousNetwork = null;
         foreach (var network in parsed.Networks)
         {
@@ -229,6 +229,11 @@ public static class TiaXmlSemanticGraphImporter
                 ["compileUnitId"] = network.CompileUnitId,
                 ["sourceFile"] = network.SourceFile
             };
+            if (logicStatementsByCompileUnitId.TryGetValue(network.CompileUnitId, out var logicStatements) &&
+                !string.IsNullOrWhiteSpace(logicStatements))
+            {
+                networkProperties["logicStatements"] = logicStatements;
+            }
 
             graph.UpsertNode(new SemanticGraphNode(
                 network.Id,

@@ -152,5 +152,19 @@ public static class SchemaVocabulary
               AND member.kind = 'UDT Member'
             ORDER BY udt.name, member.name;
             """),
+        new SchemaExampleQuery(
+            "Search translated network logic",
+            """
+            SELECT
+              network.id,
+              network.name,
+              logic.value AS logic_statements
+            FROM graph_nodes network
+            JOIN graph_node_properties logic
+              ON logic.node_id = network.id AND logic.name = 'logicStatements'
+            WHERE network.kind = 'Network'
+              AND logic.value LIKE '%Time_Base%'
+            ORDER BY network.id;
+            """),
     };
 }

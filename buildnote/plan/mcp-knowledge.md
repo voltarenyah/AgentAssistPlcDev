@@ -21,8 +21,8 @@ Nothing else is in scope: no LLM audit tables, no source editing, no git, no UI.
 3. ~~**Crawl by root element, not `metadata.json`.**~~ **SUPERSEDED 2026-07-18 (stage 3):** mcp-engineering now writes a PlcSourceExporter-compatible `metadata.json` (schema "1.0") into its export roots, so the importer is **manifest-first**: when `<exportRoot>/metadata.json` exists, components are dispatched from the manifest (the previously unported `ImportExportRoot`/`LoadExportedComponents`/`IsProgramBlockCategory` were ported in stage 3); the root-element crawl remains as the fallback for manifest-less folders (legacy exports). Manifest mode adds reconciliation warnings: Exported-but-missing file, and on-disk `*.xml` not referenced by the manifest (catches legacy flat files and `spike/` copies). Malformed manifest → `MANIFEST_INVALID` error (loud over silent fallback).
 4. **Rebuild-only ingest.** Delete-all + bulk insert in one transaction, same as the reference. Incremental re-ingest remains a Phase-3 item (`initialLaunch` §Phase 3).
 5. **Scope = what engineering exports today.** mcp-engineering Phase 1 exports blocks only (OB/FB/FC/DB, including instance DBs). Tag-table and UDT import paths are **not** ported now; they land in the same step that adds tag/UDT export to mcp-engineering (§13). The dispatch is designed so those categories slot in without schema changes. **(2026-07-18, stage 4: the knowledge-side import of `Tags`/`UDT` categories and `SW.Tags.PlcTagTable`/`SW.Types.PlcStruct` root elements is now ported and wired into both ingest paths; engineering-side export lands in parallel.)**
-6. **`logicStatements` (SCL-like network text) deferred.** It comes from `ProgramBlockLogicYamlWriter.cs` (2 097 lines, the largest file). Network nodes already carry title + reads/writes/calls without it; it ports in the step that builds `get_block`/`get_network` for the comment workflow.
-7. **Tool surface this step = 3 tools** (`ingest_source`, `query`, `get_schema`), following the shipped mcp-engineering convention of plain verb_noun names with no server prefix.
+6. **`logicStatements` (SCL-like network text) deferred.** It comes from `ProgramBlockLogicYamlWriter.cs` (2 097 lines, the largest file). Network nodes already carry title + reads/writes/calls without it; it ports in the step that builds `get_block`/`get_network` for the comment workflow. **(DONE 2026-07-18, stage 5: translator ported to `Parsing/ProgramBlockLogicYamlWriter.cs` — FlgNet→SCL-like statements only, YAML file generation stays behind. Network nodes carry `logicStatements` (newline-joined statements, empty networks omit it), mirroring reference commit `2b3dace`; translation conventions follow the polished reference output the user maintains in `translate\program-blocks.yaml`.)**
+7. **Tool surface this step = 3 tools** (`ingest_source`, `query`, `get_schema`), following the shipped mcp-engineering convention of plain verb_noun names with no server prefix. **(stage 5 added `get_block`, `get_network`, `search` — 6 tools total.)**
 
 ## 3. Input contract with mcp-engineering
 
@@ -93,6 +93,9 @@ Vocabulary produced by this step (subset of the reference; ~~UDT/tag kinds arriv
 | `ingest_source` | write | `{ exportRoot: string, dbPath?: string }` | `IngestResult` | Crawl → classify → parse → rebuild DB. Default `dbPath` = `<exportRoot>/plc-knowledge.db` |
 | `query` | read | `{ dbPath: string, sql: string, maxRows?: int }` | `{ columns[], rows[][], truncated: bool }` | Read-only SQL. Connection opened with `Mode=ReadOnly`; single statement, must start with `SELECT`/`WITH`/`EXPLAIN`; `maxRows` default 200, hard cap 1000, `truncated` flag set when cut |
 | `get_schema` | read | — | `{ ddl: string, nodeKinds[], edgeTypes[], exampleQueries[] }` | Static content; no DB needed |
+| `get_block` (stage 5) | read | `{ dbPath: string, block: string }` | `{ block, networks[] }` | OB/FB/FC by name (case-insensitive); networks carry index, compileUnitId, title, language, logicStatements (omitted when empty) |
+| `get_network` (stage 5) | read | `{ dbPath: string, block: string, networkIndex: int }` | `{ block, network, reads[], writes[], calls[] }` | Network detail; reads/writes are distinct symbol names, calls via Instruction nodes |
+| `search` (stage 5) | read | `{ dbPath: string, text: string, kind?: string, maxRows?: int }` | `{ text, kind?, matches[], truncated }` | Case-insensitive substring match over node names + `title`/`logicStatements` properties; `maxRows` default 50, hard cap 200; snippets capped at 300 chars |
 
 `IngestResult`:
 
@@ -107,7 +110,7 @@ Vocabulary produced by this step (subset of the reference; ~~UDT/tag kinds arriv
 }
 ```
 
-Deferred to later steps: `get_block`, `get_network`, `search` (arrive with `logicStatements` and the comment workflow); UDT/tag import (arrives with engineering-side export).
+Deferred to later steps: ~~`get_block`, `get_network`, `search` (arrive with `logicStatements` and the comment workflow)~~ **(done, stage 5)**; UDT/tag import (arrives with engineering-side export).
 
 ## 7. Ingest pipeline
 
@@ -129,7 +132,7 @@ ingest_source(exportRoot, dbPath?)
  7. Return IngestResult with counts + warnings + source ("manifest" | "crawl")
 ```
 
-Error convention mirrors engineering: tool failures are normal tool results with `isError: true` and a structured `{ code, message, remediation }` payload. Codes: `EXPORT_ROOT_NOT_FOUND`, `NO_SOURCE_FILES`, `MANIFEST_INVALID` (2026-07-18: metadata.json present but not valid/readable JSON), `DB_LOCKED` (SQLite busy — likely another process holds the file), `QUERY_REJECTED` (non-read-only SQL), `DB_NOT_FOUND` (query against missing file).
+Error convention mirrors engineering: tool failures are normal tool results with `isError: true` and a structured `{ code, message, remediation }` payload. Codes: `EXPORT_ROOT_NOT_FOUND`, `NO_SOURCE_FILES`, `MANIFEST_INVALID` (2026-07-18: metadata.json present but not valid/readable JSON), `DB_LOCKED` (SQLite busy — likely another process holds the file), `QUERY_REJECTED` (non-read-only SQL), `DB_NOT_FOUND` (query against missing file). **(stage 5 adds: `BLOCK_NOT_FOUND`, `NETWORK_NOT_FOUND`, `SEARCH_TEXT_REQUIRED`.)**
 
 ## 8. Code reuse map (port sources)
 
@@ -141,7 +144,7 @@ All under `C:\Users\Ansel\Documents\Siemens TIA Add-in Dev\PlcSourceExporter\src
 | `ProgramSemanticReference.cs` (1 012 ln) | `ProgramSemanticReferenceBuilder.Parse()` — compile units, wires, accesses, calls | `Parsing/` | As-is |
 | — (new) | Root-element classifier + duplicate resolution | `Import/ExportFolderCrawler.cs` | New code, small |
 
-Explicitly **not** ported now: `ExportMetadata.cs`, `ProgramBlockComponentCatalog.cs` (manifest crawl — N/A), `ProgramBlockLogicYamlWriter.cs` (step 3), `TagTable.cs` / `UdtTypeTable.cs` (step 2), `PlcExportService.cs` (export orchestration — that's mcp-engineering's job), AddIn/TestHarness projects.
+Explicitly **not** ported now: `ExportMetadata.cs`, `ProgramBlockComponentCatalog.cs` (manifest crawl — N/A), ~~`ProgramBlockLogicYamlWriter.cs` (step 3)~~ **(ported in stage 5: translator only — `GetNetworkStatementTextByCompileUnitId` + internals; YAML `Write`/`Serialize`/`Quote` stay behind)**, `TagTable.cs` / `UdtTypeTable.cs` (step 2), `PlcExportService.cs` (export orchestration — that's mcp-engineering's job), AddIn/TestHarness projects.
 
 Each ported file gets a header comment: origin path + "adapted for mcp-knowledge; keep changes minimal to ease future re-syncs".
 
@@ -202,7 +205,7 @@ tests/Mcp.Knowledge.Tests/
 
 1. **mcp-knowledge ingest** ← this document
 2. Engineering exports tag tables + UDTs; knowledge imports them (`TagTable.cs` / `UdtTypeTable.cs` port) — **knowledge side DONE 2026-07-18 (stage 4)**; engineering-side `export_tag_tables`/`export_udts` in parallel at that date
-3. `logicStatements` port + knowledge query helpers (`get_block`, `get_network`, `search`)
+3. `logicStatements` port + knowledge query helpers (`get_block`, `get_network`, `search`) — **DONE 2026-07-18 (stage 5)**
 4. mcp-source-editor MVP (parse/comment-edit/validate)
 5. mcp-version-control MVP (`vc_snapshot` before write-back)
 6. Agent (DeepSeek) + comment-generation workflow

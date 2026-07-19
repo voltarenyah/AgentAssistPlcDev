@@ -17,6 +17,9 @@ public sealed class KnowledgeTools
 {
     private const int DefaultMaxRows = 200;
     private const int HardMaxRows = 1000;
+    private const int DefaultSearchMaxRows = 50;
+    private const int HardSearchMaxRows = 200;
+    private const int SearchSnippetMaxLength = 300;
 
     [McpServerTool(Name = "get_schema")]
     [Description("SQLite property-graph schema of the PLC knowledge base: table DDL, node kinds, edge types and example read-only queries (read-only, static content).")]
@@ -42,6 +45,30 @@ public sealed class KnowledgeTools
         [Description("One read-only SQL statement; must start with SELECT, WITH or EXPLAIN.")] string sql,
         [Description("Maximum rows to return (default 200, hard cap 1000).")] int? maxRows = null)
         => Invoke(() => RunQuery(dbPath, sql, maxRows));
+
+    [McpServerTool(Name = "get_block")]
+    [Description("Get a program block (OB/FB/FC) with its networks: index, title, language and translated SCL-like logicStatements (read-only).")]
+    public CallToolResult GetBlock(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Block name, e.g. 'Main'.")] string block)
+        => Invoke(() => BlockDetail(dbPath, block));
+
+    [McpServerTool(Name = "get_network")]
+    [Description("Get one network of a program block: title, language, logicStatements, symbols read/written and blocks called (read-only).")]
+    public CallToolResult GetNetwork(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Block name, e.g. 'Main'.")] string block,
+        [Description("1-based network index.")] int networkIndex)
+        => Invoke(() => NetworkDetail(dbPath, block, networkIndex));
+
+    [McpServerTool(Name = "search")]
+    [Description("Case-insensitive substring search over node names and network title / logicStatements text (read-only).")]
+    public CallToolResult Search(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Substring to find in node names, network titles or logicStatements.")] string text,
+        [Description("Optional node-kind filter, e.g. 'Network', 'OB', 'Variable'.")] string? kind = null,
+        [Description("Maximum matches to return (default 50, hard cap 200).")] int? maxRows = null)
+        => Invoke(() => SearchGraph(dbPath, text, kind, maxRows));
 
     private static object Ingest(string exportRoot, string? dbPath)
     {
@@ -177,6 +204,277 @@ public sealed class KnowledgeTools
 
         return statement;
     }
+
+    private static object BlockDetail(string dbPath, string block)
+    {
+        using var connection = OpenReadOnly(dbPath);
+        var blockNode = FindBlockNode(connection, block);
+        var networks = ReadNetworks(connection, blockNode.Id);
+        return new
+        {
+            block = blockNode,
+            networks,
+        };
+    }
+
+    private static object NetworkDetail(string dbPath, string block, int networkIndex)
+    {
+        using var connection = OpenReadOnly(dbPath);
+        var blockNode = FindBlockNode(connection, block);
+        var networks = ReadNetworks(connection, blockNode.Id);
+        var network = networks.FirstOrDefault(item => item.Index == networkIndex);
+        if (network == null)
+        {
+            var available = string.Join(", ", networks.Select(item => item.Index?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?"));
+            throw new KnowledgeToolException(
+                "NETWORK_NOT_FOUND",
+                $"Block '{blockNode.Name}' has no network with index {networkIndex} (available: {available}).",
+                "Pass a 1-based network index as listed by get_block.");
+        }
+
+        return new
+        {
+            block = blockNode,
+            network,
+            reads = ReadAccessNames(connection, network.Id, "READS"),
+            writes = ReadAccessNames(connection, network.Id, "WRITES"),
+            calls = ReadCalls(connection, network.Id),
+        };
+    }
+
+    private static object SearchGraph(string dbPath, string text, string? kind, int? maxRows)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            throw new KnowledgeToolException(
+                "SEARCH_TEXT_REQUIRED",
+                "Search text must not be empty.",
+                "Pass a substring to find in node names, network titles or logicStatements.");
+        }
+
+        var limit = maxRows is null ? DefaultSearchMaxRows : Math.Clamp(maxRows.Value, 1, HardSearchMaxRows);
+        var pattern = "%" + text.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
+        var hasKind = !string.IsNullOrWhiteSpace(kind);
+        using var connection = OpenReadOnly(dbPath);
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT id, kind, name, 'name' AS matchedIn, NULL AS snippet
+            FROM graph_nodes
+            WHERE name LIKE @pattern ESCAPE '\' {(hasKind ? "AND kind = @kind" : string.Empty)}
+            UNION ALL
+            SELECT n.id, n.kind, n.name, p.name AS matchedIn, p.value AS snippet
+            FROM graph_nodes n
+            JOIN graph_node_properties p ON p.node_id = n.id AND p.name IN ('title', 'logicStatements')
+            WHERE p.value LIKE @pattern ESCAPE '\' {(hasKind ? "AND n.kind = @kind" : string.Empty)}
+            ORDER BY kind, id
+            LIMIT @limit;
+            """;
+        command.Parameters.AddWithValue("@pattern", pattern);
+        if (hasKind)
+        {
+            command.Parameters.AddWithValue("@kind", kind);
+        }
+
+        command.Parameters.AddWithValue("@limit", limit + 1);
+
+        var matches = new List<SearchMatch>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var snippet = reader.IsDBNull(4) ? null : reader.GetString(4);
+            if (snippet is { Length: > SearchSnippetMaxLength })
+            {
+                snippet = snippet[..SearchSnippetMaxLength] + "…";
+            }
+
+            matches.Add(new SearchMatch(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                snippet));
+        }
+
+        var truncated = matches.Count > limit;
+        if (truncated)
+        {
+            matches.RemoveAt(matches.Count - 1);
+        }
+
+        return new { text, kind, matches, truncated };
+    }
+
+    private static SqliteConnection OpenReadOnly(string dbPath)
+    {
+        if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath))
+        {
+            throw new KnowledgeToolException(
+                "DB_NOT_FOUND",
+                $"Database '{dbPath}' was not found.",
+                "Run ingest_source first, or check the dbPath.");
+        }
+
+        SqliteSemanticGraphStore.EnsureSqliteInitialized();
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString();
+        var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        return connection;
+    }
+
+    private static BlockNodeInfo FindBlockNode(SqliteConnection connection, string block)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, kind, name
+            FROM graph_nodes
+            WHERE name = @name COLLATE NOCASE
+              AND kind IN ('OB', 'FB', 'FC')
+            ORDER BY id
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("@name", block);
+        string? id = null;
+        string? kind = null;
+        string? name = null;
+        using (var reader = command.ExecuteReader())
+        {
+            if (reader.Read())
+            {
+                id = reader.GetString(0);
+                kind = reader.GetString(1);
+                name = reader.GetString(2);
+            }
+        }
+
+        if (id == null || kind == null || name == null)
+        {
+            throw new KnowledgeToolException(
+                "BLOCK_NOT_FOUND",
+                $"Program block '{block}' was not found.",
+                "Check the name; list blocks via query: SELECT id, kind, name FROM graph_nodes WHERE kind IN ('OB','FB','FC') ORDER BY kind, name;");
+        }
+
+        using var properties = connection.CreateCommand();
+        properties.CommandText = "SELECT name, value FROM graph_node_properties WHERE node_id = @id AND name IN ('sourceFile', 'folderPath');";
+        properties.Parameters.AddWithValue("@id", id);
+        string? sourceFile = null;
+        string? folderPath = null;
+        using (var reader = properties.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                if (reader.GetString(0) == "sourceFile")
+                {
+                    sourceFile = reader.GetString(1);
+                }
+                else
+                {
+                    folderPath = reader.GetString(1);
+                }
+            }
+        }
+
+        return new BlockNodeInfo(id, kind, name, sourceFile, folderPath);
+    }
+
+    private static List<NetworkInfo> ReadNetworks(SqliteConnection connection, string blockId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+              network.id,
+              idx.value,
+              cu.value,
+              title.value,
+              lang.value,
+              logic.value
+            FROM graph_edges e
+            JOIN graph_nodes network ON network.id = e.to_node_id AND network.kind = 'Network'
+            LEFT JOIN graph_node_properties idx ON idx.node_id = network.id AND idx.name = 'networkIndex'
+            LEFT JOIN graph_node_properties cu ON cu.node_id = network.id AND cu.name = 'compileUnitId'
+            LEFT JOIN graph_node_properties title ON title.node_id = network.id AND title.name = 'title'
+            LEFT JOIN graph_node_properties lang ON lang.node_id = network.id AND lang.name = 'language'
+            LEFT JOIN graph_node_properties logic ON logic.node_id = network.id AND logic.name = 'logicStatements'
+            WHERE e.type = 'CONTAINS' AND e.from_node_id = @blockId
+            ORDER BY CAST(idx.value AS INTEGER);
+            """;
+        command.Parameters.AddWithValue("@blockId", blockId);
+        var networks = new List<NetworkInfo>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var indexText = reader.IsDBNull(1) ? null : reader.GetString(1);
+            int? index = int.TryParse(indexText, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : null;
+            networks.Add(new NetworkInfo(
+                reader.GetString(0),
+                index,
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5)));
+        }
+
+        return networks;
+    }
+
+    private static string[] ReadAccessNames(SqliteConnection connection, string networkId, string relationship)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT DISTINCT symbol.name
+            FROM graph_edges e
+            JOIN graph_nodes symbol ON symbol.id = e.to_node_id
+            WHERE e.type = @relationship AND e.from_node_id = @networkId
+            ORDER BY symbol.name;
+            """;
+        command.Parameters.AddWithValue("@relationship", relationship);
+        command.Parameters.AddWithValue("@networkId", networkId);
+        var names = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            names.Add(reader.GetString(0));
+        }
+
+        return names.ToArray();
+    }
+
+    private static CallInfo[] ReadCalls(SqliteConnection connection, string networkId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT callee.name, callee.kind
+            FROM graph_edges contains
+            JOIN graph_nodes instruction ON instruction.id = contains.to_node_id AND instruction.kind = 'Instruction'
+            JOIN graph_edges calls ON calls.from_node_id = instruction.id AND calls.type = 'CALLS'
+            JOIN graph_nodes callee ON callee.id = calls.to_node_id
+            WHERE contains.type = 'CONTAINS' AND contains.from_node_id = @networkId
+            ORDER BY callee.name;
+            """;
+        command.Parameters.AddWithValue("@networkId", networkId);
+        var calls = new List<CallInfo>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            calls.Add(new CallInfo(reader.GetString(0), reader.GetString(1)));
+        }
+
+        return calls.ToArray();
+    }
+
+    private sealed record BlockNodeInfo(string Id, string Kind, string Name, string? SourceFile, string? FolderPath);
+
+    private sealed record NetworkInfo(string Id, int? Index, string? CompileUnitId, string? Title, string? Language, string? LogicStatements);
+
+    private sealed record CallInfo(string Name, string Kind);
+
+    private sealed record SearchMatch(string Id, string Kind, string Name, string MatchedIn, string? Snippet);
 
     private static CallToolResult Invoke(Func<object> action)
     {

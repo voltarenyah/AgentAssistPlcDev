@@ -53,7 +53,7 @@ C:\Users\Ansel\orca\projects\AgentAssistPlcDev\
 Naming convention: tools use a plain verb_noun pattern (no per-server prefix). Each tool annotated (`readOnlyHint`/`destructiveHint`), structured JSON output, actionable error messages. Each server tested standalone with MCP Inspector before UI integration.
 
 - **mcp-engineering** (Phase 1): `check_environment`, `list_sessions`, `connect`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `import_block` (destructive), `compile_block`, `compile_plc`, `save_project`, `disconnect`
-- **mcp-knowledge** (Phase 2, split — design: `buildnote/plan/mcp-knowledge.md`): step 1 ships `ingest_source`, `query` (read-only SQL), `get_schema`; later steps add `get_block`, `get_network`, `search`
+- **mcp-knowledge** (Phase 2, split — design: `buildnote/plan/mcp-knowledge.md`): step 1 ships `ingest_source`, `query` (read-only SQL), `get_schema`; knowledge-depth step (done 2026-07-18) adds `get_block`, `get_network`, `search` + `logicStatements` network text
 - **mcp-source-editor** (Phase 2): `src_parse_block`, `src_insert_network_comment`, `src_diff`, `src_validate` (well-formedness + TIA schema sanity checks)
 - **mcp-version-control** (Phase 2): `vc_init`, `vc_snapshot`, `vc_log`, `vc_diff`, `vc_restore` (destructive)
 - **mcp-simulation** (Phase 5): `sim_list_instances`, `sim_create_instance`, `sim_power`, `sim_set_state`, `sim_read_tag`, `sim_write_tag`, `sim_run_assertion`

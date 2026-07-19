@@ -4,7 +4,7 @@
 
 Windows desktop app that assists PLC programming work, starting with Siemens TIA Portal V17. The app is decomposed into independent MCP servers (one per capability domain) so any MCP-compatible client can call each server individually. Each MCP hosts pluggable platform adapters behind a shared contract.
 
-**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 — AI-generated network comments over the MCP chain — is split into steps; step 1 (mcp-knowledge ingest) design: `buildnote/plan/mcp-knowledge.md`.
+**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 — AI-generated network comments over the MCP chain — is split into steps; mcp-knowledge (step 1 + knowledge depth: `logicStatements`, `get_block`/`get_network`/`search`) done 2026-07-18; design: `buildnote/plan/mcp-knowledge.md`.
 
 ## Tech Stack
 
@@ -88,7 +88,7 @@ AgentAssistPlcDev.sln
 | Server | Phase | Key Tools |
 | ------ | ----- | --------- |
 | Engineering | 1 (done) | `check_environment`, `list_sessions`, `connect`, `disconnect`, `save_project`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `import_block` (destructive), `compile_block`, `compile_plc` |
-| Knowledge | 2, step 1 | `ingest_source`, `query` (read-only SQL), `get_schema`; later steps add `get_block`, `get_network`, `search` |
+| Knowledge | 2, step 1 + depth | `ingest_source`, `query` (read-only SQL), `get_schema`, `get_block`, `get_network`, `search` |
 | Source Editor | 2, step 4 | `parse_block`, `insert_network_comment`, `diff`, `validate` |
 | Version Control | 2, step 5 | `init`, `snapshot`, `log`, `diff`, `restore` (destructive) |
 | Simulation | 5 | instance lifecycle, tag I/O, cycle control |
