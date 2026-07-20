@@ -249,6 +249,11 @@ public static class ProgramBlockLogicYamlWriter
         return MatchesAny(partName, "SCoil", "RCoil");
     }
 
+    private static bool IsSetResetPart(string partName)
+    {
+        return MatchesAny(partName, "Sr", "Rs");
+    }
+
     private static bool MatchesAny(string value, params string[] candidates)
     {
         return candidates.Any(candidate => string.Equals(value, candidate, StringComparison.OrdinalIgnoreCase));
@@ -765,31 +770,57 @@ public static class ProgramBlockLogicYamlWriter
         public IReadOnlyList<string> BuildSetResetPartStatements(List<string> notes)
         {
             var statements = new List<string>();
-            foreach (var part in Parts.Values.Where(part => string.Equals(part.Name, "Sr", StringComparison.OrdinalIgnoreCase)).OrderBy(part => part.Order))
+            foreach (var part in Parts.Values.Where(part => IsSetResetPart(part.Name)).OrderBy(part => part.Order))
             {
                 var target = GetPinAccess(part.Uid, "operand");
                 if (string.IsNullOrWhiteSpace(target))
                 {
-                    notes.Add("Skipped Sr part because its operand could not be resolved by symbol name.");
+                    notes.Add($"Skipped {part.Name} part because its operand could not be resolved by symbol name.");
                     continue;
                 }
 
-                var set = ResolveInputValue(part.Uid, "s", notes);
-                var reset = ResolveInputValue(part.Uid, "r1", notes);
+                // Siemens Sr part (pins S/R1) is reset dominant, Rs part (pins S1/R) is set
+                // dominant: the dominant input's statement is emitted last so it overwrites
+                // the other one when both inputs are true.
+                var resetDominant = string.Equals(part.Name, "Sr", StringComparison.OrdinalIgnoreCase);
+                var set = ResolveInputValue(part.Uid, resetDominant ? "s" : "s1", notes);
+                var reset = ResolveInputValue(part.Uid, resetDominant ? "r1" : "r", notes);
                 if (string.IsNullOrWhiteSpace(set) && string.IsNullOrWhiteSpace(reset))
                 {
-                    notes.Add($"Skipped Sr part for {target} because neither S nor R1 could be resolved.");
+                    notes.Add($"Skipped {part.Name} part for {target} because neither set nor reset could be resolved.");
                     continue;
                 }
 
-                if (!string.IsNullOrWhiteSpace(reset))
-                {
-                    statements.Add($"IF {reset} THEN {target} := FALSE; END_IF;");
-                }
+                var setStatement = string.IsNullOrWhiteSpace(set)
+                    ? null
+                    : $"IF {set} THEN {target} := TRUE; END_IF;";
+                var resetStatement = string.IsNullOrWhiteSpace(reset)
+                    ? null
+                    : $"IF {reset} THEN {target} := FALSE; END_IF;";
 
-                if (!string.IsNullOrWhiteSpace(set))
+                if (resetDominant)
                 {
-                    statements.Add($"IF {set} THEN {target} := TRUE; END_IF;");
+                    if (setStatement != null)
+                    {
+                        statements.Add(setStatement);
+                    }
+
+                    if (resetStatement != null)
+                    {
+                        statements.Add(resetStatement);
+                    }
+                }
+                else
+                {
+                    if (resetStatement != null)
+                    {
+                        statements.Add(resetStatement);
+                    }
+
+                    if (setStatement != null)
+                    {
+                        statements.Add(setStatement);
+                    }
                 }
             }
 
@@ -1149,12 +1180,12 @@ public static class ProgramBlockLogicYamlWriter
                 return BuildArithmeticExpression(part, notes);
             }
 
-            if (string.Equals(part.Name, "Sr", StringComparison.OrdinalIgnoreCase) && MatchesAny(pinName, "q", "out"))
+            if (IsSetResetPart(part.Name) && MatchesAny(pinName, "q", "out"))
             {
                 var target = GetPinAccess(part.Uid, "operand");
                 if (string.IsNullOrWhiteSpace(target))
                 {
-                    notes.Add("Skipped Sr output because its operand could not be resolved by symbol name.");
+                    notes.Add($"Skipped {part.Name} output because its operand could not be resolved by symbol name.");
                 }
 
                 return target;

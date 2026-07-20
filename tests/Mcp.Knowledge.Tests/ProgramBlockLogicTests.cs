@@ -507,8 +507,61 @@ public sealed class ProgramBlockLogicTests
         var statements = StatementsOf(result);
         Assert.Contains("IF ResetRequest THEN LatchedMemory := FALSE; END_IF;", statements);
         Assert.Contains("IF SetRequest THEN LatchedMemory := TRUE; END_IF;", statements);
+        // Siemens Sr part is reset dominant: the reset line must come after the set line
+        // so reset overwrites set when both inputs are true.
+        var statementList = statements.ToList();
+        Assert.True(
+            statementList.IndexOf("IF SetRequest THEN LatchedMemory := TRUE; END_IF;")
+            < statementList.IndexOf("IF ResetRequest THEN LatchedMemory := FALSE; END_IF;"),
+            "Set line must be emitted before the reset line for reset-dominant Sr parts.");
         Assert.Contains("Alarm := LatchedMemory;", statements);
         Assert.DoesNotContain("Skipped Sr", Joined(result));
+    }
+
+    [Fact]
+    public void TranslatesBuiltInRsPartAsSetDominant()
+    {
+        var result = TranslateLadBlock(
+            "RsLogic",
+            "cu-rs",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v5">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-set"><Symbol><Component Name="SetRequest" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-reset"><Symbol><Component Name="ResetRequest" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-memory"><Symbol><Component Name="LatchedMemory" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-alarm"><Symbol><Component Name="Alarm" /></Symbol></Access>
+                <Part Name="Contact" UId="p-set" />
+                <Part Name="Contact" UId="p-reset" />
+                <Part Name="Rs" UId="p-rs" />
+                <Part Name="Coil" UId="p-alarm" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-power"><Powerrail /><NameCon UId="p-set" Name="in" /><NameCon UId="p-reset" Name="in" /></Wire>
+                <Wire UId="w-set-op"><IdentCon UId="a-set" /><NameCon UId="p-set" Name="operand" /></Wire>
+                <Wire UId="w-reset-op"><IdentCon UId="a-reset" /><NameCon UId="p-reset" Name="operand" /></Wire>
+                <Wire UId="w-set"><NameCon UId="p-set" Name="out" /><NameCon UId="p-rs" Name="s1" /></Wire>
+                <Wire UId="w-reset"><NameCon UId="p-reset" Name="out" /><NameCon UId="p-rs" Name="r" /></Wire>
+                <Wire UId="w-memory"><IdentCon UId="a-memory" /><NameCon UId="p-rs" Name="operand" /></Wire>
+                <Wire UId="w-q"><NameCon UId="p-rs" Name="q" /><NameCon UId="p-alarm" Name="in" /></Wire>
+                <Wire UId="w-alarm"><IdentCon UId="a-alarm" /><NameCon UId="p-alarm" Name="operand" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var statements = StatementsOf(result);
+        Assert.Contains("IF ResetRequest THEN LatchedMemory := FALSE; END_IF;", statements);
+        Assert.Contains("IF SetRequest THEN LatchedMemory := TRUE; END_IF;", statements);
+        // Siemens Rs part is set dominant: the set line must come after the reset line
+        // so set overwrites reset when both inputs are true.
+        var statementList = statements.ToList();
+        Assert.True(
+            statementList.IndexOf("IF ResetRequest THEN LatchedMemory := FALSE; END_IF;")
+            < statementList.IndexOf("IF SetRequest THEN LatchedMemory := TRUE; END_IF;"),
+            "Reset line must be emitted before the set line for set-dominant Rs parts.");
+        Assert.Contains("Alarm := LatchedMemory;", statements);
+        Assert.DoesNotContain("Skipped Rs", Joined(result));
+        Assert.DoesNotContain("Unsupported LAD/FBD part 'Rs'", Joined(result));
     }
 
     [Fact]
