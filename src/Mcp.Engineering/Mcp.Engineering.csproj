@@ -26,6 +26,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Pure internals (SyncPlanner, ContentHasher, manifest DTOs) are unit-tested by the net48 test project. -->
+    <InternalsVisibleTo Include="Mcp.Engineering.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- net48 framework assembly: local-group membership check for check_environment. -->
     <Reference Include="System.DirectoryServices.AccountManagement" />
   </ItemGroup>

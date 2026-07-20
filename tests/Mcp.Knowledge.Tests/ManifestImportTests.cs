@@ -142,4 +142,52 @@ public sealed class ManifestImportTests
         Assert.Equal("crawl", result.GetProperty("source").GetString());
         Assert.Equal(1, result.GetProperty("filesImported").GetInt32());
     }
+
+    [Fact]
+    public void ManifestWithSyncExportFieldsStillImports()
+    {
+        // sync_export (mcp-engineering, 2026-07-20) extends the manifest with plcSoftwareChecksum,
+        // contentHash and fingerprints while keeping schemaVersion "1.0" — the reader DTO must keep
+        // ignoring unknown fields.
+        using var tree = new TempExportTree();
+        tree.AddFixture(FixtureFiles.MainObPath, Path.Combine("Blocks", "Main [OB1].xml"));
+        tree.AddText("metadata.json", """
+            {
+              "schemaVersion": "1.0",
+              "exportStartedUtc": "2026-07-20T08:00:00.0000000+00:00",
+              "exportFinishedUtc": "2026-07-20T08:00:01.0000000+00:00",
+              "exportRoot": "unused",
+              "plcSoftwareChecksum": "4F 4F D9 C3 06 F9 C0 23",
+              "components": [
+                {
+                  "id": "KTJyIUGV2W_2xDDF_u7qCPBXueQh_FdT564FtACYn70",
+                  "name": "Main",
+                  "sourcePath": "Main",
+                  "category": "OB",
+                  "folder": "Blocks",
+                  "siemensTypeName": "OB",
+                  "status": "Exported",
+                  "exportedFile": "Blocks\\Main [OB1].xml",
+                  "message": null,
+                  "programmingLanguage": "LAD",
+                  "tiaIdentifier": "Main",
+                  "number": 1,
+                  "isKnowHowProtected": false,
+                  "creationDate": "2026-07-04T15:05:28.5729940+00:00",
+                  "modifiedDate": "2026-07-18T15:37:54.7848587+00:00",
+                  "codeModifiedDate": "2026-07-18T15:37:54.7848587+00:00",
+                  "interfaceModifiedDate": "2008-07-21T16:55:08.4195470+00:00",
+                  "contentHash": "ysxKe8N4Xrybb0d9yow7X5iawEgtEdgjKp8VEWnf4vg",
+                  "fingerprints": "Code=9/y2tKG9dGm9rL2sqgQLz2sg6os=;Comments=H2i1+wMxWSK3ru6abY74v4KvJdQ="
+                }
+              ]
+            }
+            """);
+
+        var result = ToolResults.OkJson(new KnowledgeTools().IngestSource(tree.Root, null));
+
+        Assert.Equal("manifest", result.GetProperty("source").GetString());
+        Assert.Equal(1, result.GetProperty("filesImported").GetInt32());
+        Assert.Equal(0, result.GetProperty("warnings").GetArrayLength());
+    }
 }

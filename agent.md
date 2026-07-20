@@ -4,7 +4,7 @@
 
 Windows desktop app that assists PLC programming work, starting with Siemens TIA Portal V17. The app is decomposed into independent MCP servers (one per capability domain) so any MCP-compatible client can call each server individually. Each MCP hosts pluggable platform adapters behind a shared contract.
 
-**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 in steps: mcp-knowledge (ingest + tags/UDTs + knowledge depth) done 2026-07-18 (`buildnote/plan/mcp-knowledge.md`); App step 7a — read-only shell + "Read Project Context" — done 2026-07-19 (`buildnote/plan/app.md`); step 6 chat slice — DeepSeek agent chat + MCP tool calling + first-run API key UI — done 2026-07-19 (`buildnote/plan/agent.md`); agent sandbox (tool tiers, path jail, destructive confirmation, audit) added 2026-07-20 (`buildnote/log/20260720_agent-sandbox.md`).
+**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 in steps: mcp-knowledge (ingest + tags/UDTs + knowledge depth) done 2026-07-18 (`buildnote/plan/mcp-knowledge.md`); App step 7a — read-only shell + "Read Project Context" — done 2026-07-19 (`buildnote/plan/app.md`); step 6 chat slice — DeepSeek agent chat + MCP tool calling + first-run API key UI — done 2026-07-19 (`buildnote/plan/agent.md`); agent sandbox (tool tiers, path jail, destructive confirmation, audit) added 2026-07-20 (`buildnote/log/20260720_agent-sandbox.md`); `sync_export` — incremental context refresh via PLC checksum gate + TIA fingerprints + content hashes — done 2026-07-20 (`buildnote/plan/export-sync.md`).
 
 ## Tech Stack
 
@@ -81,6 +81,7 @@ AgentAssistPlcDev.sln
 
 - `buildnote/plan/initialLaunch_20260717.md` — full phased build plan with exit criteria (source of truth for architecture decisions)
 - `buildnote/plan/mcp-engineering.md` — Phase 0–1 detailed design for the engineering MCP server (complete 2026-07-18)
+- `buildnote/plan/export-sync.md` — incremental context refresh: PLC checksum gate, TIA fingerprints, per-XML content hashes (done 2026-07-20)
 - `buildnote/plan/mcp-knowledge.md` — Phase 2 step 1 detailed design for the knowledge MCP server
 - `buildnote/plan/app.md` — Phase 2 step 7a design for the WPF App (read-only shell + Read Project Context)
 - `buildnote/plan/agent.md` — Phase 2 step 6 chat slice: DeepSeek client, tool catalog (import_block excluded), AgentLoop, first-run key UI
@@ -94,7 +95,7 @@ AgentAssistPlcDev.sln
 
 | Server | Phase | Key Tools |
 | ------ | ----- | --------- |
-| Engineering | 1 (done) | `check_environment`, `list_sessions`, `connect`, `disconnect`, `save_project`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `import_block` (destructive), `compile_block`, `compile_plc` |
+| Engineering | 1 (done) | `check_environment`, `list_sessions`, `connect`, `disconnect`, `save_project`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `export_tag_tables`, `export_udts`, `sync_export` (incremental, hash/fingerprint-based), `import_block` (destructive), `compile_block`, `compile_plc` |
 | Knowledge | 2, step 1 + depth | `ingest_source`, `query` (read-only SQL), `get_schema`, `get_block`, `get_network`, `search` |
 | Source Editor | 2, step 4 | `parse_block`, `insert_network_comment`, `diff`, `validate` |
 | Version Control | 2, step 5 | `init`, `snapshot`, `log`, `diff`, `restore` (destructive) |

@@ -185,6 +185,34 @@ with the same signature as blocks: `void Export(FileInfo path, ExportOptions exp
   `Export(FileInfo, ExportOptions)`, `Delete()`, `ShowInEditor()`, `GetService<T>()`.
   **No `CodeModifiedDate`, no `Number`, no `ProgrammingLanguage`.**
 
+## 10. Change detection: software checksum & fingerprints (verified live 2026-07-20)
+
+Both verified against the running TestPLCExportDemo session via `scripts/Probe-PlcChecksum.ps1`
+(attach + traverse + read; PowerShell 5.1 cannot bind `GetService<T>()` — invoke it via reflection
+on `IEngineeringServiceProvider`).
+
+- **`Siemens.Engineering.SW.PlcChecksumProvider`** — station-level software checksum, one value per
+  PLC: `plc.GetService<PlcChecksumProvider>()?.Software` (String, read-only). `GetService` returns
+  null on unsupported CPUs; `Software` returns null when the program is not compiled. Verified
+  byte-identical to the TIA UI value (`4F 4F D9 C3 06 F9 C0 23` after a tag-table edit), and a
+  tag-table-only edit moves it — coverage includes tags. The UI's *text list* checksum is **not**
+  exposed (the provider's only attribute is `Software`), so comment-only changes are invisible to it.
+- **`Siemens.Engineering.SW.FingerprintProvider`** — per-object fingerprints for blocks and UDTs
+  (**not** tag tables — `GetService` returns null there): `GetFingerprints()` → `IList<Fingerprint>`
+  with `Id:FingerprintId` (enum: `Code, Comments, Interface, Properties, Events (OB), Texts, Alarms,
+  Supervisions, TechnologyObject, LibraryType, TextualInterface`) and `Value:String` (base64 SHA-256;
+  `2jmj7l5rSw0yVb/vlWAYkK/YBwk=` is the empty-content value). DBs have no `Code` fingerprint;
+  an instance DB shares its FB's `Interface` value. Fingerprints consider **only user input** —
+  compiles/saves do not move them. `GetFingerprints()` throws `RecoverableException` on
+  inconsistent objects (which also cannot be exported).
+  **Quirk (verified): the returned `IList<Fingerprint>` throws
+  `NotSupportedException("Collection is read-only")` from `ICollection<T>.CopyTo`** — LINQ
+  buffering (`OrderBy`/`ToList`) uses that fast path and blows up; materialize with a plain
+  `foreach` (enumerator path) first. PowerShell `foreach` works by accident for the same reason.
+- Timestamp side channel (verified): editing a tag table bumps `ModifiedDate`/`CodeModifiedDate`
+  of **blocks referencing tags** (dependency ripple), not only the table's `ModifiedTimeStamp` —
+  timestamps are false-positive-prone nomination signals, fingerprints are exact.
+
 ## Key findings
 
 **(a) Compile: synchronous.** `ICompilable.Compile()` is parameterless, blocks, and returns

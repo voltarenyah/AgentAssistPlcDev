@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Contracts.Engineering;
 using Siemens.Engineering.SW.Blocks;
 
@@ -28,6 +26,9 @@ internal static class ExportManifest
 
     /// <summary>Categories a block export owns in the manifest — every possible <see cref="CategoryOf"/> outcome for V17 block subclasses.</summary>
     public static readonly IReadOnlyCollection<string> BlockCategories = new[] { "OB", "FB", "FC", "DB" };
+
+    /// <summary>Categories sync_export reconciles — block categories plus Tags and UDT (the whole manifest).</summary>
+    public static readonly IReadOnlyCollection<string> AllCategories = new[] { "OB", "FB", "FC", "DB", "Tags", "UDT" };
 
     /// <summary>Export subfolder for a category — program blocks under Blocks/, everything else in a folder named after its category (DB, Tags, UDT).</summary>
     public static string FolderFor(string category) => category switch
@@ -73,7 +74,8 @@ internal static class ExportManifest
             creationDate: creationDate,
             modifiedDate: modifiedDate,
             codeModifiedDate: codeModifiedDate,
-            interfaceModifiedDate: interfaceModifiedDate);
+            interfaceModifiedDate: interfaceModifiedDate,
+            fingerprints: FingerprintReader.TryRead(block));
     }
 
     /// <summary>Tag tables / UDTs carry no number or programming language; the caller supplies whatever metadata the object type exposes.</summary>
@@ -90,7 +92,8 @@ internal static class ExportManifest
         DateTimeOffset? creationDate = null,
         DateTimeOffset? modifiedDate = null,
         DateTimeOffset? codeModifiedDate = null,
-        DateTimeOffset? interfaceModifiedDate = null)
+        DateTimeOffset? interfaceModifiedDate = null,
+        string? fingerprints = null)
     {
         var sourcePath = SourcePathOf(name, groupPath);
         return new ExportMetadataRecord
@@ -112,17 +115,44 @@ internal static class ExportManifest
             ModifiedDate = modifiedDate,
             CodeModifiedDate = codeModifiedDate,
             InterfaceModifiedDate = interfaceModifiedDate,
+            ContentHash = result.Success && result.Path is not null ? ContentHasher.TryCompute(result.Path) : null,
+            Fingerprints = fingerprints,
         };
     }
 
-    /// <summary>export_all_blocks: full rewrite of the categories this run exports (stale entries
+    /// <summary>Reads the manifest at exportRoot; false when missing or unparseable (callers treat
+    /// that as "no baseline"). Used by sync_export; WriteAll keeps its own tolerant inline read.</summary>
+    public static bool TryRead(string exportRoot, out ExportMetadataDocument? document)
+    {
+        document = null;
+        var path = Path.Combine(exportRoot, MetadataFileName);
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            document = ExportMetadataJsonSerializer.Deserialize(File.ReadAllText(path));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>export_all_blocks / sync_export: full rewrite of the categories this run exports (stale entries
     /// disappear — full evidence of the current set). Records of any other category (Tags, UDT, …)
-    /// in an existing manifest are preserved byte-identical; absent or unparseable manifest → fresh document.</summary>
+    /// in an existing manifest are preserved byte-identical; absent or unparseable manifest → fresh document.
+    /// plcSoftwareChecksum overwrites the stored gate value (null when the PLC is unsupported or
+    /// the program is not compiled — the gate only ever skips on a non-null match).</summary>
     public static void WriteAll(
         string exportRoot,
         DateTimeOffset exportStartedUtc,
         List<ExportMetadataRecord> records,
-        IReadOnlyCollection<string> replacedCategories)
+        IReadOnlyCollection<string> replacedCategories,
+        string? plcSoftwareChecksum = null)
     {
         var path = Path.Combine(exportRoot, MetadataFileName);
         ExportMetadataDocument? existing = null;
@@ -143,6 +173,7 @@ internal static class ExportManifest
             ExportStartedUtc = existing?.ExportStartedUtc ?? exportStartedUtc,
             ExportFinishedUtc = DateTimeOffset.UtcNow,
             ExportRoot = existing?.ExportRoot ?? exportRoot,
+            PlcSoftwareChecksum = plcSoftwareChecksum,
             Components = records
                 .Concat(existing?.Components.Where(r => !replacedCategories.Contains(r.Category))
                     ?? Enumerable.Empty<ExportMetadataRecord>())
@@ -183,16 +214,8 @@ internal static class ExportManifest
             Path.Combine(exportRoot, MetadataFileName),
             ExportMetadataJsonSerializer.Serialize(document));
 
-    private static string CreateStableId(string category, string sourcePath)
-    {
-        using var sha256 = SHA256.Create();
-        var input = $"{category}|{sourcePath}";
-        var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(input));
-        return Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
+    private static string CreateStableId(string category, string sourcePath) =>
+        StableId.Create(category, sourcePath);
 
     private static string? ToRelativePath(string exportRoot, string? filePath)
     {

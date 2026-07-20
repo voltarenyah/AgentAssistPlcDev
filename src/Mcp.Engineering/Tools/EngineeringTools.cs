@@ -97,6 +97,13 @@ public sealed class EngineeringTools
         [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
         => Invoke("export_udts", () => _adapter.ExportUdts(outputDir, plcName), ("outputDir", outputDir));
 
+    [McpServerTool(Name = "sync_export")]
+    [Description("Incrementally sync an export root with the current project state: PLC software-checksum gate (skip everything when unchanged), then a timestamp-nominated, hash-confirmed diff that re-exports only real changes and drops components deleted in TIA. Read-only w.r.t. the project. Run ingest_source afterwards to refresh the knowledge base.")]
+    public CallToolResult SyncExport(
+        [Description("Export root directory previously filled by export_all_blocks / export_tag_tables / export_udts.")] string outputDir,
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
+        => Invoke("sync_export", () => _adapter.SyncExport(outputDir, plcName), ("outputDir", outputDir));
+
     [McpServerTool(Name = "import_block")]
     [Description("Import a modified block XML back into the project (DESTRUCTIVE: overwrites the block). Caller must validate the XML and snapshot the working folder first.")]
     public CallToolResult ImportBlock(

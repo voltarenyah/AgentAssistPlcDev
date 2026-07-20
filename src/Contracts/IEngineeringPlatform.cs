@@ -26,6 +26,10 @@ public interface IEngineeringPlatform : IDisposable
     /// <summary>Tag tables / UDTs export into Tags/ and UDT/ subfolders and upsert one metadata.json record per object (§13 step 2).</summary>
     ExportResult[] ExportTagTables(string outputDir, string? plcName);
     ExportResult[] ExportUdts(string outputDir, string? plcName);
+
+    /// <summary>Incremental sync (buildnote/plan/export-sync.md): PLC software-checksum gate,
+    /// timestamp-nominated diff, hash-confirmed re-export of changed components only.</summary>
+    SyncResult[] SyncExport(string outputDir, string? plcName);
     ImportResult ImportBlock(string blockName, string xmlFilePath);
 
     CompileResult CompileBlock(string blockName);

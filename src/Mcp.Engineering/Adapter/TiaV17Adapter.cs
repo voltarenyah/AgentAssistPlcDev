@@ -285,47 +285,351 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             {
                 // Multi-PLC: per-PLC subfolder, each its own export root with its own metadata.json.
                 var dir = plcs.Count > 1 ? Path.Combine(outputDir, Sanitize(plc.Name)) : outputDir;
-                Directory.CreateDirectory(dir);
-                var exportStartedUtc = DateTimeOffset.UtcNow;
-                var records = new List<ExportMetadataRecord>();
-                var blocks = BlockEnumerator.Enumerate(plc.BlockGroup).ToArray();
-                _logger.LogInformation("export_all_blocks: {Count} blocks to export ({Plc})", blocks.Length, plc.Name);
-                var index = 0;
-                foreach (var (block, groupPath) in blocks)
-                {
-                    index++;
-                    ExportResult result;
-                    try
-                    {
-                        result = ExportCore(block, dir);
-                    }
-                    catch (Exception ex)
-                    {
-                        result = new ExportResult
-                        {
-                            BlockName = block.Name,
-                            Success = false,
-                            Error = ex.Message,
-                            ExportedAt = DateTime.Now,
-                        };
-                    }
-
-                    if (!result.Success)
-                    {
-                        _logger.LogWarning("export_all_blocks: FAILED {Block} — {Error}", block.Name, result.Error);
-                    }
-                    else if (index % 25 == 0 || index == blocks.Length)
-                    {
-                        _logger.LogInformation("export_all_blocks: {Index}/{Total} ({Plc})", index, blocks.Length, plc.Name);
-                    }
-
-                    results.Add(result);
-                    records.Add(ExportManifest.CreateRecord(block, groupPath, dir, result));
-                }
-
-                ExportManifest.WriteAll(dir, exportStartedUtc, records, ExportManifest.BlockCategories);
+                results.AddRange(ExportAllBlocksForPlc(plc, dir));
             }
             return results.ToArray();
+        }
+    }
+
+    /// <summary>Per-PLC body of <see cref="ExportAllBlocks"/> (also used by sync_export when no
+    /// baseline manifest exists): export every block, rewrite the block categories of the manifest,
+    /// and stamp the current software checksum as the sync gate value.</summary>
+    private List<ExportResult> ExportAllBlocksForPlc(PlcSoftware plc, string dir)
+    {
+        Directory.CreateDirectory(dir);
+        var exportStartedUtc = DateTimeOffset.UtcNow;
+        var results = new List<ExportResult>();
+        var records = new List<ExportMetadataRecord>();
+        var blocks = BlockEnumerator.Enumerate(plc.BlockGroup).ToArray();
+        _logger.LogInformation("export_all_blocks: {Count} blocks to export ({Plc})", blocks.Length, plc.Name);
+        var index = 0;
+        foreach (var (block, groupPath) in blocks)
+        {
+            index++;
+            ExportResult result;
+            try
+            {
+                result = ExportCore(block, dir);
+            }
+            catch (Exception ex)
+            {
+                result = new ExportResult
+                {
+                    BlockName = block.Name,
+                    Success = false,
+                    Error = ex.Message,
+                    ExportedAt = DateTime.Now,
+                };
+            }
+
+            if (!result.Success)
+            {
+                _logger.LogWarning("export_all_blocks: FAILED {Block} — {Error}", block.Name, result.Error);
+            }
+            else if (index % 25 == 0 || index == blocks.Length)
+            {
+                _logger.LogInformation("export_all_blocks: {Index}/{Total} ({Plc})", index, blocks.Length, plc.Name);
+            }
+
+            results.Add(result);
+            records.Add(ExportManifest.CreateRecord(block, groupPath, dir, result));
+        }
+
+        ExportManifest.WriteAll(dir, exportStartedUtc, records, ExportManifest.BlockCategories, TryReadSoftwareChecksum(plc));
+        return results;
+    }
+
+    public SyncResult[] SyncExport(string outputDir, string? plcName)
+    {
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var plcs = plcName is null
+                ? PlcSoftwareResolver.FindAll(project)
+                : new[] { PlcSoftwareResolver.Resolve(project, plcName) };
+            var results = new List<SyncResult>();
+            foreach (var plc in plcs)
+            {
+                // Same per-PLC export-root rule as the export tools.
+                var dir = plcs.Count > 1 ? Path.Combine(outputDir, Sanitize(plc.Name)) : outputDir;
+                results.Add(SyncExportForPlc(plc, dir));
+            }
+            return results.ToArray();
+        }
+    }
+
+    /// <summary>Per-PLC sync (buildnote/plan/export-sync.md): station-level checksum gate first;
+    /// otherwise a timestamp-nominated, hash-confirmed diff that re-exports only real changes
+    /// and rewrites the manifest (all categories) with the fresh gate value.</summary>
+    private SyncResult SyncExportForPlc(PlcSoftware plc, string dir)
+    {
+        var checksum = TryReadSoftwareChecksum(plc);
+        var result = new SyncResult
+        {
+            PlcName = plc.Name,
+            ExportRoot = dir,
+            ChecksumAfter = checksum,
+        };
+
+        if (!ExportManifest.TryRead(dir, out var manifest) || manifest is null)
+        {
+            // No baseline manifest → full export for this PLC (blocks rewrite the manifest and
+            // stamp the checksum; tags/UDTs upsert into it afterwards).
+            var full = new List<ExportResult>();
+            full.AddRange(ExportAllBlocksForPlc(plc, dir));
+            full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables", p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord));
+            full.AddRange(ExportObjectsForPlc(plc, dir, "export_udts", p => PlcTypeEnumerator.Enumerate(p.TypeGroup), ExportUdtCore, CreateUdtRecord));
+            result.Status = "updated";
+            result.Added = full.Where(r => r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = "no-baseline" }).ToArray();
+            result.Failed = full.Where(r => !r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = r.Error }).ToArray();
+            return result;
+        }
+
+        result.ChecksumBefore = manifest.PlcSoftwareChecksum;
+
+        // Tier 0 gate: a matching station-level checksum proves nothing changed — no exports.
+        if (checksum is not null && checksum == manifest.PlcSoftwareChecksum)
+        {
+            result.Status = "unchanged";
+            return result;
+        }
+
+        // Tier 1: flatten live objects to plain values (id formula shared with the manifest) and diff.
+        var live = new List<SyncLiveComponent>();
+        var blocksById = new Dictionary<string, (PlcBlock Block, string? GroupPath)>(StringComparer.Ordinal);
+        foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
+        {
+            var category = ExportManifest.CategoryOf(block);
+            var sourcePath = ExportManifest.SourcePathOf(block.Name, groupPath);
+            var id = StableId.Create(category, sourcePath);
+            var (modified, codeModified, interfaceModified) = ReadBlockTimestamps(block);
+            live.Add(new SyncLiveComponent
+            {
+                Id = id,
+                Name = block.Name,
+                Category = category,
+                SourcePath = sourcePath,
+                Fingerprints = FingerprintReader.TryRead(block),
+                ModifiedDate = modified,
+                CodeModifiedDate = codeModified,
+                InterfaceModifiedDate = interfaceModified,
+            });
+            blocksById[id] = (block, groupPath);
+        }
+
+        var tablesById = new Dictionary<string, (PlcTagTable Table, string? GroupPath)>(StringComparer.Ordinal);
+        foreach (var (table, groupPath) in TagTableEnumerator.Enumerate(plc.TagTableGroup))
+        {
+            var sourcePath = ExportManifest.SourcePathOf(table.Name, groupPath);
+            var id = StableId.Create("Tags", sourcePath);
+            live.Add(new SyncLiveComponent
+            {
+                Id = id,
+                Name = table.Name,
+                Category = "Tags",
+                SourcePath = sourcePath,
+                ModifiedDate = ReadTagTableModified(table),
+            });
+            tablesById[id] = (table, groupPath);
+        }
+
+        var typesById = new Dictionary<string, (PlcType Type, string? GroupPath)>(StringComparer.Ordinal);
+        foreach (var (type, groupPath) in PlcTypeEnumerator.Enumerate(plc.TypeGroup))
+        {
+            var sourcePath = ExportManifest.SourcePathOf(type.Name, groupPath);
+            var id = StableId.Create("UDT", sourcePath);
+            var (_, _, modified, interfaceModified) = ReadTypeMetadata(type);
+            live.Add(new SyncLiveComponent
+            {
+                Id = id,
+                Name = type.Name,
+                Category = "UDT",
+                SourcePath = sourcePath,
+                Fingerprints = FingerprintReader.TryRead(type),
+                ModifiedDate = modified,
+                InterfaceModifiedDate = interfaceModified,
+            });
+            typesById[id] = (type, groupPath);
+        }
+
+        // Tier 2: execute the plan — re-export candidates, hash each result, classify, delete removals.
+        var plan = SyncPlanner.Plan(manifest.Components, live);
+        if (live.Count > 0 && live.All(item => item.Fingerprints is null))
+        {
+            _logger.LogWarning(
+                "sync_export: 0/{Total} live items have fingerprints (last read error: {Error}) — falling back to the timestamp path",
+                live.Count, FingerprintReader.LastError ?? "(none)");
+        }
+        var keptRecords = new List<ExportMetadataRecord>();
+        var added = new List<SyncChange>();
+        var changed = new List<SyncChange>();
+        var touched = new List<SyncChange>();
+        var removed = new List<SyncChange>();
+        var failed = new List<SyncChange>();
+        foreach (var item in plan)
+        {
+            switch (item.Action)
+            {
+                case SyncAction.Skip:
+                    keptRecords.Add(item.Record!);
+                    break;
+
+                case SyncAction.Remove:
+                    DeleteComponentFile(dir, item.Record!);
+                    removed.Add(ToChange(item.Record!, item.Reason));
+                    break;
+
+                case SyncAction.UpdateRecord:
+                    // Legacy fingerprint backfill: timestamps proved the content stood still —
+                    // stamp the live fingerprints onto the kept record, no export.
+                    item.Record!.Fingerprints = item.Live!.Fingerprints;
+                    keptRecords.Add(item.Record!);
+                    touched.Add(ToChange(item.Record!, item.Reason));
+                    break;
+
+                case SyncAction.ReExport:
+                    var record = ReExportComponent(dir, item.Live!, blocksById, tablesById, typesById, out var exportResult);
+                    keptRecords.Add(record);
+                    var change = ToChange(record, item.Reason);
+                    if (!exportResult.Success)
+                    {
+                        change.Reason = exportResult.Error;
+                        failed.Add(change);
+                    }
+                    else if (item.Record is null || !string.Equals(item.Record.Status, "Exported", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // New component, or first successful export after a Failed record.
+                        added.Add(change);
+                    }
+                    else if (item.Reason == SyncPlanner.ReasonFingerprint)
+                    {
+                        // Detection was the fingerprint mismatch itself — the change is certain.
+                        changed.Add(change);
+                    }
+                    else if (item.Record.ContentHash is not null
+                        ? !string.Equals(record.ContentHash, item.Record.ContentHash, StringComparison.Ordinal)
+                        : item.Reason != SyncPlanner.ReasonLegacyNoHash)
+                    {
+                        // Old hash present → it decides. Old hash absent (legacy) → timestamps
+                        // disagreed (legacy-no-hash with agreeing timestamps lands in touched).
+                        changed.Add(change);
+                    }
+                    else
+                    {
+                        touched.Add(change);
+                    }
+                    break;
+            }
+        }
+
+        ExportManifest.WriteAll(dir, manifest.ExportStartedUtc, keptRecords, ExportManifest.AllCategories, checksum);
+        result.Status = "updated";
+        result.Added = added.ToArray();
+        result.Changed = changed.ToArray();
+        result.Touched = touched.ToArray();
+        result.Removed = removed.ToArray();
+        result.Failed = failed.ToArray();
+        _logger.LogInformation(
+            "sync_export: {Plc} — {Added} added, {Changed} changed, {Touched} touched, {Removed} removed, {Failed} failed",
+            plc.Name, added.Count, changed.Count, touched.Count, removed.Count, failed.Count);
+        return result;
+    }
+
+    /// <summary>Re-exports one component the planner nominated and rebuilds its manifest record
+    /// (with fresh timestamps and content hash, via the normal CreateRecord paths).</summary>
+    private static ExportMetadataRecord ReExportComponent(
+        string dir,
+        SyncLiveComponent live,
+        IReadOnlyDictionary<string, (PlcBlock Block, string? GroupPath)> blocksById,
+        IReadOnlyDictionary<string, (PlcTagTable Table, string? GroupPath)> tablesById,
+        IReadOnlyDictionary<string, (PlcType Type, string? GroupPath)> typesById,
+        out ExportResult exportResult)
+    {
+        switch (live.Category)
+        {
+            case "Tags":
+                var (table, tablePath) = tablesById[live.Id];
+                exportResult = ExportTagTableCore(table, dir);
+                return CreateTagTableRecord(table, tablePath, dir, exportResult);
+            case "UDT":
+                var (type, typePath) = typesById[live.Id];
+                exportResult = ExportUdtCore(type, dir);
+                return CreateUdtRecord(type, typePath, dir, exportResult);
+            default:
+                var (block, blockPath) = blocksById[live.Id];
+                exportResult = ExportCore(block, dir);
+                return ExportManifest.CreateRecord(block, blockPath, dir, exportResult);
+        }
+    }
+
+    /// <summary>Deletes a removed component's XML. The manifest is user-writable, so the recorded
+    /// relative path is re-validated to resolve inside the export root before anything is deleted;
+    /// failures are logged, never thrown (the record is dropped either way).</summary>
+    private void DeleteComponentFile(string exportRoot, ExportMetadataRecord record)
+    {
+        if (record.ExportedFile is null)
+        {
+            return;
+        }
+
+        var root = Path.GetFullPath(exportRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullPath = Path.GetFullPath(Path.Combine(root, record.ExportedFile));
+        if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("sync_export: refusing to delete outside the export root: {Path}", record.ExportedFile);
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(fullPath))
+            {
+                File.Delete(fullPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("sync_export: failed to delete {Path}: {Error}", fullPath, ex.Message);
+        }
+    }
+
+    private static SyncChange ToChange(ExportMetadataRecord record, string? reason) => new()
+    {
+        Name = record.Name,
+        Category = record.Category,
+        SourcePath = record.SourcePath,
+        ExportedFile = record.ExportedFile,
+        Reason = reason,
+    };
+
+    /// <summary>Station-level software checksum (PlcChecksumProvider.Software): null when the PLC
+    /// does not support checksums (GetService → null) or the program is not compiled (Software →
+    /// null). Verified byte-identical to the TIA UI value on PLC_1/TestPLCExportDemo, 2026-07-20
+    /// (scripts/Probe-PlcChecksum.ps1).</summary>
+    private static string? TryReadSoftwareChecksum(PlcSoftware plc)
+    {
+        try
+        {
+            return plc.GetService<PlcChecksumProvider>()?.Software;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Block timestamps for the sync diff — same guarded read as the manifest metadata
+    /// (know-how-protected blocks can throw; nulls make the planner re-export conservatively).</summary>
+    private static (DateTimeOffset? Modified, DateTimeOffset? CodeModified, DateTimeOffset? InterfaceModified)
+        ReadBlockTimestamps(PlcBlock block)
+    {
+        try
+        {
+            return (block.ModifiedDate, block.CodeModifiedDate, block.InterfaceModifiedDate);
+        }
+        catch
+        {
+            return (null, null, null);
         }
     }
 
@@ -372,9 +676,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 "export_tag_tables",
                 plc => TagTableEnumerator.Enumerate(plc.TagTableGroup),
                 ExportTagTableCore,
-                (table, groupPath, root, result) => ExportManifest.CreateRecord(
-                    table.Name, "Tags", table.GetType().Name, groupPath, root, result,
-                    modifiedDate: ReadTagTableModified(table)));
+                CreateTagTableRecord);
         }
     }
 
@@ -388,17 +690,25 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 "export_udts",
                 plc => PlcTypeEnumerator.Enumerate(plc.TypeGroup),
                 ExportUdtCore,
-                (type, groupPath, root, result) =>
-                {
-                    var (khp, created, modified, interfaceModified) = ReadTypeMetadata(type);
-                    return ExportManifest.CreateRecord(
-                        type.Name, "UDT", type.GetType().Name, groupPath, root, result,
-                        isKnowHowProtected: khp,
-                        creationDate: created,
-                        modifiedDate: modified,
-                        interfaceModifiedDate: interfaceModified);
-                });
+                CreateUdtRecord);
         }
+    }
+
+    private static ExportMetadataRecord CreateTagTableRecord(PlcTagTable table, string? groupPath, string root, ExportResult result) =>
+        ExportManifest.CreateRecord(
+            table.Name, "Tags", table.GetType().Name, groupPath, root, result,
+            modifiedDate: ReadTagTableModified(table));
+
+    private static ExportMetadataRecord CreateUdtRecord(PlcType type, string? groupPath, string root, ExportResult result)
+    {
+        var (khp, created, modified, interfaceModified) = ReadTypeMetadata(type);
+        return ExportManifest.CreateRecord(
+            type.Name, "UDT", type.GetType().Name, groupPath, root, result,
+            isKnowHowProtected: khp,
+            creationDate: created,
+            modifiedDate: modified,
+            interfaceModifiedDate: interfaceModified,
+            fingerprints: FingerprintReader.TryRead(type));
     }
 
     /// <summary>Shared export loop for tag tables and UDTs: per-PLC export root (subfolder when
@@ -421,26 +731,41 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         {
             // Multi-PLC: per-PLC subfolder, each its own export root with its own metadata.json.
             var dir = plcs.Count > 1 ? Path.Combine(outputDir, Sanitize(plc.Name)) : outputDir;
-            Directory.CreateDirectory(dir);
-            var items = enumerate(plc).ToArray();
-            _logger.LogInformation("{Label}: {Count} objects to export ({Plc})", label, items.Length, plc.Name);
-            var index = 0;
-            foreach (var (item, groupPath) in items)
-            {
-                index++;
-                var result = exportCore(item, dir);
-                if (!result.Success)
-                {
-                    _logger.LogWarning("{Label}: FAILED {Name} — {Error}", label, result.BlockName, result.Error);
-                }
-                else if (index % 25 == 0 || index == items.Length)
-                {
-                    _logger.LogInformation("{Label}: {Index}/{Total} ({Plc})", label, index, items.Length, plc.Name);
-                }
+            results.AddRange(ExportObjectsForPlc(plc, dir, label, enumerate, exportCore, createRecord));
+        }
+        return results.ToArray();
+    }
 
-                results.Add(result);
-                ExportManifest.Upsert(dir, createRecord(item, groupPath, dir, result));
+    /// <summary>Per-PLC body of <see cref="ExportObjects{TObject}"/> (also used by sync_export
+    /// when no baseline manifest exists).</summary>
+    private ExportResult[] ExportObjectsForPlc<TObject>(
+        PlcSoftware plc,
+        string dir,
+        string label,
+        Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
+        Func<TObject, string, ExportResult> exportCore,
+        Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord)
+    {
+        Directory.CreateDirectory(dir);
+        var results = new List<ExportResult>();
+        var items = enumerate(plc).ToArray();
+        _logger.LogInformation("{Label}: {Count} objects to export ({Plc})", label, items.Length, plc.Name);
+        var index = 0;
+        foreach (var (item, groupPath) in items)
+        {
+            index++;
+            var result = exportCore(item, dir);
+            if (!result.Success)
+            {
+                _logger.LogWarning("{Label}: FAILED {Name} — {Error}", label, result.BlockName, result.Error);
             }
+            else if (index % 25 == 0 || index == items.Length)
+            {
+                _logger.LogInformation("{Label}: {Index}/{Total} ({Plc})", label, index, items.Length, plc.Name);
+            }
+
+            results.Add(result);
+            ExportManifest.Upsert(dir, createRecord(item, groupPath, dir, result));
         }
         return results.ToArray();
     }

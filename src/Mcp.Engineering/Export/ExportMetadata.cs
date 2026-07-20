@@ -16,6 +16,11 @@ public sealed class ExportMetadataDocument
     public DateTimeOffset ExportStartedUtc { get; set; }
     public DateTimeOffset ExportFinishedUtc { get; set; }
     public string ExportRoot { get; set; } = string.Empty;
+
+    /// <summary>TIA station-level software checksum (PlcChecksumProvider.Software) captured at export/sync
+    /// time; the sync_export gate skips the diff while it still matches. Null when the PLC does not
+    /// support checksums or the program was not compiled. Additive — schemaVersion stays "1.0".</summary>
+    public string? PlcSoftwareChecksum { get; set; }
     public List<ExportMetadataRecord> Components { get; set; } = new();
 }
 
@@ -38,6 +43,16 @@ public sealed class ExportMetadataRecord
     public DateTimeOffset? ModifiedDate { get; set; }
     public DateTimeOffset? CodeModifiedDate { get; set; }
     public DateTimeOffset? InterfaceModifiedDate { get; set; }
+
+    /// <summary>SHA256 (base64url, '=' trimmed) of the normalized exported XML (XmlCompare.Normalize —
+    /// &lt;Created&gt; lines and CR stripped, so only real content changes move it). Null for failed
+    /// exports and legacy manifests; sync_export treats null as "needs one re-export".</summary>
+    public string? ContentHash { get; set; }
+
+    /// <summary>Canonical "Id=Value;…" TIA fingerprint set (blocks/UDTs only — tag tables have no
+    /// FingerprintProvider). sync_export compares these in-memory to detect changes without
+    /// exporting; null on legacy manifests, tag tables, and unreadable providers.</summary>
+    public string? Fingerprints { get; set; }
 }
 
 internal static class ExportMetadataJsonSerializer
@@ -50,6 +65,7 @@ internal static class ExportMetadataJsonSerializer
         WriteProperty(builder, 1, "exportStartedUtc", document.ExportStartedUtc.ToString("O"), appendComma: true);
         WriteProperty(builder, 1, "exportFinishedUtc", document.ExportFinishedUtc.ToString("O"), appendComma: true);
         WriteProperty(builder, 1, "exportRoot", document.ExportRoot, appendComma: true);
+        WriteProperty(builder, 1, "plcSoftwareChecksum", document.PlcSoftwareChecksum, appendComma: true);
         Indent(builder, 1).AppendLine("\"components\": [");
 
         for (var index = 0; index < document.Components.Count; index++)
@@ -73,6 +89,7 @@ internal static class ExportMetadataJsonSerializer
             ExportStartedUtc = GetDate(root, "exportStartedUtc") ?? DateTimeOffset.UtcNow,
             ExportFinishedUtc = GetDate(root, "exportFinishedUtc") ?? DateTimeOffset.UtcNow,
             ExportRoot = GetString(root, "exportRoot") ?? string.Empty,
+            PlcSoftwareChecksum = GetString(root, "plcSoftwareChecksum"),
         };
         if (root.TryGetProperty("components", out var components) && components.ValueKind == JsonValueKind.Array)
         {
@@ -97,6 +114,8 @@ internal static class ExportMetadataJsonSerializer
                     ModifiedDate = GetDate(element, "modifiedDate"),
                     CodeModifiedDate = GetDate(element, "codeModifiedDate"),
                     InterfaceModifiedDate = GetDate(element, "interfaceModifiedDate"),
+                    ContentHash = GetString(element, "contentHash"),
+                    Fingerprints = GetString(element, "fingerprints"),
                 });
             }
         }
@@ -150,7 +169,9 @@ internal static class ExportMetadataJsonSerializer
         WriteProperty(builder, 3, "creationDate", record.CreationDate?.ToString("O"), appendComma: true);
         WriteProperty(builder, 3, "modifiedDate", record.ModifiedDate?.ToString("O"), appendComma: true);
         WriteProperty(builder, 3, "codeModifiedDate", record.CodeModifiedDate?.ToString("O"), appendComma: true);
-        WriteProperty(builder, 3, "interfaceModifiedDate", record.InterfaceModifiedDate?.ToString("O"), appendComma: false);
+        WriteProperty(builder, 3, "interfaceModifiedDate", record.InterfaceModifiedDate?.ToString("O"), appendComma: true);
+        WriteProperty(builder, 3, "contentHash", record.ContentHash, appendComma: true);
+        WriteProperty(builder, 3, "fingerprints", record.Fingerprints, appendComma: false);
         Indent(builder, 2).Append('}');
         if (appendComma)
         {
