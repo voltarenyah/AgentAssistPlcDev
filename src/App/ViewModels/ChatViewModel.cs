@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using Agent.Chat;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Contracts.Sandbox;
 
 namespace App.ViewModels;
 
@@ -34,6 +35,7 @@ public partial class ChatViewModel : ObservableObject
     private McpToolCatalog? catalog;
     private DeepSeekClient? client;
     private AgentLoop? loop;
+    private AgentSandbox? agentSandbox;
     private CancellationTokenSource? runCancellation;
 
     // Streaming state: live entries updated in place as deltas arrive, finalized per model round.
@@ -41,6 +43,8 @@ public partial class ChatViewModel : ObservableObject
     private readonly StringBuilder streamContent = new();
     private int reasoningEntryIndex = -1;
     private int contentEntryIndex = -1;
+    // Survives the per-round ResetStreamState: tells SendAsync the answer already has a bubble.
+    private bool contentStreamedThisTurn;
 
     public ChatViewModel(Func<string> contextProvider)
     {
@@ -98,6 +102,18 @@ public partial class ChatViewModel : ObservableObject
     {
         this.settings = settings;
         this.catalog = catalog;
+
+        // Agent sandbox (2026-07-20): tier policy + destructive confirmation + audit, from sandbox.json.
+        var sandboxConfig = SandboxConfig.LoadDefault();
+        agentSandbox = new AgentSandbox(
+            sandboxConfig.Policy,
+            sandboxConfig.MaxDestructiveCallsPerSession,
+            ConfirmToolCallAsync,
+            new SandboxAudit(sandboxConfig.AuditDirectory, "agent"));
+        AddEntry(ChatEntry.Info(
+            $"Sandbox active ({sandboxConfig.SourceDescription}): destructive tools need approval, " +
+            $"budget {sandboxConfig.MaxDestructiveCallsPerSession}/session, unknown tools blocked. Audit: {sandboxConfig.AuditDirectory}"));
+
         SelectedModel = AvailableModels.Contains(settings.DeepSeekModel) ? settings.DeepSeekModel : ChatRequestSettings.DefaultModel;
         ThinkingEnabled = settings.DeepSeekThinkingEnabled;
         NotThinking = !ThinkingEnabled;
@@ -235,18 +251,20 @@ public partial class ChatViewModel : ObservableObject
         InputText = string.Empty;
         AddEntry(ChatEntry.User(text));
         ResetStreamState();
+        contentStreamedThisTurn = false;
         IsBusy = true;
         runCancellation = new CancellationTokenSource();
         try
         {
             var answer = await loop.RunAsync(text, runCancellation.Token);
-            // The final round streamed its content into the live content entry already; if no
-            // content arrived at all (edge case), fall back to the returned answer.
+            // The final round streamed its content into a live bubble already — but the usage
+            // progress line that closes the round resets contentEntryIndex, so only re-add the
+            // answer when NO content streamed at all this turn (empty-response edge case).
             if (contentEntryIndex >= 0)
             {
                 UpdateEntry(contentEntryIndex, ChatEntry.Assistant(streamContent.ToString()));
             }
-            else if (!string.IsNullOrWhiteSpace(answer))
+            else if (!contentStreamedThisTurn && !string.IsNullOrWhiteSpace(answer))
             {
                 AddEntry(ChatEntry.Assistant(answer));
             }
@@ -339,7 +357,7 @@ public partial class ChatViewModel : ObservableObject
             ReasoningEffort = SelectedEffort,
             Temperature = settings.DeepSeekTemperature,
             TopP = settings.DeepSeekTopP,
-        });
+        }, agentSandbox);
         loop.Progress += line =>
         {
             // A progress line ends a model round: subsequent deltas form a new bubble.
@@ -348,6 +366,33 @@ public partial class ChatViewModel : ObservableObject
         };
         loop.StreamDelta += (kind, delta) => Dispatch(() => AppendDelta(kind, delta));
     }
+
+    /// <summary>Sandbox confirmation for destructive tools: modal approval dialog, always on the UI thread.</summary>
+    private Task<ToolConfirmation> ConfirmToolCallAsync(ToolConfirmationRequest request)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess())
+        {
+            return Task.FromResult(ShowConfirmDialog(request));
+        }
+
+        return dispatcher.InvokeAsync(() => ShowConfirmDialog(request)).Task;
+    }
+
+    private ToolConfirmation ShowConfirmDialog(ToolConfirmationRequest request)
+    {
+        var dialog = new ConfirmToolDialog(request) { Owner = Application.Current?.MainWindow };
+        dialog.ShowDialog();
+        AddEntry(ChatEntry.Info($"sandbox: {request.ToolName} — {DescribeDecision(dialog.Decision)}"));
+        return dialog.Decision;
+    }
+
+    private static string DescribeDecision(ToolConfirmation decision) => decision switch
+    {
+        ToolConfirmation.AllowOnce => "allowed once by the user",
+        ToolConfirmation.AllowSession => "allowed for this session",
+        _ => "denied by the user",
+    };
 
     private void AppendDelta(string kind, string delta)
     {
@@ -367,6 +412,7 @@ public partial class ChatViewModel : ObservableObject
         else
         {
             streamContent.Append(delta);
+            contentStreamedThisTurn = true;
             if (contentEntryIndex < 0)
             {
                 contentEntryIndex = Messages.Count;

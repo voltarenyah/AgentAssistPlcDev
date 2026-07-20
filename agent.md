@@ -4,7 +4,7 @@
 
 Windows desktop app that assists PLC programming work, starting with Siemens TIA Portal V17. The app is decomposed into independent MCP servers (one per capability domain) so any MCP-compatible client can call each server individually. Each MCP hosts pluggable platform adapters behind a shared contract.
 
-**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 in steps: mcp-knowledge (ingest + tags/UDTs + knowledge depth) done 2026-07-18 (`buildnote/plan/mcp-knowledge.md`); App step 7a — read-only shell + "Read Project Context" — done 2026-07-19 (`buildnote/plan/app.md`); step 6 chat slice — DeepSeek agent chat + MCP tool calling + first-run API key UI — done 2026-07-19 (`buildnote/plan/agent.md`).
+**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 in steps: mcp-knowledge (ingest + tags/UDTs + knowledge depth) done 2026-07-18 (`buildnote/plan/mcp-knowledge.md`); App step 7a — read-only shell + "Read Project Context" — done 2026-07-19 (`buildnote/plan/app.md`); step 6 chat slice — DeepSeek agent chat + MCP tool calling + first-run API key UI — done 2026-07-19 (`buildnote/plan/agent.md`); agent sandbox (tool tiers, path jail, destructive confirmation, audit) added 2026-07-20 (`buildnote/log/20260720_agent-sandbox.md`).
 
 ## Tech Stack
 
@@ -68,6 +68,8 @@ AgentAssistPlcDev.sln
 
 6. **Safety:** Never import a block into TIA without a `vc_snapshot` first. Always `src_validate` before `import_block`. Dry-run mode must produce diff-on-disk without importing.
 
+7. **Agent sandbox (2026-07-20):** Every MCP tool call is tier-classified before it runs: `read` auto-allow, `write` allow + audit, `destructive` (save_project, import_block) needs user confirmation within a per-session budget, `deny` is blocked; unclassified tools fail closed. Tiers live in `Contracts.Sandbox.SandboxPolicy.Defaults`; overrides in `%APPDATA%/PlcAiAssistant/sandbox.json` (`tiers`, `allowedRoots` — extends the defaults, `maxDestructiveCallsPerSession`). Enforcement is two-sided: Mcp.Engineering's `EngineeringGuard` classifies + jails all path arguments (outputDir, xmlFilePath, projectPath) to the allowed roots for ANY MCP client; the chat agent's `AgentSandbox` adds the confirmation dialog + budget. Audit trail (JSONL, per decision): `%LOCALAPPDATA%/PlcAiAssistant/audit/{agent,engineering}.jsonl`. When adding a new MCP tool, classify it in `SandboxPolicy.Defaults` — `SandboxPolicyTests.EveryCurrentMcpToolIsClassified` fails otherwise.
+
 ## Git Workflow
 
 - **Current branch:** `master`
@@ -82,8 +84,11 @@ AgentAssistPlcDev.sln
 - `buildnote/plan/mcp-knowledge.md` — Phase 2 step 1 detailed design for the knowledge MCP server
 - `buildnote/plan/app.md` — Phase 2 step 7a design for the WPF App (read-only shell + Read Project Context)
 - `buildnote/plan/agent.md` — Phase 2 step 6 chat slice: DeepSeek client, tool catalog (import_block excluded), AgentLoop, first-run key UI
+- `buildnote/bestpractice/tia-v17-lad-instruction-catalog.md` — TIA V17 LAD/FBD instruction catalog: FlgNet part names, semantics (e.g. SR/RS dominance), SCL patterns, translator coverage + roadmap
 - `agent.md` — this file; concise rules and context for AI agents
 - `%APPDATA%/PlcAiAssistant/config.json` — local config (git-ignored)
+- `%APPDATA%/PlcAiAssistant/sandbox.json` — sandbox overrides: tier map, extra allowedRoots, destructive budget (git-ignored)
+- `%LOCALAPPDATA%/PlcAiAssistant/audit/` — sandbox decision trail, one JSONL file per process
 
 ## MCP Server Inventory
 
@@ -118,4 +123,5 @@ AgentAssistPlcDev.sln
 - MCP servers use **stdio transport** only (no HTTP/networking in MVP).
 - The user's working directory is `C:\Users\Ansel\orca\projects\AgentAssistPlcDev`.
 - Use english as default language, expect user ask for different language or ask to translate.
+- When adding/changing a FlgNet part translation in `ProgramBlockLogicYamlWriter.cs`: update its row in `buildnote/bestpractice/tia-v17-lad-instruction-catalog.md` (status + semantics) and add a fixture test in `ProgramBlockLogicTests.cs` asserting statement content **and order** (pattern: `TranslatesBuiltInSrPartAndQOutput` / `TranslatesBuiltInRsPartAsSetDominant`).
 

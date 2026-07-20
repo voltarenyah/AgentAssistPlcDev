@@ -17,14 +17,16 @@ public sealed class AgentLoop
     private readonly DeepSeekClient client;
     private readonly McpToolCatalog catalog;
     private readonly Func<string> contextProvider;
+    private readonly AgentSandbox? sandbox;
     private readonly List<ChatMessage> messages = new();
     private readonly List<UsageInfo?> roundUsages = new();
 
-    public AgentLoop(DeepSeekClient client, McpToolCatalog catalog, Func<string> contextProvider, ChatRequestSettings? settings = null)
+    public AgentLoop(DeepSeekClient client, McpToolCatalog catalog, Func<string> contextProvider, ChatRequestSettings? settings = null, AgentSandbox? sandbox = null)
     {
         this.client = client;
         this.catalog = catalog;
         this.contextProvider = contextProvider;
+        this.sandbox = sandbox;
         Settings = settings ?? new ChatRequestSettings();
     }
 
@@ -100,6 +102,17 @@ public sealed class AgentLoop
 
     private async Task<ChatMessage> ExecuteToolCallAsync(ChatToolCall call, CancellationToken cancellationToken)
     {
+        // Sandbox gate first: unknown/denied/budget-stopped/user-denied calls never reach the server.
+        if (sandbox != null)
+        {
+            var verdict = await sandbox.CheckAsync(call, cancellationToken);
+            if (verdict != null)
+            {
+                Progress?.Invoke($"  ⛔ {call.Name}: {verdict.Note}");
+                return ChatMessage.Tool(call.Id, verdict.ErrorJson);
+            }
+        }
+
         string content;
         try
         {
