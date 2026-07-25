@@ -36,7 +36,10 @@ public sealed class McpToolCatalog
         {
             if (!ExcludedToolNames.Contains(spec.Name))
             {
-                byName[spec.Name] = spec;
+                if (byName.TryGetValue(spec.Name, out var existing))
+                    throw new InvalidOperationException(
+                        $"Duplicate MCP tool name '{spec.Name}' from '{existing.ServerName}' and '{spec.ServerName}'.");
+                byName.Add(spec.Name, spec);
             }
         }
     }

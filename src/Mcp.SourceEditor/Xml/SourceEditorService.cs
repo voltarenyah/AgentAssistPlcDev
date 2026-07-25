@@ -57,7 +57,7 @@ public sealed class SourceEditorService
         {
             var baseline = Load(baselineFilePath, nameof(baselineFilePath));
             protectedMatches = ProtectedCanonical(baseline.Document) == ProtectedCanonical(candidate.Document)
-                && ExistingEditableIdsMatch(baseline.Document, candidate.Document);
+                && ExistingEditableStructureMatches(baseline.Document, candidate.Document);
             if (!protectedMatches)
                 findings.Add(new("error", "SOURCE_INTEGRITY_CHANGED", "Protected PLC logic or structure changed."));
         }
@@ -91,6 +91,7 @@ public sealed class SourceEditorService
         if (edits.Count == 0)
             throw new SourceEditorException("SOURCE_OPERATION_UNSUPPORTED", "At least one edit is required.");
         var source = Load(xmlFilePath, nameof(xmlFilePath));
+        var sourceHash = HashFile(source.Path);
         var candidate = new XDocument(source.Document);
         var normalized = ApplyEdits(candidate, edits);
         var validation = ValidateDocuments(source.Document, candidate);
@@ -101,12 +102,26 @@ public sealed class SourceEditorService
             throw new SourceEditorException("SOURCE_OUTPUT_INVALID", "Output path must end in .xml.");
         if (!inPlace && File.Exists(output) && !overwrite)
             throw new SourceEditorException("SOURCE_OUTPUT_EXISTS", $"Output file already exists: {output}");
-        AtomicWrite(candidate, output, source.Encoding, inPlace || overwrite);
-        var reopened = Load(output, nameof(outputFilePath));
+        var temp = WriteTemporary(candidate, output, source.Encoding);
+        LoadedXml reopened;
+        try
+        {
+            reopened = Load(temp, nameof(outputFilePath));
+            var tempValidation = ValidateDocuments(source.Document, reopened.Document);
+            if (!tempValidation.IsValid)
+                throw new SourceEditorException("SOURCE_INTEGRITY_CHANGED", "Serialized output changed protected PLC content.");
+            File.Move(temp, output, inPlace || overwrite);
+        }
+        catch
+        {
+            if (File.Exists(temp)) File.Delete(temp);
+            throw;
+        }
+        reopened = Load(output, nameof(outputFilePath));
         var reopenedValidation = ValidateDocuments(source.Document, reopened.Document);
         if (!reopenedValidation.IsValid)
             throw new SourceEditorException("SOURCE_INTEGRITY_CHANGED", "Serialized output changed protected PLC content.");
-        return new(source.Path, output, normalized, reopenedValidation, true, HashFile(source.Path), HashFile(output));
+        return new(source.Path, output, normalized, reopenedValidation, true, sourceHash, HashFile(output));
     }
 
     private IReadOnlyList<NormalizedEdit> ApplyEdits(XDocument document, IReadOnlyList<SourceEdit> edits)
@@ -136,6 +151,8 @@ public sealed class SourceEditorService
                 case SourceEditOperation.SetSafeProperty:
                     owner = block;
                     field = SetSafeProperty(block, edit.PropertyName, edit.Value, index, out var oldProperty);
+                    if (!keys.Add($"{Attr(block, "ID")}|{field}"))
+                        throw Error("SOURCE_OPERATION_UNSUPPORTED", "A batch cannot edit the same safe property twice.", index);
                     results.Add(new(index, "block", Attr(block, "ID"), null, field, null, oldProperty, edit.Value));
                     continue;
                 default:
@@ -183,7 +200,17 @@ public sealed class SourceEditorService
         var composition = owner.Elements().FirstOrDefault(x => x.Name.LocalName == "ObjectList")?
             .Elements().FirstOrDefault(x => x.Name.LocalName == "MultilingualText" && Attr(x, "CompositionName") == field);
         if (composition == null)
-            throw Error("SOURCE_TEMPLATE_MISSING", $"{field} structure is missing for target {Attr(owner, "ID")}.", index);
+        {
+            var template = document.Descendants().FirstOrDefault(x => x.Name.LocalName == "MultilingualText"
+                && Attr(x, "CompositionName") == field)
+                ?? throw Error("SOURCE_TEMPLATE_MISSING", $"No {field} composition template exists.", index);
+            composition = new XElement(template);
+            composition.SetAttributeValue("ID", NextId(document));
+            var targetList = owner.Elements().FirstOrDefault(x => x.Name.LocalName == "ObjectList")
+                ?? throw Error("SOURCE_TEMPLATE_MISSING", $"Target {Attr(owner, "ID")} has no ObjectList.", index);
+            composition.Descendants().First(x => x.Name.LocalName == "ObjectList").RemoveNodes();
+            targetList.Add(composition);
+        }
         var objectList = composition.Elements().First(x => x.Name.LocalName == "ObjectList");
         var items = objectList.Elements().Where(x => x.Name.LocalName == "MultilingualTextItem").ToList();
         XElement? item = requestedCulture == null ? items.FirstOrDefault() : items.FirstOrDefault(x => Value(Child(x, "AttributeList"), "Culture") == requestedCulture);
@@ -216,8 +243,10 @@ public sealed class SourceEditorService
         if (propertyName == null || !names.TryGetValue(propertyName, out var xmlName))
             throw Error("SOURCE_PROPERTY_UNSUPPORTED", $"Safe property '{propertyName}' is not supported.", index);
         var attributes = Child(block, "AttributeList");
-        oldValue = Value(attributes, xmlName) ?? "";
-        SetValue(attributes, xmlName, value);
+        var element = attributes.Elements().FirstOrDefault(x => x.Name.LocalName == xmlName)
+            ?? throw Error("SOURCE_PROPERTY_UNSUPPORTED", $"Safe property '{propertyName}' is absent from this block schema.", index);
+        oldValue = element.Value;
+        element.Value = value;
         return propertyName;
     }
 
@@ -225,7 +254,7 @@ public sealed class SourceEditorService
     {
         var findings = StandaloneFindings(candidate).ToList();
         var matches = ProtectedCanonical(baseline) == ProtectedCanonical(candidate)
-            && ExistingEditableIdsMatch(baseline, candidate);
+            && ExistingEditableStructureMatches(baseline, candidate);
         if (!matches) findings.Add(new("error", "SOURCE_INTEGRITY_CHANGED", "Protected PLC logic or structure changed."));
         return new(!findings.Any(x => x.Severity == "error"), matches, findings);
     }
@@ -250,7 +279,8 @@ public sealed class SourceEditorService
         }
         var attributes = Child(block, "AttributeList");
         foreach (var name in new[] { "HeaderAuthor", "HeaderFamily", "HeaderName" })
-            attributes.Elements().Where(x => x.Name.LocalName == name).Remove();
+            foreach (var element in attributes.Elements().Where(x => x.Name.LocalName == name))
+                element.Value = "__EDITABLE_TEXT__";
         foreach (var element in clone.Root!.DescendantsAndSelf())
             element.Attributes().OrderBy(x => x.Name.ToString(), StringComparer.Ordinal).ToList().ForEach(x => { x.Remove(); element.Add(x); });
         return clone.ToString(SaveOptions.DisableFormatting).Replace("\r\n", "\n");
@@ -266,10 +296,19 @@ public sealed class SourceEditorService
             foreach (var field in new[] { "Title", "Comment" })
                 foreach (var value in TextValues(owner.Element, field))
                     result[$"{owner.Kind}|{Attr(owner.Element, "ID")}|{owner.Number}|{field}|{value.Culture}"] = value.Value;
+        var blockAttributes = Child(block, "AttributeList");
+        foreach (var pair in new[]
+        {
+            ("blockHeaderAuthor", "HeaderAuthor"),
+            ("blockHeaderFamily", "HeaderFamily"),
+            ("blockHeaderName", "HeaderName"),
+        })
+            if (blockAttributes.Elements().FirstOrDefault(x => x.Name.LocalName == pair.Item2) is { } element)
+                result[$"block|{Attr(block, "ID")}||{pair.Item1}|"] = element.Value;
         return result;
     }
 
-    private static bool ExistingEditableIdsMatch(XDocument baseline, XDocument candidate)
+    private static bool ExistingEditableStructureMatches(XDocument baseline, XDocument candidate)
     {
         static Dictionary<string, string> Identities(XDocument document)
         {
@@ -282,11 +321,19 @@ public sealed class SourceEditorService
                     && Attr(x, "CompositionName") is "Title" or "Comment") ?? Enumerable.Empty<XElement>())
                 {
                     var field = Attr(composition, "CompositionName");
+                    var compositionIndex = objectList!.Elements().TakeWhile(x => !ReferenceEquals(x, composition)).Count();
                     foreach (var item in composition.Descendants().Where(x => x.Name.LocalName == "MultilingualTextItem"))
                     {
                         var attributes = Child(item, "AttributeList");
                         var culture = Value(attributes, "Culture") ?? "";
-                        result[$"{Attr(owner, "ID")}|{field}|{culture}"] = $"{Attr(composition, "ID")}:{Attr(item, "ID")}";
+                        var clone = new XElement(composition);
+                        var clonedList = clone.Descendants().First(x => x.Name.LocalName == "ObjectList");
+                        clonedList.Elements().Where(x => x.Name.LocalName == "MultilingualTextItem"
+                            && Value(Child(x, "AttributeList"), "Culture") != culture).Remove();
+                        foreach (var text in clone.Descendants().Where(x => x.Name.LocalName == "Text"))
+                            text.Value = "__EDITABLE_TEXT__";
+                        result[$"{Attr(owner, "ID")}|{field}|{culture}"] =
+                            $"{compositionIndex}|{clone.ToString(SaveOptions.DisableFormatting)}";
                     }
                 }
             }
@@ -295,7 +342,41 @@ public sealed class SourceEditorService
 
         var before = Identities(baseline);
         var after = Identities(candidate);
-        return before.All(pair => after.TryGetValue(pair.Key, out var value) && value == pair.Value);
+        if (!before.All(pair => after.TryGetValue(pair.Key, out var value) && value == pair.Value))
+            return false;
+
+        static string ItemShape(XElement item)
+        {
+            var clone = new XElement(item);
+            clone.SetAttributeValue("ID", "__NEW_ID__");
+            var attributes = Child(clone, "AttributeList");
+            SetValue(attributes, "Culture", "__CULTURE__");
+            SetValue(attributes, "Text", "__EDITABLE_TEXT__");
+            return clone.ToString(SaveOptions.DisableFormatting);
+        }
+
+        var baselineShapes = FindBlock(baseline).Descendants()
+            .Where(x => x.Name.LocalName == "MultilingualTextItem").Select(ItemShape)
+            .ToHashSet(StringComparer.Ordinal);
+        var baselineKeys = before.Keys.ToHashSet(StringComparer.Ordinal);
+        var candidateBlock = FindBlock(candidate);
+        foreach (var owner in CompileUnits(candidateBlock).Append(candidateBlock))
+        {
+            var objectList = owner.Elements().FirstOrDefault(x => x.Name.LocalName == "ObjectList");
+            foreach (var composition in objectList?.Elements().Where(x => x.Name.LocalName == "MultilingualText"
+                && Attr(x, "CompositionName") is "Title" or "Comment") ?? Enumerable.Empty<XElement>())
+            {
+                var field = Attr(composition, "CompositionName");
+                foreach (var item in composition.Descendants().Where(x => x.Name.LocalName == "MultilingualTextItem"))
+                {
+                    var culture = Value(Child(item, "AttributeList"), "Culture") ?? "";
+                    var key = $"{Attr(owner, "ID")}|{field}|{culture}";
+                    if (!baselineKeys.Contains(key) && !baselineShapes.Contains(ItemShape(item)))
+                        return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static IReadOnlyList<MultilingualValue> TextValues(XElement owner, string field) =>
@@ -320,7 +401,7 @@ public sealed class SourceEditorService
             var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
             using var reader = XmlReader.Create(canonical, settings);
             var document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
-            return new(canonical, document, new UTF8Encoding(false));
+            return new(canonical, document, DetectEncoding(canonical, document));
         }
         catch (SourceEditorException) { throw; }
         catch (Exception ex)
@@ -364,20 +445,34 @@ public sealed class SourceEditorService
         Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + suffix + Path.GetExtension(path));
     private static bool SamePath(string a, string b) =>
         string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
-    private static void AtomicWrite(XDocument document, string output, Encoding encoding, bool overwrite)
+    private static string WriteTemporary(XDocument document, string output, Encoding encoding)
     {
-        var temp = Path.Combine(Path.GetDirectoryName(output)!, $".{Path.GetFileName(output)}.{Guid.NewGuid():N}.tmp");
+        var temp = Path.Combine(Path.GetDirectoryName(output)!,
+            $".{Path.GetFileNameWithoutExtension(output)}.{Guid.NewGuid():N}.xml");
         try
         {
             using (var writer = XmlWriter.Create(temp, new XmlWriterSettings { Encoding = encoding, Indent = false, OmitXmlDeclaration = false }))
                 document.Save(writer);
-            File.Move(temp, output, overwrite);
+            return temp;
         }
         catch (Exception ex)
         {
             if (File.Exists(temp)) File.Delete(temp);
             throw new SourceEditorException("SOURCE_WRITE_FAILED", $"Could not write XML: {ex.Message}", inner: ex);
         }
+    }
+    private static Encoding DetectEncoding(string path, XDocument document)
+    {
+        var bytes = File.ReadAllBytes(path);
+        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) return Encoding.Unicode;
+        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) return Encoding.BigEndianUnicode;
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) return new UTF8Encoding(true);
+        if (!string.IsNullOrWhiteSpace(document.Declaration?.Encoding))
+        {
+            try { return Encoding.GetEncoding(document.Declaration.Encoding); }
+            catch (ArgumentException) { }
+        }
+        return new UTF8Encoding(false);
     }
     private static string HashFile(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
     private static SourceEditorException Error(string code, string message, int index) => new(code, message, batchIndex: index);

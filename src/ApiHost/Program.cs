@@ -361,7 +361,12 @@ app.UseCors(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 // Status
 app.MapGet("/api/status", () => Results.Ok(new
 {
-    servers = host.Engineering.IsRunning && host.Knowledge.IsRunning ? "running" : "starting",
+    servers = host.Engineering.IsRunning
+        && host.Knowledge.IsRunning
+        && (host.VersionControl?.IsRunning ?? true)
+        && (host.SourceEditor?.IsRunning ?? true)
+            ? "running"
+            : "starting",
     connected = ActiveConnection()?.ProjectName,
     selectedProject = _selectedProjectName,
     connections = _connections.Count,

@@ -9,6 +9,7 @@
     "tool": "src_preview_edits",
     "args": {
       "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml",
+      "overwriteOutput": true,
       "edits": [
         {
           "operation": "setNetworkComment",
@@ -37,6 +38,7 @@
     "tool": "src_apply_edits",
     "args": {
       "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml",
+      "overwriteOutput": true,
       "edits": [
         {
           "operation": "setNetworkTitle",

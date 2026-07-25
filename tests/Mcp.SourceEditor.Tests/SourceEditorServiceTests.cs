@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using System.Text;
 using Contracts.Sandbox;
 using Mcp.SourceEditor.Models;
 using Mcp.SourceEditor.Xml;
@@ -122,6 +123,98 @@ public sealed class SourceEditorServiceTests : IDisposable
         var error = Assert.Throws<SourceEditorException>(() => service.Parse(path));
 
         Assert.Equal("SOURCE_XML_INVALID", error.Code);
+    }
+
+    [Fact]
+    public void Validate_RejectsChangedMultilingualCompositionStructure()
+    {
+        var source = CopyFixture("Main [OB1].xml");
+        var changed = Path.Combine(root, "changed-composition.xml");
+        var document = XDocument.Load(source, LoadOptions.PreserveWhitespace);
+        document.Descendants().First(x => x.Name.LocalName == "MultilingualText")
+            .SetAttributeValue("unexpected", "unsafe");
+        document.Save(changed, SaveOptions.DisableFormatting);
+
+        Assert.False(service.Validate(changed, source).IsValid);
+    }
+
+    [Fact]
+    public void SafeProperty_IsDiffedAndCannotBeWrittenTwice()
+    {
+        var source = CopyFixture("Main [OB1].xml");
+        var result = service.Preview(source, new[]
+        {
+            new SourceEdit(SourceEditOperation.SetSafeProperty, null, null, "Ansel", "blockHeaderAuthor")
+        }, null, false);
+
+        var diff = service.Diff(source, result.OutputFilePath);
+        Assert.Contains(diff.Changes, x => x.Field == "blockHeaderAuthor" && x.NewValue == "Ansel");
+
+        var error = Assert.Throws<SourceEditorException>(() => service.Preview(source, new[]
+        {
+            new SourceEdit(SourceEditOperation.SetSafeProperty, null, null, "A", "blockHeaderAuthor"),
+            new SourceEdit(SourceEditOperation.SetSafeProperty, null, null, "B", "blockHeaderAuthor"),
+        }, Path.Combine(root, "duplicate.xml"), false));
+        Assert.Equal("SOURCE_OPERATION_UNSUPPORTED", error.Code);
+    }
+
+    [Fact]
+    public void Apply_InPlaceReportsOriginalAndOutputHashes()
+    {
+        var source = CopyFixture("Main [OB1].xml");
+        var originalHash = service.Parse(source).Sha256;
+        var parsed = service.Parse(source);
+
+        var result = service.Apply(source, new[]
+        {
+            new SourceEdit(SourceEditOperation.SetNetworkTitle,
+                new EditTarget(parsed.Networks[0].XmlId), "en-US", "Changed")
+        }, null, false, true, true);
+
+        Assert.Equal(originalHash, result.SourceSha256);
+        Assert.NotEqual(result.SourceSha256, result.OutputSha256);
+    }
+
+    [Fact]
+    public void Preview_PreservesUtf16Encoding()
+    {
+        var source = Path.Combine(root, "utf16.xml");
+        var fixture = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Main [OB1].xml"));
+        fixture = fixture.Replace("encoding=\"utf-8\"", "encoding=\"utf-16\"");
+        File.WriteAllText(source, fixture, Encoding.Unicode);
+        var parsed = service.Parse(source);
+
+        var result = service.Preview(source, new[]
+        {
+            new SourceEdit(SourceEditOperation.SetNetworkComment,
+                new EditTarget(parsed.Networks[0].XmlId), "en-US", "UTF16")
+        }, null, false);
+
+        var bytes = File.ReadAllBytes(result.OutputFilePath);
+        Assert.Equal(0xFF, bytes[0]);
+        Assert.Equal(0xFE, bytes[1]);
+    }
+
+    [Fact]
+    public void Preview_CreatesMissingCommentCompositionFromMatchingTemplate()
+    {
+        var source = CopyFixture("Main [OB1].xml");
+        var document = XDocument.Load(source, LoadOptions.PreserveWhitespace);
+        var firstUnit = document.Descendants().First(x => x.Name.LocalName == "SW.Blocks.CompileUnit");
+        firstUnit.Elements().First(x => x.Name.LocalName == "ObjectList").Elements()
+            .First(x => x.Name.LocalName == "MultilingualText"
+                && (string?)x.Attribute("CompositionName") == "Comment").Remove();
+        document.Save(source, SaveOptions.DisableFormatting);
+        var parsed = service.Parse(source);
+
+        var result = service.Preview(source, new[]
+        {
+            new SourceEdit(SourceEditOperation.SetNetworkComment,
+                new EditTarget(parsed.Networks[0].XmlId), "en-US", "Created")
+        }, null, false);
+
+        Assert.Contains("Created", File.ReadAllText(result.OutputFilePath));
+        Assert.True(result.ProtectedContentMatches);
     }
 
     private string CopyFixture(string name)

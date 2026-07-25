@@ -33,7 +33,7 @@ Fresh SourceEditor test run:
 
 ```text
 dotnet test tests\Mcp.SourceEditor.Tests\Mcp.SourceEditor.Tests.csproj
-Passed: 9, Failed: 0
+Passed: 14, Failed: 0
 ```
 
 Fresh solution build:
@@ -46,9 +46,9 @@ Build succeeded: 0 errors, 4 pre-existing warnings
 Fresh full test run:
 
 ```text
-SourceEditor:       9 passed, 0 failed
+SourceEditor:      14 passed, 0 failed
 Contracts:         51 passed, 0 failed
-Agent:             56 passed, 0 failed
+Agent:             57 passed, 0 failed
 VersionControl:    19 passed, 0 failed
 Engineering:       20 passed, 0 failed
 Knowledge:         87 passed, 1 failed
@@ -59,6 +59,22 @@ The one failure is the accepted pre-existing baseline:
 `Mcp.Knowledge.Tests.ManifestImportTests.MalformedManifestReturnsManifestInvalid`
 
 It was reproduced before SourceEditor implementation and remains out of scope.
+
+A second verification run excluding only that named baseline test passed all 248 remaining tests.
+
+## Independent review fixes
+
+An independent code review found and drove test-first fixes for:
+
+- Validation now compares existing multilingual composition/item structure, attributes, ordering,
+  and IDs while allowing only template-shaped new culture items.
+- Temporary output is reopened and validated before it is published or replaces the source.
+- Original/output hashes remain distinct and correct for in-place writes.
+- UTF-8 BOM and UTF-16 source encodings are retained.
+- Safe-property changes appear in `src_diff`; missing slots and duplicate writes are rejected.
+- Missing Title/Comment compositions are cloned from a matching document template.
+- Duplicate MCP names across servers fail startup instead of silently changing routing.
+- `/api/status` includes optional SourceEditor and VersionControl process health.
 
 ## MCP stdio verification
 
