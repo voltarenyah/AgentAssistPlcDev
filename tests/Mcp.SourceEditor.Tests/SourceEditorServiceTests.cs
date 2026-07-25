@@ -217,6 +217,24 @@ public sealed class SourceEditorServiceTests : IDisposable
         Assert.True(result.ProtectedContentMatches);
     }
 
+    [Fact]
+    public void Validate_RejectsUnauthorizedNewEmptyComposition()
+    {
+        var source = CopyFixture("Main [OB1].xml");
+        var changed = Path.Combine(root, "extra-composition.xml");
+        var document = XDocument.Load(source, LoadOptions.PreserveWhitespace);
+        var unit = document.Descendants().First(x => x.Name.LocalName == "SW.Blocks.CompileUnit");
+        var objectList = unit.Elements().First(x => x.Name.LocalName == "ObjectList");
+        objectList.Add(new XElement("MultilingualText",
+            new XAttribute("ID", "FFFF"),
+            new XAttribute("CompositionName", "Comment"),
+            new XAttribute("unauthorized", "true"),
+            new XElement("ObjectList")));
+        document.Save(changed, SaveOptions.DisableFormatting);
+
+        Assert.False(service.Validate(changed, source).IsValid);
+    }
+
     private string CopyFixture(string name)
     {
         var source = Path.Combine(AppContext.BaseDirectory, "Fixtures", name);

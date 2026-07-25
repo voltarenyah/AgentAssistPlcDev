@@ -201,15 +201,27 @@ public sealed class SourceEditorService
             .Elements().FirstOrDefault(x => x.Name.LocalName == "MultilingualText" && Attr(x, "CompositionName") == field);
         if (composition == null)
         {
-            var template = document.Descendants().FirstOrDefault(x => x.Name.LocalName == "MultilingualText"
-                && Attr(x, "CompositionName") == field)
+            var allElements = document.Descendants().ToList();
+            var ownerIndex = allElements.IndexOf(owner);
+            var template = allElements.Where(x => x.Name.LocalName == "MultilingualText"
+                    && Attr(x, "CompositionName") == field)
+                .OrderBy(x => Math.Abs(allElements.IndexOf(x) - ownerIndex))
+                .FirstOrDefault()
                 ?? throw Error("SOURCE_TEMPLATE_MISSING", $"No {field} composition template exists.", index);
             composition = new XElement(template);
             composition.SetAttributeValue("ID", NextId(document));
             var targetList = owner.Elements().FirstOrDefault(x => x.Name.LocalName == "ObjectList")
                 ?? throw Error("SOURCE_TEMPLATE_MISSING", $"Target {Attr(owner, "ID")} has no ObjectList.", index);
-            composition.Descendants().First(x => x.Name.LocalName == "ObjectList").RemoveNodes();
             targetList.Add(composition);
+            var clonedItems = composition.Descendants().Where(x => x.Name.LocalName == "MultilingualTextItem").ToList();
+            foreach (var extra in clonedItems.Skip(1)) extra.Remove();
+            if (clonedItems.FirstOrDefault() is { } clonedItem)
+            {
+                clonedItem.SetAttributeValue("ID", NextId(document));
+                var clonedAttributes = Child(clonedItem, "AttributeList");
+                SetValue(clonedAttributes, "Culture", requestedCulture ?? "en-US");
+                SetValue(clonedAttributes, "Text", "");
+            }
         }
         var objectList = composition.Elements().First(x => x.Name.LocalName == "ObjectList");
         var items = objectList.Elements().Where(x => x.Name.LocalName == "MultilingualTextItem").ToList();
@@ -217,7 +229,17 @@ public sealed class SourceEditorService
         actualCulture = requestedCulture ?? (item == null ? "en-US" : Value(Child(item, "AttributeList"), "Culture") ?? "en-US");
         if (item == null)
         {
-            var template = items.FirstOrDefault() ?? document.Descendants().FirstOrDefault(x => x.Name.LocalName == "MultilingualTextItem");
+            var template = items.FirstOrDefault();
+            if (template == null)
+            {
+                var allElements = document.Descendants().ToList();
+                var ownerIndex = allElements.IndexOf(owner);
+                template = allElements.Where(x => x.Name.LocalName == "MultilingualText"
+                        && Attr(x, "CompositionName") == field)
+                    .OrderBy(x => Math.Abs(allElements.IndexOf(x) - ownerIndex))
+                    .SelectMany(x => x.Descendants().Where(y => y.Name.LocalName == "MultilingualTextItem"))
+                    .FirstOrDefault();
+            }
             if (template == null) throw Error("SOURCE_TEMPLATE_MISSING", "No multilingual item template exists.", index);
             item = new XElement(template);
             item.SetAttributeValue("ID", NextId(document));
@@ -376,6 +398,53 @@ public sealed class SourceEditorService
                 }
             }
         }
+        static Dictionary<string, List<XElement>> Compositions(XDocument document)
+        {
+            var block = FindBlock(document);
+            var result = new Dictionary<string, List<XElement>>(StringComparer.Ordinal);
+            foreach (var owner in CompileUnits(block).Append(block))
+            {
+                var list = owner.Elements().FirstOrDefault(x => x.Name.LocalName == "ObjectList");
+                foreach (var composition in list?.Elements().Where(x => x.Name.LocalName == "MultilingualText"
+                    && Attr(x, "CompositionName") is "Title" or "Comment") ?? Enumerable.Empty<XElement>())
+                {
+                    var key = $"{Attr(owner, "ID")}|{Attr(composition, "CompositionName")}";
+                    if (!result.TryGetValue(key, out var values)) result[key] = values = new();
+                    values.Add(composition);
+                }
+            }
+            return result;
+        }
+        static string CompositionShape(XElement composition)
+        {
+            var clone = new XElement(composition);
+            clone.SetAttributeValue("ID", "__NEW_ID__");
+            clone.Descendants().First(x => x.Name.LocalName == "ObjectList").RemoveNodes();
+            return clone.ToString(SaveOptions.DisableFormatting);
+        }
+
+        var baselineCompositions = Compositions(baseline);
+        var candidateCompositions = Compositions(candidate);
+        var approvedShapes = baselineCompositions.Values.SelectMany(x => x)
+            .GroupBy(x => Attr(x, "CompositionName"), StringComparer.Ordinal)
+            .ToDictionary(x => x.Key, x => x.Select(CompositionShape).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
+        if (baselineCompositions.Any(pair =>
+            !candidateCompositions.TryGetValue(pair.Key, out var values) || values.Count != pair.Value.Count))
+            return false;
+        foreach (var pair in candidateCompositions)
+        {
+            var baselineCount = baselineCompositions.GetValueOrDefault(pair.Key)?.Count ?? 0;
+            if (baselineCount > 0 && pair.Value.Count != baselineCount) return false;
+            if (baselineCount == 0)
+            {
+                if (pair.Value.Count != 1) return false;
+                var composition = pair.Value[0];
+                var field = Attr(composition, "CompositionName");
+                if (!composition.Descendants().Any(x => x.Name.LocalName == "MultilingualTextItem")) return false;
+                if (!approvedShapes.TryGetValue(field, out var shapes) || !shapes.Contains(CompositionShape(composition)))
+                    return false;
+            }
+        }
         return true;
     }
 
@@ -451,8 +520,12 @@ public sealed class SourceEditorService
             $".{Path.GetFileNameWithoutExtension(output)}.{Guid.NewGuid():N}.xml");
         try
         {
-            using (var writer = XmlWriter.Create(temp, new XmlWriterSettings { Encoding = encoding, Indent = false, OmitXmlDeclaration = false }))
+            using var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                4096, FileOptions.WriteThrough);
+            using (var writer = XmlWriter.Create(stream,
+                new XmlWriterSettings { Encoding = encoding, Indent = false, OmitXmlDeclaration = false, CloseOutput = false }))
                 document.Save(writer);
+            stream.Flush(flushToDisk: true);
             return temp;
         }
         catch (Exception ex)
