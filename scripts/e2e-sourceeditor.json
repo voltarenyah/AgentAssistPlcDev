@@ -1,0 +1,52 @@
+[
+  {
+    "tool": "src_parse_block",
+    "args": {
+      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml"
+    }
+  },
+  {
+    "tool": "src_preview_edits",
+    "args": {
+      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml",
+      "overwriteOutput": true,
+      "edits": [
+        {
+          "operation": "setNetworkComment",
+          "target": { "xmlId": "3", "networkNumber": 1 },
+          "culture": "zh-CN",
+          "value": "MCP SourceEditor 精确编辑验证"
+        }
+      ]
+    }
+  },
+  {
+    "tool": "src_diff",
+    "args": {
+      "originalFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml",
+      "modifiedFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.preview.xml"
+    }
+  },
+  {
+    "tool": "src_validate",
+    "args": {
+      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.preview.xml",
+      "baselineFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml"
+    }
+  },
+  {
+    "tool": "src_apply_edits",
+    "args": {
+      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml",
+      "overwriteOutput": true,
+      "edits": [
+        {
+          "operation": "setNetworkTitle",
+          "target": { "xmlId": "3" },
+          "culture": "en-US",
+          "value": "Verified source editor title"
+        }
+      ]
+    }
+  }
+]

@@ -7,6 +7,20 @@ namespace Agent.Tests;
 
 public sealed class McpToolCatalogTests
 {
+    [Fact]
+    public void DuplicateToolNamesAcrossServersAreRejected()
+    {
+        var schema = JsonDocument.Parse("""{"type":"object"}""").RootElement.Clone();
+        var caller = new FakeToolCaller();
+
+        var error = Assert.Throws<InvalidOperationException>(() => new McpToolCatalog(new[]
+        {
+            new AgentToolSpec("same_name", "one", schema, caller, "engineering"),
+            new AgentToolSpec("same_name", "two", schema, caller, "sourceeditor"),
+        }));
+
+        Assert.Contains("same_name", error.Message);
+    }
     private static AgentToolSpec Spec(string name, IMcpToolCaller caller, string schema = """{"type":"object","properties":{}}""") =>
         new(name, $"desc {name}", JsonDocument.Parse(schema).RootElement, caller, "test");
 
@@ -56,13 +70,11 @@ public sealed class McpToolCatalogTests
     }
 
     [Fact]
-    public void DuplicateNamesLastWins()
+    public void DuplicateNamesFromSameServerAreRejected()
     {
         var first = new FakeToolCaller();
         var second = new FakeToolCaller();
-        var catalog = new McpToolCatalog(new[] { Spec("search", first), Spec("search", second) });
-
-        Assert.Same(second, catalog.Resolve("search").Caller);
-        Assert.Single(catalog.Tools);
+        Assert.Throws<InvalidOperationException>(
+            () => new McpToolCatalog(new[] { Spec("search", first), Spec("search", second) }));
     }
 }

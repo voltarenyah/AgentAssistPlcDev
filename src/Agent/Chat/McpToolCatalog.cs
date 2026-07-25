@@ -36,7 +36,10 @@ public sealed class McpToolCatalog
         {
             if (!ExcludedToolNames.Contains(spec.Name))
             {
-                byName[spec.Name] = spec;
+                if (byName.TryGetValue(spec.Name, out var existing))
+                    throw new InvalidOperationException(
+                        $"Duplicate MCP tool name '{spec.Name}' from '{existing.ServerName}' and '{spec.ServerName}'.");
+                byName.Add(spec.Name, spec);
             }
         }
     }
@@ -86,6 +89,11 @@ public sealed class McpToolCatalog
         {
             foreach (var (name, description, inputSchema) in await host.VersionControl.ListToolsAsync(cancellationToken))
                 specs.Add(new AgentToolSpec(name, description, inputSchema, host.VersionControl, "versioncontrol"));
+        }
+        if (host.SourceEditor != null)
+        {
+            foreach (var (name, description, inputSchema) in await host.SourceEditor.ListToolsAsync(cancellationToken))
+                specs.Add(new AgentToolSpec(name, description, inputSchema, host.SourceEditor, "sourceeditor"));
         }
 
         return new McpToolCatalog(specs);
