@@ -87,6 +87,11 @@ public sealed class McpToolCatalog
             foreach (var (name, description, inputSchema) in await host.VersionControl.ListToolsAsync(cancellationToken))
                 specs.Add(new AgentToolSpec(name, description, inputSchema, host.VersionControl, "versioncontrol"));
         }
+        if (host.SourceEditor != null)
+        {
+            foreach (var (name, description, inputSchema) in await host.SourceEditor.ListToolsAsync(cancellationToken))
+                specs.Add(new AgentToolSpec(name, description, inputSchema, host.SourceEditor, "sourceeditor"));
+        }
 
         return new McpToolCatalog(specs);
     }

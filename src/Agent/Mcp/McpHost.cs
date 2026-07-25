@@ -1,17 +1,18 @@
 namespace Agent.Mcp;
 
 /// <summary>
-/// Owns the MCP server child processes for the app session (engineering + knowledge + versioncontrol).
+/// Owns the MCP server child processes for the app session.
 /// Lives in the shared Agent library per buildnote/plan/app.md §2.3.
 /// </summary>
 public sealed class McpHost : IAsyncDisposable
 {
     public McpHost(string engineeringServerPath, string knowledgeServerPath)
-        : this(engineeringServerPath, knowledgeServerPath, null)
+        : this(engineeringServerPath, knowledgeServerPath, null, null)
     {
     }
 
-    public McpHost(string engineeringServerPath, string knowledgeServerPath, string? versionControlServerPath)
+    public McpHost(string engineeringServerPath, string knowledgeServerPath, string? versionControlServerPath,
+        string? sourceEditorServerPath = null)
     {
         Engineering = new McpServerConnection("engineering", engineeringServerPath);
         Knowledge = new McpServerConnection("knowledge", knowledgeServerPath);
@@ -23,6 +24,11 @@ public sealed class McpHost : IAsyncDisposable
             VersionControl = new McpServerConnection("versioncontrol", versionControlServerPath);
             VersionControl.StderrLine += line => ServerLog?.Invoke(line);
         }
+        if (!string.IsNullOrWhiteSpace(sourceEditorServerPath))
+        {
+            SourceEditor = new McpServerConnection("sourceeditor", sourceEditorServerPath);
+            SourceEditor.StderrLine += line => ServerLog?.Invoke(line);
+        }
     }
 
     /// <summary>Stderr lines from all hosted servers, prefixed with the server name.</summary>
@@ -31,6 +37,7 @@ public sealed class McpHost : IAsyncDisposable
     public McpServerConnection Engineering { get; }
     public McpServerConnection Knowledge { get; }
     public McpServerConnection? VersionControl { get; }
+    public McpServerConnection? SourceEditor { get; }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -40,15 +47,17 @@ public sealed class McpHost : IAsyncDisposable
         {
             await VersionControl.StartAsync(cancellationToken);
         }
+        if (SourceEditor != null) await SourceEditor.StartAsync(cancellationToken);
     }
 
     public async ValueTask DisposeAsync()
     {
-        await Engineering.DisposeAsync();
-        await Knowledge.DisposeAsync();
+        if (SourceEditor != null) await SourceEditor.DisposeAsync();
         if (VersionControl != null)
         {
             await VersionControl.DisposeAsync();
         }
+        await Knowledge.DisposeAsync();
+        await Engineering.DisposeAsync();
     }
 }

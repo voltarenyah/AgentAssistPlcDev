@@ -40,7 +40,7 @@ static AppConfig LoadConfig()
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ConfigDirName);
     var configPath = Path.Combine(configDir, ConfigFileName);
 
-    string? engineeringOverride = null, knowledgeOverride = null, versionControlOverride = null;
+    string? engineeringOverride = null, knowledgeOverride = null, versionControlOverride = null, sourceEditorOverride = null;
     string? apiKey = null, model = null, baseUrl = null, effort = null;
     bool? thinking = null;
     double? temperature = null, topP = null;
@@ -62,6 +62,7 @@ static AppConfig LoadConfig()
             engineeringOverride = GetStr(root, "engineeringServerPath");
             knowledgeOverride = GetStr(root, "knowledgeServerPath");
             versionControlOverride = GetStr(root, "versionControlServerPath");
+            sourceEditorOverride = GetStr(root, "sourceEditorServerPath");
             apiKey = GetStr(root, "deepSeekApiKey");
             model = GetStr(root, "deepSeekModel");
             baseUrl = GetStr(root, "deepSeekBaseUrl");
@@ -73,12 +74,13 @@ static AppConfig LoadConfig()
         catch (JsonException) { /* use defaults */ }
     }
 
-    string engPath, knowPath, vcPath;
+    string engPath, knowPath, vcPath, sourceEditorPath;
     if (engineeringOverride != null && knowledgeOverride != null)
     {
         engPath = engineeringOverride;
         knowPath = knowledgeOverride;
         vcPath = versionControlOverride ?? ResolveVcPath();
+        sourceEditorPath = sourceEditorOverride ?? ResolveSourceEditorPath();
     }
     else
     {
@@ -88,9 +90,10 @@ static AppConfig LoadConfig()
         knowPath = knowledgeOverride
             ?? Path.Combine(slnDir, "src", "Mcp.Knowledge", "bin", BuildConfiguration, "net8.0", "Mcp.Knowledge.exe");
         vcPath = versionControlOverride ?? ResolveVcPath();
+        sourceEditorPath = sourceEditorOverride ?? ResolveSourceEditorPath();
     }
 
-    return new AppConfig(engPath, knowPath, vcPath)
+    return new AppConfig(engPath, knowPath, vcPath, sourceEditorPath)
     {
         DeepSeekApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey,
         DeepSeekModel = model ?? "deepseek-v4-flash",
@@ -106,6 +109,12 @@ static string ResolveVcPath()
 {
     var slnDir = FindSolutionDirectory(AppContext.BaseDirectory);
     return Path.Combine(slnDir, "src", "Mcp.VersionControl", "bin", BuildConfiguration, "net8.0", "Mcp.VersionControl.exe");
+}
+
+static string ResolveSourceEditorPath()
+{
+    var slnDir = FindSolutionDirectory(AppContext.BaseDirectory);
+    return Path.Combine(slnDir, "src", "Mcp.SourceEditor", "bin", BuildConfiguration, "net8.0", "Mcp.SourceEditor.exe");
 }
 
 static void SaveApiKey(string apiKey)
@@ -158,6 +167,7 @@ var config = LoadConfig();
 Console.Error.WriteLine($"Engineering server: {config.EngineeringServerPath}");
 Console.Error.WriteLine($"Knowledge server: {config.KnowledgeServerPath}");
 Console.Error.WriteLine($"Version control server: {config.VersionControlServerPath}");
+Console.Error.WriteLine($"Source editor server: {config.SourceEditorServerPath}");
 Console.Error.WriteLine($"DeepSeek: {config.DeepSeekBaseUrl} model={config.DeepSeekModel}");
 
 /* ── Log buffer (ring buffer + subscriber channels) ──── */
@@ -197,7 +207,8 @@ void RecordSourcePath(string projectName, string sourcePath)
     catch (Exception ex) { Log($"failed to record source path in project metadata: {ex.Message}"); }
 }
 
-var host = new McpHost(config.EngineeringServerPath, config.KnowledgeServerPath, config.VersionControlServerPath);
+var host = new McpHost(config.EngineeringServerPath, config.KnowledgeServerPath,
+    config.VersionControlServerPath, config.SourceEditorServerPath);
 host.ServerLog += line => Log(line);
 await host.StartAsync();
 Log("MCP servers running.");
@@ -584,6 +595,7 @@ app.MapPost("/api/tools/call", async (ToolCallRequest req) =>
     {
         "knowledge" => host.Knowledge,
         "versioncontrol" => host.VersionControl,
+        "sourceeditor" => host.SourceEditor,
         _ => host.Engineering,
     };
 
@@ -1916,6 +1928,7 @@ sealed record AppConfig(
     string EngineeringServerPath,
     string KnowledgeServerPath,
     string VersionControlServerPath,
+    string SourceEditorServerPath,
     string? DeepSeekApiKey = null,
     string DeepSeekModel = "deepseek-v4-flash",
     string DeepSeekBaseUrl = "https://api.deepseek.com",
