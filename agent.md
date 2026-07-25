@@ -4,7 +4,7 @@
 
 Windows desktop app that assists PLC programming work, starting with Siemens TIA Portal V17. The app is decomposed into independent MCP servers (one per capability domain) so any MCP-compatible client can call each server individually. Each MCP hosts pluggable platform adapters behind a shared contract.
 
-**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 in steps: mcp-knowledge (ingest + tags/UDTs + knowledge depth) done 2026-07-18 (`buildnote/plan/mcp-knowledge.md`); App step 7a — read-only shell + "Read Project Context" — done 2026-07-19 (`buildnote/plan/app.md`); step 6 chat slice — DeepSeek agent chat + MCP tool calling + first-run API key UI — done 2026-07-19 (`buildnote/plan/agent.md`); agent sandbox (tool tiers, path jail, destructive confirmation, audit) added 2026-07-20 (`buildnote/log/20260720_agent-sandbox.md`); `sync_export` — incremental context refresh via PLC checksum gate + TIA fingerprints + content hashes — done 2026-07-20; UI check→confirm→sync flow (`get_context_status` on attach, confirmed Sync Context button, incremental workflow) + Compare tab (`compare_context` per-file diff) done 2026-07-21 (`buildnote/plan/export-sync.md`).
+**Status:** Phase 1 (mcp-engineering) complete 2026-07-18. Phase 2 in steps: mcp-knowledge (ingest + tags/UDTs + knowledge depth) done 2026-07-18 (`buildnote/plan/mcp-knowledge.md`); App step 7a — read-only shell + "Read Project Context" — done 2026-07-19 (`buildnote/plan/app.md`); step 6 chat slice — DeepSeek agent chat + MCP tool calling + first-run API key UI — done 2026-07-19 (`buildnote/plan/agent.md`); agent sandbox (tool tiers, path jail, destructive confirmation, audit) added 2026-07-20 (`buildnote/log/20260720_agent-sandbox.md`); `sync_export` — incremental context refresh via PLC checksum gate + TIA fingerprints + content hashes — done 2026-07-20; UI check→confirm→sync flow (`get_context_status` on attach, confirmed Sync Context button, incremental workflow) + Compare tab (`compare_context` per-file diff) done 2026-07-21 (`buildnote/plan/export-sync.md`); mcp-source-editor structured title/comment/safe-property editing implemented and stdio-verified 2026-07-25, with real-TIA import/re-export acceptance still open (`buildnote/plan/mcp-sourceeditor.md`).
 
 ## Tech Stack
 
@@ -39,7 +39,7 @@ AgentAssistPlcDev.sln
 │   ├── Contracts/                 netstandard2.0 — shared DTOs + platform interfaces
 │   ├── Mcp.Engineering/           net48 — TIA Openness adapter
 │   ├── Mcp.Knowledge/             net8  — SQLite knowledge graph from exported XML
-│   ├── Mcp.SourceEditor/          net8  — block XML parse/edit/generate
+│   ├── Mcp.SourceEditor/          net8  — protected TIA XML inspect/edit/diff/validate
 │   ├── Mcp.Simulation/            net48 — PLCSIM Advanced adapter (Phase 5)
 │   ├── Mcp.VersionControl/        net8  — git operations
 │   ├── Agent/                     net8  — MCP host + workflows + DeepSeek chat client + tool-calling loop
@@ -98,7 +98,7 @@ AgentAssistPlcDev.sln
 | ------ | ----- | --------- |
 | Engineering | 1 (done) | `check_environment`, `list_sessions`, `connect`, `disconnect`, `save_project`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `export_tag_tables`, `export_udts`, `sync_export` (incremental, hash/fingerprint-based), `get_context_status` (read-only consistency check), `compare_context` (read-only per-file diff), `import_block` (destructive), `compile_block`, `compile_plc` |
 | Knowledge | 2, step 1 + depth | `ingest_source`, `query` (read-only SQL), `get_schema`, `get_block`, `get_network`, `search` |
-| Source Editor | 2, step 4 | `parse_block`, `insert_network_comment`, `diff`, `validate` |
+| Source Editor | 2, step 4 (automated complete; TIA acceptance open) | `src_parse_block`, `src_preview_edits`, `src_apply_edits`, `src_diff`, `src_validate` |
 | Version Control | 2, step 5 | `vc_init`, `vc_status`, `vc_add`, `vc_commit`, `vc_log`, `vc_diff`, `vc_snapshot`, `vc_restore` (destructive), `vc_branches`, `vc_config` |
 | Simulation | 5 | instance lifecycle, tag I/O, cycle control |
 
