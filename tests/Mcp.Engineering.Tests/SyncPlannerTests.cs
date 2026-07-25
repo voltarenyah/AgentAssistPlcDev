@@ -29,7 +29,7 @@ public sealed class SyncPlannerTests
     }
 
     [Fact]
-    public void MatchingFingerprints_Skip()
+    public void MatchingFingerprints_MatchingTimestamps_Skip()
     {
         var plan = SyncPlanner.Plan(
             new[] { Record(fingerprints: "fp1") },
@@ -38,6 +38,46 @@ public sealed class SyncPlannerTests
         var item = Assert.Single(plan);
         Assert.Equal(SyncAction.Skip, item.Action);
         Assert.Equal(SyncPlanner.ReasonUnchanged, item.Reason);
+    }
+
+    [Fact]
+    public void MatchingFingerprints_MovedTimestamp_ReExportForHashVerdict()
+    {
+        // Signal-lag safety net (verified 2026-07-21): fingerprints can still match right after a
+        // start-value edit while the timestamp already moved — nominate anyway, hash decides.
+        var plan = SyncPlanner.Plan(
+            new[] { Record(fingerprints: "fp1") },
+            new[] { Live(fingerprints: "fp1", modified: T1) });
+
+        var item = Assert.Single(plan);
+        Assert.Equal(SyncAction.ReExport, item.Action);
+        Assert.Equal(SyncPlanner.ReasonTimestamp, item.Reason);
+    }
+
+    [Fact]
+    public void InstanceDB_AlwaysReExportedForHashVerdict()
+    {
+        // Instance DBs can change system-side (parent FB static-area edit) with neither
+        // fingerprints nor timestamps moving — the hash check on every diff is the only
+        // reliable signal.
+        var plan = SyncPlanner.Plan(
+            new[] { Record(fingerprints: "fp1") },
+            new[] { Live(fingerprints: "fp1", siemensTypeName: "InstanceDB") });
+
+        var item = Assert.Single(plan);
+        Assert.Equal(SyncAction.ReExport, item.Action);
+        Assert.Equal(SyncPlanner.ReasonInstanceDbVerify, item.Reason);
+    }
+
+    [Fact]
+    public void GlobalDB_MatchingSignals_Skip()
+    {
+        var plan = SyncPlanner.Plan(
+            new[] { Record(fingerprints: "fp1") },
+            new[] { Live(fingerprints: "fp1", siemensTypeName: "GlobalDB") });
+
+        var item = Assert.Single(plan);
+        Assert.Equal(SyncAction.Skip, item.Action);
     }
 
     [Fact]
@@ -199,6 +239,7 @@ public sealed class SyncPlannerTests
     private static SyncLiveComponent Live(
         string id = "id1",
         string? fingerprints = "fp1",
+        string? siemensTypeName = null,
         DateTimeOffset? modified = null,
         DateTimeOffset? codeModified = null,
         DateTimeOffset? interfaceModified = null,
@@ -208,6 +249,7 @@ public sealed class SyncPlannerTests
             Name = "A",
             Category = "FB",
             SourcePath = "A",
+            SiemensTypeName = siemensTypeName,
             Fingerprints = fingerprints,
             ModifiedDate = nullTimestamps ? null : modified ?? T0,
             CodeModifiedDate = nullTimestamps ? null : codeModified ?? T0,

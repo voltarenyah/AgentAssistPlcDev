@@ -145,14 +145,12 @@ internal static class ExportManifest
     /// <summary>export_all_blocks / sync_export: full rewrite of the categories this run exports (stale entries
     /// disappear — full evidence of the current set). Records of any other category (Tags, UDT, …)
     /// in an existing manifest are preserved byte-identical; absent or unparseable manifest → fresh document.
-    /// plcSoftwareChecksum overwrites the stored gate value (null when the PLC is unsupported or
-    /// the program is not compiled — the gate only ever skips on a non-null match).</summary>
+    /// Project-level fields (sourceProjectPath, plcSoftwareChecksum) are managed separately in ProjectMetadata.</summary>
     public static void WriteAll(
         string exportRoot,
         DateTimeOffset exportStartedUtc,
         List<ExportMetadataRecord> records,
-        IReadOnlyCollection<string> replacedCategories,
-        string? plcSoftwareChecksum = null)
+        IReadOnlyCollection<string> replacedCategories)
     {
         var path = Path.Combine(exportRoot, MetadataFileName);
         ExportMetadataDocument? existing = null;
@@ -173,7 +171,6 @@ internal static class ExportManifest
             ExportStartedUtc = existing?.ExportStartedUtc ?? exportStartedUtc,
             ExportFinishedUtc = DateTimeOffset.UtcNow,
             ExportRoot = existing?.ExportRoot ?? exportRoot,
-            PlcSoftwareChecksum = plcSoftwareChecksum,
             Components = records
                 .Concat(existing?.Components.Where(r => !replacedCategories.Contains(r.Category))
                     ?? Enumerable.Empty<ExportMetadataRecord>())

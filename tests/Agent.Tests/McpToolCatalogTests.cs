@@ -8,7 +8,7 @@ namespace Agent.Tests;
 public sealed class McpToolCatalogTests
 {
     private static AgentToolSpec Spec(string name, IMcpToolCaller caller, string schema = """{"type":"object","properties":{}}""") =>
-        new(name, $"desc {name}", JsonDocument.Parse(schema).RootElement, caller);
+        new(name, $"desc {name}", JsonDocument.Parse(schema).RootElement, caller, "test");
 
     [Fact]
     public void ImportBlockIsExcluded()

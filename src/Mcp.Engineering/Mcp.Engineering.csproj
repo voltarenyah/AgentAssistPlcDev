@@ -45,4 +45,11 @@
     </Reference>
   </ItemGroup>
 
+  <!-- Post-build: generate (and auto-merge when elevated) the TIA Openness whitelist .reg file.
+       The script writes register-whitelist.reg to the project root for manual merge, and when
+       run elevated also imports it immediately to suppress the TIA firewall prompt. -->
+  <Target Name="GenerateOpennessWhitelist" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+    <Exec Command="powershell -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\..\scripts\register-whitelist.ps1&quot; -TargetPath &quot;$(TargetPath)&quot;" />
+  </Target>
+
 </Project>

@@ -19,12 +19,16 @@ Three-tier change detection, cheapest first:
    compiled) or different → tier 1. Blind spot accepted: comment-only edits (text-list checksum is
    not exposed in V17).
 2. **Tier 1 — per-object detection.**
-   - Blocks/UDTs: **TIA fingerprints** (`FingerprintProvider.GetFingerprints()`) compared against
-     the manifest record's `fingerprints` string. In-memory, no export; considers only user input,
-     so compiles/saves/dependency ripples don't move it. Differs → export that object (`changed`).
-   - Tag tables (no FingerprintProvider in V17): **timestamps nominate** (`ModifiedTimeStamp` vs
-     record), and the **content hash confirms**: re-export, hash the normalized XML, compare —
-     same → `touched`, differs → `changed`.
+   - Blocks/UDTs: **TIA fingerprints** (`FingerprintProvider.GetFingerprints()`) **and modified
+     timestamps** — either one nominates. Fingerprints consider only user input, so compiles/saves
+     don't move them; but both signals can lag the edit until TIA propagates it (verified
+     2026-07-21), hence the dual check. The **content hash of the re-exported XML is always the
+     verdict**: fingerprint mismatch → changed directly; timestamp-only mismatch → export + hash,
+     changed or touched (compile ripples land here).
+   - **Instance DBs**: no reliable signal — TIA regenerates them system-side when the parent FB
+     changes, and in the propagation window neither fingerprints nor timestamps move. Re-exported
+     on every diff for a hash verdict (few and small in practice).
+   - Tag tables (no FingerprintProvider in V17): timestamps nominate, content hash confirms.
 3. **Tier 2 — refresh.** Only genuinely changed/new components are exported; the agent then calls
    the existing `ingest_source` (local, fast) to rebuild the knowledge DB. **No mcp-knowledge
    changes**: `SqliteSemanticGraphStore.Save` rewrites all tables anyway, so per-component ingest
@@ -66,9 +70,45 @@ Three-tier change detection, cheapest first:
 - Unit: 17 tests in new `tests/Mcp.Engineering.Tests` (net48) — full planner matrix + hasher
   normalization; whole suite green (192 tests).
 
-## 5. Out of scope / follow-ups
+## 5. UI integration: check → confirm → sync (2026-07-21)
+
+Hard rule: **attaching/opening a project never regenerates context data.** Three distinct steps:
+
+1. **Check** — new read-only tool `get_context_status(outputDir, plcName?)` (tier Read): per PLC
+   the stored manifest checksum vs the live software checksum + `State` ∈ `no-baseline` /
+   `in-sync` / `changed` / `unknown` (live checksum unavailable or legacy manifest). No exports,
+   no writes — the App runs it automatically after every attach and after every sync.
+   The manifest preserves the previous stored checksum when a sync reads null (uncompiled
+   program), so the check compares against the last compiled state instead of degrading to
+   "unknown" until the next sync (locked 2026-07-21 after live validation).
+2. **Confirm** — the "Project context" panel shows the state + both checksums + the export root
+   (wrong-project guard); the **Sync Context** button (formerly "Read Project Context") asks for
+   explicit confirmation (MessageBox) before anything is written.
+3. **Sync** — `ReadProjectContextWorkflow` now calls `sync_export` (full export when no baseline)
+   instead of the three export tools, and runs `ingest_source` only when content changed or the
+   knowledge db is missing (all-unchanged + db present → sub-second no-op). `SyncResult` carries
+   `BaselineExisted` for the zero-content guard; `ReadProjectContextResult` exposes `Sync`,
+   `Ingest` (null when skipped), `UpToDate`.
+
+**Compare tab** (`compare_context` tool, tier Read; App tab after Warnings): per-component
+read-only diff — name/category/state (`same`/`different`/`new`/`missing`/`unverifiable` for
+instance DBs/`unknown`), live vs stored fingerprints and modified dates, plus the project
+checksums. Runs the same capture + planner as sync but executes nothing; on demand and after each
+sync, never automatic on attach (full-PLC enumeration cost).
+
+**Bug fix (2026-07-21, user-reported "only 1 changed"):** a failed re-export during sync used to
+replace the last-known-good manifest record with a Failed stub (losing `exportedFile`,
+`contentHash`, `fingerprints`) — the later recovery then misreported the component as `added`
+instead of `changed`. Sync now keeps the last-known-good record on failure and reports the item
+in `failed` only. The same investigation revealed the signal propagation lag (api-surface §10):
+nomination widened to fingerprints OR timestamps with the content hash as verdict, plus the
+instance-DB hash-verify rule — a GlobalDB start-value edit and an FB static-area edit (incl. the
+instance DB) are now all detected (verified live: 3 changed, compile ripple as touched).
+
+## 6. Out of scope / follow-ups
 
 - Per-component incremental ingest into SQLite (see §1 tier 2 rationale).
-- Wiring `sync_export` into the App "Read Project Context" workflow (today: agent calls the tool).
+- Detailed per-component preview in the confirmation dialog (state + checksums today; the
+  per-file lists land in the log/result).
 - Comment-only changes: invisible to the station checksum (gate) but **covered by the `Comments`
   fingerprint** whenever a diff runs; the gate only skips when *nothing* changed.

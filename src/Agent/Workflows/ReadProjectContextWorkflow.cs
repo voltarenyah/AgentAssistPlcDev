@@ -6,21 +6,29 @@ using Contracts.Knowledge;
 namespace Agent.Workflows;
 
 /// <summary>
-/// The Read Project Context orchestration (buildnote/plan/app.md §4): one workflow, two triggers —
-/// the UI button now, the AI agent in step 6. Requires an already-connected engineering session
-/// (connect/disconnect is UI session state); the connection is validated via get_project_info.
+/// The confirmed incremental context sync (buildnote/plan/export-sync.md §UI): one sync_export
+/// call (checksum gate + fingerprint/hash diff, full export when no baseline exists), then
+/// ingest_source only when the sync actually changed files or the knowledge db is missing.
+/// Requires an already-connected engineering session (connect/disconnect is UI session state);
+/// the connection is validated via get_project_info.
 /// </summary>
 public sealed class ReadProjectContextWorkflow
 {
     private readonly IMcpToolCaller engineering;
     private readonly IMcpToolCaller knowledge;
     private readonly IProgress<string>? progress;
+    private readonly Func<string, bool> fileExists;
 
-    public ReadProjectContextWorkflow(IMcpToolCaller engineering, IMcpToolCaller knowledge, IProgress<string>? progress = null)
+    public ReadProjectContextWorkflow(
+        IMcpToolCaller engineering,
+        IMcpToolCaller knowledge,
+        IProgress<string>? progress = null,
+        Func<string, bool>? fileExists = null)
     {
         this.engineering = engineering;
         this.knowledge = knowledge;
         this.progress = progress;
+        this.fileExists = fileExists ?? File.Exists;
     }
 
     public async Task<ReadProjectContextResult> RunAsync(CancellationToken cancellationToken = default)
@@ -32,48 +40,58 @@ public sealed class ReadProjectContextWorkflow
         Log($"Export root: {exportRoot}");
 
         cancellationToken.ThrowIfCancellationRequested();
-        var blocks = await Timed("Exporting blocks", () =>
-            engineering.CallAsync<ExportResult[]>("export_all_blocks", new { outputDir = exportRoot }, cancellationToken));
+        var sync = await Timed("Syncing exports", () =>
+            engineering.CallAsync<SyncResult[]>("sync_export", new { outputDir = exportRoot }, cancellationToken));
 
-        cancellationToken.ThrowIfCancellationRequested();
-        var tagTables = await Timed("Exporting tag tables", () =>
-            engineering.CallAsync<ExportResult[]>("export_tag_tables", new { outputDir = exportRoot }, cancellationToken));
-
-        cancellationToken.ThrowIfCancellationRequested();
-        var udts = await Timed("Exporting UDTs", () =>
-            engineering.CallAsync<ExportResult[]>("export_udts", new { outputDir = exportRoot }, cancellationToken));
-
-        // Fail fast with the real cause: a 0-block export means no PLC software was found (or every
-        // block failed) — running ingest would only surface a confusing EXPORT_ROOT_NOT_FOUND later.
-        var blocksExported = CountSuccessful(blocks);
-        if (blocksExported == 0)
+        // Fail fast with the real cause: a first sync (no baseline) that produced nothing means no
+        // PLC software was found or every export failed — running ingest would only surface a
+        // confusing EXPORT_ROOT_NOT_FOUND later.
+        foreach (var plc in sync)
         {
-            throw new InvalidOperationException(
-                $"export_all_blocks produced 0 blocks for project '{projectName}' — no PLC software was found or every block failed to export. " +
-                "Check the project has a PLC with blocks (list_blocks) before reading project context.");
+            if (!plc.BaselineExisted && plc.Added.Length == 0)
+            {
+                var detail = plc.Failed.Length > 0
+                    ? $"every export failed (first: {plc.Failed[0].Reason})"
+                    : "no PLC software was found";
+                throw new InvalidOperationException(
+                    $"sync_export produced 0 components for PLC '{plc.PlcName}' in project '{projectName}' — {detail}. " +
+                    "Check the project has a PLC with blocks (list_blocks) before syncing context.");
+            }
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        var ingest = await Timed("Building knowledge base", () =>
-            knowledge.CallAsync<IngestResult>("ingest_source", new { exportRoot }, cancellationToken));
+        var added = sync.Sum(plc => plc.Added.Length);
+        var changed = sync.Sum(plc => plc.Changed.Length);
+        var touched = sync.Sum(plc => plc.Touched.Length);
+        var removed = sync.Sum(plc => plc.Removed.Length);
+        var failed = sync.Sum(plc => plc.Failed.Length);
+        Log($"Sync: {added} added, {changed} changed, {touched} touched, {removed} removed, {failed} failed");
 
-        Log($"Knowledge base: {ingest.Nodes} nodes, {ingest.Edges} edges → {ingest.DbPath}");
+        var dbPath = AssistantPaths.ResolveKnowledgeDbPath(projectName);
+        var contentChanged = added + changed + removed > 0;
+        var dbMissing = !fileExists(dbPath);
+
+        IngestResult? ingest = null;
+        if (contentChanged || dbMissing)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ingest = await Timed("Building knowledge base", () =>
+                knowledge.CallAsync<IngestResult>("ingest_source", new { exportRoot }, cancellationToken));
+            Log($"Knowledge base: {ingest.Nodes} nodes, {ingest.Edges} edges → {ingest.DbPath}");
+        }
+        else
+        {
+            Log("Knowledge base already up to date — ingest skipped.");
+        }
+
         return new ReadProjectContextResult
         {
             ProjectName = projectName,
             ExportRoot = exportRoot,
-            DbPath = ingest.DbPath,
-            BlocksExported = blocksExported,
-            TagTablesExported = CountSuccessful(tagTables),
-            UdtsExported = CountSuccessful(udts),
+            DbPath = ingest?.DbPath ?? dbPath,
+            Sync = sync,
             Ingest = ingest,
+            UpToDate = !contentChanged && !dbMissing,
         };
-    }
-
-    private static int CountSuccessful(ExportResult[] results)
-    {
-        var failed = results.Count(result => !result.Success);
-        return results.Length - failed;
     }
 
     private async Task<T> Timed<T>(string step, Func<Task<T>> action)

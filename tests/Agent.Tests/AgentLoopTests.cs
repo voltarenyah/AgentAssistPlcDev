@@ -41,7 +41,7 @@ public sealed class AgentLoopTests
         var caller = new FakeToolCaller();
         var catalog = new McpToolCatalog(new[]
         {
-            new AgentToolSpec("search", "find text", JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement, caller),
+            new AgentToolSpec("search", "find text", JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement, caller, "test"),
         });
         var client = new DeepSeekClient("sk-test", "https://api.deepseek.com", new HttpClient(endpoint));
         var progress = new List<string>();

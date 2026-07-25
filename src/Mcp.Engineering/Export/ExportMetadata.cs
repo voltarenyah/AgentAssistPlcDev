@@ -17,10 +17,6 @@ public sealed class ExportMetadataDocument
     public DateTimeOffset ExportFinishedUtc { get; set; }
     public string ExportRoot { get; set; } = string.Empty;
 
-    /// <summary>TIA station-level software checksum (PlcChecksumProvider.Software) captured at export/sync
-    /// time; the sync_export gate skips the diff while it still matches. Null when the PLC does not
-    /// support checksums or the program was not compiled. Additive — schemaVersion stays "1.0".</summary>
-    public string? PlcSoftwareChecksum { get; set; }
     public List<ExportMetadataRecord> Components { get; set; } = new();
 }
 
@@ -65,7 +61,6 @@ internal static class ExportMetadataJsonSerializer
         WriteProperty(builder, 1, "exportStartedUtc", document.ExportStartedUtc.ToString("O"), appendComma: true);
         WriteProperty(builder, 1, "exportFinishedUtc", document.ExportFinishedUtc.ToString("O"), appendComma: true);
         WriteProperty(builder, 1, "exportRoot", document.ExportRoot, appendComma: true);
-        WriteProperty(builder, 1, "plcSoftwareChecksum", document.PlcSoftwareChecksum, appendComma: true);
         Indent(builder, 1).AppendLine("\"components\": [");
 
         for (var index = 0; index < document.Components.Count; index++)
@@ -89,7 +84,6 @@ internal static class ExportMetadataJsonSerializer
             ExportStartedUtc = GetDate(root, "exportStartedUtc") ?? DateTimeOffset.UtcNow,
             ExportFinishedUtc = GetDate(root, "exportFinishedUtc") ?? DateTimeOffset.UtcNow,
             ExportRoot = GetString(root, "exportRoot") ?? string.Empty,
-            PlcSoftwareChecksum = GetString(root, "plcSoftwareChecksum"),
         };
         if (root.TryGetProperty("components", out var components) && components.ValueKind == JsonValueKind.Array)
         {

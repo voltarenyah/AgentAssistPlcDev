@@ -12,6 +12,10 @@ public sealed class SandboxPolicyTests
     [InlineData("export_all_blocks")]
     [InlineData("query")]
     [InlineData("search")]
+    [InlineData("vc_status")]
+    [InlineData("vc_log")]
+    [InlineData("vc_diff")]
+    [InlineData("vc_branches")]
     public void KnownReadToolsClassifyAsRead(string tool)
     {
         Assert.Equal(SandboxTier.Read, new SandboxPolicy().Classify(tool));
@@ -21,6 +25,11 @@ public sealed class SandboxPolicyTests
     [InlineData("connect")]
     [InlineData("disconnect")]
     [InlineData("compile_plc")]
+    [InlineData("vc_init")]
+    [InlineData("vc_add")]
+    [InlineData("vc_commit")]
+    [InlineData("vc_snapshot")]
+    [InlineData("vc_config")]
     public void StateChangingToolsClassifyAsWrite(string tool)
     {
         Assert.Equal(SandboxTier.Write, new SandboxPolicy().Classify(tool));
@@ -29,6 +38,7 @@ public sealed class SandboxPolicyTests
     [Theory]
     [InlineData("save_project")]
     [InlineData("import_block")]
+    [InlineData("vc_restore")]
     public void DestructiveToolsClassifyAsDestructive(string tool)
     {
         Assert.Equal(SandboxTier.Destructive, new SandboxPolicy().Classify(tool));
@@ -43,13 +53,14 @@ public sealed class SandboxPolicyTests
     [Fact]
     public void EveryCurrentMcpToolIsClassified()
     {
-        // Guard rail for the fail-closed rule: adding a tool server-side without a tier must fail a test here.
         string[] currentTools =
         {
             "check_environment", "list_sessions", "connect", "disconnect", "save_project", "get_project_info",
             "list_blocks", "export_block", "export_all_blocks", "export_tag_tables", "export_udts",
             "import_block", "compile_block", "compile_plc",
             "ingest_source", "query", "get_schema", "get_block", "get_network", "search",
+            "vc_init", "vc_status", "vc_add", "vc_commit", "vc_log",
+            "vc_diff", "vc_snapshot", "vc_restore", "vc_branches", "vc_config",
         };
         var policy = new SandboxPolicy();
         foreach (var tool in currentTools)

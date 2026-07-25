@@ -150,7 +150,7 @@ public sealed class ProgramReferenceRecord
 
 public static class ProgramSemanticReferenceBuilder
 {
-    public static ProgramSemanticParseResult Parse(string xml, ProgramBlockComponent component)
+    public static ProgramSemanticParseResult Parse(string xml, ProgramBlockComponent component, string deviceName = "")
     {
         if (xml == null)
         {
@@ -183,7 +183,8 @@ public static class ProgramSemanticReferenceBuilder
 
         foreach (var compileUnit in compileUnits)
         {
-            var networkId = $"network:{component.Name}:{compileUnit.Index}";
+            var baseId = $"network:{component.Name}:{compileUnit.Index}";
+            var networkId = string.IsNullOrEmpty(deviceName) ? baseId : $"{deviceName}/{baseId}";
             var title = GetPreferredMultilingualText(compileUnit.Element, "Title");
             if (string.IsNullOrWhiteSpace(title))
             {

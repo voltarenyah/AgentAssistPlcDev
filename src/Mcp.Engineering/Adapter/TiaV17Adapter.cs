@@ -194,6 +194,44 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
+    public void CloseSession(int sessionId)
+    {
+        // Use System.Diagnostics.Process to send a close signal (WM_CLOSE) to the TIA window.
+        // This is the same as clicking the X button — the user can save or discard changes.
+        // For headless sessions (our own), disposal during disconnect already cleans up.
+        lock (_gate)
+        {
+            try
+            {
+                var process = Process.GetProcessById(sessionId);
+                if (!process.CloseMainWindow())
+                {
+                    // CloseMainWindow returned false (no window or already closing).
+                    // If still running after a short wait, the session may be headless.
+                    if (!process.WaitForExit(3000))
+                    {
+                        // Force-close only headless sessions (no window) that linger
+                        if (process.MainWindowHandle == IntPtr.Zero)
+                        {
+                            process.Kill();
+                            process.WaitForExit(3000);
+                        }
+                    }
+                }
+            }
+            catch (ArgumentException ex)
+            {
+                throw new AdapterException("SESSION_NOT_FOUND",
+                    $"No running TIA Portal process with id {sessionId}: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                throw new AdapterException("CLOSE_FAILED",
+                    $"Failed to close TIA session {sessionId}: {ex.Message}");
+            }
+        }
+    }
+
     public void SaveProject()
     {
         lock (_gate)
@@ -283,8 +321,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var results = new List<ExportResult>();
             foreach (var plc in plcs)
             {
-                // Multi-PLC: per-PLC subfolder, each its own export root with its own metadata.json.
-                var dir = plcs.Count > 1 ? Path.Combine(outputDir, Sanitize(plc.Name)) : outputDir;
+                // Per-device subfolder, each its own export root with its own metadata.json.
+                var dir = Path.Combine(outputDir, Sanitize(plc.Name));
                 results.AddRange(ExportAllBlocksForPlc(plc, dir));
             }
             return results.ToArray();
@@ -293,7 +331,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
     /// <summary>Per-PLC body of <see cref="ExportAllBlocks"/> (also used by sync_export when no
     /// baseline manifest exists): export every block, rewrite the block categories of the manifest,
-    /// and stamp the current software checksum as the sync gate value.</summary>
+    /// and stamp the current software checksum into project metadata as the sync gate value.</summary>
     private List<ExportResult> ExportAllBlocksForPlc(PlcSoftware plc, string dir)
     {
         Directory.CreateDirectory(dir);
@@ -335,7 +373,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             records.Add(ExportManifest.CreateRecord(block, groupPath, dir, result));
         }
 
-        ExportManifest.WriteAll(dir, exportStartedUtc, records, ExportManifest.BlockCategories, TryReadSoftwareChecksum(plc));
+        ExportManifest.WriteAll(dir, exportStartedUtc, records, ExportManifest.BlockCategories);
+        ProjectMetadata.SetPlcSoftwareChecksum(
+            Path.GetDirectoryName(dir)!, plc.Name, TryReadSoftwareChecksum(plc));
         return results;
     }
 
@@ -350,20 +390,38 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var results = new List<SyncResult>();
             foreach (var plc in plcs)
             {
-                // Same per-PLC export-root rule as the export tools.
-                var dir = plcs.Count > 1 ? Path.Combine(outputDir, Sanitize(plc.Name)) : outputDir;
+                // Per-device export-root subfolder (same rule as the export tools).
+                var dir = Path.Combine(outputDir, Sanitize(plc.Name));
                 results.Add(SyncExportForPlc(plc, dir));
+            }
+            // Update project metadata with the complete device list discovered.
+            if (plcName is null)
+            {
+                var deviceNames = plcs.Select(p => p.Name).ToList();
+                var checksums = new Dictionary<string, string>();
+                foreach (var plc in plcs)
+                {
+                    var cs = TryReadSoftwareChecksum(plc);
+                    if (cs is not null) checksums[plc.Name] = cs;
+                }
+                var meta = new ProjectMetadataDocument
+                {
+                    PlcDevices = deviceNames,
+                    PlcSoftwareChecksums = checksums,
+                };
+                ProjectMetadata.Write(outputDir, meta);
             }
             return results.ToArray();
         }
     }
 
-    /// <summary>Per-PLC sync (buildnote/plan/export-sync.md): station-level checksum gate first;
+    /// <summary>Per-PLC sync (buildnote/plan/export-sync.md): project-level checksum gate first;
     /// otherwise a timestamp-nominated, hash-confirmed diff that re-exports only real changes
-    /// and rewrites the manifest (all categories) with the fresh gate value.</summary>
+    /// and rewrites the manifest (all categories) with the fresh gate value in project metadata.</summary>
     private SyncResult SyncExportForPlc(PlcSoftware plc, string dir)
     {
         var checksum = TryReadSoftwareChecksum(plc);
+        var projectRoot = Path.GetDirectoryName(dir)!;
         var result = new SyncResult
         {
             PlcName = plc.Name,
@@ -371,10 +429,12 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             ChecksumAfter = checksum,
         };
 
+        var storedChecksum = ProjectMetadata.GetPlcSoftwareChecksum(projectRoot, plc.Name);
+
         if (!ExportManifest.TryRead(dir, out var manifest) || manifest is null)
         {
             // No baseline manifest → full export for this PLC (blocks rewrite the manifest and
-            // stamp the checksum; tags/UDTs upsert into it afterwards).
+            // stamp the checksum in project metadata; tags/UDTs upsert into it afterwards).
             var full = new List<ExportResult>();
             full.AddRange(ExportAllBlocksForPlc(plc, dir));
             full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables", p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord));
@@ -385,72 +445,22 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             return result;
         }
 
-        result.ChecksumBefore = manifest.PlcSoftwareChecksum;
+        result.ChecksumBefore = storedChecksum;
+        result.BaselineExisted = true;
 
-        // Tier 0 gate: a matching station-level checksum proves nothing changed — no exports.
-        if (checksum is not null && checksum == manifest.PlcSoftwareChecksum)
+        // Tier 0 gate: a matching project-level checksum proves nothing changed — no exports.
+        if (checksum is not null && checksum == storedChecksum)
         {
             result.Status = "unchanged";
             return result;
         }
 
         // Tier 1: flatten live objects to plain values (id formula shared with the manifest) and diff.
-        var live = new List<SyncLiveComponent>();
-        var blocksById = new Dictionary<string, (PlcBlock Block, string? GroupPath)>(StringComparer.Ordinal);
-        foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
-        {
-            var category = ExportManifest.CategoryOf(block);
-            var sourcePath = ExportManifest.SourcePathOf(block.Name, groupPath);
-            var id = StableId.Create(category, sourcePath);
-            var (modified, codeModified, interfaceModified) = ReadBlockTimestamps(block);
-            live.Add(new SyncLiveComponent
-            {
-                Id = id,
-                Name = block.Name,
-                Category = category,
-                SourcePath = sourcePath,
-                Fingerprints = FingerprintReader.TryRead(block),
-                ModifiedDate = modified,
-                CodeModifiedDate = codeModified,
-                InterfaceModifiedDate = interfaceModified,
-            });
-            blocksById[id] = (block, groupPath);
-        }
-
-        var tablesById = new Dictionary<string, (PlcTagTable Table, string? GroupPath)>(StringComparer.Ordinal);
-        foreach (var (table, groupPath) in TagTableEnumerator.Enumerate(plc.TagTableGroup))
-        {
-            var sourcePath = ExportManifest.SourcePathOf(table.Name, groupPath);
-            var id = StableId.Create("Tags", sourcePath);
-            live.Add(new SyncLiveComponent
-            {
-                Id = id,
-                Name = table.Name,
-                Category = "Tags",
-                SourcePath = sourcePath,
-                ModifiedDate = ReadTagTableModified(table),
-            });
-            tablesById[id] = (table, groupPath);
-        }
-
-        var typesById = new Dictionary<string, (PlcType Type, string? GroupPath)>(StringComparer.Ordinal);
-        foreach (var (type, groupPath) in PlcTypeEnumerator.Enumerate(plc.TypeGroup))
-        {
-            var sourcePath = ExportManifest.SourcePathOf(type.Name, groupPath);
-            var id = StableId.Create("UDT", sourcePath);
-            var (_, _, modified, interfaceModified) = ReadTypeMetadata(type);
-            live.Add(new SyncLiveComponent
-            {
-                Id = id,
-                Name = type.Name,
-                Category = "UDT",
-                SourcePath = sourcePath,
-                Fingerprints = FingerprintReader.TryRead(type),
-                ModifiedDate = modified,
-                InterfaceModifiedDate = interfaceModified,
-            });
-            typesById[id] = (type, groupPath);
-        }
+        var snapshot = CaptureLiveSnapshot(plc);
+        var live = snapshot.Live;
+        var blocksById = snapshot.BlocksById;
+        var tablesById = snapshot.TablesById;
+        var typesById = snapshot.TypesById;
 
         // Tier 2: execute the plan — re-export candidates, hash each result, classify, delete removals.
         var plan = SyncPlanner.Plan(manifest.Components, live);
@@ -489,14 +499,20 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
                 case SyncAction.ReExport:
                     var record = ReExportComponent(dir, item.Live!, blocksById, tablesById, typesById, out var exportResult);
-                    keptRecords.Add(record);
                     var change = ToChange(record, item.Reason);
                     if (!exportResult.Success)
                     {
+                        // Keep the last-known-good record when there is one: a Failed stub would
+                        // lose exportedFile/hash/fingerprints — and the later recovery would then
+                        // misreport as "added" instead of "changed" (bug found 2026-07-21).
+                        keptRecords.Add(item.Record ?? record);
                         change.Reason = exportResult.Error;
                         failed.Add(change);
+                        break;
                     }
-                    else if (item.Record is null || !string.Equals(item.Record.Status, "Exported", StringComparison.OrdinalIgnoreCase))
+
+                    keptRecords.Add(record);
+                    if (item.Record is null || !string.Equals(item.Record.Status, "Exported", StringComparison.OrdinalIgnoreCase))
                     {
                         // New component, or first successful export after a Failed record.
                         added.Add(change);
@@ -522,7 +538,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             }
         }
 
-        ExportManifest.WriteAll(dir, manifest.ExportStartedUtc, keptRecords, ExportManifest.AllCategories, checksum);
+        ExportManifest.WriteAll(dir, manifest.ExportStartedUtc, keptRecords, ExportManifest.AllCategories);
+        ProjectMetadata.SetPlcSoftwareChecksum(projectRoot, plc.Name, checksum);
         result.Status = "updated";
         result.Added = added.ToArray();
         result.Changed = changed.ToArray();
@@ -533,6 +550,246 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             "sync_export: {Plc} — {Added} added, {Changed} changed, {Touched} touched, {Removed} removed, {Failed} failed",
             plc.Name, added.Count, changed.Count, touched.Count, removed.Count, failed.Count);
         return result;
+    }
+
+    /// <summary>Full rebuild export for all PLC devices (§full-rebuild): exports every component
+    /// (blocks, tag tables, UDTs) to fresh per-device subfolders, always rewriting the manifest.
+    /// Writes project-level metadata with the complete device list and per-device checksums.
+    /// No incremental diff — this is the "start fresh" tool.</summary>
+    public SyncResult[] RebuildExport(string outputDir)
+    {
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var plcs = PlcSoftwareResolver.FindAll(project);
+            var results = new List<SyncResult>();
+            var allDeviceNames = new List<string>();
+            var allChecksums = new Dictionary<string, string>();
+
+            foreach (var plc in plcs)
+            {
+                var name = plc.Name;
+                allDeviceNames.Add(name);
+                var dir = Path.Combine(outputDir, Sanitize(name));
+                Directory.CreateDirectory(dir);
+
+                var checksum = TryReadSoftwareChecksum(plc);
+                if (checksum is not null) allChecksums[name] = checksum;
+
+                // Full export: blocks rewrite the manifest; tags/UDTs upsert into it.
+                var full = new List<ExportResult>();
+                full.AddRange(ExportAllBlocksForPlc(plc, dir));
+                full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables",
+                    p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord));
+                full.AddRange(ExportObjectsForPlc(plc, dir, "export_udts",
+                    p => PlcTypeEnumerator.Enumerate(p.TypeGroup), ExportUdtCore, CreateUdtRecord));
+
+                results.Add(new SyncResult
+                {
+                    PlcName = name,
+                    ExportRoot = dir,
+                    ChecksumAfter = checksum,
+                    Status = "updated",
+                    BaselineExisted = false,
+                    Added = full.Where(r => r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = "full-rebuild" }).ToArray(),
+                    Failed = full.Where(r => !r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = r.Error }).ToArray(),
+                });
+
+                _logger.LogInformation(
+                    "rebuild_export: {Plc} — {Added} exported, {Failed} failed",
+                    name, full.Count(r => r.Success), full.Count(r => !r.Success));
+            }
+
+            // Write project-level metadata with the complete device list and checksums.
+            var projectMeta = new ProjectMetadataDocument
+            {
+                PlcDevices = allDeviceNames,
+                PlcSoftwareChecksums = allChecksums,
+            };
+            ProjectMetadata.Write(outputDir, projectMeta);
+
+            return results.ToArray();
+        }
+    }
+
+    /// <summary>Live enumeration shared by sync and compare: blocks + tag tables + UDTs flattened
+    /// to <see cref="SyncLiveComponent"/>, plus the object lookups the export cores need.</summary>
+    private sealed class LiveSnapshot
+    {
+        public List<SyncLiveComponent> Live { get; } = new();
+        public Dictionary<string, (PlcBlock Block, string? GroupPath)> BlocksById { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, (PlcTagTable Table, string? GroupPath)> TablesById { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, (PlcType Type, string? GroupPath)> TypesById { get; } = new(StringComparer.Ordinal);
+    }
+
+    private static LiveSnapshot CaptureLiveSnapshot(PlcSoftware plc)
+    {
+        var snapshot = new LiveSnapshot();
+        foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
+        {
+            var category = ExportManifest.CategoryOf(block);
+            var sourcePath = ExportManifest.SourcePathOf(block.Name, groupPath);
+            var id = StableId.Create(category, sourcePath);
+            var (modified, codeModified, interfaceModified) = ReadBlockTimestamps(block);
+            snapshot.Live.Add(new SyncLiveComponent
+            {
+                Id = id,
+                Name = block.Name,
+                Category = category,
+                SourcePath = sourcePath,
+                SiemensTypeName = block.GetType().Name,
+                Fingerprints = FingerprintReader.TryRead(block),
+                ModifiedDate = modified,
+                CodeModifiedDate = codeModified,
+                InterfaceModifiedDate = interfaceModified,
+            });
+            snapshot.BlocksById[id] = (block, groupPath);
+        }
+
+        foreach (var (table, groupPath) in TagTableEnumerator.Enumerate(plc.TagTableGroup))
+        {
+            var sourcePath = ExportManifest.SourcePathOf(table.Name, groupPath);
+            var id = StableId.Create("Tags", sourcePath);
+            snapshot.Live.Add(new SyncLiveComponent
+            {
+                Id = id,
+                Name = table.Name,
+                Category = "Tags",
+                SourcePath = sourcePath,
+                ModifiedDate = ReadTagTableModified(table),
+            });
+            snapshot.TablesById[id] = (table, groupPath);
+        }
+
+        foreach (var (type, groupPath) in PlcTypeEnumerator.Enumerate(plc.TypeGroup))
+        {
+            var sourcePath = ExportManifest.SourcePathOf(type.Name, groupPath);
+            var id = StableId.Create("UDT", sourcePath);
+            var (_, _, modified, interfaceModified) = ReadTypeMetadata(type);
+            snapshot.Live.Add(new SyncLiveComponent
+            {
+                Id = id,
+                Name = type.Name,
+                Category = "UDT",
+                SourcePath = sourcePath,
+                Fingerprints = FingerprintReader.TryRead(type),
+                ModifiedDate = modified,
+                InterfaceModifiedDate = interfaceModified,
+            });
+            snapshot.TypesById[id] = (type, groupPath);
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>Read-only per-component diff (buildnote/plan/export-sync.md §Compare): runs the same
+    /// capture + planner as sync_export but executes nothing — entries report live vs stored
+    /// fingerprints/timestamps and the planner's verdict per component. No exports, no writes.</summary>
+    public ContextCompareResult[] CompareContext(string outputDir, string? plcName)
+    {
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var plcs = plcName is null
+                ? PlcSoftwareResolver.FindAll(project)
+                : new[] { PlcSoftwareResolver.Resolve(project, plcName) };
+            var results = new List<ContextCompareResult>();
+            foreach (var plc in plcs)
+            {
+                // Per-device export-root subfolder (same rule as the export/sync tools).
+                var dir = Path.Combine(outputDir, Sanitize(plc.Name));
+                var liveChecksum = TryReadSoftwareChecksum(plc);
+                var manifestExists = ExportManifest.TryRead(dir, out var manifest) && manifest is not null;
+                var records = manifestExists ? manifest!.Components : new List<ExportMetadataRecord>();
+                var plan = SyncPlanner.Plan(records, CaptureLiveSnapshot(plc).Live);
+                var entries = plan
+                    .Select(item => new ContextCompareEntry
+                    {
+                        Name = item.Live?.Name ?? item.Record!.Name,
+                        Category = item.Live?.Category ?? item.Record!.Category,
+                        SourcePath = item.Live?.SourcePath ?? item.Record!.SourcePath,
+                        LiveFingerprints = item.Live?.Fingerprints,
+                        StoredFingerprints = item.Record?.Fingerprints,
+                        FingerprintsMatch = item.Live?.Fingerprints is null || item.Record?.Fingerprints is null
+                            ? null
+                            : string.Equals(item.Live.Fingerprints, item.Record.Fingerprints, StringComparison.Ordinal),
+                        LiveModifiedDate = item.Live?.ModifiedDate,
+                        StoredModifiedDate = item.Record?.ModifiedDate,
+                        State = CompareStateFor(item),
+                    })
+                    .OrderBy(entry => entry.Category, StringComparer.Ordinal)
+                    .ThenBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                results.Add(new ContextCompareResult
+                {
+                    PlcName = plc.Name,
+                    ExportRoot = dir,
+                    ManifestExists = manifestExists,
+                    StoredChecksum = ProjectMetadata.GetPlcSoftwareChecksum(outputDir, plc.Name),
+                    LiveChecksum = liveChecksum,
+                    Components = entries,
+                });
+            }
+            return results.ToArray();
+        }
+    }
+
+    private static string CompareStateFor(SyncPlanItem item) => item.Action switch
+    {
+        SyncAction.Skip => "same",
+        // Timestamps agree; only the fingerprint backfill is pending → content is the same.
+        SyncAction.UpdateRecord => "same",
+        SyncAction.Remove => "missing",
+        SyncAction.ReExport => item.Reason switch
+        {
+            SyncPlanner.ReasonNew => "new",
+            SyncPlanner.ReasonFingerprint or SyncPlanner.ReasonTimestamp => "different",
+            // Instance DBs can never be proven same without an export (system-side regeneration
+            // moves neither fingerprints nor timestamps) — sync verifies them via hash.
+            SyncPlanner.ReasonInstanceDbVerify => "unverifiable",
+            // legacy-no-hash / unreadable-metadata / previous-export-failed: no reliable verdict.
+            _ => "unknown",
+        },
+        _ => "unknown",
+    };
+
+    /// <summary>Read-only status per PLC export root (buildnote/plan/export-sync.md §UI): manifest
+    /// presence + stored project-level checksum vs the live software checksum. No enumeration, no
+    /// exports — cheap enough to run on every attach. The tier-1 diff stays exclusive to sync_export.</summary>
+    public ContextStatusResult[] GetContextStatus(string outputDir, string? plcName)    {
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var plcs = plcName is null
+                ? PlcSoftwareResolver.FindAll(project)
+                : new[] { PlcSoftwareResolver.Resolve(project, plcName) };
+            var results = new List<ContextStatusResult>();
+            foreach (var plc in plcs)
+            {
+                // Per-device export-root subfolder (same rule as the export/sync tools).
+                var dir = Path.Combine(outputDir, Sanitize(plc.Name));
+                var liveChecksum = TryReadSoftwareChecksum(plc);
+                var manifestExists = ExportManifest.TryRead(dir, out var manifest) && manifest is not null;
+                var storedChecksum = ProjectMetadata.GetPlcSoftwareChecksum(outputDir, plc.Name);
+                results.Add(new ContextStatusResult
+                {
+                    PlcName = plc.Name,
+                    ExportRoot = dir,
+                    ManifestExists = manifestExists,
+                    ComponentCount = manifestExists ? manifest!.Components.Count : 0,
+                    StoredChecksum = storedChecksum,
+                    LiveChecksum = liveChecksum,
+                    State = !manifestExists
+                        ? "no-baseline"
+                        : liveChecksum is null || storedChecksum is null
+                            ? "unknown"
+                            : liveChecksum == storedChecksum
+                                ? "in-sync"
+                                : "changed",
+                });
+            }
+            return results.ToArray();
+        }
     }
 
     /// <summary>Re-exports one component the planner nominated and rebuilds its manifest record
@@ -729,8 +986,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         var results = new List<ExportResult>();
         foreach (var plc in plcs)
         {
-            // Multi-PLC: per-PLC subfolder, each its own export root with its own metadata.json.
-            var dir = plcs.Count > 1 ? Path.Combine(outputDir, Sanitize(plc.Name)) : outputDir;
+            // Per-device subfolder, each its own export root with its own metadata.json.
+            var dir = Path.Combine(outputDir, Sanitize(plc.Name));
             results.AddRange(ExportObjectsForPlc(plc, dir, label, enumerate, exportCore, createRecord));
         }
         return results.ToArray();
@@ -1078,6 +1335,33 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     }
 
     public void Dispose() => Disconnect();
+
+    public void OpenBlockInEditor(string blockName)
+    {
+        lock (_gate)
+        {
+            var plc = PlcSoftwareResolver.Resolve(RequireProject(), null);
+            var block = BlockEnumerator.Find(plc.BlockGroup, blockName);
+            try
+            {
+                // PlcBlock implements IShowable which exposes ShowInEditor().
+                // This opens the block in the TIA Portal editor window.
+                var showable = block as Siemens.Engineering.IShowable;
+                if (showable == null)
+                    throw new AdapterException("EDITOR_NOT_AVAILABLE",
+                        $"Cannot open block '{blockName}' in editor — block does not support the editor interface.",
+                        "This Siemens Openness API feature may not be available in this version.");
+                showable.ShowInEditor();
+            }
+            catch (AdapterException) { throw; }
+            catch (Exception ex)
+            {
+                throw new AdapterException("EDITOR_NOT_AVAILABLE",
+                    $"Cannot open block '{blockName}' in editor — {ex.Message}",
+                    "TIA Portal must be in UI mode (withUI=true on connect).");
+            }
+        }
+    }
 
     private Project RequireProject() =>
         _project ?? throw new AdapterException("NOT_CONNECTED", "No project connected. Call connect first.");

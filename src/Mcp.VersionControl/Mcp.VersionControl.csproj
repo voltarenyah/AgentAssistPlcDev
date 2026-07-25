@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned: same MCP SDK version as Mcp.Knowledge / Mcp.Engineering (API churn between versions). -->
+    <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
+    <!-- Generic host for the MCP server; aligned with Mcp.Knowledge. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
+    <!-- Git repository operations via native bindings (win-x64 bundled). -->
+    <!-- 0.27.x stable branch; 0.30+ has a different (renamed) FileStatus/DiffLineKind API that we are not yet targeting. -->
+    <PackageReference Include="LibGit2Sharp" Version="0.27.0" />
+    <!-- 0.27 is netstandard2.0 and bundles native win-x64 binaries. -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Contracts\Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Mcp.VersionControl.Tests" />
+  </ItemGroup>
+
+</Project>

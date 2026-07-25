@@ -2,9 +2,9 @@ namespace Contracts.Sandbox;
 
 /// <summary>
 /// Tool → tier map with built-in defaults for every tool of the current MCP servers
-/// (engineering + knowledge). Config overrides merge on top; a tool missing from the map
-/// classifies as null and must be denied by callers (fail closed — a newly added tool is
-/// blocked until someone classifies it).
+/// (engineering + knowledge + versioncontrol). Config overrides merge on top; a tool
+/// missing from the map classifies as null and must be denied by callers (fail closed —
+/// a newly added tool is blocked until someone classifies it).
 /// </summary>
 public sealed class SandboxPolicy
 {
@@ -27,7 +27,7 @@ public sealed class SandboxPolicy
         }
     }
 
-    /// <summary>Built-in tiers: 21 tools (15 read, 4 write, 2 destructive).</summary>
+    /// <summary>Built-in tiers: 34 tools (22 read, 9 write, 3 destructive).</summary>
     public static IReadOnlyDictionary<string, SandboxTier> Defaults { get; } =
         new Dictionary<string, SandboxTier>(StringComparer.Ordinal)
         {
@@ -41,11 +41,16 @@ public sealed class SandboxPolicy
             ["export_tag_tables"] = SandboxTier.Read,
             ["export_udts"] = SandboxTier.Read,
             ["sync_export"] = SandboxTier.Read,
+            ["rebuild_export"] = SandboxTier.Read,
+            ["get_context_status"] = SandboxTier.Read,
+            ["compare_context"] = SandboxTier.Read,
             // Engineering — mutate project/portal state but do not persist or overwrite user code.
             ["connect"] = SandboxTier.Write,
             ["disconnect"] = SandboxTier.Write,
+            ["close_session"] = SandboxTier.Write,
             ["compile_block"] = SandboxTier.Write,
             ["compile_plc"] = SandboxTier.Write,
+            ["open_block_in_editor"] = SandboxTier.Write,
             // Engineering — persist/overwrite user work.
             ["save_project"] = SandboxTier.Destructive,
             ["import_block"] = SandboxTier.Destructive,
@@ -56,6 +61,19 @@ public sealed class SandboxPolicy
             ["get_block"] = SandboxTier.Read,
             ["get_network"] = SandboxTier.Read,
             ["search"] = SandboxTier.Read,
+            // Version control — read-only queries (status, log, diff, branches).
+            ["vc_status"] = SandboxTier.Read,
+            ["vc_log"] = SandboxTier.Read,
+            ["vc_diff"] = SandboxTier.Read,
+            ["vc_branches"] = SandboxTier.Read,
+            // Version control — write operations (state changes).
+            ["vc_init"] = SandboxTier.Write,
+            ["vc_add"] = SandboxTier.Write,
+            ["vc_commit"] = SandboxTier.Write,
+            ["vc_snapshot"] = SandboxTier.Write,
+            ["vc_config"] = SandboxTier.Write,
+            // Version control — destructive (overwrites working tree).
+            ["vc_restore"] = SandboxTier.Destructive,
         };
 
     public IReadOnlyDictionary<string, SandboxTier> Tiers => tiers;

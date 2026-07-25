@@ -30,8 +30,30 @@ public interface IEngineeringPlatform : IDisposable
     /// <summary>Incremental sync (buildnote/plan/export-sync.md): PLC software-checksum gate,
     /// timestamp-nominated diff, hash-confirmed re-export of changed components only.</summary>
     SyncResult[] SyncExport(string outputDir, string? plcName);
+
+    /// <summary>Full rebuild export: scans all PLC devices in the project, exports every component
+    /// (blocks, tag tables, UDTs) to fresh per-device subfolders under outputDir, and writes
+    /// project-level metadata (sourceProjectPath, per-device checksums, device list). Always
+    /// rewrites the device manifests — no incremental diff. Used when the device set changes or
+    /// the export structure needs a clean rebuild.</summary>
+    SyncResult[] RebuildExport(string outputDir);
+
+    /// <summary>Close a TIA Portal session by process ID. Sends a close signal to the portal
+    /// window (same as clicking the X button). The user can save or discard any project changes.</summary>
+    void CloseSession(int sessionId);
+
+    /// <summary>Read-only counterpart of <see cref="SyncExport"/> (buildnote/plan/export-sync.md §UI):
+    /// stored vs live checksum per PLC export root — no exports, no writes.</summary>
+    ContextStatusResult[] GetContextStatus(string outputDir, string? plcName);
+
+    /// <summary>Read-only per-component diff (buildnote/plan/export-sync.md §Compare): live
+    /// fingerprints/timestamps vs the stored manifest — the Compare tab's data source.</summary>
+    ContextCompareResult[] CompareContext(string outputDir, string? plcName);
     ImportResult ImportBlock(string blockName, string xmlFilePath);
 
     CompileResult CompileBlock(string blockName);
     CompileResult CompilePlc();
+
+    /// <summary>Open a block in the TIA Portal editor window. Requires a UI-connected session.</summary>
+    void OpenBlockInEditor(string blockName);
 }

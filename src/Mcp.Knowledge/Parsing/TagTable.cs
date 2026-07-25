@@ -63,7 +63,7 @@ public sealed class TagTableRow
 
 public static class TagTableBuilder
 {
-    public static IReadOnlyList<TagTableRow> ParseRows(string xml, string sourceFile, string tagTableSourcePath)
+    public static IReadOnlyList<TagTableRow> ParseRows(string xml, string sourceFile, string tagTableSourcePath, string deviceName = "")
     {
         if (xml == null)
         {
@@ -105,8 +105,10 @@ public static class TagTableBuilder
             var tagName = rawTagName!;
             var rawDataType = GetDirectAttributeValue(tag, "DataTypeName") ?? string.Empty;
             var logicalAddress = GetDirectAttributeValue(tag, "LogicalAddress") ?? string.Empty;
+            var baseId = $"tag:{tagTableName}:{tagName}:{logicalAddress}";
+            var tagId = string.IsNullOrEmpty(deviceName) ? baseId : $"{deviceName}/{baseId}";
             rows.Add(new TagTableRow(
-                $"tag:{tagTableName}:{tagName}:{logicalAddress}",
+                tagId,
                 tagTableName,
                 tagTableSourcePath,
                 tagName,

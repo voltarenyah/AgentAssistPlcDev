@@ -39,6 +39,12 @@ public sealed class AgentLoop
     /// <summary>Per-request chat parameters (model, thinking, effort, temperature, top_p). Settable between turns.</summary>
     public ChatRequestSettings Settings { get; set; }
 
+    /// <summary>ID of the persisted session this AgentLoop is currently working on, if any.</summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>Project name the current session is bound to.</summary>
+    public string? ProjectName { get; set; }
+
     /// <summary>The exact conversation sent to DeepSeek (system prompt first, rebuilt per turn).</summary>
     public IReadOnlyList<ChatMessage> History => messages;
 
@@ -49,6 +55,18 @@ public sealed class AgentLoop
     {
         messages.Clear();
         roundUsages.Clear();
+    }
+
+    /// <summary>
+    /// Replace the current in-memory conversation state with loaded session data.
+    /// Does NOT persist — the caller must save separately via <see cref="SessionManager"/>.
+    /// </summary>
+    public void RestoreFrom(List<ChatMessage> history, List<UsageInfo?> usages)
+    {
+        messages.Clear();
+        messages.AddRange(history);
+        roundUsages.Clear();
+        roundUsages.AddRange(usages);
     }
 
     /// <summary>Runs one user turn to completion; returns the assistant's final text.</summary>

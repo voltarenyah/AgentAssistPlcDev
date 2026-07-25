@@ -67,7 +67,7 @@ public sealed class AgentLoopSandboxTests
         }
 
         private static AgentToolSpec Spec(string name, FakeToolCaller caller) =>
-            new(name, name, JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement, caller);
+            new(name, name, JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement, caller, "test");
 
         public string LastToolMessageContent()
         {

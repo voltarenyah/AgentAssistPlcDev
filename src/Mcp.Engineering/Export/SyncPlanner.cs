@@ -2,11 +2,14 @@ namespace Mcp.Engineering.Export;
 
 /// <summary>
 /// Pure diff between manifest records and live TIA components (buildnote/plan/export-sync.md).
-/// Detection signals per category: blocks/UDTs compare TIA fingerprints (in-memory, no export —
-/// fingerprints consider only user input, so saves/compiles never move them); tag tables have no
-/// FingerprintProvider, so timestamps nominate and the post-export content hash confirms.
-/// No Siemens types — the adapter flattens blocks/tag tables/UDTs into <see cref="SyncLiveComponent"/>
-/// first, which makes this the unit-test seam.
+/// Nomination per category: blocks/UDTs compare TIA fingerprints AND timestamps (either may lag
+/// the actual edit until TIA propagates it on save/compile — verified 2026-07-21 — so both are
+/// checked); the post-export content hash is always the verdict (fingerprint- or hash-proven
+/// changes land in "changed", compile ripples degrade to "touched"). Tag tables have no
+/// FingerprintProvider and run the timestamp+hash path by default; instance DBs may get no moved
+/// signal at all in the propagation window (system-side regeneration) and are re-exported on
+/// every diff for a hash verdict. No Siemens types — the adapter flattens blocks/tag tables/UDTs
+/// into <see cref="SyncLiveComponent"/> first, which makes this the unit-test seam.
 /// </summary>
 internal enum SyncAction
 {
@@ -31,6 +34,9 @@ internal sealed class SyncLiveComponent
     public string Name { get; set; } = string.Empty;
     public string Category { get; set; } = string.Empty;
     public string SourcePath { get; set; } = string.Empty;
+
+    /// <summary>Concrete Openness type name (e.g. GlobalDB, InstanceDB); used by the instance-DB rule.</summary>
+    public string? SiemensTypeName { get; set; }
 
     /// <summary>Canonical "Id=Value;…" fingerprint string (blocks/UDTs); null for tag tables and
     /// when the provider is missing/throws (e.g. inconsistent block) → timestamp path applies.</summary>
@@ -60,6 +66,7 @@ internal static class SyncPlanner
     public const string ReasonNew = "new";
     public const string ReasonFingerprint = "fingerprint";
     public const string ReasonTimestamp = "timestamp";
+    public const string ReasonInstanceDbVerify = "instance-db-verify";
     public const string ReasonFingerprintBackfill = "fingerprint-backfill";
     public const string ReasonLegacyNoHash = "legacy-no-hash";
     public const string ReasonUnreadableMetadata = "unreadable-metadata";
@@ -118,19 +125,39 @@ internal static class SyncPlanner
             return SyncAction.ReExport;
         }
 
+        // Instance DBs can change without any moved per-object signal (verified 2026-07-21):
+        // when the parent FB's static area changes, TIA regenerates them system-side and — until
+        // the change propagates — neither fingerprints nor modified dates move. Re-export on
+        // every diff; the content hash decides changed vs touched.
+        if (string.Equals(item.SiemensTypeName, "InstanceDB", StringComparison.Ordinal))
+        {
+            reason = ReasonInstanceDbVerify;
+            return SyncAction.ReExport;
+        }
+
         if (item.Fingerprints is not null)
         {
-            // Fingerprint path (blocks/UDTs): exact per-object change detection, no export needed.
+            // Fingerprint path (blocks/UDTs).
             if (record.Fingerprints is not null)
             {
-                if (string.Equals(record.Fingerprints, item.Fingerprints, StringComparison.Ordinal))
+                if (!string.Equals(record.Fingerprints, item.Fingerprints, StringComparison.Ordinal))
                 {
-                    reason = ReasonUnchanged;
-                    return SyncAction.Skip;
+                    reason = ReasonFingerprint;
+                    return SyncAction.ReExport;
                 }
 
-                reason = ReasonFingerprint;
-                return SyncAction.ReExport;
+                // Signals can lag the actual edit until TIA propagates it (save/compile): a moved
+                // timestamp nominates even when fingerprints still match (verified for a
+                // start-value edit, 2026-07-21). The content hash decides — compile ripples that
+                // bump timestamps without content change degrade to "touched".
+                if (!TimestampsMatch(record, item))
+                {
+                    reason = ReasonTimestamp;
+                    return SyncAction.ReExport;
+                }
+
+                reason = ReasonUnchanged;
+                return SyncAction.Skip;
             }
 
             // Legacy record (pre-fingerprints): no stored fingerprint to compare. Matching

@@ -10,57 +10,99 @@ using Xunit;
 
 namespace Agent.Tests;
 
+/// <summary>
+/// The confirmed incremental sync (buildnote/plan/export-sync.md §UI): sync_export first, then
+/// ingest_source only when content changed or the knowledge db is missing.
+/// </summary>
 public sealed class ReadProjectContextWorkflowTests
 {
     [Fact]
-    public async Task RunsExportChainInOrderAndMapsResult()
+    public async Task RunsSyncThenIngest_InOrder_WhenContentChanged()
     {
         var engineering = new FakeToolCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "TestPLC" })
-            .Respond("export_all_blocks", new[]
+            .Respond("sync_export", new[]
             {
-                new ExportResult { BlockName = "A", Success = true },
-                new ExportResult { BlockName = "B", Success = false, Error = "skipped" },
-                new ExportResult { BlockName = "C", Success = true },
-            })
-            .Respond("export_tag_tables", new[] { new ExportResult { BlockName = "Tags", Success = true } })
-            .Respond("export_udts", new ExportResult[] { });
+                Plc(status: "updated", changed: new[] { Change("FB_Motor") }),
+            });
         var knowledge = new FakeToolCaller()
             .Respond("ingest_source", new IngestResult { DbPath = "x.db", Nodes = 10, Edges = 20 });
         var progress = new List<string>();
-        var workflow = new ReadProjectContextWorkflow(engineering, knowledge, new Progress<string>(progress.Add));
+        var workflow = new ReadProjectContextWorkflow(
+            engineering, knowledge, new Progress<string>(progress.Add), fileExists: _ => true);
 
         var result = await workflow.RunAsync();
 
-        Assert.Equal(
-            new[] { "get_project_info", "export_all_blocks", "export_tag_tables", "export_udts" },
-            engineering.Calls.ToArray());
+        Assert.Equal(new[] { "get_project_info", "sync_export" }, engineering.Calls.ToArray());
         Assert.Equal(new[] { "ingest_source" }, knowledge.Calls.ToArray());
 
         // Same export root everywhere, derived from the project name.
-        foreach (var call in new[] { "export_all_blocks", "export_tag_tables", "export_udts" })
-        {
-            var args = engineering.CallArgs[call][0];
-            var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
-            Assert.EndsWith("TestPLC", outputDir);
-        }
-
+        var syncArgs = engineering.CallArgs["sync_export"][0];
+        var outputDir = (string)syncArgs.GetType().GetProperty("outputDir")!.GetValue(syncArgs)!;
+        Assert.EndsWith("TestPLC", outputDir);
         var ingestArgs = knowledge.CallArgs["ingest_source"][0];
         var exportRoot = (string)ingestArgs.GetType().GetProperty("exportRoot")!.GetValue(ingestArgs)!;
         Assert.EndsWith("TestPLC", exportRoot);
 
-        // Only successful exports count.
         Assert.Equal("TestPLC", result.ProjectName);
-        Assert.Equal(2, result.BlocksExported);
-        Assert.Equal(1, result.TagTablesExported);
-        Assert.Equal(0, result.UdtsExported);
+        Assert.False(result.UpToDate);
         Assert.Equal("x.db", result.DbPath);
-        Assert.Equal(10, result.Ingest.Nodes);
+        Assert.NotNull(result.Ingest);
+        Assert.Equal(10, result.Ingest!.Nodes);
         Assert.NotEmpty(progress);
     }
 
     [Fact]
-    public async Task ProjectInfoErrorAbortsBeforeAnyExport()
+    public async Task UnchangedAndDbExists_SkipsIngest()
+    {
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo { Name = "TestPLC" })
+            .Respond("sync_export", new[] { Plc() });
+        var knowledge = new FakeToolCaller();
+        var workflow = new ReadProjectContextWorkflow(engineering, knowledge, fileExists: _ => true);
+
+        var result = await workflow.RunAsync();
+
+        Assert.Empty(knowledge.Calls);
+        Assert.True(result.UpToDate);
+        Assert.Null(result.Ingest);
+        Assert.EndsWith("plc-knowledge.db", result.DbPath);
+    }
+
+    [Fact]
+    public async Task UnchangedButDbMissing_RunsIngest()
+    {
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo { Name = "TestPLC" })
+            .Respond("sync_export", new[] { Plc() });
+        var knowledge = new FakeToolCaller()
+            .Respond("ingest_source", new IngestResult { DbPath = "x.db", Nodes = 10, Edges = 20 });
+        var workflow = new ReadProjectContextWorkflow(engineering, knowledge, fileExists: _ => false);
+
+        var result = await workflow.RunAsync();
+
+        Assert.Equal(new[] { "ingest_source" }, knowledge.Calls.ToArray());
+        Assert.False(result.UpToDate);
+        Assert.NotNull(result.Ingest);
+    }
+
+    [Fact]
+    public async Task ContentChange_RunsIngest_EvenWhenDbExists()
+    {
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo { Name = "TestPLC" })
+            .Respond("sync_export", new[] { Plc(status: "updated", removed: new[] { Change("FB_Old") }) });
+        var knowledge = new FakeToolCaller()
+            .Respond("ingest_source", new IngestResult { DbPath = "x.db" });
+        var workflow = new ReadProjectContextWorkflow(engineering, knowledge, fileExists: _ => true);
+
+        await workflow.RunAsync();
+
+        Assert.Equal(new[] { "ingest_source" }, knowledge.Calls.ToArray());
+    }
+
+    [Fact]
+    public async Task ProjectInfoErrorAbortsBeforeAnySync()
     {
         var engineering = new FakeToolCaller()
             .Fail("get_project_info", "NOT_CONNECTED", "No TIA session is connected.");
@@ -75,39 +117,37 @@ public sealed class ReadProjectContextWorkflowTests
     }
 
     [Fact]
-    public async Task ExportErrorAbortsBeforeIngest()
+    public async Task SyncErrorAbortsBeforeIngest()
     {
         var engineering = new FakeToolCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "TestPLC" })
-            .Fail("export_all_blocks", "EXPORT_FAILED", "Block export failed.");
+            .Fail("sync_export", "SANDBOX_TOOL_DENIED", "Tool disabled.");
         var knowledge = new FakeToolCaller();
         var workflow = new ReadProjectContextWorkflow(engineering, knowledge);
 
         var error = await Assert.ThrowsAsync<ToolCallException>(() => workflow.RunAsync());
 
-        Assert.Equal("EXPORT_FAILED", error.Code);
+        Assert.Equal("SANDBOX_TOOL_DENIED", error.Code);
         Assert.Empty(knowledge.Calls);
     }
 
     [Fact]
-    public async Task ZeroBlocksExportedAbortsBeforeIngest()
+    public async Task NoBaselineWithZeroAdded_Throws()
     {
         var engineering = new FakeToolCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "TestPLC" })
-            .Respond("export_all_blocks", new ExportResult[] { })
-            .Respond("export_tag_tables", new ExportResult[] { })
-            .Respond("export_udts", new ExportResult[] { });
+            .Respond("sync_export", new[] { Plc(baselineExisted: false, status: "updated") });
         var knowledge = new FakeToolCaller();
         var workflow = new ReadProjectContextWorkflow(engineering, knowledge);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => workflow.RunAsync());
 
-        Assert.Contains("0 blocks", error.Message);
+        Assert.Contains("0 components", error.Message);
         Assert.Empty(knowledge.Calls);
     }
 
     [Fact]
-    public async Task CancelledTokenStopsChainBeforeExports()
+    public async Task CancelledTokenStopsChainBeforeSync()
     {
         var engineering = new FakeToolCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "TestPLC" });
@@ -121,4 +161,24 @@ public sealed class ReadProjectContextWorkflowTests
         Assert.Equal(new[] { "get_project_info" }, engineering.Calls.ToArray());
         Assert.Empty(knowledge.Calls);
     }
+
+    private static SyncResult Plc(
+        bool baselineExisted = true,
+        string status = "unchanged",
+        SyncChange[]? added = null,
+        SyncChange[]? changed = null,
+        SyncChange[]? removed = null,
+        SyncChange[]? failed = null) => new()
+        {
+            PlcName = "PLC_1",
+            ExportRoot = "root",
+            Status = status,
+            BaselineExisted = baselineExisted,
+            Added = added ?? Array.Empty<SyncChange>(),
+            Changed = changed ?? Array.Empty<SyncChange>(),
+            Removed = removed ?? Array.Empty<SyncChange>(),
+            Failed = failed ?? Array.Empty<SyncChange>(),
+        };
+
+    private static SyncChange Change(string name) => new() { Name = name, Category = "FB" };
 }

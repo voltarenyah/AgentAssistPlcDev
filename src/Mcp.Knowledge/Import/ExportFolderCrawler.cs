@@ -3,6 +3,7 @@
 // driven by ManifestImporter; otherwise this root-element folder crawl is the fallback. The crawl
 // classifies each exported file by its SW.* root element and feeds the ported per-category import
 // methods (Graph/TiaXmlSemanticGraphImporter).
+using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 using Mcp.Knowledge.Graph;
@@ -49,9 +50,101 @@ public static class ExportFolderCrawler
             throw new DirectoryNotFoundException($"Export root '{exportRoot}' was not found.");
         }
 
-        return File.Exists(Path.Combine(exportRoot, ManifestImporter.MetadataFileName))
-            ? ManifestImporter.Import(exportRoot, progress)
-            : ImportByCrawl(exportRoot, progress);
+        // 1. Per-device subfolders: each subdirectory with its own metadata.json
+        var deviceFolders = Directory.EnumerateDirectories(exportRoot)
+            .Where(dir => File.Exists(Path.Combine(dir, ManifestImporter.MetadataFileName)))
+            .ToArray();
+
+        if (deviceFolders.Length > 0)
+        {
+            // Import each device individually, then merge into one graph
+            var combinedGraph = new SemanticPlcGraph();
+            var allWarnings = new List<string>();
+            var totalFilesFound = 0;
+            var totalFilesImported = 0;
+            var fullRoot = Path.GetFullPath(exportRoot);
+            var projectNode = CreateProjectNode(exportRoot, fullRoot);
+            combinedGraph.UpsertNode(projectNode);
+
+            foreach (var deviceDir in deviceFolders)
+            {
+                var deviceName = Path.GetFileName(deviceDir);
+                var result = ManifestImporter.Import(deviceDir, progress, deviceName);
+                // Project node from the device's manifest — skip it (we use the combined one).
+                var skippedProjectIds = result.Graph.Nodes
+                    .Where(n => string.Equals(n.Kind, SemanticNodeKind.Project, StringComparison.OrdinalIgnoreCase))
+                    .Select(n => n.Id)
+                    .ToHashSet(StringComparer.Ordinal);
+                foreach (var node in result.Graph.Nodes)
+                    if (!skippedProjectIds.Contains(node.Id))
+                        combinedGraph.UpsertNode(node);
+                foreach (var edge in result.Graph.Edges)
+                {
+                    if (skippedProjectIds.Contains(edge.FromNodeId) && skippedProjectIds.Contains(edge.ToNodeId))
+                        continue;
+                    if (skippedProjectIds.Contains(edge.FromNodeId))
+                    {
+                        // Rewire: point the CONTAINS edge to the combined project node
+                        combinedGraph.UpsertEdge(new SemanticGraphEdge(
+                            TiaXmlSemanticGraphImporter.EdgeId(projectNode.Id, edge.ToNodeId, edge.Type, edge.Properties),
+                            projectNode.Id, edge.ToNodeId, edge.Type, edge.Properties));
+                    }
+                    else if (skippedProjectIds.Contains(edge.ToNodeId))
+                    {
+                        continue; // edge targeting the old project node — drop
+                    }
+                    else
+                    {
+                        combinedGraph.UpsertEdge(edge);
+                    }
+                }
+                totalFilesFound += result.FilesFound;
+                totalFilesImported += result.FilesImported;
+                allWarnings.AddRange(result.Warnings);
+            }
+
+            // CONTAINS edges from the combined project node to each device
+            foreach (var deviceDir in deviceFolders)
+            {
+                var deviceName = Path.GetFileName(deviceDir);
+                combinedGraph.UpsertNode(new SemanticGraphNode(
+                    $"plc-device:{deviceName}",
+                    SemanticNodeKind.PlcDevice,
+                    deviceName));
+                TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                    combinedGraph, projectNode.Id, $"plc-device:{deviceName}", SemanticRelationshipType.Contains);
+            }
+
+            return new ExportFolderImportResult(combinedGraph, totalFilesFound, totalFilesImported, allWarnings, "manifest");
+        }
+
+        // 2. Legacy flat export: metadata.json at the project root (pre-device-subfolder structure)
+        // that contains a "components" array. After the metadata split (2026-07-24), the project
+        // root metadata.json is project-level only (no components) — skip it, fall to crawl.
+        var rootMeta = Path.Combine(exportRoot, ManifestImporter.MetadataFileName);
+        if (File.Exists(rootMeta) && HasComponents(rootMeta))
+        {
+            return ManifestImporter.Import(exportRoot, progress);
+        }
+
+        // 3. Fall to crawl (legacy no-manifest)
+        return ImportByCrawl(exportRoot, progress);
+    }
+
+    /// <summary>Cheap check: does the metadata.json at <paramref name="path"/> have a "components"
+    /// array? True for legacy device manifests, false for project-level metadata.</summary>
+    private static bool HasComponents(string path)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            return doc.RootElement.TryGetProperty("components", out var comps)
+                && comps.ValueKind == JsonValueKind.Array;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     internal static SemanticGraphNode CreateProjectNode(string exportRoot, string fullRoot)
@@ -114,25 +207,33 @@ public static class ExportFolderCrawler
         foreach (var winner in winners.OrderBy(candidate => candidate.RelativeFile, StringComparer.Ordinal))
         {
             var sourcePath = Path.GetDirectoryName(winner.RelativeFile) ?? string.Empty;
+            // Extract device name from the first segment of the relative path, if present
+            var firstSep = sourcePath.IndexOfAny(new[] { '/', '\\' });
+            var deviceName = firstSep > 0 ? sourcePath.Substring(0, firstSep) : "";
+            // Also handle the case where the file is directly at a device subfolder root
+            if (string.IsNullOrEmpty(deviceName) && sourcePath.Length > 0)
+                deviceName = sourcePath;
+
             switch (winner.Kind)
             {
                 case ImportKind.ProgramBlock:
                     TiaXmlSemanticGraphImporter.ImportBlockXml(
                         winner.Xml,
                         new ProgramBlockComponent(winner.Name, winner.Category!, sourcePath, winner.RelativeFile),
-                        graph);
+                        graph,
+                        deviceName);
                     TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                        graph, project.Id, TiaXmlSemanticGraphImporter.BlockId(winner.Name), SemanticRelationshipType.Contains);
+                        graph, project.Id, TiaXmlSemanticGraphImporter.BlockId(deviceName, winner.Name), SemanticRelationshipType.Contains);
                     break;
                 case ImportKind.DataBlock:
-                    TiaXmlSemanticGraphImporter.ImportDbXml(winner.Xml, winner.RelativeFile, sourcePath, graph);
+                    TiaXmlSemanticGraphImporter.ImportDbXml(winner.Xml, winner.RelativeFile, sourcePath, graph, deviceName);
                     TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                        graph, project.Id, TiaXmlSemanticGraphImporter.DbId(winner.Name), SemanticRelationshipType.Contains);
+                        graph, project.Id, TiaXmlSemanticGraphImporter.DbId(deviceName, winner.Name), SemanticRelationshipType.Contains);
                     break;
                 case ImportKind.Udt:
-                    TiaXmlSemanticGraphImporter.ImportUdtXml(winner.Xml, winner.RelativeFile, sourcePath, graph);
+                    TiaXmlSemanticGraphImporter.ImportUdtXml(winner.Xml, winner.RelativeFile, sourcePath, graph, deviceName);
                     TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                        graph, project.Id, TiaXmlSemanticGraphImporter.UdtId(winner.Name), SemanticRelationshipType.Contains);
+                        graph, project.Id, TiaXmlSemanticGraphImporter.UdtId(deviceName, winner.Name), SemanticRelationshipType.Contains);
                     break;
                 case ImportKind.TagTable:
                     // Reference behaviour: tag tables get no project CONTAINS edge (tags float freely).

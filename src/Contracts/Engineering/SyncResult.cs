@@ -9,6 +9,9 @@ public sealed class SyncResult
     /// <summary>"unchanged" (checksum gate held, nothing exported) or "updated" (diff ran).</summary>
     public string Status { get; set; } = string.Empty;
 
+    /// <summary>False when this run started from no manifest (no-baseline full export).</summary>
+    public bool BaselineExisted { get; set; }
+
     /// <summary>PlcSoftwareChecksum stored in the manifest before this run; null when absent/legacy.</summary>
     public string? ChecksumBefore { get; set; }
 

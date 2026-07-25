@@ -27,7 +27,7 @@ public sealed class ChatSessionExporterTests
         };
         var catalog = new McpToolCatalog(new[]
         {
-            new AgentToolSpec("list_sessions", "list TIA", JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement, new FakeToolCaller()),
+            new AgentToolSpec("list_sessions", "list TIA", JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement, new FakeToolCaller(), "test"),
         });
 
         var markdown = ChatSessionExporter.Export(
@@ -113,7 +113,7 @@ public sealed class ChatSessionExporterTests
             .Respond("search", JsonDocument.Parse("""{"matches":[{"id":"network:000_Main_PC:12"}]}""").RootElement);
         var catalog = new McpToolCatalog(new[]
         {
-            new AgentToolSpec("search", "find text", JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement, caller),
+            new AgentToolSpec("search", "find text", JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement, caller, "test"),
         });
         var client = new DeepSeekClient("sk-test", "https://api.deepseek.com", new HttpClient(endpoint));
         var loop = new AgentLoop(client, catalog, () => "CTX dbPath=C:\\x.db");

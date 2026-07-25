@@ -46,9 +46,10 @@ public sealed class ExportFolderCrawlerTests
         Assert.Equal(2, result.FilesFound);
         Assert.Equal(1, result.FilesImported);
         Assert.Single(result.Warnings);
+        // "a/" is the first path segment, treated as device name, prefixed to the block id.
         Assert.Equal(
             Path.Combine("a", "FC_LAD_SimulateCylinder_Call [FC1].xml"),
-            result.Graph.GetNode("block:FC_LAD_SimulateCylinder_Call").Properties["sourceFile"]);
+            result.Graph.GetNode("a/block:FC_LAD_SimulateCylinder_Call").Properties["sourceFile"]);
     }
 
     [Fact]

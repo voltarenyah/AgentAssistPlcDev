@@ -300,7 +300,8 @@ public sealed class TagAndUdtImportTests
 
         var graph = SqliteSemanticGraphStore.Load(result.GetProperty("dbPath").GetString()!);
         Assert.Equal(10, graph.FindNodesByKind(SemanticNodeKind.PlcTag).Count);
-        Assert.Equal(SemanticNodeKind.UserDataType, graph.GetNode("udt:CAB").Kind);
+        // "UDT/" is the first path segment, treated as device name, prefixed to the udt id.
+        Assert.Equal(SemanticNodeKind.UserDataType, graph.GetNode("UDT/udt:CAB").Kind);
     }
 
     [Fact]

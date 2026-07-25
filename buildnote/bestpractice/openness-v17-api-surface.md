@@ -212,6 +212,24 @@ on `IEngineeringServiceProvider`).
 - Timestamp side channel (verified): editing a tag table bumps `ModifiedDate`/`CodeModifiedDate`
   of **blocks referencing tags** (dependency ripple), not only the table's `ModifiedTimeStamp` —
   timestamps are false-positive-prone nomination signals, fingerprints are exact.
+- **Fingerprint coverage gaps (verified 2026-07-21, user-driven experiments on TestPLCExportDemo):**
+  - **Start-value edits in a GlobalDB move `ModifiedDate` but NOT the `Interface` fingerprint** —
+    the Siemens doc claims start values are covered; V17 reality says otherwise. Sync therefore
+    nominates on fingerprints OR timestamps and lets the content hash decide.
+  - **Instance DBs change system-side** when the parent FB's static area changes: neither their
+    fingerprints nor their `ModifiedDate` moves (both track user edits only). The only reliable
+    detection is re-export + content hash on every diff.
+  - Compiling bumps `ModifiedDate` of dependents (ripple) with zero content change — observed
+    `Main` + `DB_CylinderHMI` moving minutes after a compile with identical fingerprints.
+- **Signal propagation lag (verified 2026-07-21):** fingerprints and modified dates can lag the
+  actual edit until TIA propagates it. After a start-value edit (GlobalDB) + static-area edit
+  (FB), taken *before* a further save/compile: the Interface fingerprints of the FB, its instance
+  DB and the GlobalDB were all unchanged, and the instance DB's `ModifiedDate` had not moved —
+  after later save/compile cycles all of them moved. Instance DBs may therefore show **no moved
+  signal at all** in that window (system-side regeneration). `sync_export` handles this by (a)
+  re-exporting instance DBs on every diff for a content-hash verdict and (b) letting a timestamp
+  mismatch nominate even when fingerprints still match (hash decides; compile ripples degrade to
+  "touched").
 
 ## Key findings
 

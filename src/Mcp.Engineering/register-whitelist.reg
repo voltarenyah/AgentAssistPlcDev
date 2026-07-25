@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Siemens\Automation\Openness\17.0\Whitelist\Mcp.Engineering.exe\Entry]
+"Path"="C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\src\\Mcp.Engineering\\bin\\Debug\\net48\\Mcp.Engineering.exe"
+"DateModified"="2026/07/23 06:51:01.417"
+"FileHash"="vQAuIy7wr+/M2d/kH4YUbwYozVlZFk6avXnqiVJN9Xw="
+

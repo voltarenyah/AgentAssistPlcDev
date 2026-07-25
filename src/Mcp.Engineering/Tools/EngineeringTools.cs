@@ -56,6 +56,12 @@ public sealed class EngineeringTools
     [Description("Release project and portal handles. Never saves; never closes a project owned by an attached session. Reports unsaved changes.")]
     public CallToolResult Disconnect() => Invoke("disconnect", () => _adapter.Disconnect());
 
+    [McpServerTool(Name = "close_session")]
+    [Description("Close a TIA Portal session by process ID (sends close signal — same as clicking X). For sessions with UI, the user can save or discard changes.")]
+    public CallToolResult CloseSession(
+        [Description("TIA process ID from list_sessions.")] int sessionId)
+        => Invoke("close_session", () => { _adapter.CloseSession(sessionId); return true; });
+
     [McpServerTool(Name = "save_project")]
     [Description("Explicitly save the open TIA project — the only tool that persists it.")]
     public CallToolResult SaveProject() => Invoke("save_project", () => { _adapter.SaveProject(); return new { }; });
@@ -104,6 +110,26 @@ public sealed class EngineeringTools
         [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
         => Invoke("sync_export", () => _adapter.SyncExport(outputDir, plcName), ("outputDir", outputDir));
 
+    [McpServerTool(Name = "rebuild_export")]
+    [Description("Complete full export of all PLC devices: exports every block, tag table, and UDT for every device in the project into per-device subfolders. Always rewrites all manifests — no incremental diff. Writes project-level metadata with the complete device list and per-device software checksums. Use this when the device set changes, or the export structure needs a clean rebuild. Read-only w.r.t. the project.")]
+    public CallToolResult RebuildExport(
+        [Description("Export root directory for the per-device subfolders.")] string outputDir)
+        => Invoke("rebuild_export", () => _adapter.RebuildExport(outputDir), ("outputDir", outputDir));
+
+    [McpServerTool(Name = "get_context_status")]
+    [Description("Check whether an export root matches the current project state without changing anything: per PLC, the stored manifest checksum vs the live software checksum (states: no-baseline / in-sync / changed / unknown). No exports, no writes — safe to run anytime.")]
+    public CallToolResult GetContextStatus(
+        [Description("Export root directory to check.")] string outputDir,
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
+        => Invoke("get_context_status", () => _adapter.GetContextStatus(outputDir, plcName), ("outputDir", outputDir));
+
+    [McpServerTool(Name = "compare_context")]
+    [Description("Per-component read-only diff between the live project and an export root's manifest: for every block/tag table/UDT, live vs stored fingerprints and modified dates with a verdict (same / different / new / missing / unknown). No exports, no writes — the data behind a compare view before deciding to sync.")]
+    public CallToolResult CompareContext(
+        [Description("Export root directory to compare against.")] string outputDir,
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
+        => Invoke("compare_context", () => _adapter.CompareContext(outputDir, plcName), ("outputDir", outputDir));
+
     [McpServerTool(Name = "import_block")]
     [Description("Import a modified block XML back into the project (DESTRUCTIVE: overwrites the block). Caller must validate the XML and snapshot the working folder first.")]
     public CallToolResult ImportBlock(
@@ -120,6 +146,12 @@ public sealed class EngineeringTools
     [McpServerTool(Name = "compile_plc")]
     [Description("Compile the whole PLC software, returning all messages (write: mutates project compile state).")]
     public CallToolResult CompilePlc() => Invoke("compile_plc", () => _adapter.CompilePlc());
+
+    [McpServerTool(Name = "open_block_in_editor")]
+    [Description("Open a block in the TIA Portal editor window. Requires a UI-connected TIA session.")]
+    public CallToolResult OpenBlockInEditor(
+        [Description("Block name to open.")] string blockName)
+        => Invoke("open_block_in_editor", () => { _adapter.OpenBlockInEditor(blockName); return true; });
 
     private CallToolResult Invoke(string tool, Func<object> action, params (string Name, string? Value)[] pathArguments)
     {

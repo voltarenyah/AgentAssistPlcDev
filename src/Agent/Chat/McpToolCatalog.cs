@@ -5,7 +5,7 @@ using Agent.Mcp;
 namespace Agent.Chat;
 
 /// <summary>One MCP tool exposed to the model: OpenAI-shaped schema + the caller that executes it.</summary>
-public sealed record AgentToolSpec(string Name, string? Description, JsonElement InputSchema, IMcpToolCaller Caller);
+public sealed record AgentToolSpec(string Name, string? Description, JsonElement InputSchema, IMcpToolCaller Caller, string ServerName);
 
 /// <summary>
 /// All tools of both MCP servers as OpenAI function definitions, with name → caller routing.
@@ -75,12 +75,17 @@ public sealed class McpToolCatalog
     public static async Task<McpToolCatalog> BuildAsync(McpHost host, CancellationToken cancellationToken = default)
     {
         var specs = new List<AgentToolSpec>();
-        foreach (var connection in new[] { host.Engineering, host.Knowledge })
+        foreach (var (server, conn) in new (string, McpServerConnection)[]
+                 { ("engineering", host.Engineering), ("knowledge", host.Knowledge) })
         {
-            foreach (var (name, description, inputSchema) in await connection.ListToolsAsync(cancellationToken))
-            {
-                specs.Add(new AgentToolSpec(name, description, inputSchema, connection));
-            }
+            foreach (var (name, description, inputSchema) in await conn.ListToolsAsync(cancellationToken))
+                specs.Add(new AgentToolSpec(name, description, inputSchema, conn, server));
+        }
+
+        if (host.VersionControl != null)
+        {
+            foreach (var (name, description, inputSchema) in await host.VersionControl.ListToolsAsync(cancellationToken))
+                specs.Add(new AgentToolSpec(name, description, inputSchema, host.VersionControl, "versioncontrol"));
         }
 
         return new McpToolCatalog(specs);

@@ -55,7 +55,7 @@ public static class ManifestImporter
         PropertyNameCaseInsensitive = true,
     };
 
-    public static ExportFolderImportResult Import(string exportRoot, Action<string>? progress = null)
+    public static ExportFolderImportResult Import(string exportRoot, Action<string>? progress = null, string deviceName = "")
     {
         var fullRoot = Path.GetFullPath(exportRoot);
         var warnings = new List<string>();
@@ -130,27 +130,28 @@ public static class ManifestImporter
                 TiaXmlSemanticGraphImporter.ImportBlockXml(
                     xml,
                     new ProgramBlockComponent(name, category, component.SourcePath ?? string.Empty, relativeFile),
-                    graph);
+                    graph,
+                    deviceName);
                 TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                    graph, project.Id, TiaXmlSemanticGraphImporter.BlockId(name), SemanticRelationshipType.Contains);
+                    graph, project.Id, TiaXmlSemanticGraphImporter.BlockId(deviceName, name), SemanticRelationshipType.Contains);
                 imported++;
                 continue;
             }
 
             if (string.Equals(category, "DB", StringComparison.OrdinalIgnoreCase))
             {
-                TiaXmlSemanticGraphImporter.ImportDbXml(xml, relativeFile, component.SourcePath ?? string.Empty, graph);
+                TiaXmlSemanticGraphImporter.ImportDbXml(xml, relativeFile, component.SourcePath ?? string.Empty, graph, deviceName);
                 TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                    graph, project.Id, TiaXmlSemanticGraphImporter.DbId(name), SemanticRelationshipType.Contains);
+                    graph, project.Id, TiaXmlSemanticGraphImporter.DbId(deviceName, name), SemanticRelationshipType.Contains);
                 imported++;
                 continue;
             }
 
             if (string.Equals(category, "UDT", StringComparison.OrdinalIgnoreCase))
             {
-                TiaXmlSemanticGraphImporter.ImportUdtXml(xml, relativeFile, component.SourcePath ?? string.Empty, graph);
+                TiaXmlSemanticGraphImporter.ImportUdtXml(xml, relativeFile, component.SourcePath ?? string.Empty, graph, deviceName);
                 TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                    graph, project.Id, TiaXmlSemanticGraphImporter.UdtId(name), SemanticRelationshipType.Contains);
+                    graph, project.Id, TiaXmlSemanticGraphImporter.UdtId(deviceName, name), SemanticRelationshipType.Contains);
                 imported++;
                 continue;
             }
@@ -158,7 +159,7 @@ public static class ManifestImporter
             if (string.Equals(category, "Tags", StringComparison.OrdinalIgnoreCase))
             {
                 // Reference behaviour: tag tables get no project CONTAINS edge (tags float freely).
-                TiaXmlSemanticGraphImporter.ImportTagTableXml(xml, relativeFile, component.SourcePath ?? string.Empty, graph);
+                TiaXmlSemanticGraphImporter.ImportTagTableXml(xml, relativeFile, component.SourcePath ?? string.Empty, graph, deviceName);
                 imported++;
                 continue;
             }

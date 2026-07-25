@@ -192,7 +192,7 @@ public sealed class SemanticPlcGraph
 
 public static class TiaXmlSemanticGraphImporter
 {
-    public static void ImportBlockXml(string xml, ProgramBlockComponent component, SemanticPlcGraph graph)
+    public static void ImportBlockXml(string xml, ProgramBlockComponent component, SemanticPlcGraph graph, string deviceName = "")
     {
         if (component == null)
         {
@@ -204,7 +204,7 @@ public static class TiaXmlSemanticGraphImporter
             throw new ArgumentNullException(nameof(graph));
         }
 
-        var blockId = BlockId(component.Name);
+        var blockId = BlockId(deviceName, component.Name);
         graph.UpsertNode(new SemanticGraphNode(
             blockId,
             GetBlockNodeKind(component.Category),
@@ -215,7 +215,7 @@ public static class TiaXmlSemanticGraphImporter
                 ["sourceFile"] = component.ExportedFile
             }));
 
-        var parsed = ProgramSemanticReferenceBuilder.Parse(xml, component);
+        var parsed = ProgramSemanticReferenceBuilder.Parse(xml, component, deviceName);
         var logicStatementsByCompileUnitId = ProgramBlockLogicYamlWriter.GetNetworkStatementTextByCompileUnitId(xml, component);
         ProgramNetworkRecord? previousNetwork = null;
         foreach (var network in parsed.Networks)
@@ -259,7 +259,7 @@ public static class TiaXmlSemanticGraphImporter
         {
             if (string.Equals(reference.Access, "call", StringComparison.OrdinalIgnoreCase))
             {
-                var calleeId = BlockId(reference.To);
+                var calleeId = BlockId(deviceName, reference.To);
                 // Adaptation: the reference upserts this placeholder unconditionally and relied on the
                 // metadata.json component order to overwrite it with the real block later; the folder
                 // crawl is alphabetical, so a placeholder must never clobber an imported real block.
@@ -278,7 +278,8 @@ public static class TiaXmlSemanticGraphImporter
                 }
 
                 instructionSequence++;
-                var instructionId = $"instruction:{component.Name}:{reference.NetworkIndex}:call:{instructionSequence}";
+                var baseId = $"instruction:{component.Name}:{reference.NetworkIndex}:call:{instructionSequence}";
+                var instructionId = string.IsNullOrEmpty(deviceName) ? baseId : $"{deviceName}/{baseId}";
                 graph.UpsertNode(new SemanticGraphNode(
                     instructionId,
                     SemanticNodeKind.Instruction,
@@ -298,7 +299,7 @@ public static class TiaXmlSemanticGraphImporter
 
             if (string.Equals(reference.TargetKind, "symbol", StringComparison.OrdinalIgnoreCase))
             {
-                var symbolId = SymbolId(reference.To);
+                var symbolId = SymbolId(deviceName, reference.To);
                 graph.UpsertNode(new SemanticGraphNode(
                     symbolId,
                     SemanticNodeKind.Variable,
@@ -325,7 +326,7 @@ public static class TiaXmlSemanticGraphImporter
         }
     }
 
-    public static void ImportDbXml(string xml, string sourceFile, string sourcePath, SemanticPlcGraph graph)
+    public static void ImportDbXml(string xml, string sourceFile, string sourcePath, SemanticPlcGraph graph, string deviceName = "")
     {
         if (xml == null)
         {
@@ -362,7 +363,7 @@ public static class TiaXmlSemanticGraphImporter
         var kind = dbRoot.Name.LocalName == "SW.Blocks.InstanceDB"
             ? SemanticNodeKind.InstanceDataBlock
             : SemanticNodeKind.GlobalDataBlock;
-        var dbId = DbId(name);
+        var dbId = DbId(deviceName, name);
         graph.UpsertNode(new SemanticGraphNode(
             dbId,
             kind,
@@ -378,25 +379,25 @@ public static class TiaXmlSemanticGraphImporter
         if (!string.IsNullOrWhiteSpace(instanceOfName))
         {
             // Adaptation: same placeholder guard as for call targets — never clobber a real FB node.
-            if (!graph.TryGetNode(BlockId(instanceOfName), out _))
+            if (!graph.TryGetNode(BlockId(deviceName, instanceOfName), out _))
             {
-                graph.UpsertNode(new SemanticGraphNode(BlockId(instanceOfName), SemanticNodeKind.FunctionBlock, instanceOfName));
+                graph.UpsertNode(new SemanticGraphNode(BlockId(deviceName, instanceOfName), SemanticNodeKind.FunctionBlock, instanceOfName));
             }
 
-            AddEdge(graph, dbId, BlockId(instanceOfName), SemanticRelationshipType.InstanceOf);
+            AddEdge(graph, dbId, BlockId(deviceName, instanceOfName), SemanticRelationshipType.InstanceOf);
         }
 
         foreach (var section in GetSections(dbRoot))
         {
             foreach (var member in section.Elements().Where(element => element.Name.LocalName == "Member"))
             {
-                ImportDbMember(member, name, dbId, string.Empty, graph);
+                ImportDbMember(member, name, dbId, string.Empty, graph, deviceName);
             }
         }
     }
 
     // Ported in stage 4 (was deferred in stage 1): UDT import via UdtTypeTableBuilder.
-    public static void ImportUdtXml(string xml, string sourceFile, string sourcePath, SemanticPlcGraph graph)
+    public static void ImportUdtXml(string xml, string sourceFile, string sourcePath, SemanticPlcGraph graph, string deviceName = "")
     {
         if (graph == null)
         {
@@ -409,7 +410,7 @@ public static class TiaXmlSemanticGraphImporter
             if (string.Equals(row.Kind, "Type", StringComparison.OrdinalIgnoreCase))
             {
                 graph.UpsertNode(new SemanticGraphNode(
-                    UdtId(row.Name),
+                    UdtId(deviceName, row.Name),
                     SemanticNodeKind.UserDataType,
                     row.Name,
                     new Dictionary<string, string>
@@ -425,7 +426,7 @@ public static class TiaXmlSemanticGraphImporter
                 continue;
             }
 
-            var memberId = UdtMemberId(row.ParentType, row.Path);
+            var memberId = UdtMemberId(deviceName, row.ParentType, row.Path);
             graph.UpsertNode(new SemanticGraphNode(
                 memberId,
                 SemanticNodeKind.UserDataTypeMember,
@@ -436,21 +437,21 @@ public static class TiaXmlSemanticGraphImporter
                     ["folderPath"] = row.SourcePath,
                     ["sourceFile"] = row.SourceFile
                 }));
-            graph.UpsertNode(new SemanticGraphNode(TypeId(row.DataType), SemanticNodeKind.DataType, row.DataType));
-            AddEdge(graph, UdtId(row.ParentType), memberId, SemanticRelationshipType.Contains);
-            AddEdge(graph, memberId, TypeId(row.DataType), SemanticRelationshipType.HasType);
+            graph.UpsertNode(new SemanticGraphNode(TypeId(deviceName, row.DataType), SemanticNodeKind.DataType, row.DataType));
+            AddEdge(graph, UdtId(deviceName, row.ParentType), memberId, SemanticRelationshipType.Contains);
+            AddEdge(graph, memberId, TypeId(deviceName, row.DataType), SemanticRelationshipType.HasType);
         }
     }
 
     // Ported in stage 4 (was deferred in stage 1): PLC tag-table import via TagTableBuilder.
-    public static void ImportTagTableXml(string xml, string sourceFile, string sourcePath, SemanticPlcGraph graph)
+    public static void ImportTagTableXml(string xml, string sourceFile, string sourcePath, SemanticPlcGraph graph, string deviceName = "")
     {
         if (graph == null)
         {
             throw new ArgumentNullException(nameof(graph));
         }
 
-        foreach (var row in TagTableBuilder.ParseRows(xml, sourceFile, sourcePath))
+        foreach (var row in TagTableBuilder.ParseRows(xml, sourceFile, sourcePath, deviceName))
         {
             graph.UpsertNode(new SemanticGraphNode(
                 row.Id,
@@ -465,20 +466,20 @@ public static class TiaXmlSemanticGraphImporter
                 }));
             if (!string.IsNullOrWhiteSpace(row.DataType))
             {
-                graph.UpsertNode(new SemanticGraphNode(TypeId(row.DataType), SemanticNodeKind.DataType, row.DataType));
-                AddEdge(graph, row.Id, TypeId(row.DataType), SemanticRelationshipType.HasType);
+                graph.UpsertNode(new SemanticGraphNode(TypeId(deviceName, row.DataType), SemanticNodeKind.DataType, row.DataType));
+                AddEdge(graph, row.Id, TypeId(deviceName, row.DataType), SemanticRelationshipType.HasType);
             }
 
             if (!string.IsNullOrWhiteSpace(row.LogicalAddress))
             {
-                var addressId = IoAddressId(row.LogicalAddress);
+                var addressId = IoAddressId(deviceName, row.LogicalAddress);
                 graph.UpsertNode(new SemanticGraphNode(addressId, SemanticNodeKind.IoAddress, row.LogicalAddress));
                 AddEdge(graph, row.Id, addressId, SemanticRelationshipType.ConnectedTo);
             }
         }
     }
 
-    private static void ImportDbMember(XElement member, string dbName, string parentNodeId, string parentPath, SemanticPlcGraph graph)
+    private static void ImportDbMember(XElement member, string dbName, string parentNodeId, string parentPath, SemanticPlcGraph graph, string deviceName = "")
     {
         var name = ((string?)member.Attribute("Name"))?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(name))
@@ -488,7 +489,7 @@ public static class TiaXmlSemanticGraphImporter
 
         var path = string.IsNullOrWhiteSpace(parentPath) ? name : $"{parentPath}.{name}";
         var dataType = NormalizeDataType(((string?)member.Attribute("Datatype"))?.Trim() ?? string.Empty);
-        var memberId = DbMemberId(dbName, path);
+        var memberId = DbMemberId(deviceName, dbName, path);
         graph.UpsertNode(new SemanticGraphNode(
             memberId,
             SemanticNodeKind.DataBlockMember,
@@ -501,8 +502,8 @@ public static class TiaXmlSemanticGraphImporter
 
         if (!string.IsNullOrWhiteSpace(dataType))
         {
-            graph.UpsertNode(new SemanticGraphNode(TypeId(dataType), SemanticNodeKind.DataType, dataType));
-            AddEdge(graph, memberId, TypeId(dataType), SemanticRelationshipType.HasType);
+            graph.UpsertNode(new SemanticGraphNode(TypeId(deviceName, dataType), SemanticNodeKind.DataType, dataType));
+            AddEdge(graph, memberId, TypeId(deviceName, dataType), SemanticRelationshipType.HasType);
         }
 
         var directSections = member
@@ -516,7 +517,7 @@ public static class TiaXmlSemanticGraphImporter
         {
             foreach (var child in section.Elements().Where(element => element.Name.LocalName == "Member"))
             {
-                ImportDbMember(child, dbName, memberId, path, graph);
+                ImportDbMember(child, dbName, memberId, path, graph, deviceName);
             }
         }
     }
@@ -614,44 +615,52 @@ public static class TiaXmlSemanticGraphImporter
         return $"edge:{type}:{fromNodeId}->{toNodeId}{qualifier}";
     }
 
-    internal static string BlockId(string name)
+    internal static string BlockId(string deviceName, string name)
     {
-        return $"block:{name}";
+        var id = $"block:{name}";
+        return string.IsNullOrEmpty(deviceName) ? id : $"{deviceName}/{id}";
     }
 
-    private static string SymbolId(string name)
+    private static string SymbolId(string deviceName, string name)
     {
-        return $"symbol:{name}";
+        var id = $"symbol:{name}";
+        return string.IsNullOrEmpty(deviceName) ? id : $"{deviceName}/{id}";
     }
 
-    internal static string DbId(string name)
+    internal static string DbId(string deviceName, string name)
     {
-        return $"db:{name}";
+        var id = $"db:{name}";
+        return string.IsNullOrEmpty(deviceName) ? id : $"{deviceName}/{id}";
     }
 
-    internal static string UdtId(string name)
+    internal static string UdtId(string deviceName, string name)
     {
-        return $"udt:{name}";
+        var id = $"udt:{name}";
+        return string.IsNullOrEmpty(deviceName) ? id : $"{deviceName}/{id}";
     }
 
-    private static string UdtMemberId(string udtName, string path)
+    private static string UdtMemberId(string deviceName, string udtName, string path)
     {
-        return $"udt-member:{udtName}:{path}";
+        var id = $"udt-member:{udtName}:{path}";
+        return string.IsNullOrEmpty(deviceName) ? id : $"{deviceName}/{id}";
     }
 
-    private static string IoAddressId(string address)
+    private static string IoAddressId(string deviceName, string address)
     {
-        return $"io:{address}";
+        var id = $"io:{address}";
+        return string.IsNullOrEmpty(deviceName) ? id : $"{deviceName}/{id}";
     }
 
-    private static string DbMemberId(string dbName, string path)
+    private static string DbMemberId(string deviceName, string dbName, string path)
     {
-        return $"db-member:{dbName}:{path}";
+        var id = $"db-member:{dbName}:{path}";
+        return string.IsNullOrEmpty(deviceName) ? id : $"{deviceName}/{id}";
     }
 
-    private static string TypeId(string name)
+    private static string TypeId(string deviceName, string name)
     {
-        return $"type:{name}";
+        var id = $"type:{name}";
+        return string.IsNullOrEmpty(deviceName) ? id : $"{deviceName}/{id}";
     }
 
     private static string GetBlockNodeKind(string blockKind)

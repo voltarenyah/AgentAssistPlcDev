@@ -6,18 +6,11 @@
     "timeout": 300000
   },
   {
-    "tool": "sync_export",
+    "tool": "get_context_status",
     "args": {
-      "outputDir": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\sync-e2e"
+      "outputDir": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo"
     },
-    "timeout": 240000
-  },
-  {
-    "tool": "sync_export",
-    "args": {
-      "outputDir": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\sync-e2e"
-    },
-    "timeout": 240000
+    "timeout": 120000
   },
   {
     "tool": "sync_export",
@@ -25,6 +18,20 @@
       "outputDir": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo"
     },
     "timeout": 240000
+  },
+  {
+    "tool": "get_context_status",
+    "args": {
+      "outputDir": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo"
+    },
+    "timeout": 120000
+  },
+  {
+    "tool": "compare_context",
+    "args": {
+      "outputDir": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\exported\\TestPLCExportDemo"
+    },
+    "timeout": 120000
   },
   { "tool": "disconnect" }
 ]
