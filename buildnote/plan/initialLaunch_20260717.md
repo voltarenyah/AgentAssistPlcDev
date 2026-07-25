@@ -1,5 +1,84 @@
 # PLC AI Assistant — Phased Build Plan (MCP architecture)
 
+## Current progress review — 2026-07-25
+
+This section is the current status overlay for the original launch plan below. The phase
+descriptions remain as historical scope and exit criteria; where they disagree with this section,
+this section and `agent.md` describe the repository as it exists now.
+
+### Executive status
+
+| Area | Status | Evidence / remaining work |
+|---|---|---|
+| Phase 0 — scaffold and spikes | **Done** | Completed 2026-07-17. |
+| Phase 1 — engineering MCP | **Done and expanded** | The server now has 20 tools, including multi-PLC export, tag/UDT export, incremental `sync_export`, forced `rebuild_export`, context status/compare, session close, and opening a block in TIA. Real-TIA E2E evidence remains documented in the phase-specific notes/scripts. |
+| Phase 2.1–2.3 — knowledge | **Done and expanded** | SQLite graph ingest, tags/UDTs, semantic references, LAD/FBD logic translation, and `get_block`/`get_network`/`search` are implemented. |
+| Phase 2.4 — source editor | **Not started** | There is no `src/Mcp.SourceEditor` project and no `src_*` tool surface. Comment-safe XML editing, diff, and validation remain a blocker for the original comment-application MVP. |
+| Phase 2.5 — version control MCP | **Implemented** | `src/Mcp.VersionControl` provides init/status/add/commit/log/diff/snapshot/restore/branches/checkout/config, with 19 passing tests. Integration exists in the API host and Git panel. The mandatory snapshot-before-import orchestration is not yet implemented because the source-edit/apply workflow does not exist. |
+| Phase 2.6 — agent/chat | **Chat/Q&A slice implemented** | Streaming DeepSeek client, thinking/reasoning settings, MCP tool routing, sandbox confirmation/audit, session export, and persistent per-project chat sessions exist. Comment generation and the `llm_runs` database audit table remain open. |
+| Phase 2.7 — application UI | **Read/context/chat/version-control workbench implemented; technology changed** | The WPF app was removed. The current app is `studio/` (React + Vite) served/proxied by `src/ApiHost` (ASP.NET Core). It supports project/session management, TIA attach/open, multi-PLC selection, context sync/rebuild/compare, block/source/graph views, chat, raw tool access, and Git operations. The Generate → review → apply comment workflow and dry-run XML edit flow remain open. |
+| Phase 2 exit criteria | **Not met** | No source editor or comment workflow; therefore no verified generate/snapshot/validate/import/re-export chain, no applied generated comments, and no `llm_runs` audit trail. |
+| Phase 3 — understanding/Q&A | **Partially delivered early** | Grounded chat, semantic graph browsing, block/network helpers, persistent sessions, and program source views exist. A formal real-project Q&A evaluation/cross-reference acceptance test is not documented as complete. |
+| Phase 4 — modification/generation | **Not started** | Depends on the source editor and approval/apply workflow. |
+| Phase 5 — simulation | **Not started** | There is no `src/Mcp.Simulation` project. |
+| Phase 6 — version-control depth | **Partially delivered early** | Repository status, staging, commits, log/diff, restore, branches, and checkout are exposed in the current UI/API. The phase exit criterion—complete in-app history browsing/diffing validated end-to-end—is not yet recorded as met. |
+| Phase 7 — platform expansion/hardening | **Not started as a phase** | Some hardening landed early (sandbox, path jail, audit, whitelist registration, launch script), but Rockwell/TIA-version adapters, installer, and first-run health wizard remain open. |
+
+### Current architecture and implemented surfaces
+
+The approved WPF direction was superseded by the 2026-07-25 web workbench implementation:
+
+```
+studio/                     React 19 + Vite 8 + TypeScript UI
+src/ApiHost/                net8 ASP.NET Core API, static host, SSE/log/chat bridge
+src/Agent/                  net8 MCP host, DeepSeek agent loop, sandbox, sessions/workflows
+src/Mcp.Engineering/        net48 TIA V17 Openness server
+src/Mcp.Knowledge/          net8 SQLite knowledge server
+src/Mcp.VersionControl/     net8 LibGit2Sharp server
+src/Contracts/              netstandard2.0 shared contracts and sandbox policy
+```
+
+Implemented MCP tools as reviewed from the source:
+
+- Engineering (20): `check_environment`, `list_sessions`, `connect`, `disconnect`,
+  `close_session`, `save_project`, `get_project_info`, `list_blocks`, `export_block`,
+  `export_all_blocks`, `export_tag_tables`, `export_udts`, `sync_export`, `rebuild_export`,
+  `get_context_status`, `compare_context`, `import_block`, `compile_block`, `compile_plc`,
+  `open_block_in_editor`.
+- Knowledge (6): `get_schema`, `ingest_source`, `query`, `get_block`, `get_network`, `search`.
+- Version control (11): `vc_init`, `vc_status`, `vc_add`, `vc_commit`, `vc_log`, `vc_diff`,
+  `vc_snapshot`, `vc_restore`, `vc_branches`, `vc_checkout`, `vc_config`.
+
+Safety is now enforced through shared tool tiers, path jailing, destructive-call confirmation and
+budgets, and JSONL audit logs. Incremental context refresh uses project/PLC checksums, TIA
+fingerprints, and content hashes; the UI exposes check → confirm → sync, forced rebuild, and
+per-file comparison. Export storage and chat sessions are project-scoped and support multiple PLCs.
+
+### Verification snapshot — 2026-07-25
+
+- `dotnet test AgentAssistPlcDev.sln --no-restore`: **not green** — 229 passed, 1 failed.
+  The failure is
+  `Mcp.Knowledge.Tests.ManifestImportTests.MalformedManifestReturnsManifestInvalid`
+  (`Expected: True`, `Actual: False`). The run also reported nullable/analyzer warnings.
+- `studio/npm run build`: **not green** — TypeScript compilation fails. Current errors include
+  a Sonner toast type mismatch, missing `vitest` modules/types for component tests, unused symbols,
+  a missing `BlockInfo.language` property, and nullable chat content passed to a non-null string.
+  Because the build failed, lint was not reached in the combined verification command.
+- The test run compiled all .NET source/test projects before executing tests, including the net48
+  engineering project. This does not replace real TIA/Openness E2E verification.
+
+### Recommended next milestone
+
+1. Restore a green baseline: fix the malformed-manifest regression and the Studio TypeScript build,
+   then run .NET tests, Studio build, and Studio lint independently.
+2. Implement `Mcp.SourceEditor` with fixture-backed round-trip tests for parse, comment-only edit,
+   diff, and validation.
+3. Implement the original safe comment workflow:
+   generate strict structured comments → review/approve → `vc_snapshot` → edit →
+   `src_validate` → import → re-export/logic comparison → compile.
+4. Add `llm_runs` audit persistence and execute the Phase 2 exit test against a real TIA V17
+   project before marking Phase 2 complete.
+
 ## Goal
 
 Windows desktop app that assists PLC programming work, initially Siemens TIA Portal V17:
@@ -9,7 +88,8 @@ Windows desktop app that assists PLC programming work, initially Siemens TIA Por
 3. **DeepSeek cloud API** for program understanding, suggestions, and source modification
 4. Test modified logic against **PLCSIM Advanced** (installed)
 5. Version control for program source files (git)
-6. One WPF UI combining all of the above
+6. One desktop-oriented local UI combining all of the above (currently React/Vite + ASP.NET Core;
+   the original WPF shell was superseded)
 
 **MVP (Phase 1):** `mcp-engineering` complete — all TIA Openness operations (connect/disconnect, export/import, compile) accessible as MCP tools, verified standalone via MCP Inspector, ready for downstream consumers.
 
@@ -17,7 +97,9 @@ Windows desktop app that assists PLC programming work, initially Siemens TIA Por
 
 ## Confirmed decisions
 
-- **Language:** C# everywhere. WPF for the UI shell. DeepSeek cloud API (`https://api.deepseek.com`, OpenAI-compatible).
+- **Language:** C# for services/MCP servers and TypeScript/React for the current UI. The original
+  WPF shell was replaced by a React/Vite workbench plus ASP.NET Core API host. DeepSeek cloud API
+  (`https://api.deepseek.com`, OpenAI-compatible).
 - **MCP SDK:** official C# SDK (`ModelContextProtocol` NuGet), **stdio transport** — the UI spawns each MCP server as a child process; servers are also usable standalone from any MCP client (Inspector, Claude Code, etc.).
 - **Framework split (hard constraint):** Siemens API assemblies require .NET Framework 4.8 → `mcp-engineering` and `mcp-simulation` target **net48**; all other components target **net8** (better SDK/async support). `Contracts` is netstandard2.0 so both sides share it.
 - **Location:** `C:\Users\Ansel\orca\projects\AgentAssistPlcDev` (project folder already created by the user; this plan is saved there as `buildnote/plan/initialLaunch_20260717.md`).
@@ -43,8 +125,9 @@ C:\Users\Ansel\orca\projects\AgentAssistPlcDev\
 │   ├── Mcp.VersionControl/  net8  — MCP server: git for source folders (LibGit2Sharp)
 │   ├── Agent/               net8  — DeepSeek client + MCP client host + tool-routing
 │   │                              agent loop + prompt templates + token/run logging
-│   └── App/                 net8-windows WPF — UI shell (CommunityToolkit.Mvvm);
-│                                  spawns/attaches MCP servers, hosts chat + review panes
+│   └── ApiHost/             net8 ASP.NET Core — spawns MCP servers, exposes the local API,
+│                                  hosts the production React build
+├── studio/                  React + Vite + TypeScript workbench
 └── tests/                         unit tests + sample TIA V17 XML fixtures
 ```
 
