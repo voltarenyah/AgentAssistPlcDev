@@ -487,3 +487,4 @@ $RECYCLE.BIN/
 config.json
 *.db
 exported/
+.worktrees/
