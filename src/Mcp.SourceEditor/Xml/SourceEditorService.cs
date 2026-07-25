@@ -371,9 +371,13 @@ public sealed class SourceEditorService
         {
             var clone = new XElement(item);
             clone.SetAttributeValue("ID", "__NEW_ID__");
-            var attributes = Child(clone, "AttributeList");
-            SetValue(attributes, "Culture", "__CULTURE__");
-            SetValue(attributes, "Text", "__EDITABLE_TEXT__");
+            var attributes = clone.Elements().FirstOrDefault(x => x.Name.LocalName == "AttributeList");
+            var culture = attributes?.Elements().FirstOrDefault(x => x.Name.LocalName == "Culture");
+            var text = attributes?.Elements().FirstOrDefault(x => x.Name.LocalName == "Text");
+            if (attributes == null || culture == null || text == null)
+                return "__INVALID_ITEM__|" + clone.ToString(SaveOptions.DisableFormatting);
+            culture.Value = "__CULTURE__";
+            text.Value = "__EDITABLE_TEXT__";
             return clone.ToString(SaveOptions.DisableFormatting);
         }
 
@@ -419,7 +423,8 @@ public sealed class SourceEditorService
         {
             var clone = new XElement(composition);
             clone.SetAttributeValue("ID", "__NEW_ID__");
-            clone.Descendants().First(x => x.Name.LocalName == "ObjectList").RemoveNodes();
+            clone.Descendants().First(x => x.Name.LocalName == "ObjectList").Elements()
+                .Where(x => x.Name.LocalName == "MultilingualTextItem").Remove();
             return clone.ToString(SaveOptions.DisableFormatting);
         }
 

@@ -33,7 +33,7 @@ Fresh SourceEditor test run:
 
 ```text
 dotnet test tests\Mcp.SourceEditor.Tests\Mcp.SourceEditor.Tests.csproj
-Passed: 15, Failed: 0
+Passed: 16, Failed: 0
 ```
 
 Fresh solution build:
@@ -46,7 +46,7 @@ Build succeeded: 0 errors, 4 pre-existing warnings
 Fresh full test run:
 
 ```text
-SourceEditor:      15 passed, 0 failed
+SourceEditor:      16 passed, 0 failed
 Contracts:         51 passed, 0 failed
 Agent:             57 passed, 0 failed
 VersionControl:    19 passed, 0 failed

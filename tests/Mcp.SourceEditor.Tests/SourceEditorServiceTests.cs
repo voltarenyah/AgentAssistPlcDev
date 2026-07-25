@@ -235,6 +235,34 @@ public sealed class SourceEditorServiceTests : IDisposable
         Assert.False(service.Validate(changed, source).IsValid);
     }
 
+    [Fact]
+    public void Validate_RejectsExtraNodesInsideNewComposition()
+    {
+        var source = CopyFixture("Main [OB1].xml");
+        var document = XDocument.Load(source, LoadOptions.PreserveWhitespace);
+        var firstUnit = document.Descendants().First(x => x.Name.LocalName == "SW.Blocks.CompileUnit");
+        firstUnit.Elements().First(x => x.Name.LocalName == "ObjectList").Elements()
+            .First(x => x.Name.LocalName == "MultilingualText"
+                && (string?)x.Attribute("CompositionName") == "Comment").Remove();
+        document.Save(source, SaveOptions.DisableFormatting);
+        var parsed = service.Parse(source);
+        var preview = service.Preview(source, new[]
+        {
+            new SourceEdit(SourceEditOperation.SetNetworkComment,
+                new EditTarget(parsed.Networks[0].XmlId), "en-US", "Created")
+        }, null, false);
+        var changed = Path.Combine(root, "extra-node.xml");
+        var candidate = XDocument.Load(preview.OutputFilePath, LoadOptions.PreserveWhitespace);
+        var newComposition = candidate.Descendants().First(x => x.Name.LocalName == "SW.Blocks.CompileUnit")
+            .Descendants().First(x => x.Name.LocalName == "MultilingualText"
+                && (string?)x.Attribute("CompositionName") == "Comment");
+        newComposition.Elements().First(x => x.Name.LocalName == "ObjectList")
+            .Add(new XElement("UnauthorizedReference", new XAttribute("Target", "logic")));
+        candidate.Save(changed, SaveOptions.DisableFormatting);
+
+        Assert.False(service.Validate(changed, source).IsValid);
+    }
+
     private string CopyFixture(string name)
     {
         var source = Path.Combine(AppContext.BaseDirectory, "Fixtures", name);
