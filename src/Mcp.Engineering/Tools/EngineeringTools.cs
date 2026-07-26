@@ -134,14 +134,16 @@ public sealed class EngineeringTools
     [Description("Import a modified block XML back into the project (DESTRUCTIVE: overwrites the block). Caller must validate the XML and snapshot the working folder first.")]
     public CallToolResult ImportBlock(
         [Description("Block name to overwrite.")] string blockName,
-        [Description("Path to the modified XML file.")] string xmlFilePath)
-        => Invoke("import_block", () => _adapter.ImportBlock(blockName, xmlFilePath), ("xmlFilePath", xmlFilePath));
+        [Description("Path to the modified XML file.")] string xmlFilePath,
+        [Description("PLC device name; optional for single-PLC projects and required when the project contains multiple PLCs.")] string? plcName = null)
+        => Invoke("import_block", () => _adapter.ImportBlock(blockName, xmlFilePath, plcName), ("xmlFilePath", xmlFilePath));
 
     [McpServerTool(Name = "compile_block")]
     [Description("Compile the PLC software and report messages for the named block (write: mutates project compile state). V17 has no per-block compile — this is compile_plc + per-block filtering.")]
     public CallToolResult CompileBlock(
-        [Description("Block name to report on.")] string blockName)
-        => Invoke("compile_block", () => _adapter.CompileBlock(blockName));
+        [Description("Block name to report on.")] string blockName,
+        [Description("PLC device name; optional for single-PLC projects and required when the project contains multiple PLCs.")] string? plcName = null)
+        => Invoke("compile_block", () => _adapter.CompileBlock(blockName, plcName));
 
     [McpServerTool(Name = "compile_plc")]
     [Description("Compile the whole PLC software, returning all messages (write: mutates project compile state).")]

@@ -103,7 +103,7 @@ Each tool is registered with `readOnlyHint` or `destructiveHint`, emits structur
 | `list_blocks` | read | `{ plcName?: string }` | `BlockInfo[]` | Enumerate all blocks (OB/FB/FC/DB) incl. nested block groups; needed to discover names for export/import |
 | `export_block` | read | `{ blockName: string, outputDir: string }` | `ExportResult` | Export single block to XML in outputDir |
 | `export_all_blocks` | read | `{ outputDir: string }` | `ExportResult[]` | Export all PLC blocks; returns array of results |
-| `import_block` | destructive | `{ blockName: string, xmlFilePath: string, comment?: string }` | `ImportResult` | Import modified XML; see §6.1 for safety guarantees |
+| `import_block` | destructive | `{ blockName: string, xmlFilePath: string, plcName?: string }` | `ImportResult` | Import modified XML into the selected PLC; `plcName` is required for multi-PLC projects. See §6.1 for safety guarantees |
 
 `export_selection` and `import_all` are deferred past Phase 1 (see §1.1).
 
@@ -111,7 +111,7 @@ Each tool is registered with `readOnlyHint` or `destructiveHint`, emits structur
 
 | Tool | Hint | Input | Output | Notes |
 |------|------|-------|--------|-------|
-| `compile_block` | write | `{ blockName: string }` | `CompileResult` | Implemented as full-software compile + per-block message filtering (§7.1) |
+| `compile_block` | write | `{ blockName: string, plcName?: string }` | `CompileResult` | Compile the selected PLC software and filter messages to the named block; `plcName` is required for multi-PLC projects (§7.1) |
 | `compile_plc` | write | — | `CompileResult` | Full `PLCSoftware` compile |
 
 compile_hardware and get_compile_state deferred past Phase 1 (see §1.1).
@@ -618,7 +618,7 @@ The `check_environment` tool uses this to report which versions are available an
 Every import, compile, and modification operation must be wrapped in TIA's exclusive access / transaction pattern. **This is not optional** — operations outside a transaction can corrupt the project.
 
 ```csharp
-public ImportResult ImportBlock(string blockName, string xmlFilePath)
+public ImportResult ImportBlock(string blockName, string xmlFilePath, string? plcName = null)
 {
     // 1. Acquire exclusive access (prevents other Openness instances from interfering)
     using var exclusiveAccess = tiaPortal.ExclusiveAccess("Block import");
@@ -805,9 +805,9 @@ public interface IEngineeringPlatform : IDisposable
     BlockInfo[] ListBlocks(string plcName = null);
     ExportResult ExportBlock(string blockName, string outputDir);
     ExportResult[] ExportAllBlocks(string outputDir);
-    ImportResult ImportBlock(string blockName, string xmlFilePath);
+    ImportResult ImportBlock(string blockName, string xmlFilePath, string? plcName = null);
 
-    CompileResult CompileBlock(string blockName);
+    CompileResult CompileBlock(string blockName, string? plcName = null);
     CompileResult CompilePlcSoftware();
 
     ProjectInfo GetProjectInfo();

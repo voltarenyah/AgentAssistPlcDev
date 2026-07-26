@@ -1125,14 +1125,14 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         return new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
     }
 
-    public ImportResult ImportBlock(string blockName, string xmlFilePath)
+    public ImportResult ImportBlock(string blockName, string xmlFilePath, string? plcName = null)
     {
         lock (_gate)
         {
             if (!File.Exists(xmlFilePath))
                 throw new AdapterException("XML_NOT_FOUND", $"XML file not found: {xmlFilePath}");
 
-            var plc = PlcSoftwareResolver.Resolve(RequireProject(), null);
+            var plc = PlcSoftwareResolver.Resolve(RequireProject(), plcName);
             var targetGroup = ResolveImportGroup(plc, blockName);
 
             IList<PlcBlock> imported;
@@ -1220,11 +1220,11 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     /// <summary>Strips export-volatile metadata before comparison (§6.1 item 5).</summary>
     private static string NormalizeForCompare(string xml) => XmlCompare.Normalize(xml);
 
-    public CompileResult CompileBlock(string blockName)
+    public CompileResult CompileBlock(string blockName, string? plcName = null)
     {
         lock (_gate)
         {
-            var plc = PlcSoftwareResolver.Resolve(RequireProject(), null);
+            var plc = PlcSoftwareResolver.Resolve(RequireProject(), plcName);
             BlockEnumerator.Find(plc.BlockGroup, blockName); // throws BLOCK_NOT_FOUND if absent
 
             // V17 has no per-block compile (verified): compile the software, filter messages (§7.1).

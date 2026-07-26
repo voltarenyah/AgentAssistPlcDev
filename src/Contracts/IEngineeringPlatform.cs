@@ -49,9 +49,11 @@ public interface IEngineeringPlatform : IDisposable
     /// <summary>Read-only per-component diff (buildnote/plan/export-sync.md §Compare): live
     /// fingerprints/timestamps vs the stored manifest — the Compare tab's data source.</summary>
     ContextCompareResult[] CompareContext(string outputDir, string? plcName);
-    ImportResult ImportBlock(string blockName, string xmlFilePath);
+    /// <summary>Import a block into the selected PLC. The PLC name may be omitted only when the
+    /// project contains a single PLC.</summary>
+    ImportResult ImportBlock(string blockName, string xmlFilePath, string? plcName = null);
 
-    CompileResult CompileBlock(string blockName);
+    CompileResult CompileBlock(string blockName, string? plcName = null);
     CompileResult CompilePlc();
 
     /// <summary>Open a block in the TIA Portal editor window. Requires a UI-connected session.</summary>
