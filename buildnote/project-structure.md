@@ -25,9 +25,14 @@ absolute custom root. Persisted IDs, not display names, connect each metadata le
 Registered relative paths are containment checked and existing reparse points are
 rejected.
 
+Custom roots are added to a host-owned trusted-root registry only after their
+persisted workbench identity is loaded or created through `WorkbenchCatalog`. The
+registry path is passed to engineering/source-editor child processes at startup.
+Neither MCP tool arguments nor model output can register a root. Registry reads
+discard malformed, missing, and reparse-point entries.
+
 Every linked worktree is a complete editable checkout. The bare repository is shared
 storage, so commits made in one worktree are visible from every other worktree and can
 be merged into `master`.
 
 There is intentionally no migration from `%LOCALAPPDATA%\PlcAiAssistant\exports`.
-

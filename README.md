@@ -42,6 +42,12 @@ database once after a batch of edits and before relying on it again.
 Existing `%LOCALAPPDATA%\PlcAiAssistant\exports` directories are legacy data. New
 workbenches do not migrate, list, modify, or delete them.
 
+For a user-selected custom root, the trusted host validates persisted workbench
+metadata and registers the canonical, non-reparse root in
+`%APPDATA%\AutomationWorkbench\trusted-workbench-roots.json`. Engineering and source
+editor child processes receive only the host-owned registry location; tool arguments
+cannot grant themselves a new filesystem root. Unregistered and reparse-point roots
+remain sandbox-denied.
+
 The current implementation is backend-only. See the
 [future UI plan](buildnote/plan/workbench-project-storage-future-ui.md).
-

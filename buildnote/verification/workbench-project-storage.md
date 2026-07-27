@@ -17,6 +17,10 @@ claimed. `tests/E2E.Tests` supersedes it because the coordinator approval and se
 boundaries plus mocked TIA behavior cannot be represented safely by the existing
 standalone stdio-server scenario runner.
 
+Sandbox integration tests additionally verify that a catalog-backed custom root is
+usable after trusted host registration, while an arbitrary unregistered root and a
+root containing a reparse point remain denied.
+
 ## Live TIA Portal V17 status
 
 **Pending — TIA Portal V17 and a live two-device project were unavailable in this

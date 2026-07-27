@@ -14,3 +14,4 @@
 
 旧的 `%LOCALAPPDATA%\PlcAiAssistant\exports` 不迁移、不修改，也不会作为新工作台列出。当前范围仅包含后端；未来 UI 工作见 [UI 计划](buildnote/plan/workbench-project-storage-future-ui.md)。
 
+用户选择自定义根目录时，可信后端会校验持久化的 workbench 元数据，并把规范化且不经过 reparse point 的根目录登记到 `%APPDATA%\AutomationWorkbench\trusted-workbench-roots.json`。Engineering 与 Source Editor 子进程只接收该可信登记文件的位置；普通工具参数不能自行扩大允许目录。未登记目录和 reparse point 仍会被 sandbox 拒绝。
