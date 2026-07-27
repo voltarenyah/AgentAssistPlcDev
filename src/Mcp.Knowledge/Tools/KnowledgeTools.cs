@@ -41,11 +41,29 @@ public sealed class KnowledgeTools
     });
 
     [McpServerTool(Name = "ingest_source")]
-    [Description("Crawl a folder of TIA Openness XML exports, build the PLC property graph and write it as a SQLite knowledge base (write: full rebuild of dbPath; duplicates and unsupported files are skipped with warnings).")]
+    [Description("Build one device SQLite knowledge database from exported-source plus an optional sparse modified-source overlay (write: full rebuild of dbPath). The legacy exportRoot argument remains accepted.")]
     public CallToolResult IngestSource(
-        [Description("Export folder filled by mcp-engineering export_block / export_all_blocks.")] string exportRoot,
-        [Description("SQLite output path. Default: <exportRoot>/plc-knowledge.db.")] string? dbPath = null)
-        => Invoke(() => Ingest(exportRoot, dbPath));
+        [Description("Authoritative exported-source folder.")] string? exportedSourceRoot = null,
+        [Description("Device SQLite output path. Default: <exportedSourceRoot>/plc-knowledge.db.")] string? dbPath = null,
+        [Description("Optional sparse modified-source overlay folder.")] string? modifiedSourceRoot = null,
+        [Description("Deprecated alias for exportedSourceRoot retained for existing callers.")] string? exportRoot = null)
+        => Invoke(() => Ingest(
+            ResolveExportedSourceRoot(exportedSourceRoot, exportRoot),
+            dbPath,
+            modifiedSourceRoot));
+
+    [McpServerTool(Name = "update_components")]
+    [Description("Transactionally replace selected components in one device SQLite knowledge database from modified-source overlays (write).")]
+    public CallToolResult UpdateComponents(
+        [Description("Authoritative exported-source folder containing metadata.json.")] string exportedSourceRoot,
+        [Description("Sparse modified-source overlay folder.")] string modifiedSourceRoot,
+        [Description("Existing device SQLite knowledge database path.")] string dbPath,
+        [Description("One or more component paths relative to the source roots.")] string[] relativePaths)
+        => Invoke(() => Update(
+            exportedSourceRoot,
+            modifiedSourceRoot,
+            dbPath,
+            relativePaths));
 
     [McpServerTool(Name = "query")]
     [Description("Run a single read-only SQL statement (SELECT / WITH / EXPLAIN) against a PLC knowledge base (read-only).")]
@@ -79,7 +97,10 @@ public sealed class KnowledgeTools
         [Description("Maximum matches to return (default 50, hard cap 200).")] int? maxRows = null)
         => Invoke(() => SearchGraph(dbPath, text, kind, maxRows));
 
-    private object Ingest(string exportRoot, string? dbPath)
+    private object Ingest(
+        string exportRoot,
+        string? dbPath,
+        string? modifiedSourceRoot)
     {
         if (string.IsNullOrWhiteSpace(exportRoot) || !Directory.Exists(exportRoot))
         {
@@ -90,9 +111,17 @@ public sealed class KnowledgeTools
         }
 
         var stopwatch = Stopwatch.StartNew();
-        var import = ExportFolderCrawler.Import(
-            exportRoot,
-            progress: message => _logger?.LogInformation("{IngestProgress}", message));
+        var import = string.IsNullOrWhiteSpace(modifiedSourceRoot)
+            ? ExportFolderCrawler.Import(
+                exportRoot,
+                progress: message => _logger?.LogInformation("{IngestProgress}", message))
+            : ToExportFolderResult(
+                EffectiveSourceImporter.Import(
+                    exportRoot,
+                    modifiedSourceRoot,
+                    progress: message => _logger?.LogInformation(
+                        "{IngestProgress}",
+                        message)));
         if (import.FilesImported == 0)
         {
             var details = import.Warnings.Count == 0
@@ -128,6 +157,191 @@ public sealed class KnowledgeTools
             Warnings = import.Warnings.ToList(),
             DurationMs = stopwatch.ElapsedMilliseconds,
         };
+    }
+
+    private static object Update(
+        string exportedSourceRoot,
+        string modifiedSourceRoot,
+        string dbPath,
+        string[] relativePaths)
+    {
+        if (relativePaths == null || relativePaths.Length == 0)
+        {
+            throw new KnowledgeToolException(
+                "COMPONENT_PATHS_REQUIRED",
+                "At least one component path is required.",
+                "Pass the modified-source relative paths that should be applied.");
+        }
+
+        if (string.IsNullOrWhiteSpace(exportedSourceRoot) ||
+            !Directory.Exists(exportedSourceRoot))
+        {
+            throw new KnowledgeToolException(
+                "EXPORT_ROOT_NOT_FOUND",
+                $"Exported source root '{exportedSourceRoot}' was not found.",
+                "Pass the device exported-source folder containing metadata.json.");
+        }
+
+        if (string.IsNullOrWhiteSpace(modifiedSourceRoot) ||
+            !Directory.Exists(modifiedSourceRoot))
+        {
+            throw new KnowledgeToolException(
+                "MODIFIED_ROOT_NOT_FOUND",
+                $"Modified source root '{modifiedSourceRoot}' was not found.",
+                "Pass the device modified-source folder.");
+        }
+
+        if (string.IsNullOrWhiteSpace(dbPath) || !File.Exists(dbPath))
+        {
+            throw new KnowledgeToolException(
+                "DB_NOT_FOUND",
+                $"Database '{dbPath}' was not found.",
+                "Run ingest_source first, or check the device dbPath.");
+        }
+
+        var normalizedPaths = new List<string>();
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in relativePaths)
+        {
+            string normalizedPath;
+            try
+            {
+                normalizedPath = EffectiveSourceImporter.NormalizeRelativePath(path);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new KnowledgeToolException(
+                    "COMPONENT_PATH_INVALID",
+                    ex.Message,
+                    "Pass paths relative to modifiedSourceRoot without '.' or '..' segments.");
+            }
+
+            if (seenPaths.Add(normalizedPath))
+            {
+                normalizedPaths.Add(normalizedPath);
+            }
+        }
+
+        var replacements = new List<(SemanticPlcGraph Graph, ComponentImport Component)>();
+        foreach (var relativePath in normalizedPaths)
+        {
+            var overlayPath = EffectiveSourceImporter.ResolvePath(
+                modifiedSourceRoot,
+                relativePath);
+            if (!File.Exists(overlayPath))
+            {
+                throw new KnowledgeToolException(
+                    "OVERLAY_COMPONENT_NOT_FOUND",
+                    $"Overlay component '{relativePath}' was not found under '{modifiedSourceRoot}'.",
+                    "Create the component under modified-source, or remove it from relativePaths.");
+            }
+
+            var imported = EffectiveSourceImporter.ImportComponent(
+                exportedSourceRoot,
+                modifiedSourceRoot,
+                relativePath);
+            replacements.Add((imported.Graph, imported.Components.Single()));
+        }
+
+        var stored = SqliteSemanticGraphStore.Load(dbPath).ComponentImports;
+        if (stored.Count == 0)
+        {
+            throw new ComponentProvenanceUnavailableException(
+                "The knowledge database has no component provenance. Rebuild it before updating selected components.");
+        }
+
+        foreach (var replacement in replacements)
+        {
+            var exactIdentity = stored.Where(component =>
+                string.Equals(
+                    component.ComponentKey,
+                    replacement.Component.ComponentKey,
+                    StringComparison.Ordinal) ||
+                string.Equals(
+                    component.RelativePath,
+                    replacement.Component.RelativePath,
+                    StringComparison.Ordinal)).ToArray();
+            if (exactIdentity.Length == 0)
+            {
+                throw new KnowledgeToolException(
+                    "COMPONENT_NOT_IN_DATABASE",
+                    $"Component '{replacement.Component.ComponentKey}' at '{replacement.Component.RelativePath}' is not present in the device database.",
+                    "Run ingest_source with exportedSourceRoot, modifiedSourceRoot, and dbPath to rebuild before applying partial updates.");
+            }
+
+            if (exactIdentity.Length != 1 ||
+                !string.Equals(
+                    exactIdentity[0].ComponentKey,
+                    replacement.Component.ComponentKey,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    exactIdentity[0].RelativePath,
+                    replacement.Component.RelativePath,
+                    StringComparison.Ordinal))
+            {
+                throw new ComponentIdentityMismatchException(
+                    $"Overlay component '{replacement.Component.ComponentKey}' at '{replacement.Component.RelativePath}' " +
+                    "does not match the component identity stored in the device database.");
+            }
+        }
+
+        foreach (var replacement in replacements)
+        {
+            ComponentProvenanceStore.Replace(
+                dbPath,
+                replacement.Graph,
+                replacement.Component);
+        }
+
+        var hashes = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var replacement in replacements)
+        {
+            hashes[replacement.Component.ComponentKey] =
+                replacement.Component.ContentHash;
+        }
+
+        return new KnowledgeUpdateResult(
+            dbPath,
+            replacements
+                .Select(replacement => replacement.Component.ComponentKey)
+                .ToArray(),
+            hashes,
+            Array.Empty<string>());
+    }
+
+    private static string ResolveExportedSourceRoot(
+        string? exportedSourceRoot,
+        string? legacyExportRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(exportedSourceRoot) &&
+            !string.IsNullOrWhiteSpace(legacyExportRoot) &&
+            !string.Equals(
+                Path.GetFullPath(exportedSourceRoot),
+                Path.GetFullPath(legacyExportRoot),
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            throw new KnowledgeToolException(
+                "EXPORT_ROOT_CONFLICT",
+                "exportedSourceRoot and legacy exportRoot identify different folders.",
+                "Pass only exportedSourceRoot, or pass the same folder to both arguments.");
+        }
+
+        return !string.IsNullOrWhiteSpace(exportedSourceRoot)
+            ? exportedSourceRoot
+            : legacyExportRoot ?? string.Empty;
+    }
+
+    private static ExportFolderImportResult ToExportFolderResult(
+        EffectiveSourceImportResult import)
+    {
+        return new ExportFolderImportResult(
+            import.Graph,
+            import.FilesFound,
+            import.FilesImported,
+            import.Warnings,
+            import.Source);
     }
 
     private static object RunQuery(string dbPath, string sql, int? maxRows)
@@ -537,6 +751,20 @@ public sealed class KnowledgeTools
                 "MANIFEST_INVALID",
                 ex.Message,
                 "Fix the manifest, or delete metadata.json to use the root-element folder crawl instead.");
+        }
+        catch (ComponentIdentityMismatchException ex)
+        {
+            return ToolJson.Fail(
+                ex.Code,
+                ex.Message,
+                "Keep the overlay XML name/type at the baseline path, or run a full ingest for a new component.");
+        }
+        catch (ComponentProvenanceUnavailableException ex)
+        {
+            return ToolJson.Fail(
+                ex.Code,
+                ex.Message,
+                "Run ingest_source to rebuild the device database before applying partial updates.");
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 5 or 6) // SQLITE_BUSY / SQLITE_LOCKED
         {

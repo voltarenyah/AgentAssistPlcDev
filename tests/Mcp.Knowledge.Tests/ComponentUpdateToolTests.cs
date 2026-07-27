@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Mcp.Knowledge.Graph;
 using Mcp.Knowledge.Import;
+using Mcp.Knowledge.Tools;
 using Microsoft.Data.Sqlite;
 using Xunit;
 
@@ -14,6 +16,196 @@ public sealed class ComponentUpdateToolTests
 {
     private const string MainPath = "Blocks/Main [OB1].xml";
     private const string CalleePath = "Blocks/FC_LAD_SimulateCylinder_Call [FC1].xml";
+
+    [Fact]
+    public void UpdateComponentsNormalizesDeduplicatesAndReturnsKeysAndHashes()
+    {
+        using var exported = new TempExportTree();
+        using var modified = new TempExportTree();
+        const string firstPath = "Blocks/A.xml";
+        const string secondPath = "Blocks/B.xml";
+        exported.AddText(firstPath, EmptyOb("A"));
+        exported.AddText(secondPath, EmptyOb("B"));
+        ManifestFixtures.Write(
+            exported,
+            ManifestFixtures.Component("A", "OB", firstPath, "Program blocks/A"),
+            ManifestFixtures.Component("B", "OB", secondPath, "Program blocks/B"));
+        var dbPath = Path.Combine(exported.Root, "knowledge.db");
+        ToolResults.OkJson(new KnowledgeTools().IngestSource(exported.Root, dbPath));
+        var beforeB = SqliteSemanticGraphStore.Load(dbPath).ComponentImports
+            .Single(component => component.RelativePath == secondPath)
+            .ContentHash;
+        var modifiedPath = modified.AddText(firstPath, ObWithNetwork("A", "modified"));
+        var expectedKey = ComponentKey("OB", "Program blocks/A");
+
+        var result = ToolResults.OkJson(new KnowledgeTools().UpdateComponents(
+            exported.Root,
+            modified.Root,
+            dbPath,
+            new[] { @"Blocks\A.xml", "./Blocks/A.xml" }));
+
+        Assert.Equal(dbPath, result.GetProperty("dbPath").GetString());
+        Assert.Equal(
+            new[] { expectedKey },
+            result.GetProperty("updatedComponents")
+                .EnumerateArray()
+                .Select(item => item.GetString())
+                .ToArray());
+        Assert.Equal(
+            Sha256(modifiedPath),
+            result.GetProperty("appliedHashes").GetProperty(expectedKey).GetString());
+        Assert.Equal(0, result.GetProperty("warnings").GetArrayLength());
+        var updated = SqliteSemanticGraphStore.Load(dbPath);
+        Assert.Contains(updated.Nodes, node =>
+            node.Id.StartsWith("network:A:", StringComparison.Ordinal));
+        Assert.Equal(
+            beforeB,
+            updated.ComponentImports
+                .Single(component => component.RelativePath == secondPath)
+                .ContentHash);
+    }
+
+    [Fact]
+    public void UpdateComponentsRejectsMissingOverlayBeforeChangingDatabase()
+    {
+        using var exported = new TempExportTree();
+        using var modified = new TempExportTree();
+        const string relativePath = "Blocks/A.xml";
+        exported.AddText(relativePath, EmptyOb("A"));
+        ManifestFixtures.Write(
+            exported,
+            ManifestFixtures.Component("A", "OB", relativePath, "Program blocks/A"));
+        var dbPath = Path.Combine(exported.Root, "knowledge.db");
+        ToolResults.OkJson(new KnowledgeTools().IngestSource(exported.Root, dbPath));
+        var before = DatabaseSnapshot(dbPath);
+
+        var error = ToolResults.ErrorJson(new KnowledgeTools().UpdateComponents(
+            exported.Root,
+            modified.Root,
+            dbPath,
+            new[] { relativePath }));
+
+        Assert.Equal("OVERLAY_COMPONENT_NOT_FOUND", error.GetProperty("code").GetString());
+        Assert.Equal(before, DatabaseSnapshot(dbPath));
+    }
+
+    [Fact]
+    public void UpdateComponentsPrevalidatesEveryIdentityBeforeChangingDatabase()
+    {
+        using var exported = new TempExportTree();
+        using var modified = new TempExportTree();
+        const string firstPath = "Blocks/A.xml";
+        const string secondPath = "Blocks/B.xml";
+        exported.AddText(firstPath, EmptyOb("A"));
+        exported.AddText(secondPath, EmptyOb("B"));
+        ManifestFixtures.Write(
+            exported,
+            ManifestFixtures.Component("A", "OB", firstPath, "Program blocks/A"),
+            ManifestFixtures.Component("B", "OB", secondPath, "Program blocks/B"));
+        var dbPath = Path.Combine(exported.Root, "knowledge.db");
+        ToolResults.OkJson(new KnowledgeTools().IngestSource(exported.Root, dbPath));
+        modified.AddText(firstPath, ObWithNetwork("A", "valid"));
+        modified.AddText(secondPath, EmptyOb("Different"));
+        var before = DatabaseSnapshot(dbPath);
+
+        var error = ToolResults.ErrorJson(new KnowledgeTools().UpdateComponents(
+            exported.Root,
+            modified.Root,
+            dbPath,
+            new[] { firstPath, secondPath }));
+
+        Assert.Equal("COMPONENT_IDENTITY_MISMATCH", error.GetProperty("code").GetString());
+        Assert.Equal(before, DatabaseSnapshot(dbPath));
+    }
+
+    [Fact]
+    public void UpdateComponentsRequiresFullRebuildForNewOverlayOnlyIdentity()
+    {
+        using var exported = new TempExportTree();
+        using var modified = new TempExportTree();
+        const string baselinePath = "Blocks/A.xml";
+        const string newPath = "Blocks/New.xml";
+        exported.AddText(baselinePath, EmptyOb("A"));
+        ManifestFixtures.Write(
+            exported,
+            ManifestFixtures.Component("A", "OB", baselinePath, "Program blocks/A"));
+        var dbPath = Path.Combine(exported.Root, "knowledge.db");
+        ToolResults.OkJson(new KnowledgeTools().IngestSource(exported.Root, dbPath));
+        modified.AddText(newPath, EmptyOb("New"));
+        var before = DatabaseSnapshot(dbPath);
+
+        var error = ToolResults.ErrorJson(new KnowledgeTools().UpdateComponents(
+            exported.Root,
+            modified.Root,
+            dbPath,
+            new[] { newPath }));
+
+        Assert.Equal("COMPONENT_NOT_IN_DATABASE", error.GetProperty("code").GetString());
+        Assert.Contains("ingest_source", error.GetProperty("remediation").GetString());
+        Assert.Equal(before, DatabaseSnapshot(dbPath));
+    }
+
+    [Fact]
+    public void UpdateComponentsReportsPreProvenanceDatabaseRequiresRebuild()
+    {
+        using var exported = new TempExportTree();
+        using var modified = new TempExportTree();
+        const string relativePath = "Blocks/A.xml";
+        exported.AddText(relativePath, EmptyOb("A"));
+        ManifestFixtures.Write(
+            exported,
+            ManifestFixtures.Component("A", "OB", relativePath, "Program blocks/A"));
+        modified.AddText(relativePath, EmptyOb("A"));
+        var dbPath = Path.Combine(exported.Root, "legacy.db");
+        CreateLegacyGraphDatabase(dbPath);
+
+        var error = ToolResults.ErrorJson(new KnowledgeTools().UpdateComponents(
+            exported.Root,
+            modified.Root,
+            dbPath,
+            new[] { relativePath }));
+
+        Assert.Equal(
+            "COMPONENT_PROVENANCE_REBUILD_REQUIRED",
+            error.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void IngestSourceRebuildsDeviceDatabaseFromBaselineAndOverlay()
+    {
+        using var exported = new TempExportTree();
+        using var modified = new TempExportTree();
+        const string relativePath = "Blocks/A.xml";
+        exported.AddText(relativePath, EmptyOb("A"));
+        ManifestFixtures.Write(
+            exported,
+            ManifestFixtures.Component("A", "OB", relativePath, "Program blocks/A"));
+        modified.AddText(relativePath, ObWithNetwork("A", "effective"));
+        var dbPath = Path.Combine(exported.Root, "device.db");
+
+        var result = ToolResults.OkJson(new KnowledgeTools().IngestSource(
+            exported.Root,
+            dbPath,
+            modified.Root));
+
+        Assert.Equal(dbPath, result.GetProperty("dbPath").GetString());
+        Assert.Equal("effective-manifest", result.GetProperty("source").GetString());
+        Assert.Contains(
+            SqliteSemanticGraphStore.Load(dbPath).Nodes,
+            node => node.Id.StartsWith("network:A:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UpdateComponentsRequiresAtLeastOnePath()
+    {
+        var error = ToolResults.ErrorJson(new KnowledgeTools().UpdateComponents(
+            "exported",
+            "modified",
+            "device.db",
+            Array.Empty<string>()));
+
+        Assert.Equal("COMPONENT_PATHS_REQUIRED", error.GetProperty("code").GetString());
+    }
 
     [Fact]
     public void FullSaveRecordsEachComponentsOwnedNodesAndEdges()
@@ -342,6 +534,43 @@ public sealed class ComponentUpdateToolTests
               </SW.Blocks.OB>
             </Document>
             """;
+    }
+
+    private static string ObWithNetwork(string name, string title)
+    {
+        return $$"""
+            <Document>
+              <SW.Blocks.OB ID="0">
+                <AttributeList>
+                  <Name>{{name}}</Name>
+                  <ProgrammingLanguage>LAD</ProgrammingLanguage>
+                </AttributeList>
+                <ObjectList>
+                  <SW.Blocks.CompileUnit ID="1" CompositionName="CompileUnits">
+                    <AttributeList>
+                      <NetworkSource><FlgNet /></NetworkSource>
+                      <ProgrammingLanguage>LAD</ProgrammingLanguage>
+                    </AttributeList>
+                    <ObjectList>
+                      <MultilingualText ID="2" CompositionName="Title">
+                        <ObjectList>
+                          <MultilingualTextItem ID="3" CompositionName="Items">
+                            <AttributeList><Text>{{title}}</Text></AttributeList>
+                          </MultilingualTextItem>
+                        </ObjectList>
+                      </MultilingualText>
+                    </ObjectList>
+                  </SW.Blocks.CompileUnit>
+                </ObjectList>
+              </SW.Blocks.OB>
+            </Document>
+            """;
+    }
+
+    private static string Sha256(string path)
+    {
+        return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
+            .ToLowerInvariant();
     }
 
     private static string EmptyTagTable(string name)

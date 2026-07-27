@@ -56,6 +56,7 @@ public sealed class SandboxPolicy
             ["import_block"] = SandboxTier.Destructive,
             // Knowledge — local SQLite graph only; no TIA side effects.
             ["ingest_source"] = SandboxTier.Read,
+            ["update_components"] = SandboxTier.Write,
             ["query"] = SandboxTier.Read,
             ["get_schema"] = SandboxTier.Read,
             ["get_block"] = SandboxTier.Read,
