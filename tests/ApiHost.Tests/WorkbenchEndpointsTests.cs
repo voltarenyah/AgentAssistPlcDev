@@ -177,6 +177,39 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public void KnowledgeAndSourceReadsAreBoundToSelectedDevice()
+    {
+        var context = Context();
+        Directory.CreateDirectory(context.ExportedSourceRoot);
+        var source = Path.Combine(context.ExportedSourceRoot, "A.xml");
+        File.WriteAllText(source, "<a/>");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var knowledge = binder.Bind("get_schema", new Dictionary<string, object?>(), context);
+        Assert.Equal(context.KnowledgeDbPath, knowledge["dbPath"]);
+        Assert.Throws<ArgumentException>(() => binder.Bind(
+            "search", new Dictionary<string, object?> { ["dbPath"] = Path.Combine(root, "other.db") }, context));
+        var parsed = binder.Bind("src_parse_block", new Dictionary<string, object?> { ["xmlFilePath"] = source }, context);
+        Assert.Equal(source, parsed["xmlFilePath"]);
+        Assert.Throws<ArgumentException>(() => binder.Bind(
+            "src_validate", new Dictionary<string, object?> { ["xmlFilePath"] = Path.Combine(root, "foreign.xml") }, context));
+    }
+
+    [Fact]
+    public async Task ExpiryActivelyDeniesWaitingConfirmation()
+    {
+        var pending = new PendingToolActions(TimeProvider.System, TimeSpan.FromMilliseconds(30));
+        var released = new TaskCompletionSource<ToolConfirmation>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pending.Add("context", "requester", (decision, _) =>
+        {
+            released.TrySetResult(decision);
+            return Task.FromResult<object?>(null);
+        });
+
+        Assert.Equal(ToolConfirmation.Deny, await released.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
     public async Task SelectionResolvesRegisteredDeviceAndUnknownApprovalIsConflict()
     {
         var store = new AtomicJsonStore();
@@ -214,6 +247,16 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             (await client.PostAsync($"/api/workbenches/{wb.WorkbenchId}/worktrees/{wtId}/devices/dev-1/select", null)).StatusCode);
         Assert.Equal(HttpStatusCode.OK,
             (await client.GetAsync("/api/devices/dev-1/sessions")).StatusCode);
+        var createdSessionResponse = await client.PostAsync("/api/chat/session/new", null);
+        createdSessionResponse.EnsureSuccessStatusCode();
+        var createdSession = await createdSessionResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var sessionId = createdSession.GetProperty("header").GetProperty("sessionId").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/chat/history")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/api/chat/clear", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync(
+            "/api/chat/session/delete", new { sessionId })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync(
+            "/api/chat/session/load", new { sessionId })).StatusCode);
         var conflict = await client.PostAsJsonAsync("/api/devices/dev-1/refresh/apply",
             new RefreshApplyApiRequest("unknown", []));
         Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);

@@ -24,10 +24,15 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
             Force(args, "outputDir", device.StagingRoot);
         if (tool is "get_context_status" or "compare_context")
             Force(args, "outputDir", device.ExportedSourceRoot);
-        if (tool is "ingest_source" or "update_components")
+        if (tool is "ingest_source" or "update_components" or "get_schema" or "query"
+            or "get_block" or "get_network" or "search"
+            || tool.StartsWith("query_", StringComparison.Ordinal))
         {
-            Force(args, "exportedSourceRoot", device.ExportedSourceRoot);
-            Force(args, "modifiedSourceRoot", device.ModifiedSourceRoot);
+            if (tool is "ingest_source" or "update_components")
+            {
+                Force(args, "exportedSourceRoot", device.ExportedSourceRoot);
+                Force(args, "modifiedSourceRoot", device.ModifiedSourceRoot);
+            }
             Force(args, "dbPath", device.KnowledgeDbPath);
         }
         if (tool.StartsWith("vc_", StringComparison.Ordinal)) Force(args, "repoPath", device.WorktreeRoot);
@@ -42,6 +47,19 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
             Force(args, "outputFilePath", output);
             args.Remove("relativePath");
         }
+        if (tool == "src_parse_block")
+            BindReadable(args, "xmlFilePath", device);
+        if (tool == "src_diff")
+        {
+            BindReadable(args, "originalFilePath", device);
+            BindReadable(args, "modifiedFilePath", device);
+        }
+        if (tool == "src_validate")
+        {
+            BindReadable(args, "xmlFilePath", device);
+            if (StringValue(args, "baselineFilePath") is not null)
+                BindReadable(args, "baselineFilePath", device);
+        }
         if (tool == "import_block")
         {
             var relative = StringValue(args, "relativePath")
@@ -53,6 +71,29 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
             args.Remove("relativePath");
         }
         return args;
+    }
+    private static void BindReadable(
+        IDictionary<string, object?> args,
+        string key,
+        DeviceContext device)
+    {
+        var path = StringValue(args, key)
+            ?? throw new ArgumentException($"{key} is required.");
+        foreach (var root in new[] { device.ModifiedSourceRoot, device.ExportedSourceRoot })
+        {
+            try
+            {
+                var relative = Path.GetRelativePath(root, Path.GetFullPath(path));
+                var safe = WorkbenchPaths.ResolveRelative(root, relative);
+                if (!relative.StartsWith("..", StringComparison.Ordinal))
+                {
+                    args[key] = safe;
+                    return;
+                }
+            }
+            catch (WorkbenchPathException) { }
+        }
+        throw new ArgumentException($"{key} must be inside the selected device source roots.");
     }
     private static string? RelativeUnder(string root, string? path)
     {
@@ -100,11 +141,19 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
 
 public sealed class PendingToolActions
 {
-    private sealed record Entry(
-        string ContextKey,
-        string Requester,
-        DateTimeOffset ExpiresAt,
-        Func<ToolConfirmation, CancellationToken, Task<object?>> Action);
+    private sealed class Entry(
+        string contextKey,
+        string requester,
+        DateTimeOffset expiresAt,
+        Func<ToolConfirmation, CancellationToken, Task<object?>> action,
+        CancellationTokenSource expiry)
+    {
+        public string ContextKey { get; } = contextKey;
+        public string Requester { get; } = requester;
+        public DateTimeOffset ExpiresAt { get; } = expiresAt;
+        public Func<ToolConfirmation, CancellationToken, Task<object?>> Action { get; } = action;
+        public CancellationTokenSource Expiry { get; } = expiry;
+    }
     private readonly ConcurrentDictionary<string, Entry> pending = new(StringComparer.Ordinal);
     private readonly TimeProvider timeProvider;
     private readonly TimeSpan lifetime;
@@ -120,9 +169,18 @@ public sealed class PendingToolActions
         Func<ToolConfirmation, CancellationToken, Task<object?>> action)
     {
         var id = Guid.NewGuid().ToString("N");
-        pending[id] = new(contextKey, requester, timeProvider.GetUtcNow() + lifetime, action);
+        var expiry = new CancellationTokenSource(lifetime, timeProvider);
+        var entry = new Entry(contextKey, requester, timeProvider.GetUtcNow() + lifetime, action, expiry);
+        pending[id] = entry;
+        expiry.Token.Register(() =>
+        {
+            if (pending.TryRemove(new(id, entry)))
+                _ = entry.Action(ToolConfirmation.Deny, CancellationToken.None);
+        });
         return id;
     }
+    public string? Requester(string id) =>
+        pending.TryGetValue(id, out var entry) ? entry.Requester : null;
     public async Task<object?> ResolveAsync(
         string id,
         ToolConfirmation decision,
@@ -133,12 +191,15 @@ public sealed class PendingToolActions
         if (entry.ExpiresAt <= timeProvider.GetUtcNow())
         {
             pending.TryRemove(new(id, entry));
+            entry.Expiry.Dispose();
             throw new KeyNotFoundException("CONFIRMATION_EXPIRED");
         }
         if (!string.Equals(entry.ContextKey, contextKey, StringComparison.Ordinal)
             || !string.Equals(entry.Requester, requester, StringComparison.Ordinal))
             throw new InvalidOperationException("CONFIRMATION_CONTEXT_MISMATCH");
         if (!pending.TryRemove(new(id, entry))) throw new KeyNotFoundException("CONFIRMATION_NOT_FOUND");
+        entry.Expiry.CancelAfter(Timeout.InfiniteTimeSpan);
+        entry.Expiry.Dispose();
         using var execution = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         return await entry.Action(decision, execution.Token);
     }

@@ -103,12 +103,12 @@ public static class CompatibilityEndpoints
         });
         app.MapGet("/api/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
 
-        app.MapPost("/api/tools/call", async (HttpContext http, CompatibilityToolCallRequest request, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
+        app.MapPost("/api/tools/call", async (CompatibilityToolCallRequest request, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
         {
             var device = Device(state);
-            return await executor.RequestAsync(request.Tool, request.Arguments ?? new(), device, Requester(http), ct);
+            return await executor.RequestAsync(request.Tool, request.Arguments ?? new(), device, "api", ct);
         });
-        app.MapPost("/api/chat/confirm/{id}", async (HttpContext http, string id, JsonElement body, WorkbenchApiState state, PendingToolActions pending) =>
+        app.MapPost("/api/chat/confirm/{id}", async (string id, JsonElement body, WorkbenchApiState state, PendingToolActions pending, ApiChatService chat) =>
         {
             var decision = body.TryGetProperty("decision", out var value) ? value.GetString() : null;
             var parsed = decision switch
@@ -118,14 +118,19 @@ public static class CompatibilityEndpoints
                 "allowSession" => ToolConfirmation.AllowOnce,
                 _ => ToolConfirmation.Deny,
             };
+            var device = Device(state);
+            var requester = pending.Requester(id) ?? throw new KeyNotFoundException("CONFIRMATION_NOT_FOUND");
+            if (requester != "api" && requester != chat.ActiveSessionId(device))
+                throw new InvalidOperationException("CONFIRMATION_CONTEXT_MISMATCH");
             return Results.Ok(await pending.ResolveAsync(
-                id, parsed, DeviceContextIdentity.Key(Device(state)), Requester(http)));
+                id, parsed, DeviceContextIdentity.Key(device), requester));
         });
         app.MapGet("/api/logs", (CompatibilityRuntimeState state) => state.Logs.ToArray());
-        app.MapGet("/api/chat/history", (CompatibilityRuntimeState state) => state.ChatHistory.ToArray());
-        app.MapPost("/api/chat/clear", (CompatibilityRuntimeState state) =>
+        app.MapGet("/api/chat/history", (WorkbenchApiState state, ApiChatService chat) =>
+            chat.History(Device(state)));
+        app.MapPost("/api/chat/clear", (WorkbenchApiState state, ApiChatService chat) =>
         {
-            state.ChatHistory.Clear();
+            chat.Clear(Device(state));
             return Results.NoContent();
         });
         app.MapPost("/api/chat", async (JsonElement body, WorkbenchApiState state, ApiChatService chat, CancellationToken ct) =>
@@ -161,10 +166,10 @@ public static class CompatibilityEndpoints
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
             return chat.LoadSession(Device(state), id) is { } session ? Results.Ok(session) : Results.NotFound();
         });
-        app.MapPost("/api/chat/session/delete", (JsonElement body, WorkbenchApiState state) =>
+        app.MapPost("/api/chat/session/delete", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
-            SessionManager.DeleteSession(Device(state), id);
+            chat.DeleteSession(Device(state), id);
             return Results.NoContent();
         });
         app.MapGet("/api/chat/session/info", (WorkbenchApiState state) => Results.Ok(new
@@ -234,17 +239,14 @@ public static class CompatibilityEndpoints
             await gateway.For("vc_add").CallAsync<JsonElement>("vc_add", new { repoPath = Device(state).WorktreeRoot, paths = body.Paths ?? [] }, ct));
         app.MapPost("/api/vc/commit", async (CompatibilityPathRequest body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_commit").CallAsync<JsonElement>("vc_commit", new { repoPath = Device(state).WorktreeRoot, message = body.Message }, ct));
-        app.MapPost("/api/vc/restore", async (HttpContext http, CompatibilityPathRequest body, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
-            await executor.RequestAsync("vc_restore", new Dictionary<string, object?> { ["filePath"] = body.FilePath }, Device(state), Requester(http), ct));
+        app.MapPost("/api/vc/restore", async (CompatibilityPathRequest body, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
+            await executor.RequestAsync("vc_restore", new Dictionary<string, object?> { ["filePath"] = body.FilePath }, Device(state), "api", ct));
         app.MapGet("/api/vc/branches", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_branches").CallAsync<JsonElement>("vc_branches", new { repoPath = Device(state).WorktreeRoot }, ct));
         app.MapPost("/api/vc/checkout", async (JsonElement body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_checkout").CallAsync<JsonElement>("vc_checkout", new { repoPath = Device(state).WorktreeRoot, branchName = body.GetProperty("branch").GetString() }, ct));
         return app;
 
-        static string Requester(HttpContext context) =>
-            context.Request.Headers.TryGetValue("X-Session-Id", out var value)
-                && !string.IsNullOrWhiteSpace(value) ? value.ToString() : "api";
     }
 
     private static void ApplyDevicePaths(string tool, IDictionary<string, object?> args, DeviceContext device)
@@ -271,6 +273,39 @@ internal sealed class ApiChatService(
     private sealed record ActiveChat(AgentLoop Loop, ChatSessionData Session);
     private readonly ConcurrentDictionary<string, ActiveChat> chats = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ChatSessionData> pendingSessions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> sessionRequired = new(StringComparer.Ordinal);
+
+    public string? ActiveSessionId(DeviceContext device) =>
+        chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
+            ? active.Session.Header.SessionId
+            : pendingSessions.TryGetValue(DeviceContextIdentity.Key(device), out var pending)
+                ? pending.Header.SessionId : null;
+    public IReadOnlyList<ChatMessage> History(DeviceContext device) =>
+        chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
+            ? active.Loop.History : Array.Empty<ChatMessage>();
+    public void Clear(DeviceContext device)
+    {
+        var key = DeviceContextIdentity.Key(device);
+        sessionRequired.TryRemove(key, out _);
+        if (!chats.TryGetValue(key, out var active)) return;
+        active.Loop.ClearHistory();
+        var cleared = active.Session with { Messages = [], RoundUsages = [] };
+        SessionManager.SaveSession(device, cleared);
+        chats[key] = active with { Session = cleared };
+    }
+    public void DeleteSession(DeviceContext device, string sessionId)
+    {
+        var key = DeviceContextIdentity.Key(device);
+        sessionRequired.TryRemove(key, out _);
+        if (chats.TryGetValue(key, out var active)
+            && active.Session.Header.SessionId == sessionId)
+            chats.TryRemove(key, out _);
+        if (pendingSessions.TryGetValue(key, out var pending)
+            && pending.Header.SessionId == sessionId)
+            pendingSessions.TryRemove(key, out _);
+        sessionRequired[key] = 0;
+        SessionManager.DeleteSession(device, sessionId);
+    }
 
     public ChatSessionData CreateSession(DeviceContext device)
     {
@@ -303,8 +338,13 @@ internal sealed class ApiChatService(
         var runtime = services.GetService<McpRuntime>()
             ?? throw new InvalidOperationException("CHAT_MCP_RUNTIME_UNAVAILABLE");
         var contextKey = DeviceContextIdentity.Key(device);
+        if (sessionRequired.ContainsKey(contextKey))
+            throw new InvalidOperationException("CHAT_SESSION_REQUIRED");
         if (!chats.TryGetValue(contextKey, out var active))
         {
+            var session = pendingSessions.TryRemove(contextKey, out var restored)
+                ? restored
+                : SessionManager.CreateNewSession(device, Settings(configuration), null);
             var discovered = await McpToolCatalog.BuildAsync(runtime.Host, token);
             var catalog = new McpToolCatalog(discovered.Tools.Select(spec => spec with
             {
@@ -314,7 +354,7 @@ internal sealed class ApiChatService(
             {
                 var completion = new TaskCompletionSource<ToolConfirmation>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
-                var confirmationRequester = $"chat:{contextKey}";
+                var confirmationRequester = session.Header.SessionId;
                 var id = pending.Add(contextKey, confirmationRequester, (decision, _) =>
                 {
                     completion.TrySetResult(decision);
@@ -340,10 +380,8 @@ internal sealed class ApiChatService(
                     $"Exported source: {device.ExportedSourceRoot}",
                     $"Modified source: {device.ModifiedSourceRoot}",
                     $"Knowledge DB: {device.KnowledgeDbPath}"),
-                sandbox: sandbox);
-            var session = pendingSessions.TryRemove(contextKey, out var restored)
-                ? restored
-                : SessionManager.CreateNewSession(device, loop.Settings, null);
+                Settings(configuration),
+                sandbox);
             if (restored is not null) loop.RestoreFrom(restored.Messages, restored.RoundUsages);
             active = new ActiveChat(loop, session);
             chats[contextKey] = active;
@@ -359,6 +397,15 @@ internal sealed class ApiChatService(
         chats[contextKey] = active with { Session = updated };
         return answer;
     }
+
+    private static ChatRequestSettings Settings(IConfiguration configuration) => new()
+    {
+        Model = configuration["chatSettings:model"] ?? configuration["deepSeekModel"] ?? "deepseek-v4-flash",
+        ThinkingEnabled = bool.TryParse(configuration["chatSettings:thinkingEnabled"] ?? configuration["deepSeekThinkingEnabled"], out var thinking) ? thinking : true,
+        ReasoningEffort = configuration["chatSettings:reasoningEffort"] ?? configuration["deepSeekReasoningEffort"] ?? "high",
+        Temperature = double.TryParse(configuration["chatSettings:temperature"] ?? configuration["deepSeekTemperature"], out var temperature) ? temperature : 1.0,
+        TopP = double.TryParse(configuration["chatSettings:topP"] ?? configuration["deepSeekTopP"], out var topP) ? topP : 1.0,
+    };
 
     private sealed class BoundMcpCaller(
         IMcpToolCaller inner,

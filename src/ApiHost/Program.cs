@@ -8,6 +8,11 @@ var legacyConfigPath = Path.Combine(
     "PlcAiAssistant", "config.json");
 // Read-only compatibility for existing server/API-key overrides; never used for workbench storage.
 builder.Configuration.AddJsonFile(legacyConfigPath, optional: true, reloadOnChange: false);
+var currentConfigPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+    "AutomationWorkbench", "config.json");
+// Current settings load after legacy compatibility so they take precedence.
+builder.Configuration.AddJsonFile(currentConfigPath, optional: true, reloadOnChange: false);
 builder.Services.AddCors();
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
