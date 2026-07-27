@@ -1,0 +1,226 @@
+namespace Agent.Workbench;
+
+public sealed class WorkbenchCatalogException : Exception
+{
+    public WorkbenchCatalogException(string code, string message)
+        : base(message)
+    {
+        Code = code;
+    }
+
+    public string Code { get; }
+}
+
+public sealed class WorkbenchCatalog
+{
+    private readonly AtomicJsonStore _store;
+    private readonly string _defaultRoot;
+
+    public WorkbenchCatalog()
+        : this(new AtomicJsonStore(), defaultRoot: null)
+    {
+    }
+
+    public WorkbenchCatalog(AtomicJsonStore store, string? defaultRoot = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+
+        _store = store;
+        _defaultRoot = Path.GetFullPath(
+            defaultRoot
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "AutomationWorkbench",
+                "Project"));
+    }
+
+    public WorkbenchMetadata Create(string name, string? requestedRoot)
+    {
+        var root = requestedRoot is null
+            ? ResolveDefaultWorkbenchRoot(name)
+            : WorkbenchPaths.ResolveWorkbench(name, requestedRoot);
+
+        if (File.Exists(root)
+            || (Directory.Exists(root) && Directory.EnumerateFileSystemEntries(root).Any()))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKBENCH_CONFLICT",
+                $"Workbench root '{root}' already exists and is not empty.");
+        }
+
+        var createdDirectories = new List<string>();
+        try
+        {
+            CreateDirectory(root, createdDirectories);
+            CreateDirectory(Path.Combine(root, "worktrees"), createdDirectories);
+
+            var metadata = new WorkbenchMetadata(
+                WorkbenchSchema.CurrentVersion,
+                Guid.NewGuid().ToString("N"),
+                name,
+                DateTimeOffset.UtcNow.ToString("O"),
+                root,
+                Path.Combine(root, "repository.git"),
+                null,
+                null,
+                Array.Empty<WorkbenchWorktreeRegistration>());
+
+            _store.Write(MetadataPath(root), metadata);
+            return metadata;
+        }
+        catch
+        {
+            RemoveEmptyCreatedDirectories(createdDirectories);
+            throw;
+        }
+    }
+
+    public WorkbenchMetadata Load(string workbenchRoot)
+    {
+        var root = WorkbenchPaths.ResolveWorkbench("workbench", workbenchRoot);
+        var metadataPath = MetadataPath(root);
+        if (!File.Exists(metadataPath))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKBENCH_NOT_FOUND",
+                $"Workbench metadata was not found at '{metadataPath}'.");
+        }
+
+        return _store.Read<WorkbenchMetadata>(metadataPath);
+    }
+
+    public IReadOnlyList<WorkbenchMetadata> ListDefaultRoot()
+    {
+        if (!Directory.Exists(_defaultRoot))
+        {
+            return Array.Empty<WorkbenchMetadata>();
+        }
+
+        return Directory.EnumerateDirectories(_defaultRoot)
+            .Where(directory => File.Exists(MetadataPath(directory)))
+            .Select(Load)
+            .OrderBy(workbench => workbench.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(workbench => workbench.WorkbenchId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    public WorkbenchMetadata RegisterWorktree(
+        WorkbenchMetadata workbench,
+        WorkbenchWorktreeRegistration registration)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        ArgumentNullException.ThrowIfNull(registration);
+
+        if (workbench.Worktrees.Any(existing =>
+                string.Equals(
+                    existing.WorktreeId,
+                    registration.WorktreeId,
+                    StringComparison.Ordinal)))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKTREE_CONFLICT",
+                $"Workbench '{workbench.WorkbenchId}' already contains worktree '{registration.WorktreeId}'.");
+        }
+
+        var updated = workbench with
+        {
+            Worktrees = workbench.Worktrees.Append(registration).ToArray(),
+        };
+
+        _store.Write(MetadataPath(workbench.RootPath), updated);
+        return updated;
+    }
+
+    public DeviceContext ResolveDevice(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree,
+        DeviceMetadata device)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        ArgumentNullException.ThrowIfNull(worktree);
+        ArgumentNullException.ThrowIfNull(device);
+
+        if (!string.Equals(
+                workbench.WorkbenchId,
+                worktree.WorkbenchId,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                worktree.WorktreeId,
+                device.WorktreeId,
+                StringComparison.Ordinal)
+            || !worktree.DeviceIds.Contains(device.DeviceId, StringComparer.Ordinal))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKBENCH_RELATIONSHIP_MISMATCH",
+                "Workbench, worktree, and device metadata do not describe the same registered context.");
+        }
+
+        var registration = workbench.Worktrees.SingleOrDefault(candidate =>
+            string.Equals(
+                candidate.WorktreeId,
+                worktree.WorktreeId,
+                StringComparison.Ordinal));
+        if (registration is null)
+        {
+            throw new WorkbenchCatalogException(
+                "WORKTREE_NOT_FOUND",
+                $"Workbench '{workbench.WorkbenchId}' does not contain worktree '{worktree.WorktreeId}'.");
+        }
+
+        return WorkbenchPaths.ResolveDevice(
+            workbench.WorkbenchId,
+            workbench.RootPath,
+            worktree.WorktreeId,
+            registration.RelativePath,
+            device.DeviceId,
+            device.PlcName);
+    }
+
+    private string ResolveDefaultWorkbenchRoot(string name)
+    {
+        var sanitizedName = Path.GetFileName(WorkbenchPaths.DefaultRoot(name));
+        return WorkbenchPaths.ResolveWorkbench(
+            name,
+            Path.Combine(_defaultRoot, sanitizedName));
+    }
+
+    private static string MetadataPath(string root) =>
+        Path.Combine(root, "workbench.json");
+
+    private static void CreateDirectory(string path, ICollection<string> createdDirectories)
+    {
+        var missing = new Stack<string>();
+        var current = Path.GetFullPath(path);
+
+        while (!Directory.Exists(current))
+        {
+            missing.Push(current);
+            var parent = Directory.GetParent(current)?.FullName;
+            if (parent is null || string.Equals(parent, current, StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            current = parent;
+        }
+
+        Directory.CreateDirectory(path);
+        while (missing.TryPop(out var created))
+        {
+            createdDirectories.Add(created);
+        }
+    }
+
+    private static void RemoveEmptyCreatedDirectories(
+        IEnumerable<string> createdDirectories)
+    {
+        foreach (var directory in createdDirectories.Reverse())
+        {
+            if (Directory.Exists(directory)
+                && !Directory.EnumerateFileSystemEntries(directory).Any())
+            {
+                Directory.Delete(directory);
+            }
+        }
+    }
+}
