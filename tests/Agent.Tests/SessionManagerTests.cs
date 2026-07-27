@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Agent.Chat;
 using Agent.Workbench;
 using Xunit;
@@ -72,7 +73,7 @@ public sealed class SessionManagerTests : IDisposable
             new(300, 30, 330),
         };
 
-        SessionManager.SaveSession(new ChatSessionData(header, messages, usages));
+        SessionManager.SaveSession(device, new ChatSessionData(header, messages, usages));
         var loaded = SessionManager.LoadSession(device, sessionId);
 
         Assert.NotNull(loaded);
@@ -101,7 +102,7 @@ public sealed class SessionManagerTests : IDisposable
         older.Messages.Add(ChatMessage.User("first question"));
         older.Messages.Add(ChatMessage.Assistant("first answer"));
         older.Messages.Add(ChatMessage.User("second question"));
-        SessionManager.SaveSession(older);
+        SessionManager.SaveSession(device, older);
         Thread.Sleep(10);
         var newer = SessionManager.CreateNewSession(device, settings, "newer");
 
@@ -131,6 +132,11 @@ public sealed class SessionManagerTests : IDisposable
 
         Assert.Null(SessionManager.LoadSession(device, sessionId));
         Assert.Empty(SessionManager.ListSessions(device));
+
+        File.WriteAllText(
+            Path.Combine(SessionManager.SessionsDirectory(device), $"{sessionId}.json"),
+            "{}");
+        Assert.Null(SessionManager.LoadSession(device, sessionId));
     }
 
     [Fact]
@@ -159,18 +165,83 @@ public sealed class SessionManagerTests : IDisposable
             """;
         File.WriteAllText(Path.Combine(sessionsDirectory, $"{sessionId}.json"), json);
 
-        var loaded = SessionManager.LoadSession(device.WorktreeRoot, sessionId);
+        var loaded = SessionManager.LoadLegacySession(device.WorktreeRoot, sessionId);
 
         Assert.NotNull(loaded);
         Assert.Equal(legacyProjectName, loaded!.Header.ProjectName);
         Assert.Null(loaded.Header.WorkbenchId);
         Assert.Null(loaded.Header.WorktreeRoot);
+        Assert.Throws<InvalidDataException>(() => SessionManager.SaveSession(device, loaded));
         var legacyLocalAppDataPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PlcAiAssistant",
             "exports",
             legacyProjectName);
         Assert.False(Directory.Exists(legacyLocalAppDataPath));
+    }
+
+    [Fact]
+    public void SaveSession_rejects_tampered_context_without_creating_outside_files()
+    {
+        var device = CreateDeviceContext();
+        var data = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null);
+        var outsideRoot = Path.Combine(tempRoot, "outside-worktree");
+        var tamperedRoot = data with
+        {
+            Header = data.Header with { WorktreeRoot = outsideRoot },
+        };
+        var tamperedDatabase = data with
+        {
+            Header = data.Header with
+            {
+                KnowledgeDbPath = Path.Combine(tempRoot, "outside", "stolen.db"),
+            },
+        };
+
+        Assert.Throws<InvalidDataException>(() => SessionManager.SaveSession(device, tamperedRoot));
+        Assert.Throws<InvalidDataException>(() => SessionManager.SaveSession(device, tamperedDatabase));
+        Assert.Throws<InvalidDataException>(() =>
+            SessionManager.SaveSession(
+                device,
+                data with { Header = data.Header with { WorkbenchId = "wb-other" } }));
+        Assert.Throws<InvalidDataException>(() =>
+            SessionManager.SaveSession(
+                device,
+                data with { Header = data.Header with { WorktreeId = "wt-other" } }));
+        Assert.Throws<InvalidDataException>(() =>
+            SessionManager.SaveSession(
+                device,
+                data with { Header = data.Header with { DeviceId = "dev-other" } }));
+        Assert.False(Directory.Exists(outsideRoot));
+        Assert.False(File.Exists(Path.Combine(
+            outsideRoot,
+            ".automation",
+            "sessions",
+            $"{data.Header.SessionId}.json")));
+        Assert.False(Directory.Exists(Path.Combine(tempRoot, "outside")));
+    }
+
+    [Fact]
+    public void LoadSession_rejects_a_new_format_header_tampered_to_another_context()
+    {
+        var device = CreateDeviceContext();
+        var data = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null);
+        var filePath = SessionManager.ResolveSessionPath(device, data.Header.SessionId)!;
+        var outsideRoot = Path.Combine(tempRoot, "outside-worktree");
+        var json = JsonNode.Parse(File.ReadAllText(filePath))!;
+        json["header"]!["deviceId"] = "dev-other";
+        json["header"]!["worktreeRoot"] = outsideRoot;
+        File.WriteAllText(filePath, json.ToJsonString());
+
+        var loaded = SessionManager.LoadSession(device, data.Header.SessionId);
+
+        Assert.Null(loaded);
+        Assert.False(Directory.Exists(outsideRoot));
+        Assert.False(File.Exists(Path.Combine(
+            outsideRoot,
+            ".automation",
+            "sessions",
+            $"{data.Header.SessionId}.json")));
     }
 
     [Fact]

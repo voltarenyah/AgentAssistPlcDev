@@ -66,30 +66,29 @@ public static class SessionManager
 
     /// <summary>
     /// Load a full session from a device worktree. Returns null for missing,
-    /// corrupted, or unsafe session IDs.
+    /// corrupted, unsafe, or context-mismatched sessions.
     /// </summary>
-    public static ChatSessionData? LoadSession(DeviceContext device, string sessionId) =>
-        LoadSession(
-            device?.WorktreeRoot ?? throw new ArgumentNullException(nameof(device)),
-            sessionId);
-
-    /// <summary>Load a full session from an explicit worktree root.</summary>
-    public static ChatSessionData? LoadSession(string worktreeRoot, string sessionId)
+    public static ChatSessionData? LoadSession(DeviceContext device, string sessionId)
     {
-        if (!TrySessionFilePath(SessionsDirectory(worktreeRoot), sessionId, out var filePath))
-            return null;
-        if (!File.Exists(filePath))
+        ArgumentNullException.ThrowIfNull(device);
+        var data = ReadSession(device.WorktreeRoot, sessionId);
+        if (data is null)
             return null;
 
-        try
-        {
-            var json = File.ReadAllText(filePath);
-            return JsonSerializer.Deserialize<ChatSessionData>(json, Json);
-        }
-        catch (Exception exception) when (exception is JsonException or IOException)
-        {
+        if (!IsLegacyHeader(data.Header) && !HeaderMatches(device, data.Header))
             return null;
-        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// Load an old project-name session from a caller-supplied worktree root.
+    /// New-format sessions require <see cref="LoadSession(DeviceContext, string)"/>.
+    /// </summary>
+    public static ChatSessionData? LoadLegacySession(string worktreeRoot, string sessionId)
+    {
+        var data = ReadSession(worktreeRoot, sessionId);
+        return data is not null && IsLegacyHeader(data.Header) ? data : null;
     }
 
     /// <summary>Create a new empty session for the selected device.</summary>
@@ -141,19 +140,30 @@ public static class SessionManager
             new List<ChatMessage>(),
             new List<UsageInfo?>());
 
-        SaveSession(data);
+        WriteSession(normalizedWorktreeRoot, data);
         return data;
     }
 
     /// <summary>
-    /// Write session data beneath the WorktreeRoot recorded in its header.
+    /// Write session data beneath the trusted device worktree after validating
+    /// every persisted identity and path against that device.
     /// </summary>
-    public static void SaveSession(ChatSessionData data)
+    public static void SaveSession(DeviceContext device, ChatSessionData data)
     {
+        ArgumentNullException.ThrowIfNull(device);
         ArgumentNullException.ThrowIfNull(data);
-        ValidateNewSessionHeader(data.Header);
+        if (!HeaderMatches(device, data.Header))
+        {
+            throw new InvalidDataException(
+                "Session header does not match the trusted device context.");
+        }
 
-        var directory = SessionsDirectory(data.Header.WorktreeRoot);
+        WriteSession(device.WorktreeRoot, data);
+    }
+
+    private static void WriteSession(string trustedWorktreeRoot, ChatSessionData data)
+    {
+        var directory = SessionsDirectory(trustedWorktreeRoot);
         Directory.CreateDirectory(directory);
         if (!TrySessionFilePath(directory, data.Header.SessionId, out var filePath))
             throw new ArgumentException("Session ID contains unsafe path characters.", nameof(data));
@@ -281,6 +291,36 @@ public static class SessionManager
         }
     }
 
+    private static ChatSessionData? ReadSession(string trustedWorktreeRoot, string sessionId)
+    {
+        if (!TrySessionFilePath(
+                SessionsDirectory(trustedWorktreeRoot),
+                sessionId,
+                out var filePath))
+        {
+            return null;
+        }
+        if (!File.Exists(filePath))
+            return null;
+
+        try
+        {
+            var data = JsonSerializer.Deserialize<ChatSessionData>(
+                File.ReadAllText(filePath),
+                Json);
+            return data?.Header is null ||
+                   data.Header.Settings is null ||
+                   data.Messages is null ||
+                   data.RoundUsages is null
+                ? null
+                : data;
+        }
+        catch (Exception exception) when (exception is JsonException or IOException)
+        {
+            return null;
+        }
+    }
+
     private static bool TrySessionFilePath(
         string sessionsDirectory,
         string? sessionId,
@@ -307,15 +347,52 @@ public static class SessionManager
         return true;
     }
 
-    private static void ValidateNewSessionHeader(ChatSessionHeader header)
+    private static bool HeaderMatches(DeviceContext device, ChatSessionHeader header)
     {
-        ArgumentNullException.ThrowIfNull(header);
-        ArgumentException.ThrowIfNullOrWhiteSpace(header.WorkbenchId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(header.WorktreeId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(header.DeviceId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(header.WorktreeRoot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(header.KnowledgeDbPath);
-        ArgumentNullException.ThrowIfNull(header.Settings);
+        return string.Equals(
+                   device.WorkbenchId,
+                   header.WorkbenchId,
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   device.WorktreeId,
+                   header.WorktreeId,
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   device.DeviceId,
+                   header.DeviceId,
+                   StringComparison.Ordinal) &&
+               PathsEqual(device.WorktreeRoot, header.WorktreeRoot) &&
+               PathsEqual(device.KnowledgeDbPath, header.KnowledgeDbPath) &&
+               header.Settings is not null;
+    }
+
+    private static bool IsLegacyHeader(ChatSessionHeader header) =>
+        !string.IsNullOrWhiteSpace(header.ProjectName) &&
+        string.IsNullOrWhiteSpace(header.WorkbenchId) &&
+        string.IsNullOrWhiteSpace(header.WorktreeId) &&
+        string.IsNullOrWhiteSpace(header.DeviceId) &&
+        string.IsNullOrWhiteSpace(header.WorktreeRoot);
+
+    private static bool PathsEqual(string trustedPath, string? persistedPath)
+    {
+        if (string.IsNullOrWhiteSpace(persistedPath))
+            return false;
+
+        try
+        {
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(
+                Path.GetFullPath(trustedPath),
+                Path.GetFullPath(persistedPath),
+                comparison);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private static string? GetString(JsonElement element, string property) =>
