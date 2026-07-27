@@ -1,12 +1,13 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Agent.Workbench;
 
 namespace Agent.Chat;
 
 /// <summary>
-/// Per-project persistent chat session storage.
-/// Session files live at {exportRoot}\sessions\{sessionId}.json.
-/// Stateless — all methods are static with no shared state.
+/// Per-worktree persistent chat session storage.
+/// Session files live at {worktreeRoot}\.automation\sessions\{sessionId}.json.
+/// Stateless - all methods are static with no shared state.
 /// </summary>
 public static class SessionManager
 {
@@ -17,105 +18,161 @@ public static class SessionManager
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>Directory for a project's session files: {exportRoot}\sessions\</summary>
-    public static string SessionsDirectory(string projectName) =>
-        Path.Combine(AssistantPaths.ResolveExportRoot(projectName), "sessions");
+    /// <summary>Directory for a device worktree's ignored session files.</summary>
+    public static string SessionsDirectory(DeviceContext device) =>
+        SessionsDirectory(device?.WorktreeRoot
+            ?? throw new ArgumentNullException(nameof(device)));
 
-    private static string SessionFilePath(string sessionsDir, string sessionId) =>
-        Path.Combine(sessionsDir, $"{sessionId}.json");
+    /// <summary>Directory for an explicit worktree's ignored session files.</summary>
+    public static string SessionsDirectory(string worktreeRoot)
+    {
+        if (string.IsNullOrWhiteSpace(worktreeRoot))
+            throw new ArgumentException("Worktree root cannot be blank.", nameof(worktreeRoot));
+        if (!Path.IsPathFullyQualified(worktreeRoot))
+            throw new ArgumentException("Worktree root must be an absolute path.", nameof(worktreeRoot));
+
+        return Path.Combine(Path.GetFullPath(worktreeRoot), ".automation", "sessions");
+    }
 
     /// <summary>Generate a new unique session ID.</summary>
     public static string NewSessionId() => Guid.NewGuid().ToString("N");
 
     /// <summary>
-    /// List all sessions for a project, ordered by creation time descending (newest first).
-    /// Returns an empty list if the sessions directory does not exist.
+    /// List all sessions for a device worktree, ordered by creation time descending.
     /// </summary>
-    public static List<ChatSessionInfo> ListSessions(string projectName)
+    public static List<ChatSessionInfo> ListSessions(DeviceContext device) =>
+        ListSessions(device?.WorktreeRoot
+            ?? throw new ArgumentNullException(nameof(device)));
+
+    /// <summary>List all sessions beneath an explicit worktree root.</summary>
+    public static List<ChatSessionInfo> ListSessions(string worktreeRoot)
     {
-        var dir = SessionsDirectory(projectName);
-        if (!Directory.Exists(dir))
+        var directory = SessionsDirectory(worktreeRoot);
+        if (!Directory.Exists(directory))
             return new List<ChatSessionInfo>();
 
         var result = new List<ChatSessionInfo>();
-        foreach (var filePath in Directory.EnumerateFiles(dir, "*.json"))
+        foreach (var filePath in Directory.EnumerateFiles(directory, "*.json"))
         {
             var info = ReadSessionInfo(filePath);
-            if (info != null)
+            if (info is not null)
                 result.Add(info);
         }
 
-        result.Sort((a, b) => string.CompareOrdinal(b.CreatedAt, a.CreatedAt));
+        result.Sort((left, right) =>
+            string.CompareOrdinal(right.CreatedAt, left.CreatedAt));
         return result;
     }
 
     /// <summary>
-    /// Load a full session from disk. Returns null if not found or if the file is corrupted.
+    /// Load a full session from a device worktree. Returns null for missing,
+    /// corrupted, or unsafe session IDs.
     /// </summary>
-    public static ChatSessionData? LoadSession(string projectName, string sessionId)
+    public static ChatSessionData? LoadSession(DeviceContext device, string sessionId) =>
+        LoadSession(
+            device?.WorktreeRoot ?? throw new ArgumentNullException(nameof(device)),
+            sessionId);
+
+    /// <summary>Load a full session from an explicit worktree root.</summary>
+    public static ChatSessionData? LoadSession(string worktreeRoot, string sessionId)
     {
-        var filePath = SessionFilePath(SessionsDirectory(projectName), sessionId);
-        if (!File.Exists(filePath)) return null;
+        if (!TrySessionFilePath(SessionsDirectory(worktreeRoot), sessionId, out var filePath))
+            return null;
+        if (!File.Exists(filePath))
+            return null;
 
         try
         {
             var json = File.ReadAllText(filePath);
             return JsonSerializer.Deserialize<ChatSessionData>(json, Json);
         }
-        catch (Exception ex) when (ex is JsonException or IOException)
+        catch (Exception exception) when (exception is JsonException or IOException)
         {
             return null;
         }
     }
 
-    /// <summary>
-    /// Create a new session file for the given project and settings.
-    /// The returned ChatSessionData has an empty message list and zero round usages.
-    /// </summary>
+    /// <summary>Create a new empty session for the selected device.</summary>
     public static ChatSessionData CreateNewSession(
-        string projectName,
+        DeviceContext device,
+        ChatRequestSettings settings,
+        string? runtimeContext) =>
+        CreateNewSession(
+            device?.WorkbenchId ?? throw new ArgumentNullException(nameof(device)),
+            device.WorktreeId,
+            device.DeviceId,
+            device.WorktreeRoot,
+            device.KnowledgeDbPath,
+            settings,
+            runtimeContext);
+
+    /// <summary>Create a new empty session using explicit stable identities and paths.</summary>
+    public static ChatSessionData CreateNewSession(
+        string workbenchId,
+        string worktreeId,
+        string deviceId,
+        string worktreeRoot,
+        string knowledgeDbPath,
         ChatRequestSettings settings,
         string? runtimeContext)
     {
-        var now = DateTimeOffset.Now.ToString("O");
-        var sessionId = NewSessionId();
-        var exportRoot = AssistantPaths.ResolveExportRoot(projectName);
-        var knowledgeDbPath = AssistantPaths.ResolveKnowledgeDbPath(projectName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workbenchId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreeId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(knowledgeDbPath);
+        ArgumentNullException.ThrowIfNull(settings);
 
+        _ = SessionsDirectory(worktreeRoot);
+        var normalizedWorktreeRoot = Path.GetFullPath(worktreeRoot);
+        var now = DateTimeOffset.UtcNow.ToString("O");
         var header = new ChatSessionHeader(
-            sessionId,
-            projectName,
+            NewSessionId(),
+            workbenchId,
+            worktreeId,
+            deviceId,
+            normalizedWorktreeRoot,
+            Path.GetFullPath(knowledgeDbPath),
             now,
             now,
             settings,
-            runtimeContext,
-            exportRoot,
-            knowledgeDbPath);
-
-        var data = new ChatSessionData(header, new List<ChatMessage>(), new List<UsageInfo?>());
+            runtimeContext);
+        var data = new ChatSessionData(
+            header,
+            new List<ChatMessage>(),
+            new List<UsageInfo?>());
 
         SaveSession(data);
         return data;
     }
 
     /// <summary>
-    /// Write session data to its file. Creates the sessions directory if needed.
-    /// SessionId and ProjectName come from <paramref name="data"/>'s header.
+    /// Write session data beneath the WorktreeRoot recorded in its header.
     /// </summary>
     public static void SaveSession(ChatSessionData data)
     {
-        var dir = SessionsDirectory(data.Header.ProjectName);
-        Directory.CreateDirectory(dir);
+        ArgumentNullException.ThrowIfNull(data);
+        ValidateNewSessionHeader(data.Header);
 
-        var filePath = SessionFilePath(dir, data.Header.SessionId);
-        var json = JsonSerializer.Serialize(data, Json);
-        File.WriteAllText(filePath, json);
+        var directory = SessionsDirectory(data.Header.WorktreeRoot);
+        Directory.CreateDirectory(directory);
+        if (!TrySessionFilePath(directory, data.Header.SessionId, out var filePath))
+            throw new ArgumentException("Session ID contains unsafe path characters.", nameof(data));
+
+        File.WriteAllText(filePath, JsonSerializer.Serialize(data, Json));
     }
 
-    /// <summary>Delete a session file. Idempotent — does nothing if the file is absent.</summary>
-    public static void DeleteSession(string projectName, string sessionId)
+    /// <summary>Delete a session file. Idempotent if the file is absent.</summary>
+    public static void DeleteSession(DeviceContext device, string sessionId) =>
+        DeleteSession(
+            device?.WorktreeRoot ?? throw new ArgumentNullException(nameof(device)),
+            sessionId);
+
+    /// <summary>Delete a session beneath an explicit worktree root.</summary>
+    public static void DeleteSession(string worktreeRoot, string sessionId)
     {
-        var filePath = SessionFilePath(SessionsDirectory(projectName), sessionId);
+        if (!TrySessionFilePath(SessionsDirectory(worktreeRoot), sessionId, out var filePath))
+            return;
+
         try
         {
             if (File.Exists(filePath))
@@ -123,84 +180,154 @@ public static class SessionManager
         }
         catch (IOException)
         {
-            // Non-fatal: file may be in use or already removed
+            // Non-fatal: file may be in use or already removed.
         }
     }
 
-    /// <summary>
-    /// Resolve a session-relative path to an absolute path. Returns null if the session
-    /// does not exist on disk.
-    /// </summary>
-    public static string? ResolveSessionPath(string projectName, string sessionId)
+    /// <summary>Resolve an existing session file for a device worktree.</summary>
+    public static string? ResolveSessionPath(DeviceContext device, string sessionId) =>
+        ResolveSessionPath(
+            device?.WorktreeRoot ?? throw new ArgumentNullException(nameof(device)),
+            sessionId);
+
+    /// <summary>Resolve an existing session file beneath an explicit worktree root.</summary>
+    public static string? ResolveSessionPath(string worktreeRoot, string sessionId)
     {
-        var filePath = SessionFilePath(SessionsDirectory(projectName), sessionId);
+        if (!TrySessionFilePath(SessionsDirectory(worktreeRoot), sessionId, out var filePath))
+            return null;
+
         return File.Exists(filePath) ? filePath : null;
     }
 
-    // Parse session metadata without loading the full message array.
-    // Uses JsonDocument for lightweight parsing — reads header fields from the
-    // "header" sub-object + counts messages/turns from the top-level "messages" array.
+    /// <summary>Build the runtime context shown to the model for a selected device.</summary>
+    public static string BuildRuntimeContext(
+        DeviceContext device,
+        string workbenchName,
+        string worktreeName,
+        string branch,
+        string plcName,
+        bool knowledgeStale)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workbenchName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(branch);
+        ArgumentException.ThrowIfNullOrWhiteSpace(plcName);
+
+        var knowledgeState = knowledgeStale
+            ? "stale; run update_components before reuse"
+            : "current";
+        return string.Join(
+            Environment.NewLine,
+            $"Workbench: {workbenchName} ({device.WorkbenchId})",
+            $"Worktree: {worktreeName} [{branch}]",
+            $"Device: {plcName} ({device.DeviceId})",
+            $"Exported source: {device.ExportedSourceRoot}",
+            $"Modified source: {device.ModifiedSourceRoot}",
+            $"Knowledge DB: {device.KnowledgeDbPath}",
+            $"Knowledge state: {knowledgeState}");
+    }
+
     private static ChatSessionInfo? ReadSessionInfo(string filePath)
     {
         try
         {
             using var stream = File.OpenRead(filePath);
-            using var doc = JsonDocument.Parse(stream);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("header", out var header) || header.ValueKind != JsonValueKind.Object)
+            using var document = JsonDocument.Parse(stream);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("header", out var header) ||
+                header.ValueKind != JsonValueKind.Object)
+            {
                 return null;
+            }
 
             var sessionId = GetString(header, "sessionId");
-            var projectName = GetString(header, "projectName");
             var createdAt = GetString(header, "createdAt");
             var updatedAt = GetString(header, "updatedAt");
-
-            if (sessionId == null || projectName == null || createdAt == null || updatedAt == null)
+            if (sessionId is null || createdAt is null || updatedAt is null)
                 return null;
 
             var messageCount = 0;
             var turnCount = 0;
             string? firstUserMessage = null;
-
-            if (root.TryGetProperty("messages", out var messages) && messages.ValueKind == JsonValueKind.Array)
+            if (root.TryGetProperty("messages", out var messages) &&
+                messages.ValueKind == JsonValueKind.Array)
             {
                 messageCount = messages.GetArrayLength();
-                foreach (var msg in messages.EnumerateArray())
+                foreach (var message in messages.EnumerateArray())
                 {
-                    var role = GetString(msg, "role");
-                    if (role == "user")
-                    {
-                        turnCount++;
-                        firstUserMessage = Truncate(GetString(msg, "content"), 120);
-                        break;
-                    }
+                    if (GetString(message, "role") != "user")
+                        continue;
+
+                    turnCount++;
+                    firstUserMessage ??= Truncate(GetString(message, "content"), 120);
                 }
             }
 
             return new ChatSessionInfo(
                 sessionId,
-                projectName,
+                GetString(header, "workbenchId"),
+                GetString(header, "worktreeId"),
+                GetString(header, "deviceId"),
                 createdAt,
                 updatedAt,
                 messageCount,
                 turnCount,
                 firstUserMessage);
         }
-        catch (Exception ex) when (ex is JsonException or IOException)
+        catch (Exception exception) when (exception is JsonException or IOException)
         {
             return null;
         }
     }
 
+    private static bool TrySessionFilePath(
+        string sessionsDirectory,
+        string? sessionId,
+        out string filePath)
+    {
+        filePath = string.Empty;
+        if (string.IsNullOrWhiteSpace(sessionId) || sessionId.Length > 128)
+            return false;
+        if (sessionId.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
+        {
+            return false;
+        }
+
+        var directory = Path.GetFullPath(sessionsDirectory);
+        var candidate = Path.GetFullPath(Path.Combine(directory, $"{sessionId}.json"));
+        var directoryPrefix = directory.EndsWith(Path.DirectorySeparatorChar)
+            ? directory
+            : directory + Path.DirectorySeparatorChar;
+        if (!candidate.StartsWith(directoryPrefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        filePath = candidate;
+        return true;
+    }
+
+    private static void ValidateNewSessionHeader(ChatSessionHeader header)
+    {
+        ArgumentNullException.ThrowIfNull(header);
+        ArgumentException.ThrowIfNullOrWhiteSpace(header.WorkbenchId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(header.WorktreeId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(header.DeviceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(header.WorktreeRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(header.KnowledgeDbPath);
+        ArgumentNullException.ThrowIfNull(header.Settings);
+    }
+
     private static string? GetString(JsonElement element, string property) =>
-        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+        element.TryGetProperty(property, out var value) &&
+        value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
 
     private static string? Truncate(string? text, int maxChars)
     {
-        if (text == null) return null;
-        return text.Length <= maxChars ? text : text[..maxChars] + "…";
+        if (text is null)
+            return null;
+        return text.Length <= maxChars ? text : text[..maxChars] + "...";
     }
 }

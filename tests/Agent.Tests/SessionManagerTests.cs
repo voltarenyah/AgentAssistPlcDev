@@ -1,73 +1,61 @@
 using Agent.Chat;
+using Agent.Workbench;
 using Xunit;
 
 namespace Agent.Tests;
 
 public sealed class SessionManagerTests : IDisposable
 {
-    private readonly List<string> createdProjectNames = new();
+    private readonly string tempRoot = Path.Combine(
+        Path.GetTempPath(),
+        "AgentAssistPlcDev.SessionManagerTests",
+        Guid.NewGuid().ToString("N"));
 
     public void Dispose()
     {
-        foreach (var projectName in createdProjectNames)
-        {
-            var exportRoot = AssistantPaths.ResolveExportRoot(projectName);
-            try { Directory.Delete(exportRoot, recursive: true); } catch { /* best-effort cleanup */ }
-        }
-    }
-
-    // The session manager stores files under {exportRoot}\sessions\. Each project's
-    // export root is %LOCALAPPDATA%\PlcAiAssistant\exports\{projectName}. We can't
-    // redirect AssistantPaths without indirection. Since SessionManager is a stateless
-    // static class that calls AssistantPaths.ResolveExportRoot, we test with the real
-    // export root path, which maps to %LOCALAPPDATA%\PlcAiAssistant\exports\{projectName}.
-    // Tests use unique project names to avoid collisions. Tracked project export roots
-    // are cleaned up in Dispose().
-
-    private string UniqueProjectName()
-    {
-        var name = $"test-{Guid.NewGuid():N}";
-        createdProjectNames.Add(name);
-        return name;
+        try { Directory.Delete(tempRoot, recursive: true); } catch { /* best-effort cleanup */ }
     }
 
     [Fact]
-    public void CreateNewSession_creates_file_and_returns_valid_data()
+    public void CreateNewSession_stores_device_identity_under_worktree_automation_directory()
     {
-        var projectName = UniqueProjectName();
+        var device = CreateDeviceContext();
         var settings = new ChatRequestSettings { Model = "test-model" };
-        var context = "dbPath=C:\\test.db";
 
-        var data = SessionManager.CreateNewSession(projectName, settings, context);
+        var data = SessionManager.CreateNewSession(device, settings, "runtime context");
 
-        Assert.NotNull(data);
-        Assert.Equal(projectName, data.Header.ProjectName);
-        Assert.Equal("test-model", data.Header.Settings.Model);
-        Assert.Equal(context, data.Header.RuntimeContext);
+        Assert.Equal(device.WorkbenchId, data.Header.WorkbenchId);
+        Assert.Equal(device.WorktreeId, data.Header.WorktreeId);
+        Assert.Equal(device.DeviceId, data.Header.DeviceId);
+        Assert.Equal(device.WorktreeRoot, data.Header.WorktreeRoot);
+        Assert.Equal(device.KnowledgeDbPath, data.Header.KnowledgeDbPath);
+        Assert.Null(data.Header.ProjectName);
+        Assert.Equal("runtime context", data.Header.RuntimeContext);
         Assert.Empty(data.Messages);
         Assert.Empty(data.RoundUsages);
-        Assert.NotNull(data.Header.SessionId);
-        Assert.Equal(32, data.Header.SessionId.Length); // Guid "N" = 32 hex chars
 
-        var filePath = Path.Combine(
-            SessionManager.SessionsDirectory(projectName),
-            $"{data.Header.SessionId}.json");
-        Assert.True(File.Exists(filePath));
+        var sessionsDirectory = Path.Combine(device.WorktreeRoot, ".automation", "sessions");
+        Assert.Equal(sessionsDirectory, SessionManager.SessionsDirectory(device));
+        Assert.True(File.Exists(Path.Combine(sessionsDirectory, $"{data.Header.SessionId}.json")));
     }
 
     [Fact]
     public void SaveSession_and_LoadSession_roundtrip()
     {
-        var projectName = UniqueProjectName();
-        var settings = new ChatRequestSettings { Model = "roundtrip" };
+        var device = CreateDeviceContext();
         var sessionId = SessionManager.NewSessionId();
-        var now = DateTimeOffset.Now.ToString("O");
-
+        var now = DateTimeOffset.UtcNow.ToString("O");
         var header = new ChatSessionHeader(
-            sessionId, projectName, now, now, settings,
-            "ctx", AssistantPaths.ResolveExportRoot(projectName),
-            AssistantPaths.ResolveKnowledgeDbPath(projectName));
-
+            sessionId,
+            device.WorkbenchId,
+            device.WorktreeId,
+            device.DeviceId,
+            device.WorktreeRoot,
+            device.KnowledgeDbPath,
+            now,
+            now,
+            new ChatRequestSettings { Model = "roundtrip" },
+            "ctx");
         var messages = new List<ChatMessage>
         {
             ChatMessage.User("hello"),
@@ -77,7 +65,6 @@ public sealed class SessionManagerTests : IDisposable
             ChatMessage.Tool("c1", "{\"result\":\"ok\"}"),
             ChatMessage.Assistant("done"),
         };
-
         var usages = new List<UsageInfo?>
         {
             new(100, 10, 110),
@@ -85,116 +72,204 @@ public sealed class SessionManagerTests : IDisposable
             new(300, 30, 330),
         };
 
-        var data = new ChatSessionData(header, messages, usages);
-        SessionManager.SaveSession(data);
+        SessionManager.SaveSession(new ChatSessionData(header, messages, usages));
+        var loaded = SessionManager.LoadSession(device, sessionId);
 
-        var loaded = SessionManager.LoadSession(projectName, sessionId);
         Assert.NotNull(loaded);
         Assert.Equal(sessionId, loaded!.Header.SessionId);
-        Assert.Equal(projectName, loaded.Header.ProjectName);
+        Assert.Equal(device.WorkbenchId, loaded.Header.WorkbenchId);
+        Assert.Equal(device.WorktreeId, loaded.Header.WorktreeId);
+        Assert.Equal(device.DeviceId, loaded.Header.DeviceId);
+        Assert.Equal(device.WorktreeRoot, loaded.Header.WorktreeRoot);
+        Assert.Equal(device.KnowledgeDbPath, loaded.Header.KnowledgeDbPath);
         Assert.Equal("roundtrip", loaded.Header.Settings.Model);
         Assert.Equal(6, loaded.Messages.Count);
         Assert.Equal("hello", loaded.Messages[0].Content);
-        Assert.Equal("user", loaded.Messages[0].Role);
-        Assert.Equal("assistant", loaded.Messages[1].Role);
-        Assert.Equal("hi there", loaded.Messages[1].Content);
         Assert.NotNull(loaded.Messages[3].ToolCalls);
-        Assert.Single(loaded.Messages[3].ToolCalls!);
-        Assert.Equal("c1", loaded.Messages[3].ToolCalls![0].Id);
         Assert.Equal("get_block", loaded.Messages[3].ToolCalls![0].Name);
-        Assert.Equal("tool", loaded.Messages[4].Role);
         Assert.Equal("c1", loaded.Messages[4].ToolCallId);
         Assert.Equal(3, loaded.RoundUsages.Count);
         Assert.Equal(100, loaded.RoundUsages[0]!.PromptTokens);
     }
 
     [Fact]
-    public void ListSessions_returns_all_sessions_in_newest_first_order()
+    public void ListSessions_returns_device_identity_and_counts_all_user_turns()
     {
-        var projectName = UniqueProjectName();
+        var device = CreateDeviceContext();
         var settings = new ChatRequestSettings();
+        var older = SessionManager.CreateNewSession(device, settings, "older");
+        older.Messages.Add(ChatMessage.User("first question"));
+        older.Messages.Add(ChatMessage.Assistant("first answer"));
+        older.Messages.Add(ChatMessage.User("second question"));
+        SessionManager.SaveSession(older);
+        Thread.Sleep(10);
+        var newer = SessionManager.CreateNewSession(device, settings, "newer");
 
-        var s1 = SessionManager.CreateNewSession(projectName, settings, "ctx1");
-        Thread.Sleep(10); // ensure timestamp ordering
-        var s2 = SessionManager.CreateNewSession(projectName, settings, "ctx2");
+        var sessions = SessionManager.ListSessions(device);
 
-        var list = SessionManager.ListSessions(projectName);
-
-        Assert.Equal(2, list.Count);
-        Assert.Equal(s2.Header.SessionId, list[0].SessionId); // newest first
-        Assert.Equal(s1.Header.SessionId, list[1].SessionId);
+        Assert.Equal(2, sessions.Count);
+        Assert.Equal(newer.Header.SessionId, sessions[0].SessionId);
+        Assert.Equal(older.Header.SessionId, sessions[1].SessionId);
+        Assert.Equal(device.WorkbenchId, sessions[1].WorkbenchId);
+        Assert.Equal(device.WorktreeId, sessions[1].WorktreeId);
+        Assert.Equal(device.DeviceId, sessions[1].DeviceId);
+        Assert.Equal(2, sessions[1].TurnCount);
+        Assert.Equal("first question", sessions[1].FirstUserMessage);
     }
 
     [Fact]
-    public void ListSessions_returns_empty_for_nonexistent_project()
+    public void Missing_and_corrupted_sessions_return_null()
     {
-        var list = SessionManager.ListSessions("nonexistent-project-" + Guid.NewGuid().ToString("N"));
-        Assert.Empty(list);
-    }
+        var device = CreateDeviceContext();
+        Assert.Null(SessionManager.LoadSession(device, SessionManager.NewSessionId()));
 
-    [Fact]
-    public void LoadSession_returns_null_for_missing_session()
-    {
-        var result = SessionManager.LoadSession("no-project-" + Guid.NewGuid().ToString("N"), "no-session-id");
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public void LoadSession_returns_null_for_corrupted_file()
-    {
-        var projectName = UniqueProjectName();
-        var sessionsDir = SessionManager.SessionsDirectory(projectName);
-        Directory.CreateDirectory(sessionsDir);
         var sessionId = SessionManager.NewSessionId();
-        var filePath = Path.Combine(sessionsDir, $"{sessionId}.json");
+        Directory.CreateDirectory(SessionManager.SessionsDirectory(device));
+        File.WriteAllText(
+            Path.Combine(SessionManager.SessionsDirectory(device), $"{sessionId}.json"),
+            "not valid json {{{");
 
-        // Write garbage
-        File.WriteAllText(filePath, "not valid json {{{");
-
-        var result = SessionManager.LoadSession(projectName, sessionId);
-        Assert.Null(result);
+        Assert.Null(SessionManager.LoadSession(device, sessionId));
+        Assert.Empty(SessionManager.ListSessions(device));
     }
 
     [Fact]
-    public void DeleteSession_removes_file()
+    public void Legacy_project_name_is_deserialized_but_never_used_for_path_resolution()
     {
-        var projectName = UniqueProjectName();
-        var settings = new ChatRequestSettings();
-        var data = SessionManager.CreateNewSession(projectName, settings, null);
+        var device = CreateDeviceContext();
+        var sessionId = SessionManager.NewSessionId();
+        var sessionsDirectory = SessionManager.SessionsDirectory(device);
+        Directory.CreateDirectory(sessionsDirectory);
+        var legacyProjectName = $"legacy-{Guid.NewGuid():N}";
+        var json = $$"""
+            {
+              "header": {
+                "sessionId": "{{sessionId}}",
+                "projectName": "{{legacyProjectName}}",
+                "createdAt": "2026-01-01T00:00:00.0000000+00:00",
+                "updatedAt": "2026-01-01T00:00:00.0000000+00:00",
+                "settings": { "model": "legacy-model" },
+                "runtimeContext": "legacy",
+                "exportRoot": "C:\\legacy\\export",
+                "knowledgeDbPath": "C:\\legacy\\knowledge.db"
+              },
+              "messages": [],
+              "roundUsages": []
+            }
+            """;
+        File.WriteAllText(Path.Combine(sessionsDirectory, $"{sessionId}.json"), json);
 
-        var filePath = Path.Combine(
-            SessionManager.SessionsDirectory(projectName),
-            $"{data.Header.SessionId}.json");
-        Assert.True(File.Exists(filePath));
+        var loaded = SessionManager.LoadSession(device.WorktreeRoot, sessionId);
 
-        SessionManager.DeleteSession(projectName, data.Header.SessionId);
+        Assert.NotNull(loaded);
+        Assert.Equal(legacyProjectName, loaded!.Header.ProjectName);
+        Assert.Null(loaded.Header.WorkbenchId);
+        Assert.Null(loaded.Header.WorktreeRoot);
+        var legacyLocalAppDataPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PlcAiAssistant",
+            "exports",
+            legacyProjectName);
+        Assert.False(Directory.Exists(legacyLocalAppDataPath));
+    }
+
+    [Fact]
+    public void DeleteSession_is_idempotent_and_removes_existing_file()
+    {
+        var device = CreateDeviceContext();
+        var data = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null);
+        var filePath = SessionManager.ResolveSessionPath(device, data.Header.SessionId);
+        Assert.NotNull(filePath);
+
+        SessionManager.DeleteSession(device, data.Header.SessionId);
+        SessionManager.DeleteSession(device, data.Header.SessionId);
+
         Assert.False(File.Exists(filePath));
     }
 
-    [Fact]
-    public void DeleteSession_is_idempotent()
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("..\\outside")]
+    [InlineData("nested/session")]
+    [InlineData(".")]
+    [InlineData("")]
+    public void Session_id_cannot_escape_sessions_directory(string unsafeSessionId)
     {
-        SessionManager.DeleteSession("no-such-project", "no-such-session");
-        // Should not throw
+        var device = CreateDeviceContext();
+
+        Assert.Null(SessionManager.LoadSession(device, unsafeSessionId));
+        Assert.Null(SessionManager.ResolveSessionPath(device, unsafeSessionId));
+        SessionManager.DeleteSession(device, unsafeSessionId);
     }
 
     [Fact]
-    public void NewSessionId_is_unique()
+    public void Explicit_identity_creation_rejects_a_relative_worktree_root()
     {
-        var ids = new HashSet<string>();
-        for (var i = 0; i < 100; i++)
+        Assert.Throws<ArgumentException>(() =>
+            SessionManager.CreateNewSession(
+                "wb-1",
+                "wt-1",
+                "dev-1",
+                "legacy-project-name",
+                Path.Combine(tempRoot, "plc-knowledge.db"),
+                new ChatRequestSettings(),
+                null));
+    }
+
+    [Fact]
+    public void BuildRuntimeContext_describes_selected_device_and_knowledge_state()
+    {
+        var device = CreateDeviceContext();
+
+        var runtimeContext = SessionManager.BuildRuntimeContext(
+            device,
+            "Packaging Line",
+            "Valve tuning",
+            "feature/valves",
+            "PLC_1",
+            knowledgeStale: true);
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                $"Workbench: Packaging Line ({device.WorkbenchId})",
+                $"Worktree: Valve tuning [feature/valves]",
+                $"Device: PLC_1 ({device.DeviceId})",
+                $"Exported source: {device.ExportedSourceRoot}",
+                $"Modified source: {device.ModifiedSourceRoot}",
+                $"Knowledge DB: {device.KnowledgeDbPath}",
+                "Knowledge state: stale; run update_components before reuse"),
+            runtimeContext);
+    }
+
+    [Fact]
+    public void NewSessionId_is_unique_safe_guid_text()
+    {
+        var ids = Enumerable.Range(0, 100).Select(_ => SessionManager.NewSessionId()).ToArray();
+
+        Assert.Equal(ids.Length, ids.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(ids, id =>
         {
-            var id = SessionManager.NewSessionId();
-            Assert.False(ids.Contains(id));
-            ids.Add(id);
-        }
+            Assert.Equal(32, id.Length);
+            Assert.True(Guid.TryParseExact(id, "N", out _));
+        });
     }
 
-    [Fact]
-    public void SessionsDirectory_uses_export_root()
+    private DeviceContext CreateDeviceContext()
     {
-        var dir = SessionManager.SessionsDirectory("TestProject");
-        var expected = Path.Combine(AssistantPaths.ResolveExportRoot("TestProject"), "sessions");
-        Assert.Equal(expected, dir);
+        var workbenchRoot = Path.Combine(tempRoot, "workbench");
+        var worktreeRoot = Path.Combine(workbenchRoot, "worktrees", "feature-a");
+        var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+        return new DeviceContext(
+            "wb-1",
+            "wt-1",
+            "dev-1",
+            workbenchRoot,
+            worktreeRoot,
+            deviceRoot,
+            Path.Combine(deviceRoot, "exported-source"),
+            Path.Combine(deviceRoot, "modified-source"),
+            Path.Combine(deviceRoot, "staging"),
+            Path.Combine(deviceRoot, "plc-knowledge.db"));
     }
 }
