@@ -18,13 +18,19 @@ builder.Services.AddSingleton<DeviceSourceResolver>(services =>
     });
 });
 
-if (!builder.Environment.IsEnvironment("Testing"))
+var startExternalMcp = !builder.Environment.IsEnvironment("Testing")
+    && builder.Configuration.GetValue("Mcp:StartExternal", true);
+if (startExternalMcp)
 {
     builder.Services.AddSingleton<McpRuntime>();
     builder.Services.AddHostedService<McpRuntimeHostedService>();
     builder.Services.AddSingleton<EngineeringCaller>(s => new(s.GetRequiredService<McpRuntime>()));
     builder.Services.AddSingleton<KnowledgeCaller>(s => new(s.GetRequiredService<McpRuntime>()));
     builder.Services.AddSingleton<VersionControlCaller>(s => new(s.GetRequiredService<McpRuntime>()));
+    builder.Services.AddSingleton<SourceEditorCaller>(s => new(s.GetRequiredService<McpRuntime>()));
+    builder.Services.AddSingleton<ApiMcpGateway>(s => new(
+        s.GetRequiredService<EngineeringCaller>(), s.GetRequiredService<KnowledgeCaller>(),
+        s.GetRequiredService<VersionControlCaller>(), s.GetRequiredService<SourceEditorCaller>()));
     builder.Services.AddSingleton<WorkbenchCoordinator>(s => new(
         s.GetRequiredService<EngineeringCaller>(),
         s.GetRequiredService<KnowledgeCaller>(),
@@ -38,6 +44,11 @@ if (!builder.Environment.IsEnvironment("Testing"))
 else
 {
     builder.Services.AddSingleton<UnavailableCaller>();
+    builder.Services.AddSingleton<ApiMcpGateway>(s =>
+    {
+        var caller = s.GetRequiredService<UnavailableCaller>();
+        return new(caller, caller, caller, caller);
+    });
     builder.Services.AddSingleton<WorkbenchCoordinator>(s => new(
         s.GetRequiredService<UnavailableCaller>(),
         s.GetRequiredService<UnavailableCaller>(),
@@ -50,12 +61,15 @@ else
 }
 
 builder.Services.AddSingleton<WorkbenchApiState>();
+builder.Services.AddSingleton<CompatibilityRuntimeState>();
+builder.Services.AddSingleton<ApiChatService>();
 
 var app = builder.Build();
 app.UseCors(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 app.UseMiddleware<WorkbenchApiExceptionMiddleware>();
 app.MapGet("/api/status", () => Results.Ok(new { storage = "workbench", legacyProjects = false }));
 app.MapWorkbenchEndpoints();
+app.MapCompatibilityEndpoints();
 app.Run();
 
 public partial class Program { }
@@ -64,16 +78,12 @@ internal sealed class McpRuntime : IAsyncDisposable
 {
     public McpRuntime(IConfiguration configuration)
     {
+        var paths = McpExecutableResolver.Resolve(configuration, AppContext.BaseDirectory);
         Host = new McpHost(
-            Required(configuration, "Mcp:Engineering"),
-            Required(configuration, "Mcp:Knowledge"),
-            Required(configuration, "Mcp:VersionControl"),
-            Required(configuration, "Mcp:SourceEditor"));
+            paths.Engineering, paths.Knowledge, paths.VersionControl, paths.SourceEditor);
     }
     public McpHost Host { get; }
     public ValueTask DisposeAsync() => Host.DisposeAsync();
-    private static string Required(IConfiguration configuration, string key) =>
-        configuration[key] ?? throw new InvalidOperationException($"Missing configuration '{key}'.");
 }
 
 internal sealed class McpRuntimeHostedService(McpRuntime runtime) : IHostedService
@@ -99,6 +109,10 @@ internal sealed class KnowledgeCaller(McpRuntime runtime) : RuntimeCaller(runtim
 internal sealed class VersionControlCaller(McpRuntime runtime) : RuntimeCaller(runtime)
 {
     protected override IMcpToolCaller Resolve(McpHost host) => host.VersionControl!;
+}
+internal sealed class SourceEditorCaller(McpRuntime runtime) : RuntimeCaller(runtime)
+{
+    protected override IMcpToolCaller Resolve(McpHost host) => host.SourceEditor!;
 }
 internal sealed class UnavailableCaller : IMcpToolCaller
 {

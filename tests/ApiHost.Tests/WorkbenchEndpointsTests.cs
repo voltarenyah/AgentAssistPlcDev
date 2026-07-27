@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Configuration;
 using System.Net.Http.Json;
 using System.Net;
 using Xunit;
@@ -23,6 +24,48 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         Assert.Equal(HttpStatusCode.OK, status.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
+    [Fact]
+    public void ProductionResolverUsesRepositoryDefaultsWithoutMcpConfiguration()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var paths = McpExecutableResolver.Resolve(configuration, AppContext.BaseDirectory);
+
+        Assert.EndsWith(Path.Combine("Mcp.Engineering", "bin", "Debug", "net48", "Mcp.Engineering.exe"), paths.Engineering);
+        Assert.EndsWith(Path.Combine("Mcp.Knowledge", "bin", "Debug", "net8.0", "Mcp.Knowledge.exe"), paths.Knowledge);
+    }
+
+    [Fact]
+    public async Task ProductionHostCanReachListeningPipelineWithExternalStartupDisabled()
+    {
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Production");
+            builder.UseSetting("Mcp:StartExternal", "false");
+        });
+        using var client = factory.CreateClient();
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/status")).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/api/project/info")]
+    [InlineData("/api/blocks")]
+    [InlineData("/api/knowledge/node-kinds")]
+    [InlineData("/api/vc/status")]
+    [InlineData("/api/chat")]
+    public async Task RestoredDeviceScopedEndpointsRejectNoSelection(string endpoint)
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        var response = endpoint == "/api/chat"
+            ? await client.PostAsJsonAsync(endpoint, new { message = "hello" })
+            : await client.GetAsync(endpoint);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
