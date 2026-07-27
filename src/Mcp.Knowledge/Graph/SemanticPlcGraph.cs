@@ -18,6 +18,7 @@
 using Microsoft.Data.Sqlite;
 using System.Xml;
 using System.Xml.Linq;
+using Mcp.Knowledge.Import;
 using Mcp.Knowledge.Parsing;
 
 namespace Mcp.Knowledge.Graph;
@@ -141,12 +142,18 @@ public sealed class SemanticPlcGraph
 {
     private readonly Dictionary<string, SemanticGraphNode> nodes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SemanticGraphEdge> edges = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ComponentImport> componentImports = new(StringComparer.Ordinal);
+    private HashSet<string>? touchedNodeIds;
+    private HashSet<string>? touchedEdgeIds;
 
     public IReadOnlyList<SemanticGraphNode> Nodes => nodes.Values.OrderBy(node => node.Id, StringComparer.Ordinal).ToArray();
 
     public IReadOnlyList<SemanticGraphEdge> Edges => edges.Values.OrderBy(edge => edge.Id, StringComparer.Ordinal).ToArray();
 
-    public void UpsertNode(SemanticGraphNode node)
+    public IReadOnlyList<ComponentImport> ComponentImports =>
+        componentImports.Values.OrderBy(component => component.ComponentKey, StringComparer.Ordinal).ToArray();
+
+    public string UpsertNode(SemanticGraphNode node)
     {
         if (node == null)
         {
@@ -154,9 +161,11 @@ public sealed class SemanticPlcGraph
         }
 
         nodes[node.Id] = node;
+        touchedNodeIds?.Add(node.Id);
+        return node.Id;
     }
 
-    public void UpsertEdge(SemanticGraphEdge edge)
+    public string UpsertEdge(SemanticGraphEdge edge)
     {
         if (edge == null)
         {
@@ -164,6 +173,8 @@ public sealed class SemanticPlcGraph
         }
 
         edges[edge.Id] = edge;
+        touchedEdgeIds?.Add(edge.Id);
+        return edge.Id;
     }
 
     public SemanticGraphNode GetNode(string id)
@@ -188,6 +199,51 @@ public sealed class SemanticPlcGraph
             .OrderBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    internal GraphTouches CaptureTouches(Action import)
+    {
+        ArgumentNullException.ThrowIfNull(import);
+        if (touchedNodeIds != null || touchedEdgeIds != null)
+        {
+            throw new InvalidOperationException("Semantic graph touch capture cannot be nested.");
+        }
+
+        touchedNodeIds = new HashSet<string>(StringComparer.Ordinal);
+        touchedEdgeIds = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            import();
+            return new GraphTouches(
+                touchedNodeIds.ToHashSet(StringComparer.Ordinal),
+                touchedEdgeIds.ToHashSet(StringComparer.Ordinal));
+        }
+        finally
+        {
+            touchedNodeIds = null;
+            touchedEdgeIds = null;
+        }
+    }
+
+    internal void RegisterComponentImport(ComponentImport componentImport)
+    {
+        ArgumentNullException.ThrowIfNull(componentImport);
+        componentImports[componentImport.ComponentKey] = componentImport;
+    }
+
+    internal void TouchNode(string nodeId)
+    {
+        if (!nodes.ContainsKey(nodeId))
+        {
+            throw new KeyNotFoundException(
+                $"Semantic graph node '{nodeId}' cannot be touched before it is imported.");
+        }
+
+        touchedNodeIds?.Add(nodeId);
+    }
+
+    internal sealed record GraphTouches(
+        IReadOnlySet<string> NodeIds,
+        IReadOnlySet<string> EdgeIds);
 }
 
 public static class TiaXmlSemanticGraphImporter
@@ -275,6 +331,10 @@ public static class TiaXmlSemanticGraphImporter
                         {
                             ["declaredByReference"] = "true"
                         }));
+                }
+                else
+                {
+                    graph.TouchNode(calleeId);
                 }
 
                 instructionSequence++;
@@ -382,6 +442,10 @@ public static class TiaXmlSemanticGraphImporter
             if (!graph.TryGetNode(BlockId(deviceName, instanceOfName), out _))
             {
                 graph.UpsertNode(new SemanticGraphNode(BlockId(deviceName, instanceOfName), SemanticNodeKind.FunctionBlock, instanceOfName));
+            }
+            else
+            {
+                graph.TouchNode(BlockId(deviceName, instanceOfName));
             }
 
             AddEdge(graph, dbId, BlockId(deviceName, instanceOfName), SemanticRelationshipType.InstanceOf);
@@ -718,11 +782,35 @@ public static class PlcSemanticGraphSqliteSchema
             FOREIGN KEY (edge_id) REFERENCES graph_edges(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS source_components (
+            component_key TEXT PRIMARY KEY,
+            relative_path TEXT NOT NULL UNIQUE,
+            content_hash TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS source_component_nodes (
+            component_key TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            PRIMARY KEY (component_key, node_id),
+            FOREIGN KEY (component_key) REFERENCES source_components(component_key) ON DELETE CASCADE,
+            FOREIGN KEY (node_id) REFERENCES graph_nodes(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS source_component_edges (
+            component_key TEXT NOT NULL,
+            edge_id TEXT NOT NULL,
+            PRIMARY KEY (component_key, edge_id),
+            FOREIGN KEY (component_key) REFERENCES source_components(component_key) ON DELETE CASCADE,
+            FOREIGN KEY (edge_id) REFERENCES graph_edges(id) ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS ix_graph_nodes_kind ON graph_nodes(kind);
         CREATE INDEX IF NOT EXISTS ix_graph_nodes_name ON graph_nodes(name);
         CREATE INDEX IF NOT EXISTS ix_graph_edges_type ON graph_edges(type);
         CREATE INDEX IF NOT EXISTS ix_graph_edges_from ON graph_edges(from_node_id);
         CREATE INDEX IF NOT EXISTS ix_graph_edges_to ON graph_edges(to_node_id);
+        CREATE INDEX IF NOT EXISTS ix_source_component_nodes_node ON source_component_nodes(node_id);
+        CREATE INDEX IF NOT EXISTS ix_source_component_edges_edge ON source_component_edges(edge_id);
         """;
 }
 
@@ -754,9 +842,20 @@ public static class SqliteSemanticGraphStore
         connection.Open();
         ExecuteNonQuery(connection, "PRAGMA foreign_keys = ON;");
         ExecuteNonQuery(connection, PlcSemanticGraphSqliteSchema.CreateScript);
-        ExecuteNonQuery(connection, "DELETE FROM graph_edge_properties; DELETE FROM graph_edges; DELETE FROM graph_node_properties; DELETE FROM graph_nodes;");
 
         using var transaction = connection.BeginTransaction();
+        ExecuteNonQuery(
+            connection,
+            """
+            DELETE FROM source_component_edges;
+            DELETE FROM source_component_nodes;
+            DELETE FROM source_components;
+            DELETE FROM graph_edge_properties;
+            DELETE FROM graph_edges;
+            DELETE FROM graph_node_properties;
+            DELETE FROM graph_nodes;
+            """,
+            transaction);
         foreach (var node in graph.Nodes)
         {
             ExecuteNonQuery(
@@ -800,6 +899,7 @@ public static class SqliteSemanticGraphStore
             }
         }
 
+        ComponentProvenanceStore.Save(connection, transaction, graph.ComponentImports);
         transaction.Commit();
     }
 
@@ -848,6 +948,7 @@ public static class SqliteSemanticGraphStore
             }
         }
 
+        ComponentProvenanceStore.Load(connection, graph);
         return graph;
     }
 
@@ -915,6 +1016,17 @@ public static class SqliteSemanticGraphStore
             command.Parameters.AddWithValue(parameter.Name, parameter.Value);
         }
 
+        command.ExecuteNonQuery();
+    }
+
+    private static void ExecuteNonQuery(
+        SqliteConnection connection,
+        string sql,
+        SqliteTransaction transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
         command.ExecuteNonQuery();
     }
 }

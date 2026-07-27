@@ -3,6 +3,8 @@
 // driven by ManifestImporter; otherwise this root-element folder crawl is the fallback. The crawl
 // classifies each exported file by its SW.* root element and feeds the ported per-category import
 // methods (Graph/TiaXmlSemanticGraphImporter).
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
@@ -29,6 +31,8 @@ public sealed class ExportFolderImportResult
     public int FilesImported { get; }
 
     public IReadOnlyList<string> Warnings { get; }
+
+    public IReadOnlyList<ComponentImport> Components => Graph.ComponentImports;
 
     /// <summary>"manifest" when driven by metadata.json, "crawl" for the root-element folder crawl.</summary>
     public string Source { get; }
@@ -98,6 +102,34 @@ public static class ExportFolderCrawler
                         combinedGraph.UpsertEdge(edge);
                     }
                 }
+                foreach (var component in result.Components)
+                {
+                    var rewrittenEdges = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var edgeId in component.EdgeIds)
+                    {
+                        var edge = result.Graph.Edges.Single(candidate => candidate.Id == edgeId);
+                        if (skippedProjectIds.Contains(edge.ToNodeId))
+                        {
+                            continue;
+                        }
+
+                        rewrittenEdges.Add(skippedProjectIds.Contains(edge.FromNodeId)
+                            ? TiaXmlSemanticGraphImporter.EdgeId(
+                                projectNode.Id,
+                                edge.ToNodeId,
+                                edge.Type,
+                                edge.Properties)
+                            : edge.Id);
+                    }
+
+                    combinedGraph.RegisterComponentImport(component with
+                    {
+                        NodeIds = component.NodeIds
+                            .Where(nodeId => !skippedProjectIds.Contains(nodeId))
+                            .ToHashSet(StringComparer.Ordinal),
+                        EdgeIds = rewrittenEdges,
+                    });
+                }
                 totalFilesFound += result.FilesFound;
                 totalFilesImported += result.FilesImported;
                 allWarnings.AddRange(result.Warnings);
@@ -141,9 +173,15 @@ public static class ExportFolderCrawler
             return doc.RootElement.TryGetProperty("components", out var comps)
                 && comps.ValueKind == JsonValueKind.Array;
         }
-        catch
+        catch (JsonException ex)
         {
-            return false;
+            throw new ManifestInvalidException(
+                $"metadata.json at '{path}' is not valid JSON: {ex.Message}");
+        }
+        catch (IOException ex)
+        {
+            throw new ManifestInvalidException(
+                $"metadata.json at '{path}' could not be read: {ex.Message}");
         }
     }
 
@@ -214,32 +252,42 @@ public static class ExportFolderCrawler
             if (string.IsNullOrEmpty(deviceName) && sourcePath.Length > 0)
                 deviceName = sourcePath;
 
-            switch (winner.Kind)
+            var touches = graph.CaptureTouches(() =>
             {
-                case ImportKind.ProgramBlock:
-                    TiaXmlSemanticGraphImporter.ImportBlockXml(
-                        winner.Xml,
-                        new ProgramBlockComponent(winner.Name, winner.Category!, sourcePath, winner.RelativeFile),
-                        graph,
-                        deviceName);
-                    TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                        graph, project.Id, TiaXmlSemanticGraphImporter.BlockId(deviceName, winner.Name), SemanticRelationshipType.Contains);
-                    break;
-                case ImportKind.DataBlock:
-                    TiaXmlSemanticGraphImporter.ImportDbXml(winner.Xml, winner.RelativeFile, sourcePath, graph, deviceName);
-                    TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                        graph, project.Id, TiaXmlSemanticGraphImporter.DbId(deviceName, winner.Name), SemanticRelationshipType.Contains);
-                    break;
-                case ImportKind.Udt:
-                    TiaXmlSemanticGraphImporter.ImportUdtXml(winner.Xml, winner.RelativeFile, sourcePath, graph, deviceName);
-                    TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                        graph, project.Id, TiaXmlSemanticGraphImporter.UdtId(deviceName, winner.Name), SemanticRelationshipType.Contains);
-                    break;
-                case ImportKind.TagTable:
-                    // Reference behaviour: tag tables get no project CONTAINS edge (tags float freely).
-                    TiaXmlSemanticGraphImporter.ImportTagTableXml(winner.Xml, winner.RelativeFile, sourcePath, graph);
-                    break;
-            }
+                switch (winner.Kind)
+                {
+                    case ImportKind.ProgramBlock:
+                        TiaXmlSemanticGraphImporter.ImportBlockXml(
+                            winner.Xml,
+                            new ProgramBlockComponent(winner.Name, winner.Category!, sourcePath, winner.RelativeFile),
+                            graph,
+                            deviceName);
+                        TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                            graph, project.Id, TiaXmlSemanticGraphImporter.BlockId(deviceName, winner.Name), SemanticRelationshipType.Contains);
+                        break;
+                    case ImportKind.DataBlock:
+                        TiaXmlSemanticGraphImporter.ImportDbXml(winner.Xml, winner.RelativeFile, sourcePath, graph, deviceName);
+                        TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                            graph, project.Id, TiaXmlSemanticGraphImporter.DbId(deviceName, winner.Name), SemanticRelationshipType.Contains);
+                        break;
+                    case ImportKind.Udt:
+                        TiaXmlSemanticGraphImporter.ImportUdtXml(winner.Xml, winner.RelativeFile, sourcePath, graph, deviceName);
+                        TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                            graph, project.Id, TiaXmlSemanticGraphImporter.UdtId(deviceName, winner.Name), SemanticRelationshipType.Contains);
+                        break;
+                    case ImportKind.TagTable:
+                        // Reference behaviour: tag tables get no project CONTAINS edge (tags float freely).
+                        TiaXmlSemanticGraphImporter.ImportTagTableXml(winner.Xml, winner.RelativeFile, sourcePath, graph);
+                        break;
+                }
+            });
+            var normalizedPath = winner.RelativeFile.Replace('\\', '/');
+            graph.RegisterComponentImport(new ComponentImport(
+                $"path:{normalizedPath}",
+                normalizedPath,
+                winner.ContentHash,
+                touches.NodeIds,
+                touches.EdgeIds));
 
             imported++;
             if (progress != null && (imported % 100 == 0 || imported == winners.Count))
@@ -254,10 +302,17 @@ public static class ExportFolderCrawler
     private static ImportCandidate? TryClassify(string fullRoot, string relativeFile, IList<string> warnings)
     {
         string xml;
+        byte[] bytes;
         XDocument document;
         try
         {
-            xml = File.ReadAllText(Path.Combine(fullRoot, relativeFile));
+            bytes = File.ReadAllBytes(Path.Combine(fullRoot, relativeFile));
+            using var stream = new MemoryStream(bytes, writable: false);
+            using var reader = new StreamReader(
+                stream,
+                Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: true);
+            xml = reader.ReadToEnd();
             document = XDocument.Parse(xml);
         }
         catch (XmlException ex)
@@ -315,7 +370,8 @@ public static class ExportFolderCrawler
             rootElement,
             kind,
             kind == ImportKind.ProgramBlock ? rootElement.Substring(ProgramBlockPrefix.Length) : null,
-            relativeFile.Count(character => character == '/' || character == '\\'));
+            relativeFile.Count(character => character == '/' || character == '\\'),
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
     }
 
     private static string GetAttributeListValue(XElement element, string name)
@@ -340,7 +396,15 @@ public static class ExportFolderCrawler
 
     private sealed class ImportCandidate
     {
-        public ImportCandidate(string relativeFile, string xml, string name, string rootElement, ImportKind kind, string? category, int depth)
+        public ImportCandidate(
+            string relativeFile,
+            string xml,
+            string name,
+            string rootElement,
+            ImportKind kind,
+            string? category,
+            int depth,
+            string contentHash)
         {
             RelativeFile = relativeFile;
             Xml = xml;
@@ -349,6 +413,7 @@ public static class ExportFolderCrawler
             Kind = kind;
             Category = category;
             Depth = depth;
+            ContentHash = contentHash;
             Identity = rootElement + "\n" + name;
         }
 
@@ -366,6 +431,8 @@ public static class ExportFolderCrawler
         public string? Category { get; }
 
         public int Depth { get; }
+
+        public string ContentHash { get; }
 
         /// <summary>Duplicate-detection identity: content root element + block name.</summary>
         public string Identity { get; }
