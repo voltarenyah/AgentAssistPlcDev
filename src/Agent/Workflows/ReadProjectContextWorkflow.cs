@@ -16,17 +16,20 @@ public sealed class ReadProjectContextWorkflow
     private readonly IMcpToolCaller knowledge;
     private readonly IProgress<string>? progress;
     private readonly Func<string, bool> fileExists;
+    private readonly SafeDeviceExportStager stager;
 
     public ReadProjectContextWorkflow(
         IMcpToolCaller engineering,
         IMcpToolCaller knowledge,
         IProgress<string>? progress = null,
-        Func<string, bool>? fileExists = null)
+        Func<string, bool>? fileExists = null,
+        SafeDeviceExportStager? stager = null)
     {
         this.engineering = engineering;
         this.knowledge = knowledge;
         this.progress = progress;
         this.fileExists = fileExists ?? File.Exists;
+        this.stager = stager ?? new SafeDeviceExportStager(engineering);
     }
 
     public async Task<ReadProjectContextResult> RunAsync(
@@ -50,10 +53,7 @@ public sealed class ReadProjectContextWorkflow
         cancellationToken.ThrowIfCancellationRequested();
         var sync = await Timed(
             "Staging device export",
-            () => engineering.CallAsync<SyncResult[]>(
-                "rebuild_export",
-                new { outputDir = device.StagingRoot, plcName },
-                cancellationToken));
+            () => stager.StageAsync(device, plcName, cancellationToken));
         var selected = sync.Where(item =>
             string.Equals(item.PlcName, plcName, StringComparison.Ordinal)).ToArray();
         if (selected.Length == 0)

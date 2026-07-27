@@ -78,6 +78,7 @@ public sealed class WorkbenchCoordinator
     private readonly DeviceReconciler reconciler;
     private readonly DeviceSourceResolver sourceResolver;
     private readonly DeviceOperationLock operationLock;
+    private readonly SafeDeviceExportStager stager;
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> knownWorkbenches =
         new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, WorktreeMetadata> knownWorktrees =
@@ -101,6 +102,7 @@ public sealed class WorkbenchCoordinator
         this.reconciler = reconciler ?? throw new ArgumentNullException(nameof(reconciler));
         this.sourceResolver = sourceResolver ?? throw new ArgumentNullException(nameof(sourceResolver));
         this.operationLock = operationLock ?? new DeviceOperationLock();
+        stager = new SafeDeviceExportStager(engineering, this.operationLock);
     }
 
     public async Task<CreateWorkbenchResult> CreateWorkbenchAsync(
@@ -272,47 +274,11 @@ public sealed class WorkbenchCoordinator
 
     public Task<SyncResult[]> StageRefreshAsync(
         DeviceContext device,
-        CancellationToken token) =>
-        operationLock.RunAsync(
-            device,
-            async cancellationToken =>
-            {
-                var metadata = ReadDevice(device);
-                var incoming = WorkbenchPaths.ResolveRelative(
-                    device.DeviceRoot,
-                    $".staging-{Guid.NewGuid():N}.incoming");
-                try
-                {
-                    var result = await engineering.CallAsync<SyncResult[]>(
-                        "rebuild_export",
-                        new { outputDir = incoming, plcName = metadata.PlcName },
-                        cancellationToken).ConfigureAwait(false);
-                    var selected = result.Where(item =>
-                        string.Equals(item.PlcName, metadata.PlcName, StringComparison.Ordinal)).ToArray();
-                    if (selected.Length == 0)
-                    {
-                        throw new WorkbenchLifecycleException(
-                            "DEVICE_EXPORT_INCOMPLETE",
-                            $"The export did not return selected PLC '{metadata.PlcName}'.");
-                    }
-
-                    if (selected.Any(item => item.Failed.Length > 0))
-                    {
-                        var failed = selected.Sum(item => item.Failed.Length);
-                        throw new WorkbenchLifecycleException(
-                            "DEVICE_EXPORT_INCOMPLETE",
-                            $"The selected PLC export failed for {failed} component(s); previous staging was preserved.");
-                    }
-
-                    ReplaceStaging(device, incoming);
-                    return selected;
-                }
-                finally
-                {
-                    SafeDeleteTree(incoming);
-                }
-            },
-            token);
+        CancellationToken token)
+    {
+        var metadata = ReadDevice(device);
+        return stager.StageAsync(device, metadata.PlcName, token);
+    }
 
     public ReconciliationPreview PreviewRefresh(DeviceContext device) =>
         reconciler.Preview(device);
@@ -339,6 +305,15 @@ public sealed class WorkbenchCoordinator
                     device,
                     approval.Preview,
                     approval.ApprovedRemovalPaths);
+                if (outcome.ChangedPaths.Count == 0)
+                {
+                    return new RefreshApplyResult(
+                        RefreshApplyState.Committed,
+                        Array.Empty<string>(),
+                        null,
+                        null);
+                }
+
                 var deviceMetadata = ReadDevice(device);
                 WriteDevice(
                     device,
@@ -360,15 +335,6 @@ public sealed class WorkbenchCoordinator
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(path => path, StringComparer.Ordinal)
                     .ToArray();
-                if (outcome.ChangedPaths.Count == 0)
-                {
-                    return new RefreshApplyResult(
-                        RefreshApplyState.Committed,
-                        changedPaths,
-                        null,
-                        null);
-                }
-
                 try
                 {
                     await versionControl.CallAsync<object>(
@@ -622,76 +588,6 @@ public sealed class WorkbenchCoordinator
 
     private static string HashFile(string path) =>
         Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
-
-    private static void ReplaceStaging(DeviceContext device, string incoming)
-    {
-        if (!Directory.Exists(incoming))
-        {
-            throw new WorkbenchLifecycleException(
-                "DEVICE_EXPORT_INCOMPLETE",
-                "The engineering export did not create a staging directory.");
-        }
-
-        var backup = WorkbenchPaths.ResolveRelative(
-            device.DeviceRoot,
-            $".staging-{Guid.NewGuid():N}.backup");
-        var movedPrevious = false;
-        try
-        {
-            if (Directory.Exists(device.StagingRoot))
-            {
-                Directory.Move(device.StagingRoot, backup);
-                movedPrevious = true;
-            }
-
-            Directory.Move(incoming, device.StagingRoot);
-            SafeDeleteTree(backup);
-        }
-        catch
-        {
-            if (!Directory.Exists(device.StagingRoot)
-                && movedPrevious
-                && Directory.Exists(backup))
-            {
-                Directory.Move(backup, device.StagingRoot);
-            }
-
-            throw;
-        }
-        finally
-        {
-            SafeDeleteTree(backup);
-        }
-    }
-
-    private static void SafeDeleteTree(string path)
-    {
-        if (!Directory.Exists(path))
-        {
-            return;
-        }
-
-        foreach (var entry in Directory.EnumerateFileSystemEntries(path))
-        {
-            if (Directory.Exists(entry))
-            {
-                if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0)
-                {
-                    Directory.Delete(entry);
-                }
-                else
-                {
-                    SafeDeleteTree(entry);
-                }
-            }
-            else
-            {
-                File.Delete(entry);
-            }
-        }
-
-        Directory.Delete(path);
-    }
 
     private IReadOnlyList<DeviceMetadata> LoadInheritedDevices(
         string worktreePath,

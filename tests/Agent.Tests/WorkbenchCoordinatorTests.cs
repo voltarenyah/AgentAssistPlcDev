@@ -109,6 +109,31 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task FailedReplacementAndRestorePreservesBackupForRecovery()
+    {
+        var fixture = Fixture.Create(root);
+        fixture.WriteStaging("sentinel.txt", "previous");
+        var engineering = new MutatingExportCaller(new[]
+        {
+            new SyncResult { PlcName = "PLC_1" },
+        });
+        var files = new FailSecondAndThirdMoveOperations();
+        var stager = new SafeDeviceExportStager(
+            engineering,
+            new DeviceOperationLock(),
+            files);
+
+        var error = await Assert.ThrowsAsync<AggregateException>(
+            () => stager.StageAsync(fixture.Context, "PLC_1"));
+
+        Assert.Contains("backup was preserved", error.Message, StringComparison.OrdinalIgnoreCase);
+        var backup = Assert.Single(Directory.EnumerateDirectories(
+            fixture.Context.DeviceRoot,
+            ".staging-*.backup"));
+        Assert.Equal("previous", File.ReadAllText(Path.Combine(backup, "sentinel.txt")));
+    }
+
+    [Fact]
     public async Task ApplyRefreshReconcilesThenStagesExactPathsAndCommits()
     {
         var fixture = Fixture.Create(root);
@@ -160,6 +185,36 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal(RefreshApplyState.Rejected, result.State);
         Assert.Empty(calls);
         Assert.False(File.Exists(Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+    }
+
+    [Fact]
+    public async Task ApprovedNoOpLeavesMetadataCleanAndDoesNotCallGit()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: false);
+        fixture.WriteBaseline("Blocks/A.xml", "<same />");
+        fixture.WriteStaging("Blocks/A.xml", "<same />");
+        fixture.WriteManifests("Blocks/A.xml");
+        // Make the two manifests byte-identical so reconciliation is a true no-op.
+        File.Copy(
+            Path.Combine(fixture.Context.ExportedSourceRoot, "metadata.json"),
+            Path.Combine(fixture.Context.StagingRoot, "metadata.json"),
+            overwrite: true);
+        var before = File.ReadAllBytes(Path.Combine(fixture.Context.DeviceRoot, "device.json"));
+        var version = new FakeToolCaller();
+        var coordinator = Create(fixture, versionControl: version);
+
+        var result = await coordinator.ApplyRefreshAsync(
+            fixture.Context,
+            new ApprovedReconciliation(
+                coordinator.PreviewRefresh(fixture.Context),
+                new HashSet<string>()),
+            CancellationToken.None);
+
+        Assert.Empty(result.ChangedPaths);
+        Assert.Empty(version.Calls);
+        Assert.Equal(
+            before,
+            File.ReadAllBytes(Path.Combine(fixture.Context.DeviceRoot, "device.json")));
     }
 
     [Fact]
@@ -389,8 +444,33 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             var output = Property<string>(args, "outputDir");
             Directory.CreateDirectory(output);
             File.WriteAllText(Path.Combine(output, "partial.txt"), "partial");
+            File.WriteAllText(Path.Combine(output, "metadata.json"), "{}");
             return Task.FromResult((T)(object)result);
         }
+    }
+
+    private sealed class FailSecondAndThirdMoveOperations : IStagingFileOperations
+    {
+        private int moves;
+
+        public bool DirectoryExists(string path) => Directory.Exists(path);
+        public bool FileExists(string path) => File.Exists(path);
+        public void CreateDirectory(string path) => Directory.CreateDirectory(path);
+        public void MoveDirectory(string source, string destination)
+        {
+            moves++;
+            if (moves is 2 or 3)
+            {
+                throw new IOException($"Injected move failure {moves}.");
+            }
+
+            Directory.Move(source, destination);
+        }
+        public void DeleteDirectory(string path) => Directory.Delete(path);
+        public IEnumerable<string> EnumerateEntries(string path) =>
+            Directory.EnumerateFileSystemEntries(path);
+        public FileAttributes GetAttributes(string path) => File.GetAttributes(path);
+        public void DeleteFile(string path) => File.Delete(path);
     }
     private sealed class Fixture
     {

@@ -19,7 +19,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         Directory.CreateDirectory(context.ExportedSourceRoot);
         var sentinel = Path.Combine(context.ExportedSourceRoot, "sentinel.xml");
         File.WriteAllText(sentinel, "unchanged");
-        var engineering = new FakeToolCaller()
+        var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line", PlcDevices = new[] { "PLC_1" } })
             .Respond("rebuild_export", new[]
             {
@@ -34,8 +34,9 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
 
         Assert.Equal(new[] { "get_project_info", "rebuild_export" }, engineering.Calls);
         var args = engineering.CallArgs["rebuild_export"].Single();
-        Assert.Equal(context.StagingRoot, Property<string>(args, "outputDir"));
+        Assert.StartsWith(context.DeviceRoot, Property<string>(args, "outputDir"));
         Assert.Equal("PLC_1", Property<string>(args, "plcName"));
+        Assert.True(File.Exists(Path.Combine(context.StagingRoot, "metadata.json")));
         Assert.Equal("unchanged", File.ReadAllText(sentinel));
         Assert.Equal(context.DeviceId, result.DeviceId);
         Assert.Equal(context.KnowledgeDbPath, result.DbPath);
@@ -47,7 +48,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         var context = Context();
         Directory.CreateDirectory(context.ExportedSourceRoot);
         File.WriteAllText(Path.Combine(context.ExportedSourceRoot, "metadata.json"), "{}");
-        var engineering = new FakeToolCaller()
+        var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
             .Respond("rebuild_export", new[] { new SyncResult { PlcName = "PLC_1" } });
         var knowledge = new FakeToolCaller()
@@ -69,7 +70,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
     public async Task FirstStagedExportDoesNotIngestBeforeBaselineApproval()
     {
         var context = Context();
-        var engineering = new FakeToolCaller()
+        var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
             .Respond("rebuild_export", new[]
             {
@@ -93,10 +94,37 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task PartialExportThroughWorkflowPreservesPreviousStaging()
+    {
+        var context = Context();
+        Directory.CreateDirectory(context.StagingRoot);
+        File.WriteAllText(Path.Combine(context.StagingRoot, "sentinel.txt"), "previous");
+        var engineering = new ManifestExportCaller()
+            .Respond("get_project_info", new ProjectInfo { Name = "Line" })
+            .Respond("rebuild_export", new[]
+            {
+                new SyncResult
+                {
+                    PlcName = "PLC_1",
+                    Failed = new[] { new SyncChange { Name = "A" } },
+                },
+            });
+        var workflow = new ReadProjectContextWorkflow(engineering, new FakeToolCaller());
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(
+            () => workflow.RunAsync(context, "PLC_1"));
+
+        Assert.Equal("DEVICE_EXPORT_INCOMPLETE", error.Code);
+        Assert.Equal(
+            "previous",
+            File.ReadAllText(Path.Combine(context.StagingRoot, "sentinel.txt")));
+    }
+
+    [Fact]
     public async Task ExistingKnowledgeIsNotRebuiltFromUnapprovedStage()
     {
         var context = Context();
-        var engineering = new FakeToolCaller()
+        var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
             .Respond("rebuild_export", new[]
             {
@@ -124,7 +152,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
     public async Task CancellationAfterProjectInfoStopsBeforeStage()
     {
         var context = Context();
-        var engineering = new FakeToolCaller()
+        var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" });
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
@@ -151,4 +179,22 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
 
     private static T Property<T>(object value, string name) =>
         (T)value.GetType().GetProperty(name)!.GetValue(value)!;
+
+    private sealed class ManifestExportCaller : FakeToolCaller
+    {
+        public override Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            if (tool == "rebuild_export")
+            {
+                var output = Property<string>(args, "outputDir");
+                Directory.CreateDirectory(output);
+                File.WriteAllText(Path.Combine(output, "metadata.json"), "{}");
+            }
+
+            return base.CallAsync<T>(tool, args, cancellationToken);
+        }
+    }
 }

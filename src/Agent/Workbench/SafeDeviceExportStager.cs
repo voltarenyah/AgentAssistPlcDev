@@ -1,0 +1,198 @@
+using Agent.Mcp;
+using Contracts.Engineering;
+
+namespace Agent.Workbench;
+
+internal interface IStagingFileOperations
+{
+    bool DirectoryExists(string path);
+    bool FileExists(string path);
+    void CreateDirectory(string path);
+    void MoveDirectory(string source, string destination);
+    void DeleteDirectory(string path);
+    IEnumerable<string> EnumerateEntries(string path);
+    FileAttributes GetAttributes(string path);
+    void DeleteFile(string path);
+}
+
+internal sealed class StagingFileOperations : IStagingFileOperations
+{
+    public bool DirectoryExists(string path) => Directory.Exists(path);
+    public bool FileExists(string path) => File.Exists(path);
+    public void CreateDirectory(string path) => Directory.CreateDirectory(path);
+    public void MoveDirectory(string source, string destination) => Directory.Move(source, destination);
+    public void DeleteDirectory(string path) => Directory.Delete(path);
+    public IEnumerable<string> EnumerateEntries(string path) =>
+        Directory.EnumerateFileSystemEntries(path);
+    public FileAttributes GetAttributes(string path) => File.GetAttributes(path);
+    public void DeleteFile(string path) => File.Delete(path);
+}
+
+/// <summary>Stages one complete selected-device export without exposing a partial tree.</summary>
+public sealed class SafeDeviceExportStager
+{
+    private readonly IMcpToolCaller engineering;
+    private readonly DeviceOperationLock operationLock;
+    private readonly IStagingFileOperations files;
+
+    public SafeDeviceExportStager(
+        IMcpToolCaller engineering,
+        DeviceOperationLock? operationLock = null)
+        : this(engineering, operationLock ?? new DeviceOperationLock(), new StagingFileOperations())
+    {
+    }
+
+    internal SafeDeviceExportStager(
+        IMcpToolCaller engineering,
+        DeviceOperationLock operationLock,
+        IStagingFileOperations files)
+    {
+        this.engineering = engineering ?? throw new ArgumentNullException(nameof(engineering));
+        this.operationLock = operationLock ?? throw new ArgumentNullException(nameof(operationLock));
+        this.files = files ?? throw new ArgumentNullException(nameof(files));
+    }
+
+    public Task<SyncResult[]> StageAsync(
+        DeviceContext device,
+        string plcName,
+        CancellationToken cancellationToken = default) =>
+        operationLock.RunAsync(
+            device,
+            token => StageCoreAsync(device, plcName, token),
+            cancellationToken);
+
+    private async Task<SyncResult[]> StageCoreAsync(
+        DeviceContext device,
+        string plcName,
+        CancellationToken cancellationToken)
+    {
+        var incoming = WorkbenchPaths.ResolveRelative(
+            device.DeviceRoot,
+            $".staging-{Guid.NewGuid():N}.incoming");
+        try
+        {
+            files.CreateDirectory(incoming);
+            var result = await engineering.CallAsync<SyncResult[]>(
+                "rebuild_export",
+                new { outputDir = incoming, plcName },
+                cancellationToken).ConfigureAwait(false);
+            var selected = result.Where(item =>
+                string.Equals(item.PlcName, plcName, StringComparison.Ordinal)).ToArray();
+            if (selected.Length == 0 || selected.Any(item => item.Failed.Length > 0))
+            {
+                var failed = selected.Sum(item => item.Failed.Length);
+                throw new WorkbenchLifecycleException(
+                    "DEVICE_EXPORT_INCOMPLETE",
+                    selected.Length == 0
+                        ? $"The export did not return selected PLC '{plcName}'."
+                        : $"The selected PLC export failed for {failed} component(s); previous staging was preserved.");
+            }
+
+            if (!files.FileExists(Path.Combine(incoming, "metadata.json")))
+            {
+                throw new WorkbenchLifecycleException(
+                    "DEVICE_EXPORT_INCOMPLETE",
+                    "The selected PLC export did not produce a component manifest; previous staging was preserved.");
+            }
+
+            ReplaceStaging(device, incoming);
+            return selected;
+        }
+        finally
+        {
+            TryDeleteTree(incoming);
+        }
+    }
+
+    private void ReplaceStaging(DeviceContext device, string incoming)
+    {
+        var backup = WorkbenchPaths.ResolveRelative(
+            device.DeviceRoot,
+            $".staging-{Guid.NewGuid():N}.backup");
+        var previousMoved = false;
+        var replacementInstalled = false;
+        try
+        {
+            if (files.DirectoryExists(device.StagingRoot))
+            {
+                files.MoveDirectory(device.StagingRoot, backup);
+                previousMoved = true;
+            }
+
+            files.MoveDirectory(incoming, device.StagingRoot);
+            replacementInstalled = true;
+        }
+        catch (Exception primary)
+        {
+            if (previousMoved && !files.DirectoryExists(device.StagingRoot))
+            {
+                try
+                {
+                    files.MoveDirectory(backup, device.StagingRoot);
+                    previousMoved = false;
+                }
+                catch (Exception restore)
+                {
+                    // The backup remains in place for manual recovery.
+                    throw new AggregateException(
+                        "Staging replacement failed and the previous staging tree could not be restored. The backup was preserved.",
+                        primary,
+                        restore);
+                }
+            }
+
+            throw;
+        }
+        finally
+        {
+            // Delete backup only after a replacement was installed or restoration succeeded.
+            // Cleanup is best effort and must never mask the staging result.
+            if (replacementInstalled || !previousMoved)
+            {
+                TryDeleteTree(backup);
+            }
+        }
+    }
+
+    private void TryDeleteTree(string path)
+    {
+        try
+        {
+            DeleteTree(path);
+        }
+        catch (Exception)
+        {
+            // Cleanup is deliberately non-authoritative. The primary export/swap result and any
+            // preserved backup are more important than removing a transient artifact.
+        }
+    }
+
+    private void DeleteTree(string path)
+    {
+        if (!files.DirectoryExists(path))
+        {
+            return;
+        }
+
+        foreach (var entry in files.EnumerateEntries(path))
+        {
+            if (files.DirectoryExists(entry))
+            {
+                if ((files.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0)
+                {
+                    files.DeleteDirectory(entry);
+                }
+                else
+                {
+                    DeleteTree(entry);
+                }
+            }
+            else
+            {
+                files.DeleteFile(entry);
+            }
+        }
+
+        files.DeleteDirectory(path);
+    }
+}
