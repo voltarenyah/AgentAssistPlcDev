@@ -1043,16 +1043,18 @@ git commit -m "feat(api): expose workbench device contexts"
 > command is claimed for this feature.
 
 **Files:**
-- Create: `scripts/e2e-workbench.json`
-- Modify: `scripts/mcp-e2e.mjs`
+- Create: `tests/E2E.Tests/E2E.Tests.csproj`
+- Create: `tests/E2E.Tests/WorkbenchLifecycleTests.cs`
+- Modify: `AgentAssistPlcDev.sln`
 - Modify: `agent.md`
 - Modify: `buildnote/plan/app.md`
 - Modify: `buildnote/plan/export-sync.md`
+- Create: `buildnote/verification/workbench-project-storage.md`
 - Modify: `tests/Agent.Tests/AssistantPathsTests.cs`
 
 - [ ] **Step 1: Add the end-to-end scenario**
 
-The script must:
+The xUnit lifecycle test must:
 
 1. create a temporary custom-root workbench;
 2. initialize shared Git storage and `master`;
@@ -1096,11 +1098,13 @@ Expected: matches remain only in legacy compatibility code/tests and historical 
 Run:
 
 ```powershell
-dotnet test AgentAssistPlcDev.sln
-node scripts/mcp-e2e.mjs scripts/e2e-workbench.json
+dotnet test tests/E2E.Tests/E2E.Tests.csproj --no-restore
+dotnet test AgentAssistPlcDev.sln --no-restore
 ```
 
-Expected: all unit/integration tests pass and E2E reports every workbench step successful.
+Expected: the coordinator-driven lifecycle E2E and all unit/integration tests pass.
+There is no `scripts/e2e-workbench.json` invocation for this feature; the amendment
+above records why the xUnit boundary replaced it.
 
 - [ ] **Step 5: Perform the live acceptance pass**
 
@@ -1121,8 +1125,8 @@ Record the command output, commit SHAs, device paths, and screenshots in `buildn
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add scripts agent.md buildnote/plan/app.md buildnote/plan/export-sync.md buildnote/verification/workbench-project-storage.md tests/Agent.Tests/AssistantPathsTests.cs
-git commit -m "docs: verify workbench project storage"
+git add AgentAssistPlcDev.sln tests/E2E.Tests agent.md buildnote/plan/app.md buildnote/plan/export-sync.md buildnote/verification/workbench-project-storage.md tests/Agent.Tests/AssistantPathsTests.cs
+git commit -m "test(workbench): verify project lifecycle end to end"
 ```
 
 ## Plan Self-Review Checklist
