@@ -45,6 +45,8 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
     public async Task MissingKnowledgeBuildsFromBaselinePlusOverlayNeverStaging()
     {
         var context = Context();
+        Directory.CreateDirectory(context.ExportedSourceRoot);
+        File.WriteAllText(Path.Combine(context.ExportedSourceRoot, "metadata.json"), "{}");
         var engineering = new FakeToolCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
             .Respond("rebuild_export", new[] { new SyncResult { PlcName = "PLC_1" } });
@@ -61,6 +63,33 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         Assert.Equal(context.ExportedSourceRoot, Property<string>(args, "exportedSourceRoot"));
         Assert.Equal(context.ModifiedSourceRoot, Property<string>(args, "modifiedSourceRoot"));
         Assert.Equal(context.KnowledgeDbPath, Property<string>(args, "dbPath"));
+    }
+
+    [Fact]
+    public async Task FirstStagedExportDoesNotIngestBeforeBaselineApproval()
+    {
+        var context = Context();
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo { Name = "Line" })
+            .Respond("rebuild_export", new[]
+            {
+                new SyncResult
+                {
+                    PlcName = "PLC_1",
+                    BaselineExisted = false,
+                    Added = new[] { new SyncChange { Name = "A" } },
+                },
+            });
+        var knowledge = new FakeToolCaller();
+        var workflow = new ReadProjectContextWorkflow(
+            engineering,
+            knowledge,
+            fileExists: _ => false);
+
+        var result = await workflow.RunAsync(context, "PLC_1");
+
+        Assert.True(result.ApprovalRequired);
+        Assert.Empty(knowledge.Calls);
     }
 
     [Fact]

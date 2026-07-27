@@ -2,8 +2,17 @@ using Agent.Mcp;
 using Contracts.Engineering;
 using Contracts.Knowledge;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 
 namespace Agent.Workbench;
+
+public sealed class WorkbenchLifecycleException : Exception
+{
+    public WorkbenchLifecycleException(string code, string message)
+        : base($"{code}: {message}") => Code = code;
+
+    public string Code { get; }
+}
 
 public sealed record CreateWorkbenchRequest(
     string Name,
@@ -152,7 +161,8 @@ public sealed class WorkbenchCoordinator
                 new KnowledgeState(
                     true,
                     new Dictionary<string, string>(StringComparer.Ordinal),
-                    null),
+                    null,
+                    BaselineStale: true),
                 Array.Empty<DeviceImportRecord>()))
             .ToArray();
         worktree = worktree with { DeviceIds = devices.Select(device => device.DeviceId).ToArray() };
@@ -268,19 +278,39 @@ public sealed class WorkbenchCoordinator
             async cancellationToken =>
             {
                 var metadata = ReadDevice(device);
-                var result = await engineering.CallAsync<SyncResult[]>(
-                    "rebuild_export",
-                    new { outputDir = device.StagingRoot, plcName = metadata.PlcName },
-                    cancellationToken).ConfigureAwait(false);
-                var selected = result.Where(item =>
-                    string.Equals(item.PlcName, metadata.PlcName, StringComparison.Ordinal)).ToArray();
-                if (selected.Length == 0)
+                var incoming = WorkbenchPaths.ResolveRelative(
+                    device.DeviceRoot,
+                    $".staging-{Guid.NewGuid():N}.incoming");
+                try
                 {
-                    throw new InvalidOperationException(
-                        $"The export did not return selected PLC '{metadata.PlcName}'.");
-                }
+                    var result = await engineering.CallAsync<SyncResult[]>(
+                        "rebuild_export",
+                        new { outputDir = incoming, plcName = metadata.PlcName },
+                        cancellationToken).ConfigureAwait(false);
+                    var selected = result.Where(item =>
+                        string.Equals(item.PlcName, metadata.PlcName, StringComparison.Ordinal)).ToArray();
+                    if (selected.Length == 0)
+                    {
+                        throw new WorkbenchLifecycleException(
+                            "DEVICE_EXPORT_INCOMPLETE",
+                            $"The export did not return selected PLC '{metadata.PlcName}'.");
+                    }
 
-                return selected;
+                    if (selected.Any(item => item.Failed.Length > 0))
+                    {
+                        var failed = selected.Sum(item => item.Failed.Length);
+                        throw new WorkbenchLifecycleException(
+                            "DEVICE_EXPORT_INCOMPLETE",
+                            $"The selected PLC export failed for {failed} component(s); previous staging was preserved.");
+                    }
+
+                    ReplaceStaging(device, incoming);
+                    return selected;
+                }
+                finally
+                {
+                    SafeDeleteTree(incoming);
+                }
             },
             token);
 
@@ -309,11 +339,32 @@ public sealed class WorkbenchCoordinator
                     device,
                     approval.Preview,
                     approval.ApprovedRemovalPaths);
+                var deviceMetadata = ReadDevice(device);
+                WriteDevice(
+                    device,
+                    deviceMetadata with
+                    {
+                        LastExportUtc = DateTimeOffset.UtcNow.ToString("O"),
+                        Knowledge = deviceMetadata.Knowledge with
+                        {
+                            Stale = true,
+                            BaselineStale = true,
+                        },
+                    });
+                var metadataGitPath = Path.GetRelativePath(
+                        device.WorktreeRoot,
+                        Path.Combine(device.DeviceRoot, "device.json"))
+                    .Replace('\\', '/');
+                var changedPaths = outcome.ChangedPaths
+                    .Append(metadataGitPath)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .ToArray();
                 if (outcome.ChangedPaths.Count == 0)
                 {
                     return new RefreshApplyResult(
                         RefreshApplyState.Committed,
-                        outcome.ChangedPaths,
+                        changedPaths,
                         null,
                         null);
                 }
@@ -322,7 +373,7 @@ public sealed class WorkbenchCoordinator
                 {
                     await versionControl.CallAsync<object>(
                         "vc_add",
-                        new { repoPath = device.WorktreeRoot, paths = outcome.ChangedPaths.ToArray() },
+                        new { repoPath = device.WorktreeRoot, paths = changedPaths },
                         cancellationToken).ConfigureAwait(false);
                     var commit = await versionControl.CallAsync<CoordinatorGitCommitResult>(
                         "vc_commit",
@@ -339,7 +390,7 @@ public sealed class WorkbenchCoordinator
                     WriteDevice(device, metadata);
                     return new RefreshApplyResult(
                         RefreshApplyState.Committed,
-                        outcome.ChangedPaths,
+                        changedPaths,
                         commit.Sha,
                         null);
                 }
@@ -347,7 +398,7 @@ public sealed class WorkbenchCoordinator
                 {
                     return new RefreshApplyResult(
                         RefreshApplyState.FilesUpdatedCommitFailed,
-                        outcome.ChangedPaths,
+                        changedPaths,
                         null,
                         $"{exception.Code}: {exception.Message}");
                 }
@@ -362,24 +413,72 @@ public sealed class WorkbenchCoordinator
             async cancellationToken =>
             {
                 var relativePaths = sourceResolver.EnumerateModified(device).ToArray();
-                var result = await knowledge.CallAsync<KnowledgeUpdateResult>(
-                    "update_components",
-                    new
-                    {
-                        exportedSourceRoot = device.ExportedSourceRoot,
-                        modifiedSourceRoot = device.ModifiedSourceRoot,
-                        dbPath = device.KnowledgeDbPath,
+                var before = ReadDevice(device);
+                KnowledgeUpdateResult result;
+                if (!File.Exists(device.KnowledgeDbPath) || before.Knowledge.BaselineStale)
+                {
+                    var ingest = await knowledge.CallAsync<IngestResult>(
+                        "ingest_source",
+                        new
+                        {
+                            exportedSourceRoot = device.ExportedSourceRoot,
+                            modifiedSourceRoot = device.ModifiedSourceRoot,
+                            dbPath = device.KnowledgeDbPath,
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                    result = new KnowledgeUpdateResult(
+                        ingest.DbPath,
                         relativePaths,
-                    },
-                    cancellationToken).ConfigureAwait(false);
+                        HashOverlays(device, relativePaths),
+                        Array.Empty<string>());
+                }
+                else
+                {
+                    var stalePaths = relativePaths.Where(path =>
+                    {
+                        var hash = HashFile(WorkbenchPaths.ResolveRelative(
+                            device.ModifiedSourceRoot,
+                            path));
+                        return !before.Knowledge.AppliedOverlayHashes.TryGetValue(path, out var applied)
+                            || !string.Equals(hash, applied, StringComparison.Ordinal);
+                    }).ToArray();
+                    if (stalePaths.Length == 0)
+                    {
+                        result = new KnowledgeUpdateResult(
+                            device.KnowledgeDbPath,
+                            Array.Empty<string>(),
+                            before.Knowledge.AppliedOverlayHashes,
+                            Array.Empty<string>());
+                    }
+                    else
+                    {
+                        result = await knowledge.CallAsync<KnowledgeUpdateResult>(
+                            "update_components",
+                            new
+                            {
+                                exportedSourceRoot = device.ExportedSourceRoot,
+                                modifiedSourceRoot = device.ModifiedSourceRoot,
+                                dbPath = device.KnowledgeDbPath,
+                                relativePaths = stalePaths,
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                var appliedHashes = new Dictionary<string, string>(
+                    before.Knowledge.AppliedOverlayHashes,
+                    StringComparer.Ordinal);
+                foreach (var applied in result.AppliedHashes)
+                {
+                    appliedHashes[applied.Key] = applied.Value;
+                }
+
                 var metadata = ReadDevice(device) with
                 {
                     Knowledge = new KnowledgeState(
                         false,
-                        new Dictionary<string, string>(
-                            result.AppliedHashes,
-                            StringComparer.Ordinal),
-                        DateTimeOffset.UtcNow.ToString("O")),
+                        appliedHashes,
+                        DateTimeOffset.UtcNow.ToString("O"),
+                        BaselineStale: false),
                 };
                 WriteDevice(device, metadata);
                 return result;
@@ -512,6 +611,87 @@ public sealed class WorkbenchCoordinator
         DeviceContext device,
         ReconciliationOutcome outcome) =>
         $"refresh device {device.DeviceId}: reconcile {outcome.ChangedPaths.Count} files";
+
+    private static IReadOnlyDictionary<string, string> HashOverlays(
+        DeviceContext device,
+        IEnumerable<string> relativePaths) =>
+        relativePaths.ToDictionary(
+            path => path,
+            path => HashFile(WorkbenchPaths.ResolveRelative(device.ModifiedSourceRoot, path)),
+            StringComparer.Ordinal);
+
+    private static string HashFile(string path) =>
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+    private static void ReplaceStaging(DeviceContext device, string incoming)
+    {
+        if (!Directory.Exists(incoming))
+        {
+            throw new WorkbenchLifecycleException(
+                "DEVICE_EXPORT_INCOMPLETE",
+                "The engineering export did not create a staging directory.");
+        }
+
+        var backup = WorkbenchPaths.ResolveRelative(
+            device.DeviceRoot,
+            $".staging-{Guid.NewGuid():N}.backup");
+        var movedPrevious = false;
+        try
+        {
+            if (Directory.Exists(device.StagingRoot))
+            {
+                Directory.Move(device.StagingRoot, backup);
+                movedPrevious = true;
+            }
+
+            Directory.Move(incoming, device.StagingRoot);
+            SafeDeleteTree(backup);
+        }
+        catch
+        {
+            if (!Directory.Exists(device.StagingRoot)
+                && movedPrevious
+                && Directory.Exists(backup))
+            {
+                Directory.Move(backup, device.StagingRoot);
+            }
+
+            throw;
+        }
+        finally
+        {
+            SafeDeleteTree(backup);
+        }
+    }
+
+    private static void SafeDeleteTree(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        foreach (var entry in Directory.EnumerateFileSystemEntries(path))
+        {
+            if (Directory.Exists(entry))
+            {
+                if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0)
+                {
+                    Directory.Delete(entry);
+                }
+                else
+                {
+                    SafeDeleteTree(entry);
+                }
+            }
+            else
+            {
+                File.Delete(entry);
+            }
+        }
+
+        Directory.Delete(path);
+    }
 
     private IReadOnlyList<DeviceMetadata> LoadInheritedDevices(
         string worktreePath,

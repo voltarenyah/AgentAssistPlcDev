@@ -66,11 +66,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         var fixture = Fixture.Create(root);
         var calls = new List<string>();
-        var engineering = Caller(calls)
-            .Respond("rebuild_export", new[]
-            {
-                new SyncResult { PlcName = "PLC_1", ExportRoot = fixture.Context.StagingRoot },
-            });
+        var engineering = new MutatingExportCaller(new[]
+        {
+            new SyncResult { PlcName = "PLC_1", ExportRoot = fixture.Context.StagingRoot },
+        }, calls);
         var coordinator = Create(fixture, engineering: engineering);
         var metadataBefore = File.ReadAllBytes(
             Path.Combine(fixture.Context.DeviceRoot, "device.json"));
@@ -79,11 +78,34 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Equal(new[] { "engineering:rebuild_export" }, calls);
         var args = engineering.CallArgs["rebuild_export"].Single();
-        Assert.Equal(fixture.Context.StagingRoot, Property<string>(args, "outputDir"));
+        Assert.StartsWith(fixture.Context.DeviceRoot, Property<string>(args, "outputDir"));
         Assert.Equal("PLC_1", Property<string>(args, "plcName"));
         Assert.Equal(
             metadataBefore,
             File.ReadAllBytes(Path.Combine(fixture.Context.DeviceRoot, "device.json")));
+    }
+
+    [Fact]
+    public async Task IncompleteStagePreservesPreviousStagingAndFailsExplicitly()
+    {
+        var fixture = Fixture.Create(root);
+        fixture.WriteStaging("sentinel.txt", "previous");
+        var engineering = new MutatingExportCaller(new[]
+        {
+            new SyncResult
+            {
+                PlcName = "PLC_1",
+                Failed = new[] { new SyncChange { Name = "A", Reason = "export failed" } },
+            },
+        });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(
+            () => coordinator.StageRefreshAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("DEVICE_EXPORT_INCOMPLETE", error.Code);
+        Assert.Equal("previous", File.ReadAllText(
+            Path.Combine(fixture.Context.StagingRoot, "sentinel.txt")));
     }
 
     [Fact]
@@ -110,6 +132,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal(new[] { "version:vc_add", "version:vc_commit" }, calls);
         var expected = new[]
         {
+            Relative(fixture.Context, "device.json"),
             Relative(fixture.Context, "exported-source/Blocks/A.xml"),
             Relative(fixture.Context, "exported-source/Blocks/B.xml"),
             Relative(fixture.Context, "exported-source/metadata.json"),
@@ -163,12 +186,15 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
         Assert.Equal(new[] { "version:vc_add", "version:vc_commit" }, calls);
         Assert.Null(ReadDevice(fixture).LastReconciliationCommit);
+        Assert.True(ReadDevice(fixture).Knowledge.Stale);
+        Assert.True(ReadDevice(fixture).Knowledge.BaselineStale);
     }
 
     [Fact]
     public async Task KnowledgeUpdateUsesDeviceDatabaseAndPersistsAppliedHashes()
     {
         var fixture = Fixture.Create(root, knowledgeStale: true);
+        File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
         fixture.WriteModified("Blocks/A.xml", "<modified />");
         var calls = new List<string>();
         var knowledge = Caller(calls).Respond(
@@ -191,6 +217,65 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal("hash-a", ReadDevice(fixture).Knowledge.AppliedOverlayHashes["Blocks/A.xml"]);
         Assert.False(ReadDevice(fixture).Knowledge.Stale);
         Assert.Equal(fixture.Context.KnowledgeDbPath, result.DbPath);
+    }
+
+    [Fact]
+    public async Task MissingDatabaseUsesFullIngestInsteadOfPartialUpdate()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: true);
+        fixture.WriteModified("Blocks/A.xml", "<modified />");
+        var calls = new List<string>();
+        var knowledge = Caller(calls).Respond(
+            "ingest_source",
+            new IngestResult { DbPath = fixture.Context.KnowledgeDbPath });
+        var coordinator = Create(fixture, knowledge: knowledge);
+
+        await coordinator.UpdateKnowledgeAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal(new[] { "knowledge:ingest_source" }, calls);
+        Assert.False(ReadDevice(fixture).Knowledge.Stale);
+    }
+
+    [Fact]
+    public async Task OverlayStaleWithNoChangedOverlaySkipsPartialTool()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: true);
+        File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
+        var knowledge = new FakeToolCaller();
+        var coordinator = Create(fixture, knowledge: knowledge);
+
+        var result = await coordinator.UpdateKnowledgeAsync(
+            fixture.Context,
+            CancellationToken.None);
+
+        Assert.Empty(knowledge.Calls);
+        Assert.Empty(result.UpdatedComponents);
+        Assert.False(ReadDevice(fixture).Knowledge.Stale);
+    }
+
+    [Fact]
+    public async Task BaselineReconciliationForcesFullKnowledgeRebuild()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: false);
+        File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
+        fixture.WriteStaging("Blocks/A.xml", "<new />");
+        fixture.WriteManifests("Blocks/A.xml");
+        var version = new FakeToolCaller()
+            .Respond("vc_add", new AddResult())
+            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "abc" });
+        var knowledge = new FakeToolCaller()
+            .Respond("ingest_source", new IngestResult { DbPath = fixture.Context.KnowledgeDbPath });
+        var coordinator = Create(fixture, knowledge: knowledge, versionControl: version);
+        var preview = coordinator.PreviewRefresh(fixture.Context);
+        await coordinator.ApplyRefreshAsync(
+            fixture.Context,
+            new ApprovedReconciliation(preview, new HashSet<string>()),
+            CancellationToken.None);
+
+        await coordinator.UpdateKnowledgeAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal(new[] { "ingest_source" }, knowledge.Calls);
+        Assert.False(ReadDevice(fixture).Knowledge.BaselineStale);
     }
 
     [Fact]
@@ -280,6 +365,33 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     private sealed class AddResult { }
+
+    private sealed class MutatingExportCaller : FakeToolCaller
+    {
+        private readonly SyncResult[] result;
+
+        private readonly List<string>? order;
+
+        public MutatingExportCaller(SyncResult[] result, List<string>? order = null)
+        {
+            this.result = result;
+            this.order = order;
+        }
+
+        public override Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            CallArgs[tool] = new List<object> { args };
+            order?.Add($"engineering:{tool}");
+            var output = Property<string>(args, "outputDir");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Combine(output, "partial.txt"), "partial");
+            return Task.FromResult((T)(object)result);
+        }
+    }
     private sealed class Fixture
     {
         private readonly AtomicJsonStore store = new();

@@ -63,10 +63,13 @@ public sealed class ReadProjectContextWorkflow
         }
 
         var approvalRequired = selected.Any(result =>
-            result.Added.Length + result.Changed.Length + result.Removed.Length > 0);
+            !result.BaselineExisted
+            || result.Added.Length + result.Changed.Length + result.Removed.Length > 0);
         IngestResult? ingest = null;
         var dbMissing = !fileExists(device.KnowledgeDbPath);
-        if (dbMissing)
+        var approvedBaselineExists = File.Exists(
+            Path.Combine(device.ExportedSourceRoot, "metadata.json"));
+        if (dbMissing && approvedBaselineExists)
         {
             cancellationToken.ThrowIfCancellationRequested();
             ingest = await Timed(

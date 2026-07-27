@@ -50,7 +50,8 @@ public sealed record DeviceMetadata(
 public sealed record KnowledgeState(
     bool Stale,
     IReadOnlyDictionary<string, string> AppliedOverlayHashes,
-    string? UpdatedAt);
+    string? UpdatedAt,
+    bool BaselineStale = false);
 
 public sealed record DeviceImportRecord(
     string RelativePath,
