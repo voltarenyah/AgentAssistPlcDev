@@ -68,6 +68,7 @@ else
 
 builder.Services.AddSingleton<WorkbenchApiState>();
 builder.Services.AddSingleton<CompatibilityRuntimeState>();
+builder.Services.AddSingleton<CompatibilityConfigStore>();
 builder.Services.AddSingleton<ApiChatService>();
 builder.Services.AddSingleton<SandboxPolicy>();
 builder.Services.AddSingleton<DeviceToolArgumentBinder>();

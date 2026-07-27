@@ -99,16 +99,17 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             "vc_restore",
             new Dictionary<string, object?> { ["filePath"] = "Blocks/A.xml" },
             Context(),
+            "requester",
             CancellationToken.None);
         var id = requested!.GetType().GetProperty("_confirmationId")!.GetValue(requested)!.ToString()!;
 
-        await pending.ResolveAsync(id, ToolConfirmation.AllowOnce);
+        await pending.ResolveAsync(id, ToolConfirmation.AllowOnce, DeviceContextIdentity.Key(Context()), "requester");
         Assert.Single(caller.Calls);
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => pending.ResolveAsync(id, ToolConfirmation.AllowOnce));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => pending.ResolveAsync(id, ToolConfirmation.AllowOnce, DeviceContextIdentity.Key(Context()), "requester"));
 
-        var rejected = await executor.RequestAsync("vc_restore", new Dictionary<string, object?>(), Context(), CancellationToken.None);
+        var rejected = await executor.RequestAsync("vc_restore", new Dictionary<string, object?>(), Context(), "requester", CancellationToken.None);
         var rejectedId = rejected!.GetType().GetProperty("_confirmationId")!.GetValue(rejected)!.ToString()!;
-        await pending.ResolveAsync(rejectedId, ToolConfirmation.Deny);
+        await pending.ResolveAsync(rejectedId, ToolConfirmation.Deny, DeviceContextIdentity.Key(Context()), "requester");
         Assert.Single(caller.Calls);
     }
 
@@ -118,6 +119,61 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var first = Context();
         var second = first with { WorktreeId = "other-worktree" };
         Assert.NotEqual(DeviceContextIdentity.Key(first), DeviceContextIdentity.Key(second));
+    }
+
+    [Theory]
+    [InlineData("src_validate", "source")]
+    [InlineData("get_schema", "knowledge")]
+    [InlineData("query", "knowledge")]
+    [InlineData("get_block", "knowledge")]
+    [InlineData("search", "knowledge")]
+    [InlineData("vc_status", "vc")]
+    [InlineData("list_blocks", "engineering")]
+    public void GatewayRoutesEveryToolFamilyToItsOwner(string tool, string owner)
+    {
+        var engineering = new RecordingToolCaller();
+        var knowledge = new RecordingToolCaller();
+        var vc = new RecordingToolCaller();
+        var source = new RecordingToolCaller();
+        var gateway = new ApiMcpGateway(engineering, knowledge, vc, source);
+
+        Assert.Same(owner switch
+        {
+            "knowledge" => knowledge,
+            "vc" => vc,
+            "source" => source,
+            _ => engineering,
+        }, gateway.For(tool));
+    }
+
+    [Fact]
+    public void PartialExportIsRejectedWithoutTouchingStagedSnapshot()
+    {
+        var context = Context();
+        Directory.CreateDirectory(context.StagingRoot);
+        var snapshot = Path.Combine(context.StagingRoot, "metadata.json");
+        File.WriteAllText(snapshot, "keep");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        Assert.Throws<WorkbenchLifecycleException>(() =>
+            binder.Bind("export_block", new Dictionary<string, object?>(), context));
+        Assert.Equal("keep", File.ReadAllText(snapshot));
+    }
+
+    [Fact]
+    public async Task PendingConfirmationRejectsWrongContextAndExpires()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.UtcNow);
+        var pending = new PendingToolActions(clock, TimeSpan.FromSeconds(1));
+        var id = pending.Add("right", "requester", (_, _) => Task.FromResult<object?>(true));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            pending.ResolveAsync(id, ToolConfirmation.AllowOnce, "wrong", "requester"));
+        Assert.True((bool)(await pending.ResolveAsync(id, ToolConfirmation.AllowOnce, "right", "requester"))!);
+
+        var expired = pending.Add("right", "requester", (_, _) => Task.FromResult<object?>(true));
+        clock.Advance(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            pending.ResolveAsync(expired, ToolConfirmation.AllowOnce, "right", "requester"));
     }
 
     [Fact]
@@ -212,5 +268,11 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             Calls.Add(tool);
             return Task.FromResult((T)(object)JsonDocument.Parse("{}").RootElement.Clone());
         }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+        public void Advance(TimeSpan value) => now += value;
     }
 }

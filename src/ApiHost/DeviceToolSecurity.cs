@@ -15,8 +15,12 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
 {
     public Dictionary<string, object?> Bind(string tool, IDictionary<string, object?> supplied, DeviceContext device)
     {
+        if (tool is "export_block" or "export_all_blocks" or "export_tag_tables" or "export_udts")
+            throw new WorkbenchLifecycleException(
+                "STAGED_REFRESH_REQUIRED",
+                $"'{tool}' is unavailable through generic tools; use the device refresh/stage lifecycle.");
         var args = new Dictionary<string, object?>(supplied, StringComparer.Ordinal);
-        if (tool is "sync_export" or "rebuild_export" or "export_block" or "export_all_blocks" or "export_tag_tables" or "export_udts")
+        if (tool is "sync_export" or "rebuild_export")
             Force(args, "outputDir", device.StagingRoot);
         if (tool is "get_context_status" or "compare_context")
             Force(args, "outputDir", device.ExportedSourceRoot);
@@ -96,17 +100,47 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
 
 public sealed class PendingToolActions
 {
-    private readonly ConcurrentDictionary<string, Func<ToolConfirmation, Task<object?>>> pending = new(StringComparer.Ordinal);
-    public string Add(Func<ToolConfirmation, Task<object?>> action)
+    private sealed record Entry(
+        string ContextKey,
+        string Requester,
+        DateTimeOffset ExpiresAt,
+        Func<ToolConfirmation, CancellationToken, Task<object?>> Action);
+    private readonly ConcurrentDictionary<string, Entry> pending = new(StringComparer.Ordinal);
+    private readonly TimeProvider timeProvider;
+    private readonly TimeSpan lifetime;
+    public PendingToolActions() : this(TimeProvider.System, TimeSpan.FromMinutes(3)) { }
+    public PendingToolActions(TimeProvider timeProvider, TimeSpan lifetime)
+    {
+        this.timeProvider = timeProvider;
+        this.lifetime = lifetime;
+    }
+    public string Add(
+        string contextKey,
+        string requester,
+        Func<ToolConfirmation, CancellationToken, Task<object?>> action)
     {
         var id = Guid.NewGuid().ToString("N");
-        pending[id] = action;
+        pending[id] = new(contextKey, requester, timeProvider.GetUtcNow() + lifetime, action);
         return id;
     }
-    public async Task<object?> ResolveAsync(string id, ToolConfirmation decision)
+    public async Task<object?> ResolveAsync(
+        string id,
+        ToolConfirmation decision,
+        string contextKey,
+        string requester)
     {
-        if (!pending.TryRemove(id, out var action)) throw new KeyNotFoundException("CONFIRMATION_NOT_FOUND");
-        return await action(decision);
+        if (!pending.TryGetValue(id, out var entry)) throw new KeyNotFoundException("CONFIRMATION_NOT_FOUND");
+        if (entry.ExpiresAt <= timeProvider.GetUtcNow())
+        {
+            pending.TryRemove(new(id, entry));
+            throw new KeyNotFoundException("CONFIRMATION_EXPIRED");
+        }
+        if (!string.Equals(entry.ContextKey, contextKey, StringComparison.Ordinal)
+            || !string.Equals(entry.Requester, requester, StringComparison.Ordinal))
+            throw new InvalidOperationException("CONFIRMATION_CONTEXT_MISMATCH");
+        if (!pending.TryRemove(new(id, entry))) throw new KeyNotFoundException("CONFIRMATION_NOT_FOUND");
+        using var execution = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        return await entry.Action(decision, execution.Token);
     }
 }
 
@@ -116,17 +150,22 @@ public sealed class SandboxedToolExecutor(
     ApiMcpGateway gateway,
     PendingToolActions pending)
 {
-    public async Task<object?> RequestAsync(string tool, IDictionary<string, object?> supplied, DeviceContext device, CancellationToken token)
+    public async Task<object?> RequestAsync(
+        string tool,
+        IDictionary<string, object?> supplied,
+        DeviceContext device,
+        string requester,
+        CancellationToken token)
     {
         var args = binder.Bind(tool, supplied, device);
         var tier = policy.Classify(tool) ?? throw new InvalidOperationException("SANDBOX_TOOL_UNKNOWN");
         if (tier == SandboxTier.Denied) throw new InvalidOperationException("SANDBOX_TOOL_DENIED");
         if (tier == SandboxTier.Destructive)
         {
-            var id = pending.Add(async decision =>
+            var id = pending.Add(DeviceContextIdentity.Key(device), requester, async (decision, executionToken) =>
             {
                 if (decision == ToolConfirmation.Deny) return new { status = "denied" };
-                return await gateway.For(tool).CallAsync<JsonElement>(tool, args, CancellationToken.None);
+                return await gateway.For(tool).CallAsync<JsonElement>(tool, args, executionToken);
             });
             return new { _requiresConfirmation = true, _confirmationId = id, _toolName = tool };
         }
