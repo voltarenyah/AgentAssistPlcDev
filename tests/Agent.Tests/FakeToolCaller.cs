@@ -7,7 +7,7 @@ using Agent.Mcp;
 namespace Agent.Tests;
 
 /// <summary>Scripted <see cref="IMcpToolCaller"/>: queued responses per tool, every call recorded.</summary>
-internal sealed class FakeToolCaller : IMcpToolCaller
+internal class FakeToolCaller : IMcpToolCaller
 {
     private readonly Dictionary<string, Queue<Func<object>>> scripts = new(StringComparer.Ordinal);
 
@@ -27,7 +27,7 @@ internal sealed class FakeToolCaller : IMcpToolCaller
         return this;
     }
 
-    public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
+    public virtual Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
     {
         Calls.Add(tool);
         if (!CallArgs.TryGetValue(tool, out var list))

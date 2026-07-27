@@ -111,10 +111,11 @@ public sealed class EngineeringTools
         => Invoke("sync_export", () => _adapter.SyncExport(outputDir, plcName), ("outputDir", outputDir));
 
     [McpServerTool(Name = "rebuild_export")]
-    [Description("Complete full export of all PLC devices: exports every block, tag table, and UDT for every device in the project into per-device subfolders. Always rewrites all manifests — no incremental diff. Writes project-level metadata with the complete device list and per-device software checksums. Use this when the device set changes, or the export structure needs a clean rebuild. Read-only w.r.t. the project.")]
+    [Description("Complete full export. With plcName, exports that selected device directly into outputDir; otherwise exports all devices into per-device subfolders and writes project metadata. Always rewrites manifests and never performs an incremental diff. Read-only w.r.t. the project.")]
     public CallToolResult RebuildExport(
-        [Description("Export root directory for the per-device subfolders.")] string outputDir)
-        => Invoke("rebuild_export", () => _adapter.RebuildExport(outputDir), ("outputDir", outputDir));
+        [Description("Export root directory. With plcName, this is the selected device's direct staging root; otherwise it contains per-device subfolders.")] string outputDir,
+        [Description("PLC device name for a direct full device export; omit to rebuild every PLC into per-device subfolders.")] string? plcName = null)
+        => Invoke("rebuild_export", () => _adapter.RebuildExport(outputDir, plcName), ("outputDir", outputDir));
 
     [McpServerTool(Name = "get_context_status")]
     [Description("Check whether an export root matches the current project state without changing anything: per PLC, the stored manifest checksum vs the live software checksum (states: no-baseline / in-sync / changed / unknown). No exports, no writes — safe to run anytime.")]

@@ -36,7 +36,7 @@ public interface IEngineeringPlatform : IDisposable
     /// project-level metadata (sourceProjectPath, per-device checksums, device list). Always
     /// rewrites the device manifests — no incremental diff. Used when the device set changes or
     /// the export structure needs a clean rebuild.</summary>
-    SyncResult[] RebuildExport(string outputDir);
+    SyncResult[] RebuildExport(string outputDir, string? plcName = null);
 
     /// <summary>Close a TIA Portal session by process ID. Sends a close signal to the portal
     /// window (same as clicking the X button). The user can save or discard any project changes.</summary>

@@ -1,0 +1,539 @@
+using Agent.Mcp;
+using Contracts.Engineering;
+using Contracts.Knowledge;
+using System.Collections.Concurrent;
+
+namespace Agent.Workbench;
+
+public sealed record CreateWorkbenchRequest(
+    string Name,
+    string? RootPath,
+    string EngineeringProjectPath);
+
+public sealed record CreateWorkbenchResult(
+    WorkbenchMetadata Workbench,
+    WorktreeMetadata Worktree,
+    IReadOnlyList<DeviceMetadata> Devices);
+
+public sealed record CreateWorktreeRequest(
+    WorkbenchMetadata Workbench,
+    string Name,
+    string Branch,
+    string? StartPoint = null);
+
+public sealed record ApprovedReconciliation(
+    ReconciliationPreview Preview,
+    IReadOnlySet<string> ApprovedRemovalPaths,
+    bool Approved = true)
+{
+    public static ApprovedReconciliation Rejected(ReconciliationPreview preview) =>
+        new(preview, new HashSet<string>(StringComparer.Ordinal), false);
+}
+
+public enum RefreshApplyState
+{
+    Rejected,
+    Committed,
+    FilesUpdatedCommitFailed,
+}
+
+public sealed record RefreshApplyResult(
+    RefreshApplyState State,
+    IReadOnlyList<string> ChangedPaths,
+    string? CommitSha,
+    string? Error);
+
+public sealed record ImportModifiedResult(
+    string RelativePath,
+    bool ImportSucceeded,
+    string CompileState,
+    IReadOnlyList<string> Warnings,
+    string? Error);
+
+public sealed record CoordinatorGitCommitResult
+{
+    public string Sha { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// Coordinates device-scoped mutations across MCP boundaries. No caller may bypass the
+/// staging/approval boundary when refreshing a tracked baseline.
+/// </summary>
+public sealed class WorkbenchCoordinator
+{
+    private readonly IMcpToolCaller engineering;
+    private readonly IMcpToolCaller knowledge;
+    private readonly IMcpToolCaller versionControl;
+    private readonly WorkbenchCatalog catalog;
+    private readonly AtomicJsonStore store;
+    private readonly DeviceReconciler reconciler;
+    private readonly DeviceSourceResolver sourceResolver;
+    private readonly DeviceOperationLock operationLock;
+    private readonly ConcurrentDictionary<string, WorkbenchMetadata> knownWorkbenches =
+        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, WorktreeMetadata> knownWorktrees =
+        new(StringComparer.Ordinal);
+
+    public WorkbenchCoordinator(
+        IMcpToolCaller engineering,
+        IMcpToolCaller knowledge,
+        IMcpToolCaller versionControl,
+        WorkbenchCatalog catalog,
+        AtomicJsonStore store,
+        DeviceReconciler reconciler,
+        DeviceSourceResolver sourceResolver,
+        DeviceOperationLock? operationLock = null)
+    {
+        this.engineering = engineering ?? throw new ArgumentNullException(nameof(engineering));
+        this.knowledge = knowledge ?? throw new ArgumentNullException(nameof(knowledge));
+        this.versionControl = versionControl ?? throw new ArgumentNullException(nameof(versionControl));
+        this.catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        this.store = store ?? throw new ArgumentNullException(nameof(store));
+        this.reconciler = reconciler ?? throw new ArgumentNullException(nameof(reconciler));
+        this.sourceResolver = sourceResolver ?? throw new ArgumentNullException(nameof(sourceResolver));
+        this.operationLock = operationLock ?? new DeviceOperationLock();
+    }
+
+    public async Task<CreateWorkbenchResult> CreateWorkbenchAsync(
+        CreateWorkbenchRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var workbench = catalog.Create(request.Name, request.RootPath);
+        var masterPath = Path.Combine(workbench.RootPath, "worktrees", "master");
+
+        await versionControl.CallAsync<object>(
+            "vc_init_shared",
+            new { workbenchRoot = workbench.RootPath, masterWorktreePath = masterPath },
+            cancellationToken).ConfigureAwait(false);
+        await engineering.CallAsync<object>(
+            "connect",
+            new { projectPath = request.EngineeringProjectPath },
+            cancellationToken).ConfigureAwait(false);
+        var project = await engineering.CallAsync<ProjectInfo>(
+            "get_project_info",
+            new { },
+            cancellationToken).ConfigureAwait(false);
+
+        var worktreeId = Guid.NewGuid().ToString("N");
+        var registration = new WorkbenchWorktreeRegistration(
+            worktreeId, "master", "master", "master");
+        workbench = catalog.RegisterWorktree(
+            workbench with
+            {
+                EngineeringProjectId = ProjectIdentity(project),
+                SourceProjectPath = project.Path ?? request.EngineeringProjectPath,
+            },
+            registration);
+        // RegisterWorktree writes the supplied updated workbench.
+        var worktree = new WorktreeMetadata(
+            WorkbenchSchema.CurrentVersion,
+            worktreeId,
+            workbench.WorkbenchId,
+            "master",
+            "master",
+            DateTimeOffset.UtcNow.ToString("O"),
+            null,
+            workbench.EngineeringProjectId,
+            workbench.SourceProjectPath,
+            Array.Empty<string>(),
+            null);
+
+        var devices = project.PlcDevices.Select(plcName =>
+            new DeviceMetadata(
+                WorkbenchSchema.CurrentVersion,
+                Guid.NewGuid().ToString("N"),
+                worktreeId,
+                plcName,
+                plcName,
+                null,
+                null,
+                null,
+                new KnowledgeState(
+                    true,
+                    new Dictionary<string, string>(StringComparer.Ordinal),
+                    null),
+                Array.Empty<DeviceImportRecord>()))
+            .ToArray();
+        worktree = worktree with { DeviceIds = devices.Select(device => device.DeviceId).ToArray() };
+        store.Write(Path.Combine(masterPath, "worktree.json"), worktree);
+        foreach (var device in devices)
+        {
+            var context = catalog.ResolveDevice(workbench, worktree, device);
+            Directory.CreateDirectory(context.ExportedSourceRoot);
+            Directory.CreateDirectory(context.ModifiedSourceRoot);
+            Directory.CreateDirectory(context.StagingRoot);
+            WriteDevice(context, device);
+        }
+
+        RegisterWorkbench(workbench);
+        return new CreateWorkbenchResult(workbench, worktree, devices);
+    }
+
+    public async Task<WorktreeMetadata> CreateWorktreeAsync(
+        CreateWorktreeRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var relativePath = SafeDirectoryName(request.Name);
+        var worktreePath = WorkbenchPaths.ResolveWorktree(
+            request.Workbench.RootPath,
+            relativePath);
+        await versionControl.CallAsync<object>(
+            "vc_add_worktree",
+            new
+            {
+                repositoryPath = request.Workbench.RepositoryPath,
+                worktreePath,
+                branchName = request.Branch,
+                startPoint = request.StartPoint,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var inheritedDevices = LoadInheritedDevices(worktreePath, worktreeId: null);
+        var worktree = new WorktreeMetadata(
+            WorkbenchSchema.CurrentVersion,
+            Guid.NewGuid().ToString("N"),
+            request.Workbench.WorkbenchId,
+            request.Name,
+            request.Branch,
+            DateTimeOffset.UtcNow.ToString("O"),
+            request.StartPoint,
+            request.Workbench.EngineeringProjectId,
+            request.Workbench.SourceProjectPath,
+            inheritedDevices.Select(device => device.DeviceId).ToArray(),
+            null);
+        store.Write(Path.Combine(worktreePath, "worktree.json"), worktree);
+        foreach (var inherited in inheritedDevices)
+        {
+            var updated = inherited with { WorktreeId = worktree.WorktreeId };
+            store.Write(
+                Path.Combine(
+                    worktreePath,
+                    "devices",
+                    SafeDirectoryName(updated.PlcName),
+                    "device.json"),
+                updated);
+        }
+
+        var updatedWorkbench = catalog.RegisterWorktree(
+            request.Workbench,
+            new WorkbenchWorktreeRegistration(
+                worktree.WorktreeId,
+                request.Name,
+                request.Branch,
+                relativePath));
+        knownWorkbenches[updatedWorkbench.WorkbenchId] = updatedWorkbench;
+        knownWorktrees[worktree.WorktreeId] = worktree;
+        return worktree;
+    }
+
+    /// <summary>
+    /// Registers a persisted workbench with this coordinator after application selection or
+    /// restart, so ID-only merge requests can be resolved without deriving paths from names.
+    /// </summary>
+    public void RegisterWorkbench(WorkbenchMetadata workbench)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        knownWorkbenches[workbench.WorkbenchId] = workbench;
+        foreach (var registration in workbench.Worktrees)
+        {
+            var root = WorkbenchPaths.ResolveWorktree(
+                workbench.RootPath,
+                registration.RelativePath);
+            var metadataPath = Path.Combine(root, "worktree.json");
+            if (!File.Exists(metadataPath))
+            {
+                continue;
+            }
+
+            var metadata = store.Read<WorktreeMetadata>(metadataPath);
+            if (!string.Equals(metadata.WorkbenchId, workbench.WorkbenchId, StringComparison.Ordinal)
+                || !string.Equals(metadata.WorktreeId, registration.WorktreeId, StringComparison.Ordinal))
+            {
+                throw new WorkbenchCatalogException(
+                    "WORKBENCH_RELATIONSHIP_MISMATCH",
+                    $"Worktree metadata at '{metadataPath}' does not match its registration.");
+            }
+
+            knownWorktrees[metadata.WorktreeId] = metadata;
+        }
+    }
+
+    public Task<SyncResult[]> StageRefreshAsync(
+        DeviceContext device,
+        CancellationToken token) =>
+        operationLock.RunAsync(
+            device,
+            async cancellationToken =>
+            {
+                var metadata = ReadDevice(device);
+                var result = await engineering.CallAsync<SyncResult[]>(
+                    "rebuild_export",
+                    new { outputDir = device.StagingRoot, plcName = metadata.PlcName },
+                    cancellationToken).ConfigureAwait(false);
+                var selected = result.Where(item =>
+                    string.Equals(item.PlcName, metadata.PlcName, StringComparison.Ordinal)).ToArray();
+                if (selected.Length == 0)
+                {
+                    throw new InvalidOperationException(
+                        $"The export did not return selected PLC '{metadata.PlcName}'.");
+                }
+
+                return selected;
+            },
+            token);
+
+    public ReconciliationPreview PreviewRefresh(DeviceContext device) =>
+        reconciler.Preview(device);
+
+    public Task<RefreshApplyResult> ApplyRefreshAsync(
+        DeviceContext device,
+        ApprovedReconciliation approval,
+        CancellationToken token) =>
+        operationLock.RunAsync(
+            device,
+            async cancellationToken =>
+            {
+                ArgumentNullException.ThrowIfNull(approval);
+                if (!approval.Approved)
+                {
+                    return new RefreshApplyResult(
+                        RefreshApplyState.Rejected,
+                        Array.Empty<string>(),
+                        null,
+                        null);
+                }
+
+                var outcome = reconciler.Apply(
+                    device,
+                    approval.Preview,
+                    approval.ApprovedRemovalPaths);
+                if (outcome.ChangedPaths.Count == 0)
+                {
+                    return new RefreshApplyResult(
+                        RefreshApplyState.Committed,
+                        outcome.ChangedPaths,
+                        null,
+                        null);
+                }
+
+                try
+                {
+                    await versionControl.CallAsync<object>(
+                        "vc_add",
+                        new { repoPath = device.WorktreeRoot, paths = outcome.ChangedPaths.ToArray() },
+                        cancellationToken).ConfigureAwait(false);
+                    var commit = await versionControl.CallAsync<CoordinatorGitCommitResult>(
+                        "vc_commit",
+                        new
+                        {
+                            repoPath = device.WorktreeRoot,
+                            message = BuildRefreshCommitMessage(device, outcome),
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                    var metadata = ReadDevice(device) with
+                    {
+                        LastReconciliationCommit = commit.Sha,
+                    };
+                    WriteDevice(device, metadata);
+                    return new RefreshApplyResult(
+                        RefreshApplyState.Committed,
+                        outcome.ChangedPaths,
+                        commit.Sha,
+                        null);
+                }
+                catch (ToolCallException exception)
+                {
+                    return new RefreshApplyResult(
+                        RefreshApplyState.FilesUpdatedCommitFailed,
+                        outcome.ChangedPaths,
+                        null,
+                        $"{exception.Code}: {exception.Message}");
+                }
+            },
+            token);
+
+    public Task<KnowledgeUpdateResult> UpdateKnowledgeAsync(
+        DeviceContext device,
+        CancellationToken token) =>
+        operationLock.RunAsync(
+            device,
+            async cancellationToken =>
+            {
+                var relativePaths = sourceResolver.EnumerateModified(device).ToArray();
+                var result = await knowledge.CallAsync<KnowledgeUpdateResult>(
+                    "update_components",
+                    new
+                    {
+                        exportedSourceRoot = device.ExportedSourceRoot,
+                        modifiedSourceRoot = device.ModifiedSourceRoot,
+                        dbPath = device.KnowledgeDbPath,
+                        relativePaths,
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                var metadata = ReadDevice(device) with
+                {
+                    Knowledge = new KnowledgeState(
+                        false,
+                        new Dictionary<string, string>(
+                            result.AppliedHashes,
+                            StringComparer.Ordinal),
+                        DateTimeOffset.UtcNow.ToString("O")),
+                };
+                WriteDevice(device, metadata);
+                return result;
+            },
+            token);
+
+    public Task<ImportModifiedResult> ImportModifiedAsync(
+        DeviceContext device,
+        string relativePath,
+        CancellationToken token) =>
+        operationLock.RunAsync(
+            device,
+            async cancellationToken =>
+            {
+                var metadata = ReadDevice(device);
+                var normalized = relativePath.Replace('\\', '/');
+                var modifiedPath = WorkbenchPaths.ResolveRelative(
+                    device.ModifiedSourceRoot,
+                    normalized);
+                if (!File.Exists(modifiedPath))
+                {
+                    throw new FileNotFoundException(
+                        "Only a modified-source overlay can be imported.",
+                        modifiedPath);
+                }
+
+                ImportResult? imported = null;
+                CompileResult? compiled = null;
+                Exception? failure = null;
+                try
+                {
+                    imported = await engineering.CallAsync<ImportResult>(
+                        "import_block",
+                        new { xmlFilePath = modifiedPath, plcName = metadata.PlcName },
+                        cancellationToken).ConfigureAwait(false);
+                    if (imported.Success)
+                    {
+                        compiled = await engineering.CallAsync<CompileResult>(
+                            "compile_block",
+                            new { blockName = imported.BlockName, plcName = metadata.PlcName },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    failure = exception;
+                }
+
+                var warnings = imported?.Warnings ?? Array.Empty<string>();
+                var record = new DeviceImportRecord(
+                    normalized,
+                    (imported?.ImportedAt ?? DateTime.UtcNow).ToString("O"),
+                    imported?.Success == true,
+                    compiled?.State ?? "not-run",
+                    warnings,
+                    failure?.Message ?? imported?.Error);
+                WriteDevice(
+                    device,
+                    metadata with
+                    {
+                        Imports = metadata.Imports.Append(record).ToArray(),
+                    });
+                return new ImportModifiedResult(
+                    normalized,
+                    record.ImportSucceeded,
+                    record.CompileState,
+                    warnings,
+                    record.Error);
+            },
+            token);
+
+    public async Task<object> MergeWorktreeAsync(
+        string workbenchId,
+        string sourceWorktreeId,
+        string targetWorktreeId,
+        CancellationToken token = default)
+    {
+        if (string.IsNullOrWhiteSpace(workbenchId)
+            || string.IsNullOrWhiteSpace(sourceWorktreeId)
+            || string.IsNullOrWhiteSpace(targetWorktreeId))
+        {
+            throw new ArgumentException("Workbench, source worktree, and target worktree IDs are required.");
+        }
+
+        if (!knownWorkbenches.TryGetValue(workbenchId, out var workbench)
+            || !knownWorktrees.TryGetValue(sourceWorktreeId, out var source)
+            || !knownWorktrees.TryGetValue(targetWorktreeId, out var target)
+            || !string.Equals(source.WorkbenchId, workbenchId, StringComparison.Ordinal)
+            || !string.Equals(target.WorkbenchId, workbenchId, StringComparison.Ordinal))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKTREE_NOT_FOUND",
+                "The requested source and target worktrees are not registered in this coordinator.");
+        }
+
+        var targetRegistration = workbench.Worktrees.Single(item =>
+            string.Equals(item.WorktreeId, targetWorktreeId, StringComparison.Ordinal));
+        var targetRoot = WorkbenchPaths.ResolveWorktree(
+            workbench.RootPath,
+            targetRegistration.RelativePath);
+        return await versionControl.CallAsync<object>(
+            "vc_merge",
+            new { targetWorktreePath = targetRoot, sourceBranch = source.Branch },
+            token).ConfigureAwait(false);
+    }
+
+    private DeviceMetadata ReadDevice(DeviceContext device) =>
+        store.Read<DeviceMetadata>(Path.Combine(device.DeviceRoot, "device.json"));
+
+    private void WriteDevice(DeviceContext device, DeviceMetadata metadata) =>
+        store.Write(Path.Combine(device.DeviceRoot, "device.json"), metadata);
+
+    private static string ProjectIdentity(ProjectInfo project) =>
+        project.Path ?? project.Name ?? throw new InvalidOperationException(
+            "The engineering project did not expose a stable identity.");
+
+    private static string SafeDirectoryName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var value = new string(name.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
+        if (string.IsNullOrWhiteSpace(value) || value is "." or "..")
+        {
+            throw new ArgumentException("A valid worktree name is required.", nameof(name));
+        }
+
+        return value;
+    }
+
+    private static string BuildRefreshCommitMessage(
+        DeviceContext device,
+        ReconciliationOutcome outcome) =>
+        $"refresh device {device.DeviceId}: reconcile {outcome.ChangedPaths.Count} files";
+
+    private IReadOnlyList<DeviceMetadata> LoadInheritedDevices(
+        string worktreePath,
+        string? worktreeId)
+    {
+        var devicesRoot = Path.Combine(worktreePath, "devices");
+        if (!Directory.Exists(devicesRoot))
+        {
+            return Array.Empty<DeviceMetadata>();
+        }
+
+        return Directory.EnumerateDirectories(devicesRoot)
+            .Select(directory => Path.Combine(directory, "device.json"))
+            .Where(File.Exists)
+            .Select(store.Read<DeviceMetadata>)
+            .Select(device => device with
+            {
+                DeviceId = Guid.NewGuid().ToString("N"),
+                WorktreeId = worktreeId ?? device.WorktreeId,
+                LastReconciliationCommit = null,
+            })
+            .ToArray();
+    }
+
+}

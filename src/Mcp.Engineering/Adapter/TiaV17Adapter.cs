@@ -332,7 +332,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     /// <summary>Per-PLC body of <see cref="ExportAllBlocks"/> (also used by sync_export when no
     /// baseline manifest exists): export every block, rewrite the block categories of the manifest,
     /// and stamp the current software checksum into project metadata as the sync gate value.</summary>
-    private List<ExportResult> ExportAllBlocksForPlc(PlcSoftware plc, string dir)
+    private List<ExportResult> ExportAllBlocksForPlc(
+        PlcSoftware plc,
+        string dir,
+        bool writeProjectMetadata = true)
     {
         Directory.CreateDirectory(dir);
         var exportStartedUtc = DateTimeOffset.UtcNow;
@@ -374,8 +377,11 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
 
         ExportManifest.WriteAll(dir, exportStartedUtc, records, ExportManifest.BlockCategories);
-        ProjectMetadata.SetPlcSoftwareChecksum(
-            Path.GetDirectoryName(dir)!, plc.Name, TryReadSoftwareChecksum(plc));
+        if (writeProjectMetadata)
+        {
+            ProjectMetadata.SetPlcSoftwareChecksum(
+                Path.GetDirectoryName(dir)!, plc.Name, TryReadSoftwareChecksum(plc));
+        }
         return results;
     }
 
@@ -552,16 +558,17 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         return result;
     }
 
-    /// <summary>Full rebuild export for all PLC devices (§full-rebuild): exports every component
-    /// (blocks, tag tables, UDTs) to fresh per-device subfolders, always rewriting the manifest.
-    /// Writes project-level metadata with the complete device list and per-device checksums.
-    /// No incremental diff — this is the "start fresh" tool.</summary>
-    public SyncResult[] RebuildExport(string outputDir)
+    /// <summary>Full rebuild export (§full-rebuild). A selected PLC is exported directly to
+    /// <paramref name="outputDir"/>; otherwise every PLC is exported to a per-device subfolder
+    /// and project-level metadata is written. No incremental diff.</summary>
+    public SyncResult[] RebuildExport(string outputDir, string? plcName = null)
     {
         lock (_gate)
         {
             var project = RequireProject();
-            var plcs = PlcSoftwareResolver.FindAll(project);
+            var plcs = plcName is null
+                ? PlcSoftwareResolver.FindAll(project)
+                : new[] { PlcSoftwareResolver.Resolve(project, plcName) };
             var results = new List<SyncResult>();
             var allDeviceNames = new List<string>();
             var allChecksums = new Dictionary<string, string>();
@@ -570,7 +577,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             {
                 var name = plc.Name;
                 allDeviceNames.Add(name);
-                var dir = Path.Combine(outputDir, Sanitize(name));
+                var dir = plcName is null
+                    ? Path.Combine(outputDir, Sanitize(name))
+                    : outputDir;
                 Directory.CreateDirectory(dir);
 
                 var checksum = TryReadSoftwareChecksum(plc);
@@ -578,7 +587,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
                 // Full export: blocks rewrite the manifest; tags/UDTs upsert into it.
                 var full = new List<ExportResult>();
-                full.AddRange(ExportAllBlocksForPlc(plc, dir));
+                full.AddRange(ExportAllBlocksForPlc(
+                    plc,
+                    dir,
+                    writeProjectMetadata: plcName is null));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables",
                     p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_udts",
@@ -606,7 +618,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 PlcDevices = allDeviceNames,
                 PlcSoftwareChecksums = allChecksums,
             };
-            ProjectMetadata.Write(outputDir, projectMeta);
+            if (plcName is null)
+            {
+                ProjectMetadata.Write(outputDir, projectMeta);
+            }
 
             return results.ToArray();
         }

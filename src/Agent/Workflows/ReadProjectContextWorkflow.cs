@@ -1,16 +1,14 @@
 using System.Diagnostics;
 using Agent.Mcp;
+using Agent.Workbench;
 using Contracts.Engineering;
 using Contracts.Knowledge;
 
 namespace Agent.Workflows;
 
 /// <summary>
-/// The confirmed incremental context sync (buildnote/plan/export-sync.md §UI): one sync_export
-/// call (checksum gate + fingerprint/hash diff, full export when no baseline exists), then
-/// ingest_source only when the sync actually changed files or the knowledge db is missing.
-/// Requires an already-connected engineering session (connect/disconnect is UI session state);
-/// the connection is validated via get_project_info.
+/// Stages a selected device export for review. It never reconciles staging into the tracked
+/// baseline; that requires a separate approved coordinator operation.
 /// </summary>
 public sealed class ReadProjectContextWorkflow
 {
@@ -31,66 +29,74 @@ public sealed class ReadProjectContextWorkflow
         this.fileExists = fileExists ?? File.Exists;
     }
 
-    public async Task<ReadProjectContextResult> RunAsync(CancellationToken cancellationToken = default)
+    public async Task<ReadProjectContextResult> RunAsync(
+        DeviceContext device,
+        string plcName,
+        CancellationToken cancellationToken = default)
     {
-        var info = await Timed("Reading project info", () =>
-            engineering.CallAsync<ProjectInfo>("get_project_info", new { }, cancellationToken));
-        var projectName = string.IsNullOrWhiteSpace(info.Name) ? "unknown" : info.Name!;
-        var exportRoot = AssistantPaths.ResolveExportRoot(projectName);
-        Log($"Export root: {exportRoot}");
+        ArgumentNullException.ThrowIfNull(device);
+        if (string.IsNullOrWhiteSpace(plcName))
+        {
+            throw new ArgumentException("A selected PLC name is required.", nameof(plcName));
+        }
+
+        var info = await Timed(
+            "Reading project info",
+            () => engineering.CallAsync<ProjectInfo>(
+                "get_project_info",
+                new { },
+                cancellationToken));
 
         cancellationToken.ThrowIfCancellationRequested();
-        var sync = await Timed("Syncing exports", () =>
-            engineering.CallAsync<SyncResult[]>("sync_export", new { outputDir = exportRoot }, cancellationToken));
-
-        // Fail fast with the real cause: a first sync (no baseline) that produced nothing means no
-        // PLC software was found or every export failed — running ingest would only surface a
-        // confusing EXPORT_ROOT_NOT_FOUND later.
-        foreach (var plc in sync)
+        var sync = await Timed(
+            "Staging device export",
+            () => engineering.CallAsync<SyncResult[]>(
+                "rebuild_export",
+                new { outputDir = device.StagingRoot, plcName },
+                cancellationToken));
+        var selected = sync.Where(item =>
+            string.Equals(item.PlcName, plcName, StringComparison.Ordinal)).ToArray();
+        if (selected.Length == 0)
         {
-            if (!plc.BaselineExisted && plc.Added.Length == 0)
-            {
-                var detail = plc.Failed.Length > 0
-                    ? $"every export failed (first: {plc.Failed[0].Reason})"
-                    : "no PLC software was found";
-                throw new InvalidOperationException(
-                    $"sync_export produced 0 components for PLC '{plc.PlcName}' in project '{projectName}' — {detail}. " +
-                    "Check the project has a PLC with blocks (list_blocks) before syncing context.");
-            }
+            throw new InvalidOperationException(
+                $"rebuild_export did not return selected PLC '{plcName}'.");
         }
 
-        var added = sync.Sum(plc => plc.Added.Length);
-        var changed = sync.Sum(plc => plc.Changed.Length);
-        var touched = sync.Sum(plc => plc.Touched.Length);
-        var removed = sync.Sum(plc => plc.Removed.Length);
-        var failed = sync.Sum(plc => plc.Failed.Length);
-        Log($"Sync: {added} added, {changed} changed, {touched} touched, {removed} removed, {failed} failed");
-
-        var dbPath = AssistantPaths.ResolveKnowledgeDbPath(projectName);
-        var contentChanged = added + changed + removed > 0;
-        var dbMissing = !fileExists(dbPath);
-
+        var approvalRequired = selected.Any(result =>
+            result.Added.Length + result.Changed.Length + result.Removed.Length > 0);
         IngestResult? ingest = null;
-        if (contentChanged || dbMissing)
+        var dbMissing = !fileExists(device.KnowledgeDbPath);
+        if (dbMissing)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ingest = await Timed("Building knowledge base", () =>
-                knowledge.CallAsync<IngestResult>("ingest_source", new { exportRoot }, cancellationToken));
-            Log($"Knowledge base: {ingest.Nodes} nodes, {ingest.Edges} edges → {ingest.DbPath}");
-        }
-        else
-        {
-            Log("Knowledge base already up to date — ingest skipped.");
+            ingest = await Timed(
+                "Building device knowledge",
+                () => knowledge.CallAsync<IngestResult>(
+                    "ingest_source",
+                    new
+                    {
+                        exportedSourceRoot = device.ExportedSourceRoot,
+                        modifiedSourceRoot = device.ModifiedSourceRoot,
+                        dbPath = device.KnowledgeDbPath,
+                    },
+                    cancellationToken));
         }
 
         return new ReadProjectContextResult
         {
-            ProjectName = projectName,
-            ExportRoot = exportRoot,
-            DbPath = ingest?.DbPath ?? dbPath,
-            Sync = sync,
+            ProjectName = string.IsNullOrWhiteSpace(info.Name) ? "unknown" : info.Name!,
+            WorkbenchId = device.WorkbenchId,
+            WorktreeId = device.WorktreeId,
+            DeviceId = device.DeviceId,
+            PlcName = plcName,
+            ExportRoot = device.ExportedSourceRoot,
+            ModifiedSourceRoot = device.ModifiedSourceRoot,
+            StagingRoot = device.StagingRoot,
+            DbPath = ingest?.DbPath ?? device.KnowledgeDbPath,
+            Sync = selected,
             Ingest = ingest,
-            UpToDate = !contentChanged && !dbMissing,
+            ApprovalRequired = approvalRequired,
+            UpToDate = !approvalRequired && !dbMissing,
         };
     }
 
@@ -98,7 +104,7 @@ public sealed class ReadProjectContextWorkflow
     {
         Log($"{step}…");
         var stopwatch = Stopwatch.StartNew();
-        var result = await action();
+        var result = await action().ConfigureAwait(false);
         Log($"{step} — done in {stopwatch.ElapsedMilliseconds / 1000.0:0.0}s");
         return result;
     }
