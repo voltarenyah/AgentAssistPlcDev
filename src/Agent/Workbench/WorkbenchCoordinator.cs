@@ -451,6 +451,32 @@ public sealed class WorkbenchCoordinator
             },
             token);
 
+    public Task<KnowledgeUpdateResult> RebuildKnowledgeAsync(
+        DeviceContext device,
+        CancellationToken token) =>
+        operationLock.RunAsync(device, async cancellationToken =>
+        {
+            var relativePaths = sourceResolver.EnumerateModified(device).ToArray();
+            var ingest = await knowledge.CallAsync<IngestResult>(
+                "ingest_source",
+                new
+                {
+                    exportedSourceRoot = device.ExportedSourceRoot,
+                    modifiedSourceRoot = device.ModifiedSourceRoot,
+                    dbPath = device.KnowledgeDbPath,
+                },
+                cancellationToken).ConfigureAwait(false);
+            var hashes = HashOverlays(device, relativePaths);
+            var metadata = ReadDevice(device);
+            WriteDevice(device, metadata with
+            {
+                Knowledge = new KnowledgeState(
+                    false, hashes, DateTimeOffset.UtcNow.ToString("O"), BaselineStale: false),
+            });
+            return new KnowledgeUpdateResult(
+                ingest.DbPath, relativePaths, hashes, Array.Empty<string>());
+        }, token);
+
     public Task<ImportModifiedResult> ImportModifiedAsync(
         DeviceContext device,
         string relativePath,

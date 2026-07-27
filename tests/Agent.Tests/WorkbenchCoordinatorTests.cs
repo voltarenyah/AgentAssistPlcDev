@@ -292,6 +292,22 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task ExplicitRebuildAlwaysUsesFullIngestEvenWhenDatabaseIsCurrent()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: false);
+        File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
+        var knowledge = new FakeToolCaller()
+            .Respond("ingest_source", new IngestResult { DbPath = fixture.Context.KnowledgeDbPath });
+        var coordinator = Create(fixture, knowledge: knowledge);
+
+        await coordinator.RebuildKnowledgeAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal(new[] { "ingest_source" }, knowledge.Calls);
+        Assert.False(ReadDevice(fixture).Knowledge.Stale);
+        Assert.False(ReadDevice(fixture).Knowledge.BaselineStale);
+    }
+
+    [Fact]
     public async Task OverlayStaleWithNoChangedOverlaySkipsPartialTool()
     {
         var fixture = Fixture.Create(root, knowledgeStale: true);
