@@ -2,6 +2,12 @@
 
 Direction approved by user 2026-07-18: **UI-first read-only** — the read-only slices of `initialLaunch_20260717.md` §Phase 2.7 are pulled ahead of steps 4–6 (source-editor, version-control, agent), because the export→ingest chain needs nothing from them. This document covers **UI-0 + UI-1**; UI-2 (context browser) is the follow-up step; UI-3 (generate/review/apply comments) stays after step 6.
 
+> **Historical/superseded storage design:** The export-root statements below describe
+> the 2026-07-18 implementation only. New backend creation uses named workbenches at
+> `%LOCALAPPDATA%\AutomationWorkbench\Project\<name>` (or a user-selected root), with
+> device-scoped source and knowledge paths. There is no legacy migration. UI adaptation
+> is deferred to `workbench-project-storage-future-ui.md`.
+
 ## 1. Purpose
 
 A WPF shell that spawns the two existing MCP servers as child processes and exposes the read-only project-context chain behind one button: **Read Project Context** = `get_project_info` → `export_all_blocks` → `export_tag_tables` → `export_udts` → `ingest_source`, ending in a summary view (nodes/edges by kind, warnings, dbPath). The same orchestration is later triggered by the AI agent — two triggers, one workflow.

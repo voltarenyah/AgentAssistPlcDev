@@ -2,6 +2,11 @@
 
 Status: implemented + verified live 2026-07-20. Tool: `sync_export` (mcp-engineering), tier `Read`.
 
+> **Workbench integration (2026-07-27):** `sync_export` now targets the selected
+> device's ignored `staging` directory. Its historical direct-export workflow below is
+> retained as tool background; tracked `exported-source` changes require a fresh
+> preview, user confirmation, reconciliation, and automatic Git commit.
+
 ## 0. Context
 
 Refreshing the context data for an already-exported TIA project used to mean "re-export everything

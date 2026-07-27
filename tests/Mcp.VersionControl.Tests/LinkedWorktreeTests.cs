@@ -122,6 +122,27 @@ public sealed class LinkedWorktreeTests : IDisposable
     }
 
     [Fact]
+    public void MergeAllowsIgnoredWorkbenchRuntimeArtifacts()
+    {
+        var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
+        var featurePath = Path.Combine(root, "workbench", "worktrees", "feature-a");
+        RepositoryService.AddWorktree(repositoryPath, featurePath, "feature-a", firstSha);
+        File.WriteAllText(Path.Combine(featurePath, "feature.txt"), "feature");
+        RepositoryService.Add(featurePath);
+        RepositoryService.Commit(featurePath, "feature", null);
+
+        var deviceRoot = Path.Combine(masterPath, "devices", "PLC_1");
+        Directory.CreateDirectory(Path.Combine(deviceRoot, "staging"));
+        File.WriteAllText(Path.Combine(deviceRoot, "staging", "metadata.json"), "{}");
+        File.WriteAllText(Path.Combine(deviceRoot, "plc-knowledge.db"), "runtime");
+
+        var result = RepositoryService.Merge(masterPath, "feature-a");
+
+        Assert.True(result.Merged);
+        Assert.True(File.Exists(Path.Combine(masterPath, "feature.txt")));
+    }
+
+    [Fact]
     public void AddWorktreeRejectsDuplicateBranch()
     {
         var (repositoryPath, _, firstSha) = CreateSharedRepositoryWithInitialCommit();

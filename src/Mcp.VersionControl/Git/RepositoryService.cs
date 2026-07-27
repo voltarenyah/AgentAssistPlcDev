@@ -255,7 +255,7 @@ internal static class RepositoryService
                 {
                     IncludeUntracked = true,
                     RecurseUntrackedDirs = true,
-                }).Any())
+                }).Any(entry => !entry.State.HasFlag(FileStatus.Ignored)))
             {
                 throw new VcInternalException(
                     "DIRTY_WORKTREE",

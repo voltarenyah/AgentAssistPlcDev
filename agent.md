@@ -57,6 +57,14 @@ AgentAssistPlcDev.sln
 
 ## Key Architecture Rules
 
+0. **Workbench storage:** New PLC work uses a named workbench at
+   `%LOCALAPPDATA%\AutomationWorkbench\Project\<name>` or a user-selected absolute
+   root. One bare repository backs complete linked worktrees. Source and knowledge
+   paths are device-scoped; full exports go to ignored staging, approved baseline
+   changes auto-commit, sparse overlays persist after import, and knowledge updates are
+   batched before reuse. Never migrate or mutate legacy
+   `%LOCALAPPDATA%\PlcAiAssistant\exports`. See `buildnote/project-structure.md`.
+
 1. **No useless prefixes on project names.** Names are scoped by what a thing IS within the solution, not by what the solution is called. Every project already belongs to this solution — repeating the app name as a prefix (`PlcAi.Contracts`, `PlcAi.Agent`) adds nothing. `Mcp.Engineering` is good (tells you it's an MCP server + domain). `PlcAi.Mcp.Engineering` is not. If removing a prefix would make the name ambiguous, keep it; otherwise cut it.
 
 2. **MCP naming convention:** plain `verb_noun` (no per-server prefix), e.g. `list_sessions`, `ingest_source`. Annotate tools with `readOnlyHint` or `destructiveHint`. Return structured JSON. Test each MCP server standalone with MCP Inspector before UI integration.

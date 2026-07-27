@@ -49,9 +49,14 @@ public sealed class SandboxConfig
         "PlcAiAssistant",
         "audit");
 
-    /// <summary>%LOCALAPPDATA%\PlcAiAssistant (exports, knowledge dbs) + the TIA default project dir.</summary>
+    /// <summary>
+    /// Default AutomationWorkbench parent, legacy PlcAiAssistant compatibility root,
+    /// and the TIA default project directory. Selected custom workbench roots are
+    /// added by the trusted device-context host.
+    /// </summary>
     public static IReadOnlyList<string> DefaultRoots { get; } = new[]
     {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutomationWorkbench"),
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PlcAiAssistant"),
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Automation"),
     };

@@ -6,7 +6,7 @@ namespace Agent.Tests;
 public sealed class AssistantPathsTests
 {
     [Fact]
-    public void ExportRootSanitizesInvalidFileNameChars()
+    public void LegacyExportRootSanitizesInvalidFileNameChars()
     {
         var root = AssistantPaths.ResolveExportRoot("PEI_SinoARP_Master:V4");
 
@@ -14,7 +14,7 @@ public sealed class AssistantPathsTests
     }
 
     [Fact]
-    public void KnowledgeDbPathIsUnderExportRoot()
+    public void LegacyKnowledgeDbPathIsUnderLegacyExportRoot()
     {
         var dbPath = AssistantPaths.ResolveKnowledgeDbPath("TestPLC");
 
