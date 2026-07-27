@@ -13,7 +13,9 @@ public sealed class ReadProjectContextWorkflow
 {
     private readonly IMcpToolCaller engineering;
     private readonly IProgress<string>? progress;
+    private readonly Func<string, bool> fileExists;
     private readonly SafeDeviceExportStager stager;
+    private readonly AtomicJsonStore metadataStore = new();
 
     public ReadProjectContextWorkflow(
         IMcpToolCaller engineering,
@@ -25,7 +27,7 @@ public sealed class ReadProjectContextWorkflow
         this.engineering = engineering;
         this.progress = progress;
         _ = knowledge ?? throw new ArgumentNullException(nameof(knowledge));
-        _ = fileExists; // Retained for source compatibility; this workflow no longer mutates knowledge.
+        this.fileExists = fileExists ?? File.Exists;
         this.stager = stager ?? new SafeDeviceExportStager(engineering);
     }
 
@@ -62,6 +64,7 @@ public sealed class ReadProjectContextWorkflow
         var approvalRequired = selected.Any(result =>
             !result.BaselineExisted
             || result.Added.Length + result.Changed.Length + result.Removed.Length > 0);
+        var knowledgeCurrent = IsKnowledgeCurrent(device);
         return new ReadProjectContextResult
         {
             ProjectName = string.IsNullOrWhiteSpace(info.Name) ? "unknown" : info.Name!,
@@ -76,8 +79,22 @@ public sealed class ReadProjectContextWorkflow
             Sync = selected,
             Ingest = null,
             ApprovalRequired = approvalRequired,
-            UpToDate = !approvalRequired,
+            UpToDate = !approvalRequired && knowledgeCurrent,
         };
+    }
+
+    private bool IsKnowledgeCurrent(DeviceContext device)
+    {
+        if (!fileExists(device.KnowledgeDbPath))
+        {
+            return false;
+        }
+
+        var metadata = metadataStore.TryRead<DeviceMetadata>(
+            Path.Combine(device.DeviceRoot, "device.json"));
+        return metadata is not null
+            && !metadata.Knowledge.Stale
+            && !metadata.Knowledge.BaselineStale;
     }
 
     private async Task<T> Timed<T>(string step, Func<Task<T>> action)

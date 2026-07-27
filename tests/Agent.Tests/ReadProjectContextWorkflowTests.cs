@@ -63,6 +63,71 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task NoSourceDiffWithMissingDatabaseIsNotUpToDate()
+    {
+        var context = Context();
+        WriteDeviceMetadata(context, stale: false);
+        var engineering = new ManifestExportCaller()
+            .Respond("get_project_info", new ProjectInfo { Name = "Line" })
+            .Respond("rebuild_export", new[]
+            {
+                new SyncResult { PlcName = "PLC_1", BaselineExisted = true },
+            });
+        var workflow = new ReadProjectContextWorkflow(
+            engineering,
+            new FakeToolCaller(),
+            fileExists: _ => false);
+
+        var result = await workflow.RunAsync(context, "PLC_1");
+
+        Assert.False(result.ApprovalRequired);
+        Assert.False(result.UpToDate);
+    }
+
+    [Fact]
+    public async Task NoSourceDiffWithStaleKnowledgeIsNotUpToDate()
+    {
+        var context = Context();
+        WriteDeviceMetadata(context, stale: true);
+        var engineering = new ManifestExportCaller()
+            .Respond("get_project_info", new ProjectInfo { Name = "Line" })
+            .Respond("rebuild_export", new[]
+            {
+                new SyncResult { PlcName = "PLC_1", BaselineExisted = true },
+            });
+        var workflow = new ReadProjectContextWorkflow(
+            engineering,
+            new FakeToolCaller(),
+            fileExists: _ => true);
+
+        var result = await workflow.RunAsync(context, "PLC_1");
+
+        Assert.False(result.ApprovalRequired);
+        Assert.False(result.UpToDate);
+    }
+
+    [Fact]
+    public async Task NoSourceDiffWithCurrentKnowledgeIsUpToDate()
+    {
+        var context = Context();
+        WriteDeviceMetadata(context, stale: false);
+        var engineering = new ManifestExportCaller()
+            .Respond("get_project_info", new ProjectInfo { Name = "Line" })
+            .Respond("rebuild_export", new[]
+            {
+                new SyncResult { PlcName = "PLC_1", BaselineExisted = true },
+            });
+        var workflow = new ReadProjectContextWorkflow(
+            engineering,
+            new FakeToolCaller(),
+            fileExists: _ => true);
+
+        var result = await workflow.RunAsync(context, "PLC_1");
+
+        Assert.True(result.UpToDate);
+    }
+
+    [Fact]
     public async Task FirstStagedExportDoesNotIngestBeforeBaselineApproval()
     {
         var context = Context();
@@ -187,6 +252,26 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         WorkbenchPaths.ResolveDevice(
             "wb-1", Path.Combine(root, Guid.NewGuid().ToString("N")),
             "wt-1", "master", "dev-1", "PLC_1");
+
+    private static void WriteDeviceMetadata(DeviceContext context, bool stale)
+    {
+        new AtomicJsonStore().Write(
+            Path.Combine(context.DeviceRoot, "device.json"),
+            new DeviceMetadata(
+                WorkbenchSchema.CurrentVersion,
+                context.DeviceId,
+                context.WorktreeId,
+                "PLC_1",
+                "PLC_1",
+                null,
+                null,
+                null,
+                new KnowledgeState(
+                    stale,
+                    new Dictionary<string, string>(),
+                    null),
+                Array.Empty<DeviceImportRecord>()));
+    }
 
     private static T Property<T>(object value, string name) =>
         (T)value.GetType().GetProperty(name)!.GetValue(value)!;
