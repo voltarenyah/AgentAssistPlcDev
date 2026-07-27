@@ -109,6 +109,64 @@ public sealed class DeviceSourceResolver
         return modifiedPath;
     }
 
+    public string CreateNew(
+        DeviceContext context,
+        string relativePath,
+        ReadOnlySpan<byte> initialContent)
+    {
+        var modifiedSourceRoot = ValidateRoots(context).ModifiedSourceRoot;
+        var modifiedPath = WorkbenchPaths.ResolveRelative(
+            modifiedSourceRoot,
+            relativePath);
+
+        if (File.Exists(modifiedPath) || Directory.Exists(modifiedPath))
+        {
+            throw new IOException(
+                $"The modified-source path already exists: {modifiedPath}");
+        }
+
+        var outputDirectory = Path.GetDirectoryName(modifiedPath)
+            ?? throw new IOException(
+                $"The modified-source path has no parent directory: {modifiedPath}");
+        Directory.CreateDirectory(outputDirectory);
+
+        // Validate the newly created hierarchy before placing any content in it.
+        modifiedPath = WorkbenchPaths.ResolveRelative(
+            modifiedSourceRoot,
+            relativePath);
+
+        var temporaryPath = Path.Combine(
+            outputDirectory,
+            $".{Path.GetFileName(modifiedPath)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            using (var output = new FileStream(
+                       temporaryPath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None,
+                       81920,
+                       FileOptions.WriteThrough))
+            {
+                output.Write(initialContent);
+                output.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporaryPath, modifiedPath);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+
+        markKnowledgeStale(context);
+        return modifiedPath;
+    }
+
     public IReadOnlyList<string> EnumerateModified(DeviceContext context)
     {
         var modifiedSourceRoot = ValidateRoots(context).ModifiedSourceRoot;

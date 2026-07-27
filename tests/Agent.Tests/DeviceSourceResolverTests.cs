@@ -148,6 +148,133 @@ public sealed class DeviceSourceResolverTests : IDisposable
     }
 
     [Fact]
+    public void CreateNewCreatesOnlyAnOverlayAndMarksKnowledgeStale()
+    {
+        var context = CreateContext();
+        var initialContent = new byte[] { 0, 1, 2, 127, 255 };
+        var staleNotifications = 0;
+        var resolver = new DeviceSourceResolver(_ => staleNotifications++);
+        var modifiedPath = Path.Combine(
+            context.ModifiedSourceRoot,
+            "Blocks",
+            "Authored.xml");
+        var baselinePath = Path.Combine(
+            context.ExportedSourceRoot,
+            "Blocks",
+            "Authored.xml");
+
+        var created = resolver.CreateNew(
+            context,
+            "Blocks/Authored.xml",
+            initialContent);
+
+        Assert.Equal(modifiedPath, created);
+        Assert.Equal(initialContent, File.ReadAllBytes(modifiedPath));
+        Assert.False(File.Exists(baselinePath));
+        Assert.Equal(modifiedPath, resolver.ResolveEffective(
+            context,
+            "Blocks/Authored.xml"));
+        Assert.Equal(1, staleNotifications);
+        Assert.DoesNotContain(
+            Directory.EnumerateFiles(
+                Path.GetDirectoryName(modifiedPath)!,
+                "*",
+                SearchOption.TopDirectoryOnly),
+            path => path.EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CreateNewRefusesToOverwriteAndDoesNotMarkKnowledgeStale()
+    {
+        var context = CreateContext();
+        var modifiedPath = Write(
+            Path.Combine(
+                context.ModifiedSourceRoot,
+                "Blocks",
+                "Authored.xml"),
+            "keep");
+        var staleNotifications = 0;
+        var resolver = new DeviceSourceResolver(_ => staleNotifications++);
+
+        Assert.Throws<IOException>(() =>
+            resolver.CreateNew(
+                context,
+                "Blocks/Authored.xml",
+                new byte[] { 1, 2, 3 }));
+
+        Assert.Equal("keep", File.ReadAllText(modifiedPath));
+        Assert.Equal(0, staleNotifications);
+    }
+
+    [Fact]
+    public void CreateNewRejectsTraversalWithoutMarkingKnowledgeStale()
+    {
+        var context = CreateContext();
+        var staleNotifications = 0;
+        var resolver = new DeviceSourceResolver(_ => staleNotifications++);
+
+        Assert.Throws<WorkbenchPathException>(() =>
+            resolver.CreateNew(
+                context,
+                "../escape.xml",
+                new byte[] { 1 }));
+
+        Assert.False(File.Exists(Path.Combine(context.DeviceRoot, "escape.xml")));
+        Assert.Equal(0, staleNotifications);
+    }
+
+    [Fact]
+    public void CreateNewRejectsRootedPathWithoutMarkingKnowledgeStale()
+    {
+        var context = CreateContext();
+        var staleNotifications = 0;
+        var resolver = new DeviceSourceResolver(_ => staleNotifications++);
+        var rootedPath = Path.Combine(root, "escape.xml");
+
+        Assert.Throws<WorkbenchPathException>(() =>
+            resolver.CreateNew(
+                context,
+                rootedPath,
+                new byte[] { 1 }));
+
+        Assert.False(File.Exists(rootedPath));
+        Assert.Equal(0, staleNotifications);
+    }
+
+    [Fact]
+    public void CreateNewRejectsReparsePointEscapeWhenSupported()
+    {
+        var context = CreateContext();
+        Directory.CreateDirectory(context.ModifiedSourceRoot);
+        var outside = Path.Combine(root, "outside-new");
+        Directory.CreateDirectory(outside);
+        var link = Path.Combine(context.ModifiedSourceRoot, "Blocks");
+
+        try
+        {
+            Directory.CreateSymbolicLink(link, outside);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or UnauthorizedAccessException
+            or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var staleNotifications = 0;
+        var resolver = new DeviceSourceResolver(_ => staleNotifications++);
+
+        Assert.Throws<WorkbenchPathException>(() =>
+            resolver.CreateNew(
+                context,
+                "Blocks/Authored.xml",
+                new byte[] { 1 }));
+        Assert.False(File.Exists(Path.Combine(outside, "Authored.xml")));
+        Assert.Equal(0, staleNotifications);
+    }
+
+    [Fact]
     public void ReparsePointEscapeIsRejectedWhenSupported()
     {
         var context = CreateContext();
