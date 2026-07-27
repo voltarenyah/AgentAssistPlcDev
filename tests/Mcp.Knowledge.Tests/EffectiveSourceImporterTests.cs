@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -9,6 +10,118 @@ namespace Mcp.Knowledge.Tests;
 
 public sealed class EffectiveSourceImporterTests
 {
+    [Fact]
+    public void ModifiedSourceEnumerationDoesNotFollowDirectoryJunction()
+    {
+        using var exported = new TempExportTree();
+        using var modified = new TempExportTree();
+        using var outside = new TempExportTree();
+        const string baselinePath = "Blocks/A.xml";
+        exported.AddText(baselinePath, Ob("A", "baseline"));
+        ManifestFixtures.Write(
+            exported,
+            ManifestFixtures.Component("A", "OB", baselinePath, "Program blocks/A"));
+        outside.AddText("Outside.xml", Ob("Outside", "outside"));
+        var junction = Path.Combine(modified.Root, "Linked");
+        CreateDirectoryLink(junction, outside.Root);
+
+        try
+        {
+            var result = EffectiveSourceImporter.Import(exported.Root, modified.Root);
+
+            Assert.DoesNotContain(
+                result.Graph.Nodes,
+                node => node.Id == "block:Outside");
+            Assert.DoesNotContain(
+                result.Components,
+                component => component.RelativePath.Contains("Outside.xml"));
+        }
+        finally
+        {
+            DeleteDirectoryLink(junction);
+        }
+    }
+
+    [Fact]
+    public void ExportedManifestPathTraversingDirectoryJunctionIsRejected()
+    {
+        using var exported = new TempExportTree();
+        using var modified = new TempExportTree();
+        using var outside = new TempExportTree();
+        const string linkedPath = "Linked/A.xml";
+        outside.AddText("A.xml", Ob("A", "outside"));
+        ManifestFixtures.Write(
+            exported,
+            ManifestFixtures.Component("A", "OB", linkedPath, "Program blocks/A"));
+        var junction = Path.Combine(exported.Root, "Linked");
+        CreateDirectoryLink(junction, outside.Root);
+
+        try
+        {
+            var error = Assert.Throws<ManifestInvalidException>(() =>
+                EffectiveSourceImporter.Import(exported.Root, modified.Root));
+
+            Assert.Contains("reparse point", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteDirectoryLink(junction);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DeclaredSourceRootCannotBeDirectoryJunction(bool exportedIsJunction)
+    {
+        using var exported = new TempExportTree();
+        using var modified = new TempExportTree();
+        using var links = new TempExportTree();
+        const string baselinePath = "Blocks/A.xml";
+        exported.AddText(baselinePath, Ob("A", "baseline"));
+        ManifestFixtures.Write(
+            exported,
+            ManifestFixtures.Component("A", "OB", baselinePath, "Program blocks/A"));
+        var junction = Path.Combine(
+            links.Root,
+            exportedIsJunction ? "exported-link" : "modified-link");
+        CreateDirectoryLink(
+            junction,
+            exportedIsJunction ? exported.Root : modified.Root);
+
+        try
+        {
+            var error = Assert.Throws<ManifestInvalidException>(() =>
+                EffectiveSourceImporter.Import(
+                    exportedIsJunction ? junction : exported.Root,
+                    exportedIsJunction ? modified.Root : junction));
+
+            Assert.Contains("reparse point", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteDirectoryLink(junction);
+        }
+    }
+
+    [Fact]
+    public void ExportedAndModifiedSourceRootsMustBeDifferentDirectories()
+    {
+        using var source = new TempExportTree();
+        const string baselinePath = "Blocks/A.xml";
+        source.AddText(baselinePath, Ob("A", "baseline"));
+        ManifestFixtures.Write(
+            source,
+            ManifestFixtures.Component("A", "OB", baselinePath, "Program blocks/A"));
+
+        var error = Assert.Throws<ManifestInvalidException>(() =>
+            EffectiveSourceImporter.Import(
+                source.Root,
+                Path.Combine(source.Root, ".")));
+
+        Assert.Contains("different directories", error.Message);
+    }
+
     [Fact]
     public void FullImportUsesOverlayForManifestPathAndBaselineForOtherComponents()
     {
@@ -141,5 +254,45 @@ public sealed class EffectiveSourceImporterTests
     {
         return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
             .ToLowerInvariant();
+    }
+
+    private static void CreateDirectoryLink(string linkPath, string targetPath)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Directory.CreateSymbolicLink(linkPath, targetPath);
+            return;
+        }
+
+        var startInfo = new ProcessStartInfo("cmd.exe")
+        {
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("mklink");
+        startInfo.ArgumentList.Add("/J");
+        startInfo.ArgumentList.Add(linkPath);
+        startInfo.ArgumentList.Add(targetPath);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not create a directory junction.");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(
+            process.ExitCode == 0,
+            $"Could not create junction. stdout: {output} stderr: {error}");
+    }
+
+    private static void DeleteDirectoryLink(string linkPath)
+    {
+        if (Directory.Exists(linkPath))
+        {
+            Directory.Delete(linkPath);
+        }
     }
 }

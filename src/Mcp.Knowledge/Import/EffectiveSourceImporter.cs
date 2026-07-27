@@ -49,6 +49,7 @@ public static class EffectiveSourceImporter
     {
         var exportedRoot = RequireRoot(exportedSourceRoot, nameof(exportedSourceRoot));
         var modifiedRoot = RequireRoot(modifiedSourceRoot, nameof(modifiedSourceRoot));
+        RequireDistinctRoots(exportedRoot, modifiedRoot);
         var document = ReadManifest(exportedRoot);
         var components = document.Components ?? new List<ComponentMetadataRecordDto>();
         var manifestPaths = IndexManifestPaths(components);
@@ -93,6 +94,7 @@ public static class EffectiveSourceImporter
     {
         var exportedRoot = RequireRoot(exportedSourceRoot, nameof(exportedSourceRoot));
         var modifiedRoot = RequireRoot(modifiedSourceRoot, nameof(modifiedSourceRoot));
+        RequireDistinctRoots(exportedRoot, modifiedRoot);
         var normalizedPath = NormalizeRelativePath(relativePath);
         var overlayPath = ResolvePath(modifiedRoot, normalizedPath);
         if (!File.Exists(overlayPath))
@@ -182,6 +184,7 @@ public static class EffectiveSourceImporter
                 nameof(relativePath));
         }
 
+        RejectExistingReparsePoints(fullPath);
         return fullPath;
     }
 
@@ -270,7 +273,9 @@ public static class EffectiveSourceImporter
                 $"Source root '{root}' was not found.");
         }
 
-        return Path.GetFullPath(root);
+        var fullRoot = Path.GetFullPath(root);
+        RejectExistingReparsePoints(fullRoot);
+        return fullRoot;
     }
 
     private static ComponentMetadataDocumentDto ReadManifest(string exportedRoot)
@@ -327,11 +332,107 @@ public static class EffectiveSourceImporter
 
     private static string[] EnumerateXmlFiles(string root)
     {
-        return Directory
-            .EnumerateFiles(root, "*.xml", SearchOption.AllDirectories)
-            .Select(path => NormalizeRelativePath(Path.GetRelativePath(root, path)))
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToArray();
+        var files = new List<string>();
+        var pending = new Stack<DirectoryInfo>();
+        pending.Push(new DirectoryInfo(root));
+        while (pending.Count > 0)
+        {
+            foreach (var entry in pending.Pop().EnumerateFileSystemInfos())
+            {
+                if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                {
+                    continue;
+                }
+
+                if (entry.Attributes.HasFlag(FileAttributes.Directory))
+                {
+                    pending.Push((DirectoryInfo)entry);
+                    continue;
+                }
+
+                if (string.Equals(
+                        entry.Extension,
+                        ".xml",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    files.Add(NormalizeRelativePath(
+                        Path.GetRelativePath(root, entry.FullName)));
+                }
+            }
+        }
+
+        files.Sort(StringComparer.Ordinal);
+        return files.ToArray();
+    }
+
+    private static void RequireDistinctRoots(
+        string exportedRoot,
+        string modifiedRoot)
+    {
+        if (string.Equals(
+                exportedRoot.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar),
+                modifiedRoot.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar),
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            throw new ManifestInvalidException(
+                "exportedSourceRoot and modifiedSourceRoot must resolve to different directories.");
+        }
+    }
+
+    private static void RejectExistingReparsePoints(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var pathRoot = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrWhiteSpace(pathRoot))
+        {
+            throw new ManifestInvalidException(
+                $"Source path '{path}' has no filesystem root.");
+        }
+
+        var current = pathRoot;
+        foreach (var segment in fullPath[pathRoot.Length..].Split(
+                     new[]
+                     {
+                         Path.DirectorySeparatorChar,
+                         Path.AltDirectorySeparatorChar,
+                     },
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            FileAttributes attributes;
+            try
+            {
+                attributes = File.GetAttributes(current);
+            }
+            catch (FileNotFoundException)
+            {
+                break;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                break;
+            }
+            catch (Exception ex) when (
+                ex is IOException
+                or UnauthorizedAccessException
+                or System.Security.SecurityException)
+            {
+                throw new ManifestInvalidException(
+                    $"Source path segment '{current}' could not be validated: {ex.Message}");
+            }
+
+            if (attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                throw new ManifestInvalidException(
+                    $"Source path '{path}' traverses reparse point '{current}'.");
+            }
+        }
     }
 
     private static void ValidateBaselineIdentity(
