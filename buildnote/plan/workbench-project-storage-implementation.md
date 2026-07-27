@@ -1034,6 +1034,14 @@ git commit -m "feat(api): expose workbench device contexts"
 
 ## Task 11: Add end-to-end verification and remove obsolete assumptions
 
+> **Verification amendment (2026-07-27):** The proposed JSON scenario for
+> `scripts/mcp-e2e.mjs` is superseded by `tests/E2E.Tests`. The script runner is
+> designed for independently launched stdio servers and cannot safely exercise the
+> host-owned approval/session/selection lifecycle or a mocked TIA boundary. The xUnit
+> E2E drives `WorkbenchCoordinator`, real linked Git worktrees, and real device SQLite
+> updates behind typed MCP caller seams. Therefore no `scripts/e2e-workbench.json`
+> command is claimed for this feature.
+
 **Files:**
 - Create: `scripts/e2e-workbench.json`
 - Modify: `scripts/mcp-e2e.mjs`
