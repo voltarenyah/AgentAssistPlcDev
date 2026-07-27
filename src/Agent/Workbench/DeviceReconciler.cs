@@ -1,8 +1,36 @@
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+
+[assembly: InternalsVisibleTo("Agent.Tests")]
 
 namespace Agent.Workbench;
+
+internal interface IReconciliationFileOperations
+{
+    bool FileExists(string path);
+
+    void CopyFile(string sourcePath, string destinationPath, bool overwrite);
+
+    void MoveFile(string sourcePath, string destinationPath, bool overwrite);
+
+    void DeleteFile(string path);
+}
+
+internal sealed class ReconciliationFileOperations : IReconciliationFileOperations
+{
+    public bool FileExists(string path) => File.Exists(path);
+
+    public void CopyFile(string sourcePath, string destinationPath, bool overwrite) =>
+        File.Copy(sourcePath, destinationPath, overwrite);
+
+    public void MoveFile(string sourcePath, string destinationPath, bool overwrite) =>
+        File.Move(sourcePath, destinationPath, overwrite);
+
+    public void DeleteFile(string path) => File.Delete(path);
+}
 
 public sealed class DeviceReconciler
 {
@@ -11,6 +39,18 @@ public sealed class DeviceReconciler
     public const string ManifestInvalidCode = "RECONCILIATION_MANIFEST_INVALID";
 
     private const string MetadataFileName = "metadata.json";
+    private readonly IReconciliationFileOperations _fileOperations;
+
+    public DeviceReconciler()
+        : this(new ReconciliationFileOperations())
+    {
+    }
+
+    internal DeviceReconciler(IReconciliationFileOperations fileOperations)
+    {
+        _fileOperations = fileOperations
+            ?? throw new ArgumentNullException(nameof(fileOperations));
+    }
 
     public ReconciliationPreview Preview(DeviceContext context)
     {
@@ -119,8 +159,8 @@ public sealed class DeviceReconciler
         var normalizedRemovals = NormalizeApprovedRemovals(
             context.ExportedSourceRoot,
             approvedRemovalPaths);
-        var temporaryFiles = new List<PendingReplacement>();
-        var changedRelativePaths = new List<string>();
+        var mutations = new List<PendingMutation>();
+        var artifacts = new HashSet<string>(StringComparer.Ordinal);
 
         try
         {
@@ -141,14 +181,9 @@ public sealed class DeviceReconciler
                 var temporaryPath = Path.Combine(
                     destinationDirectory,
                     $".{Path.GetFileName(destinationPath)}.{Guid.NewGuid():N}.tmp");
-                File.Copy(sourcePath, temporaryPath, overwrite: false);
-                temporaryFiles.Add(new PendingReplacement(temporaryPath, destinationPath));
-            }
-
-            foreach (var replacement in temporaryFiles)
-            {
-                File.Move(replacement.TemporaryPath, replacement.DestinationPath, overwrite: true);
-                changedRelativePaths.Add(ToGitPath(context, replacement.DestinationPath));
+                artifacts.Add(temporaryPath);
+                _fileOperations.CopyFile(sourcePath, temporaryPath, overwrite: false);
+                mutations.Add(PendingMutation.Replace(destinationPath, temporaryPath));
             }
 
             foreach (var entry in current.Entries)
@@ -161,65 +196,254 @@ public sealed class DeviceReconciler
 
                 var destinationPath =
                     ResolveControlledPath(context.ExportedSourceRoot, entry.RelativePath);
-                if (File.Exists(destinationPath))
+                if (_fileOperations.FileExists(destinationPath))
                 {
-                    File.Delete(destinationPath);
-                    changedRelativePaths.Add(ToGitPath(context, destinationPath));
+                    mutations.Add(PendingMutation.Delete(destinationPath));
                 }
             }
 
-            ApplyManifestLast(context, changedRelativePaths);
+            var manifestMutation = PrepareManifestMutation(
+                context,
+                current,
+                normalizedRemovals,
+                artifacts);
+            if (manifestMutation is not null)
+            {
+                mutations.Add(manifestMutation);
+            }
+
+            CaptureOriginalState(mutations, artifacts);
+
+            try
+            {
+                foreach (var mutation in mutations)
+                {
+                    ApplyMutation(mutation);
+                }
+            }
+            catch (Exception applyException)
+            {
+                var rollbackExceptions = RollBack(mutations);
+                if (rollbackExceptions.Count > 0)
+                {
+                    throw new AggregateException(
+                        "Reconciliation failed and one or more baseline files could not be restored.",
+                        new[] { applyException }.Concat(rollbackExceptions));
+                }
+
+                throw;
+            }
+
+            var exactChangedPaths = mutations
+                .Where(static mutation => mutation.Applied)
+                .Select(mutation => ToGitPath(context, mutation.DestinationPath))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(static path => path, StringComparer.Ordinal)
+                .ToArray();
+            return new ReconciliationOutcome(
+                current.PreviewId,
+                Array.AsReadOnly(exactChangedPaths));
         }
         finally
         {
-            foreach (var replacement in temporaryFiles)
+            foreach (var artifact in artifacts)
             {
-                if (File.Exists(replacement.TemporaryPath))
+                try
                 {
-                    File.Delete(replacement.TemporaryPath);
+                    if (_fileOperations.FileExists(artifact))
+                    {
+                        _fileOperations.DeleteFile(artifact);
+                    }
+                }
+                catch (IOException)
+                {
+                    // Preserve the primary apply/rollback result. Artifacts use unique names and
+                    // are retried by neither reconciliation nor Git staging.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Preserve the primary apply/rollback result.
                 }
             }
         }
-
-        var exactChangedPaths = changedRelativePaths
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(static path => path, StringComparer.Ordinal)
-            .ToArray();
-        return new ReconciliationOutcome(
-            current.PreviewId,
-            Array.AsReadOnly(exactChangedPaths));
     }
 
-    private static void ApplyManifestLast(
+    private PendingMutation? PrepareManifestMutation(
         DeviceContext context,
-        ICollection<string> changedRelativePaths)
+        ReconciliationPreview preview,
+        IReadOnlySet<string> approvedRemovals,
+        ISet<string> artifacts)
     {
         var sourcePath = ResolveControlledPath(context.StagingRoot, MetadataFileName);
         var destinationPath =
             ResolveControlledPath(context.ExportedSourceRoot, MetadataFileName);
-        if (File.Exists(destinationPath)
-            && FilesHaveEqualContent(sourcePath, destinationPath))
-        {
-            return;
-        }
-
         Directory.CreateDirectory(context.ExportedSourceRoot);
         var temporaryPath = Path.Combine(
             context.ExportedSourceRoot,
             $".{MetadataFileName}.{Guid.NewGuid():N}.tmp");
+        artifacts.Add(temporaryPath);
+
+        var retainedRemovalPaths = preview.Entries
+            .Where(entry =>
+                entry.Kind == ReconciliationChangeKind.Removed
+                && !approvedRemovals.Contains(entry.RelativePath))
+            .Select(static entry => entry.RelativePath)
+            .ToHashSet(StringComparer.Ordinal);
+
         try
         {
-            File.Copy(sourcePath, temporaryPath, overwrite: false);
-            File.Move(temporaryPath, destinationPath, overwrite: true);
-            changedRelativePaths.Add(ToGitPath(context, destinationPath));
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath))
+            if (retainedRemovalPaths.Count == 0)
             {
-                File.Delete(temporaryPath);
+                _fileOperations.CopyFile(sourcePath, temporaryPath, overwrite: false);
+            }
+            else
+            {
+                var mergedManifest = MergeRetainedComponents(
+                    context,
+                    retainedRemovalPaths);
+                File.WriteAllText(temporaryPath, mergedManifest);
             }
         }
+        catch
+        {
+            if (_fileOperations.FileExists(temporaryPath))
+            {
+                _fileOperations.DeleteFile(temporaryPath);
+            }
+
+            throw;
+        }
+
+        if (_fileOperations.FileExists(destinationPath)
+            && FilesHaveEqualContent(temporaryPath, destinationPath))
+        {
+            _fileOperations.DeleteFile(temporaryPath);
+            return null;
+        }
+
+        return PendingMutation.Replace(destinationPath, temporaryPath);
+    }
+
+    private static string MergeRetainedComponents(
+        DeviceContext context,
+        IReadOnlySet<string> retainedRemovalPaths)
+    {
+        var stagingManifestPath =
+            ResolveControlledPath(context.StagingRoot, MetadataFileName);
+        var baselineManifestPath =
+            ResolveControlledPath(context.ExportedSourceRoot, MetadataFileName);
+        var stagingRoot = JsonNode.Parse(File.ReadAllText(stagingManifestPath))
+            ?.AsObject()
+            ?? throw new ReconciliationException(
+                ManifestInvalidCode,
+                $"The manifest '{stagingManifestPath}' is empty.");
+        var stagingComponents = stagingRoot["components"]?.AsArray()
+            ?? throw new ReconciliationException(
+                ManifestInvalidCode,
+                $"The manifest '{stagingManifestPath}' has no component array.");
+
+        using var baselineDocument =
+            JsonDocument.Parse(File.ReadAllText(baselineManifestPath));
+        foreach (var component in baselineDocument.RootElement
+                     .GetProperty("components")
+                     .EnumerateArray())
+        {
+            if (!component.TryGetProperty("exportedFile", out var exportedFile)
+                || exportedFile.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(exportedFile.GetString()))
+            {
+                continue;
+            }
+
+            var relativePath = NormalizeRelativePath(
+                context.ExportedSourceRoot,
+                exportedFile.GetString()!);
+            if (retainedRemovalPaths.Contains(relativePath))
+            {
+                stagingComponents.Add(JsonNode.Parse(component.GetRawText()));
+            }
+        }
+
+        return stagingRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private void CaptureOriginalState(
+        IEnumerable<PendingMutation> mutations,
+        ISet<string> artifacts)
+    {
+        foreach (var mutation in mutations)
+        {
+            mutation.OriginalExisted =
+                _fileOperations.FileExists(mutation.DestinationPath);
+            if (!mutation.OriginalExisted)
+            {
+                continue;
+            }
+
+            var directory = Path.GetDirectoryName(mutation.DestinationPath)!;
+            var backupPath = Path.Combine(
+                directory,
+                $".{Path.GetFileName(mutation.DestinationPath)}.{Guid.NewGuid():N}.bak");
+            artifacts.Add(backupPath);
+            _fileOperations.CopyFile(
+                mutation.DestinationPath,
+                backupPath,
+                overwrite: false);
+            mutation.BackupPath = backupPath;
+        }
+    }
+
+    private void ApplyMutation(PendingMutation mutation)
+    {
+        if (mutation.ReplacementPath is not null)
+        {
+            _fileOperations.MoveFile(
+                mutation.ReplacementPath,
+                mutation.DestinationPath,
+                overwrite: true);
+        }
+        else
+        {
+            _fileOperations.DeleteFile(mutation.DestinationPath);
+        }
+
+        mutation.Applied = true;
+    }
+
+    private IReadOnlyList<Exception> RollBack(IReadOnlyList<PendingMutation> mutations)
+    {
+        var failures = new List<Exception>();
+        for (var index = mutations.Count - 1; index >= 0; index--)
+        {
+            var mutation = mutations[index];
+            if (!mutation.Applied)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (mutation.OriginalExisted)
+                {
+                    _fileOperations.MoveFile(
+                        mutation.BackupPath!,
+                        mutation.DestinationPath,
+                        overwrite: true);
+                }
+                else if (_fileOperations.FileExists(mutation.DestinationPath))
+                {
+                    _fileOperations.DeleteFile(mutation.DestinationPath);
+                }
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                or UnauthorizedAccessException)
+            {
+                failures.Add(exception);
+            }
+        }
+
+        return failures;
     }
 
     private static Manifest ReadManifest(
@@ -523,5 +747,30 @@ public sealed class DeviceReconciler
 
     private sealed record TreeItem(string RelativePath, string? ContentHash);
 
-    private sealed record PendingReplacement(string TemporaryPath, string DestinationPath);
+    private sealed class PendingMutation
+    {
+        private PendingMutation(string destinationPath, string? replacementPath)
+        {
+            DestinationPath = destinationPath;
+            ReplacementPath = replacementPath;
+        }
+
+        public string DestinationPath { get; }
+
+        public string? ReplacementPath { get; }
+
+        public bool OriginalExisted { get; set; }
+
+        public string? BackupPath { get; set; }
+
+        public bool Applied { get; set; }
+
+        public static PendingMutation Replace(
+            string destinationPath,
+            string replacementPath) =>
+            new(destinationPath, replacementPath);
+
+        public static PendingMutation Delete(string destinationPath) =>
+            new(destinationPath, replacementPath: null);
+    }
 }

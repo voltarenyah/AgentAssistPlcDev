@@ -148,9 +148,60 @@ public sealed class DeviceReconcilerTests : IDisposable
         Assert.DoesNotContain(
             outcome.ChangedPaths,
             path => path.EndsWith("exported-source/Blocks/RetainedRemoval.xml", StringComparison.Ordinal));
-        Assert.Equal(
-            File.ReadAllBytes(fixture.StagingPath("metadata.json")),
-            File.ReadAllBytes(fixture.BaselinePath("metadata.json")));
+
+        using (var manifest = JsonDocument.Parse(
+                   File.ReadAllText(fixture.BaselinePath("metadata.json"))))
+        {
+            var componentIds = manifest.RootElement.GetProperty("components")
+                .EnumerateArray()
+                .Select(component => component.GetProperty("id").GetString())
+                .ToArray();
+            Assert.Contains("retain", componentIds);
+            Assert.DoesNotContain("delete", componentIds);
+        }
+
+        var nextPreview = reconciler.Preview(fixture.Context);
+        var retainedRemoval = Assert.Single(
+            nextPreview.Entries,
+            entry => entry.Kind == ReconciliationChangeKind.Removed);
+        Assert.Equal("Blocks/RetainedRemoval.xml", retainedRemoval.RelativePath);
+        Assert.Equal("retain", retainedRemoval.ComponentIdentity);
+    }
+
+    [Fact]
+    public void ApplyRollsBackEveryTrackedMutationWhenLaterReplacementFails()
+    {
+        var fixture = CreateFixture();
+        fixture.WriteBaseline("Blocks/A.xml", "old-a");
+        fixture.WriteBaseline("Blocks/B.xml", "old-b");
+        fixture.WriteBaselineManifest(
+            Component("a", "Blocks/A.xml"),
+            Component("b", "Blocks/B.xml"));
+        fixture.WriteStaging("Blocks/A.xml", "new-a");
+        fixture.WriteStaging("Blocks/B.xml", "new-b");
+        fixture.WriteStagingManifest(
+            Component("a", "Blocks/A.xml"),
+            Component("b", "Blocks/B.xml"));
+        var before = fixture.SnapshotBaseline();
+        var reconciler = new DeviceReconciler(
+            new FailOnNthCommittedMoveFileOperations(failureMove: 2));
+        var preview = reconciler.Preview(fixture.Context);
+
+        var exception = Assert.Throws<IOException>(() =>
+            reconciler.Apply(
+                fixture.Context,
+                preview,
+                new HashSet<string>(StringComparer.Ordinal)));
+
+        Assert.Equal("Injected move failure.", exception.Message);
+        Assert.Equal(before, fixture.SnapshotBaseline());
+        Assert.DoesNotContain(
+            Directory.EnumerateFiles(
+                fixture.Context.ExportedSourceRoot,
+                "*",
+                SearchOption.AllDirectories),
+            path => path.EndsWith(".tmp", StringComparison.Ordinal)
+                || path.EndsWith(".bak", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -312,6 +363,36 @@ public sealed class DeviceReconcilerTests : IDisposable
             status = "Exported",
             exportedFile,
         };
+
+    private sealed class FailOnNthCommittedMoveFileOperations
+        : IReconciliationFileOperations
+    {
+        private readonly int _failureMove;
+        private int _committedMoves;
+
+        public FailOnNthCommittedMoveFileOperations(int failureMove)
+        {
+            _failureMove = failureMove;
+        }
+
+        public bool FileExists(string path) => File.Exists(path);
+
+        public void CopyFile(string sourcePath, string destinationPath, bool overwrite) =>
+            File.Copy(sourcePath, destinationPath, overwrite);
+
+        public void MoveFile(string sourcePath, string destinationPath, bool overwrite)
+        {
+            if (sourcePath.EndsWith(".tmp", StringComparison.Ordinal)
+                && ++_committedMoves == _failureMove)
+            {
+                throw new IOException("Injected move failure.");
+            }
+
+            File.Move(sourcePath, destinationPath, overwrite);
+        }
+
+        public void DeleteFile(string path) => File.Delete(path);
+    }
 
     private sealed class Fixture
     {
