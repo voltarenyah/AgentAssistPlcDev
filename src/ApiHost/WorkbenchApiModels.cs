@@ -38,7 +38,11 @@ public sealed class WorkbenchApiState
     }
 
     public WorkbenchSelection? Selection { get; private set; }
-    public IReadOnlyList<WorkbenchMetadata> List() => workbenches.Values.OrderBy(x => x.Name).ToArray();
+    public IReadOnlyList<WorkbenchMetadata> List()
+    {
+        ReconcileCatalog();
+        return workbenches.Values.OrderBy(x => x.Name).ToArray();
+    }
     public WorkbenchMetadata Add(WorkbenchMetadata value)
     {
         var persisted = catalog.Load(value.RootPath);
@@ -46,12 +50,39 @@ public sealed class WorkbenchApiState
             throw new WorkbenchCatalogException(
                 "WORKBENCH_RELATIONSHIP_MISMATCH",
                 "Workbench metadata does not match the persisted catalog entry.");
-        trustedRoots?.Register(persisted.RootPath);
         workbenches[persisted.WorkbenchId] = persisted;
+        ReconcileTrustedRoots();
         return persisted;
     }
     public WorkbenchMetadata Refresh(string id) => Add(catalog.Load(Workbench(id).RootPath));
     public WorkbenchMetadata Open(string root) => Add(catalog.Load(root));
+
+    public void ReconcileCatalog()
+    {
+        foreach (var existing in workbenches.ToArray())
+        {
+            try
+            {
+                workbenches[existing.Key] = catalog.Load(existing.Value.RootPath);
+            }
+            catch (WorkbenchCatalogException exception) when (
+                exception.Code is "WORKBENCH_NOT_FOUND" or "WORKBENCH_RELATIONSHIP_MISMATCH")
+            {
+                workbenches.TryRemove(existing.Key, out _);
+            }
+        }
+
+        foreach (var discovered in catalog.ListDefaultRoot())
+        {
+            workbenches[discovered.WorkbenchId] = discovered;
+        }
+
+        ReconcileTrustedRoots();
+    }
+
+    private void ReconcileTrustedRoots() =>
+        trustedRoots?.Reconcile(workbenches.Values.Select(workbench =>
+            new TrustedWorkbenchRoot(workbench.WorkbenchId, workbench.RootPath)));
     public WorkbenchMetadata Workbench(string id) => workbenches.TryGetValue(id, out var value) ? value : throw new KeyNotFoundException("WORKBENCH_NOT_FOUND");
     public WorktreeMetadata Worktree(string workbenchId, string worktreeId)
     {

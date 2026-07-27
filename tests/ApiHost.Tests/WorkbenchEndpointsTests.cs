@@ -359,6 +359,22 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public void CatalogReloadRemovesDeletedWorkbenchFromTrustedRegistry()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "defaults"));
+        var created = catalog.Create("Line", Path.Combine(root, "custom", "Line"));
+        var registry = new TrustedWorkbenchRootRegistry(Path.Combine(root, "trusted-roots.json"));
+        var state = new WorkbenchApiState(catalog, store, registry);
+        state.Open(created.RootPath);
+        Assert.Contains(created.RootPath, registry.Read(), StringComparer.OrdinalIgnoreCase);
+
+        File.Delete(Path.Combine(created.RootPath, "workbench.json"));
+        Assert.Empty(state.List());
+        Assert.Empty(registry.Read());
+    }
+
+    [Fact]
     public void McpHostPassesOnlyTrustedRegistryLocationToSandboxedServers()
     {
         var registryPath = Path.Combine(root, "trusted-roots.json");

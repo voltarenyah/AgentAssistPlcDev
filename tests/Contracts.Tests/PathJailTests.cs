@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using Contracts.Sandbox;
 using Xunit;
 
@@ -93,7 +94,8 @@ public sealed class PathJailTests : IDisposable
             Assert.Throws<SandboxException>(() =>
                 dynamicJail.Validate(Path.Combine(customRoot, "source.xml"), "xmlFilePath"));
 
-            new TrustedWorkbenchRootRegistry(registryPath).Register(customRoot);
+            WriteWorkbenchMetadata(customRoot, "wb-custom");
+            new TrustedWorkbenchRootRegistry(registryPath).Register("wb-custom", customRoot);
 
             Assert.Equal(
                 Path.Combine(customRoot, "source.xml"),
@@ -106,6 +108,96 @@ public sealed class PathJailTests : IDisposable
             Directory.Delete(customRoot, true);
             Directory.Delete(arbitraryRoot, true);
         }
+    }
+
+    [Fact]
+    public void DeletingOrTamperingWorkbenchMetadataRevokesGrantImmediately()
+    {
+        var registryPath = Path.Combine(root, "trusted-roots.json");
+        var customRoot = Path.Combine(root, "custom-workbench");
+        Directory.CreateDirectory(customRoot);
+        WriteWorkbenchMetadata(customRoot, "wb-1");
+        var registry = new TrustedWorkbenchRootRegistry(registryPath);
+        registry.Register("wb-1", customRoot);
+        var dynamicJail = new PathJail(Array.Empty<string>(), registryPath);
+        var source = Path.Combine(customRoot, "source.xml");
+        Assert.Equal(source, dynamicJail.Validate(source, "xmlFilePath"));
+
+        File.Delete(Path.Combine(customRoot, "workbench.json"));
+        Assert.Throws<SandboxException>(() => dynamicJail.Validate(source, "xmlFilePath"));
+
+        WriteWorkbenchMetadata(customRoot, "wrong-id");
+        Assert.Throws<SandboxException>(() => dynamicJail.Validate(source, "xmlFilePath"));
+
+        Directory.Delete(customRoot, true);
+        Directory.CreateDirectory(customRoot);
+        Assert.Throws<SandboxException>(() => dynamicJail.Validate(source, "xmlFilePath"));
+    }
+
+    [Fact]
+    public void ReconcileAtomicallyReplacesMultipleRootGrantsAndMalformedRegistryFailsClosed()
+    {
+        var registryPath = Path.Combine(root, "trusted-roots.json");
+        var first = Path.Combine(root, "first");
+        var second = Path.Combine(root, "second");
+        Directory.CreateDirectory(first);
+        Directory.CreateDirectory(second);
+        WriteWorkbenchMetadata(first, "wb-1");
+        WriteWorkbenchMetadata(second, "wb-2");
+        var registry = new TrustedWorkbenchRootRegistry(registryPath);
+
+        registry.Reconcile(new[]
+        {
+            new TrustedWorkbenchRoot("wb-1", first),
+            new TrustedWorkbenchRoot("wb-2", second),
+        });
+        Assert.Equal(2, registry.Read().Count);
+
+        File.Delete(Path.Combine(first, "workbench.json"));
+        registry.Reconcile(new[] { new TrustedWorkbenchRoot("wb-2", second) });
+        Assert.DoesNotContain(first, registry.Read(), StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(second, registry.Read(), StringComparer.OrdinalIgnoreCase);
+
+        File.WriteAllText(registryPath, "{ malformed");
+        Assert.Empty(registry.Read());
+        Assert.Throws<SandboxException>(() =>
+            new PathJail(Array.Empty<string>(), registryPath)
+                .Validate(Path.Combine(second, "source.xml"), "xmlFilePath"));
+    }
+
+    [Fact]
+    public void ConcurrentHostInstancesPreserveEachOthersValidRoots()
+    {
+        var registryPath = Path.Combine(root, "trusted-roots.json");
+        var first = Path.Combine(root, "host-one");
+        var second = Path.Combine(root, "host-two");
+        Directory.CreateDirectory(first);
+        Directory.CreateDirectory(second);
+        WriteWorkbenchMetadata(first, "wb-1");
+        WriteWorkbenchMetadata(second, "wb-2");
+        var firstHost = new TrustedWorkbenchRootRegistry(registryPath);
+        var secondHost = new TrustedWorkbenchRootRegistry(registryPath);
+
+        Parallel.Invoke(
+            () => firstHost.Register("wb-1", first),
+            () => secondHost.Register("wb-2", second));
+
+        Assert.Contains(first, firstHost.Read(), StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(second, firstHost.Read(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FailedRegistryReplacementCleansTemporaryFile()
+    {
+        var registryPath = Path.Combine(root, "registry-blocker");
+        Directory.CreateDirectory(registryPath);
+        var customRoot = Path.Combine(root, "valid-workbench");
+        Directory.CreateDirectory(customRoot);
+        WriteWorkbenchMetadata(customRoot, "wb-1");
+        var registry = new TrustedWorkbenchRootRegistry(registryPath);
+
+        Assert.ThrowsAny<IOException>(() => registry.Register("wb-1", customRoot));
+        Assert.Empty(Directory.EnumerateFiles(root, "registry-blocker.*.tmp"));
     }
 
     [Fact]
@@ -141,5 +233,12 @@ public sealed class PathJailTests : IDisposable
             Directory.Delete(link);
             Directory.Delete(outside, true);
         }
+    }
+
+    private static void WriteWorkbenchMetadata(string workbenchRoot, string workbenchId)
+    {
+        File.WriteAllText(
+            Path.Combine(workbenchRoot, "workbench.json"),
+            $$"""{"schemaVersion":"1.0","workbenchId":"{{workbenchId}}","rootPath":{{System.Text.Json.JsonSerializer.Serialize(Path.GetFullPath(workbenchRoot))}}}""");
     }
 }

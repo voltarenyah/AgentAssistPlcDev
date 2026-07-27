@@ -19,7 +19,15 @@ if (args.Length > 0) builder.Configuration.AddCommandLine(args);
 builder.Services.AddCors();
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
-builder.Services.AddSingleton<TrustedWorkbenchRootRegistry>();
+builder.Services.AddSingleton(_ => new TrustedWorkbenchRootRegistry(
+    builder.Configuration["Sandbox:TrustedRootsFile"]
+    ?? (builder.Environment.IsEnvironment("Testing")
+        ? Path.Combine(
+            Path.GetTempPath(),
+            "AutomationWorkbench.Tests",
+            Guid.NewGuid().ToString("N"),
+            "trusted-workbench-roots.json")
+        : null)));
 builder.Services.AddSingleton<DeviceOperationLock>();
 builder.Services.AddSingleton<DeviceReconciler>();
 builder.Services.AddSingleton<DeviceSourceResolver>(services =>
