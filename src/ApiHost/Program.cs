@@ -1,6 +1,7 @@
 using Agent;
 using Agent.Chat;
 using Agent.Mcp;
+using Agent.Workbench;
 using Contracts.Engineering;
 using EngConnectionInfo = Contracts.Engineering.ConnectionInfo;
 using Contracts.Sandbox;
@@ -214,39 +215,7 @@ await host.StartAsync();
 Log("MCP servers running.");
 
 /* ── Git init for existing export roots ────────────── */
-// Scan existing project exports and init git repos in folders that lack them.
-// This is a one-time migration so old projects work with the version-control MCP.
-try
-{
-    var exportsDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "PlcAiAssistant", "exports");
-    if (Directory.Exists(exportsDir) && host.VersionControl != null)
-    {
-        int inited = 0;
-        foreach (var subDir in Directory.EnumerateDirectories(exportsDir))
-        {
-            var gitDir = Path.Combine(subDir, ".git");
-            if (!Directory.Exists(gitDir))
-            {
-                try
-                {
-                    await host.VersionControl.CallAsync<JsonElement>("vc_init", new { repoPath = subDir });
-                    inited++;
-                }
-                catch (Exception inner)
-                {
-                    Log($"git init skipped for {Path.GetFileName(subDir)}: {inner.Message}");
-                }
-            }
-        }
-        if (inited > 0) Log($"git: initialised {inited} existing export root(s).");
-    }
-}
-catch (Exception migrationEx)
-{
-    Log($"git migration warning (non-fatal): {migrationEx.Message}");
-}
+// Legacy exports are intentionally neither migrated nor mutated.
 
 var catalog = await McpToolCatalog.BuildAsync(host);
 Log($"Agent: {catalog.Tools.Count} MCP tools exposed.");
@@ -352,9 +321,32 @@ if (config.HasDeepSeekApiKey) CreateLoop(config);
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors();
+var metadataStore = new AtomicJsonStore();
+var workbenchCatalog = new WorkbenchCatalog(metadataStore);
+var sourceResolver = new DeviceSourceResolver(device =>
+{
+    var path = Path.Combine(device.DeviceRoot, "device.json");
+    var metadata = metadataStore.Read<DeviceMetadata>(path);
+    metadataStore.Write(path, metadata with
+    {
+        Knowledge = metadata.Knowledge with { Stale = true },
+    });
+});
+var coordinator = new WorkbenchCoordinator(
+    host.Engineering, host.Knowledge, host.VersionControl!,
+    workbenchCatalog, metadataStore, new DeviceReconciler(), sourceResolver);
+builder.Services.AddSingleton(metadataStore);
+builder.Services.AddSingleton(workbenchCatalog);
+builder.Services.AddSingleton(sourceResolver);
+builder.Services.AddSingleton(coordinator);
+var workbenchApiState = new WorkbenchApiState(workbenchCatalog, metadataStore);
+builder.Services.AddSingleton(workbenchApiState);
 
 var app = builder.Build();
 app.UseCors(p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
+app.MapWorkbenchEndpoints();
+DeviceContext? SelectedDevice() =>
+    workbenchApiState.Selection?.DeviceId is { } id ? workbenchApiState.Device(id).Context : null;
 
 /* ── API Endpoints ──────────────────────────────────── */
 
@@ -811,7 +803,8 @@ app.MapPost("/api/chat", async (HttpContext ctx, ChatRequest req) =>
                         UpdatedAt = DateTimeOffset.Now.ToString("O"),
                     },
                 };
-                SessionManager.SaveSession(currentSession);
+                if (SelectedDevice() is { } selectedDevice)
+                    SessionManager.SaveSession(selectedDevice, currentSession);
             }
             catch (Exception saveEx)
             {
@@ -1225,11 +1218,11 @@ app.MapPost("/api/chat/clear", () =>
 // List sessions for a project (lightweight metadata only)
 app.MapGet("/api/chat/sessions", (string projectName) =>
 {
-    if (string.IsNullOrWhiteSpace(projectName))
-        return Results.BadRequest(new { error = "projectName query parameter is required." });
+    if (SelectedDevice() is not { } selectedDevice)
+        return Results.BadRequest(new { error = "Select a workbench device first." });
     try
     {
-        var sessions = SessionManager.ListSessions(projectName);
+        var sessions = SessionManager.ListSessions(selectedDevice);
         return Results.Ok(sessions);
     }
     catch (Exception ex)
@@ -1242,23 +1235,19 @@ app.MapGet("/api/chat/sessions", (string projectName) =>
 // Create a new session
 app.MapPost("/api/chat/session/new", (NewSessionRequest? req) =>
 {
-    var projectName = req?.ProjectName
-        ?? ActiveConnection()?.ProjectName
-        ?? _selectedProjectName;
-
-    if (string.IsNullOrWhiteSpace(projectName))
-        return Results.BadRequest(new { error = "No project selected. Select a project or connect to TIA first." });
+    if (SelectedDevice() is not { } selectedDevice)
+        return Results.BadRequest(new { error = "No workbench device selected." });
 
     if (agentLoop == null)
         return Results.BadRequest(new { error = "Chat not ready. Configure your DeepSeek API key first." });
 
-    var runtimeContext = BuildRuntimeContext(projectName);
-    currentSession = SessionManager.CreateNewSession(projectName, agentLoop.Settings, runtimeContext);
+    var runtimeContext = BuildRuntimeContext();
+    currentSession = SessionManager.CreateNewSession(selectedDevice, agentLoop.Settings, runtimeContext);
     agentLoop.ClearHistory();
     agentLoop.SessionId = currentSession.Header.SessionId;
-    agentLoop.ProjectName = projectName;
+    agentLoop.ProjectName = selectedDevice.DeviceId;
 
-    Log($"session created: {currentSession.Header.SessionId} for project '{projectName}'");
+    Log($"session created: {currentSession.Header.SessionId} for device '{selectedDevice.DeviceId}'");
     return Results.Ok(new
     {
         sessionId = currentSession.Header.SessionId,
@@ -1277,7 +1266,9 @@ app.MapPost("/api/chat/session/load", (LoadSessionRequest req) =>
     if (agentLoop == null)
         return Results.BadRequest(new { error = "Chat not ready. Configure your DeepSeek API key first." });
 
-    var loaded = SessionManager.LoadSession(req.ProjectName, req.SessionId);
+    if (SelectedDevice() is not { } selectedDevice)
+        return Results.BadRequest(new { error = "No workbench device selected." });
+    var loaded = SessionManager.LoadSession(selectedDevice, req.SessionId);
     if (loaded == null)
         return Results.NotFound(new { error = "Session not found or corrupted." });
 
