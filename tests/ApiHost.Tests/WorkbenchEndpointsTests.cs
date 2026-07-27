@@ -227,6 +227,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         store.Write(Path.Combine(deviceRoot, "device.json"),
             new DeviceMetadata("1.0", "dev-1", wtId, "PLC:1", "PLC:1", null, null, null,
                 new KnowledgeState(true, new Dictionary<string, string>(), null), []));
+        var runtimeState = new CompatibilityRuntimeState();
 
         await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
         {
@@ -236,9 +237,13 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 services.RemoveAll<WorkbenchCatalog>();
                 services.RemoveAll<AtomicJsonStore>();
                 services.RemoveAll<WorkbenchApiState>();
+                services.RemoveAll<CompatibilityRuntimeState>();
+                services.RemoveAll<CompatibilityConfigStore>();
                 services.AddSingleton(store);
                 services.AddSingleton(catalog);
                 services.AddSingleton<WorkbenchApiState>();
+                services.AddSingleton(runtimeState);
+                services.AddSingleton(new CompatibilityConfigStore(Path.Combine(root, "config.json")));
             });
         });
         using var client = factory.CreateClient();
@@ -251,12 +256,34 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         createdSessionResponse.EnsureSuccessStatusCode();
         var createdSession = await createdSessionResponse.Content.ReadFromJsonAsync<JsonElement>();
         var sessionId = createdSession.GetProperty("header").GetProperty("sessionId").GetString()!;
+        var secondSessionResponse = await client.PostAsync("/api/chat/session/new", null);
+        var secondSession = await secondSessionResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var secondId = secondSession.GetProperty("header").GetProperty("sessionId").GetString()!;
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/chat/history")).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/api/chat/clear", null)).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync(
-            "/api/chat/session/delete", new { sessionId })).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync(
+            "/api/chat/session/delete", new { sessionId = secondId })).StatusCode);
+        var deletedInfo = await client.GetFromJsonAsync<JsonElement>("/api/chat/session/info");
+        Assert.True(deletedInfo.GetProperty("requiresExplicitSession").GetBoolean());
+        var thirdSession = await (await client.PostAsync("/api/chat/session/new", null))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var thirdId = thirdSession.GetProperty("header").GetProperty("sessionId").GetString()!;
+        var newInfo = await client.GetFromJsonAsync<JsonElement>("/api/chat/session/info");
+        Assert.False(newInfo.GetProperty("requiresExplicitSession").GetBoolean());
+        await client.PostAsJsonAsync("/api/chat/session/delete", new { sessionId = thirdId });
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(
             "/api/chat/session/load", new { sessionId })).StatusCode);
+        var loadedInfo = await client.GetFromJsonAsync<JsonElement>("/api/chat/session/info");
+        Assert.False(loadedInfo.GetProperty("requiresExplicitSession").GetBoolean());
+        var generation = runtimeState.ChatGeneration;
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync(
+            "/api/config/settings",
+            new { model = "new-model", thinkingEnabled = false, reasoningEffort = "low", temperature = 0.2, topP = 0.8 })).StatusCode);
+        Assert.Equal(generation + 1, runtimeState.ChatGeneration);
+        Assert.Equal("new-model", runtimeState.ChatSettings!.Value.GetProperty("model").GetString());
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync(
+            "/api/config/key", new { apiKey = "replacement" })).StatusCode);
+        Assert.Equal(generation + 2, runtimeState.ChatGeneration);
         var conflict = await client.PostAsJsonAsync("/api/devices/dev-1/refresh/apply",
             new RefreshApplyApiRequest("unknown", []));
         Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);

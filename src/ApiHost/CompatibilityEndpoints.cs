@@ -32,18 +32,26 @@ public sealed class ApiMcpGateway(
 
 public sealed class CompatibilityRuntimeState
 {
+    private int chatGeneration;
     public ConcurrentQueue<string> Logs { get; } = new();
     public ConcurrentQueue<JsonElement> ChatHistory { get; } = new();
     public string? ApiKey { get; set; }
     public ConcurrentDictionary<string, JsonElement> Connections { get; } = new(StringComparer.Ordinal);
     public string? ActiveConnectionId { get; set; }
+    public JsonElement? ChatSettings { get; set; }
+    public int ChatGeneration => Volatile.Read(ref chatGeneration);
+    public void IncrementChatGeneration() => Interlocked.Increment(ref chatGeneration);
 }
 
 public sealed class CompatibilityConfigStore
 {
-    private readonly string path = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "AutomationWorkbench", "config.json");
+    private readonly string path;
+    public CompatibilityConfigStore(string? path = null)
+    {
+        this.path = path ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "AutomationWorkbench", "config.json");
+    }
     public void Set(string name, JsonNode? value)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -144,18 +152,21 @@ public static class CompatibilityEndpoints
         {
             configured = !string.IsNullOrWhiteSpace(state.ApiKey ?? configuration["DeepSeek:ApiKey"] ?? configuration["deepSeekApiKey"]),
         }));
-        app.MapPost("/api/config/key", (JsonElement body, CompatibilityRuntimeState state, CompatibilityConfigStore store) =>
+        app.MapPost("/api/config/key", (JsonElement body, CompatibilityRuntimeState state, CompatibilityConfigStore store, ApiChatService chat) =>
         {
             state.ApiKey = body.TryGetProperty("apiKey", out var apiKey)
                 ? apiKey.GetString()
                 : body.TryGetProperty("key", out var key) ? key.GetString() : null;
             if (string.IsNullOrWhiteSpace(state.ApiKey)) throw new ArgumentException("API key must not be blank.");
             store.Set("deepSeekApiKey", JsonValue.Create(state.ApiKey));
+            chat.Reset();
             return Results.NoContent();
         });
-        app.MapPost("/api/config/settings", (JsonElement body, CompatibilityConfigStore store) =>
+        app.MapPost("/api/config/settings", (JsonElement body, CompatibilityRuntimeState state, CompatibilityConfigStore store, ApiChatService chat) =>
         {
             store.Set("chatSettings", JsonNode.Parse(body.GetRawText()));
+            state.ChatSettings = body.Clone();
+            chat.Reset();
             return Results.NoContent();
         });
         app.MapGet("/api/chat/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
@@ -172,11 +183,17 @@ public static class CompatibilityEndpoints
             chat.DeleteSession(Device(state), id);
             return Results.NoContent();
         });
-        app.MapGet("/api/chat/session/info", (WorkbenchApiState state) => Results.Ok(new
+        app.MapGet("/api/chat/session/info", (WorkbenchApiState state, ApiChatService chat) =>
         {
-            selection = state.Selection,
-            sessions = SessionManager.ListSessions(Device(state)).Count,
-        }));
+            var device = Device(state);
+            return Results.Ok(new
+            {
+                selection = state.Selection,
+                sessions = SessionManager.ListSessions(device).Count,
+                activeSessionId = chat.ActiveSessionId(device),
+                requiresExplicitSession = chat.RequiresExplicitSession(device),
+            });
+        });
 
         app.MapGet("/api/project/info", (WorkbenchApiState state) =>
         {
@@ -275,6 +292,16 @@ internal sealed class ApiChatService(
     private readonly ConcurrentDictionary<string, ChatSessionData> pendingSessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> sessionRequired = new(StringComparer.Ordinal);
 
+    public void Reset()
+    {
+        foreach (var pair in chats)
+            pendingSessions[pair.Key] = pair.Value.Session;
+        chats.Clear();
+        state.IncrementChatGeneration();
+    }
+    public bool RequiresExplicitSession(DeviceContext device) =>
+        sessionRequired.ContainsKey(DeviceContextIdentity.Key(device));
+
     public string? ActiveSessionId(DeviceContext device) =>
         chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
             ? active.Session.Header.SessionId
@@ -286,7 +313,6 @@ internal sealed class ApiChatService(
     public void Clear(DeviceContext device)
     {
         var key = DeviceContextIdentity.Key(device);
-        sessionRequired.TryRemove(key, out _);
         if (!chats.TryGetValue(key, out var active)) return;
         active.Loop.ClearHistory();
         var cleared = active.Session with { Messages = [], RoundUsages = [] };
@@ -296,7 +322,6 @@ internal sealed class ApiChatService(
     public void DeleteSession(DeviceContext device, string sessionId)
     {
         var key = DeviceContextIdentity.Key(device);
-        sessionRequired.TryRemove(key, out _);
         if (chats.TryGetValue(key, out var active)
             && active.Session.Header.SessionId == sessionId)
             chats.TryRemove(key, out _);
@@ -310,6 +335,7 @@ internal sealed class ApiChatService(
     public ChatSessionData CreateSession(DeviceContext device)
     {
         var key = DeviceContextIdentity.Key(device);
+        sessionRequired.TryRemove(key, out _);
         chats.TryRemove(key, out _);
         var session = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null);
         pendingSessions[key] = session;
@@ -321,6 +347,7 @@ internal sealed class ApiChatService(
         var session = SessionManager.LoadSession(device, sessionId);
         if (session is null) return null;
         var key = DeviceContextIdentity.Key(device);
+        sessionRequired.TryRemove(key, out _);
         if (chats.TryGetValue(key, out var active))
         {
             active.Loop.RestoreFrom(session.Messages, session.RoundUsages);
@@ -344,7 +371,7 @@ internal sealed class ApiChatService(
         {
             var session = pendingSessions.TryRemove(contextKey, out var restored)
                 ? restored
-                : SessionManager.CreateNewSession(device, Settings(configuration), null);
+                : SessionManager.CreateNewSession(device, Settings(configuration, state), null);
             var discovered = await McpToolCatalog.BuildAsync(runtime.Host, token);
             var catalog = new McpToolCatalog(discovered.Tools.Select(spec => spec with
             {
@@ -380,7 +407,7 @@ internal sealed class ApiChatService(
                     $"Exported source: {device.ExportedSourceRoot}",
                     $"Modified source: {device.ModifiedSourceRoot}",
                     $"Knowledge DB: {device.KnowledgeDbPath}"),
-                Settings(configuration),
+                Settings(configuration, state),
                 sandbox);
             if (restored is not null) loop.RestoreFrom(restored.Messages, restored.RoundUsages);
             active = new ActiveChat(loop, session);
@@ -398,14 +425,22 @@ internal sealed class ApiChatService(
         return answer;
     }
 
-    private static ChatRequestSettings Settings(IConfiguration configuration) => new()
+    internal static ChatRequestSettings Settings(
+        IConfiguration configuration,
+        CompatibilityRuntimeState state)
     {
-        Model = configuration["chatSettings:model"] ?? configuration["deepSeekModel"] ?? "deepseek-v4-flash",
-        ThinkingEnabled = bool.TryParse(configuration["chatSettings:thinkingEnabled"] ?? configuration["deepSeekThinkingEnabled"], out var thinking) ? thinking : true,
-        ReasoningEffort = configuration["chatSettings:reasoningEffort"] ?? configuration["deepSeekReasoningEffort"] ?? "high",
-        Temperature = double.TryParse(configuration["chatSettings:temperature"] ?? configuration["deepSeekTemperature"], out var temperature) ? temperature : 1.0,
-        TopP = double.TryParse(configuration["chatSettings:topP"] ?? configuration["deepSeekTopP"], out var topP) ? topP : 1.0,
-    };
+        var live = state.ChatSettings;
+        string? Live(string name) => live is { ValueKind: JsonValueKind.Object } value
+            && value.TryGetProperty(name, out var property) ? property.ToString() : null;
+        return new ChatRequestSettings
+        {
+            Model = Live("model") ?? configuration["chatSettings:model"] ?? configuration["deepSeekModel"] ?? "deepseek-v4-flash",
+            ThinkingEnabled = bool.TryParse(Live("thinkingEnabled") ?? configuration["chatSettings:thinkingEnabled"] ?? configuration["deepSeekThinkingEnabled"], out var thinking) ? thinking : true,
+            ReasoningEffort = Live("reasoningEffort") ?? configuration["chatSettings:reasoningEffort"] ?? configuration["deepSeekReasoningEffort"] ?? "high",
+            Temperature = double.TryParse(Live("temperature") ?? configuration["chatSettings:temperature"] ?? configuration["deepSeekTemperature"], out var temperature) ? temperature : 1.0,
+            TopP = double.TryParse(Live("topP") ?? configuration["chatSettings:topP"] ?? configuration["deepSeekTopP"], out var topP) ? topP : 1.0,
+        };
+    }
 
     private sealed class BoundMcpCaller(
         IMcpToolCaller inner,

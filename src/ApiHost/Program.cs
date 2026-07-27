@@ -13,6 +13,9 @@ var currentConfigPath = Path.Combine(
     "AutomationWorkbench", "config.json");
 // Current settings load after legacy compatibility so they take precedence.
 builder.Configuration.AddJsonFile(currentConfigPath, optional: true, reloadOnChange: false);
+// Re-apply external providers after compatibility files: env/CLI must remain authoritative.
+builder.Configuration.AddEnvironmentVariables();
+if (args.Length > 0) builder.Configuration.AddCommandLine(args);
 builder.Services.AddCors();
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
@@ -73,7 +76,7 @@ else
 
 builder.Services.AddSingleton<WorkbenchApiState>();
 builder.Services.AddSingleton<CompatibilityRuntimeState>();
-builder.Services.AddSingleton<CompatibilityConfigStore>();
+builder.Services.AddSingleton(_ => new CompatibilityConfigStore());
 builder.Services.AddSingleton<ApiChatService>();
 builder.Services.AddSingleton<SandboxPolicy>();
 builder.Services.AddSingleton<DeviceToolArgumentBinder>();
