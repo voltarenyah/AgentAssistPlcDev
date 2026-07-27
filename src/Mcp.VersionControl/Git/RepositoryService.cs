@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using LibGit2Sharp;
@@ -35,6 +36,13 @@ internal static class RepositoryService
         packages/
         """;
 
+    private const string SharedGitIgnore = """
+        **/staging/
+        **/plc-knowledge.db
+        **/plc-knowledge.db-*
+        .automation/
+        """;
+
     /// <summary>Regex to parse unified-diff hunk headers: @@ -oldStart,oldCount +newStart,newCount @@</summary>
     private static readonly Regex HunkHeaderRegex = new(
         @"^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@",
@@ -56,6 +64,209 @@ internal static class RepositoryService
         WriteGitIgnore(repoPath);
 
         return new VcInitResult { RepoPath = repoPath, Initialized = true, ExistingRepo = false };
+    }
+
+    /// <summary>
+    /// Initialize shared bare storage and its initial linked master worktree.
+    /// Both storage and checkout remain contained by the workbench root.
+    /// </summary>
+    public static VcSharedInitResult InitShared(string workbenchRoot, string masterWorktreePath)
+    {
+        var root = RequireFullPath(workbenchRoot, nameof(workbenchRoot));
+        var masterPath = RequireFullPath(masterWorktreePath, nameof(masterWorktreePath));
+        EnsureContained(root, masterPath);
+
+        var repositoryPath = Path.Combine(root, "repository.git");
+        var existingRepository = Repository.IsValid(repositoryPath);
+
+        if (Directory.Exists(repositoryPath) && !existingRepository)
+        {
+            throw new VcInternalException(
+                "REPOSITORY_EXISTS",
+                $"'{repositoryPath}' already exists but is not a valid Git repository.");
+        }
+
+        Directory.CreateDirectory(root);
+        if (!existingRepository)
+        {
+            RunGit(
+                "GIT_INIT_FAILED",
+                "Failed to initialize the shared bare repository.",
+                "init", "--bare", repositoryPath);
+        }
+
+        if (File.Exists(Path.Combine(masterPath, ".git")))
+        {
+            if (!Repository.IsValid(masterPath))
+            {
+                throw new VcInternalException(
+                    "WORKTREE_EXISTS",
+                    $"'{masterPath}' exists but is not a valid linked Git worktree.");
+            }
+        }
+        else
+        {
+            if (Directory.Exists(masterPath) || File.Exists(masterPath))
+            {
+                throw new VcInternalException(
+                    "WORKTREE_EXISTS",
+                    $"The master worktree path '{masterPath}' already exists.");
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(masterPath)!);
+            RunGit(
+                "WORKTREE_ADD_FAILED",
+                "Failed to create the initial master worktree.",
+                "--git-dir", repositoryPath,
+                "worktree", "add", "--orphan", "-b", "master", masterPath);
+        }
+
+        WriteSharedGitIgnore(masterPath);
+        return new VcSharedInitResult
+        {
+            WorkbenchRoot = root,
+            RepositoryPath = repositoryPath,
+            MasterWorktreePath = masterPath,
+            ExistingRepository = existingRepository,
+        };
+    }
+
+    /// <summary>Create a branch and complete linked checkout backed by a shared bare repository.</summary>
+    public static VcWorktreeResult AddWorktree(
+        string repositoryPath,
+        string worktreePath,
+        string branchName,
+        string? startPoint)
+    {
+        var repository = RequireFullPath(repositoryPath, nameof(repositoryPath));
+        EnsureRepo(repository);
+        if (string.IsNullOrWhiteSpace(branchName))
+        {
+            throw new VcInternalException("BRANCH_REQUIRED", "branchName must not be empty.");
+        }
+
+        var workbenchRoot = Directory.GetParent(repository)?.FullName
+            ?? throw new VcInternalException(
+                "INVALID_REPOSITORY_PATH",
+                $"The repository path '{repository}' has no containing workbench directory.");
+        var checkout = RequireFullPath(worktreePath, nameof(worktreePath));
+        EnsureContained(workbenchRoot, checkout);
+
+        if (Directory.Exists(checkout) || File.Exists(checkout))
+        {
+            throw new VcInternalException(
+                "WORKTREE_EXISTS",
+                $"The worktree path '{checkout}' already exists.");
+        }
+
+        using (var repo = new Repository(repository))
+        {
+            if (repo.Branches[branchName] != null)
+            {
+                throw new VcInternalException(
+                    "BRANCH_EXISTS",
+                    $"Branch '{branchName}' already exists.");
+            }
+        }
+
+        var arguments = new List<string>
+        {
+            "--git-dir", repository,
+            "worktree", "add", "-b", branchName, checkout,
+        };
+        if (!string.IsNullOrWhiteSpace(startPoint))
+        {
+            arguments.Add(startPoint);
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(checkout)!);
+        RunGit(
+            "WORKTREE_ADD_FAILED",
+            $"Failed to create linked worktree '{branchName}'.",
+            arguments.ToArray());
+
+        using var linkedRepository = new Repository(checkout);
+        return new VcWorktreeResult
+        {
+            RepositoryPath = repository,
+            WorktreePath = checkout,
+            Branch = linkedRepository.Head.FriendlyName,
+            Sha = linkedRepository.Head.Tip?.Sha ?? string.Empty,
+        };
+    }
+
+    /// <summary>List complete linked checkouts registered with a shared bare repository.</summary>
+    public static VcWorktreeListResult Worktrees(string repositoryPath)
+    {
+        var repository = RequireFullPath(repositoryPath, nameof(repositoryPath));
+        EnsureRepo(repository);
+        var output = RunGit(
+            "WORKTREE_LIST_FAILED",
+            "Failed to list linked worktrees.",
+            "--git-dir", repository,
+            "worktree", "list", "--porcelain");
+
+        return new VcWorktreeListResult
+        {
+            RepositoryPath = repository,
+            Worktrees = ParseWorktrees(output).ToArray(),
+        };
+    }
+
+    /// <summary>Merge a shared branch into a clean linked target worktree.</summary>
+    public static VcMergeResult Merge(string targetWorktreePath, string sourceBranch)
+    {
+        if (string.IsNullOrWhiteSpace(sourceBranch))
+        {
+            throw new VcInternalException("BRANCH_REQUIRED", "sourceBranch must not be empty.");
+        }
+
+        var target = RequireFullPath(targetWorktreePath, nameof(targetWorktreePath));
+        EnsureRepo(target);
+        using (var targetRepository = new Repository(target))
+        {
+            if (targetRepository.RetrieveStatus(new StatusOptions
+                {
+                    IncludeUntracked = true,
+                    RecurseUntrackedDirs = true,
+                }).Any())
+            {
+                throw new VcInternalException(
+                    "DIRTY_WORKTREE",
+                    $"Target worktree '{target}' has uncommitted changes.",
+                    "Commit or restore target changes before merging.");
+            }
+
+            if (targetRepository.Branches[sourceBranch]?.Tip == null)
+            {
+                throw new VcInternalException(
+                    "BRANCH_NOT_FOUND",
+                    $"Branch '{sourceBranch}' was not found.");
+            }
+        }
+
+        string sourceSha;
+        using (var repository = new Repository(target))
+        {
+            sourceSha = repository.Branches[sourceBranch]!.Tip!.Sha;
+        }
+
+        RunGit(
+            "MERGE_FAILED",
+            $"Failed to merge branch '{sourceBranch}' into '{target}'.",
+            "-C", target,
+            "merge", "--no-ff", sourceBranch);
+
+        using var mergedRepository = new Repository(target);
+        return new VcMergeResult
+        {
+            TargetWorktreePath = target,
+            TargetBranch = mergedRepository.Head.FriendlyName,
+            SourceBranch = sourceBranch,
+            SourceSha = sourceSha,
+            Sha = mergedRepository.Head.Tip?.Sha ?? string.Empty,
+            Merged = true,
+        };
     }
 
     /// <summary>Show working-tree status.</summary>
@@ -401,6 +612,137 @@ internal static class RepositoryService
         {
             File.WriteAllText(gitIgnorePath, DefaultGitIgnore, Encoding.UTF8);
         }
+    }
+
+    private static void WriteSharedGitIgnore(string worktreePath)
+    {
+        File.WriteAllText(
+            Path.Combine(worktreePath, ".gitignore"),
+            SharedGitIgnore,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private static string RequireFullPath(string? path, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new VcInternalException(
+                "PATH_REQUIRED",
+                $"{parameterName} must not be empty.");
+        }
+
+        return Path.GetFullPath(path).TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+    }
+
+    private static void EnsureContained(string rootPath, string candidatePath)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var prefix = rootPath.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+        if (!candidatePath.StartsWith(prefix, comparison))
+        {
+            throw new VcInternalException(
+                "PATH_OUTSIDE_WORKBENCH",
+                $"Path '{candidatePath}' must remain under workbench root '{rootPath}'.");
+        }
+    }
+
+    private static IEnumerable<VcWorktreeInfo> ParseWorktrees(string output)
+    {
+        foreach (var block in Regex.Split(output.Trim(), @"\r?\n\r?\n"))
+        {
+            if (string.IsNullOrWhiteSpace(block))
+            {
+                continue;
+            }
+
+            string? path = null;
+            var sha = string.Empty;
+            var branch = string.Empty;
+            var detached = false;
+            var locked = false;
+            var bare = false;
+
+            foreach (var line in block.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+            {
+                if (line.StartsWith("worktree ", StringComparison.Ordinal))
+                    path = line["worktree ".Length..];
+                else if (line.StartsWith("HEAD ", StringComparison.Ordinal))
+                    sha = line["HEAD ".Length..];
+                else if (line.StartsWith("branch refs/heads/", StringComparison.Ordinal))
+                    branch = line["branch refs/heads/".Length..];
+                else if (line.Equals("detached", StringComparison.Ordinal))
+                    detached = true;
+                else if (line.StartsWith("locked", StringComparison.Ordinal))
+                    locked = true;
+                else if (line.Equals("bare", StringComparison.Ordinal))
+                    bare = true;
+            }
+
+            if (bare || string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            yield return new VcWorktreeInfo
+            {
+                WorktreePath = Path.GetFullPath(path),
+                Branch = branch,
+                Sha = sha,
+                Detached = detached,
+                Locked = locked,
+            };
+        }
+    }
+
+    private static string RunGit(string errorCode, string errorMessage, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        startInfo.Environment["GIT_AUTHOR_NAME"] = DefaultAuthor.Name;
+        startInfo.Environment["GIT_AUTHOR_EMAIL"] = DefaultAuthor.Email;
+        startInfo.Environment["GIT_COMMITTER_NAME"] = DefaultAuthor.Name;
+        startInfo.Environment["GIT_COMMITTER_EMAIL"] = DefaultAuthor.Email;
+
+        using var process = Process.Start(startInfo)
+            ?? throw new VcInternalException(errorCode, $"{errorMessage} Git could not be started.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        Task.WaitAll(standardOutput, standardError);
+
+        if (process.ExitCode != 0)
+        {
+            var detail = standardError.Result.Trim();
+            if (string.IsNullOrWhiteSpace(detail))
+            {
+                detail = standardOutput.Result.Trim();
+            }
+
+            throw new VcInternalException(
+                errorCode,
+                string.IsNullOrWhiteSpace(detail)
+                    ? errorMessage
+                    : $"{errorMessage} {detail}");
+        }
+
+        return standardOutput.Result;
     }
 
     private static Signature ResolveAuthor(Repository repo, string? author)

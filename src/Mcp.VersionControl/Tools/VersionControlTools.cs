@@ -18,6 +18,39 @@ public sealed class VersionControlTools
         [Description("Directory to initialise as a git repository (e.g. an export root).")] string repoPath)
         => Invoke(() => RepositoryService.Init(repoPath));
 
+    [McpServerTool(Name = "vc_init_shared")]
+    [Description("Initialize a shared bare repository and its initial linked master worktree inside a workbench root.")]
+    public CallToolResult VcInitShared(
+        [Description("Root directory of the workbench.")] string workbenchRoot,
+        [Description("Path for the initial master linked worktree. Must be inside workbenchRoot.")] string masterWorktreePath)
+        => Invoke(() => RepositoryService.InitShared(workbenchRoot, masterWorktreePath));
+
+    [McpServerTool(Name = "vc_add_worktree")]
+    [Description("Create a branch and complete linked worktree backed by a shared bare repository.")]
+    public CallToolResult VcAddWorktree(
+        [Description("Path to the shared bare repository.")] string repositoryPath,
+        [Description("Path for the new linked checkout. Must be inside the workbench root.")] string worktreePath,
+        [Description("Name of the new branch.")] string branchName,
+        [Description("Optional commit or branch from which to create the worktree.")] string? startPoint = null)
+        => Invoke(() => RepositoryService.AddWorktree(
+            repositoryPath,
+            worktreePath,
+            branchName,
+            startPoint));
+
+    [McpServerTool(Name = "vc_worktrees")]
+    [Description("List complete linked worktrees registered with a shared bare repository. Read-only.")]
+    public CallToolResult VcWorktrees(
+        [Description("Path to the shared bare repository.")] string repositoryPath)
+        => Invoke(() => RepositoryService.Worktrees(repositoryPath));
+
+    [McpServerTool(Name = "vc_merge")]
+    [Description("Merge a source branch into a clean target linked worktree using a no-fast-forward merge.")]
+    public CallToolResult VcMerge(
+        [Description("Path to the target linked worktree.")] string targetWorktreePath,
+        [Description("Source branch to merge.")] string sourceBranch)
+        => Invoke(() => RepositoryService.Merge(targetWorktreePath, sourceBranch));
+
     [McpServerTool(Name = "vc_status")]
     [Description("Show working-tree status: staged, unstaged, modified, added, deleted, and untracked files relative to HEAD.")]
     public CallToolResult VcStatus(

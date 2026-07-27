@@ -27,7 +27,7 @@ public sealed class SandboxPolicy
         }
     }
 
-    /// <summary>Built-in tiers: 34 tools (22 read, 9 write, 3 destructive).</summary>
+    /// <summary>Built-in tiers for tools exposed by the current MCP servers.</summary>
     public static IReadOnlyDictionary<string, SandboxTier> Defaults { get; } =
         new Dictionary<string, SandboxTier>(StringComparer.Ordinal)
         {
@@ -73,8 +73,12 @@ public sealed class SandboxPolicy
             ["vc_log"] = SandboxTier.Read,
             ["vc_diff"] = SandboxTier.Read,
             ["vc_branches"] = SandboxTier.Read,
+            ["vc_worktrees"] = SandboxTier.Read,
             // Version control — write operations (state changes).
             ["vc_init"] = SandboxTier.Write,
+            ["vc_init_shared"] = SandboxTier.Write,
+            ["vc_add_worktree"] = SandboxTier.Write,
+            ["vc_merge"] = SandboxTier.Write,
             ["vc_add"] = SandboxTier.Write,
             ["vc_commit"] = SandboxTier.Write,
             ["vc_snapshot"] = SandboxTier.Write,

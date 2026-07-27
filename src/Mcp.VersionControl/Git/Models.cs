@@ -73,6 +73,52 @@ public sealed class VcInitResult
     public bool ExistingRepo { get; set; }
 }
 
+/// <summary>Result of vc_init_shared.</summary>
+public sealed class VcSharedInitResult
+{
+    public string WorkbenchRoot { get; set; } = string.Empty;
+    public string RepositoryPath { get; set; } = string.Empty;
+    public string MasterWorktreePath { get; set; } = string.Empty;
+    public bool ExistingRepository { get; set; }
+}
+
+/// <summary>Result of vc_add_worktree.</summary>
+public sealed class VcWorktreeResult
+{
+    public string RepositoryPath { get; set; } = string.Empty;
+    public string WorktreePath { get; set; } = string.Empty;
+    public string Branch { get; set; } = string.Empty;
+    public string Sha { get; set; } = string.Empty;
+}
+
+/// <summary>One linked worktree in vc_worktrees.</summary>
+public sealed class VcWorktreeInfo
+{
+    public string WorktreePath { get; set; } = string.Empty;
+    public string Branch { get; set; } = string.Empty;
+    public string Sha { get; set; } = string.Empty;
+    public bool Detached { get; set; }
+    public bool Locked { get; set; }
+}
+
+/// <summary>Result of vc_worktrees.</summary>
+public sealed class VcWorktreeListResult
+{
+    public string RepositoryPath { get; set; } = string.Empty;
+    public VcWorktreeInfo[] Worktrees { get; set; } = Array.Empty<VcWorktreeInfo>();
+}
+
+/// <summary>Result of vc_merge.</summary>
+public sealed class VcMergeResult
+{
+    public string TargetWorktreePath { get; set; } = string.Empty;
+    public string TargetBranch { get; set; } = string.Empty;
+    public string SourceBranch { get; set; } = string.Empty;
+    public string SourceSha { get; set; } = string.Empty;
+    public string Sha { get; set; } = string.Empty;
+    public bool Merged { get; set; }
+}
+
 /// <summary>Result of vc_add.</summary>
 public sealed class VcAddResult
 {
