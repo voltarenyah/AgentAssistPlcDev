@@ -1,10 +1,14 @@
 using Agent.Workbench;
+using Agent.Mcp;
+using Agent.Chat;
+using Contracts.Sandbox;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Configuration;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Net;
 using Xunit;
 
@@ -66,6 +70,54 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             : await client.GetAsync(endpoint);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public void BinderRejectsConflictingStoragePath()
+    {
+        var device = Context();
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        Assert.Throws<ArgumentException>(() => binder.Bind(
+            "vc_status",
+            new Dictionary<string, object?> { ["repoPath"] = Path.Combine(root, "other") },
+            device));
+    }
+
+    [Fact]
+    public async Task DestructiveConfirmationExecutesOnceAndRejectionDoesNotExecute()
+    {
+        var caller = new RecordingToolCaller();
+        var gateway = new ApiMcpGateway(caller, caller, caller, caller);
+        var pending = new PendingToolActions();
+        var executor = new SandboxedToolExecutor(
+            new SandboxPolicy(),
+            new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { })),
+            gateway,
+            pending);
+        var requested = await executor.RequestAsync(
+            "vc_restore",
+            new Dictionary<string, object?> { ["filePath"] = "Blocks/A.xml" },
+            Context(),
+            CancellationToken.None);
+        var id = requested!.GetType().GetProperty("_confirmationId")!.GetValue(requested)!.ToString()!;
+
+        await pending.ResolveAsync(id, ToolConfirmation.AllowOnce);
+        Assert.Single(caller.Calls);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => pending.ResolveAsync(id, ToolConfirmation.AllowOnce));
+
+        var rejected = await executor.RequestAsync("vc_restore", new Dictionary<string, object?>(), Context(), CancellationToken.None);
+        var rejectedId = rejected!.GetType().GetProperty("_confirmationId")!.GetValue(rejected)!.ToString()!;
+        await pending.ResolveAsync(rejectedId, ToolConfirmation.Deny);
+        Assert.Single(caller.Calls);
+    }
+
+    [Fact]
+    public void ChatIdentitySeparatesSameDeviceIdAcrossWorktrees()
+    {
+        var first = Context();
+        var second = first with { WorktreeId = "other-worktree" };
+        Assert.NotEqual(DeviceContextIdentity.Key(first), DeviceContextIdentity.Key(second));
     }
 
     [Fact]
@@ -142,5 +194,23 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public void Dispose()
     {
         if (Directory.Exists(root)) Directory.Delete(root, true);
+    }
+
+    private DeviceContext Context() => new(
+        "wb", "wt", "device", root, Path.Combine(root, "worktree"),
+        Path.Combine(root, "worktree", "devices", "PLC"),
+        Path.Combine(root, "worktree", "devices", "PLC", "exported-source"),
+        Path.Combine(root, "worktree", "devices", "PLC", "modified-source"),
+        Path.Combine(root, "worktree", "devices", "PLC", "staging"),
+        Path.Combine(root, "worktree", "devices", "PLC", "plc-knowledge.db"));
+
+    private sealed class RecordingToolCaller : IMcpToolCaller
+    {
+        public List<string> Calls { get; } = [];
+        public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            return Task.FromResult((T)(object)JsonDocument.Parse("{}").RootElement.Clone());
+        }
     }
 }

@@ -1,7 +1,13 @@
 using Agent.Mcp;
 using Agent.Workbench;
+using Contracts.Sandbox;
 
 var builder = WebApplication.CreateBuilder(args);
+var legacyConfigPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+    "PlcAiAssistant", "config.json");
+// Read-only compatibility for existing server/API-key overrides; never used for workbench storage.
+builder.Configuration.AddJsonFile(legacyConfigPath, optional: true, reloadOnChange: false);
 builder.Services.AddCors();
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
@@ -63,6 +69,10 @@ else
 builder.Services.AddSingleton<WorkbenchApiState>();
 builder.Services.AddSingleton<CompatibilityRuntimeState>();
 builder.Services.AddSingleton<ApiChatService>();
+builder.Services.AddSingleton<SandboxPolicy>();
+builder.Services.AddSingleton<DeviceToolArgumentBinder>();
+builder.Services.AddSingleton<PendingToolActions>();
+builder.Services.AddSingleton<SandboxedToolExecutor>();
 
 var app = builder.Build();
 app.UseCors(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
@@ -76,11 +86,12 @@ public partial class Program { }
 
 internal sealed class McpRuntime : IAsyncDisposable
 {
-    public McpRuntime(IConfiguration configuration)
+    public McpRuntime(IConfiguration configuration, CompatibilityRuntimeState state)
     {
         var paths = McpExecutableResolver.Resolve(configuration, AppContext.BaseDirectory);
         Host = new McpHost(
             paths.Engineering, paths.Knowledge, paths.VersionControl, paths.SourceEditor);
+        Host.ServerLog += state.Logs.Enqueue;
     }
     public McpHost Host { get; }
     public ValueTask DisposeAsync() => Host.DisposeAsync();

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Agent.Mcp;
 using Agent.Chat;
 using Agent.Workbench;
+using Contracts.Sandbox;
 
 public sealed record CompatibilityToolCallRequest(string Tool, Dictionary<string, object?>? Arguments);
 public sealed record CompatibilityPathRequest(string? FilePath, string? Message, string[]? Paths);
@@ -40,20 +41,35 @@ public static class CompatibilityEndpoints
             await gateway.For("connect").CallAsync<object>("connect", body, ct));
         app.MapPost("/api/disconnect", async (ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("disconnect").CallAsync<object>("disconnect", new { }, ct));
-        app.MapGet("/api/connections", () => Results.Ok(Array.Empty<object>()));
+        app.MapGet("/api/connections", async (ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("list_sessions").CallAsync<JsonElement>("list_sessions", new { }, ct));
         app.MapPost("/api/connections/switch", async (JsonElement body, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("connect").CallAsync<object>("connect", body, ct));
-        app.MapGet("/api/tools", () => Results.Ok(Array.Empty<object>()));
+        app.MapGet("/api/tools", async (IServiceProvider services, CancellationToken ct) =>
+        {
+            var runtime = services.GetService<McpRuntime>();
+            if (runtime is null) return Results.Ok(Array.Empty<object>());
+            var catalog = await McpToolCatalog.BuildAsync(runtime.Host, ct);
+            return Results.Ok(catalog.Tools.Select(tool => new { tool.Name, tool.Description, tool.ServerName }));
+        });
         app.MapGet("/api/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
 
-        app.MapPost("/api/tools/call", async (CompatibilityToolCallRequest request, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
+        app.MapPost("/api/tools/call", async (CompatibilityToolCallRequest request, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
         {
             var device = Device(state);
-            var args = request.Arguments ?? new Dictionary<string, object?>();
-            ApplyDevicePaths(request.Tool, args, device);
-            return await gateway.For(request.Tool).CallAsync<JsonElement>(request.Tool, args, ct);
+            return await executor.RequestAsync(request.Tool, request.Arguments ?? new(), device, ct);
         });
-        app.MapPost("/api/chat/confirm/{id}", (string id, JsonElement body) => Results.Ok(new { id, accepted = true }));
+        app.MapPost("/api/chat/confirm/{id}", async (string id, JsonElement body, PendingToolActions pending) =>
+        {
+            var decision = body.TryGetProperty("decision", out var value) ? value.GetString() : null;
+            var parsed = decision switch
+            {
+                "allowOnce" => ToolConfirmation.AllowOnce,
+                "allowSession" => ToolConfirmation.AllowSession,
+                _ => ToolConfirmation.Deny,
+            };
+            return Results.Ok(await pending.ResolveAsync(id, parsed));
+        });
         app.MapGet("/api/logs", (CompatibilityRuntimeState state) => state.Logs.ToArray());
         app.MapGet("/api/chat/history", (CompatibilityRuntimeState state) => state.ChatHistory.ToArray());
         app.MapPost("/api/chat/clear", (CompatibilityRuntimeState state) =>
@@ -68,14 +84,22 @@ public static class CompatibilityEndpoints
             if (string.IsNullOrWhiteSpace(message)) throw new ArgumentException("message is required.");
             return Results.Ok(new { content = await chat.RunAsync(device, message, ct) });
         });
-        app.MapGet("/api/config/key/status", (CompatibilityRuntimeState state) => Results.Ok(new { configured = !string.IsNullOrWhiteSpace(state.ApiKey) }));
+        app.MapGet("/api/config/key/status", (CompatibilityRuntimeState state, IConfiguration configuration) => Results.Ok(new
+        {
+            configured = !string.IsNullOrWhiteSpace(state.ApiKey ?? configuration["DeepSeek:ApiKey"] ?? configuration["deepSeekApiKey"]),
+        }));
         app.MapPost("/api/config/key", (JsonElement body, CompatibilityRuntimeState state) =>
         {
-            state.ApiKey = body.GetProperty("apiKey").GetString();
+            state.ApiKey = body.TryGetProperty("apiKey", out var apiKey)
+                ? apiKey.GetString()
+                : body.TryGetProperty("key", out var key) ? key.GetString() : null;
+            if (string.IsNullOrWhiteSpace(state.ApiKey)) throw new ArgumentException("API key must not be blank.");
             return Results.NoContent();
         });
         app.MapPost("/api/config/settings", (JsonElement _) => Results.NoContent());
         app.MapGet("/api/chat/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
+        app.MapPost("/api/chat/session/new", (WorkbenchApiState state) =>
+            SessionManager.CreateNewSession(Device(state), new ChatRequestSettings(), null));
         app.MapPost("/api/chat/session/load", (JsonElement body, WorkbenchApiState state) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
@@ -93,16 +117,28 @@ public static class CompatibilityEndpoints
             sessions = SessionManager.ListSessions(Device(state)).Count,
         }));
 
-        app.MapGet("/api/project/info", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
+        app.MapGet("/api/project/info", (WorkbenchApiState state) =>
         {
-            _ = Device(state);
-            return await gateway.For("get_project_info").CallAsync<JsonElement>("get_project_info", new { }, ct);
+            var selected = state.Device(Device(state).DeviceId);
+            return Results.Ok(new
+            {
+                selected.Context.WorkbenchId,
+                selected.Context.WorktreeId,
+                selected.Context.DeviceId,
+                selected.Metadata.PlcName,
+                selected.Metadata.EngineeringIdentity,
+                selected.Context.ExportedSourceRoot,
+                selected.Context.ModifiedSourceRoot,
+                selected.Context.KnowledgeDbPath,
+            });
         });
         app.MapGet("/api/blocks", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
         {
             var selected = state.Device(Device(state).DeviceId);
             return await gateway.For("list_blocks").CallAsync<JsonElement>("list_blocks", new { plcName = selected.Metadata.PlcName }, ct);
         });
+        app.MapGet("/api/blocks/{blockName}/source-code", async (string blockName, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("get_block").CallAsync<JsonElement>("get_block", new { dbPath = Device(state).KnowledgeDbPath, blockName }, ct));
         app.MapPost("/api/project/select-plc", (WorkbenchApiState state) => Results.Ok(new { deviceId = Device(state).DeviceId }));
         app.MapGet("/api/project/context-status", (WorkbenchApiState state) =>
         {
@@ -111,7 +147,8 @@ public static class CompatibilityEndpoints
         });
         app.MapGet("/api/project/compare", (WorkbenchApiState state, WorkbenchCoordinator coordinator) =>
             coordinator.PreviewRefresh(Device(state)));
-        app.MapGet("/api/check-environment", (WorkbenchApiState state) => Results.Ok(new { selected = Device(state).DeviceId }));
+        app.MapGet("/api/check-environment", async (ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("check_environment").CallAsync<JsonElement>("check_environment", new { }, ct));
         app.MapGet("/api/browse", (string? path, WorkbenchApiState state) =>
         {
             var device = Device(state);
@@ -141,12 +178,12 @@ public static class CompatibilityEndpoints
             await gateway.For("vc_add").CallAsync<JsonElement>("vc_add", new { repoPath = Device(state).WorktreeRoot, paths = body.Paths ?? [] }, ct));
         app.MapPost("/api/vc/commit", async (CompatibilityPathRequest body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_commit").CallAsync<JsonElement>("vc_commit", new { repoPath = Device(state).WorktreeRoot, message = body.Message }, ct));
-        app.MapPost("/api/vc/restore", async (CompatibilityPathRequest body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("vc_restore").CallAsync<JsonElement>("vc_restore", new { repoPath = Device(state).WorktreeRoot, filePath = body.FilePath }, ct));
+        app.MapPost("/api/vc/restore", async (CompatibilityPathRequest body, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
+            await executor.RequestAsync("vc_restore", new Dictionary<string, object?> { ["filePath"] = body.FilePath }, Device(state), ct));
         app.MapGet("/api/vc/branches", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_branches").CallAsync<JsonElement>("vc_branches", new { repoPath = Device(state).WorktreeRoot }, ct));
         app.MapPost("/api/vc/checkout", async (JsonElement body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("vc_checkout").CallAsync<JsonElement>("vc_checkout", new { repoPath = Device(state).WorktreeRoot, branch = body.GetProperty("branch").GetString() }, ct));
+            await gateway.For("vc_checkout").CallAsync<JsonElement>("vc_checkout", new { repoPath = Device(state).WorktreeRoot, branchName = body.GetProperty("branch").GetString() }, ct));
         return app;
     }
 
@@ -166,9 +203,13 @@ public static class CompatibilityEndpoints
 internal sealed class ApiChatService(
     IServiceProvider services,
     IConfiguration configuration,
-    CompatibilityRuntimeState state)
+    CompatibilityRuntimeState state,
+    DeviceToolArgumentBinder binder,
+    PendingToolActions pending,
+    SandboxPolicy policy)
 {
-    private readonly ConcurrentDictionary<string, AgentLoop> loops = new(StringComparer.Ordinal);
+    private sealed record ActiveChat(AgentLoop Loop, ChatSessionData Session);
+    private readonly ConcurrentDictionary<string, ActiveChat> chats = new(StringComparer.Ordinal);
 
     public async Task<string> RunAsync(DeviceContext device, string message, CancellationToken token)
     {
@@ -177,10 +218,33 @@ internal sealed class ApiChatService(
             throw new InvalidOperationException("CHAT_API_KEY_REQUIRED");
         var runtime = services.GetService<McpRuntime>()
             ?? throw new InvalidOperationException("CHAT_MCP_RUNTIME_UNAVAILABLE");
-        if (!loops.TryGetValue(device.DeviceId, out var loop))
+        var contextKey = DeviceContextIdentity.Key(device);
+        if (!chats.TryGetValue(contextKey, out var active))
         {
-            var catalog = await McpToolCatalog.BuildAsync(runtime.Host, token);
-            loop = new AgentLoop(
+            var discovered = await McpToolCatalog.BuildAsync(runtime.Host, token);
+            var catalog = new McpToolCatalog(discovered.Tools.Select(spec => spec with
+            {
+                Caller = new BoundMcpCaller(spec.Caller, binder, device),
+            }));
+            var sandbox = new AgentSandbox(policy, 20, request =>
+            {
+                var completion = new TaskCompletionSource<ToolConfirmation>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var id = pending.Add(decision =>
+                {
+                    completion.TrySetResult(decision);
+                    return Task.FromResult<object?>(new { status = decision.ToString() });
+                });
+                state.Logs.Enqueue(JsonSerializer.Serialize(new
+                {
+                    kind = "confirmation",
+                    id,
+                    toolName = request.ToolName,
+                    arguments = request.ArgumentsSummary,
+                }));
+                return completion.Task;
+            });
+            var loop = new AgentLoop(
                 new DeepSeekClient(apiKey, configuration["DeepSeek:BaseUrl"] ?? "https://api.deepseek.com"),
                 catalog,
                 () => string.Join('\n',
@@ -189,9 +253,34 @@ internal sealed class ApiChatService(
                     $"Device: {device.DeviceId}",
                     $"Exported source: {device.ExportedSourceRoot}",
                     $"Modified source: {device.ModifiedSourceRoot}",
-                    $"Knowledge DB: {device.KnowledgeDbPath}"));
-            loops[device.DeviceId] = loop;
+                    $"Knowledge DB: {device.KnowledgeDbPath}"),
+                sandbox: sandbox);
+            var session = SessionManager.CreateNewSession(device, loop.Settings, null);
+            active = new ActiveChat(loop, session);
+            chats[contextKey] = active;
         }
-        return await loop.RunAsync(message, token);
+        var answer = await active.Loop.RunAsync(message, token);
+        var updated = active.Session with
+        {
+            Messages = active.Loop.History.ToList(),
+            RoundUsages = active.Loop.RoundUsages.ToList(),
+            Header = active.Session.Header with { UpdatedAt = DateTimeOffset.UtcNow.ToString("O") },
+        };
+        SessionManager.SaveSession(device, updated);
+        chats[contextKey] = active with { Session = updated };
+        return answer;
+    }
+
+    private sealed class BoundMcpCaller(
+        IMcpToolCaller inner,
+        DeviceToolArgumentBinder binder,
+        DeviceContext device) : IMcpToolCaller
+    {
+        public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
+        {
+            var supplied = JsonSerializer.Deserialize<Dictionary<string, object?>>(
+                JsonSerializer.Serialize(args)) ?? new();
+            return inner.CallAsync<T>(tool, binder.Bind(tool, supplied, device), cancellationToken);
+        }
     }
 }
