@@ -317,6 +317,66 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Throws<KeyNotFoundException>(() => state.Take("missing", "device-a"));
     }
 
+    [Fact]
+    public void OpeningPersistedWorkbenchRegistersItsCustomRootForMcpSandboxes()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "defaults"));
+        var customRoot = Path.Combine(root, "chosen", "Line");
+        var created = catalog.Create("Line", customRoot);
+        var registry = new TrustedWorkbenchRootRegistry(Path.Combine(root, "trusted-roots.json"));
+        var state = new WorkbenchApiState(catalog, store, registry);
+
+        state.Open(created.RootPath);
+
+        Assert.Contains(
+            registry.Read(),
+            registered => string.Equals(registered, created.RootPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void OpeningWorkbenchRejectsMetadataThatRedirectsTrustToAnotherRoot()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "defaults"));
+        var customRoot = Path.Combine(root, "chosen", "Line");
+        var created = catalog.Create("Line", customRoot);
+        var redirectedRoot = Path.Combine(root, "unregistered");
+        store.Write(
+            Path.Combine(customRoot, "workbench.json"),
+            created with { RootPath = redirectedRoot });
+        Directory.CreateDirectory(redirectedRoot);
+        store.Write(
+            Path.Combine(redirectedRoot, "workbench.json"),
+            created with { RootPath = redirectedRoot });
+        var registry = new TrustedWorkbenchRootRegistry(Path.Combine(root, "trusted-roots.json"));
+        var state = new WorkbenchApiState(catalog, store, registry);
+
+        Assert.Throws<WorkbenchCatalogException>(() => state.Open(customRoot));
+        Assert.DoesNotContain(
+            registry.Read(),
+            registered => string.Equals(registered, redirectedRoot, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void McpHostPassesOnlyTrustedRegistryLocationToSandboxedServers()
+    {
+        var registryPath = Path.Combine(root, "trusted-roots.json");
+        var environment = new Dictionary<string, string?>
+        {
+            [TrustedWorkbenchRootRegistry.EnvironmentVariableName] = registryPath,
+        };
+
+        var host = new McpHost("engineering.exe", "knowledge.exe", "vc.exe", "source.exe", environment);
+
+        Assert.Equal(registryPath,
+            host.Engineering.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
+        Assert.Equal(registryPath,
+            host.SourceEditor!.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
+        Assert.Empty(host.Knowledge.EnvironmentVariables);
+        Assert.Empty(host.VersionControl!.EnvironmentVariables);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root)) Directory.Delete(root, true);

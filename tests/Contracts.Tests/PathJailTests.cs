@@ -78,4 +78,68 @@ public sealed class PathJailTests : IDisposable
         var escaped = Path.Combine(root, "..", "escape.xml");
         Assert.Throws<SandboxException>(() => jail.Validate(escaped, "xmlFilePath"));
     }
+
+    [Fact]
+    public void RegisteredTrustedRootIsReloadedAndUnregisteredRootRemainsDenied()
+    {
+        var registryPath = Path.Combine(root, "trusted-roots.json");
+        var customRoot = Path.Combine(Path.GetTempPath(), "custom-workbench-" + Guid.NewGuid().ToString("N"));
+        var arbitraryRoot = Path.Combine(Path.GetTempPath(), "arbitrary-workbench-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(customRoot);
+        Directory.CreateDirectory(arbitraryRoot);
+        try
+        {
+            var dynamicJail = new PathJail(new[] { root }, registryPath);
+            Assert.Throws<SandboxException>(() =>
+                dynamicJail.Validate(Path.Combine(customRoot, "source.xml"), "xmlFilePath"));
+
+            new TrustedWorkbenchRootRegistry(registryPath).Register(customRoot);
+
+            Assert.Equal(
+                Path.Combine(customRoot, "source.xml"),
+                dynamicJail.Validate(Path.Combine(customRoot, "source.xml"), "xmlFilePath"));
+            Assert.Throws<SandboxException>(() =>
+                dynamicJail.Validate(Path.Combine(arbitraryRoot, "source.xml"), "xmlFilePath"));
+        }
+        finally
+        {
+            Directory.Delete(customRoot, true);
+            Directory.Delete(arbitraryRoot, true);
+        }
+    }
+
+    [Fact]
+    public void RegisteredRootDoesNotAllowReparsePointEscape()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var customRoot = Path.Combine(root, "custom");
+        var outside = Path.Combine(Path.GetTempPath(), "sandbox-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(customRoot);
+        Directory.CreateDirectory(outside);
+        var link = Path.Combine(customRoot, "link");
+        try
+        {
+            Directory.CreateSymbolicLink(link, outside);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            Directory.Delete(outside, true);
+            return;
+        }
+
+        try
+        {
+            Assert.Throws<SandboxException>(() =>
+                jail.Validate(Path.Combine(link, "source.xml"), "xmlFilePath"));
+        }
+        finally
+        {
+            Directory.Delete(link);
+            Directory.Delete(outside, true);
+        }
+    }
 }

@@ -19,6 +19,7 @@ if (args.Length > 0) builder.Configuration.AddCommandLine(args);
 builder.Services.AddCors();
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
+builder.Services.AddSingleton<TrustedWorkbenchRootRegistry>();
 builder.Services.AddSingleton<DeviceOperationLock>();
 builder.Services.AddSingleton<DeviceReconciler>();
 builder.Services.AddSingleton<DeviceSourceResolver>(services =>
@@ -95,11 +96,19 @@ public partial class Program { }
 
 internal sealed class McpRuntime : IAsyncDisposable
 {
-    public McpRuntime(IConfiguration configuration, CompatibilityRuntimeState state)
+    public McpRuntime(
+        IConfiguration configuration,
+        CompatibilityRuntimeState state,
+        TrustedWorkbenchRootRegistry trustedRoots)
     {
         var paths = McpExecutableResolver.Resolve(configuration, AppContext.BaseDirectory);
+        var sandboxEnvironment = new Dictionary<string, string?>
+        {
+            [TrustedWorkbenchRootRegistry.EnvironmentVariableName] = trustedRoots.FilePath,
+        };
         Host = new McpHost(
-            paths.Engineering, paths.Knowledge, paths.VersionControl, paths.SourceEditor);
+            paths.Engineering, paths.Knowledge, paths.VersionControl, paths.SourceEditor,
+            sandboxEnvironment);
         Host.ServerLog += state.Logs.Enqueue;
     }
     public McpHost Host { get; }

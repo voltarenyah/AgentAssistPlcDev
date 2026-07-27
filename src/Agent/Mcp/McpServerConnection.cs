@@ -19,13 +19,21 @@ public sealed class McpServerConnection : IMcpToolCaller, IAsyncDisposable
 
     private readonly string serverName;
     private readonly string exePath;
+    private readonly IReadOnlyDictionary<string, string?> environmentVariables;
     private McpClient? client;
 
-    public McpServerConnection(string serverName, string exePath)
+    public McpServerConnection(
+        string serverName,
+        string exePath,
+        IReadOnlyDictionary<string, string?>? environmentVariables = null)
     {
         this.serverName = serverName;
         this.exePath = exePath;
+        this.environmentVariables = environmentVariables
+            ?? new Dictionary<string, string?>();
     }
+
+    public IReadOnlyDictionary<string, string?> EnvironmentVariables => environmentVariables;
 
     /// <summary>Raised once per stderr line received from the server process.</summary>
     public event Action<string>? StderrLine;
@@ -46,6 +54,7 @@ public sealed class McpServerConnection : IMcpToolCaller, IAsyncDisposable
             Command = exePath,
             Name = serverName,
             StandardErrorLines = line => StderrLine?.Invoke($"[{serverName}] {line}"),
+            EnvironmentVariables = environmentVariables.ToDictionary(pair => pair.Key, pair => pair.Value),
         });
         client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken);
     }

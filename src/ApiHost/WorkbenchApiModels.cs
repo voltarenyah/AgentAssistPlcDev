@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Agent.Chat;
 using Agent.Workbench;
+using Contracts.Sandbox;
 
 public sealed record WorkbenchSelection(string WorkbenchId, string? WorktreeId, string? DeviceId);
 public sealed record CreateWorkbenchApiRequest(string Name, string? RootPath, string EngineeringProjectPath);
@@ -16,19 +17,39 @@ public sealed class WorkbenchApiState
 {
     private readonly WorkbenchCatalog catalog;
     private readonly AtomicJsonStore store;
+    private readonly TrustedWorkbenchRootRegistry? trustedRoots;
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> workbenches = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ReconciliationPreview> previews = new(StringComparer.Ordinal);
 
     public WorkbenchApiState(WorkbenchCatalog catalog, AtomicJsonStore store)
+        : this(catalog, store, null)
+    {
+    }
+
+    public WorkbenchApiState(
+        WorkbenchCatalog catalog,
+        AtomicJsonStore store,
+        TrustedWorkbenchRootRegistry? trustedRoots)
     {
         this.catalog = catalog;
         this.store = store;
-        foreach (var item in catalog.ListDefaultRoot()) workbenches[item.WorkbenchId] = item;
+        this.trustedRoots = trustedRoots;
+        foreach (var item in catalog.ListDefaultRoot()) Add(item);
     }
 
     public WorkbenchSelection? Selection { get; private set; }
     public IReadOnlyList<WorkbenchMetadata> List() => workbenches.Values.OrderBy(x => x.Name).ToArray();
-    public WorkbenchMetadata Add(WorkbenchMetadata value) { workbenches[value.WorkbenchId] = value; return value; }
+    public WorkbenchMetadata Add(WorkbenchMetadata value)
+    {
+        var persisted = catalog.Load(value.RootPath);
+        if (!string.Equals(persisted.WorkbenchId, value.WorkbenchId, StringComparison.Ordinal))
+            throw new WorkbenchCatalogException(
+                "WORKBENCH_RELATIONSHIP_MISMATCH",
+                "Workbench metadata does not match the persisted catalog entry.");
+        trustedRoots?.Register(persisted.RootPath);
+        workbenches[persisted.WorkbenchId] = persisted;
+        return persisted;
+    }
     public WorkbenchMetadata Refresh(string id) => Add(catalog.Load(Workbench(id).RootPath));
     public WorkbenchMetadata Open(string root) => Add(catalog.Load(root));
     public WorkbenchMetadata Workbench(string id) => workbenches.TryGetValue(id, out var value) ? value : throw new KeyNotFoundException("WORKBENCH_NOT_FOUND");

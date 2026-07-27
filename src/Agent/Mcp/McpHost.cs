@@ -12,9 +12,10 @@ public sealed class McpHost : IAsyncDisposable
     }
 
     public McpHost(string engineeringServerPath, string knowledgeServerPath, string? versionControlServerPath,
-        string? sourceEditorServerPath = null)
+        string? sourceEditorServerPath = null,
+        IReadOnlyDictionary<string, string?>? sandboxEnvironment = null)
     {
-        Engineering = new McpServerConnection("engineering", engineeringServerPath);
+        Engineering = new McpServerConnection("engineering", engineeringServerPath, sandboxEnvironment);
         Knowledge = new McpServerConnection("knowledge", knowledgeServerPath);
         Engineering.StderrLine += line => ServerLog?.Invoke(line);
         Knowledge.StderrLine += line => ServerLog?.Invoke(line);
@@ -26,7 +27,7 @@ public sealed class McpHost : IAsyncDisposable
         }
         if (!string.IsNullOrWhiteSpace(sourceEditorServerPath))
         {
-            SourceEditor = new McpServerConnection("sourceeditor", sourceEditorServerPath);
+            SourceEditor = new McpServerConnection("sourceeditor", sourceEditorServerPath, sandboxEnvironment);
             SourceEditor.StderrLine += line => ServerLog?.Invoke(line);
         }
     }

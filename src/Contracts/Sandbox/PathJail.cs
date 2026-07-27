@@ -8,17 +8,21 @@ namespace Contracts.Sandbox;
 public sealed class PathJail
 {
     private readonly List<string> roots;
+    private readonly TrustedWorkbenchRootRegistry? trustedRoots;
 
-    public PathJail(IEnumerable<string> roots)
+    public PathJail(IEnumerable<string> roots, string? trustedWorkbenchRootsFile = null)
     {
         this.roots = roots
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .Select(CanonicalRoot)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        trustedRoots = string.IsNullOrWhiteSpace(trustedWorkbenchRootsFile)
+            ? null
+            : new TrustedWorkbenchRootRegistry(trustedWorkbenchRootsFile);
     }
 
-    public IReadOnlyList<string> Roots => roots;
+    public IReadOnlyList<string> Roots => EffectiveRoots();
 
     /// <summary>Returns the canonical path when inside a root; throws <see cref="SandboxException"/> otherwise.</summary>
     public string Validate(string path, string parameterName)
@@ -46,7 +50,9 @@ public sealed class PathJail
                 "Copy the files to a local directory inside an allowed root.");
         }
 
-        foreach (var root in roots)
+        TrustedWorkbenchRootRegistry.RejectReparseSegments(full);
+        var effectiveRoots = EffectiveRoots();
+        foreach (var root in effectiveRoots)
         {
             if (full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(full, root.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
@@ -57,9 +63,14 @@ public sealed class PathJail
 
         throw new SandboxException(
             "SANDBOX_PATH_DENIED",
-            $"{parameterName}: '{full}' is outside the sandbox roots ({string.Join("; ", roots)}).",
+            $"{parameterName}: '{full}' is outside the sandbox roots ({string.Join("; ", effectiveRoots)}).",
             $"Add the directory to allowedRoots in {SandboxConfig.DefaultFilePath}.");
     }
+
+    private IReadOnlyList<string> EffectiveRoots() => roots
+        .Concat(trustedRoots?.Read().Select(CanonicalRoot) ?? Enumerable.Empty<string>())
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
 
     /// <summary>Canonical root with a trailing separator, so "C:\roots" cannot match "C:\roots-eve".</summary>
     private static string CanonicalRoot(string root)

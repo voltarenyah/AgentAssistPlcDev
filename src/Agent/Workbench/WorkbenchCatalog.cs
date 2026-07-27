@@ -86,7 +86,18 @@ public sealed class WorkbenchCatalog
                 $"Workbench metadata was not found at '{metadataPath}'.");
         }
 
-        return _store.Read<WorkbenchMetadata>(metadataPath);
+        var metadata = _store.Read<WorkbenchMetadata>(metadataPath);
+        if (!string.Equals(
+                Path.GetFullPath(metadata.RootPath).TrimEnd(Path.DirectorySeparatorChar),
+                root.TrimEnd(Path.DirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKBENCH_RELATIONSHIP_MISMATCH",
+                $"Workbench metadata root '{metadata.RootPath}' does not match its directory '{root}'.");
+        }
+
+        return metadata;
     }
 
     public IReadOnlyList<WorkbenchMetadata> ListDefaultRoot()

@@ -61,15 +61,17 @@ public sealed class SandboxConfig
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Automation"),
     };
 
-    public static SandboxConfig LoadDefault() => Load(DefaultFilePath);
+    public static SandboxConfig LoadDefault() => Load(
+        DefaultFilePath,
+        Environment.GetEnvironmentVariable(TrustedWorkbenchRootRegistry.EnvironmentVariableName));
 
-    public static SandboxConfig Load(string path)
+    public static SandboxConfig Load(string path, string? trustedWorkbenchRootsFile = null)
     {
         try
         {
             if (!File.Exists(path))
             {
-                return Defaults("built-in defaults (no sandbox.json)");
+                return Defaults("built-in defaults (no sandbox.json)", trustedWorkbenchRootsFile);
             }
 
             using var document = JsonDocument.Parse(File.ReadAllText(path));
@@ -109,20 +111,20 @@ public sealed class SandboxConfig
 
             return new SandboxConfig(
                 new SandboxPolicy(overrides),
-                new PathJail(roots),
+                new PathJail(roots, trustedWorkbenchRootsFile),
                 budget,
                 auditDirectory,
                 path);
         }
         catch (JsonException)
         {
-            return Defaults($"built-in defaults (invalid JSON in {path})");
+            return Defaults($"built-in defaults (invalid JSON in {path})", trustedWorkbenchRootsFile);
         }
     }
 
-    private static SandboxConfig Defaults(string sourceDescription) => new(
+    private static SandboxConfig Defaults(string sourceDescription, string? trustedWorkbenchRootsFile = null) => new(
         new SandboxPolicy(),
-        new PathJail(DefaultRoots),
+        new PathJail(DefaultRoots, trustedWorkbenchRootsFile),
         DefaultMaxDestructiveCallsPerSession,
         DefaultAuditDirectory,
         sourceDescription);
