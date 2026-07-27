@@ -43,6 +43,14 @@ internal static class RepositoryService
         .automation/
         """;
 
+    private static readonly string[] SharedGitIgnoreRules =
+    {
+        "**/staging/",
+        "**/plc-knowledge.db",
+        "**/plc-knowledge.db-*",
+        ".automation/",
+    };
+
     /// <summary>Regex to parse unified-diff hunk headers: @@ -oldStart,oldCount +newStart,newCount @@</summary>
     private static readonly Regex HunkHeaderRegex = new(
         @"^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@",
@@ -75,8 +83,32 @@ internal static class RepositoryService
         var root = RequireFullPath(workbenchRoot, nameof(workbenchRoot));
         var masterPath = RequireFullPath(masterWorktreePath, nameof(masterWorktreePath));
         EnsureContained(root, masterPath);
+        EnsureNoReparsePoints(root);
+        EnsureNoReparsePoints(masterPath);
 
         var repositoryPath = Path.Combine(root, "repository.git");
+        EnsureNoReparsePoints(repositoryPath);
+        var masterGitFile = Path.Combine(masterPath, ".git");
+        var existingMaster = File.Exists(masterGitFile);
+
+        if (existingMaster)
+        {
+            if (!Repository.IsValid(masterPath))
+            {
+                throw new VcInternalException(
+                    "WORKTREE_EXISTS",
+                    $"'{masterPath}' exists but is not a valid linked Git worktree.");
+            }
+
+            var actualRepositoryPath = ResolveCommonRepositoryPath(masterPath);
+            if (!PathsEqual(repositoryPath, actualRepositoryPath))
+            {
+                throw new VcInternalException(
+                    "WORKTREE_REPOSITORY_MISMATCH",
+                    $"Master worktree '{masterPath}' is linked to '{actualRepositoryPath}', not expected repository '{repositoryPath}'.");
+            }
+        }
+
         var existingRepository = Repository.IsValid(repositoryPath);
 
         if (Directory.Exists(repositoryPath) && !existingRepository)
@@ -95,16 +127,7 @@ internal static class RepositoryService
                 "init", "--bare", repositoryPath);
         }
 
-        if (File.Exists(Path.Combine(masterPath, ".git")))
-        {
-            if (!Repository.IsValid(masterPath))
-            {
-                throw new VcInternalException(
-                    "WORKTREE_EXISTS",
-                    $"'{masterPath}' exists but is not a valid linked Git worktree.");
-            }
-        }
-        else
+        if (!existingMaster)
         {
             if (Directory.Exists(masterPath) || File.Exists(masterPath))
             {
@@ -139,6 +162,7 @@ internal static class RepositoryService
         string? startPoint)
     {
         var repository = RequireFullPath(repositoryPath, nameof(repositoryPath));
+        EnsureNoReparsePoints(repository);
         EnsureRepo(repository);
         if (string.IsNullOrWhiteSpace(branchName))
         {
@@ -151,6 +175,7 @@ internal static class RepositoryService
                 $"The repository path '{repository}' has no containing workbench directory.");
         var checkout = RequireFullPath(worktreePath, nameof(worktreePath));
         EnsureContained(workbenchRoot, checkout);
+        EnsureNoReparsePoints(checkout);
 
         if (Directory.Exists(checkout) || File.Exists(checkout))
         {
@@ -199,6 +224,7 @@ internal static class RepositoryService
     public static VcWorktreeListResult Worktrees(string repositoryPath)
     {
         var repository = RequireFullPath(repositoryPath, nameof(repositoryPath));
+        EnsureNoReparsePoints(repository);
         EnsureRepo(repository);
         var output = RunGit(
             "WORKTREE_LIST_FAILED",
@@ -616,10 +642,40 @@ internal static class RepositoryService
 
     private static void WriteSharedGitIgnore(string worktreePath)
     {
-        File.WriteAllText(
-            Path.Combine(worktreePath, ".gitignore"),
-            SharedGitIgnore,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        var gitIgnorePath = Path.Combine(worktreePath, ".gitignore");
+        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        if (!File.Exists(gitIgnorePath))
+        {
+            File.WriteAllText(gitIgnorePath, SharedGitIgnore, encoding);
+            return;
+        }
+
+        var content = File.ReadAllText(gitIgnorePath);
+        var existingRules = content
+            .Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
+            .ToHashSet(StringComparer.Ordinal);
+        var missingRules = SharedGitIgnoreRules
+            .Where(rule => !existingRules.Contains(rule))
+            .ToArray();
+        if (missingRules.Length == 0)
+        {
+            return;
+        }
+
+        var append = new StringBuilder();
+        if (content.Length > 0 &&
+            !content.EndsWith("\r", StringComparison.Ordinal) &&
+            !content.EndsWith("\n", StringComparison.Ordinal))
+        {
+            append.Append(Environment.NewLine);
+        }
+        foreach (var rule in missingRules)
+        {
+            append.Append(rule);
+            append.Append(Environment.NewLine);
+        }
+
+        File.AppendAllText(gitIgnorePath, append.ToString(), encoding);
     }
 
     private static string RequireFullPath(string? path, string parameterName)
@@ -652,6 +708,64 @@ internal static class RepositoryService
                 $"Path '{candidatePath}' must remain under workbench root '{rootPath}'.");
         }
     }
+
+    private static void EnsureNoReparsePoints(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var pathRoot = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrWhiteSpace(pathRoot))
+        {
+            throw new VcInternalException(
+                "INVALID_PATH",
+                $"Path '{path}' has no filesystem root.");
+        }
+
+        var current = pathRoot;
+        foreach (var segment in fullPath[pathRoot.Length..].Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            FileAttributes attributes;
+            try
+            {
+                attributes = File.GetAttributes(current);
+            }
+            catch (FileNotFoundException)
+            {
+                break;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                break;
+            }
+
+            if (attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                throw new VcInternalException(
+                    "REPARSE_POINT_NOT_ALLOWED",
+                    $"Path '{path}' traverses reparse point '{current}'.");
+            }
+        }
+    }
+
+    private static string ResolveCommonRepositoryPath(string worktreePath)
+    {
+        var output = RunGit(
+            "WORKTREE_VALIDATION_FAILED",
+            $"Failed to verify linked worktree '{worktreePath}'.",
+            "-C", worktreePath,
+            "rev-parse", "--path-format=absolute", "--git-common-dir").Trim();
+        return RequireFullPath(output, "gitCommonDirectory");
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            RequireFullPath(left, nameof(left)),
+            RequireFullPath(right, nameof(right)),
+            OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal);
 
     private static IEnumerable<VcWorktreeInfo> ParseWorktrees(string output)
     {

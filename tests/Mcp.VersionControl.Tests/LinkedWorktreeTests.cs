@@ -1,6 +1,7 @@
 using Mcp.VersionControl.Git;
 using Mcp.VersionControl.Tools;
 using ModelContextProtocol.Protocol;
+using System.Diagnostics;
 using System.Text.Json;
 using Xunit;
 
@@ -16,10 +17,7 @@ public sealed class LinkedWorktreeTests : IDisposable
     {
         if (Directory.Exists(root))
         {
-            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-            {
-                File.SetAttributes(file, FileAttributes.Normal);
-            }
+            RemoveReparsePointsAndClearFileAttributes(root);
             Directory.Delete(root, recursive: true);
         }
     }
@@ -85,6 +83,29 @@ public sealed class LinkedWorktreeTests : IDisposable
         Assert.Contains("**/plc-knowledge.db", ignore);
         Assert.Contains("**/plc-knowledge.db-*", ignore);
         Assert.Contains(".automation/", ignore);
+    }
+
+    [Fact]
+    public void InitSharedPreservesExistingIgnoreContentAndAppendsOnlyMissingRules()
+    {
+        var workbenchRoot = Path.Combine(root, "workbench");
+        var masterPath = Path.Combine(workbenchRoot, "worktrees", "master");
+        RepositoryService.InitShared(workbenchRoot, masterPath);
+        var ignorePath = Path.Combine(masterPath, ".gitignore");
+        const string userContent = "# user rules\r\n*.custom\r\n**/staging/\r\n";
+        File.WriteAllText(ignorePath, userContent);
+
+        RepositoryService.InitShared(workbenchRoot, masterPath);
+        var afterFirstRetry = File.ReadAllText(ignorePath);
+        RepositoryService.InitShared(workbenchRoot, masterPath);
+        var afterSecondRetry = File.ReadAllText(ignorePath);
+
+        Assert.StartsWith(userContent, afterFirstRetry);
+        Assert.Equal(1, CountLines(afterFirstRetry, "**/staging/"));
+        Assert.Equal(1, CountLines(afterFirstRetry, "**/plc-knowledge.db"));
+        Assert.Equal(1, CountLines(afterFirstRetry, "**/plc-knowledge.db-*"));
+        Assert.Equal(1, CountLines(afterFirstRetry, ".automation/"));
+        Assert.Equal(afterFirstRetry, afterSecondRetry);
     }
 
     [Fact]
@@ -157,6 +178,112 @@ public sealed class LinkedWorktreeTests : IDisposable
 
         Assert.Equal("PATH_OUTSIDE_WORKBENCH", error.Code);
         Assert.False(Directory.Exists(outsidePath));
+    }
+
+    [Fact]
+    public void InitSharedRejectsReparsePointInWorkbenchRoot()
+    {
+        var target = Path.Combine(root, "real-workbench");
+        var linkedRoot = Path.Combine(root, "linked-workbench");
+        Directory.CreateDirectory(target);
+        CreateDirectoryLink(linkedRoot, target);
+
+        var error = Assert.Throws<VcInternalException>(() =>
+            RepositoryService.InitShared(
+                linkedRoot,
+                Path.Combine(linkedRoot, "worktrees", "master")));
+
+        Assert.Equal("REPARSE_POINT_NOT_ALLOWED", error.Code);
+        Assert.False(Directory.Exists(Path.Combine(target, "repository.git")));
+    }
+
+    [Fact]
+    public void InitSharedRejectsReparsePointAtRepositoryPath()
+    {
+        var workbenchRoot = Path.Combine(root, "workbench");
+        var repositoryTarget = Path.Combine(root, "foreign-repository");
+        Directory.CreateDirectory(workbenchRoot);
+        Directory.CreateDirectory(repositoryTarget);
+        CreateDirectoryLink(
+            Path.Combine(workbenchRoot, "repository.git"),
+            repositoryTarget);
+
+        var error = Assert.Throws<VcInternalException>(() =>
+            RepositoryService.InitShared(
+                workbenchRoot,
+                Path.Combine(workbenchRoot, "worktrees", "master")));
+
+        Assert.Equal("REPARSE_POINT_NOT_ALLOWED", error.Code);
+    }
+
+    [Fact]
+    public void InitSharedRejectsReparsePointTraversedByMasterPath()
+    {
+        var workbenchRoot = Path.Combine(root, "workbench");
+        var worktreesTarget = Path.Combine(root, "foreign-worktrees");
+        Directory.CreateDirectory(workbenchRoot);
+        Directory.CreateDirectory(worktreesTarget);
+        CreateDirectoryLink(
+            Path.Combine(workbenchRoot, "worktrees"),
+            worktreesTarget);
+
+        var error = Assert.Throws<VcInternalException>(() =>
+            RepositoryService.InitShared(
+                workbenchRoot,
+                Path.Combine(workbenchRoot, "worktrees", "master")));
+
+        Assert.Equal("REPARSE_POINT_NOT_ALLOWED", error.Code);
+        Assert.False(Directory.Exists(Path.Combine(worktreesTarget, "master")));
+    }
+
+    [Fact]
+    public void AddWorktreeRejectsReparsePointTraversedByCheckoutPath()
+    {
+        var (repositoryPath, _, firstSha) = CreateSharedRepositoryWithInitialCommit();
+        var checkoutTarget = Path.Combine(root, "foreign-worktrees");
+        var linkedParent = Path.Combine(root, "workbench", "linked-worktrees");
+        Directory.CreateDirectory(checkoutTarget);
+        CreateDirectoryLink(linkedParent, checkoutTarget);
+
+        var error = Assert.Throws<VcInternalException>(() =>
+            RepositoryService.AddWorktree(
+                repositoryPath,
+                Path.Combine(linkedParent, "feature-a"),
+                "feature-a",
+                firstSha));
+
+        Assert.Equal("REPARSE_POINT_NOT_ALLOWED", error.Code);
+        Assert.False(Directory.Exists(Path.Combine(checkoutTarget, "feature-a")));
+    }
+
+    [Fact]
+    public void InitSharedRejectsExistingMasterLinkedToDifferentRepository()
+    {
+        var foreign = RepositoryService.InitShared(
+            root,
+            Path.Combine(root, "worktrees", "foreign-master"));
+        File.WriteAllText(
+            Path.Combine(foreign.MasterWorktreePath, "seed.txt"),
+            "seed");
+        RepositoryService.Add(foreign.MasterWorktreePath);
+        var first = RepositoryService.Commit(
+            foreign.MasterWorktreePath,
+            "initial",
+            null);
+
+        var workbenchRoot = Path.Combine(root, "nested-workbench");
+        var masterPath = Path.Combine(workbenchRoot, "worktrees", "master");
+        RepositoryService.AddWorktree(
+            foreign.RepositoryPath,
+            masterPath,
+            "foreign-linked-master",
+            first.Sha);
+
+        var error = Assert.Throws<VcInternalException>(
+            () => RepositoryService.InitShared(workbenchRoot, masterPath));
+
+        Assert.Equal("WORKTREE_REPOSITORY_MISMATCH", error.Code);
+        Assert.Contains("repository.git", error.Message);
     }
 
     [Fact]
@@ -240,5 +367,71 @@ public sealed class LinkedWorktreeTests : IDisposable
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             PropertyNameCaseInsensitive = true,
         });
+    }
+
+    private static int CountLines(string text, string expected) =>
+        text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+            .Count(line => line == expected);
+
+    private static void CreateDirectoryLink(string linkPath, string targetPath)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Directory.CreateSymbolicLink(linkPath, targetPath);
+            return;
+        }
+
+        var startInfo = new ProcessStartInfo("cmd.exe")
+        {
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("mklink");
+        startInfo.ArgumentList.Add("/J");
+        startInfo.ArgumentList.Add(linkPath);
+        startInfo.ArgumentList.Add(targetPath);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start cmd.exe to create a junction.");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(
+            process.ExitCode == 0,
+            $"Could not create junction. stdout: {output} stderr: {error}");
+    }
+
+    private static void RemoveReparsePointsAndClearFileAttributes(string directory)
+    {
+        var pending = new Stack<string>();
+        pending.Push(directory);
+        while (pending.Count > 0)
+        {
+            foreach (var entry in new DirectoryInfo(pending.Pop()).EnumerateFileSystemInfos())
+            {
+                if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                {
+                    if (entry.Attributes.HasFlag(FileAttributes.Directory))
+                    {
+                        Directory.Delete(entry.FullName);
+                    }
+                    else
+                    {
+                        File.Delete(entry.FullName);
+                    }
+                }
+                else if (entry.Attributes.HasFlag(FileAttributes.Directory))
+                {
+                    pending.Push(entry.FullName);
+                }
+                else
+                {
+                    File.SetAttributes(entry.FullName, FileAttributes.Normal);
+                }
+            }
+        }
     }
 }
