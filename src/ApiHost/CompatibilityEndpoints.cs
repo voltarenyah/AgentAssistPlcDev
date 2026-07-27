@@ -109,7 +109,8 @@ public static class CompatibilityEndpoints
             var catalog = await McpToolCatalog.BuildAsync(runtime.Host, ct);
             return Results.Ok(catalog.Tools.Select(tool => new { tool.Name, tool.Description, tool.ServerName }));
         });
-        app.MapGet("/api/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
+        app.MapGet("/api/sessions", async (ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("list_sessions").CallAsync<JsonElement>("list_sessions", new { }, ct));
 
         app.MapPost("/api/tools/call", async (CompatibilityToolCallRequest request, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
         {

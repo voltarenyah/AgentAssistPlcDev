@@ -31,6 +31,32 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task SessionsListsTiaProcessesBeforeAWorkbenchIsSelected()
+    {
+        var engineering = new RecordingToolCaller("[{\"sessionId\":17,\"projectName\":\"Demo\"}]");
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<ApiMcpGateway>();
+                services.AddSingleton(new ApiMcpGateway(
+                    engineering,
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller()));
+            });
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/sessions");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("\"sessionId\":17", await response.Content.ReadAsStringAsync());
+        Assert.Equal(["list_sessions"], engineering.Calls);
+    }
+
+    [Fact]
     public void ProductionResolverUsesRepositoryDefaultsWithoutMcpConfiguration()
     {
         var configuration = new ConfigurationBuilder().Build();
@@ -406,13 +432,13 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Path.Combine(root, "worktree", "devices", "PLC", "staging"),
         Path.Combine(root, "worktree", "devices", "PLC", "plc-knowledge.db"));
 
-    private sealed class RecordingToolCaller : IMcpToolCaller
+    private sealed class RecordingToolCaller(string json = "{}") : IMcpToolCaller
     {
         public List<string> Calls { get; } = [];
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
             Calls.Add(tool);
-            return Task.FromResult((T)(object)JsonDocument.Parse("{}").RootElement.Clone());
+            return Task.FromResult((T)(object)JsonDocument.Parse(json).RootElement.Clone());
         }
     }
 
