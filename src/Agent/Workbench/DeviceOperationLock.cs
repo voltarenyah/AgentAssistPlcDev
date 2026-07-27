@@ -4,7 +4,7 @@ namespace Agent.Workbench;
 
 public sealed class DeviceOperationLock
 {
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks =
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks =
         new(StringComparer.Ordinal);
 
     public ValueTask<IAsyncDisposable> AcquireAsync(
@@ -24,7 +24,7 @@ public sealed class DeviceOperationLock
             throw new ArgumentException("A device ID is required.", nameof(deviceId));
         }
 
-        var semaphore = _locks.GetOrAdd(deviceId, static _ => new SemaphoreSlim(1, 1));
+        var semaphore = Locks.GetOrAdd(deviceId, static _ => new SemaphoreSlim(1, 1));
         await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         return new Releaser(semaphore);
     }

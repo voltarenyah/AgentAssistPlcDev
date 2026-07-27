@@ -43,7 +43,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
     }
 
     [Fact]
-    public async Task MissingKnowledgeBuildsFromBaselinePlusOverlayNeverStaging()
+    public async Task MissingKnowledgeIsNotMutatedByStagingWorkflow()
     {
         var context = Context();
         Directory.CreateDirectory(context.ExportedSourceRoot);
@@ -51,8 +51,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
             .Respond("rebuild_export", new[] { new SyncResult { PlcName = "PLC_1" } });
-        var knowledge = new FakeToolCaller()
-            .Respond("ingest_source", new IngestResult { DbPath = context.KnowledgeDbPath });
+        var knowledge = new FakeToolCaller();
         var workflow = new ReadProjectContextWorkflow(
             engineering,
             knowledge,
@@ -60,10 +59,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
 
         await workflow.RunAsync(context, "PLC_1");
 
-        var args = knowledge.CallArgs["ingest_source"].Single();
-        Assert.Equal(context.ExportedSourceRoot, Property<string>(args, "exportedSourceRoot"));
-        Assert.Equal(context.ModifiedSourceRoot, Property<string>(args, "modifiedSourceRoot"));
-        Assert.Equal(context.KnowledgeDbPath, Property<string>(args, "dbPath"));
+        Assert.Empty(knowledge.Calls);
     }
 
     [Fact]
@@ -118,6 +114,21 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         Assert.Equal(
             "previous",
             File.ReadAllText(Path.Combine(context.StagingRoot, "sentinel.txt")));
+    }
+
+    [Fact]
+    public async Task SeparateWorkflowsSerializeStagingForSameDevice()
+    {
+        var context = Context();
+        var caller = new ConcurrentExportCaller();
+        var first = new ReadProjectContextWorkflow(caller, new FakeToolCaller());
+        var second = new ReadProjectContextWorkflow(caller, new FakeToolCaller());
+
+        await Task.WhenAll(
+            first.RunAsync(context, "PLC_1"),
+            second.RunAsync(context, "PLC_1"));
+
+        Assert.Equal(1, caller.MaxConcurrentExports);
     }
 
     [Fact]
@@ -195,6 +206,61 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
             }
 
             return base.CallAsync<T>(tool, args, cancellationToken);
+        }
+    }
+
+    private sealed class ConcurrentExportCaller : FakeToolCaller
+    {
+        private int activeExports;
+        private int maxConcurrentExports;
+
+        public int MaxConcurrentExports => maxConcurrentExports;
+
+        public override async Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            if (tool == "get_project_info")
+            {
+                return (T)(object)new ProjectInfo { Name = "Line" };
+            }
+
+            var active = Interlocked.Increment(ref activeExports);
+            UpdateMaximum(active);
+            try
+            {
+                var output = Property<string>(args, "outputDir");
+                Directory.CreateDirectory(output);
+                File.WriteAllText(Path.Combine(output, "metadata.json"), "{}");
+                await Task.Delay(75, cancellationToken);
+                return (T)(object)new[]
+                {
+                    new SyncResult { PlcName = "PLC_1", BaselineExisted = true },
+                };
+            }
+            finally
+            {
+                Interlocked.Decrement(ref activeExports);
+            }
+        }
+
+        private void UpdateMaximum(int value)
+        {
+            var observed = Volatile.Read(ref maxConcurrentExports);
+            while (value > observed)
+            {
+                var previous = Interlocked.CompareExchange(
+                    ref maxConcurrentExports,
+                    value,
+                    observed);
+                if (previous == observed)
+                {
+                    return;
+                }
+
+                observed = previous;
+            }
         }
     }
 }

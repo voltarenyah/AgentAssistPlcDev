@@ -2,7 +2,6 @@ using System.Diagnostics;
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Engineering;
-using Contracts.Knowledge;
 
 namespace Agent.Workflows;
 
@@ -13,9 +12,7 @@ namespace Agent.Workflows;
 public sealed class ReadProjectContextWorkflow
 {
     private readonly IMcpToolCaller engineering;
-    private readonly IMcpToolCaller knowledge;
     private readonly IProgress<string>? progress;
-    private readonly Func<string, bool> fileExists;
     private readonly SafeDeviceExportStager stager;
 
     public ReadProjectContextWorkflow(
@@ -26,9 +23,9 @@ public sealed class ReadProjectContextWorkflow
         SafeDeviceExportStager? stager = null)
     {
         this.engineering = engineering;
-        this.knowledge = knowledge;
         this.progress = progress;
-        this.fileExists = fileExists ?? File.Exists;
+        _ = knowledge ?? throw new ArgumentNullException(nameof(knowledge));
+        _ = fileExists; // Retained for source compatibility; this workflow no longer mutates knowledge.
         this.stager = stager ?? new SafeDeviceExportStager(engineering);
     }
 
@@ -65,26 +62,6 @@ public sealed class ReadProjectContextWorkflow
         var approvalRequired = selected.Any(result =>
             !result.BaselineExisted
             || result.Added.Length + result.Changed.Length + result.Removed.Length > 0);
-        IngestResult? ingest = null;
-        var dbMissing = !fileExists(device.KnowledgeDbPath);
-        var approvedBaselineExists = File.Exists(
-            Path.Combine(device.ExportedSourceRoot, "metadata.json"));
-        if (dbMissing && approvedBaselineExists)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ingest = await Timed(
-                "Building device knowledge",
-                () => knowledge.CallAsync<IngestResult>(
-                    "ingest_source",
-                    new
-                    {
-                        exportedSourceRoot = device.ExportedSourceRoot,
-                        modifiedSourceRoot = device.ModifiedSourceRoot,
-                        dbPath = device.KnowledgeDbPath,
-                    },
-                    cancellationToken));
-        }
-
         return new ReadProjectContextResult
         {
             ProjectName = string.IsNullOrWhiteSpace(info.Name) ? "unknown" : info.Name!,
@@ -95,11 +72,11 @@ public sealed class ReadProjectContextWorkflow
             ExportRoot = device.ExportedSourceRoot,
             ModifiedSourceRoot = device.ModifiedSourceRoot,
             StagingRoot = device.StagingRoot,
-            DbPath = ingest?.DbPath ?? device.KnowledgeDbPath,
+            DbPath = device.KnowledgeDbPath,
             Sync = selected,
-            Ingest = ingest,
+            Ingest = null,
             ApprovalRequired = approvalRequired,
-            UpToDate = !approvalRequired && !dbMissing,
+            UpToDate = !approvalRequired,
         };
     }
 

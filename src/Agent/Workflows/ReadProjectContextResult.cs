@@ -19,7 +19,10 @@ public sealed class ReadProjectContextResult
     /// <summary>Per-PLC sync outcomes (added/changed/touched/removed/failed per component).</summary>
     public required SyncResult[] Sync { get; init; }
 
-    /// <summary>Ingest outcome, or null when the knowledge db was already fresh (skipped).</summary>
+    /// <summary>
+    /// Legacy compatibility field. Device-context staging never mutates knowledge, so this is null.
+    /// Use <see cref="Agent.Workbench.WorkbenchCoordinator"/> explicitly after approval.
+    /// </summary>
     public IngestResult? Ingest { get; init; }
 
     /// <summary>True when the staged export contains differences requiring user approval.</summary>
