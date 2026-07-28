@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
@@ -9,7 +10,7 @@ namespace Agent.Mcp;
 /// One MCP server child process over stdio (buildnote/plan/app.md §2.7).
 /// The server's stderr lines are forwarded via <see cref="StderrLine"/> (stdout is the JSON-RPC channel).
 /// </summary>
-public sealed class McpServerConnection : IMcpToolCaller, IAsyncDisposable
+public sealed class McpServerConnection : IProgressMcpToolCaller, IAsyncDisposable
 {
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -74,12 +75,26 @@ public sealed class McpServerConnection : IMcpToolCaller, IAsyncDisposable
 
     public async Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
     {
+        return await CallAsync<T>(tool, args, progress: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<T> CallAsync<T>(
+        string tool,
+        object args,
+        IProgress<ProgressNotificationValue>? progress,
+        CancellationToken cancellationToken = default)
+    {
         if (client == null)
         {
             throw new InvalidOperationException($"MCP server '{serverName}' is not started.");
         }
 
-        var result = await client.CallToolAsync(tool, ToArguments(args), cancellationToken: cancellationToken);
+        var result = await client.CallToolAsync(
+            tool,
+            ToArguments(args),
+            progress,
+            null,
+            cancellationToken).ConfigureAwait(false);
         var text = result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text ?? string.Empty;
         if (result.IsError == true)
         {

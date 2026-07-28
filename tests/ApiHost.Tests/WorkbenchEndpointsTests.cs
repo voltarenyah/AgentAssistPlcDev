@@ -79,6 +79,48 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/status")).StatusCode);
     }
 
+    [Fact]
+    public void OperationRegistryKeepsOnlyLatestStatusAndDismissesTerminalSnapshots()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.Parse("2026-07-28T00:00:00Z"));
+        var registry = new OperationStatusRegistry(clock);
+
+        registry.Start("op-1", "create-workbench", "Preparing workbench storage...");
+        registry.Report("op-1", "Initializing Git repository...");
+
+        Assert.True(registry.TryGet("op-1", out var running));
+        Assert.Equal("op-1", running.OperationId);
+        Assert.Equal("create-workbench", running.OperationType);
+        Assert.Equal("running", running.State);
+        Assert.Equal("Initializing Git repository...", running.Message);
+        Assert.Null(running.ErrorMessage);
+
+        registry.Succeed("op-1", "Workbench created.");
+        registry.Dismiss("op-1");
+
+        Assert.False(registry.TryGet("op-1", out _));
+        Assert.False(registry.TryGet("missing", out _));
+    }
+
+    [Fact]
+    public void OperationRegistryRetainsFailureUntilDismissedOrExpired()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.Parse("2026-07-28T00:00:00Z"));
+        var registry = new OperationStatusRegistry(clock);
+
+        registry.Start("op-1", "refresh", "Exporting block Main_OB1...");
+        registry.Fail("op-1", "Exporting block Main_OB1...", "TIA export failed.");
+
+        Assert.True(registry.TryGet("op-1", out var failed));
+        Assert.Equal("failed", failed.State);
+        Assert.Equal("Exporting block Main_OB1...", failed.Message);
+        Assert.Equal("TIA export failed.", failed.ErrorMessage);
+
+        clock.Advance(TimeSpan.FromMinutes(61));
+
+        Assert.False(registry.TryGet("op-1", out _));
+    }
+
     [Theory]
     [InlineData("/api/project/info")]
     [InlineData("/api/blocks")]

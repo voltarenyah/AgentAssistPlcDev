@@ -100,6 +100,21 @@ public sealed class WorkbenchCatalog
         return metadata;
     }
 
+    public void RollbackCreate(WorkbenchMetadata workbench)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+
+        var root = WorkbenchPaths.ResolveWorkbench("workbench", workbench.RootPath);
+        DeleteDirectoryIfPresent(Path.Combine(root, "repository.git"));
+        DeleteDirectoryIfPresent(Path.Combine(root, "worktrees"));
+
+        var metadataPath = MetadataPath(root);
+        if (File.Exists(metadataPath))
+        {
+            File.Delete(metadataPath);
+        }
+    }
+
     public IReadOnlyList<WorkbenchMetadata> ListDefaultRoot()
     {
         if (!Directory.Exists(_defaultRoot))
@@ -233,5 +248,16 @@ public sealed class WorkbenchCatalog
                 Directory.Delete(directory);
             }
         }
+    }
+
+    private static void DeleteDirectoryIfPresent(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        var attributes = File.GetAttributes(path);
+        Directory.Delete(path, recursive: !attributes.HasFlag(FileAttributes.ReparsePoint));
     }
 }

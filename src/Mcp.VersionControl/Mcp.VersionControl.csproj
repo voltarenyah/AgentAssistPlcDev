@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Mcp.VersionControl.Tests" />
+    <InternalsVisibleTo Include="Mcp.VersionControl.TestHost" />
     <InternalsVisibleTo Include="E2E.Tests" />
   </ItemGroup>
 

@@ -1,6 +1,7 @@
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Sandbox;
+using ModelContextProtocol;
 
 var builder = WebApplication.CreateBuilder(args);
 var legacyConfigPath = Path.Combine(
@@ -40,6 +41,7 @@ builder.Services.AddSingleton<DeviceSourceResolver>(services =>
         store.Write(path, metadata with { Knowledge = metadata.Knowledge with { Stale = true } });
     });
 });
+builder.Services.AddSingleton<OperationStatusRegistry>();
 
 var startExternalMcp = !builder.Environment.IsEnvironment("Testing")
     && builder.Configuration.GetValue("Mcp:StartExternal", true);
@@ -129,11 +131,23 @@ internal sealed class McpRuntimeHostedService(McpRuntime runtime) : IHostedServi
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-internal abstract class RuntimeCaller(McpRuntime runtime) : IMcpToolCaller
+internal abstract class RuntimeCaller(McpRuntime runtime) : IProgressMcpToolCaller
 {
     protected abstract IMcpToolCaller Resolve(McpHost host);
     public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default) =>
         Resolve(runtime.Host).CallAsync<T>(tool, args, cancellationToken);
+
+    public Task<T> CallAsync<T>(
+        string tool,
+        object args,
+        IProgress<ProgressNotificationValue>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        var caller = Resolve(runtime.Host);
+        return caller is IProgressMcpToolCaller progressCaller
+            ? progressCaller.CallAsync<T>(tool, args, progress, cancellationToken)
+            : caller.CallAsync<T>(tool, args, cancellationToken);
+    }
 }
 internal sealed class EngineeringCaller(McpRuntime runtime) : RuntimeCaller(runtime)
 {

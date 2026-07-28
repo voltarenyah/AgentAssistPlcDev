@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using LibGit2Sharp;
@@ -12,6 +11,7 @@ namespace Mcp.VersionControl.Git;
 internal static class RepositoryService
 {
     private static readonly Signature DefaultAuthor = new("PLC Assistant", "assistant@plc-assistant.local", DateTimeOffset.UtcNow);
+    private static readonly GitCommandRunner Git = new(TimeSpan.FromSeconds(30));
 
     /// <summary>Default .gitignore for PLC workbench export roots.</summary>
     private const string DefaultGitIgnore = """
@@ -816,48 +816,7 @@ internal static class RepositoryService
     }
 
     private static string RunGit(string errorCode, string errorMessage, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo("git")
-        {
-            CreateNoWindow = true,
-            RedirectStandardError = true,
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        startInfo.Environment["GIT_AUTHOR_NAME"] = DefaultAuthor.Name;
-        startInfo.Environment["GIT_AUTHOR_EMAIL"] = DefaultAuthor.Email;
-        startInfo.Environment["GIT_COMMITTER_NAME"] = DefaultAuthor.Name;
-        startInfo.Environment["GIT_COMMITTER_EMAIL"] = DefaultAuthor.Email;
-
-        using var process = Process.Start(startInfo)
-            ?? throw new VcInternalException(errorCode, $"{errorMessage} Git could not be started.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
-        Task.WaitAll(standardOutput, standardError);
-
-        if (process.ExitCode != 0)
-        {
-            var detail = standardError.Result.Trim();
-            if (string.IsNullOrWhiteSpace(detail))
-            {
-                detail = standardOutput.Result.Trim();
-            }
-
-            throw new VcInternalException(
-                errorCode,
-                string.IsNullOrWhiteSpace(detail)
-                    ? errorMessage
-                    : $"{errorMessage} {detail}");
-        }
-
-        return standardOutput.Result;
-    }
+        => Git.Run("git", errorCode, errorMessage, arguments);
 
     private static Signature ResolveAuthor(Repository repo, string? author)
     {

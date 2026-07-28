@@ -1,3 +1,5 @@
+using ModelContextProtocol;
+
 namespace Agent.Mcp;
 
 /// <summary>
@@ -8,4 +10,13 @@ public interface IMcpToolCaller
 {
     /// <summary>Calls one MCP tool and deserializes its JSON result; throws <see cref="ToolCallException"/> on isError results.</summary>
     Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default);
+}
+
+public interface IProgressMcpToolCaller : IMcpToolCaller
+{
+    Task<T> CallAsync<T>(
+        string tool,
+        object args,
+        IProgress<ProgressNotificationValue>? progress,
+        CancellationToken cancellationToken = default);
 }

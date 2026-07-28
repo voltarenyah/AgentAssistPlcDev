@@ -313,7 +313,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
-    public ExportResult[] ExportAllBlocks(string outputDir)
+    public ExportResult[] ExportAllBlocks(string outputDir, IProgress<EngineeringProgress>? progress = null)
     {
         lock (_gate)
         {
@@ -323,7 +323,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             {
                 // Per-device subfolder, each its own export root with its own metadata.json.
                 var dir = Path.Combine(outputDir, Sanitize(plc.Name));
-                results.AddRange(ExportAllBlocksForPlc(plc, dir));
+                results.AddRange(ExportAllBlocksForPlc(plc, dir, progress: progress));
             }
             return results.ToArray();
         }
@@ -335,7 +335,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     private List<ExportResult> ExportAllBlocksForPlc(
         PlcSoftware plc,
         string dir,
-        bool writeProjectMetadata = true)
+        bool writeProjectMetadata = true,
+        IProgress<EngineeringProgress>? progress = null)
     {
         Directory.CreateDirectory(dir);
         var exportStartedUtc = DateTimeOffset.UtcNow;
@@ -350,6 +351,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             ExportResult result;
             try
             {
+                Report(progress, $"Exporting block {block.Name}...");
                 result = ExportCore(block, dir);
             }
             catch (Exception ex)
@@ -385,7 +387,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         return results;
     }
 
-    public SyncResult[] SyncExport(string outputDir, string? plcName)
+    public SyncResult[] SyncExport(string outputDir, string? plcName, IProgress<EngineeringProgress>? progress = null)
     {
         lock (_gate)
         {
@@ -398,7 +400,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             {
                 // Per-device export-root subfolder (same rule as the export tools).
                 var dir = Path.Combine(outputDir, Sanitize(plc.Name));
-                results.Add(SyncExportForPlc(plc, dir));
+                results.Add(SyncExportForPlc(plc, dir, progress));
             }
             // Update project metadata with the complete device list discovered.
             if (plcName is null)
@@ -424,7 +426,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     /// <summary>Per-PLC sync (buildnote/plan/export-sync.md): project-level checksum gate first;
     /// otherwise a timestamp-nominated, hash-confirmed diff that re-exports only real changes
     /// and rewrites the manifest (all categories) with the fresh gate value in project metadata.</summary>
-    private SyncResult SyncExportForPlc(PlcSoftware plc, string dir)
+    private SyncResult SyncExportForPlc(
+        PlcSoftware plc,
+        string dir,
+        IProgress<EngineeringProgress>? progress = null)
     {
         var checksum = TryReadSoftwareChecksum(plc);
         var projectRoot = Path.GetDirectoryName(dir)!;
@@ -442,9 +447,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             // No baseline manifest → full export for this PLC (blocks rewrite the manifest and
             // stamp the checksum in project metadata; tags/UDTs upsert into it afterwards).
             var full = new List<ExportResult>();
-            full.AddRange(ExportAllBlocksForPlc(plc, dir));
-            full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables", p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord));
-            full.AddRange(ExportObjectsForPlc(plc, dir, "export_udts", p => PlcTypeEnumerator.Enumerate(p.TypeGroup), ExportUdtCore, CreateUdtRecord));
+            full.AddRange(ExportAllBlocksForPlc(plc, dir, progress: progress));
+            full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables", p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord, progress));
+            full.AddRange(ExportObjectsForPlc(plc, dir, "export_udts", p => PlcTypeEnumerator.Enumerate(p.TypeGroup), ExportUdtCore, CreateUdtRecord, progress));
             result.Status = "updated";
             result.Added = full.Where(r => r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = "no-baseline" }).ToArray();
             result.Failed = full.Where(r => !r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = r.Error }).ToArray();
@@ -504,7 +509,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     break;
 
                 case SyncAction.ReExport:
-                    var record = ReExportComponent(dir, item.Live!, blocksById, tablesById, typesById, out var exportResult);
+                    var record = ReExportComponent(dir, item.Live!, blocksById, tablesById, typesById, progress, out var exportResult);
                     var change = ToChange(record, item.Reason);
                     if (!exportResult.Success)
                     {
@@ -561,7 +566,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     /// <summary>Full rebuild export (§full-rebuild). A selected PLC is exported directly to
     /// <paramref name="outputDir"/>; otherwise every PLC is exported to a per-device subfolder
     /// and project-level metadata is written. No incremental diff.</summary>
-    public SyncResult[] RebuildExport(string outputDir, string? plcName = null)
+    public SyncResult[] RebuildExport(
+        string outputDir,
+        string? plcName = null,
+        IProgress<EngineeringProgress>? progress = null)
     {
         lock (_gate)
         {
@@ -590,11 +598,12 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 full.AddRange(ExportAllBlocksForPlc(
                     plc,
                     dir,
-                    writeProjectMetadata: plcName is null));
+                    writeProjectMetadata: plcName is null,
+                    progress: progress));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables",
-                    p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord));
+                    p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord, progress));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_udts",
-                    p => PlcTypeEnumerator.Enumerate(p.TypeGroup), ExportUdtCore, CreateUdtRecord));
+                    p => PlcTypeEnumerator.Enumerate(p.TypeGroup), ExportUdtCore, CreateUdtRecord, progress));
 
                 results.Add(new SyncResult
                 {
@@ -815,20 +824,24 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         IReadOnlyDictionary<string, (PlcBlock Block, string? GroupPath)> blocksById,
         IReadOnlyDictionary<string, (PlcTagTable Table, string? GroupPath)> tablesById,
         IReadOnlyDictionary<string, (PlcType Type, string? GroupPath)> typesById,
+        IProgress<EngineeringProgress>? progress,
         out ExportResult exportResult)
     {
         switch (live.Category)
         {
             case "Tags":
                 var (table, tablePath) = tablesById[live.Id];
+                Report(progress, $"Exporting tag table {table.Name}...");
                 exportResult = ExportTagTableCore(table, dir);
                 return CreateTagTableRecord(table, tablePath, dir, exportResult);
             case "UDT":
                 var (type, typePath) = typesById[live.Id];
+                Report(progress, $"Exporting UDT {type.Name}...");
                 exportResult = ExportUdtCore(type, dir);
                 return CreateUdtRecord(type, typePath, dir, exportResult);
             default:
                 var (block, blockPath) = blocksById[live.Id];
+                Report(progress, $"Exporting block {block.Name}...");
                 exportResult = ExportCore(block, dir);
                 return ExportManifest.CreateRecord(block, blockPath, dir, exportResult);
         }
@@ -938,7 +951,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         };
     }
 
-    public ExportResult[] ExportTagTables(string outputDir, string? plcName)
+    public ExportResult[] ExportTagTables(
+        string outputDir,
+        string? plcName,
+        IProgress<EngineeringProgress>? progress = null)
     {
         lock (_gate)
         {
@@ -948,11 +964,15 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 "export_tag_tables",
                 plc => TagTableEnumerator.Enumerate(plc.TagTableGroup),
                 ExportTagTableCore,
-                CreateTagTableRecord);
+                CreateTagTableRecord,
+                progress);
         }
     }
 
-    public ExportResult[] ExportUdts(string outputDir, string? plcName)
+    public ExportResult[] ExportUdts(
+        string outputDir,
+        string? plcName,
+        IProgress<EngineeringProgress>? progress = null)
     {
         lock (_gate)
         {
@@ -962,7 +982,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 "export_udts",
                 plc => PlcTypeEnumerator.Enumerate(plc.TypeGroup),
                 ExportUdtCore,
-                CreateUdtRecord);
+                CreateUdtRecord,
+                progress);
         }
     }
 
@@ -992,7 +1013,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         string label,
         Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
         Func<TObject, string, ExportResult> exportCore,
-        Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord)
+        Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord,
+        IProgress<EngineeringProgress>? progress = null)
     {
         var project = RequireProject();
         var plcs = plcName is null
@@ -1003,7 +1025,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         {
             // Per-device subfolder, each its own export root with its own metadata.json.
             var dir = Path.Combine(outputDir, Sanitize(plc.Name));
-            results.AddRange(ExportObjectsForPlc(plc, dir, label, enumerate, exportCore, createRecord));
+            results.AddRange(ExportObjectsForPlc(plc, dir, label, enumerate, exportCore, createRecord, progress));
         }
         return results.ToArray();
     }
@@ -1016,7 +1038,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         string label,
         Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
         Func<TObject, string, ExportResult> exportCore,
-        Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord)
+        Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord,
+        IProgress<EngineeringProgress>? progress = null)
     {
         Directory.CreateDirectory(dir);
         var results = new List<ExportResult>();
@@ -1026,6 +1049,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         foreach (var (item, groupPath) in items)
         {
             index++;
+            Report(progress, $"Exporting {ExportKind(label)} {ExportName(item)}...");
             var result = exportCore(item, dir);
             if (!result.Success)
             {
@@ -1109,6 +1133,28 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     };
 
     /// <summary>PlcTagTable exposes only ModifiedTimeStamp (openness-v17-api-surface.md §9); guarded like block metadata.</summary>
+    private static void Report(IProgress<EngineeringProgress>? progress, string message)
+    {
+        try
+        {
+            progress?.Report(new EngineeringProgress(message));
+        }
+        catch
+        {
+            // Progress is informational only; it must never change export behavior.
+        }
+    }
+
+    private static string ExportKind(string label) =>
+        label == "export_tag_tables" ? "tag table" : "UDT";
+
+    private static string ExportName<TObject>(TObject item) => item switch
+    {
+        PlcTagTable table => table.Name,
+        PlcType type => type.Name,
+        _ => "component",
+    };
+
     private static DateTimeOffset? ReadTagTableModified(PlcTagTable table)
     {
         try { return table.ModifiedTimeStamp; } catch { return null; }

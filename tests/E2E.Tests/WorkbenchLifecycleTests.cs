@@ -44,7 +44,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             new DeviceReconciler(), resolver);
 
         var created = await coordinator.CreateWorkbenchAsync(new(
-            "Line 1", Path.Combine(root, "custom", "Line 1"), @"C:\Fixture\Line.ap17"));
+            "Line 1", Path.Combine(root, "custom", "Line 1"), 42, @"C:\Fixture\Line.ap17"));
         Assert.Empty(catalog.ListDefaultRoot());
         Assert.Equal("do-not-touch", File.ReadAllText(legacySentinel));
 

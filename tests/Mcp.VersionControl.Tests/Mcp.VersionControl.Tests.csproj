@@ -16,6 +16,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Mcp.VersionControl\Mcp.VersionControl.csproj" />
+    <ProjectReference Include="..\Mcp.VersionControl.TestHost\Mcp.VersionControl.TestHost.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

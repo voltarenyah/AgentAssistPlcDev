@@ -4,7 +4,11 @@ using Agent.Workbench;
 using Contracts.Sandbox;
 
 public sealed record WorkbenchSelection(string WorkbenchId, string? WorktreeId, string? DeviceId);
-public sealed record CreateWorkbenchApiRequest(string Name, string? RootPath, string EngineeringProjectPath);
+public sealed record CreateWorkbenchApiRequest(
+    string Name,
+    string? RootPath,
+    int EngineeringSessionId,
+    string EngineeringProjectPath);
 public sealed record OpenWorkbenchApiRequest(string RootPath);
 public sealed record CreateWorktreeApiRequest(string Name, string Branch, string? StartPoint);
 public sealed record RefreshApplyApiRequest(string PreviewId, string[]? ApprovedRemovalPaths);
@@ -127,40 +131,197 @@ public static class WorkbenchEndpoints
 {
     public static IEndpointRouteBuilder MapWorkbenchEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/operations/{id}", (string id, OperationStatusRegistry operations) =>
+            operations.TryGet(id, out var snapshot) ? Results.Ok(snapshot) : Results.NotFound());
+        app.MapDelete("/api/operations/{id}", (string id, OperationStatusRegistry operations) =>
+        {
+            operations.Dismiss(id);
+            return Results.NoContent();
+        });
         app.MapGet("/api/workbenches", (WorkbenchApiState s) => s.List());
         app.MapPost("/api/workbenches/open", (OpenWorkbenchApiRequest r, WorkbenchApiState s) => s.Open(r.RootPath));
-        app.MapPost("/api/workbenches", async (CreateWorkbenchApiRequest r, WorkbenchCoordinator c, WorkbenchApiState s, CancellationToken ct) =>
-            s.Add((await c.CreateWorkbenchAsync(new(r.Name, r.RootPath, r.EngineeringProjectPath), ct)).Workbench));
+        app.MapPost("/api/workbenches", async (
+            CreateWorkbenchApiRequest r,
+            WorkbenchCoordinator c,
+            WorkbenchApiState s,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "create-workbench",
+                "Preparing workbench storage...",
+                async progress => s.Add((await c.CreateWorkbenchAsync(
+                    new(r.Name, r.RootPath, r.EngineeringSessionId, r.EngineeringProjectPath),
+                    ct,
+                    progress)).Workbench),
+                "Workbench created.").ConfigureAwait(false));
         app.MapGet("/api/workbenches/{id}", (string id, WorkbenchApiState s) => s.Workbench(id));
         app.MapPost("/api/workbenches/{id}/select", (string id, WorkbenchApiState s) => { s.Workbench(id); s.Select(id); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees", (string id, WorkbenchApiState s) => s.Workbench(id).Worktrees);
-        app.MapPost("/api/workbenches/{id}/worktrees", async (string id, CreateWorktreeApiRequest r, WorkbenchApiState s, WorkbenchCoordinator c, CancellationToken ct) =>
+        app.MapPost("/api/workbenches/{id}/worktrees", async (
+            string id,
+            CreateWorktreeApiRequest r,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
         {
-            var result = await c.CreateWorktreeAsync(new(s.Workbench(id), r.Name, r.Branch, r.StartPoint), ct);
+            var result = await RunOperationAsync(
+                http,
+                operations,
+                "create-worktree",
+                "Creating linked worktree...",
+                progress => c.CreateWorktreeAsync(new(s.Workbench(id), r.Name, r.Branch, r.StartPoint), ct, progress),
+                "Worktree created.").ConfigureAwait(false);
             s.Refresh(id);
             return result;
         });
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s) => { s.Worktree(id, wt); s.Select(id, wt); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.Worktree(id, wt).DeviceIds);
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
-        app.MapPost("/api/devices/{device}/refresh/stage", async (string device, WorkbenchApiState s, WorkbenchCoordinator c, CancellationToken ct) => await c.StageRefreshAsync(s.Device(device).Context, ct));
+        app.MapPost("/api/devices/{device}/refresh/stage", async (
+            string device,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "stage-refresh",
+                "Preparing export staging area...",
+                progress => c.StageRefreshAsync(s.Device(device).Context, ct, progress),
+                "Refresh staged.").ConfigureAwait(false));
         app.MapGet("/api/devices/{device}/refresh/preview", (string device, WorkbenchApiState s, WorkbenchCoordinator c) => { var p = c.PreviewRefresh(s.Device(device).Context); s.Remember(p); return p; });
-        app.MapPost("/api/devices/{device}/refresh/apply", async (string device, RefreshApplyApiRequest r, WorkbenchApiState s, WorkbenchCoordinator c, CancellationToken ct) =>
-            await c.ApplyRefreshAsync(s.Device(device).Context, new(s.Take(r.PreviewId, device), new HashSet<string>(r.ApprovedRemovalPaths ?? [], StringComparer.Ordinal)), ct));
-        app.MapPost("/api/devices/{device}/knowledge/update", async (string device, WorkbenchApiState s, WorkbenchCoordinator c, CancellationToken ct) => await c.UpdateKnowledgeAsync(s.Device(device).Context, ct));
-        app.MapPost("/api/devices/{device}/knowledge/rebuild", async (string device, WorkbenchApiState s, WorkbenchCoordinator c, CancellationToken ct) => await c.RebuildKnowledgeAsync(s.Device(device).Context, ct));
+        app.MapPost("/api/devices/{device}/refresh/apply", async (
+            string device,
+            RefreshApplyApiRequest r,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "apply-refresh",
+                "Applying approved refresh...",
+                progress => c.ApplyRefreshAsync(
+                    s.Device(device).Context,
+                    new(s.Take(r.PreviewId, device), new HashSet<string>(r.ApprovedRemovalPaths ?? [], StringComparer.Ordinal)),
+                    ct,
+                    progress),
+                "Refresh applied.").ConfigureAwait(false));
+        app.MapPost("/api/devices/{device}/knowledge/update", async (
+            string device,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "update-knowledge",
+                "Updating device knowledge...",
+                progress => c.UpdateKnowledgeAsync(s.Device(device).Context, ct, progress),
+                "Knowledge updated.").ConfigureAwait(false));
+        app.MapPost("/api/devices/{device}/knowledge/rebuild", async (
+            string device,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "rebuild-knowledge",
+                "Rebuilding device knowledge...",
+                progress => c.RebuildKnowledgeAsync(s.Device(device).Context, ct, progress),
+                "Knowledge rebuilt.").ConfigureAwait(false));
         app.MapPost("/api/devices/{device}/source/prepare-edit", (string device, SourcePathApiRequest r, WorkbenchApiState s, DeviceSourceResolver resolver) => resolver.PrepareEditable(s.Device(device).Context, r.RelativePath));
-        app.MapPost("/api/devices/{device}/source/import", async (string device, SourcePathApiRequest r, WorkbenchApiState s, WorkbenchCoordinator c, CancellationToken ct) => await c.ImportModifiedAsync(s.Device(device).Context, r.RelativePath, ct));
-        app.MapPost("/api/worktrees/{source}/merge", async (string source, MergeWorktreeApiRequest r, WorkbenchApiState s, WorkbenchCoordinator c) =>
+        app.MapPost("/api/devices/{device}/source/import", async (
+            string device,
+            SourcePathApiRequest r,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "import-source",
+                "Importing modified source...",
+                progress => c.ImportModifiedAsync(s.Device(device).Context, r.RelativePath, ct, progress),
+                "Source imported.").ConfigureAwait(false));
+        app.MapPost("/api/worktrees/{source}/merge", async (
+            string source,
+            MergeWorktreeApiRequest r,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http) =>
         {
             var workbenchId = s.Selection?.WorkbenchId ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
-            return await c.MergeWorktreeAsync(workbenchId, source, r.TargetWorktreeId);
+            return await RunOperationAsync(
+                http,
+                operations,
+                "merge-worktree",
+                "Merging worktree...",
+                progress => c.MergeWorktreeAsync(workbenchId, source, r.TargetWorktreeId, progress: progress),
+                "Worktree merged.").ConfigureAwait(false);
         });
         app.MapGet("/api/devices/{device}/sessions", (string device, WorkbenchApiState s) => SessionManager.ListSessions(s.Device(device).Context));
         app.MapPost("/api/devices/{device}/sessions", (string device, SessionCreateApiRequest r, WorkbenchApiState s) => SessionManager.CreateNewSession(s.Device(device).Context, r.Settings, r.RuntimeContext));
         app.MapGet("/api/devices/{device}/sessions/{session}", (string device, string session, WorkbenchApiState s) => SessionManager.LoadSession(s.Device(device).Context, session) is { } value ? Results.Ok(value) : Results.NotFound());
         app.MapPut("/api/devices/{device}/sessions/{session}", (string device, string session, SessionSaveApiRequest r, WorkbenchApiState s) => { if (r.Session.Header.SessionId != session) return Results.BadRequest(); SessionManager.SaveSession(s.Device(device).Context, r.Session); return Results.NoContent(); });
         return app;
+    }
+
+    private static async Task<T> RunOperationAsync<T>(
+        HttpContext http,
+        OperationStatusRegistry operations,
+        string operationType,
+        string initialMessage,
+        Func<IOperationProgress?, Task<T>> action,
+        string successMessage)
+    {
+        var operationId = http.Request.Headers["X-Operation-Id"].FirstOrDefault();
+        IOperationProgress? progress = null;
+        if (!string.IsNullOrWhiteSpace(operationId))
+        {
+            operations.Start(operationId, operationType, initialMessage);
+            progress = operations.For(operationId);
+        }
+
+        try
+        {
+            var result = await action(progress).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(operationId))
+            {
+                operations.Succeed(operationId, successMessage);
+            }
+
+            return result;
+        }
+        catch (Exception exception)
+        {
+            if (!string.IsNullOrWhiteSpace(operationId))
+            {
+                var lastMessage = operations.TryGet(operationId, out var snapshot)
+                    ? snapshot.Message
+                    : initialMessage;
+                operations.Fail(operationId, lastMessage, exception.Message);
+            }
+
+            throw;
+        }
     }
 }
 

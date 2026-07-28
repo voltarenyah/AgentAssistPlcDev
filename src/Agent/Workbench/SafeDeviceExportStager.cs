@@ -1,5 +1,6 @@
 using Agent.Mcp;
 using Contracts.Engineering;
+using ModelContextProtocol;
 
 namespace Agent.Workbench;
 
@@ -55,27 +56,39 @@ public sealed class SafeDeviceExportStager
     public Task<SyncResult[]> StageAsync(
         DeviceContext device,
         string plcName,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null) =>
         operationLock.RunAsync(
             device,
-            token => StageCoreAsync(device, plcName, token),
+            token => StageCoreAsync(device, plcName, token, progress),
             cancellationToken);
 
     private async Task<SyncResult[]> StageCoreAsync(
         DeviceContext device,
         string plcName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IOperationProgress? progress)
     {
+        progress?.Report("Preparing export staging area...");
         var incoming = WorkbenchPaths.ResolveRelative(
             device.DeviceRoot,
             $".staging-{Guid.NewGuid():N}.incoming");
         try
         {
             files.CreateDirectory(incoming);
-            var result = await engineering.CallAsync<SyncResult[]>(
-                "rebuild_export",
-                new { outputDir = incoming, plcName },
-                cancellationToken).ConfigureAwait(false);
+            progress?.Report("Exporting PLC source...");
+            var progressBridge = progress is null ? null : new McpProgressBridge(progress);
+            var result = engineering is IProgressMcpToolCaller progressCaller
+                ? await progressCaller.CallAsync<SyncResult[]>(
+                    "rebuild_export",
+                    new { outputDir = incoming, plcName },
+                    progressBridge,
+                    cancellationToken).ConfigureAwait(false)
+                : await engineering.CallAsync<SyncResult[]>(
+                    "rebuild_export",
+                    new { outputDir = incoming, plcName },
+                    cancellationToken).ConfigureAwait(false);
+            progress?.Report("Writing export metadata...");
             var selected = result.Where(item =>
                 string.Equals(item.PlcName, plcName, StringComparison.Ordinal)).ToArray();
             if (selected.Length == 0 || selected.Any(item => item.Failed.Length > 0))
@@ -194,5 +207,16 @@ public sealed class SafeDeviceExportStager
         }
 
         files.DeleteDirectory(path);
+    }
+
+    private sealed class McpProgressBridge(IOperationProgress progress) : IProgress<ProgressNotificationValue>
+    {
+        public void Report(ProgressNotificationValue value)
+        {
+            if (!string.IsNullOrWhiteSpace(value.Message))
+            {
+                progress.Report(value.Message);
+            }
+        }
     }
 }

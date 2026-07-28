@@ -37,12 +37,26 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new DeviceReconciler(),
             new DeviceSourceResolver(_ => { }));
 
+        var progress = new RecordingProgress();
+
         var result = await coordinator.CreateWorkbenchAsync(
             new CreateWorkbenchRequest(
                 "Line",
                 Path.Combine(root, "Line"),
-                @"C:\Projects\Line.ap17"));
+                42,
+                @"C:\Projects\Line.ap17"),
+            progress: progress);
 
+        Assert.Equal(
+            new[]
+            {
+                "Preparing workbench storage...",
+                "Initializing Git repository...",
+                "Attaching to TIA Portal...",
+                "Discovering PLC devices...",
+                "Creating device folders...",
+            },
+            progress.Messages);
         Assert.Equal(
             new[]
             {
@@ -51,6 +65,9 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "engineering:get_project_info",
             },
             calls);
+        Assert.Equal(
+            42,
+            Property<int>(engineering.CallArgs["connect"].Single(), "sessionId"));
         Assert.Equal(2, result.Devices.Count);
         Assert.All(result.Devices, device =>
         {
@@ -59,6 +76,35 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         });
         Assert.True(File.Exists(Path.Combine(
             result.Workbench.RootPath, "worktrees", "master", "worktree.json")));
+    }
+
+    [Fact]
+    public async Task CreateRollsBackWorkbenchArtifactsWhenGitInitializationFails()
+    {
+        var workbenchRoot = Path.Combine(root, "FailedCreate");
+        var catalog = new WorkbenchCatalog(
+            new AtomicJsonStore(),
+            Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            new FakeToolCaller().Fail("vc_init_shared", "GIT_TIMEOUT", "Git timed out."),
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        await Assert.ThrowsAsync<ToolCallException>(() =>
+            coordinator.CreateWorkbenchAsync(
+                new CreateWorkbenchRequest(
+                    "FailedCreate",
+                    workbenchRoot,
+                    42,
+                    @"C:\Projects\Line.ap17")));
+
+        Assert.False(File.Exists(Path.Combine(workbenchRoot, "workbench.json")));
+        Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "repository.git")));
+        Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "worktrees")));
     }
 
     [Fact]
@@ -74,9 +120,15 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var metadataBefore = File.ReadAllBytes(
             Path.Combine(fixture.Context.DeviceRoot, "device.json"));
 
-        await coordinator.StageRefreshAsync(fixture.Context, CancellationToken.None);
+        var progress = new RecordingProgress();
+
+        await coordinator.StageRefreshAsync(fixture.Context, CancellationToken.None, progress);
 
         Assert.Equal(new[] { "engineering:rebuild_export" }, calls);
+        Assert.Contains("Preparing export staging area...", progress.Messages);
+        Assert.Contains("Exporting PLC source...", progress.Messages);
+        Assert.Contains("Writing export metadata...", progress.Messages);
+        Assert.Contains("Preparing refresh preview...", progress.Messages);
         var args = engineering.CallArgs["rebuild_export"].Single();
         Assert.StartsWith(fixture.Context.DeviceRoot, Property<string>(args, "outputDir"));
         Assert.Equal("PLC_1", Property<string>(args, "plcName"));
@@ -106,6 +158,24 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal("DEVICE_EXPORT_INCOMPLETE", error.Code);
         Assert.Equal("previous", File.ReadAllText(
             Path.Combine(fixture.Context.StagingRoot, "sentinel.txt")));
+    }
+
+    [Fact]
+    public async Task StageRefreshForwardsMcpProgressMessages()
+    {
+        var fixture = Fixture.Create(root);
+        var engineering = new ProgressExportCaller(new[]
+        {
+            "Exporting block Main_OB1...",
+            "Exporting tag table MachineTags...",
+        });
+        var coordinator = Create(fixture, engineering: engineering);
+        var progress = new RecordingProgress();
+
+        await coordinator.StageRefreshAsync(fixture.Context, CancellationToken.None, progress);
+
+        Assert.Contains("Exporting block Main_OB1...", progress.Messages);
+        Assert.Contains("Exporting tag table MachineTags...", progress.Messages);
     }
 
     [Fact]
@@ -437,6 +507,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
     private sealed class AddResult { }
 
+    private sealed class RecordingProgress : IOperationProgress
+    {
+        public List<string> Messages { get; } = [];
+        public void Report(string message) => Messages.Add(message);
+    }
+
     private sealed class MutatingExportCaller : FakeToolCaller
     {
         private readonly SyncResult[] result;
@@ -462,6 +538,35 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             File.WriteAllText(Path.Combine(output, "partial.txt"), "partial");
             File.WriteAllText(Path.Combine(output, "metadata.json"), "{}");
             return Task.FromResult((T)(object)result);
+        }
+    }
+
+    private sealed class ProgressExportCaller(string[] progressMessages) : FakeToolCaller, IProgressMcpToolCaller
+    {
+        public Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            IProgress<ModelContextProtocol.ProgressNotificationValue>? progress,
+            CancellationToken cancellationToken = default)
+        {
+            foreach (var message in progressMessages)
+            {
+                progress?.Report(new ModelContextProtocol.ProgressNotificationValue
+                {
+                    Progress = 0,
+                    Message = message,
+                });
+            }
+
+            Calls.Add(tool);
+            CallArgs[tool] = new List<object> { args };
+            var output = Property<string>(args, "outputDir");
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Combine(output, "metadata.json"), "{}");
+            return Task.FromResult((T)(object)new[]
+            {
+                new SyncResult { PlcName = "PLC_1", ExportRoot = output },
+            });
         }
     }
 

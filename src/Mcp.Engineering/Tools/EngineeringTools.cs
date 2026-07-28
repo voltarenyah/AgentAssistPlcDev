@@ -5,6 +5,7 @@ using Contracts.Sandbox;
 using Mcp.Engineering.Adapter;
 using Mcp.Engineering.Openness;
 using Mcp.Engineering.Sandbox;
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -86,36 +87,41 @@ public sealed class EngineeringTools
     [McpServerTool(Name = "export_all_blocks")]
     [Description("Export every PLC block to XML under outputDir (Blocks/ and DB/ subfolders; per-PLC subfolder when multiple PLCs) and write a metadata.json manifest per export root.")]
     public CallToolResult ExportAllBlocks(
-        [Description("Export root directory for the XML files.")] string outputDir)
-        => Invoke("export_all_blocks", () => _adapter.ExportAllBlocks(outputDir), ("outputDir", outputDir));
+        [Description("Export root directory for the XML files.")] string outputDir,
+        IProgress<ProgressNotificationValue>? progress = null)
+        => Invoke("export_all_blocks", () => _adapter.ExportAllBlocks(outputDir, ToEngineeringProgress(progress)), ("outputDir", outputDir));
 
     [McpServerTool(Name = "export_tag_tables")]
     [Description("Export every PLC tag table to XML under outputDir/Tags (recursing nested groups) and upsert one metadata.json record per table. Per-PLC subfolder when the project has multiple PLCs, unless plcName is given.")]
     public CallToolResult ExportTagTables(
         [Description("Export root directory.")] string outputDir,
-        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
-        => Invoke("export_tag_tables", () => _adapter.ExportTagTables(outputDir, plcName), ("outputDir", outputDir));
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null,
+        IProgress<ProgressNotificationValue>? progress = null)
+        => Invoke("export_tag_tables", () => _adapter.ExportTagTables(outputDir, plcName, ToEngineeringProgress(progress)), ("outputDir", outputDir));
 
     [McpServerTool(Name = "export_udts")]
     [Description("Export every PLC data type (UDT) to XML under outputDir/UDT (recursing nested groups) and upsert one metadata.json record per type. Per-PLC subfolder when the project has multiple PLCs, unless plcName is given.")]
     public CallToolResult ExportUdts(
         [Description("Export root directory.")] string outputDir,
-        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
-        => Invoke("export_udts", () => _adapter.ExportUdts(outputDir, plcName), ("outputDir", outputDir));
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null,
+        IProgress<ProgressNotificationValue>? progress = null)
+        => Invoke("export_udts", () => _adapter.ExportUdts(outputDir, plcName, ToEngineeringProgress(progress)), ("outputDir", outputDir));
 
     [McpServerTool(Name = "sync_export")]
     [Description("Incrementally sync an export root with the current project state: PLC software-checksum gate (skip everything when unchanged), then a timestamp-nominated, hash-confirmed diff that re-exports only real changes and drops components deleted in TIA. Read-only w.r.t. the project. Run ingest_source afterwards to refresh the knowledge base.")]
     public CallToolResult SyncExport(
         [Description("Export root directory previously filled by export_all_blocks / export_tag_tables / export_udts.")] string outputDir,
-        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
-        => Invoke("sync_export", () => _adapter.SyncExport(outputDir, plcName), ("outputDir", outputDir));
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null,
+        IProgress<ProgressNotificationValue>? progress = null)
+        => Invoke("sync_export", () => _adapter.SyncExport(outputDir, plcName, ToEngineeringProgress(progress)), ("outputDir", outputDir));
 
     [McpServerTool(Name = "rebuild_export")]
     [Description("Complete full export. With plcName, exports that selected device directly into outputDir; otherwise exports all devices into per-device subfolders and writes project metadata. Always rewrites manifests and never performs an incremental diff. Read-only w.r.t. the project.")]
     public CallToolResult RebuildExport(
         [Description("Export root directory. With plcName, this is the selected device's direct staging root; otherwise it contains per-device subfolders.")] string outputDir,
-        [Description("PLC device name for a direct full device export; omit to rebuild every PLC into per-device subfolders.")] string? plcName = null)
-        => Invoke("rebuild_export", () => _adapter.RebuildExport(outputDir, plcName), ("outputDir", outputDir));
+        [Description("PLC device name for a direct full device export; omit to rebuild every PLC into per-device subfolders.")] string? plcName = null,
+        IProgress<ProgressNotificationValue>? progress = null)
+        => Invoke("rebuild_export", () => _adapter.RebuildExport(outputDir, plcName, ToEngineeringProgress(progress)), ("outputDir", outputDir));
 
     [McpServerTool(Name = "get_context_status")]
     [Description("Check whether an export root matches the current project state without changing anything: per PLC, the stored manifest checksum vs the live software checksum (states: no-baseline / in-sync / changed / unknown). No exports, no writes — safe to run anytime.")]
@@ -190,5 +196,24 @@ public sealed class EngineeringTools
         return paths.Length == 0
             ? null
             : string.Join("; ", paths.Select(argument => $"{argument.Name}={argument.Value}"));
+    }
+
+    private static IProgress<EngineeringProgress>? ToEngineeringProgress(
+        IProgress<ProgressNotificationValue>? progress) =>
+        progress is null ? null : new McpProgressBridge(progress);
+
+    private sealed class McpProgressBridge(IProgress<ProgressNotificationValue> progress) : IProgress<EngineeringProgress>
+    {
+        public void Report(EngineeringProgress value)
+        {
+            if (!string.IsNullOrWhiteSpace(value.Message))
+            {
+                progress.Report(new ProgressNotificationValue
+                {
+                    Progress = 0,
+                    Message = value.Message,
+                });
+            }
+        }
     }
 }
