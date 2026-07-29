@@ -138,6 +138,15 @@ public sealed class DeviceSnapshotReader
                 }
 
                 var sourcePath = ReadString(component, "sourcePath");
+                var baselineBlock = new OfflineBlockInfo(
+                    ReadString(component, "id") ?? $"{category}:{sourcePath ?? normalizedPath}",
+                    ReadString(component, "name") ?? Path.GetFileNameWithoutExtension(normalizedPath),
+                    ReadInt32(component, "number"),
+                    category!,
+                    ReadString(component, "programmingLanguage"),
+                    GroupPathOf(sourcePath),
+                    normalizedPath,
+                    false);
                 var modifiedPath = WorkbenchPaths.ResolveRelative(
                     context.ModifiedSourceRoot,
                     normalizedPath);
@@ -160,20 +169,13 @@ public sealed class DeviceSnapshotReader
                     {
                         diagnostics.Add(
                             $"Overlay '{normalizedPath}' is not a supported Siemens PLC block: {overlayError}");
+                        blocks.Add(baselineBlock);
                     }
 
                     continue;
                 }
 
-                blocks.Add(new OfflineBlockInfo(
-                    ReadString(component, "id") ?? $"{category}:{sourcePath ?? normalizedPath}",
-                    ReadString(component, "name") ?? Path.GetFileNameWithoutExtension(normalizedPath),
-                    ReadInt32(component, "number"),
-                    category!,
-                    ReadString(component, "programmingLanguage"),
-                    GroupPathOf(sourcePath),
-                    normalizedPath,
-                    modified));
+                blocks.Add(baselineBlock);
             }
 
             if (Directory.Exists(context.ModifiedSourceRoot))

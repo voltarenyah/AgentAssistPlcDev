@@ -112,7 +112,7 @@ public sealed class DeviceSnapshotReaderTests
     }
 
     [Fact]
-    public void ReadReportsMalformedMatchingOverlayInsteadOfReturningStaleBaselineMetadata()
+    public void ReadReportsMalformedMatchingOverlayAndRetainsUnmodifiedBaselineMetadata()
     {
         using var fixture = SnapshotFixture.Create();
         fixture.WriteManifest(
@@ -121,10 +121,39 @@ public sealed class DeviceSnapshotReaderTests
 
         var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
 
-        Assert.Empty(snapshot.Blocks);
+        var block = Assert.Single(snapshot.Blocks);
+        Assert.Equal("Main", block.Name);
+        Assert.Equal(1, block.Number);
+        Assert.Equal("LAD", block.ProgrammingLanguage);
+        Assert.False(block.Modified);
         Assert.Contains(snapshot.Diagnostics, message =>
             message.Contains("Blocks/Main [OB1].xml", StringComparison.Ordinal)
             && message.Contains("supported Siemens PLC block", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ReadReportsAmbiguousMatchingOverlayAndRetainsUnmodifiedBaselineMetadata()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest(
+            Component("ob", "Main", "OB", "Blocks/Main [OB1].xml", 1, "LAD", "Main"));
+        fixture.WriteOverlay(
+            "Blocks/Main [OB1].xml",
+            """
+            <Document>
+              <SW.Blocks.OB><AttributeList><Name>One</Name></AttributeList></SW.Blocks.OB>
+              <SW.Blocks.FC><AttributeList><Name>Two</Name></AttributeList></SW.Blocks.FC>
+            </Document>
+            """);
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        var block = Assert.Single(snapshot.Blocks);
+        Assert.Equal("Main", block.Name);
+        Assert.False(block.Modified);
+        Assert.Contains(snapshot.Diagnostics, message =>
+            message.Contains("Blocks/Main [OB1].xml", StringComparison.Ordinal)
+            && message.Contains("exactly one direct", StringComparison.Ordinal));
     }
 
     [Fact]
