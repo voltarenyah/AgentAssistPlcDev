@@ -1408,6 +1408,32 @@ public sealed class ProgramBlockLogicTests
         Assert.Contains("IF Enable THEN Shifted := SHR(in := Value, n := 2); END_IF;", statements);
     }
 
+    [Fact]
+    public void ChainsUnknownInstructionOutputPinIntoDownstreamLogic()
+    {
+        var result = TranslateLadBlock(
+            "ChainLogic",
+            "cu-foo-chain",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v5">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-start"><Symbol><Component Name="Start" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-run"><Symbol><Component Name="Run" /></Symbol></Access>
+                <Part Name="FOO" UId="p-foo" />
+                <Part Name="Coil" UId="p-coil" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-foo-in"><IdentCon UId="a-start" /><NameCon UId="p-foo" Name="in" /></Wire>
+                <Wire UId="w-foo-out"><NameCon UId="p-foo" Name="RESULT" /><NameCon UId="p-coil" Name="in" /></Wire>
+                <Wire UId="w-coil-op"><IdentCon UId="a-run" /><NameCon UId="p-coil" Name="operand" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var statements = StatementsOf(result);
+        Assert.Contains("Run := FOO(in := Start);", statements);
+    }
+
     private static IReadOnlyDictionary<string, string> Translate(string xml, ProgramBlockComponent component)
     {
         return ProgramBlockLogicYamlWriter.GetNetworkStatementTextByCompileUnitId(xml, component);

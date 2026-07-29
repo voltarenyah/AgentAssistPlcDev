@@ -496,6 +496,7 @@ public static class ProgramBlockLogicYamlWriter
         private readonly Dictionary<PartPin, string> _pinAccesses;
         private readonly Dictionary<PartPin, string> _powerInputs;
         private readonly IReadOnlyList<DirectAssignment> _directAssignments;
+        private readonly HashSet<PartPin> _sourcePins;
         private readonly Dictionary<PartPin, string> _expressionCache = new();
         private readonly HashSet<PartPin> _visiting = new();
 
@@ -506,7 +507,8 @@ public static class ProgramBlockLogicYamlWriter
             Dictionary<PartPin, PartPin> inputSources,
             Dictionary<PartPin, string> pinAccesses,
             Dictionary<PartPin, string> powerInputs,
-            IReadOnlyList<DirectAssignment> directAssignments)
+            IReadOnlyList<DirectAssignment> directAssignments,
+            HashSet<PartPin> sourcePins)
         {
             Parts = parts;
             Accesses = accesses;
@@ -515,6 +517,7 @@ public static class ProgramBlockLogicYamlWriter
             _pinAccesses = pinAccesses;
             _powerInputs = powerInputs;
             _directAssignments = directAssignments;
+            _sourcePins = sourcePins;
         }
 
         public IReadOnlyDictionary<string, PartNode> Parts { get; }
@@ -572,6 +575,7 @@ public static class ProgramBlockLogicYamlWriter
             var pinAccesses = new Dictionary<PartPin, string>();
             var powerInputs = new Dictionary<PartPin, string>();
             var directAssignments = new List<DirectAssignment>();
+            var sourcePins = new HashSet<PartPin>();
 
             foreach (var item in flgNet.Descendants().Where(element => element.Name.LocalName == "Wire").Select((wire, index) => new { Wire = wire, Order = index }))
             {
@@ -609,26 +613,45 @@ public static class ProgramBlockLogicYamlWriter
                     }
                 }
 
-                var sourcePins = nameCons.Where(pin => IsOutputPin(pin.PinName)).ToArray();
-                var targetPins = nameCons.Where(pin => IsInputPin(pin.PinName)).ToArray();
+                var wireSourcePins = nameCons.Where(pin => GetPinRole(pin.PinName) == PinRole.Output).ToArray();
+                if (wireSourcePins.Length == 0)
+                {
+                    // No known output pin: when exactly one pin has an unknown role and the wire
+                    // also has a known input, the unknown pin is the source. This is how outputs
+                    // of instructions with unlisted pin names (e.g. RESULT) chain downstream.
+                    var unknownPins = nameCons.Where(pin => GetPinRole(pin.PinName) == PinRole.Unknown).ToArray();
+                    if (unknownPins.Length == 1 && nameCons.Any(pin => GetPinRole(pin.PinName) == PinRole.Input))
+                    {
+                        wireSourcePins = unknownPins;
+                    }
+                }
+
+                var targetPins = nameCons
+                    .Where(pin => GetPinRole(pin.PinName) != PinRole.Output && !wireSourcePins.Contains(pin))
+                    .ToArray();
                 foreach (var target in targetPins)
                 {
-                    foreach (var source in sourcePins)
+                    foreach (var source in wireSourcePins)
                     {
                         inputSources[target] = source;
                     }
                 }
 
+                foreach (var source in wireSourcePins)
+                {
+                    sourcePins.Add(source);
+                }
+
                 if (accessValues.Length == 1)
                 {
-                    foreach (var source in sourcePins)
+                    foreach (var source in wireSourcePins)
                     {
                         directAssignments.Add(new DirectAssignment(source, accessValues[0], item.Order));
                     }
                 }
             }
 
-            return new FlgNetContext(parts, accesses, calls, inputSources, pinAccesses, powerInputs, directAssignments);
+            return new FlgNetContext(parts, accesses, calls, inputSources, pinAccesses, powerInputs, directAssignments, sourcePins);
         }
 
         public string GetPinAccess(string partUid, string pinName)
@@ -1276,6 +1299,78 @@ public static class ProgramBlockLogicYamlWriter
             return $"{part.Name}({string.Join(", ", bindings)})";
         }
 
+        private enum PinRole
+        {
+            Input,
+            Output,
+            Unknown
+        }
+
+        private static PinRole GetPinRole(string pinName)
+        {
+            if (IsOutputPin(pinName))
+            {
+                return PinRole.Output;
+            }
+
+            return IsExplicitInputPin(pinName) ? PinRole.Input : PinRole.Unknown;
+        }
+
+        // Same names as IsInputPin but without its default-true fallthrough, so pins of
+        // unlisted instructions land on PinRole.Unknown instead of being forced to input.
+        private static bool IsExplicitInputPin(string pinName)
+        {
+            if (pinName.StartsWith("in", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (pinName.StartsWith("SD_", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(pinName.Substring(3), out _))
+            {
+                return true;
+            }
+
+            return MatchesAny(
+                pinName,
+                "pre",
+                "en",
+                "SIG",
+                "TIMESTAMP",
+                "s",
+                "s1",
+                "r",
+                "r1",
+                "PT",
+                "min",
+                "max",
+                "mn",
+                "mx",
+                "operand",
+                "bit",
+                "IN",
+                "CLK",
+                "CU",
+                "CD",
+                "R",
+                "LD",
+                "PV",
+                "RESET",
+                "REQ",
+                "MODE",
+                "LOCALE",
+                "MEM",
+                "OB",
+                "VALUE",
+                "L",
+                "M",
+                "H",
+                "IN_OUT",
+                "N",
+                "P",
+                "K");
+        }
+
         private static bool IsInputPin(string pinName)
         {
             if (pinName.StartsWith("in", StringComparison.OrdinalIgnoreCase))
@@ -1373,7 +1468,9 @@ public static class ProgramBlockLogicYamlWriter
             return _inputSources.Keys
                 .Concat(_pinAccesses.Keys)
                 .Concat(_powerInputs.Keys)
-                .Where(pin => string.Equals(pin.PartUid, partUid, StringComparison.OrdinalIgnoreCase) && IsInputPin(pin.PinName))
+                .Where(pin => string.Equals(pin.PartUid, partUid, StringComparison.OrdinalIgnoreCase) &&
+                    (GetPinRole(pin.PinName) == PinRole.Input ||
+                        (GetPinRole(pin.PinName) == PinRole.Unknown && !_sourcePins.Contains(pin))))
                 .Select(pin => pin.PinName)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(GetPinSortKey)
