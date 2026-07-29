@@ -14,8 +14,23 @@ const functionBody = (name: string, nextName: string) => {
 describe('MainStudio offline snapshot contract', () => {
   it('does not request live blocks while selecting a device', () => {
     const body = functionBody('selectDevice', 'createWorkbench')
-    expect(body).toContain('api.getSelectedDeviceInfo()')
+    expect(body).toContain('api.getDeviceInfo(workbench.workbenchId, worktree.worktreeId, deviceId)')
     expect(body).not.toContain('api.getBlocks')
+    expect(body).not.toContain('api.selectDevice')
+    expect(body).not.toContain('api.getVcStatus')
+  })
+
+  it('passes explicit workbench, worktree, and device identity to every device workflow', () => {
+    expect(source).not.toContain('api.getSelectedDeviceInfo(')
+    expect(source).not.toContain('api.stageDeviceRefresh(selection.deviceId')
+    expect(source).not.toContain('api.previewDeviceRefresh(selection.deviceId')
+    expect(source).not.toContain('api.applyDeviceRefresh(selection.deviceId')
+    expect(source).not.toContain('api.updateDeviceKnowledge(selection.deviceId')
+    expect(source).not.toContain('api.rebuildDeviceKnowledge(selection.deviceId')
+    expect(source).not.toContain('api.prepareDeviceEdit(selection.deviceId')
+    expect(source).not.toContain('api.importDeviceSource(selection.deviceId')
+    expect(source).not.toContain('api.listDeviceSessions(deviceId)')
+    expect(source).not.toContain('api.mergeWorktree(activeWorktree.worktreeId')
   })
 
   it.each([
@@ -24,6 +39,6 @@ describe('MainStudio offline snapshot contract', () => {
     ['prepareEdit', 'importSource'],
     ['importSource', 'mergeIntoMaster'],
   ])('reloads the persisted snapshot after %s', (name, nextName) => {
-    expect(functionBody(name, nextName)).toContain('await reloadDeviceSnapshot()')
+    expect(functionBody(name, nextName)).toContain('await reloadDeviceSnapshot(context)')
   })
 })

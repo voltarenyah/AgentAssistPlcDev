@@ -128,9 +128,10 @@ public sealed class WorkbenchApiState
     }
     public void Select(string wb, string? wt = null, string? device = null) => Selection = new(wb, wt, device);
     public void Remember(ReconciliationPreview preview) => previews[preview.PreviewId] = preview;
-    public ReconciliationPreview Take(string id, string deviceId)
+    public ReconciliationPreview Take(string id, string deviceId, string? worktreeId = null)
     {
         if (!previews.TryGetValue(id, out var preview) || preview.DeviceId != deviceId
+            || (worktreeId is not null && preview.WorktreeId != worktreeId)
             || !previews.TryRemove(new KeyValuePair<string, ReconciliationPreview>(id, preview)))
             throw new KeyNotFoundException("RECONCILIATION_PREVIEW_UNKNOWN");
         return preview;
@@ -216,6 +217,124 @@ public static class WorkbenchEndpoints
                     return new { opened = true };
                 },
                 "TIA project opened.").ConfigureAwait(false));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}", (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
+        {
+            var selected = s.Device(workbenchId, worktreeId, device);
+            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata));
+        });
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/blocks", (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
+        {
+            var selected = s.Device(workbenchId, worktreeId, device);
+            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata).Blocks);
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/refresh/stage", async (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "stage-refresh", "Preparing export staging area...",
+                progress => c.StageRefreshAsync(s.Device(workbenchId, worktreeId, device).Context, ct, progress),
+                "Refresh staged.").ConfigureAwait(false));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/refresh/preview", (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s, WorkbenchCoordinator c) =>
+        {
+            var preview = c.PreviewRefresh(s.Device(workbenchId, worktreeId, device).Context);
+            s.Remember(preview);
+            return preview;
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/refresh/apply", async (
+            string workbenchId, string worktreeId, string device, RefreshApplyApiRequest r,
+            WorkbenchApiState s, WorkbenchCoordinator c, DeviceReconciler reconciler,
+            OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
+        {
+            var selected = s.Device(workbenchId, worktreeId, device);
+            var preview = s.Take(r.PreviewId, device, worktreeId);
+            var legacyRemovals = reconciler.ValidateLegacyRemovalApprovals(
+                selected.Context, preview, r.ApprovedRemovalPaths ?? []);
+            var approved = new HashSet<string>(
+                r.ApprovedPaths ?? preview.Entries
+                    .Where(entry => entry.Kind is ReconciliationChangeKind.Added or ReconciliationChangeKind.Changed)
+                    .Select(entry => entry.RelativePath),
+                StringComparer.Ordinal);
+            approved.UnionWith(legacyRemovals);
+            return await RunOperationAsync(http, operations, "apply-refresh", "Applying approved refresh...",
+                progress => c.ApplyRefreshAsync(selected.Context, new(preview, approved), ct, progress),
+                "Refresh applied.").ConfigureAwait(false);
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/update", async (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "update-knowledge", "Updating device knowledge...",
+                progress => c.UpdateKnowledgeAsync(s.Device(workbenchId, worktreeId, device).Context, ct, progress),
+                "Knowledge updated.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/rebuild", async (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "rebuild-knowledge", "Rebuilding device knowledge...",
+                progress => c.RebuildKnowledgeAsync(s.Device(workbenchId, worktreeId, device).Context, ct, progress),
+                "Knowledge rebuilt.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/prepare-edit", (
+            string workbenchId, string worktreeId, string device, SourcePathApiRequest r,
+            WorkbenchApiState s, DeviceSourceResolver resolver) =>
+            resolver.PrepareEditable(s.Device(workbenchId, worktreeId, device).Context, r.RelativePath));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/import", async (
+            string workbenchId, string worktreeId, string device, SourcePathApiRequest r,
+            WorkbenchApiState s, WorkbenchCoordinator c, OperationStatusRegistry operations,
+            HttpContext http, CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "import-source", "Importing modified source...",
+                progress => c.ImportModifiedAsync(
+                    s.Device(workbenchId, worktreeId, device).Context, r.RelativePath, ct, progress),
+                "Source imported.").ConfigureAwait(false));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions", (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s) =>
+            SessionManager.ListSessions(s.Device(workbenchId, worktreeId, device).Context));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions", (
+            string workbenchId, string worktreeId, string device, SessionCreateApiRequest r, WorkbenchApiState s) =>
+            SessionManager.CreateNewSession(
+                s.Device(workbenchId, worktreeId, device).Context, r.Settings, r.RuntimeContext));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
+            string workbenchId, string worktreeId, string device, string session, WorkbenchApiState s) =>
+            SessionManager.LoadSession(s.Device(workbenchId, worktreeId, device).Context, session) is { } value
+                ? Results.Ok(value) : Results.NotFound());
+        app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
+            string workbenchId, string worktreeId, string device, string session,
+            SessionSaveApiRequest r, WorkbenchApiState s) =>
+        {
+            if (r.Session.Header.SessionId != session) return Results.BadRequest();
+            SessionManager.SaveSession(s.Device(workbenchId, worktreeId, device).Context, r.Session);
+            return Results.NoContent();
+        });
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/status", async (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_status").CallAsync<System.Text.Json.JsonElement>(
+                "vc_status", new { repoPath = s.Device(workbenchId, worktreeId, device).Context.WorktreeRoot }, ct));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/log", async (
+            string workbenchId, string worktreeId, string device, int? maxCount, WorkbenchApiState s,
+            ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_log").CallAsync<System.Text.Json.JsonElement>(
+                "vc_log", new { repoPath = s.Device(workbenchId, worktreeId, device).Context.WorktreeRoot, maxCount }, ct));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/diff", async (
+            string workbenchId, string worktreeId, string device, string filePath, WorkbenchApiState s,
+            ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_diff").CallAsync<System.Text.Json.JsonElement>(
+                "vc_diff", new { repoPath = s.Device(workbenchId, worktreeId, device).Context.WorktreeRoot, filePath }, ct));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/add", async (
+            string workbenchId, string worktreeId, string device, CompatibilityPathRequest body,
+            WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_add").CallAsync<System.Text.Json.JsonElement>(
+                "vc_add", new { repoPath = s.Device(workbenchId, worktreeId, device).Context.WorktreeRoot, paths = body.Paths ?? [] }, ct));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/commit", async (
+            string workbenchId, string worktreeId, string device, CompatibilityPathRequest body,
+            WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_commit").CallAsync<System.Text.Json.JsonElement>(
+                "vc_commit", new { repoPath = s.Device(workbenchId, worktreeId, device).Context.WorktreeRoot, message = body.Message }, ct));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/restore", async (
+            string workbenchId, string worktreeId, string device, CompatibilityPathRequest body,
+            WorkbenchApiState s, SandboxedToolExecutor executor, CancellationToken ct) =>
+            await executor.RequestAsync("vc_restore",
+                new Dictionary<string, object?> { ["filePath"] = body.FilePath },
+                s.Device(workbenchId, worktreeId, device).Context, "api", ct));
         app.MapPost("/api/devices/{device}/refresh/stage", async (
             string device,
             WorkbenchApiState s,
@@ -248,7 +367,9 @@ public static class WorkbenchEndpoints
                 preview,
                 r.ApprovedRemovalPaths ?? []);
             var approved = new HashSet<string>(
-                r.ApprovedPaths ?? [],
+                r.ApprovedPaths ?? preview.Entries
+                    .Where(entry => entry.Kind is ReconciliationChangeKind.Added or ReconciliationChangeKind.Changed)
+                    .Select(entry => entry.RelativePath),
                 StringComparer.Ordinal);
             approved.UnionWith(legacyRemovals);
             return await RunOperationAsync(
@@ -323,6 +444,26 @@ public static class WorkbenchEndpoints
                 "merge-worktree",
                 "Merging worktree...",
                 progress => c.MergeWorktreeAsync(workbenchId, source, r.TargetWorktreeId, progress: progress),
+                "Worktree merged.").ConfigureAwait(false);
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{source}/merge", async (
+            string workbenchId,
+            string source,
+            MergeWorktreeApiRequest r,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http) =>
+        {
+            s.Worktree(workbenchId, source);
+            s.Worktree(workbenchId, r.TargetWorktreeId);
+            return await RunOperationAsync(
+                http,
+                operations,
+                "merge-worktree",
+                "Merging worktree...",
+                progress => c.MergeWorktreeAsync(
+                    workbenchId, source, r.TargetWorktreeId, progress: progress),
                 "Worktree merged.").ConfigureAwait(false);
         });
         app.MapGet("/api/devices/{device}/sessions", (string device, WorkbenchApiState s) => SessionManager.ListSessions(s.Device(device).Context));

@@ -191,7 +191,6 @@ export default function MainStudio() {
       setSessions(loadedSessions)
       if (loadedWorkbenches.length > 0) {
         const first = loadedWorkbenches[0]
-        await api.selectWorkbench(first.workbenchId)
         setSelection({ workbenchId: first.workbenchId, worktreeId: null, deviceId: null })
       }
     } catch (error) {
@@ -254,11 +253,24 @@ export default function MainStudio() {
     if (id) void api.dismissOperationStatus(id).catch(() => undefined)
   }, [activeOperation?.id])
 
-  const reloadDeviceSnapshot = useCallback(async () => {
+  const reloadDeviceSnapshot = useCallback(async (context: {
+    workbenchId: string
+    worktreeId: string
+    deviceId: string
+  }) => {
     try {
-      const snapshot = await api.getSelectedDeviceInfo()
+      const snapshot = await api.getDeviceInfo(context.workbenchId, context.worktreeId, context.deviceId)
+      if (snapshot.workbenchId !== context.workbenchId
+        || snapshot.worktreeId !== context.worktreeId
+        || snapshot.deviceId !== context.deviceId) {
+        throw new Error('Device snapshot identity does not match the requested context')
+      }
       setDeviceSelection(previous => {
-        if (!previous || previous.deviceId !== snapshot.deviceId) return previous
+        const current = previous?.view?.snapshot
+        if (!previous || !current
+          || current.workbenchId !== context.workbenchId
+          || current.worktreeId !== context.worktreeId
+          || current.deviceId !== context.deviceId) return previous
         return { ...previous, view: applyDeviceSnapshot(previous.view, snapshot) }
       })
       return snapshot
@@ -273,7 +285,6 @@ export default function MainStudio() {
 
   const selectWorkbench = async (workbench: api.Workbench) => {
     try {
-      await api.selectWorkbench(workbench.workbenchId)
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
       setDeviceSelection(null)
     } catch (error) {
@@ -284,7 +295,6 @@ export default function MainStudio() {
   const selectWorktree = async (workbench: api.Workbench, worktree: api.WorkbenchRegistration) => {
     setOperation('select-worktree')
     try {
-      await api.selectWorktree(workbench.workbenchId, worktree.worktreeId)
       const devices = await api.listDevices(workbench.workbenchId, worktree.worktreeId)
       setDevicesByWorktree(previous => ({
         ...previous,
@@ -311,16 +321,15 @@ export default function MainStudio() {
     setDeviceSelection(previous => beginDeviceSelection(previous, deviceId, requestId))
     setOperation('select-device')
     try {
-      await api.selectDevice(workbench.workbenchId, worktree.worktreeId, deviceId)
-      if (selectionRequestId.current !== requestId) return
-      const [snapshot, , savedSessions] = await Promise.all([
-        api.getSelectedDeviceInfo(),
-        api.getVcStatus().catch(() => ({ repoPath: '', branch: worktree.branch, entries: [] } as api.VcStatusResult)),
-        api.listDeviceSessions(deviceId).catch(() => []),
+      const [snapshot, savedSessions] = await Promise.all([
+        api.getDeviceInfo(workbench.workbenchId, worktree.worktreeId, deviceId),
+        api.listDeviceSessions(workbench.workbenchId, worktree.worktreeId, deviceId).catch(() => []),
       ])
       if (selectionRequestId.current !== requestId) return
-      if (snapshot.deviceId !== deviceId) {
-        throw new Error(`Selected-device snapshot mismatch: expected ${deviceId}, received ${snapshot.deviceId}`)
+      if (snapshot.workbenchId !== workbench.workbenchId
+        || snapshot.worktreeId !== worktree.worktreeId
+        || snapshot.deviceId !== deviceId) {
+        throw new Error('Device snapshot identity does not match the requested context')
       }
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
       setDeviceSelection(previous => previous
@@ -389,12 +398,13 @@ export default function MainStudio() {
   }
 
   const stageRefresh = async () => {
-    if (!selection.deviceId) return
+    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
+    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
     setOperation('stage-refresh')
     const op = beginOperation('stage-refresh', 'Exporting live PLC to temporary comparison staging...')
     try {
-      await api.stageDeviceRefresh(selection.deviceId, op.id)
-      setPreview(await api.previewDeviceRefresh(selection.deviceId))
+      await api.stageDeviceRefresh(context.workbenchId, context.worktreeId, context.deviceId, op.id)
+      setPreview(await api.previewDeviceRefresh(context.workbenchId, context.worktreeId, context.deviceId))
       toast.success('Comparison ready; no tracked files changed.')
     } catch (error) {
       toast.error(displayError(error))
@@ -423,13 +433,14 @@ export default function MainStudio() {
   }
 
   const applyRefresh = async (approvedPaths: string[]) => {
-    if (!selection.deviceId || !preview) return
+    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !preview) return
+    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
     setOperation('apply-refresh')
     const op = beginOperation('apply-refresh', 'Applying approved refresh...')
     try {
-      const result = await api.applyDeviceRefresh(selection.deviceId, preview.previewId, approvedPaths, op.id)
+      const result = await api.applyDeviceRefresh(context.workbenchId, context.worktreeId, context.deviceId, preview.previewId, approvedPaths, op.id)
       setPreview(null)
-      await reloadDeviceSnapshot()
+      await reloadDeviceSnapshot(context)
       if (result.error) {
         toast.warning(`Files updated, commit failed: ${result.error}`)
       } else if (result.commitSha) {
@@ -451,7 +462,8 @@ export default function MainStudio() {
   }
 
   const updateKnowledge = async (rebuild = false) => {
-    if (!selection.deviceId) return
+    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
+    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
     setOperation(rebuild ? 'rebuild-knowledge' : 'update-knowledge')
     const op = beginOperation(
       rebuild ? 'rebuild-knowledge' : 'update-knowledge',
@@ -459,9 +471,9 @@ export default function MainStudio() {
     )
     try {
       const result = rebuild
-        ? await api.rebuildDeviceKnowledge(selection.deviceId, op.id)
-        : await api.updateDeviceKnowledge(selection.deviceId, op.id)
-      await reloadDeviceSnapshot()
+        ? await api.rebuildDeviceKnowledge(context.workbenchId, context.worktreeId, context.deviceId, op.id)
+        : await api.updateDeviceKnowledge(context.workbenchId, context.worktreeId, context.deviceId, op.id)
+      await reloadDeviceSnapshot(context)
       toast.success(`${result.updatedComponents.length} component${result.updatedComponents.length === 1 ? '' : 's'} updated`)
     } catch (error) {
       toast.error(displayError(error))
@@ -471,11 +483,12 @@ export default function MainStudio() {
   }
 
   const prepareEdit = async () => {
-    if (!selection.deviceId || !relativePath.trim()) return
+    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !relativePath.trim()) return
+    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
     setOperation('prepare-edit')
     try {
-      await api.prepareDeviceEdit(selection.deviceId, relativePath.trim())
-      await reloadDeviceSnapshot()
+      await api.prepareDeviceEdit(context.workbenchId, context.worktreeId, context.deviceId, relativePath.trim())
+      await reloadDeviceSnapshot(context)
       toast.success('Sparse overlay prepared. Edit the modified-source copy.')
     } catch (error) {
       toast.error(displayError(error))
@@ -485,13 +498,14 @@ export default function MainStudio() {
   }
 
   const importSource = async () => {
-    if (!selection.deviceId || !relativePath.trim()) return
+    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !relativePath.trim()) return
+    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
     setOperation('import-source')
     const op = beginOperation('import-source', 'Importing modified source...')
     try {
-      const result = await api.importDeviceSource(selection.deviceId, relativePath.trim(), op.id)
+      const result = await api.importDeviceSource(context.workbenchId, context.worktreeId, context.deviceId, relativePath.trim(), op.id)
       setLastImport(result)
-      await reloadDeviceSnapshot()
+      await reloadDeviceSnapshot(context)
       if (result.importSucceeded && result.compileState.toLowerCase().includes('success')) {
         toast.success('Overlay imported and compiled; modified file retained')
       } else {
@@ -511,7 +525,7 @@ export default function MainStudio() {
     setOperation('merge-worktree')
     const op = beginOperation('merge-worktree', 'Merging worktree...')
     try {
-      await api.mergeWorktree(activeWorktree.worktreeId, target.worktreeId, op.id)
+      await api.mergeWorktree(activeWorkbench.workbenchId, activeWorktree.worktreeId, target.worktreeId, op.id)
       toast.success(`${activeWorktree.branch} merged into master`)
       await reloadWorkbenches()
     } catch (error) {
@@ -840,7 +854,11 @@ export default function MainStudio() {
 
                 {activeTab === 'git' && (
                   <div className="h-full min-h-[520px]">
-                    <GitPanel projectName={`${selection.workbenchId}:${selection.worktreeId}:${selection.deviceId}`} />
+                    <GitPanel
+                      workbenchId={selection.workbenchId!}
+                      worktreeId={selection.worktreeId!}
+                      deviceId={selection.deviceId}
+                    />
                   </div>
                 )}
               </div>

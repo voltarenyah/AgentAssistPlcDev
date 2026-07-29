@@ -23,10 +23,12 @@ const stateColor: Record<string, string> = {
 }
 
 interface GitPanelProps {
-  projectName?: string
+  workbenchId: string
+  worktreeId: string
+  deviceId: string
 }
 
-export default function GitPanel({ projectName }: GitPanelProps) {
+export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanelProps) {
   const [status, setStatus] = useState<api.VcStatusResult | null>(null)
   const [log, setLog] = useState<api.VcCommitEntry[]>([])
   const [tab, setTab] = useState(0) // 0=Changes, 1=History, 2=Diff
@@ -48,8 +50,8 @@ export default function GitPanel({ projectName }: GitPanelProps) {
     setError(null)
     try {
       const [s, l] = await Promise.all([
-        api.getVcStatus(),
-        api.getVcLog(20).catch(() => ({ repoPath: '', commits: [] })),
+        api.getVcStatus(workbenchId, worktreeId, deviceId),
+        api.getVcLog(workbenchId, worktreeId, deviceId, 20).catch(() => ({ repoPath: '', commits: [] })),
       ])
       setStatus(s)
       setLog(l.commits)
@@ -62,14 +64,14 @@ export default function GitPanel({ projectName }: GitPanelProps) {
 
   useEffect(() => {
     fetchAll()
-  }, [projectName])
+  }, [workbenchId, worktreeId, deviceId])
 
   // ── Actions ───────────────────────────────────────────
 
   const handleStageAll = async () => {
     setOperating(true)
     try {
-      await api.postVcAdd()
+      await api.postVcAdd(workbenchId, worktreeId, deviceId)
       await fetchAll()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Stage failed')
@@ -81,7 +83,7 @@ export default function GitPanel({ projectName }: GitPanelProps) {
   const handleStageFile = async (filePath: string) => {
     setOperating(true)
     try {
-      await api.postVcAdd([filePath])
+      await api.postVcAdd(workbenchId, worktreeId, deviceId, [filePath])
       await fetchAll()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Stage failed')
@@ -94,7 +96,7 @@ export default function GitPanel({ projectName }: GitPanelProps) {
     if (!commitMsg.trim()) return
     setOperating(true)
     try {
-      await api.postVcCommit(commitMsg.trim())
+      await api.postVcCommit(workbenchId, worktreeId, deviceId, commitMsg.trim())
       setCommitMsg('')
       setDiff(null)
       setSelectedFile(null)
@@ -115,7 +117,7 @@ export default function GitPanel({ projectName }: GitPanelProps) {
     setOperating(true)
     setConfirmRestore(null)
     try {
-      await api.postVcRestore(confirmRestore.filePath, confirmRestore.sourceSha)
+      await api.postVcRestore(workbenchId, worktreeId, deviceId, confirmRestore.filePath, confirmRestore.sourceSha)
       setDiff(null)
       setSelectedFile(null)
       await fetchAll()
@@ -131,7 +133,7 @@ export default function GitPanel({ projectName }: GitPanelProps) {
     setTab(2)
     setDiffLoading(true)
     try {
-      const d = await api.getVcDiff(filePath)
+      const d = await api.getVcDiff(workbenchId, worktreeId, deviceId, filePath)
       setDiff(d)
     } catch {
       setDiff(null)

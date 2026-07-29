@@ -216,6 +216,70 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task LegacyRefreshPayloadAppliesAllAddedAndChangedPaths()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync($"/api/devices/{fixture.DeviceId}/refresh/stage", null))
+            .EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedRemovalPaths = Array.Empty<string>(),
+            });
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
+        Assert.Equal("<new/>", fixture.ReadBaseline("Blocks/New.xml"));
+    }
+
+    [Fact]
+    public async Task NewRefreshPayloadWithEmptyApprovedPathsAppliesNothing()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync($"/api/devices/{fixture.DeviceId}/refresh/stage", null))
+            .EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedPaths = Array.Empty<string>(),
+            });
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("<stored/>", fixture.ReadBaseline("Blocks/Main.xml"));
+        Assert.False(fixture.BaselineExists("Blocks/New.xml"));
+    }
+
+    [Fact]
     public async Task LegacyRemovalApprovalRejectsAddedOrChangedEntries()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
@@ -451,13 +515,34 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             engineeringOffline: false,
             sourceProjectPath: @"C:\Projects\Master.ap17");
         var other = fixture.AddWorktree("wt-2", "other", @"C:\Projects\Other.ap17");
-        await fixture.Client.PostAsync(other.SelectRoute, null);
+        await fixture.Client.GetAsync("/api/workbenches");
+        (await fixture.Client.PostAsync(other.SelectRoute, null)).EnsureSuccessStatusCode();
 
         var response = await fixture.Client.PostAsync($"{fixture.DeviceRoute}/tia/open", null);
 
         response.EnsureSuccessStatusCode();
         Assert.Equal(@"C:\Projects\Master.ap17",
             fixture.Engineering.Arguments["connect"].GetProperty("projectPath").GetString());
+    }
+
+    [Fact]
+    public async Task ExplicitDeviceSnapshotIgnoresSelectionFlipWithSharedDeviceId()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            sourceProjectPath: @"C:\Projects\Master.ap17");
+        var other = fixture.AddWorktree("wt-2", "other", @"C:\Projects\Other.ap17");
+        await fixture.Client.GetAsync("/api/workbenches");
+        (await fixture.Client.PostAsync(other.SelectRoute, null)).EnsureSuccessStatusCode();
+
+        var master = await fixture.Client.GetFromJsonAsync<JsonElement>(fixture.DeviceRoute);
+        var selectedOther = await fixture.Client.GetFromJsonAsync<JsonElement>(other.DeviceRoute);
+
+        Assert.Equal("wt-1", master.GetProperty("worktreeId").GetString());
+        Assert.Equal("wt-2", selectedOther.GetProperty("worktreeId").GetString());
+        Assert.Equal(fixture.DeviceId, master.GetProperty("deviceId").GetString());
+        Assert.Equal(fixture.DeviceId, selectedOther.GetProperty("deviceId").GetString());
     }
 
     [Fact]

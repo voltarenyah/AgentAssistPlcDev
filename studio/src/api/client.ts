@@ -316,7 +316,10 @@ export const listDevices = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<string[]>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices`)
 export const selectDevice = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/select`, jsonRequest('POST'))
-export const getSelectedDeviceInfo = () => workbenchRequest<DeviceSnapshot>('/project/info')
+const devicePath = (workbenchId: string, worktreeId: string, deviceId: string) =>
+  `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}`
+export const getDeviceInfo = (workbenchId: string, worktreeId: string, deviceId: string) =>
+  workbenchRequest<DeviceSnapshot>(devicePath(workbenchId, worktreeId, deviceId))
 export const openDeviceProject = (
   workbenchId: string,
   worktreeId: string,
@@ -327,27 +330,27 @@ export const openDeviceProject = (
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/tia/open`,
     withOperation(jsonRequest('POST'), operationId),
   )
-export const stageDeviceRefresh = (deviceId: string, operationId?: string) =>
-  workbenchRequest<unknown>(`/devices/${encodeURIComponent(deviceId)}/refresh/stage`, withOperation(jsonRequest('POST'), operationId))
-export const previewDeviceRefresh = (deviceId: string) =>
-  workbenchRequest<ReconciliationPreview>(`/devices/${encodeURIComponent(deviceId)}/refresh/preview`)
-export const applyDeviceRefresh = (deviceId: string, previewId: string, approvedPaths: string[], operationId?: string) =>
-  workbenchRequest<RefreshApplyResult>(`/devices/${encodeURIComponent(deviceId)}/refresh/apply`, withOperation(jsonRequest('POST', {
+export const stageDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string) =>
+  workbenchRequest<unknown>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/stage`, withOperation(jsonRequest('POST'), operationId))
+export const previewDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string) =>
+  workbenchRequest<ReconciliationPreview>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/preview`)
+export const applyDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string, previewId: string, approvedPaths: string[], operationId?: string) =>
+  workbenchRequest<RefreshApplyResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/apply`, withOperation(jsonRequest('POST', {
     previewId,
     approvedPaths,
   }), operationId))
-export const updateDeviceKnowledge = (deviceId: string, operationId?: string) =>
-  workbenchRequest<KnowledgeUpdateResult>(`/devices/${encodeURIComponent(deviceId)}/knowledge/update`, withOperation(jsonRequest('POST'), operationId))
-export const rebuildDeviceKnowledge = (deviceId: string, operationId?: string) =>
-  workbenchRequest<KnowledgeUpdateResult>(`/devices/${encodeURIComponent(deviceId)}/knowledge/rebuild`, withOperation(jsonRequest('POST'), operationId))
-export const prepareDeviceEdit = (deviceId: string, relativePath: string) =>
-  workbenchRequest<string>(`/devices/${encodeURIComponent(deviceId)}/source/prepare-edit`, jsonRequest('POST', { relativePath }))
-export const importDeviceSource = (deviceId: string, relativePath: string, operationId?: string) =>
-  workbenchRequest<ImportModifiedResult>(`/devices/${encodeURIComponent(deviceId)}/source/import`, withOperation(jsonRequest('POST', { relativePath }), operationId))
-export const mergeWorktree = (sourceWorktreeId: string, targetWorktreeId: string, operationId?: string) =>
-  workbenchRequest<unknown>(`/worktrees/${encodeURIComponent(sourceWorktreeId)}/merge`, withOperation(jsonRequest('POST', { targetWorktreeId }), operationId))
-export const listDeviceSessions = (deviceId: string) =>
-  workbenchRequest<ChatSessionInfo[]>(`/devices/${encodeURIComponent(deviceId)}/sessions`)
+export const updateDeviceKnowledge = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string) =>
+  workbenchRequest<KnowledgeUpdateResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/knowledge/update`, withOperation(jsonRequest('POST'), operationId))
+export const rebuildDeviceKnowledge = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string) =>
+  workbenchRequest<KnowledgeUpdateResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/knowledge/rebuild`, withOperation(jsonRequest('POST'), operationId))
+export const prepareDeviceEdit = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string) =>
+  workbenchRequest<string>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/prepare-edit`, jsonRequest('POST', { relativePath }))
+export const importDeviceSource = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string, operationId?: string) =>
+  workbenchRequest<ImportModifiedResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/import`, withOperation(jsonRequest('POST', { relativePath }), operationId))
+export const mergeWorktree = (workbenchId: string, sourceWorktreeId: string, targetWorktreeId: string, operationId?: string) =>
+  workbenchRequest<unknown>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(sourceWorktreeId)}/merge`, withOperation(jsonRequest('POST', { targetWorktreeId }), operationId))
+export const listDeviceSessions = (workbenchId: string, worktreeId: string, deviceId: string) =>
+  workbenchRequest<ChatSessionInfo[]>(`${devicePath(workbenchId, worktreeId, deviceId)}/sessions`)
 export const getOperationStatus = (operationId: string) =>
   workbenchRequest<OperationStatus>(`/operations/${encodeURIComponent(operationId)}`)
 export const dismissOperationStatus = (operationId: string) =>
@@ -773,34 +776,34 @@ export async function callTool(
 
 /* ── Version control API ────────────────────────────── */
 
-export async function getVcStatus(): Promise<VcStatusResult> {
-  return workbenchRequest<VcStatusResult>('/vc/status')
+export async function getVcStatus(workbenchId: string, worktreeId: string, deviceId: string): Promise<VcStatusResult> {
+  return workbenchRequest<VcStatusResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/vc/status`)
 }
 
-export async function getVcLog(maxCount?: number, filePath?: string): Promise<VcLogResult> {
+export async function getVcLog(workbenchId: string, worktreeId: string, deviceId: string, maxCount?: number, filePath?: string): Promise<VcLogResult> {
   const params = new URLSearchParams()
   if (maxCount) params.set('maxCount', String(maxCount))
   if (filePath) params.set('filePath', filePath)
-  return workbenchRequest<VcLogResult>(`/vc/log?${params}`)
+  return workbenchRequest<VcLogResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/vc/log?${params}`)
 }
 
-export async function getVcDiff(filePath: string, oldSha?: string, newSha?: string): Promise<VcDiffResult> {
+export async function getVcDiff(workbenchId: string, worktreeId: string, deviceId: string, filePath: string, oldSha?: string, newSha?: string): Promise<VcDiffResult> {
   const params = new URLSearchParams({ filePath })
   if (oldSha) params.set('oldSha', oldSha)
   if (newSha) params.set('newSha', newSha)
-  return workbenchRequest<VcDiffResult>(`/vc/diff?${params}`)
+  return workbenchRequest<VcDiffResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/vc/diff?${params}`)
 }
 
-export async function postVcAdd(paths?: string[]): Promise<{ files: string[] }> {
-  return workbenchRequest<{ files: string[] }>('/vc/add', jsonRequest('POST', { paths }))
+export async function postVcAdd(workbenchId: string, worktreeId: string, deviceId: string, paths?: string[]): Promise<{ files: string[] }> {
+  return workbenchRequest<{ files: string[] }>(`${devicePath(workbenchId, worktreeId, deviceId)}/vc/add`, jsonRequest('POST', { paths }))
 }
 
-export async function postVcCommit(message: string): Promise<{ sha: string; message: string; files: string[] }> {
-  return workbenchRequest<{ sha: string; message: string; files: string[] }>('/vc/commit', jsonRequest('POST', { message }))
+export async function postVcCommit(workbenchId: string, worktreeId: string, deviceId: string, message: string): Promise<{ sha: string; message: string; files: string[] }> {
+  return workbenchRequest<{ sha: string; message: string; files: string[] }>(`${devicePath(workbenchId, worktreeId, deviceId)}/vc/commit`, jsonRequest('POST', { message }))
 }
 
-export async function postVcRestore(filePath?: string, sourceSha?: string): Promise<{ files?: string[] }> {
-  return workbenchRequest<{ files?: string[] }>('/vc/restore', jsonRequest('POST', { filePath, sourceSha }))
+export async function postVcRestore(workbenchId: string, worktreeId: string, deviceId: string, filePath?: string, sourceSha?: string): Promise<{ files?: string[] }> {
+  return workbenchRequest<{ files?: string[] }>(`${devicePath(workbenchId, worktreeId, deviceId)}/vc/restore`, jsonRequest('POST', { filePath, sourceSha }))
 }
 
 export async function getVcBranches(): Promise<{ branches: VcBranchInfo[] }> {
