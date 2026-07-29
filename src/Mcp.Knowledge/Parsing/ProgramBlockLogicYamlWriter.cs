@@ -770,7 +770,9 @@ public static class ProgramBlockLogicYamlWriter
         public IReadOnlyList<string> BuildPartCallStatements(List<string> notes)
         {
             var statements = new List<string>();
-            foreach (var part in Parts.Values.Where(part => IsInstanceCallPart(part.Name)).OrderBy(part => part.Order))
+            foreach (var part in Parts.Values
+                .Where(part => IsInstanceCallPart(part.Name) || !string.IsNullOrWhiteSpace(part.InstanceName))
+                .OrderBy(part => part.Order))
             {
                 if (string.IsNullOrWhiteSpace(part.InstanceName))
                 {
@@ -787,6 +789,11 @@ public static class ProgramBlockLogicYamlWriter
                         notes.Add($"Skipped {part.Name} call {part.InstanceName} because no input pins could be resolved.");
                         continue;
                     }
+                }
+
+                if (!IsInstanceCallPart(part.Name))
+                {
+                    notes.Add($"Rendered '{part.Name}' generically; pin semantics not verified.");
                 }
 
                 statements.Add($"{part.InstanceName}({string.Join(", ", bindings)});");
@@ -1150,7 +1157,7 @@ public static class ProgramBlockLogicYamlWriter
                 return $"{edge}({input}, {bit})";
             }
 
-            if (IsInstanceCallPart(part.Name))
+            if (IsInstanceCallPart(part.Name) || !string.IsNullOrWhiteSpace(part.InstanceName))
             {
                 if (string.IsNullOrWhiteSpace(part.InstanceName))
                 {
@@ -1158,8 +1165,13 @@ public static class ProgramBlockLogicYamlWriter
                     return string.Empty;
                 }
 
-                if (IsOutputPin(pinName))
+                if (IsOutputPin(pinName) || _sourcePins.Contains(new PartPin(part.Uid, pinName)))
                 {
+                    if (!IsInstanceCallPart(part.Name))
+                    {
+                        notes.Add($"Rendered '{part.Name}' generically; pin semantics not verified.");
+                    }
+
                     return $"{part.InstanceName}.{NormalizeOutputPinName(pinName)}";
                 }
 

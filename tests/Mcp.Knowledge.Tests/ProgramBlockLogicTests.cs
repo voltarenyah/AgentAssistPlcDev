@@ -1434,6 +1434,41 @@ public sealed class ProgramBlockLogicTests
         Assert.Contains("Run := FOO(in := Start);", statements);
     }
 
+    [Fact]
+    public void RendersUnknownInstanceFunctionBlockAsInstanceCall()
+    {
+        var result = TranslateLadBlock(
+            "CounterLogic",
+            "cu-ctd",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v5">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-start"><Symbol><Component Name="Start" /></Symbol></Access>
+                <Access Scope="LiteralConstant" UId="a-five"><Constant><ConstantValue>5</ConstantValue></Constant></Access>
+                <Access Scope="LocalVariable" UId="a-motor"><Symbol><Component Name="Motor" /></Symbol></Access>
+                <Part Name="Contact" UId="p-start" />
+                <Part Name="CTD" Version="1.0" UId="p-ctd">
+                  <Instance Scope="GlobalVariable"><Component Name="IEC_CTD" /></Instance>
+                </Part>
+                <Part Name="Coil" UId="p-coil" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-start-in"><Powerrail /><NameCon UId="p-start" Name="in" /></Wire>
+                <Wire UId="w-start-op"><IdentCon UId="a-start" /><NameCon UId="p-start" Name="operand" /></Wire>
+                <Wire UId="w-cd"><NameCon UId="p-start" Name="out" /><NameCon UId="p-ctd" Name="CD" /></Wire>
+                <Wire UId="w-pv"><IdentCon UId="a-five" /><NameCon UId="p-ctd" Name="PV" /></Wire>
+                <Wire UId="w-q"><NameCon UId="p-ctd" Name="Q" /><NameCon UId="p-coil" Name="in" /></Wire>
+                <Wire UId="w-motor"><IdentCon UId="a-motor" /><NameCon UId="p-coil" Name="operand" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var statements = StatementsOf(result);
+        Assert.Contains("IEC_CTD(PV := 5, CD := Start);", statements);
+        Assert.Contains("Motor := IEC_CTD.Q;", statements);
+        Assert.Contains("// Translated generically: pin semantics of one or more instructions were not verified.", statements);
+    }
+
     private static IReadOnlyDictionary<string, string> Translate(string xml, ProgramBlockComponent component)
     {
         return ProgramBlockLogicYamlWriter.GetNetworkStatementTextByCompileUnitId(xml, component);
