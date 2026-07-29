@@ -1,7 +1,10 @@
-// Ported from PlcSourceExporter (src/PlcSourceExporter.Core/ProgramBlockLogicYamlWriter.cs) — adapted for mcp-knowledge; keep changes minimal to ease future re-syncs.
+// Ported from PlcSourceExporter (src/PlcSourceExporter.Core/ProgramBlockLogicYamlWriter.cs) — mcp-knowledge is
+// now the home of this translator; the re-sync constraint is dropped and the two copies may diverge.
 // Only the FlgNet → SCL-like translator ports (GetNetworkStatementTextByCompileUnitId and everything below);
 // the YAML file generation (Write / Serialize / Quote, ProgramBlockLogicYamlResult) stays behind — mcp-knowledge
 // stores translated statements as the `logicStatements` network property, not a translate\program-blocks.yaml file.
+// Unknown instructions never hard-fail: they render generically from wire topology (see
+// BuildGenericPartExpression / GetPinRole) and the network gets a leading "// Translated generically" comment.
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
