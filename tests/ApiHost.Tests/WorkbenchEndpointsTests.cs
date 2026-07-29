@@ -57,6 +57,44 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenProjectInTiaSwitchesToVisibleProjectPathAndCompletesOperation()
+    {
+        var engineering = new RecordingToolCaller();
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<ApiMcpGateway>();
+                services.AddSingleton(new ApiMcpGateway(
+                    engineering,
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller()));
+            });
+        });
+        using var client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/connections/switch")
+        {
+            Content = JsonContent.Create(new
+            {
+                projectPath = @"C:\Projects\Line.ap17",
+                withUI = true,
+            }),
+        };
+        request.Headers.Add("X-Operation-Id", "open-tia-1");
+
+        var response = await client.SendAsync(request);
+        var operation = await client.GetFromJsonAsync<JsonElement>("/api/operations/open-tia-1");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(["connect"], engineering.Calls);
+        Assert.Equal(@"C:\Projects\Line.ap17", engineering.Arguments.Single().GetProperty("projectPath").GetString());
+        Assert.True(engineering.Arguments.Single().GetProperty("withUI").GetBoolean());
+        Assert.Equal("succeeded", operation.GetProperty("state").GetString());
+    }
+
+    [Fact]
     public void ProductionResolverUsesRepositoryDefaultsWithoutMcpConfiguration()
     {
         var configuration = new ConfigurationBuilder().Build();
@@ -477,9 +515,11 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     private sealed class RecordingToolCaller(string json = "{}") : IMcpToolCaller
     {
         public List<string> Calls { get; } = [];
+        public List<JsonElement> Arguments { get; } = [];
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
             Calls.Add(tool);
+            Arguments.Add(JsonSerializer.SerializeToElement(args));
             return Task.FromResult((T)(object)JsonDocument.Parse(json).RootElement.Clone());
         }
     }

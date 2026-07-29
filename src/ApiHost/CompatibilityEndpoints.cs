@@ -94,13 +94,47 @@ public static class CompatibilityEndpoints
             activeConnectionId = state.ActiveConnectionId,
             connections = state.Connections.Select(pair => new { connectionId = pair.Key, request = pair.Value }),
         }));
-        app.MapPost("/api/connections/switch", async (JsonElement body, ApiMcpGateway gateway, CompatibilityRuntimeState state, CancellationToken ct) =>
+        app.MapPost("/api/connections/switch", async (
+            HttpContext http,
+            JsonElement body,
+            ApiMcpGateway gateway,
+            CompatibilityRuntimeState state,
+            OperationStatusRegistry operations,
+            CancellationToken ct) =>
         {
-            var id = body.GetProperty("connectionId").GetString() ?? throw new ArgumentException("connectionId is required.");
-            if (!state.Connections.TryGetValue(id, out var request)) throw new KeyNotFoundException("CONNECTION_NOT_FOUND");
-            var result = await gateway.For("connect").CallAsync<object>("connect", request, ct);
-            state.ActiveConnectionId = id;
-            return result;
+            return await RunOperationAsync(
+                http,
+                operations,
+                "open-project-in-tia",
+                "Opening project in TIA Portal...",
+                async _ =>
+                {
+                    JsonElement request;
+                    string id;
+                    var rememberConnection = false;
+                    if (body.TryGetProperty("connectionId", out var suppliedId))
+                    {
+                        id = suppliedId.GetString() ?? throw new ArgumentException("connectionId is required.");
+                        if (!state.Connections.TryGetValue(id, out request))
+                            throw new KeyNotFoundException("CONNECTION_NOT_FOUND");
+                    }
+                    else
+                    {
+                        var projectPath = body.GetProperty("projectPath").GetString();
+                        if (string.IsNullOrWhiteSpace(projectPath))
+                            throw new ArgumentException("projectPath is required.");
+                        id = Guid.NewGuid().ToString("N");
+                        request = body.Clone();
+                        rememberConnection = true;
+                    }
+
+                    var result = await gateway.For("connect").CallAsync<object>("connect", request, ct);
+                    if (rememberConnection)
+                        state.Connections[id] = request;
+                    state.ActiveConnectionId = id;
+                    return result;
+                },
+                "Project opened in TIA Portal.");
         });
         app.MapGet("/api/tools", async (IServiceProvider services, CancellationToken ct) =>
         {
@@ -277,6 +311,39 @@ public static class CompatibilityEndpoints
             args["dbPath"] = device.KnowledgeDbPath;
         }
         if (tool.StartsWith("vc_", StringComparison.Ordinal)) args["repoPath"] = device.WorktreeRoot;
+    }
+
+    private static async Task<T> RunOperationAsync<T>(
+        HttpContext http,
+        OperationStatusRegistry operations,
+        string operationType,
+        string initialMessage,
+        Func<IOperationProgress?, Task<T>> action,
+        string successMessage)
+    {
+        var operationId = http.Request.Headers["X-Operation-Id"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(operationId))
+            operations.Start(operationId, operationType, initialMessage);
+
+        try
+        {
+            var result = await action(
+                string.IsNullOrWhiteSpace(operationId) ? null : operations.For(operationId));
+            if (!string.IsNullOrWhiteSpace(operationId))
+                operations.Succeed(operationId, successMessage);
+            return result;
+        }
+        catch (Exception exception)
+        {
+            if (!string.IsNullOrWhiteSpace(operationId))
+            {
+                var message = operations.TryGet(operationId, out var snapshot)
+                    ? snapshot.Message
+                    : initialMessage;
+                operations.Fail(operationId, message, exception.Message);
+            }
+            throw;
+        }
     }
 }
 
