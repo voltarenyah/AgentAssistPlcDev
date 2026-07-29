@@ -31,6 +31,7 @@ builder.Services.AddSingleton(_ => new TrustedWorkbenchRootRegistry(
         : null)));
 builder.Services.AddSingleton<DeviceOperationLock>();
 builder.Services.AddSingleton<DeviceReconciler>();
+builder.Services.AddSingleton<DeviceSnapshotReader>();
 builder.Services.AddSingleton<DeviceSourceResolver>(services =>
 {
     var store = services.GetRequiredService<AtomicJsonStore>();

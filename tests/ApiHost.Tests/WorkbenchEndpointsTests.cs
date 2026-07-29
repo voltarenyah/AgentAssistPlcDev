@@ -140,6 +140,63 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData(false, false, false, "missing")]
+    [InlineData(true, true, false, "stale")]
+    [InlineData(true, false, true, "stale")]
+    [InlineData(true, false, false, "current")]
+    public async Task SelectedDeviceSnapshotSerializesPersistedKnowledgeState(
+        bool databaseExists,
+        bool stale,
+        bool baselineStale,
+        string expected)
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists,
+            stale,
+            baselineStale);
+        fixture.WriteManifest();
+
+        var snapshot = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/project/info");
+
+        Assert.Equal(expected, snapshot.GetProperty("knowledge").GetProperty("state").GetString());
+        Assert.Single(snapshot.GetProperty("blocks").EnumerateArray());
+        Assert.Empty(fixture.Engineering.Calls);
+    }
+
+    [Fact]
+    public async Task SelectedDeviceSnapshotReportsMissingManifestWithoutEngineering()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+
+        var snapshot = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/project/info");
+
+        Assert.Empty(snapshot.GetProperty("blocks").EnumerateArray());
+        Assert.Contains(
+            snapshot.GetProperty("diagnostics").EnumerateArray(),
+            diagnostic => diagnostic.GetString()!.Contains("Export manifest is missing", StringComparison.Ordinal));
+        Assert.Empty(fixture.Engineering.Calls);
+    }
+
+    [Fact]
+    public async Task SelectedDeviceBlocksComeFromPersistedSnapshotWithoutEngineering()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+        fixture.WriteManifest();
+
+        var blocks = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/blocks");
+
+        var block = Assert.Single(blocks.EnumerateArray());
+        Assert.Equal("Main", block.GetProperty("name").GetString());
+        Assert.Equal("OB", block.GetProperty("blockType").GetString());
+        Assert.Empty(fixture.Engineering.Calls);
+    }
+
     [Fact]
     public void BinderRejectsConflictingStoragePath()
     {
@@ -481,6 +538,142 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         {
             Calls.Add(tool);
             return Task.FromResult((T)(object)JsonDocument.Parse(json).RootElement.Clone());
+        }
+    }
+
+    private sealed class SelectedApiFixture : IAsyncDisposable
+    {
+        private readonly WebApplicationFactory<Program> factory;
+        private readonly DeviceContext context;
+
+        private SelectedApiFixture(
+            WebApplicationFactory<Program> factory,
+            HttpClient client,
+            ThrowingToolCaller engineering,
+            DeviceContext context)
+        {
+            this.factory = factory;
+            Client = client;
+            Engineering = engineering;
+            this.context = context;
+        }
+
+        public HttpClient Client { get; }
+        public ThrowingToolCaller Engineering { get; }
+
+        public static async Task<SelectedApiFixture> CreateAsync(
+            string fixtureRoot,
+            bool databaseExists,
+            bool stale = false,
+            bool baselineStale = false)
+        {
+            var store = new AtomicJsonStore();
+            var catalog = new WorkbenchCatalog(store, fixtureRoot);
+            var workbench = catalog.Create("Line", null);
+            const string worktreeId = "wt-1";
+            const string deviceId = "dev-1";
+            workbench = catalog.RegisterWorktree(
+                workbench,
+                new WorkbenchWorktreeRegistration(worktreeId, "master", "master", "master"));
+            var worktreeRoot = Path.Combine(workbench.RootPath, "worktrees", "master");
+            var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+            var context = new DeviceContext(
+                workbench.WorkbenchId,
+                worktreeId,
+                deviceId,
+                workbench.RootPath,
+                worktreeRoot,
+                deviceRoot,
+                Path.Combine(deviceRoot, "exported-source"),
+                Path.Combine(deviceRoot, "modified-source"),
+                Path.Combine(deviceRoot, "staging"),
+                Path.Combine(deviceRoot, "plc-knowledge.db"));
+            Directory.CreateDirectory(context.ExportedSourceRoot);
+            Directory.CreateDirectory(context.ModifiedSourceRoot);
+            Directory.CreateDirectory(context.StagingRoot);
+            store.Write(
+                Path.Combine(worktreeRoot, "worktree.json"),
+                new WorktreeMetadata(
+                    "1.0", worktreeId, workbench.WorkbenchId, "master", "master",
+                    DateTimeOffset.UtcNow.ToString("O"), null, null, null, [deviceId], null));
+            store.Write(
+                Path.Combine(deviceRoot, "device.json"),
+                new DeviceMetadata(
+                    "1.0", deviceId, worktreeId, "PLC_1", "PLC:1", null, null, null,
+                    new KnowledgeState(stale, new Dictionary<string, string>(), "2026-07-29T08:00:00Z", baselineStale),
+                    []));
+            if (databaseExists)
+                await File.WriteAllBytesAsync(context.KnowledgeDbPath, [1]);
+
+            var engineering = new ThrowingToolCaller();
+            var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
+            {
+                host.UseEnvironment("Testing");
+                host.ConfigureServices(services =>
+                {
+                    services.RemoveAll<WorkbenchCatalog>();
+                    services.RemoveAll<AtomicJsonStore>();
+                    services.RemoveAll<WorkbenchApiState>();
+                    services.RemoveAll<ApiMcpGateway>();
+                    services.AddSingleton(store);
+                    services.AddSingleton(catalog);
+                    services.AddSingleton<WorkbenchApiState>();
+                    services.AddSingleton(new ApiMcpGateway(
+                        engineering,
+                        new RecordingToolCaller(),
+                        new RecordingToolCaller(),
+                        new RecordingToolCaller()));
+                });
+            });
+            var client = factory.CreateClient();
+            var select = await client.PostAsync(
+                $"/api/workbenches/{workbench.WorkbenchId}/worktrees/{worktreeId}/devices/{deviceId}/select",
+                null);
+            select.EnsureSuccessStatusCode();
+            return new SelectedApiFixture(factory, client, engineering, context);
+        }
+
+        public void WriteManifest()
+        {
+            File.WriteAllText(
+                Path.Combine(context.ExportedSourceRoot, "metadata.json"),
+                """
+                {
+                  "schemaVersion": "1.0",
+                  "components": [
+                    {
+                      "id": "ob-main",
+                      "name": "Main",
+                      "category": "OB",
+                      "status": "Exported",
+                      "exportedFile": "Blocks/Main [OB1].xml",
+                      "sourcePath": "Area/Main",
+                      "number": 1,
+                      "programmingLanguage": "LAD"
+                    }
+                  ]
+                }
+                """);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Client.Dispose();
+            await factory.DisposeAsync();
+        }
+    }
+
+    private sealed class ThrowingToolCaller : IMcpToolCaller
+    {
+        public List<string> Calls { get; } = [];
+
+        public Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            throw new InvalidOperationException("Engineering is offline.");
         }
     }
 
