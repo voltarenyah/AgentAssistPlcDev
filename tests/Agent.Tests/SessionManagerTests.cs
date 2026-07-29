@@ -31,6 +31,7 @@ public sealed class SessionManagerTests : IDisposable
         Assert.Equal(device.WorktreeRoot, data.Header.WorktreeRoot);
         Assert.Equal(device.KnowledgeDbPath, data.Header.KnowledgeDbPath);
         Assert.Null(data.Header.ProjectName);
+        Assert.Equal("New chat", data.Header.Title);
         Assert.Equal("runtime context", data.Header.RuntimeContext);
         Assert.Empty(data.Messages);
         Assert.Empty(data.RoundUsages);
@@ -116,6 +117,51 @@ public sealed class SessionManagerTests : IDisposable
         Assert.Equal(device.DeviceId, sessions[1].DeviceId);
         Assert.Equal(2, sessions[1].TurnCount);
         Assert.Equal("first question", sessions[1].FirstUserMessage);
+    }
+
+    [Fact]
+    public void RenameSession_trims_and_persists_title()
+    {
+        var device = CreateDeviceContext();
+        var created = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null);
+
+        var renamed = SessionManager.RenameSession(
+            device,
+            created.Header.SessionId,
+            "  Valve diagnosis  ");
+
+        Assert.NotNull(renamed);
+        Assert.Equal("Valve diagnosis", renamed!.Header.Title);
+        Assert.Equal(
+            "Valve diagnosis",
+            SessionManager.LoadSession(device, created.Header.SessionId)!.Header.Title);
+    }
+
+    [Fact]
+    public void RenameSession_rejects_blank_title()
+    {
+        var device = CreateDeviceContext();
+        var created = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null);
+
+        Assert.Throws<ArgumentException>(() =>
+            SessionManager.RenameSession(device, created.Header.SessionId, "   "));
+    }
+
+    [Fact]
+    public void ListSessions_derives_title_when_stored_title_is_missing()
+    {
+        var device = CreateDeviceContext();
+        var created = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null);
+        var untitled = created with
+        {
+            Header = created.Header with { Title = null },
+            Messages = [ChatMessage.User("Investigate the conveyor interlock")],
+        };
+        SessionManager.SaveSession(device, untitled);
+
+        var info = Assert.Single(SessionManager.ListSessions(device));
+
+        Assert.Equal("Investigate the conveyor interlock", info.Title);
     }
 
     [Fact]

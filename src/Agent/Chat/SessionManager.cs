@@ -60,7 +60,12 @@ public static class SessionManager
         }
 
         result.Sort((left, right) =>
-            string.CompareOrdinal(right.CreatedAt, left.CreatedAt));
+        {
+            var updated = string.CompareOrdinal(right.UpdatedAt, left.UpdatedAt);
+            return updated != 0
+                ? updated
+                : string.CompareOrdinal(right.CreatedAt, left.CreatedAt);
+        });
         return result;
     }
 
@@ -134,7 +139,8 @@ public static class SessionManager
             now,
             now,
             settings,
-            runtimeContext);
+            runtimeContext,
+            "New chat");
         var data = new ChatSessionData(
             header,
             new List<ChatMessage>(),
@@ -159,6 +165,46 @@ public static class SessionManager
         }
 
         WriteSession(device.WorktreeRoot, data);
+    }
+
+    public static ChatSessionData? RenameSession(
+        DeviceContext device,
+        string sessionId,
+        string title)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var normalized = title?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new ArgumentException("Session title cannot be blank.", nameof(title));
+
+        var data = LoadSession(device, sessionId);
+        if (data is null)
+            return null;
+
+        var updated = data with
+        {
+            Header = data.Header with
+            {
+                Title = normalized,
+                UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
+            },
+        };
+        SaveSession(device, updated);
+        return updated;
+    }
+
+    public static bool IsDefaultTitle(string? title) =>
+        string.IsNullOrWhiteSpace(title) ||
+        string.Equals(title.Trim(), "New chat", StringComparison.Ordinal);
+
+    public static string DeriveTitle(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return "New chat";
+        var singleLine = string.Join(
+            " ",
+            message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return Truncate(singleLine, 60) ?? "New chat";
     }
 
     private static void WriteSession(string trustedWorktreeRoot, ChatSessionData data)
@@ -276,6 +322,9 @@ public static class SessionManager
 
             return new ChatSessionInfo(
                 sessionId,
+                IsDefaultTitle(GetString(header, "title"))
+                    ? DeriveTitle(firstUserMessage)
+                    : GetString(header, "title")!.Trim(),
                 GetString(header, "workbenchId"),
                 GetString(header, "worktreeId"),
                 GetString(header, "deviceId"),
