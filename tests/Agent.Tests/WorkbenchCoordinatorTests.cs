@@ -70,6 +70,87 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenProjectInTiaWaitsForWorkbenchDiscoverySequence()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Existing.ap17");
+        var engineering = new BlockingDiscoveryEngineeringCaller();
+        var versionControl = new FakeToolCaller().Respond("vc_init_shared", new object());
+        var coordinator = Create(
+            fixture,
+            engineering: engineering,
+            versionControl: versionControl);
+        var createRoot = Path.Combine(root, "created");
+
+        var creating = coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest("Created", createRoot, 42, @"C:\Projects\Created.ap17"));
+        await engineering.ProjectInfoEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var opening = coordinator.OpenProjectInTiaAsync(
+            fixture.Context,
+            CancellationToken.None);
+
+        await Task.Yield();
+        Assert.False(opening.IsCompleted);
+        Assert.Equal(["connect", "get_project_info"], engineering.Calls);
+
+        engineering.ReleaseProjectInfo.SetResult();
+        await Task.WhenAll(creating, opening);
+        Assert.Equal(["connect", "get_project_info", "connect"], engineering.Calls);
+    }
+
+    [Fact]
+    public async Task CancelledWorkbenchDiscoveryReleasesEngineeringSession()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Existing.ap17");
+        var engineering = new BlockingDiscoveryEngineeringCaller();
+        var versionControl = new FakeToolCaller().Respond("vc_init_shared", new object());
+        var coordinator = Create(
+            fixture,
+            engineering: engineering,
+            versionControl: versionControl);
+        using var cancellation = new CancellationTokenSource();
+        var creating = coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest(
+                "Cancelled",
+                Path.Combine(root, "cancelled"),
+                42,
+                @"C:\Projects\Cancelled.ap17"),
+            cancellation.Token);
+        await engineering.ProjectInfoEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => creating);
+        await coordinator.OpenProjectInTiaAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal(["connect", "get_project_info", "connect"], engineering.Calls);
+    }
+
+    [Fact]
+    public async Task OpenProjectInTiaWaitsForFullImportAndCompileSequence()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        fixture.WriteModified("Blocks/A.xml", "<modified />");
+        var engineering = new BlockingImportEngineeringCaller();
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var importing = coordinator.ImportModifiedAsync(
+            fixture.Context,
+            "Blocks/A.xml",
+            CancellationToken.None);
+        await engineering.ImportEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var opening = coordinator.OpenProjectInTiaAsync(
+            fixture.Context,
+            CancellationToken.None);
+
+        await Task.Yield();
+        Assert.False(opening.IsCompleted);
+        Assert.Equal(["import_block"], engineering.Calls);
+
+        engineering.ReleaseImport.SetResult();
+        await Task.WhenAll(importing, opening);
+        Assert.Equal(["import_block", "compile_block", "connect"], engineering.Calls);
+    }
+
+    [Fact]
     public async Task CreateInitializesGitThenConnectsAndDiscoversDevicesBeforeMetadata()
     {
         var calls = new List<string>();
@@ -656,6 +737,68 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             if (tool == "connect")
                 return (T)(object)new object();
 
+            throw new InvalidOperationException(tool);
+        }
+    }
+
+    private sealed class BlockingDiscoveryEngineeringCaller : FakeToolCaller
+    {
+        public TaskCompletionSource ProjectInfoEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseProjectInfo { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (tool == "connect")
+                return (T)(object)new object();
+            if (tool == "get_project_info")
+            {
+                ProjectInfoEntered.SetResult();
+                await ReleaseProjectInfo.Task.WaitAsync(cancellationToken);
+                return (T)(object)new ProjectInfo
+                {
+                    Name = "Created",
+                    Path = @"C:\Projects\Created.ap17",
+                    PlcDevices = ["PLC_1"],
+                };
+            }
+            throw new InvalidOperationException(tool);
+        }
+    }
+
+    private sealed class BlockingImportEngineeringCaller : FakeToolCaller
+    {
+        public TaskCompletionSource ImportEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseImport { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (tool == "import_block")
+            {
+                ImportEntered.SetResult();
+                await ReleaseImport.Task.WaitAsync(cancellationToken);
+                return (T)(object)new ImportResult
+                {
+                    BlockName = "A",
+                    Success = true,
+                    ImportedAt = DateTime.UtcNow,
+                };
+            }
+            if (tool == "compile_block")
+                return (T)(object)new CompileResult { BlockName = "A", State = "success" };
+            if (tool == "connect")
+                return (T)(object)new object();
             throw new InvalidOperationException(tool);
         }
     }

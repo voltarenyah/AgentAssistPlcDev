@@ -154,16 +154,25 @@ public sealed class WorkbenchCoordinator
                 "vc_init_shared",
                 new { workbenchRoot = workbench.RootPath, masterWorktreePath = masterPath },
                 cancellationToken).ConfigureAwait(false);
-            progress?.Report("Attaching to TIA Portal...");
-            await engineering.CallAsync<object>(
-                "connect",
-                new { sessionId = request.EngineeringSessionId },
-                cancellationToken).ConfigureAwait(false);
-            progress?.Report("Discovering PLC devices...");
-            var project = await engineering.CallAsync<ProjectInfo>(
-                "get_project_info",
-                new { },
-                cancellationToken).ConfigureAwait(false);
+            ProjectInfo project;
+            await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                progress?.Report("Attaching to TIA Portal...");
+                await engineering.CallAsync<object>(
+                    "connect",
+                    new { sessionId = request.EngineeringSessionId },
+                    cancellationToken).ConfigureAwait(false);
+                progress?.Report("Discovering PLC devices...");
+                project = await engineering.CallAsync<ProjectInfo>(
+                    "get_project_info",
+                    new { },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                engineeringSession.Release();
+            }
 
             progress?.Report("Creating device folders...");
             var worktreeId = Guid.NewGuid().ToString("N");
