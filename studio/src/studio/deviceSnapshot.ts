@@ -17,6 +17,8 @@ export type DeviceViewState = {
 export type DeviceSelectionState = {
   requestId: number
   deviceId: string
+  selectedDeviceId: string | null
+  selecting: boolean
   view: DeviceViewState | null
   sessions: ChatSessionInfo[]
 }
@@ -45,6 +47,8 @@ export const beginDeviceSelection = (
 ): DeviceSelectionState => ({
   requestId,
   deviceId,
+  selectedDeviceId: null,
+  selecting: true,
   view: null,
   sessions: [],
 })
@@ -61,6 +65,8 @@ export const completeDeviceSelection = (
 
   return {
     ...current,
+    selectedDeviceId: snapshot.deviceId,
+    selecting: false,
     view: applyDeviceSnapshot(current.view, snapshot),
     sessions,
   }
@@ -70,5 +76,5 @@ export const failDeviceSelection = (
   current: DeviceSelectionState,
   requestId: number,
 ): DeviceSelectionState => current.requestId === requestId
-  ? { ...current, view: null, sessions: [] }
+  ? { ...current, selectedDeviceId: null, selecting: false, view: null, sessions: [] }
   : current

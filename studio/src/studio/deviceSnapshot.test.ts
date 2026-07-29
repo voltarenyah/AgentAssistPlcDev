@@ -97,4 +97,26 @@ describe('device snapshot state', () => {
     )
     expect(mismatchedB).toBe(pendingB)
   })
+
+  it('keeps B fully selected when B completes before the older A request', () => {
+    const pendingA = beginDeviceSelection(null, 'plc-a')
+    const pendingB = beginDeviceSelection(pendingA, 'plc-b')
+    const selectedB = completeDeviceSelection(
+      pendingB,
+      pendingB.requestId,
+      snapshot({ deviceId: 'plc-b', plcName: 'PLC_B' }),
+      [{ sessionId: 'b', projectName: 'PLC_B', createdAt: '', updatedAt: '', messageCount: 0, turnCount: 0, firstUserMessage: null }],
+    )
+    const lateA = completeDeviceSelection(
+      selectedB,
+      pendingA.requestId,
+      snapshot({ deviceId: 'plc-a', plcName: 'PLC_A' }),
+      [{ sessionId: 'a', projectName: 'PLC_A', createdAt: '', updatedAt: '', messageCount: 0, turnCount: 0, firstUserMessage: null }],
+    )
+
+    expect(lateA.selectedDeviceId).toBe('plc-b')
+    expect(lateA.view?.snapshot.deviceId).toBe('plc-b')
+    expect(lateA.sessions[0]?.sessionId).toBe('b')
+    expect(lateA.selecting).toBe(false)
+  })
 })

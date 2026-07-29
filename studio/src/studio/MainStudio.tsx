@@ -311,22 +311,28 @@ export default function MainStudio() {
     setOperation('select-device')
     try {
       await api.selectDevice(workbench.workbenchId, worktree.worktreeId, deviceId)
-      setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
+      if (selectionRequestId.current !== requestId) return
       const [snapshot, , savedSessions] = await Promise.all([
         api.getSelectedDeviceInfo(),
         api.getVcStatus().catch(() => ({ repoPath: '', branch: worktree.branch, entries: [] } as api.VcStatusResult)),
         api.listDeviceSessions(deviceId).catch(() => []),
       ])
+      if (selectionRequestId.current !== requestId) return
+      if (snapshot.deviceId !== deviceId) {
+        throw new Error(`Selected-device snapshot mismatch: expected ${deviceId}, received ${snapshot.deviceId}`)
+      }
+      setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
       setDeviceSelection(previous => previous
         ? completeDeviceSelection(previous, requestId, snapshot, savedSessions)
         : previous)
     } catch (error) {
+      if (selectionRequestId.current !== requestId) return
       setDeviceSelection(previous => previous
         ? failDeviceSelection(previous, requestId)
         : previous)
       toast.error(displayError(error))
     } finally {
-      setOperation(null)
+      if (selectionRequestId.current === requestId) setOperation(null)
     }
   }
 
