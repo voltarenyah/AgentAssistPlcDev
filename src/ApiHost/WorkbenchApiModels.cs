@@ -236,25 +236,34 @@ public static class WorkbenchEndpoints
             RefreshApplyApiRequest r,
             WorkbenchApiState s,
             WorkbenchCoordinator c,
+            DeviceReconciler reconciler,
             OperationStatusRegistry operations,
             HttpContext http,
             CancellationToken ct) =>
-            await RunOperationAsync(
-                http,
-                operations,
-                "apply-refresh",
-                "Applying approved refresh...",
-                progress => c.ApplyRefreshAsync(
-                    s.Device(device).Context,
-                    new(
-                        s.Take(r.PreviewId, device),
-                        new HashSet<string>(
-                            (r.ApprovedPaths ?? [])
-                                .Concat(r.ApprovedRemovalPaths ?? []),
-                            StringComparer.Ordinal)),
-                    ct,
-                    progress),
-                "Refresh applied.").ConfigureAwait(false));
+        {
+            var selected = s.Device(device);
+            var preview = s.Take(r.PreviewId, device);
+            var legacyRemovals = reconciler.ValidateLegacyRemovalApprovals(
+                selected.Context,
+                preview,
+                r.ApprovedRemovalPaths ?? []);
+            var approved = new HashSet<string>(
+                r.ApprovedPaths ?? [],
+                StringComparer.Ordinal);
+            approved.UnionWith(legacyRemovals);
+            return await RunOperationAsync(
+                    http,
+                    operations,
+                    "apply-refresh",
+                    "Applying approved refresh...",
+                    progress => c.ApplyRefreshAsync(
+                        selected.Context,
+                        new(preview, approved),
+                        ct,
+                        progress),
+                    "Refresh applied.")
+                .ConfigureAwait(false);
+        });
         app.MapPost("/api/devices/{device}/knowledge/update", async (
             string device,
             WorkbenchApiState s,

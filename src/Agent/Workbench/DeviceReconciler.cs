@@ -398,6 +398,33 @@ public sealed class DeviceReconciler
         return outputRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
+    public IReadOnlySet<string> ValidateLegacyRemovalApprovals(
+        DeviceContext context,
+        ReconciliationPreview preview,
+        IEnumerable<string> approvedRemovalPaths)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(preview);
+        ArgumentNullException.ThrowIfNull(approvedRemovalPaths);
+
+        var normalized = NormalizeApprovedPaths(
+            context.ExportedSourceRoot,
+            approvedRemovalPaths);
+        var removable = preview.Entries
+            .Where(static entry => entry.Kind == ReconciliationChangeKind.Removed)
+            .Select(static entry => entry.RelativePath)
+            .ToHashSet(StringComparer.Ordinal);
+        var invalid = normalized.FirstOrDefault(path => !removable.Contains(path));
+        if (invalid is not null)
+        {
+            throw new ReconciliationException(
+                ApprovalInvalidCode,
+                $"Deprecated removal approval '{invalid}' is not a removed entry in this comparison.");
+        }
+
+        return normalized;
+    }
+
     private static Dictionary<string, JsonNode> IndexManifestNodes(
         JsonArray? components,
         string root)

@@ -215,6 +215,109 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(["vc_add", "vc_commit"], fixture.VersionControl.Calls);
     }
 
+    [Fact]
+    public async Task LegacyRemovalApprovalRejectsAddedOrChangedEntries()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null)).EnsureSuccessStatusCode();
+        foreach (var path in new[] { "Blocks/Main.xml", "Blocks/New.xml", "Blocks/Unknown.xml" })
+        {
+            var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+                $"/api/devices/{fixture.DeviceId}/refresh/preview");
+            var response = await fixture.Client.PostAsJsonAsync(
+                $"/api/devices/{fixture.DeviceId}/refresh/apply",
+                new
+                {
+                    previewId = preview.GetProperty("previewId").GetString(),
+                    approvedRemovalPaths = new[] { path },
+                });
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(
+                DeviceReconciler.ApprovalInvalidCode,
+                error.GetProperty("error").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task LegacyRemovalApprovalRejectsUnchangedEntry()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<stored/>");
+                WriteComparisonManifest(outputDir, "stored-fingerprint");
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null)).EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedRemovalPaths = new[] { "Blocks/Main.xml" },
+            });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            DeviceReconciler.ApprovalInvalidCode,
+            error.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task LegacyRemovalApprovalStillAppliesActualRemoval()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(outputDir);
+                File.WriteAllText(
+                    Path.Combine(outputDir, "metadata.json"),
+                    """{"schemaVersion":"1.0","components":[]}""");
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null)).EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedRemovalPaths = new[] { "Blocks/Main.xml" },
+            });
+
+        response.EnsureSuccessStatusCode();
+        Assert.False(fixture.BaselineExists("Blocks/Main.xml"));
+    }
+
     private static void WriteComparisonManifest(
         string rootPath,
         string? fingerprints,
