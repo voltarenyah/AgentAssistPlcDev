@@ -13,7 +13,10 @@ public sealed record ReconciliationEntry(
     ReconciliationChangeKind Kind,
     string? BaselineHash,
     string? StagingHash,
-    string? ComponentIdentity);
+    string? ComponentIdentity,
+    string? StoredFingerprints = null,
+    string? LiveFingerprints = null,
+    bool? FingerprintsMatch = null);
 
 public sealed record ReconciliationPreview(
     string PreviewId,

@@ -183,6 +183,9 @@ export type ReconciliationEntry = {
   baselineHash: string | null
   stagingHash: string | null
   componentIdentity: string | null
+  storedFingerprints: string | null
+  liveFingerprints: string | null
+  fingerprintsMatch: boolean | null
 }
 
 export type ReconciliationPreview = {

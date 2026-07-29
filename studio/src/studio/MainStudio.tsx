@@ -391,10 +391,11 @@ export default function MainStudio() {
   const stageRefresh = async () => {
     if (!selection.deviceId) return
     setOperation('stage-refresh')
-    const op = beginOperation('stage-refresh', 'Preparing export staging area...')
+    const op = beginOperation('stage-refresh', 'Exporting live PLC to temporary comparison staging...')
     try {
       await api.stageDeviceRefresh(selection.deviceId, op.id)
       setPreview(await api.previewDeviceRefresh(selection.deviceId))
+      toast.success('Comparison ready; no tracked files changed.')
     } catch (error) {
       toast.error(displayError(error))
     } finally {
@@ -657,7 +658,7 @@ export default function MainStudio() {
                             <Server className="h-3.5 w-3.5" /> Open project in TIA
                           </button>
                           <button className="primary-button" disabled={Boolean(operation)} onClick={() => void stageRefresh()}>
-                            <RefreshCw className="h-3.5 w-3.5" /> Stage full PLC refresh
+                            <RefreshCw className="h-3.5 w-3.5" /> Compare with TIA
                           </button>
                           <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void updateKnowledge(false)}>
                             <Database className="h-3.5 w-3.5" /> Update knowledge

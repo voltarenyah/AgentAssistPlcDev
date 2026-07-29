@@ -10,6 +10,7 @@ using Microsoft.Extensions.Configuration;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Net;
+using Contracts.Engineering;
 using Xunit;
 
 public sealed class WorkbenchEndpointsTests : IDisposable
@@ -138,6 +139,80 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             : await client.GetAsync(endpoint);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task TiaComparisonStageAndPreviewAreNonDestructiveAndExposeFingerprintEvidence()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, plcName) =>
+            {
+                Assert.Equal("PLC_1", plcName);
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        var before = fixture.PersistentArtifactHashes();
+
+        var stage = await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null);
+        stage.EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        Assert.Equal(before, fixture.PersistentArtifactHashes());
+        var entries = preview.GetProperty("entries").EnumerateArray().ToArray();
+        var entry = Assert.Single(entries, value =>
+            value.GetProperty("relativePath").GetString() == "Blocks/Main.xml");
+        Assert.Equal("stored-fingerprint", entry.GetProperty("storedFingerprints").GetString());
+        Assert.Equal("live-fingerprint", entry.GetProperty("liveFingerprints").GetString());
+        Assert.False(entry.GetProperty("fingerprintsMatch").GetBoolean());
+        var added = Assert.Single(entries, value =>
+            value.GetProperty("relativePath").GetString() == "Blocks/New.xml");
+        Assert.Equal(JsonValueKind.Null, added.GetProperty("storedFingerprints").ValueKind);
+        Assert.Equal("new-live-fingerprint", added.GetProperty("liveFingerprints").GetString());
+        Assert.Equal(JsonValueKind.Null, added.GetProperty("fingerprintsMatch").ValueKind);
+        Assert.Empty(fixture.VersionControl.Calls);
+    }
+
+    private static void WriteComparisonManifest(
+        string rootPath,
+        string? fingerprints,
+        bool includeNew = false)
+    {
+        var components = new List<object>
+        {
+            new
+            {
+                id = "ob-main",
+                sourcePath = "Program/Main",
+                exportedFile = "Blocks/Main.xml",
+                fingerprints,
+            },
+        };
+        if (includeNew)
+        {
+            components.Add(new
+            {
+                id = "fb-new",
+                sourcePath = "Program/New",
+                exportedFile = "Blocks/New.xml",
+                fingerprints = "new-live-fingerprint",
+            });
+        }
+
+        File.WriteAllText(
+            Path.Combine(rootPath, "metadata.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                components,
+            }));
     }
 
     [Theory]
@@ -638,18 +713,22 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             WebApplicationFactory<Program> factory,
             HttpClient client,
             ThrowingToolCaller engineering,
+            RecordingToolCaller versionControl,
             DeviceContext context,
             WorkbenchCatalog catalog)
         {
             this.factory = factory;
             Client = client;
             Engineering = engineering;
+            VersionControl = versionControl;
             this.context = context;
             this.catalog = catalog;
         }
 
         public HttpClient Client { get; }
         public ThrowingToolCaller Engineering { get; }
+        public RecordingToolCaller VersionControl { get; }
+        public string DeviceId => context.DeviceId;
         public string DeviceRoute =>
             $"/api/workbenches/{context.WorkbenchId}/worktrees/{context.WorktreeId}/devices/{context.DeviceId}";
 
@@ -659,7 +738,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             bool stale = false,
             bool baselineStale = false,
             bool engineeringOffline = true,
-            string? sourceProjectPath = null)
+            string? sourceProjectPath = null,
+            Action<string, string>? stageExport = null)
         {
             var store = new AtomicJsonStore();
             var catalog = new WorkbenchCatalog(store, fixtureRoot);
@@ -699,7 +779,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             if (databaseExists)
                 await File.WriteAllBytesAsync(context.KnowledgeDbPath, [1]);
 
-            var engineering = new ThrowingToolCaller(engineeringOffline);
+            var engineering = new ThrowingToolCaller(engineeringOffline, stageExport);
+            var versionControl = new RecordingToolCaller();
             var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
             {
                 host.UseEnvironment("Testing");
@@ -716,12 +797,12 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                     services.AddSingleton(new ApiMcpGateway(
                         engineering,
                         new RecordingToolCaller(),
-                        new RecordingToolCaller(),
+                        versionControl,
                         new RecordingToolCaller()));
                     services.AddSingleton(sp => new WorkbenchCoordinator(
                         engineering,
                         new RecordingToolCaller(),
-                        new RecordingToolCaller(),
+                        versionControl,
                         catalog,
                         store,
                         sp.GetRequiredService<DeviceReconciler>(),
@@ -734,7 +815,14 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 $"/api/workbenches/{workbench.WorkbenchId}/worktrees/{worktreeId}/devices/{deviceId}/select",
                 null);
             select.EnsureSuccessStatusCode();
-            return new SelectedApiFixture(factory, client, engineering, context, catalog);
+            return new SelectedApiFixture(factory, client, engineering, versionControl, context, catalog);
+        }
+
+        public void WriteComparisonBaseline(string? fingerprints)
+        {
+            Directory.CreateDirectory(Path.Combine(context.ExportedSourceRoot, "Blocks"));
+            File.WriteAllText(Path.Combine(context.ExportedSourceRoot, "Blocks", "Main.xml"), "<stored/>");
+            WriteComparisonManifest(context.ExportedSourceRoot, fingerprints);
         }
 
         public void WriteManifest()
@@ -808,7 +896,9 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         }
     }
 
-    private sealed class ThrowingToolCaller(bool throwOnCall = true) : IMcpToolCaller
+    private sealed class ThrowingToolCaller(
+        bool throwOnCall = true,
+        Action<string, string>? stageExport = null) : IMcpToolCaller
     {
         public List<string> Calls { get; } = [];
         public Dictionary<string, JsonElement> Arguments { get; } = [];
@@ -820,6 +910,17 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         {
             Calls.Add(tool);
             Arguments[tool] = JsonSerializer.SerializeToElement(args);
+            if (tool == "rebuild_export" && stageExport is not null)
+            {
+                var arguments = Arguments[tool];
+                var outputDir = arguments.GetProperty("outputDir").GetString()!;
+                var plcName = arguments.GetProperty("plcName").GetString()!;
+                stageExport(outputDir, plcName);
+                return Task.FromResult((T)(object)new[]
+                {
+                    new SyncResult { PlcName = plcName, ExportRoot = outputDir, Status = "updated" },
+                });
+            }
             if (throwOnCall)
                 throw new InvalidOperationException("Engineering is offline.");
             return Task.FromResult((T)(object)new object());

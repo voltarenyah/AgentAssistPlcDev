@@ -102,7 +102,12 @@ public sealed class DeviceReconciler
                 Classify(baselineComponent, stagingComponent, baselineHash, stagingHash),
                 baselineHash,
                 stagingHash,
-                stagingComponent?.Identity ?? baselineComponent?.Identity);
+                stagingComponent?.Identity ?? baselineComponent?.Identity,
+                baselineComponent?.Fingerprints,
+                stagingComponent?.Fingerprints,
+                MatchFingerprints(
+                    baselineComponent?.Fingerprints,
+                    stagingComponent?.Fingerprints));
         }
 
         var baselineTreeHash = ComputeTreeHash(baselineTree);
@@ -530,9 +535,10 @@ public sealed class DeviceReconciler
 
                 var identity = ReadOptionalString(component, "id")
                     ?? ReadOptionalString(component, "sourcePath");
+                var fingerprints = ReadOptionalString(component, "fingerprints");
                 if (!controlled.TryAdd(
                         relativePath,
-                        new ManifestComponent(relativePath, identity)))
+                        new ManifestComponent(relativePath, identity, fingerprints)))
                 {
                     throw new ReconciliationException(
                         ManifestInvalidCode,
@@ -641,6 +647,11 @@ public sealed class DeviceReconciler
             : ReconciliationChangeKind.Changed;
     }
 
+    private static bool? MatchFingerprints(string? stored, string? live) =>
+        stored is null || live is null
+            ? null
+            : string.Equals(stored, live, StringComparison.Ordinal);
+
     private static string? HashFileIfPresent(string root, string relativePath)
     {
         var path = ResolveControlledPath(root, relativePath);
@@ -719,6 +730,12 @@ public sealed class DeviceReconciler
             AppendUtf8(hash, entry.Kind.ToString());
             hash.AppendData(new byte[] { 0 });
             AppendUtf8(hash, entry.ComponentIdentity ?? string.Empty);
+            hash.AppendData(new byte[] { 0 });
+            AppendUtf8(hash, entry.StoredFingerprints ?? "<missing>");
+            hash.AppendData(new byte[] { 0 });
+            AppendUtf8(hash, entry.LiveFingerprints ?? "<missing>");
+            hash.AppendData(new byte[] { 0 });
+            AppendUtf8(hash, entry.FingerprintsMatch?.ToString() ?? "<unknown>");
             hash.AppendData(new byte[] { (byte)'\n' });
         }
 
@@ -736,7 +753,10 @@ public sealed class DeviceReconciler
     private static string ToGitPath(DeviceContext context, string path) =>
         Path.GetRelativePath(context.WorktreeRoot, path).Replace('\\', '/');
 
-    private sealed record ManifestComponent(string RelativePath, string? Identity);
+    private sealed record ManifestComponent(
+        string RelativePath,
+        string? Identity,
+        string? Fingerprints);
 
     private sealed record Manifest(
         IReadOnlyDictionary<string, ManifestComponent> Components)
