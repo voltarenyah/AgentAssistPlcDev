@@ -38,6 +38,7 @@ import {
   type DeviceSelectionState,
 } from '@/studio/deviceSnapshot'
 import * as api from '@/api/client'
+import { runOpenProjectInTia } from '@/studio/deviceActions'
 
 type StudioTab = 'overview' | 'source' | 'knowledge' | 'git'
 type ActiveOperation = {
@@ -402,11 +403,16 @@ export default function MainStudio() {
   }
 
   const openProjectInTia = async () => {
-    if (!selection.deviceId) return
+    if (!activeWorkbench || !activeWorktree || !selection.deviceId) return
+    const context = {
+      workbenchId: activeWorkbench.workbenchId,
+      worktreeId: activeWorktree.worktreeId,
+      deviceId: selection.deviceId,
+    }
     setOperation('open-tia-project')
     const op = beginOperation('open-tia-project', 'Opening registered project in TIA Portal...')
     try {
-      await api.openDeviceProject(selection.deviceId, op.id)
+      await runOpenProjectInTia(api.openDeviceProject, { ...context, operationId: op.id })
       toast.success('Registered project opened in TIA Portal')
     } catch (error) {
       toast.error(displayError(error))

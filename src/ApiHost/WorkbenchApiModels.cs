@@ -98,8 +98,15 @@ public sealed class WorkbenchApiState
     {
         var selection = Selection;
         if (selection?.WorkbenchId is null || selection.WorktreeId is null) throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
-        var wb = Workbench(selection.WorkbenchId);
-        var wt = Worktree(wb.WorkbenchId, selection.WorktreeId);
+        return Device(selection.WorkbenchId, selection.WorktreeId, deviceId);
+    }
+    public (DeviceContext Context, DeviceMetadata Metadata) Device(
+        string workbenchId,
+        string worktreeId,
+        string deviceId)
+    {
+        var wb = Workbench(workbenchId);
+        var wt = Worktree(workbenchId, worktreeId);
         if (!wt.DeviceIds.Contains(deviceId, StringComparer.Ordinal)) throw new KeyNotFoundException("DEVICE_NOT_FOUND");
         var reg = wb.Worktrees.Single(x => x.WorktreeId == wt.WorktreeId);
         var wtRoot = WorkbenchPaths.ResolveWorktree(wb.RootPath, reg.RelativePath);
@@ -182,7 +189,9 @@ public static class WorkbenchEndpoints
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s) => { s.Worktree(id, wt); s.Select(id, wt); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.Worktree(id, wt).DeviceIds);
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
-        app.MapPost("/api/devices/{device}/tia/open", async (
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/tia/open", async (
+            string workbenchId,
+            string worktreeId,
             string device,
             WorkbenchApiState s,
             WorkbenchCoordinator c,
@@ -196,7 +205,10 @@ public static class WorkbenchEndpoints
                 "Opening registered project in TIA Portal...",
                 async progress =>
                 {
-                    await c.OpenProjectInTiaAsync(s.Device(device).Context, ct, progress)
+                    await c.OpenProjectInTiaAsync(
+                            s.Device(workbenchId, worktreeId, device).Context,
+                            ct,
+                            progress)
                         .ConfigureAwait(false);
                     return new { opened = true };
                 },

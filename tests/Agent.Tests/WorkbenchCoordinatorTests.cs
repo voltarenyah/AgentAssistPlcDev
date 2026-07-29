@@ -45,6 +45,31 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenProjectInTiaWaitsForActiveStagedExportEngineeringSequence()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new BlockingEngineeringCaller();
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var staging = coordinator.StageRefreshAsync(
+            fixture.Context,
+            CancellationToken.None);
+        await engineering.ExportEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var opening = coordinator.OpenProjectInTiaAsync(
+            fixture.Context,
+            CancellationToken.None);
+
+        await Task.Yield();
+        Assert.False(opening.IsCompleted);
+        Assert.Equal(["rebuild_export"], engineering.Calls);
+
+        engineering.ReleaseExport.SetResult();
+        await Task.WhenAll(staging, opening);
+
+        Assert.Equal(["rebuild_export", "connect"], engineering.Calls);
+    }
+
+    [Fact]
     public async Task CreateInitializesGitThenConnectsAndDiscoversDevicesBeforeMetadata()
     {
         var calls = new List<string>();
@@ -599,6 +624,39 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             {
                 new SyncResult { PlcName = "PLC_1", ExportRoot = output },
             });
+        }
+    }
+
+    private sealed class BlockingEngineeringCaller : FakeToolCaller
+    {
+        public TaskCompletionSource ExportEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseExport { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (tool == "rebuild_export")
+            {
+                ExportEntered.SetResult();
+                await ReleaseExport.Task.WaitAsync(cancellationToken);
+                var output = Property<string>(args, "outputDir");
+                Directory.CreateDirectory(output);
+                File.WriteAllText(Path.Combine(output, "metadata.json"), "{}");
+                return (T)(object)new[]
+                {
+                    new SyncResult { PlcName = "PLC_1", ExportRoot = output },
+                };
+            }
+
+            if (tool == "connect")
+                return (T)(object)new object();
+
+            throw new InvalidOperationException(tool);
         }
     }
 

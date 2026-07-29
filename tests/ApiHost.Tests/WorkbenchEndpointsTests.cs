@@ -191,9 +191,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             sourceProjectPath: @"C:\Projects\Line.ap17");
         fixture.WriteManifest();
         var before = await fixture.Client.GetStringAsync("/api/project/info");
+        var artifactsBefore = fixture.PersistentArtifactHashes();
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            "/api/devices/dev-1/tia/open");
+            $"{fixture.DeviceRoute}/tia/open");
         request.Headers.Add("X-Operation-Id", "open-1");
 
         var response = await fixture.Client.SendAsync(request);
@@ -204,6 +205,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             fixture.Engineering.Arguments["connect"].GetProperty("projectPath").GetString());
         Assert.True(fixture.Engineering.Arguments["connect"].GetProperty("withUI").GetBoolean());
         Assert.Equal(before, await fixture.Client.GetStringAsync("/api/project/info"));
+        Assert.Equal(artifactsBefore, fixture.PersistentArtifactHashes());
         var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/open-1");
         Assert.Equal("open-tia-project", operation.GetProperty("operationType").GetString());
         Assert.Equal("succeeded", operation.GetProperty("state").GetString());
@@ -218,11 +220,52 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             sourceProjectPath: @"C:\Projects\Line.ap17");
         fixture.WriteManifest();
         var before = await fixture.Client.GetStringAsync("/api/project/info");
+        var artifactsBefore = fixture.PersistentArtifactHashes();
 
-        var response = await fixture.Client.PostAsync("/api/devices/dev-1/tia/open", null);
+        var response = await fixture.Client.PostAsync($"{fixture.DeviceRoute}/tia/open", null);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(before, await fixture.Client.GetStringAsync("/api/project/info"));
+        Assert.Equal(artifactsBefore, fixture.PersistentArtifactHashes());
+    }
+
+    [Fact]
+    public async Task ExplicitTiaOpenIgnoresMutableSelectionAndUsesRequestedWorktree()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            engineeringOffline: false,
+            sourceProjectPath: @"C:\Projects\Master.ap17");
+        var other = fixture.AddWorktree("wt-2", "other", @"C:\Projects\Other.ap17");
+        await fixture.Client.PostAsync(other.SelectRoute, null);
+
+        var response = await fixture.Client.PostAsync($"{fixture.DeviceRoute}/tia/open", null);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(@"C:\Projects\Master.ap17",
+            fixture.Engineering.Arguments["connect"].GetProperty("projectPath").GetString());
+    }
+
+    [Fact]
+    public async Task MissingProjectPathFailsOperationBeforeEngineeringCall()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            engineeringOffline: false);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{fixture.DeviceRoute}/tia/open");
+        request.Headers.Add("X-Operation-Id", "open-missing");
+
+        var response = await fixture.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(fixture.Engineering.Calls);
+        var operation = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            "/api/operations/open-missing");
+        Assert.Equal("failed", operation.GetProperty("state").GetString());
+        Assert.Contains("No engineering project path is registered",
+            operation.GetProperty("errorMessage").GetString());
     }
 
     [Fact]
@@ -589,21 +632,26 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     {
         private readonly WebApplicationFactory<Program> factory;
         private readonly DeviceContext context;
+        private readonly WorkbenchCatalog catalog;
 
         private SelectedApiFixture(
             WebApplicationFactory<Program> factory,
             HttpClient client,
             ThrowingToolCaller engineering,
-            DeviceContext context)
+            DeviceContext context,
+            WorkbenchCatalog catalog)
         {
             this.factory = factory;
             Client = client;
             Engineering = engineering;
             this.context = context;
+            this.catalog = catalog;
         }
 
         public HttpClient Client { get; }
         public ThrowingToolCaller Engineering { get; }
+        public string DeviceRoute =>
+            $"/api/workbenches/{context.WorkbenchId}/worktrees/{context.WorktreeId}/devices/{context.DeviceId}";
 
         public static async Task<SelectedApiFixture> CreateAsync(
             string fixtureRoot,
@@ -686,7 +734,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 $"/api/workbenches/{workbench.WorkbenchId}/worktrees/{worktreeId}/devices/{deviceId}/select",
                 null);
             select.EnsureSuccessStatusCode();
-            return new SelectedApiFixture(factory, client, engineering, context);
+            return new SelectedApiFixture(factory, client, engineering, context, catalog);
         }
 
         public void WriteManifest()
@@ -710,6 +758,47 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                   ]
                 }
                 """);
+        }
+
+        public string[] PersistentArtifactHashes() =>
+            Directory.EnumerateFiles(context.DeviceRoot, "*", SearchOption.AllDirectories)
+                .Where(path => !path.StartsWith(
+                    context.StagingRoot + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .Select(path =>
+                    $"{Path.GetRelativePath(context.DeviceRoot, path).Replace('\\', '/')}:" +
+                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                        File.ReadAllBytes(path))))
+                .ToArray();
+
+        public (string SelectRoute, string DeviceRoute) AddWorktree(
+            string worktreeId,
+            string relativePath,
+            string sourceProjectPath)
+        {
+            var workbench = catalog.Load(context.WorkbenchRoot);
+            workbench = catalog.RegisterWorktree(
+                workbench,
+                new WorkbenchWorktreeRegistration(worktreeId, relativePath, relativePath, relativePath));
+            var worktreeRoot = Path.Combine(workbench.RootPath, "worktrees", relativePath);
+            var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+            Directory.CreateDirectory(deviceRoot);
+            var store = new AtomicJsonStore();
+            store.Write(
+                Path.Combine(worktreeRoot, "worktree.json"),
+                new WorktreeMetadata(
+                    "1.0", worktreeId, workbench.WorkbenchId, relativePath, relativePath,
+                    DateTimeOffset.UtcNow.ToString("O"), null, null, sourceProjectPath,
+                    [context.DeviceId], null));
+            store.Write(
+                Path.Combine(deviceRoot, "device.json"),
+                new DeviceMetadata(
+                    "1.0", context.DeviceId, worktreeId, "PLC_1", "PLC:1", null, null, null,
+                    new KnowledgeState(true, new Dictionary<string, string>(), null), []));
+            var baseRoute =
+                $"/api/workbenches/{workbench.WorkbenchId}/worktrees/{worktreeId}/devices/{context.DeviceId}";
+            return ($"{baseRoute}/select", baseRoute);
         }
 
         public async ValueTask DisposeAsync()
