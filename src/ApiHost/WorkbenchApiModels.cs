@@ -11,7 +11,10 @@ public sealed record CreateWorkbenchApiRequest(
     string EngineeringProjectPath);
 public sealed record OpenWorkbenchApiRequest(string RootPath);
 public sealed record CreateWorktreeApiRequest(string Name, string Branch, string? StartPoint);
-public sealed record RefreshApplyApiRequest(string PreviewId, string[]? ApprovedRemovalPaths);
+public sealed record RefreshApplyApiRequest(
+    string PreviewId,
+    string[]? ApprovedPaths,
+    string[]? ApprovedRemovalPaths = null);
 public sealed record SourcePathApiRequest(string RelativePath);
 public sealed record MergeWorktreeApiRequest(string TargetWorktreeId);
 public sealed record SessionCreateApiRequest(Agent.Chat.ChatRequestSettings Settings, string? RuntimeContext);
@@ -243,7 +246,12 @@ public static class WorkbenchEndpoints
                 "Applying approved refresh...",
                 progress => c.ApplyRefreshAsync(
                     s.Device(device).Context,
-                    new(s.Take(r.PreviewId, device), new HashSet<string>(r.ApprovedRemovalPaths ?? [], StringComparer.Ordinal)),
+                    new(
+                        s.Take(r.PreviewId, device),
+                        new HashSet<string>(
+                            (r.ApprovedPaths ?? [])
+                                .Concat(r.ApprovedRemovalPaths ?? []),
+                            StringComparer.Ordinal)),
                     ct,
                     progress),
                 "Refresh applied.").ConfigureAwait(false));

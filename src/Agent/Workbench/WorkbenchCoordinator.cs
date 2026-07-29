@@ -33,7 +33,7 @@ public sealed record CreateWorktreeRequest(
 
 public sealed record ApprovedReconciliation(
     ReconciliationPreview Preview,
-    IReadOnlySet<string> ApprovedRemovalPaths,
+    IReadOnlySet<string> ApprovedPaths,
     bool Approved = true)
 {
     public static ApprovedReconciliation Rejected(ReconciliationPreview preview) =>
@@ -386,7 +386,7 @@ public sealed class WorkbenchCoordinator
                 var outcome = reconciler.Apply(
                     device,
                     approval.Preview,
-                    approval.ApprovedRemovalPaths);
+                    approval.ApprovedPaths);
                 if (outcome.ChangedPaths.Count == 0)
                 {
                     progress?.Report("PLC source is already current.");

@@ -1,12 +1,17 @@
 import { AlertTriangle, CheckCircle2, FileDiff, Loader2, X } from 'lucide-react'
 import { useState } from 'react'
 import type { ReconciliationEntry, ReconciliationPreview } from '@/api/client'
+import {
+  actionableEntries,
+  comparisonState,
+  toggleApprovedPath,
+} from '@/studio/reconciliationPresentation'
 
 type Props = {
   preview: ReconciliationPreview
   busy: boolean
   onClose: () => void
-  onApply: (approvedRemovalPaths: string[]) => Promise<void>
+  onApply: (approvedPaths: string[]) => Promise<void>
 }
 
 const nameOf = (kind: ReconciliationEntry['kind']) => {
@@ -24,10 +29,10 @@ const colorOf = (kind: ReconciliationEntry['kind']) => ({
 }[nameOf(kind)])
 
 export default function RefreshDialog({ preview, busy, onClose, onApply }: Props) {
-  const [approvedRemovals, setApprovedRemovals] = useState<Set<string>>(() => new Set())
+  const [approvedPaths, setApprovedPaths] = useState<Set<string>>(() => new Set())
   const compared = preview.entries.filter(entry =>
     nameOf(entry.kind) !== 'Unchanged' || entry.fingerprintsMatch !== true)
-  const removals = compared.filter(entry => nameOf(entry.kind) === 'Removed')
+  const actionable = actionableEntries(preview.entries)
   const counts = preview.entries.reduce<Record<string, number>>((result, entry) => {
     const name = nameOf(entry.kind)
     result[name] = (result[name] ?? 0) + 1
@@ -71,17 +76,18 @@ export default function RefreshDialog({ preview, busy, onClose, onApply }: Props
               {compared.map(entry => (
                 <div key={entry.relativePath} className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border)' }}>
                   <div className="flex items-center gap-3">
-                    {nameOf(entry.kind) === 'Removed' && (
+                    {nameOf(entry.kind) !== 'Unchanged' && (
                       <input
                         type="checkbox"
-                        aria-label={`Approve removal ${entry.relativePath}`}
-                        checked={approvedRemovals.has(entry.relativePath)}
+                        aria-label={`Apply ${entry.relativePath}`}
+                        checked={approvedPaths.has(entry.relativePath)}
                         onChange={event => {
-                          setApprovedRemovals(current => {
-                            const next = new Set(current)
-                            if (event.target.checked) next.add(entry.relativePath)
-                            else next.delete(entry.relativePath)
-                            return next
+                          setApprovedPaths(current => {
+                            return toggleApprovedPath(
+                              current,
+                              entry.relativePath,
+                              event.target.checked,
+                            )
                           })
                         }}
                       />
@@ -89,9 +95,7 @@ export default function RefreshDialog({ preview, busy, onClose, onApply }: Props
                     <span className={`w-16 text-[9px] font-semibold uppercase ${colorOf(entry.kind)}`}>{nameOf(entry.kind)}</span>
                     <span className="min-w-0 flex-1 truncate font-mono text-[10px]">{entry.relativePath}</span>
                     <span className="text-[8px] uppercase text-muted-foreground">
-                      {entry.fingerprintsMatch === true ? 'fingerprints match'
-                        : entry.fingerprintsMatch === false ? 'fingerprints differ'
-                          : 'unverifiable'}
+                      {comparisonState(entry)}
                     </span>
                     {entry.componentIdentity && <span className="max-w-36 truncate text-[8px] text-muted-foreground">{entry.componentIdentity}</span>}
                   </div>
@@ -112,20 +116,20 @@ export default function RefreshDialog({ preview, busy, onClose, onApply }: Props
         </div>
 
         <div className="flex items-center gap-3 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          {removals.length > 0 ? (
+          {actionable.length > 0 ? (
             <div className="flex flex-1 items-center gap-2 text-[9px] text-amber-500">
               <AlertTriangle className="h-3.5 w-3.5" />
-              Select each removal to approve it ({approvedRemovals.size}/{removals.length} selected).
+              Select every source change you want to apply ({approvedPaths.size}/{actionable.length} selected).
             </div>
           ) : <div className="flex-1" />}
           <button className="secondary-button" onClick={onClose} disabled={busy}>Reject</button>
           <button
             className="primary-button"
-            disabled={busy}
-            onClick={() => onApply([...approvedRemovals])}
+            disabled={busy || (actionable.length > 0 && approvedPaths.size === 0)}
+            onClick={() => onApply([...approvedPaths])}
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {compared.length === 0 ? 'Confirm no changes' : 'Apply selected baseline changes'}
+            {actionable.length === 0 ? 'Confirm no changes' : `Apply ${approvedPaths.size} selected`}
           </button>
         </div>
       </div>

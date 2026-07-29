@@ -35,6 +35,7 @@ internal sealed class ReconciliationFileOperations : IReconciliationFileOperatio
 public sealed class DeviceReconciler
 {
     public const string ApprovalRequiredCode = "RECONCILIATION_APPROVAL_REQUIRED";
+    public const string ApprovalInvalidCode = "RECONCILIATION_APPROVAL_INVALID";
     public const string PreviewStaleCode = "RECONCILIATION_PREVIEW_STALE";
     public const string ManifestInvalidCode = "RECONCILIATION_MANIFEST_INVALID";
 
@@ -131,7 +132,7 @@ public sealed class DeviceReconciler
     public ReconciliationOutcome Apply(
         DeviceContext context,
         ReconciliationPreview approvedPreview,
-        IReadOnlySet<string> approvedRemovalPaths)
+        IReadOnlySet<string> approvedPaths)
     {
         ArgumentNullException.ThrowIfNull(context);
         if (approvedPreview is null)
@@ -141,7 +142,7 @@ public sealed class DeviceReconciler
                 "A reconciliation preview must be explicitly approved before applying it.");
         }
 
-        ArgumentNullException.ThrowIfNull(approvedRemovalPaths);
+        ArgumentNullException.ThrowIfNull(approvedPaths);
 
         var current = Preview(context);
         if (!string.Equals(approvedPreview.WorktreeId, context.WorktreeId, StringComparison.Ordinal)
@@ -161,9 +162,21 @@ public sealed class DeviceReconciler
                 "The baseline or staged export changed after this preview was created.");
         }
 
-        var normalizedRemovals = NormalizeApprovedRemovals(
+        var normalizedApprovals = NormalizeApprovedPaths(
             context.ExportedSourceRoot,
-            approvedRemovalPaths);
+            approvedPaths);
+        var actionablePaths = current.Entries
+            .Where(static entry => entry.Kind != ReconciliationChangeKind.Unchanged)
+            .Select(static entry => entry.RelativePath)
+            .ToHashSet(StringComparer.Ordinal);
+        var invalidApproval = normalizedApprovals.FirstOrDefault(path =>
+            !actionablePaths.Contains(path));
+        if (invalidApproval is not null)
+        {
+            throw new ReconciliationException(
+                ApprovalInvalidCode,
+                $"'{invalidApproval}' is not an actionable entry in this comparison.");
+        }
         var mutations = new List<PendingMutation>();
         var artifacts = new HashSet<string>(StringComparer.Ordinal);
 
@@ -173,7 +186,8 @@ public sealed class DeviceReconciler
             {
                 if (entry.Kind is not (
                         ReconciliationChangeKind.Added or
-                        ReconciliationChangeKind.Changed))
+                        ReconciliationChangeKind.Changed)
+                    || !normalizedApprovals.Contains(entry.RelativePath))
                 {
                     continue;
                 }
@@ -194,7 +208,7 @@ public sealed class DeviceReconciler
             foreach (var entry in current.Entries)
             {
                 if (entry.Kind != ReconciliationChangeKind.Removed
-                    || !normalizedRemovals.Contains(entry.RelativePath))
+                    || !normalizedApprovals.Contains(entry.RelativePath))
                 {
                     continue;
                 }
@@ -210,7 +224,7 @@ public sealed class DeviceReconciler
             var manifestMutation = PrepareManifestMutation(
                 context,
                 current,
-                normalizedRemovals,
+                normalizedApprovals,
                 artifacts);
             if (manifestMutation is not null)
             {
@@ -276,9 +290,14 @@ public sealed class DeviceReconciler
     private PendingMutation? PrepareManifestMutation(
         DeviceContext context,
         ReconciliationPreview preview,
-        IReadOnlySet<string> approvedRemovals,
+        IReadOnlySet<string> approvedPaths,
         ISet<string> artifacts)
     {
+        if (approvedPaths.Count == 0)
+        {
+            return null;
+        }
+
         var sourcePath = ResolveControlledPath(context.StagingRoot, MetadataFileName);
         var destinationPath =
             ResolveControlledPath(context.ExportedSourceRoot, MetadataFileName);
@@ -288,26 +307,13 @@ public sealed class DeviceReconciler
             $".{MetadataFileName}.{Guid.NewGuid():N}.tmp");
         artifacts.Add(temporaryPath);
 
-        var retainedRemovalPaths = preview.Entries
-            .Where(entry =>
-                entry.Kind == ReconciliationChangeKind.Removed
-                && !approvedRemovals.Contains(entry.RelativePath))
-            .Select(static entry => entry.RelativePath)
-            .ToHashSet(StringComparer.Ordinal);
-
         try
         {
-            if (retainedRemovalPaths.Count == 0)
-            {
-                _fileOperations.CopyFile(sourcePath, temporaryPath, overwrite: false);
-            }
-            else
-            {
-                var mergedManifest = MergeRetainedComponents(
-                    context,
-                    retainedRemovalPaths);
-                File.WriteAllText(temporaryPath, mergedManifest);
-            }
+            var mergedManifest = MergeSelectedComponents(
+                context,
+                preview,
+                approvedPaths);
+            File.WriteAllText(temporaryPath, mergedManifest);
         }
         catch
         {
@@ -329,9 +335,10 @@ public sealed class DeviceReconciler
         return PendingMutation.Replace(destinationPath, temporaryPath);
     }
 
-    private static string MergeRetainedComponents(
+    private static string MergeSelectedComponents(
         DeviceContext context,
-        IReadOnlySet<string> retainedRemovalPaths)
+        ReconciliationPreview preview,
+        IReadOnlySet<string> approvedPaths)
     {
         var stagingManifestPath =
             ResolveControlledPath(context.StagingRoot, MetadataFileName);
@@ -346,30 +353,75 @@ public sealed class DeviceReconciler
             ?? throw new ReconciliationException(
                 ManifestInvalidCode,
                 $"The manifest '{stagingManifestPath}' has no component array.");
+        var baselineRoot = File.Exists(baselineManifestPath)
+            ? JsonNode.Parse(File.ReadAllText(baselineManifestPath))?.AsObject()
+            : null;
+        var outputRoot = baselineRoot?.DeepClone().AsObject()
+            ?? stagingRoot.DeepClone().AsObject();
+        var outputComponents = new JsonArray();
+        outputRoot["components"] = outputComponents;
 
-        using var baselineDocument =
-            JsonDocument.Parse(File.ReadAllText(baselineManifestPath));
-        foreach (var component in baselineDocument.RootElement
-                     .GetProperty("components")
-                     .EnumerateArray())
+        var baselineByPath = IndexManifestNodes(
+            baselineRoot?["components"]?.AsArray(),
+            context.ExportedSourceRoot);
+        var stagingByPath = IndexManifestNodes(
+            stagingComponents,
+            context.StagingRoot);
+
+        foreach (var entry in preview.Entries.OrderBy(
+                     static entry => entry.RelativePath,
+                     StringComparer.Ordinal))
         {
-            if (!component.TryGetProperty("exportedFile", out var exportedFile)
-                || exportedFile.ValueKind != JsonValueKind.String
-                || string.IsNullOrWhiteSpace(exportedFile.GetString()))
+            JsonNode? selected = entry.Kind switch
+            {
+                ReconciliationChangeKind.Added when approvedPaths.Contains(entry.RelativePath) =>
+                    stagingByPath.GetValueOrDefault(entry.RelativePath),
+                ReconciliationChangeKind.Added => null,
+                ReconciliationChangeKind.Changed when approvedPaths.Contains(entry.RelativePath) =>
+                    stagingByPath.GetValueOrDefault(entry.RelativePath),
+                ReconciliationChangeKind.Changed =>
+                    baselineByPath.GetValueOrDefault(entry.RelativePath),
+                ReconciliationChangeKind.Removed when approvedPaths.Contains(entry.RelativePath) =>
+                    null,
+                ReconciliationChangeKind.Removed =>
+                    baselineByPath.GetValueOrDefault(entry.RelativePath),
+                _ => baselineByPath.GetValueOrDefault(entry.RelativePath)
+                    ?? stagingByPath.GetValueOrDefault(entry.RelativePath),
+            };
+
+            if (selected is not null)
+            {
+                outputComponents.Add(selected.DeepClone());
+            }
+        }
+
+        return outputRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static Dictionary<string, JsonNode> IndexManifestNodes(
+        JsonArray? components,
+        string root)
+    {
+        var indexed = new Dictionary<string, JsonNode>(StringComparer.Ordinal);
+        if (components is null)
+        {
+            return indexed;
+        }
+
+        foreach (var node in components)
+        {
+            if (node is not JsonObject component
+                || component["exportedFile"] is not JsonValue exportedFile
+                || !exportedFile.TryGetValue<string>(out var value)
+                || string.IsNullOrWhiteSpace(value))
             {
                 continue;
             }
 
-            var relativePath = NormalizeRelativePath(
-                context.ExportedSourceRoot,
-                exportedFile.GetString()!);
-            if (retainedRemovalPaths.Contains(relativePath))
-            {
-                stagingComponents.Add(JsonNode.Parse(component.GetRawText()));
-            }
+            indexed[NormalizeRelativePath(root, value)] = component;
         }
 
-        return stagingRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        return indexed;
     }
 
     private void CaptureOriginalState(
@@ -576,12 +628,12 @@ public sealed class DeviceReconciler
         return value.GetString();
     }
 
-    private static HashSet<string> NormalizeApprovedRemovals(
+    private static HashSet<string> NormalizeApprovedPaths(
         string baselineRoot,
-        IEnumerable<string> approvedRemovalPaths)
+        IEnumerable<string> approvedPaths)
     {
         var normalized = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var path in approvedRemovalPaths)
+        foreach (var path in approvedPaths)
         {
             normalized.Add(NormalizeRelativePath(baselineRoot, path));
         }

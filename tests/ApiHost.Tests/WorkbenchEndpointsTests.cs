@@ -180,6 +180,41 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Empty(fixture.VersionControl.Calls);
     }
 
+    [Fact]
+    public async Task TiaComparisonApplyChangesOnlyExplicitlySelectedPaths()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null)).EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedPaths = new[] { "Blocks/Main.xml" },
+            });
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
+        Assert.False(fixture.BaselineExists("Blocks/New.xml"));
+        Assert.DoesNotContain(fixture.BaselineComponentIds(), id => id == "fb-new");
+        Assert.Equal(["vc_add", "vc_commit"], fixture.VersionControl.Calls);
+    }
+
     private static void WriteComparisonManifest(
         string rootPath,
         string? fingerprints,
@@ -699,7 +734,13 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
             Calls.Add(tool);
-            return Task.FromResult((T)(object)JsonDocument.Parse(json).RootElement.Clone());
+            if (typeof(T) == typeof(JsonElement))
+            {
+                return Task.FromResult(
+                    (T)(object)JsonDocument.Parse(json).RootElement.Clone());
+            }
+
+            return Task.FromResult(JsonSerializer.Deserialize<T>(json)!);
         }
     }
 
@@ -823,6 +864,26 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             Directory.CreateDirectory(Path.Combine(context.ExportedSourceRoot, "Blocks"));
             File.WriteAllText(Path.Combine(context.ExportedSourceRoot, "Blocks", "Main.xml"), "<stored/>");
             WriteComparisonManifest(context.ExportedSourceRoot, fingerprints);
+        }
+
+        public string ReadBaseline(string relativePath) =>
+            File.ReadAllText(Path.Combine(
+                context.ExportedSourceRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+        public bool BaselineExists(string relativePath) =>
+            File.Exists(Path.Combine(
+                context.ExportedSourceRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+        public string?[] BaselineComponentIds()
+        {
+            using var manifest = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(context.ExportedSourceRoot, "metadata.json")));
+            return manifest.RootElement.GetProperty("components")
+                .EnumerateArray()
+                .Select(component => component.GetProperty("id").GetString())
+                .ToArray();
         }
 
         public void WriteManifest()

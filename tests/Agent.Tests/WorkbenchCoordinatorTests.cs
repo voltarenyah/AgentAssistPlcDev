@@ -358,7 +358,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         var result = await coordinator.ApplyRefreshAsync(
             fixture.Context,
-            new ApprovedReconciliation(preview, new HashSet<string>()),
+            new ApprovedReconciliation(
+                preview,
+                preview.Entries
+                    .Where(entry => entry.Kind != ReconciliationChangeKind.Unchanged)
+                    .Select(entry => entry.RelativePath)
+                    .ToHashSet(StringComparer.Ordinal)),
             CancellationToken.None);
 
         Assert.Equal(RefreshApplyState.Committed, result.State);
@@ -441,7 +446,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         var result = await coordinator.ApplyRefreshAsync(
             fixture.Context,
-            new ApprovedReconciliation(preview, new HashSet<string>()),
+            new ApprovedReconciliation(
+                preview,
+                preview.Entries
+                    .Where(entry => entry.Kind != ReconciliationChangeKind.Unchanged)
+                    .Select(entry => entry.RelativePath)
+                    .ToHashSet(StringComparer.Ordinal)),
             CancellationToken.None);
 
         Assert.Equal(RefreshApplyState.FilesUpdatedCommitFailed, result.State);
@@ -548,7 +558,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var preview = coordinator.PreviewRefresh(fixture.Context);
         await coordinator.ApplyRefreshAsync(
             fixture.Context,
-            new ApprovedReconciliation(preview, new HashSet<string>()),
+            new ApprovedReconciliation(
+                preview,
+                preview.Entries
+                    .Where(entry => entry.Kind != ReconciliationChangeKind.Unchanged)
+                    .Select(entry => entry.RelativePath)
+                    .ToHashSet(StringComparer.Ordinal)),
             CancellationToken.None);
 
         await coordinator.UpdateKnowledgeAsync(fixture.Context, CancellationToken.None);

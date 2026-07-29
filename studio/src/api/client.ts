@@ -331,10 +331,10 @@ export const stageDeviceRefresh = (deviceId: string, operationId?: string) =>
   workbenchRequest<unknown>(`/devices/${encodeURIComponent(deviceId)}/refresh/stage`, withOperation(jsonRequest('POST'), operationId))
 export const previewDeviceRefresh = (deviceId: string) =>
   workbenchRequest<ReconciliationPreview>(`/devices/${encodeURIComponent(deviceId)}/refresh/preview`)
-export const applyDeviceRefresh = (deviceId: string, previewId: string, approvedRemovalPaths: string[], operationId?: string) =>
+export const applyDeviceRefresh = (deviceId: string, previewId: string, approvedPaths: string[], operationId?: string) =>
   workbenchRequest<RefreshApplyResult>(`/devices/${encodeURIComponent(deviceId)}/refresh/apply`, withOperation(jsonRequest('POST', {
     previewId,
-    approvedRemovalPaths,
+    approvedPaths,
   }), operationId))
 export const updateDeviceKnowledge = (deviceId: string, operationId?: string) =>
   workbenchRequest<KnowledgeUpdateResult>(`/devices/${encodeURIComponent(deviceId)}/knowledge/update`, withOperation(jsonRequest('POST'), operationId))

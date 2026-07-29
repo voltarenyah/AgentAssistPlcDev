@@ -422,12 +422,12 @@ export default function MainStudio() {
     }
   }
 
-  const applyRefresh = async (approvedRemovalPaths: string[]) => {
+  const applyRefresh = async (approvedPaths: string[]) => {
     if (!selection.deviceId || !preview) return
     setOperation('apply-refresh')
     const op = beginOperation('apply-refresh', 'Applying approved refresh...')
     try {
-      const result = await api.applyDeviceRefresh(selection.deviceId, preview.previewId, approvedRemovalPaths, op.id)
+      const result = await api.applyDeviceRefresh(selection.deviceId, preview.previewId, approvedPaths, op.id)
       setPreview(null)
       await reloadDeviceSnapshot()
       if (result.error) {
