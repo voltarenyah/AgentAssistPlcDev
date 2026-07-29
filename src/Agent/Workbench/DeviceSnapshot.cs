@@ -1,3 +1,7 @@
+using System.Text.Json;
+using System.Xml;
+using System.Xml.Linq;
+
 namespace Agent.Workbench;
 
 public sealed record DeviceKnowledgeSnapshot(string State, string? UpdatedAt);
@@ -30,6 +34,8 @@ public sealed class DeviceSnapshotReader
 {
     public DeviceSnapshot Read(DeviceContext context, DeviceMetadata metadata)
     {
+        var diagnostics = new List<string>();
+        var blocks = ReadBlocks(context, diagnostics, out var overlayCount);
         var state = !File.Exists(context.KnowledgeDbPath)
             ? "missing"
             : metadata.Knowledge.Stale || metadata.Knowledge.BaselineStale
@@ -46,8 +52,207 @@ public sealed class DeviceSnapshotReader
             context.ModifiedSourceRoot,
             context.KnowledgeDbPath,
             new DeviceKnowledgeSnapshot(state, metadata.Knowledge.UpdatedAt),
-            [],
-            0,
-            []);
+            blocks,
+            overlayCount,
+            diagnostics);
     }
+
+    private static IReadOnlyList<OfflineBlockInfo> ReadBlocks(
+        DeviceContext context,
+        List<string> diagnostics,
+        out int overlayCount)
+    {
+        overlayCount = Directory.Exists(context.ModifiedSourceRoot)
+            ? Directory.EnumerateFiles(context.ModifiedSourceRoot, "*.xml", SearchOption.AllDirectories).Count()
+            : 0;
+
+        var manifestPath = Path.Combine(context.ExportedSourceRoot, "metadata.json");
+        if (!File.Exists(manifestPath))
+        {
+            diagnostics.Add($"Export manifest is missing: {manifestPath}");
+            return [];
+        }
+
+        JsonDocument manifest;
+        try
+        {
+            manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        }
+        catch (JsonException ex)
+        {
+            diagnostics.Add($"Export manifest is invalid JSON: {manifestPath}: {ex.Message}");
+            return [];
+        }
+
+        using (manifest)
+        {
+            if (!manifest.RootElement.TryGetProperty("components", out var components)
+                || components.ValueKind != JsonValueKind.Array)
+            {
+                diagnostics.Add($"Export manifest has no components array: {manifestPath}");
+                return [];
+            }
+
+            var blocks = new List<OfflineBlockInfo>();
+            var representedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var component in components.EnumerateArray())
+            {
+                var exportedFile = ReadString(component, "exportedFile");
+                if (string.IsNullOrWhiteSpace(exportedFile))
+                    continue;
+
+                string normalizedPath;
+                try
+                {
+                    var fullPath = WorkbenchPaths.ResolveRelative(context.ExportedSourceRoot, exportedFile);
+                    normalizedPath = Path.GetRelativePath(context.ExportedSourceRoot, fullPath).Replace('\\', '/');
+                }
+                catch (Exception ex) when (ex is ArgumentException or WorkbenchPathException)
+                {
+                    diagnostics.Add($"Manifest component has invalid exportedFile '{exportedFile}': {ex.Message}");
+                    continue;
+                }
+
+                representedPaths.Add(normalizedPath);
+                var category = ReadString(component, "category");
+                var status = ReadString(component, "status");
+                if (!IsBlockCategory(category)
+                    || !string.Equals(status, "Exported", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var sourcePath = ReadString(component, "sourcePath");
+                var modified = File.Exists(WorkbenchPaths.ResolveRelative(
+                    context.ModifiedSourceRoot,
+                    normalizedPath));
+                blocks.Add(new OfflineBlockInfo(
+                    ReadString(component, "id") ?? $"{category}:{sourcePath ?? normalizedPath}",
+                    ReadString(component, "name") ?? Path.GetFileNameWithoutExtension(normalizedPath),
+                    ReadInt32(component, "number"),
+                    category!,
+                    ReadString(component, "programmingLanguage"),
+                    GroupPathOf(sourcePath),
+                    normalizedPath,
+                    modified));
+            }
+
+            if (Directory.Exists(context.ModifiedSourceRoot))
+            {
+                foreach (var overlayPath in Directory.EnumerateFiles(
+                    context.ModifiedSourceRoot,
+                    "*.xml",
+                    SearchOption.AllDirectories))
+                {
+                    var relativePath = Path.GetRelativePath(context.ModifiedSourceRoot, overlayPath)
+                        .Replace('\\', '/');
+                    if (representedPaths.Contains(relativePath))
+                        continue;
+
+                    if (TryReadOverlayBlock(overlayPath, relativePath, out var block, out var error))
+                        blocks.Add(block!);
+                    else
+                        diagnostics.Add($"Overlay '{relativePath}' is not a supported Siemens PLC block: {error}");
+                }
+            }
+
+            return blocks
+                .OrderBy(block => block.BlockType, StringComparer.Ordinal)
+                .ThenBy(block => block.Number ?? int.MaxValue)
+                .ThenBy(block => block.Name, StringComparer.Ordinal)
+                .ThenBy(block => block.RelativePath, StringComparer.Ordinal)
+                .ToArray();
+        }
+    }
+
+    private static bool TryReadOverlayBlock(
+        string path,
+        string relativePath,
+        out OfflineBlockInfo? result,
+        out string error)
+    {
+        result = null;
+        try
+        {
+            var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
+            using var reader = XmlReader.Create(path, settings);
+            var document = XDocument.Load(reader);
+            var element = document.Descendants().FirstOrDefault(candidate =>
+                BlockTypeOf(candidate.Name.LocalName) is not null);
+            if (element is null)
+            {
+                error = "no SW.Blocks.OB, FB, FC, DB, GlobalDB, InstanceDB, or ArrayDB element was found";
+                return false;
+            }
+
+            var blockType = BlockTypeOf(element.Name.LocalName)!;
+            var attributes = element.Elements()
+                .FirstOrDefault(candidate => candidate.Name.LocalName == "AttributeList");
+            var name = AttributeValue(attributes, "Name");
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                error = "the block AttributeList has no Name";
+                return false;
+            }
+
+            var number = int.TryParse(AttributeValue(attributes, "Number"), out var parsedNumber)
+                ? parsedNumber
+                : (int?)null;
+            result = new OfflineBlockInfo(
+                $"overlay:{relativePath}",
+                name,
+                number,
+                blockType,
+                AttributeValue(attributes, "ProgrammingLanguage"),
+                OverlayGroupPath(relativePath),
+                relativePath,
+                true);
+            error = string.Empty;
+            return true;
+        }
+        catch (Exception ex) when (ex is XmlException or IOException or UnauthorizedAccessException)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static string? ReadString(JsonElement owner, string property) =>
+        owner.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static int? ReadInt32(JsonElement owner, string property) =>
+        owner.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt32(out var number)
+            ? number
+            : null;
+
+    private static bool IsBlockCategory(string? category) =>
+        category is "OB" or "FB" or "FC" or "DB";
+
+    private static string? GroupPathOf(string? sourcePath)
+    {
+        var separator = sourcePath?.LastIndexOf('/') ?? -1;
+        return separator <= 0 ? null : sourcePath![..separator];
+    }
+
+    private static string? OverlayGroupPath(string relativePath)
+    {
+        var segments = relativePath.Split('/');
+        return segments.Length <= 2 ? null : string.Join('/', segments[1..^1]);
+    }
+
+    private static string? BlockTypeOf(string elementName) => elementName switch
+    {
+        "SW.Blocks.OB" => "OB",
+        "SW.Blocks.FB" => "FB",
+        "SW.Blocks.FC" => "FC",
+        "SW.Blocks.DB" or "SW.Blocks.GlobalDB" or "SW.Blocks.InstanceDB" or "SW.Blocks.ArrayDB" => "DB",
+        _ => null,
+    };
+
+    private static string? AttributeValue(XElement? attributes, string name) =>
+        attributes?.Elements().FirstOrDefault(element => element.Name.LocalName == name)?.Value;
 }
