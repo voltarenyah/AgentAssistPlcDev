@@ -362,6 +362,21 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         createdSessionResponse.EnsureSuccessStatusCode();
         var createdSession = await createdSessionResponse.Content.ReadFromJsonAsync<JsonElement>();
         var sessionId = createdSession.GetProperty("header").GetProperty("sessionId").GetString()!;
+        var renameResponse = await client.PostAsJsonAsync(
+            "/api/chat/session/rename",
+            new { sessionId, title = "  Startup checks  " });
+        renameResponse.EnsureSuccessStatusCode();
+        var renamedSession = await renameResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            "Startup checks",
+            renamedSession.GetProperty("header").GetProperty("title").GetString());
+        var sessionList = await client.GetFromJsonAsync<JsonElement[]>("/api/chat/sessions");
+        Assert.Equal("Startup checks", Assert.Single(sessionList!).GetProperty("title").GetString());
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await client.PostAsJsonAsync(
+                "/api/chat/session/rename",
+                new { sessionId = SessionManager.NewSessionId(), title = "Missing" })).StatusCode);
         var secondSessionResponse = await client.PostAsync("/api/chat/session/new", null);
         var secondSession = await secondSessionResponse.Content.ReadFromJsonAsync<JsonElement>();
         var secondId = secondSession.GetProperty("header").GetProperty("sessionId").GetString()!;
