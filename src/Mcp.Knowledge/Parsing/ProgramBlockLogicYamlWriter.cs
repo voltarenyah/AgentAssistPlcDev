@@ -202,6 +202,11 @@ public static class ProgramBlockLogicYamlWriter
         statements.AddRange(context.BuildIncrementStatements(notes));
         statements.AddRange(context.BuildDirectAssignmentStatements(notes));
 
+        if (statements.Count > 0 && notes.Any(note => note.Contains("generically", StringComparison.Ordinal)))
+        {
+            statements.Insert(0, "// Translated generically: pin semantics of one or more instructions were not verified.");
+        }
+
         if (statements.Count == 0)
         {
             if (notes.Count == 0)
@@ -1247,8 +1252,28 @@ public static class ProgramBlockLogicYamlWriter
                 return And(upstream, $"({min} <= {input} AND {input} <= {max})");
             }
 
-            notes.Add($"Unsupported LAD/FBD part '{part.Name}'.");
-            return string.Empty;
+            return BuildGenericPartExpression(part, pinName, notes);
+        }
+
+        private string BuildGenericPartExpression(PartNode part, string pinName, List<string> notes)
+        {
+            // eno behaves like every other LAD enable-out: it mirrors the en input.
+            if (MatchesAny(pinName, "eno"))
+            {
+                var enable = EvaluateInput(part.Uid, "en", notes);
+                notes.Add($"Rendered '{part.Name}' generically; pin semantics not verified.");
+                return string.IsNullOrWhiteSpace(enable) ? "TRUE" : enable;
+            }
+
+            var bindings = GetInputBindings(part.Uid, notes);
+            if (bindings.Count == 0 && !HasEnableInput(part.Uid))
+            {
+                notes.Add($"Unsupported LAD/FBD part '{part.Name}'.");
+                return string.Empty;
+            }
+
+            notes.Add($"Rendered '{part.Name}' generically; pin semantics not verified.");
+            return $"{part.Name}({string.Join(", ", bindings)})";
         }
 
         private static bool IsInputPin(string pinName)

@@ -1350,6 +1350,64 @@ public sealed class ProgramBlockLogicTests
         Assert.Empty(result);
     }
 
+    [Fact]
+    public void RendersUnknownExpressionInstructionFromTopology()
+    {
+        var result = TranslateLadBlock(
+            "ShiftLogic",
+            "cu-shr",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v5">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-value"><Symbol><Component Name="Value" /></Symbol></Access>
+                <Access Scope="LiteralConstant" UId="a-two"><Constant><ConstantValue>2</ConstantValue></Constant></Access>
+                <Access Scope="LocalVariable" UId="a-shifted"><Symbol><Component Name="Shifted" /></Symbol></Access>
+                <Part Name="SHR" UId="p-shr" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-in"><IdentCon UId="a-value" /><NameCon UId="p-shr" Name="in" /></Wire>
+                <Wire UId="w-n"><IdentCon UId="a-two" /><NameCon UId="p-shr" Name="n" /></Wire>
+                <Wire UId="w-out"><NameCon UId="p-shr" Name="out" /><IdentCon UId="a-shifted" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var statements = StatementsOf(result);
+        Assert.Contains("Shifted := SHR(in := Value, n := 2);", statements);
+        Assert.Contains("// Translated generically: pin semantics of one or more instructions were not verified.", statements);
+    }
+
+    [Fact]
+    public void WrapsGenericallyRenderedInstructionInEnableGuard()
+    {
+        var result = TranslateLadBlock(
+            "GuardedShiftLogic",
+            "cu-shr-en",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v5">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-enable"><Symbol><Component Name="Enable" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-value"><Symbol><Component Name="Value" /></Symbol></Access>
+                <Access Scope="LiteralConstant" UId="a-two"><Constant><ConstantValue>2</ConstantValue></Constant></Access>
+                <Access Scope="LocalVariable" UId="a-shifted"><Symbol><Component Name="Shifted" /></Symbol></Access>
+                <Part Name="Contact" UId="p-enable" />
+                <Part Name="SHR" UId="p-shr" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-enable-in"><Powerrail /><NameCon UId="p-enable" Name="in" /></Wire>
+                <Wire UId="w-enable-op"><IdentCon UId="a-enable" /><NameCon UId="p-enable" Name="operand" /></Wire>
+                <Wire UId="w-en"><NameCon UId="p-enable" Name="out" /><NameCon UId="p-shr" Name="en" /></Wire>
+                <Wire UId="w-in"><IdentCon UId="a-value" /><NameCon UId="p-shr" Name="in" /></Wire>
+                <Wire UId="w-n"><IdentCon UId="a-two" /><NameCon UId="p-shr" Name="n" /></Wire>
+                <Wire UId="w-out"><NameCon UId="p-shr" Name="out" /><IdentCon UId="a-shifted" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var statements = StatementsOf(result);
+        Assert.Contains("IF Enable THEN Shifted := SHR(in := Value, n := 2); END_IF;", statements);
+    }
+
     private static IReadOnlyDictionary<string, string> Translate(string xml, ProgramBlockComponent component)
     {
         return ProgramBlockLogicYamlWriter.GetNetworkStatementTextByCompileUnitId(xml, component);
