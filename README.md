@@ -39,6 +39,28 @@ unchanged files.
 for the worktree lifetime after PLC import and compile. Update the device knowledge
 database once after a batch of edits and before relying on it again.
 
+## Offline workflow and TIA synchronization
+
+Normal block browsing, overlay editing, Git work, and knowledge queries use the
+persisted device artifacts and do not require TIA Portal. Closing TIA or restarting
+the application does not clear `exported-source`, `modified-source`, Git history, or
+`plc-knowledge.db`. The block index is reconstructed from the tracked
+`exported-source/metadata.json` and merged with sparse overlays.
+
+The device overview reports knowledge state from disk and `device.json`:
+
+- `missing`: `plc-knowledge.db` does not exist.
+- `stale`: the database exists, but persisted metadata records baseline or overlay
+  changes that have not been ingested.
+- `current`: the database exists and no persisted stale flag is set.
+
+Use **Open project in TIA** before an explicit **Compare with TIA** or **Import &
+compile** operation. Compare exports the live PLC into temporary `staging`, then
+shows stored and live fingerprints. It is non-destructive: tracked baseline files,
+overlays, Git history, and the knowledge database remain unchanged until the
+engineer explicitly approves selected baseline changes. Import & compile is also an
+explicit action and sends only the selected modified source to TIA.
+
 Existing `%LOCALAPPDATA%\PlcAiAssistant\exports` directories are legacy data. New
 workbenches do not migrate, list, modify, or delete them.
 
@@ -48,6 +70,3 @@ metadata and registers the canonical, non-reparse root in
 editor child processes receive only the host-owned registry location; tool arguments
 cannot grant themselves a new filesystem root. Unregistered and reparse-point roots
 remain sandbox-denied.
-
-The current implementation is backend-only. See the
-[future UI plan](buildnote/plan/workbench-project-storage-future-ui.md).
