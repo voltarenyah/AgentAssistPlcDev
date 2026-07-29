@@ -314,6 +314,11 @@ export const listDevices = (workbenchId: string, worktreeId: string) =>
 export const selectDevice = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/select`, jsonRequest('POST'))
 export const getSelectedDeviceInfo = () => workbenchRequest<DeviceSnapshot>('/project/info')
+export const openDeviceProject = (deviceId: string, operationId?: string) =>
+  workbenchRequest<{ opened: boolean }>(
+    `/devices/${encodeURIComponent(deviceId)}/tia/open`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
 export const stageDeviceRefresh = (deviceId: string, operationId?: string) =>
   workbenchRequest<unknown>(`/devices/${encodeURIComponent(deviceId)}/refresh/stage`, withOperation(jsonRequest('POST'), operationId))
 export const previewDeviceRefresh = (deviceId: string) =>

@@ -401,6 +401,20 @@ export default function MainStudio() {
     }
   }
 
+  const openProjectInTia = async () => {
+    if (!selection.deviceId) return
+    setOperation('open-tia-project')
+    const op = beginOperation('open-tia-project', 'Opening registered project in TIA Portal...')
+    try {
+      await api.openDeviceProject(selection.deviceId, op.id)
+      toast.success('Registered project opened in TIA Portal')
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
   const applyRefresh = async (approvedRemovalPaths: string[]) => {
     if (!selection.deviceId || !preview) return
     setOperation('apply-refresh')
@@ -633,6 +647,9 @@ export default function MainStudio() {
                         <h1 className="text-lg font-semibold">{deviceInfo?.plcName ?? selection.deviceId}</h1>
                         <p className="mt-0.5 font-mono text-[9px] text-muted-foreground">{deviceInfo?.engineeringIdentity ?? selection.deviceId}</p>
                         <div className="mt-3 flex flex-wrap gap-2">
+                          <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void openProjectInTia()}>
+                            <Server className="h-3.5 w-3.5" /> Open project in TIA
+                          </button>
                           <button className="primary-button" disabled={Boolean(operation)} onClick={() => void stageRefresh()}>
                             <RefreshCw className="h-3.5 w-3.5" /> Stage full PLC refresh
                           </button>

@@ -13,6 +13,38 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Path.Combine(Path.GetTempPath(), $"coordinator-tests-{Guid.NewGuid():N}");
 
     [Fact]
+    public async Task OpenProjectInTiaUsesRegisteredProjectWithUi()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller().Respond("connect", new { connected = true });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        await coordinator.OpenProjectInTiaAsync(fixture.Context, CancellationToken.None);
+
+        var args = engineering.CallArgs["connect"].Single();
+        Assert.Equal(@"C:\Projects\Line.ap17", Property<string>(args, "projectPath"));
+        Assert.True(Property<bool>(args, "withUI"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task OpenProjectInTiaRejectsMissingRegisteredProjectBeforeEngineeringCall(
+        string? sourceProjectPath)
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: sourceProjectPath);
+        var engineering = new FakeToolCaller();
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var error = await Assert.ThrowsAsync<WorkbenchCatalogException>(
+            () => coordinator.OpenProjectInTiaAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("ENGINEERING_PROJECT_PATH_MISSING", error.Code);
+        Assert.Empty(engineering.CallArgs);
+    }
+
+    [Fact]
     public async Task CreateInitializesGitThenConnectsAndDiscoversDevicesBeforeMetadata()
     {
         var calls = new List<string>();
@@ -600,7 +632,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         private Fixture(DeviceContext context) => Context = context;
         public DeviceContext Context { get; }
 
-        public static Fixture Create(string parent, bool knowledgeStale = false)
+        public static Fixture Create(
+            string parent,
+            bool knowledgeStale = false,
+            string? sourceProjectPath = @"C:\Projects\Line.ap17")
         {
             var context = WorkbenchPaths.ResolveDevice(
                 "wb-1", Path.Combine(parent, Guid.NewGuid().ToString("N")),
@@ -615,6 +650,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     null, null, null,
                     new KnowledgeState(knowledgeStale, new Dictionary<string, string>(), null),
                     Array.Empty<DeviceImportRecord>()));
+            new AtomicJsonStore().Write(
+                Path.Combine(context.WorktreeRoot, "worktree.json"),
+                new WorktreeMetadata(
+                    WorkbenchSchema.CurrentVersion, "wt-1", "wb-1", "master", "master",
+                    "2026-07-29T00:00:00Z", null, null, sourceProjectPath,
+                    new[] { "dev-1" }, null));
             return new Fixture(context);
         }
 

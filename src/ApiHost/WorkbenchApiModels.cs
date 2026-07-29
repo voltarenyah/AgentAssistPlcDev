@@ -182,6 +182,25 @@ public static class WorkbenchEndpoints
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s) => { s.Worktree(id, wt); s.Select(id, wt); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.Worktree(id, wt).DeviceIds);
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
+        app.MapPost("/api/devices/{device}/tia/open", async (
+            string device,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "open-tia-project",
+                "Opening registered project in TIA Portal...",
+                async progress =>
+                {
+                    await c.OpenProjectInTiaAsync(s.Device(device).Context, ct, progress)
+                        .ConfigureAwait(false);
+                    return new { opened = true };
+                },
+                "TIA project opened.").ConfigureAwait(false));
         app.MapPost("/api/devices/{device}/refresh/stage", async (
             string device,
             WorkbenchApiState s,

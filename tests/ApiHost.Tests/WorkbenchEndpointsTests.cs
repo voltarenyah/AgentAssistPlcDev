@@ -182,6 +182,50 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenProjectInTiaEndpointUsesExplicitOperationAndPreservesOfflineSnapshot()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            engineeringOffline: false,
+            sourceProjectPath: @"C:\Projects\Line.ap17");
+        fixture.WriteManifest();
+        var before = await fixture.Client.GetStringAsync("/api/project/info");
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/api/devices/dev-1/tia/open");
+        request.Headers.Add("X-Operation-Id", "open-1");
+
+        var response = await fixture.Client.SendAsync(request);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(["connect"], fixture.Engineering.Calls);
+        Assert.Equal(@"C:\Projects\Line.ap17",
+            fixture.Engineering.Arguments["connect"].GetProperty("projectPath").GetString());
+        Assert.True(fixture.Engineering.Arguments["connect"].GetProperty("withUI").GetBoolean());
+        Assert.Equal(before, await fixture.Client.GetStringAsync("/api/project/info"));
+        var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/open-1");
+        Assert.Equal("open-tia-project", operation.GetProperty("operationType").GetString());
+        Assert.Equal("succeeded", operation.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task FailedOpenProjectInTiaPreservesOfflineSnapshot()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            sourceProjectPath: @"C:\Projects\Line.ap17");
+        fixture.WriteManifest();
+        var before = await fixture.Client.GetStringAsync("/api/project/info");
+
+        var response = await fixture.Client.PostAsync("/api/devices/dev-1/tia/open", null);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(before, await fixture.Client.GetStringAsync("/api/project/info"));
+    }
+
+    [Fact]
     public async Task SelectedDeviceBlocksComeFromPersistedSnapshotWithoutEngineering()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
@@ -565,7 +609,9 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             string fixtureRoot,
             bool databaseExists,
             bool stale = false,
-            bool baselineStale = false)
+            bool baselineStale = false,
+            bool engineeringOffline = true,
+            string? sourceProjectPath = null)
         {
             var store = new AtomicJsonStore();
             var catalog = new WorkbenchCatalog(store, fixtureRoot);
@@ -595,7 +641,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 Path.Combine(worktreeRoot, "worktree.json"),
                 new WorktreeMetadata(
                     "1.0", worktreeId, workbench.WorkbenchId, "master", "master",
-                    DateTimeOffset.UtcNow.ToString("O"), null, null, null, [deviceId], null));
+                    DateTimeOffset.UtcNow.ToString("O"), null, null, sourceProjectPath, [deviceId], null));
             store.Write(
                 Path.Combine(deviceRoot, "device.json"),
                 new DeviceMetadata(
@@ -605,7 +651,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             if (databaseExists)
                 await File.WriteAllBytesAsync(context.KnowledgeDbPath, [1]);
 
-            var engineering = new ThrowingToolCaller();
+            var engineering = new ThrowingToolCaller(engineeringOffline);
             var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
             {
                 host.UseEnvironment("Testing");
@@ -615,6 +661,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                     services.RemoveAll<AtomicJsonStore>();
                     services.RemoveAll<WorkbenchApiState>();
                     services.RemoveAll<ApiMcpGateway>();
+                    services.RemoveAll<WorkbenchCoordinator>();
                     services.AddSingleton(store);
                     services.AddSingleton(catalog);
                     services.AddSingleton<WorkbenchApiState>();
@@ -623,6 +670,15 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                         new RecordingToolCaller(),
                         new RecordingToolCaller(),
                         new RecordingToolCaller()));
+                    services.AddSingleton(sp => new WorkbenchCoordinator(
+                        engineering,
+                        new RecordingToolCaller(),
+                        new RecordingToolCaller(),
+                        catalog,
+                        store,
+                        sp.GetRequiredService<DeviceReconciler>(),
+                        sp.GetRequiredService<DeviceSourceResolver>(),
+                        sp.GetRequiredService<DeviceOperationLock>()));
                 });
             });
             var client = factory.CreateClient();
@@ -663,9 +719,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         }
     }
 
-    private sealed class ThrowingToolCaller : IMcpToolCaller
+    private sealed class ThrowingToolCaller(bool throwOnCall = true) : IMcpToolCaller
     {
         public List<string> Calls { get; } = [];
+        public Dictionary<string, JsonElement> Arguments { get; } = [];
 
         public Task<T> CallAsync<T>(
             string tool,
@@ -673,7 +730,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             Calls.Add(tool);
-            throw new InvalidOperationException("Engineering is offline.");
+            Arguments[tool] = JsonSerializer.SerializeToElement(args);
+            if (throwOnCall)
+                throw new InvalidOperationException("Engineering is offline.");
+            return Task.FromResult((T)(object)new object());
         }
     }
 

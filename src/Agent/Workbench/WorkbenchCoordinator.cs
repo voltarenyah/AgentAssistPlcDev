@@ -106,6 +106,28 @@ public sealed class WorkbenchCoordinator
         stager = new SafeDeviceExportStager(engineering, this.operationLock);
     }
 
+    public async Task OpenProjectInTiaAsync(
+        DeviceContext device,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var worktree = store.Read<WorktreeMetadata>(
+            Path.Combine(device.WorktreeRoot, "worktree.json"));
+        if (string.IsNullOrWhiteSpace(worktree.SourceProjectPath))
+        {
+            throw new WorkbenchCatalogException(
+                "ENGINEERING_PROJECT_PATH_MISSING",
+                $"No engineering project path is registered for worktree '{device.WorktreeId}'.");
+        }
+
+        progress?.Report("Opening registered project in TIA Portal...");
+        await engineering.CallAsync<object>(
+            "connect",
+            new { projectPath = worktree.SourceProjectPath, withUI = true },
+            cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<CreateWorkbenchResult> CreateWorkbenchAsync(
         CreateWorkbenchRequest request,
         CancellationToken cancellationToken = default,
