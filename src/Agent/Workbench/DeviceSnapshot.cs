@@ -86,6 +86,12 @@ public sealed class DeviceSnapshotReader
 
         using (manifest)
         {
+            if (manifest.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                diagnostics.Add($"Export manifest root must be a JSON object: {manifestPath}");
+                return [];
+            }
+
             if (!manifest.RootElement.TryGetProperty("components", out var components)
                 || components.ValueKind != JsonValueKind.Array)
             {
@@ -95,8 +101,17 @@ public sealed class DeviceSnapshotReader
 
             var blocks = new List<OfflineBlockInfo>();
             var representedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var componentIndex = -1;
             foreach (var component in components.EnumerateArray())
             {
+                componentIndex++;
+                if (component.ValueKind != JsonValueKind.Object)
+                {
+                    diagnostics.Add(
+                        $"Export manifest component at index {componentIndex} must be a JSON object.");
+                    continue;
+                }
+
                 var exportedFile = ReadString(component, "exportedFile");
                 if (string.IsNullOrWhiteSpace(exportedFile))
                     continue;
@@ -123,9 +138,33 @@ public sealed class DeviceSnapshotReader
                 }
 
                 var sourcePath = ReadString(component, "sourcePath");
-                var modified = File.Exists(WorkbenchPaths.ResolveRelative(
+                var modifiedPath = WorkbenchPaths.ResolveRelative(
                     context.ModifiedSourceRoot,
-                    normalizedPath));
+                    normalizedPath);
+                var modified = File.Exists(modifiedPath);
+                if (modified)
+                {
+                    if (TryReadOverlayBlock(
+                        modifiedPath,
+                        normalizedPath,
+                        out var effectiveBlock,
+                        out var overlayError))
+                    {
+                        blocks.Add(effectiveBlock! with
+                        {
+                            Id = ReadString(component, "id")
+                                ?? effectiveBlock!.Id,
+                        });
+                    }
+                    else
+                    {
+                        diagnostics.Add(
+                            $"Overlay '{normalizedPath}' is not a supported Siemens PLC block: {overlayError}");
+                    }
+
+                    continue;
+                }
+
                 blocks.Add(new OfflineBlockInfo(
                     ReadString(component, "id") ?? $"{category}:{sourcePath ?? normalizedPath}",
                     ReadString(component, "name") ?? Path.GetFileNameWithoutExtension(normalizedPath),
@@ -177,14 +216,22 @@ public sealed class DeviceSnapshotReader
             var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
             using var reader = XmlReader.Create(path, settings);
             var document = XDocument.Load(reader);
-            var element = document.Descendants().FirstOrDefault(candidate =>
-                BlockTypeOf(candidate.Name.LocalName) is not null);
-            if (element is null)
+            if (document.Root?.Name.LocalName != "Document")
             {
-                error = "no SW.Blocks.OB, FB, FC, DB, GlobalDB, InstanceDB, or ArrayDB element was found";
+                error = "expected a Siemens Document root";
                 return false;
             }
 
+            var supportedElements = document.Root.Descendants()
+                .Where(candidate => BlockTypeOf(candidate.Name.LocalName) is not null)
+                .ToArray();
+            if (supportedElements.Length != 1 || supportedElements[0].Parent != document.Root)
+            {
+                error = "expected exactly one direct supported block element below the Siemens Document root";
+                return false;
+            }
+
+            var element = supportedElements[0];
             var blockType = BlockTypeOf(element.Name.LocalName)!;
             var attributes = element.Elements()
                 .FirstOrDefault(candidate => candidate.Name.LocalName == "AttributeList");

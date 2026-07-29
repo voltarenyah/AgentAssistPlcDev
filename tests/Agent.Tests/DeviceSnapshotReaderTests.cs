@@ -93,6 +93,41 @@ public sealed class DeviceSnapshotReaderTests
     }
 
     [Fact]
+    public void ReadUsesMatchingOverlayMetadataAsTheEffectiveBlock()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest(
+            Component("ob", "Old Main", "OB", "Blocks/Area/Main [OB1].xml", 1, "LAD", "Old/Old Main"));
+        fixture.WriteOverlay(
+            "Blocks/Area/Main [OB1].xml",
+            BlockXml("SW.Blocks.OB", "New Main", 9, "SCL"));
+
+        var block = Assert.Single(new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata).Blocks);
+
+        Assert.Equal("New Main", block.Name);
+        Assert.Equal(9, block.Number);
+        Assert.Equal("SCL", block.ProgrammingLanguage);
+        Assert.Equal("Area", block.GroupPath);
+        Assert.True(block.Modified);
+    }
+
+    [Fact]
+    public void ReadReportsMalformedMatchingOverlayInsteadOfReturningStaleBaselineMetadata()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest(
+            Component("ob", "Main", "OB", "Blocks/Main [OB1].xml", 1, "LAD", "Main"));
+        fixture.WriteOverlay("Blocks/Main [OB1].xml", "<Document><SW.Blocks.OB>");
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.Empty(snapshot.Blocks);
+        Assert.Contains(snapshot.Diagnostics, message =>
+            message.Contains("Blocks/Main [OB1].xml", StringComparison.Ordinal)
+            && message.Contains("supported Siemens PLC block", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ReadReturnsDiagnosticWhenManifestIsMissing()
     {
         using var fixture = SnapshotFixture.Create();
@@ -117,6 +152,44 @@ public sealed class DeviceSnapshotReaderTests
             "Export manifest is invalid JSON:", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("\"manifest\"")]
+    public void ReadReturnsDiagnosticWhenManifestRootIsNotAnObject(string json)
+    {
+        using var fixture = SnapshotFixture.Create();
+        File.WriteAllText(Path.Combine(fixture.Context.ExportedSourceRoot, "metadata.json"), json);
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.Empty(snapshot.Blocks);
+        Assert.Contains(snapshot.Diagnostics, message => message.Contains(
+            "root must be a JSON object", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ReadSkipsNonObjectManifestComponentsWithDiagnostic()
+    {
+        using var fixture = SnapshotFixture.Create();
+        File.WriteAllText(
+            Path.Combine(fixture.Context.ExportedSourceRoot, "metadata.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                components = new object[]
+                {
+                    "invalid",
+                    Component("ob", "Main", "OB", "Blocks/Main [OB1].xml", 1, "LAD", "Main"),
+                },
+            }));
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.Single(snapshot.Blocks);
+        Assert.Contains(snapshot.Diagnostics, message => message.Contains(
+            "component at index 0 must be a JSON object", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void ReadReportsUnsupportedOverlayXmlWithoutDiscardingManifestBlocks()
     {
@@ -132,6 +205,53 @@ public sealed class DeviceSnapshotReaderTests
         Assert.Contains(snapshot.Diagnostics, message =>
             message.Contains("Tags/NotABlock.xml", StringComparison.Ordinal)
             && message.Contains("supported Siemens PLC block", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ReadRejectsOverlayWithMultipleSupportedBlocks()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest();
+        fixture.WriteOverlay(
+            "Blocks/Ambiguous.xml",
+            """
+            <Document>
+              <SW.Blocks.OB><AttributeList><Name>One</Name></AttributeList></SW.Blocks.OB>
+              <Payload>
+                <SW.Blocks.FC><AttributeList><Name>Two</Name></AttributeList></SW.Blocks.FC>
+              </Payload>
+            </Document>
+            """);
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.Empty(snapshot.Blocks);
+        Assert.Contains(snapshot.Diagnostics, message =>
+            message.Contains("Blocks/Ambiguous.xml", StringComparison.Ordinal)
+            && message.Contains("exactly one direct", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ReadRejectsSupportedBlockNestedUnderUnrelatedEnvelope()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest();
+        fixture.WriteOverlay(
+            "Blocks/Nested.xml",
+            """
+            <Envelope>
+              <Payload>
+                <SW.Blocks.OB><AttributeList><Name>Nested</Name></AttributeList></SW.Blocks.OB>
+              </Payload>
+            </Envelope>
+            """);
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.Empty(snapshot.Blocks);
+        Assert.Contains(snapshot.Diagnostics, message =>
+            message.Contains("Blocks/Nested.xml", StringComparison.Ordinal)
+            && message.Contains("Document root", StringComparison.Ordinal));
     }
 
     [Fact]
