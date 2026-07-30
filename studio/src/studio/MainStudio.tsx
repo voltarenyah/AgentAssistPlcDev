@@ -870,16 +870,9 @@ export default function MainStudio() {
                   )
                 })}
                 <div className="flex-1" />
-          {operation && (
-                  <OperationStatusLine
-                    status={activeOperation?.status ?? null}
-                    fallback={activeOperation?.label ?? operation.replaceAll('-', ' ')}
-                    onDismiss={dismissActiveOperation}
-                  />
-                )}
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
                 {activeTab === 'overview' && (
                   <div className="mx-auto max-w-6xl space-y-5 p-5">
                     <section className="flex flex-wrap items-start gap-4 rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>

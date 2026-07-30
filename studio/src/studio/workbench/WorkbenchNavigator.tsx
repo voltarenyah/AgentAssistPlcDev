@@ -61,7 +61,7 @@ export default function WorkbenchNavigator({
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-2">
         {workbenches.length === 0 ? (
           <button
             onClick={onCreateWorkbench}
