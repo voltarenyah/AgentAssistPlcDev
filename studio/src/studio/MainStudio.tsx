@@ -13,6 +13,9 @@ import {
   GitBranch,
   GitMerge,
   Loader2,
+  MessageSquare,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   RefreshCw,
   Server,
@@ -39,8 +42,20 @@ import {
 } from '@/studio/deviceSnapshot'
 import * as api from '@/api/client'
 import { runOpenProjectInTia } from '@/studio/deviceActions'
+import ChatWorkspace from '@/studio/chat/ChatWorkspace'
+import SessionDock from '@/studio/chat/SessionDock'
+import {
+  appendAssistantDelta,
+  appendLocalUserMessage,
+  appendProgressMessage,
+  closeTab,
+  emptyChatTabs,
+  openTab,
+  renameTab,
+  type ChatTabsState,
+} from '@/studio/chat/chatTabState'
 
-type StudioTab = 'overview' | 'source' | 'knowledge' | 'git'
+type StudioTab = 'overview' | 'chat' | 'source' | 'knowledge' | 'git'
 type ActiveOperation = {
   id: string
   kind: string
@@ -145,6 +160,9 @@ export default function MainStudio() {
   const [deviceSelection, setDeviceSelection] = useState<DeviceSelectionState | null>(null)
   const selectionRequestId = useRef(0)
   const [activeTab, setActiveTab] = useState<StudioTab>('overview')
+  const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
+  const [sessionDockVisible, setSessionDockVisible] = useState(true)
+  const [chatBusy, setChatBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [operation, setOperation] = useState<string | null>(null)
   const [activeOperation, setActiveOperation] = useState<ActiveOperation | null>(null)
@@ -173,6 +191,18 @@ export default function MainStudio() {
     ? { [deviceInfo.deviceId]: activeKnowledge }
     : {}
   const activeOperationId = activeOperation?.id
+  const selectedChatContext = useMemo(() => {
+    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return null
+    return {
+      workbenchId: selection.workbenchId,
+      worktreeId: selection.worktreeId,
+      deviceId: selection.deviceId,
+    }
+  }, [selection.deviceId, selection.workbenchId, selection.worktreeId])
+
+  const replaceDeviceSessions = useCallback((savedSessions: api.ChatSessionInfo[]) => {
+    setDeviceSelection(previous => previous ? { ...previous, sessions: savedSessions } : previous)
+  }, [])
 
   const reloadWorkbenches = useCallback(async () => {
     const values = await api.listWorkbenches()
@@ -287,6 +317,7 @@ export default function MainStudio() {
     try {
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
       setDeviceSelection(null)
+      setChatTabs(emptyChatTabs())
     } catch (error) {
       toast.error(displayError(error))
     }
@@ -302,6 +333,7 @@ export default function MainStudio() {
       }))
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
       setDeviceSelection(null)
+      setChatTabs(emptyChatTabs())
       if (devices.length === 1) {
         await selectDevice(workbench, worktree, devices[0])
       }
@@ -319,6 +351,7 @@ export default function MainStudio() {
   ) => {
     const requestId = ++selectionRequestId.current
     setDeviceSelection(previous => beginDeviceSelection(previous, deviceId, requestId))
+    setChatTabs(emptyChatTabs())
     setOperation('select-device')
     try {
       const [snapshot, savedSessions] = await Promise.all([
@@ -373,6 +406,113 @@ export default function MainStudio() {
       toast.error(displayError(error))
     } finally {
       setOperation(null)
+    }
+  }
+
+  const ensureChatContext = useCallback(async () => {
+    if (!selectedChatContext) throw new Error('Select a device before opening chat.')
+    await api.selectDevice(
+      selectedChatContext.workbenchId,
+      selectedChatContext.worktreeId,
+      selectedChatContext.deviceId,
+    )
+  }, [selectedChatContext])
+
+  const refreshChatSessions = useCallback(async () => {
+    if (!selectedChatContext) return []
+    const savedSessions = await api.listDeviceSessions(
+      selectedChatContext.workbenchId,
+      selectedChatContext.worktreeId,
+      selectedChatContext.deviceId,
+    )
+    replaceDeviceSessions(savedSessions)
+    return savedSessions
+  }, [replaceDeviceSessions, selectedChatContext])
+
+  const createChatSession = async () => {
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      const session = await api.newChatSession()
+      setChatTabs(previous => openTab(previous, session))
+      setActiveTab('chat')
+      await refreshChatSessions()
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  const activateChatSession = async (sessionId: string) => {
+    if (chatTabs.activeId === sessionId) {
+      setActiveTab('chat')
+      return
+    }
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      const session = await api.loadChatSession(sessionId)
+      setChatTabs(previous => openTab(previous, session))
+      setActiveTab('chat')
+    } catch (error) {
+      toast.error(displayError(error))
+      await refreshChatSessions().catch(() => undefined)
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  const renameChatSession = async (sessionId: string, title: string) => {
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      const session = await api.renameChatSession(sessionId, title)
+      setChatTabs(previous => renameTab(previous, sessionId, session.header.title?.trim() || title))
+      await refreshChatSessions()
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  const removeChatSession = async (sessionId: string) => {
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      await api.deleteChatSession(sessionId)
+      setChatTabs(previous => closeTab(previous, sessionId))
+      await refreshChatSessions()
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  const sendChatMessage = async (sessionId: string, message: string) => {
+    setChatBusy(true)
+    setChatTabs(previous => appendLocalUserMessage(previous, sessionId, message))
+    try {
+      await ensureChatContext()
+      if (chatTabs.activeId !== sessionId) await api.loadChatSession(sessionId)
+      await api.sendChatMessage(message, event => {
+        if (event.kind === 'progress') {
+          setChatTabs(previous => appendProgressMessage(previous, sessionId, event.delta))
+        } else if (event.kind === 'content' || event.kind === 'reasoning') {
+          setChatTabs(previous => appendAssistantDelta(previous, sessionId, event.delta))
+        } else if (event.kind === 'error') {
+          setChatTabs(previous => appendProgressMessage(previous, sessionId, `Error: ${event.delta}`))
+        }
+      })
+      const session = await api.loadChatSession(sessionId)
+      setChatTabs(previous => openTab(previous, session))
+      await refreshChatSessions()
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setChatBusy(false)
     }
   }
 
@@ -537,6 +677,7 @@ export default function MainStudio() {
 
   const tabs: Array<{ id: StudioTab; label: string; icon: typeof Boxes }> = [
     { id: 'overview', label: 'Device overview', icon: Cpu },
+    { id: 'chat', label: 'AI chat', icon: MessageSquare },
     { id: 'source', label: 'Source overlays', icon: Code2 },
     { id: 'knowledge', label: 'Knowledge', icon: Database },
     { id: 'git', label: 'Git worktree', icon: GitBranch },
@@ -580,6 +721,15 @@ export default function MainStudio() {
             <Server className="h-3 w-3 text-chart-3" />
             {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
           </div>
+          {selection.deviceId && (
+            <button
+              className="icon-button"
+              aria-label={sessionDockVisible ? 'Hide AI sessions' : 'Show AI sessions'}
+              onClick={() => setSessionDockVisible(value => !value)}
+            >
+              {sessionDockVisible ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
+            </button>
+          )}
           <ThemeToggle />
         </div>
       </header>
@@ -737,6 +887,17 @@ export default function MainStudio() {
                   </div>
                 )}
 
+                {activeTab === 'chat' && (
+                  <div className="h-full min-h-[520px]">
+                    <ChatWorkspace
+                      tabs={chatTabs}
+                      busy={chatBusy}
+                      onFocus={sessionId => setChatTabs(previous => ({ ...previous, activeId: sessionId }))}
+                      onSend={(sessionId, message) => void sendChatMessage(sessionId, message)}
+                    />
+                  </div>
+                )}
+
                 {activeTab === 'source' && (
                   <div className="mx-auto max-w-6xl space-y-4 p-5">
                     <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
@@ -865,6 +1026,18 @@ export default function MainStudio() {
             </>
           )}
         </main>
+        {selection.deviceId && (
+          <SessionDock
+            sessions={deviceSessions}
+            activeSessionId={chatTabs.activeId}
+            busy={chatBusy}
+            hidden={!sessionDockVisible}
+            onCreate={() => void createChatSession()}
+            onActivate={sessionId => void activateChatSession(sessionId)}
+            onRename={(sessionId, title) => void renameChatSession(sessionId, title)}
+            onRemove={sessionId => void removeChatSession(sessionId)}
+          />
+        )}
       </div>
 
       {createWorkbenchOpen && (

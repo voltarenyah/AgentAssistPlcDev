@@ -1,0 +1,130 @@
+import type { ChatMessage, ChatSessionData } from '@/api/client'
+
+export type ChatTab = {
+  sessionId: string
+  title: string
+  messages: ChatMessage[]
+}
+
+export type ChatTabsState = {
+  tabs: ChatTab[]
+  activeId: string | null
+  mru: string[]
+}
+
+export const emptyChatTabs = (): ChatTabsState => ({
+  tabs: [],
+  activeId: null,
+  mru: [],
+})
+
+const timestamp = () => new Date().toISOString()
+
+const titleOf = (session: ChatSessionData) =>
+  session.header.title?.trim() || 'New chat'
+
+const touch = (mru: string[], sessionId: string) => [
+  sessionId,
+  ...mru.filter(id => id !== sessionId),
+]
+
+export function openTab(state: ChatTabsState, session: ChatSessionData): ChatTabsState {
+  const tab: ChatTab = {
+    sessionId: session.header.sessionId,
+    title: titleOf(session),
+    messages: session.messages,
+  }
+  const exists = state.tabs.some(value => value.sessionId === tab.sessionId)
+  return {
+    tabs: exists
+      ? state.tabs.map(value => value.sessionId === tab.sessionId ? tab : value)
+      : [...state.tabs, tab],
+    activeId: tab.sessionId,
+    mru: touch(state.mru, tab.sessionId),
+  }
+}
+
+export function renameTab(state: ChatTabsState, sessionId: string, title: string): ChatTabsState {
+  return {
+    ...state,
+    tabs: state.tabs.map(tab => tab.sessionId === sessionId ? { ...tab, title } : tab),
+  }
+}
+
+export function appendLocalUserMessage(
+  state: ChatTabsState,
+  sessionId: string,
+  content: string,
+): ChatTabsState {
+  return {
+    ...state,
+    tabs: state.tabs.map(tab => tab.sessionId === sessionId
+      ? {
+          ...tab,
+          messages: [
+            ...tab.messages,
+            { role: 'user', content, toolCallId: null, timestamp: timestamp() },
+          ],
+        }
+      : tab),
+  }
+}
+
+export function appendProgressMessage(
+  state: ChatTabsState,
+  sessionId: string,
+  content: string,
+): ChatTabsState {
+  return {
+    ...state,
+    tabs: state.tabs.map(tab => tab.sessionId === sessionId
+      ? {
+          ...tab,
+          messages: [
+            ...tab.messages,
+            { role: 'tool', content, toolCallId: null, timestamp: timestamp() },
+          ],
+        }
+      : tab),
+  }
+}
+
+export function appendAssistantDelta(
+  state: ChatTabsState,
+  sessionId: string,
+  delta: string,
+): ChatTabsState {
+  return {
+    ...state,
+    tabs: state.tabs.map(tab => {
+      if (tab.sessionId !== sessionId) return tab
+      const last = tab.messages.at(-1)
+      if (last?.role === 'assistant') {
+        return {
+          ...tab,
+          messages: [
+            ...tab.messages.slice(0, -1),
+            { ...last, content: `${last.content ?? ''}${delta}` },
+          ],
+        }
+      }
+      return {
+        ...tab,
+        messages: [
+          ...tab.messages,
+          { role: 'assistant', content: delta, toolCallId: null, timestamp: timestamp() },
+        ],
+      }
+    }),
+  }
+}
+
+export function closeTab(state: ChatTabsState, sessionId: string): ChatTabsState {
+  const tabs = state.tabs.filter(tab => tab.sessionId !== sessionId)
+  const mru = state.mru.filter(id => id !== sessionId && tabs.some(tab => tab.sessionId === id))
+  return {
+    tabs,
+    activeId: state.activeId === sessionId ? mru[0] ?? null : state.activeId,
+    mru,
+  }
+}

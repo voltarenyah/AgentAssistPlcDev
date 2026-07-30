@@ -58,12 +58,18 @@ export type ChatMessage = {
   role: string
   content: string | null
   toolCallId: string | null
-  timestamp: string
+  toolCalls?: { id: string; name: string; argumentsJson: string }[] | null
+  reasoningContent?: string | null
+  timestamp: string | null
 }
 
 export type ChatSessionInfo = {
   sessionId: string
-  projectName: string
+  title: string
+  projectName?: string | null
+  workbenchId?: string | null
+  worktreeId?: string | null
+  deviceId?: string | null
   createdAt: string
   updatedAt: string
   messageCount: number
@@ -71,10 +77,21 @@ export type ChatSessionInfo = {
   firstUserMessage: string | null
 }
 
-export type ChatSessionResponse = {
+export type ChatSessionHeader = {
   sessionId: string
-  createdAt?: string
-  messageCount?: number
+  title?: string | null
+  projectName?: string | null
+  workbenchId?: string | null
+  worktreeId?: string | null
+  deviceId?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type ChatSessionData = {
+  header: ChatSessionHeader
+  messages: ChatMessage[]
+  roundUsages?: unknown[]
 }
 
 export type ActiveSessionInfo = {
@@ -614,17 +631,17 @@ export async function clearChatHistory(): Promise<void> {
   await fetch(`${BASE}/chat/clear`, { method: 'POST' })
 }
 
-export async function getChatSessions(projectName: string): Promise<ChatSessionInfo[]> {
-  const res = await fetch(`${BASE}/chat/sessions?projectName=${encodeURIComponent(projectName)}`)
+export async function getChatSessions(_projectName?: string): Promise<ChatSessionInfo[]> {
+  const res = await fetch(`${BASE}/chat/sessions`)
   if (!res.ok) throw new Error(`Chat sessions failed: ${res.status}`)
   return res.json()
 }
 
-export async function newChatSession(projectName?: string): Promise<ChatSessionResponse> {
+export async function newChatSession(_projectName?: string): Promise<ChatSessionData> {
   const res = await fetch(`${BASE}/chat/session/new`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(projectName ? { projectName } : {}),
+    body: JSON.stringify({}),
   })
   if (!res.ok) {
     const body = await res.text()
@@ -633,11 +650,11 @@ export async function newChatSession(projectName?: string): Promise<ChatSessionR
   return res.json()
 }
 
-export async function loadChatSession(sessionId: string, projectName: string): Promise<ChatSessionResponse> {
+export async function loadChatSession(sessionId: string, _projectName?: string): Promise<ChatSessionData> {
   const res = await fetch(`${BASE}/chat/session/load`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, projectName }),
+    body: JSON.stringify({ sessionId }),
   })
   if (!res.ok) {
     const body = await res.text()
@@ -646,11 +663,24 @@ export async function loadChatSession(sessionId: string, projectName: string): P
   return res.json()
 }
 
-export async function deleteChatSession(sessionId: string, projectName: string): Promise<void> {
+export async function renameChatSession(sessionId: string, title: string): Promise<ChatSessionData> {
+  const res = await fetch(`${BASE}/chat/session/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, title }),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(body || `Rename session failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function deleteChatSession(sessionId: string, _projectName?: string): Promise<void> {
   const res = await fetch(`${BASE}/chat/session/delete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, projectName }),
+    body: JSON.stringify({ sessionId }),
   })
   if (!res.ok) {
     const body = await res.text()
