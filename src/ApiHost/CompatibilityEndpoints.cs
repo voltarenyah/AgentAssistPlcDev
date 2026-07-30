@@ -607,7 +607,7 @@ internal sealed class ApiChatService(
         return new ChatRequestSettings
         {
             Model = Live("model") ?? configuration["chatSettings:model"] ?? configuration["deepSeekModel"] ?? "deepseek-v4-flash",
-            ThinkingEnabled = bool.TryParse(Live("thinkingEnabled") ?? configuration["chatSettings:thinkingEnabled"] ?? configuration["deepSeekThinkingEnabled"], out var thinking) ? thinking : true,
+            ThinkingEnabled = bool.TryParse(Live("thinkingEnabled") ?? configuration["chatSettings:thinkingEnabled"] ?? configuration["deepSeekThinkingEnabled"], out var thinking) ? thinking : ChatRequestSettings.DefaultThinkingEnabled,
             ReasoningEffort = Live("reasoningEffort") ?? configuration["chatSettings:reasoningEffort"] ?? configuration["deepSeekReasoningEffort"] ?? "high",
             Temperature = double.TryParse(Live("temperature") ?? configuration["chatSettings:temperature"] ?? configuration["deepSeekTemperature"], out var temperature) ? temperature : 1.0,
             TopP = double.TryParse(Live("topP") ?? configuration["chatSettings:topP"] ?? configuration["deepSeekTopP"], out var topP) ? topP : 1.0,
