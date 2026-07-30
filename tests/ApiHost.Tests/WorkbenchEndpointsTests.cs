@@ -838,6 +838,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         });
         using var client = factory.CreateClient();
 
+        var defaultSettings = await client.GetFromJsonAsync<JsonElement>("/api/config/settings");
+        Assert.Equal("deepseek-v4-flash", defaultSettings.GetProperty("model").GetString());
+        Assert.Equal("high", defaultSettings.GetProperty("reasoningEffort").GetString());
+
         Assert.Equal(HttpStatusCode.NoContent,
             (await client.PostAsync($"/api/workbenches/{wb.WorkbenchId}/worktrees/{wtId}/devices/dev-1/select", null)).StatusCode);
         Assert.Equal(HttpStatusCode.OK,
@@ -886,6 +890,12 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             new { model = "new-model", thinkingEnabled = false, reasoningEffort = "low", temperature = 0.2, topP = 0.8 })).StatusCode);
         Assert.Equal(generation + 1, runtimeState.ChatGeneration);
         Assert.Equal("new-model", runtimeState.ChatSettings!.Value.GetProperty("model").GetString());
+        var resolvedSettings = await client.GetFromJsonAsync<JsonElement>("/api/config/settings");
+        Assert.Equal("new-model", resolvedSettings.GetProperty("model").GetString());
+        Assert.False(resolvedSettings.GetProperty("thinkingEnabled").GetBoolean());
+        Assert.Equal("low", resolvedSettings.GetProperty("reasoningEffort").GetString());
+        Assert.Equal(0.2, resolvedSettings.GetProperty("temperature").GetDouble());
+        Assert.Equal(0.8, resolvedSettings.GetProperty("topP").GetDouble());
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync(
             "/api/config/key", new { apiKey = "replacement" })).StatusCode);
         Assert.Equal(generation + 2, runtimeState.ChatGeneration);

@@ -606,28 +606,36 @@ export async function getKeyStatus(): Promise<{ configured: boolean }> {
   return res.json()
 }
 
-export async function saveApiKey(key: string): Promise<{ status: string; chatReady: boolean }> {
+export async function saveApiKey(key: string): Promise<void> {
   const res = await fetch(`${BASE}/config/key`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key }),
+    body: JSON.stringify({ apiKey: key }),
   })
   if (!res.ok) throw new Error(`Save key failed: ${res.status}`)
-  return res.json()
 }
 
-export async function saveChatSettings(settings: {
+export type ChatSettings = {
   model: string
   thinkingEnabled: boolean
   reasoningEffort: string
   temperature: number
   topP: number
-}): Promise<void> {
-  await fetch(`${BASE}/config/settings`, {
+}
+
+export async function getChatSettings(): Promise<ChatSettings> {
+  const res = await fetch(`${BASE}/config/settings`)
+  if (!res.ok) throw new Error(`Chat settings failed: ${res.status}`)
+  return res.json()
+}
+
+export async function saveChatSettings(settings: ChatSettings): Promise<void> {
+  const res = await fetch(`${BASE}/config/settings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   })
+  if (!res.ok) throw new Error(`Save chat settings failed: ${res.status}`)
 }
 
 export async function getChatHistory(): Promise<ChatMessage[]> {
