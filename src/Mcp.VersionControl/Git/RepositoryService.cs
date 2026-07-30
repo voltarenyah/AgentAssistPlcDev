@@ -41,6 +41,7 @@ internal static class RepositoryService
         **/plc-knowledge.db
         **/plc-knowledge.db-*
         .automation/
+        sessionexport/
         """;
 
     private static readonly string[] SharedGitIgnoreRules =
@@ -49,6 +50,7 @@ internal static class RepositoryService
         "**/plc-knowledge.db",
         "**/plc-knowledge.db-*",
         ".automation/",
+        "sessionexport/",
     };
 
     /// <summary>Regex to parse unified-diff hunk headers: @@ -oldStart,oldCount +newStart,newCount @@</summary>
@@ -217,6 +219,33 @@ internal static class RepositoryService
             WorktreePath = checkout,
             Branch = linkedRepository.Head.FriendlyName,
             Sha = linkedRepository.Head.Tip?.Sha ?? string.Empty,
+        };
+    }
+
+    /// <summary>Remove a linked worktree from a shared bare repository (git worktree remove --force).</summary>
+    public static VcWorktreeRemoveResult RemoveWorktree(string repositoryPath, string worktreePath)
+    {
+        var repository = RequireFullPath(repositoryPath, nameof(repositoryPath));
+        EnsureNoReparsePoints(repository);
+        EnsureRepo(repository);
+        var workbenchRoot = Directory.GetParent(repository)?.FullName
+            ?? throw new VcInternalException(
+                "INVALID_REPOSITORY_PATH",
+                $"The repository path '{repository}' has no containing workbench directory.");
+        var checkout = RequireFullPath(worktreePath, nameof(worktreePath));
+        EnsureContained(workbenchRoot, checkout);
+
+        RunGit(
+            "WORKTREE_REMOVE_FAILED",
+            $"Failed to remove linked worktree '{checkout}'.",
+            "--git-dir", repository,
+            "worktree", "remove", "--force", checkout);
+
+        return new VcWorktreeRemoveResult
+        {
+            RepositoryPath = repository,
+            WorktreePath = checkout,
+            Removed = true,
         };
     }
 

@@ -128,6 +128,17 @@ public sealed class WorkbenchApiState
         return (catalog.ResolveDevice(wb, wt, metadataPath.device), metadataPath.device);
     }
     public void Select(string wb, string? wt = null, string? device = null) => Selection = new(wb, wt, device);
+    /// <summary>Drops a deleted workbench from memory and clears a selection that referenced it.</summary>
+    public void Remove(string id)
+    {
+        workbenches.TryRemove(id, out _);
+        if (Selection?.WorkbenchId == id)
+        {
+            Selection = null;
+        }
+
+        ReconcileTrustedRoots();
+    }
     public void Remember(ReconciliationPreview preview) => previews[preview.PreviewId] = preview;
     public ReconciliationPreview Take(string id, string deviceId, string? worktreeId = null)
     {
@@ -172,6 +183,28 @@ public static class WorkbenchEndpoints
                     progress)).Workbench),
                 "Workbench created.").ConfigureAwait(false));
         app.MapGet("/api/workbenches/{id}", (string id, WorkbenchApiState s) => s.Workbench(id));
+        app.MapDelete("/api/workbenches/{id}", async (
+            string id,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+        {
+            var result = await RunOperationAsync(
+                http,
+                operations,
+                "delete-workbench",
+                "Deleting workbench...",
+                async progress =>
+                {
+                    await c.DeleteWorkbenchAsync(s.Workbench(id), ct, progress).ConfigureAwait(false);
+                    return new { deleted = true };
+                },
+                "Workbench deleted.").ConfigureAwait(false);
+            s.Remove(id);
+            return result;
+        });
         app.MapPost("/api/workbenches/{id}/select", (string id, WorkbenchApiState s) => { s.Workbench(id); s.Select(id); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees", (string id, WorkbenchApiState s) => s.Workbench(id).Worktrees);
         app.MapPost("/api/workbenches/{id}/worktrees", async (
@@ -292,6 +325,12 @@ public static class WorkbenchEndpoints
                 progress => c.ApplyRefreshAsync(selected.Context, new(preview, approved), ct, progress),
                 "Refresh applied.").ConfigureAwait(false);
         });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/bootstrap", async (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "bootstrap-device", "Generating PLC context...",
+                progress => c.BootstrapDeviceAsync(s.Device(workbenchId, worktreeId, device).Context, ct, progress),
+                "PLC context generated.").ConfigureAwait(false));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/update", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
             WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>

@@ -115,6 +115,29 @@ public sealed class WorkbenchCatalog
         }
     }
 
+    /// <summary>
+    /// Permanently deletes a registered workbench root and everything beneath it
+    /// (workbench.json, worktrees/, repository.git). The persisted metadata is
+    /// re-loaded and identity-checked first, so only the catalog-registered path
+    /// can be removed.
+    /// </summary>
+    public void Delete(WorkbenchMetadata workbench)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+
+        var root = WorkbenchPaths.ResolveWorkbench("workbench", workbench.RootPath);
+        var persisted = Load(root);
+        if (!string.Equals(persisted.WorkbenchId, workbench.WorkbenchId, StringComparison.Ordinal))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKBENCH_RELATIONSHIP_MISMATCH",
+                "Workbench metadata does not match the persisted catalog entry.");
+        }
+
+        ClearReadOnlyAttributes(root);
+        DeleteDirectoryIfPresent(root);
+    }
+
     public IReadOnlyList<WorkbenchMetadata> ListDefaultRoot()
     {
         if (!Directory.Exists(_defaultRoot))
@@ -246,6 +269,23 @@ public sealed class WorkbenchCatalog
                 && !Directory.EnumerateFileSystemEntries(directory).Any())
             {
                 Directory.Delete(directory);
+            }
+        }
+    }
+
+    /// <summary>Git object and pack files are read-only on Windows; reset attributes so the recursive delete succeeds.</summary>
+    private static void ClearReadOnlyAttributes(string root)
+    {
+        if (!Directory.Exists(root))
+        {
+            return;
+        }
+
+        foreach (var entry in Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories))
+        {
+            if (!File.GetAttributes(entry).HasFlag(FileAttributes.ReparsePoint))
+            {
+                File.SetAttributes(entry, FileAttributes.Normal);
             }
         }
     }

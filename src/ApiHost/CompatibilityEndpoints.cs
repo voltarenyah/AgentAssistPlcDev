@@ -76,6 +76,16 @@ public static class CompatibilityEndpoints
                 ? state.Device(id).Context
                 : throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
 
+        static string ExportSessionFile(DeviceContext device, string sessionId, ChatSessionData session)
+        {
+            var path = ChatSessionExporter.ResolveSessionExportPath(
+                device.WorktreeRoot,
+                session.Header.Title,
+                sessionId);
+            File.WriteAllText(path, ChatSessionExporter.ExportPersisted(session));
+            return path;
+        }
+
         app.MapPost("/api/connect", async (JsonElement body, ApiMcpGateway gateway, CompatibilityRuntimeState state, CancellationToken ct) =>
         {
             var result = await gateway.For("connect").CallAsync<object>("connect", body, ct);
@@ -287,6 +297,14 @@ public static class CompatibilityEndpoints
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
             chat.DeleteSession(Device(state), id);
             return Results.NoContent();
+        });
+        app.MapPost("/api/chat/session/export", (JsonElement body, WorkbenchApiState state) =>
+        {
+            var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
+            var device = Device(state);
+            return SessionManager.LoadSession(device, id) is { } session
+                ? Results.Ok(new { path = ExportSessionFile(device, id, session) })
+                : Results.NotFound();
         });
         app.MapGet("/api/chat/session/info", (WorkbenchApiState state, ApiChatService chat) =>
         {

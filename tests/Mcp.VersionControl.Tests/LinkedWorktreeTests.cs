@@ -71,6 +71,63 @@ public sealed class LinkedWorktreeTests : IDisposable
     }
 
     [Fact]
+    public void RemoveWorktreeDeletesCheckoutAndUnregistersIt()
+    {
+        var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
+        var featurePath = Path.Combine(root, "workbench", "worktrees", "feature-a");
+        RepositoryService.AddWorktree(repositoryPath, featurePath, "feature-a", firstSha);
+        File.WriteAllText(Path.Combine(featurePath, "dirty.txt"), "uncommitted");
+
+        var removed = RepositoryService.RemoveWorktree(repositoryPath, featurePath);
+
+        Assert.True(removed.Removed);
+        Assert.Equal(repositoryPath, removed.RepositoryPath);
+        Assert.False(Directory.Exists(featurePath));
+        var listed = RepositoryService.Worktrees(repositoryPath);
+        Assert.DoesNotContain(listed.Worktrees, item => item.WorktreePath == featurePath);
+        Assert.Contains(listed.Worktrees, item => item.WorktreePath == masterPath);
+    }
+
+    [Fact]
+    public void RemoveWorktreeRejectsPathOutsideWorkbench()
+    {
+        var (repositoryPath, _, _) = CreateSharedRepositoryWithInitialCommit();
+        var outsidePath = Path.Combine(root, "outside", "feature-x");
+
+        var error = Assert.Throws<VcInternalException>(
+            () => RepositoryService.RemoveWorktree(repositoryPath, outsidePath));
+
+        Assert.Equal("PATH_OUTSIDE_WORKBENCH", error.Code);
+    }
+
+    [Fact]
+    public void VersionControlToolsExposeWorktreeRemoval()
+    {
+        var tools = new VersionControlTools();
+        var workbenchRoot = Path.Combine(root, "workbench");
+        var masterPath = Path.Combine(workbenchRoot, "worktrees", "master");
+        var featurePath = Path.Combine(workbenchRoot, "worktrees", "feature-a");
+
+        var init = Unwrap<VcSharedInitResult>(tools.VcInitShared(workbenchRoot, masterPath));
+        Assert.NotNull(init);
+        File.WriteAllText(Path.Combine(masterPath, "seed.txt"), "seed");
+        tools.VcAdd(masterPath);
+        var commit = Unwrap<VcCommitResult>(tools.VcCommit(masterPath, "initial"));
+        Assert.NotNull(commit);
+        var addCall = tools.VcAddWorktree(init!.RepositoryPath, featurePath, "feature-a", commit!.Sha);
+        Assert.False(addCall.IsError == true);
+
+        var removeCall = tools.VcRemoveWorktree(init.RepositoryPath, featurePath);
+
+        Assert.False(removeCall.IsError == true);
+        Assert.True(Unwrap<VcWorktreeRemoveResult>(removeCall)!.Removed);
+        Assert.False(Directory.Exists(featurePath));
+        var remaining = Unwrap<VcWorktreeListResult>(tools.VcWorktrees(init.RepositoryPath))!.Worktrees;
+        Assert.Single(remaining);
+        Assert.Equal(masterPath, remaining[0].WorktreePath);
+    }
+
+    [Fact]
     public void InitSharedWritesWorkbenchIgnoreRules()
     {
         var workbenchRoot = Path.Combine(root, "workbench");

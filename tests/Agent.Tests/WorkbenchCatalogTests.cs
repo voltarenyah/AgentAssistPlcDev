@@ -129,6 +129,39 @@ public sealed class WorkbenchCatalogTests : IDisposable
             context.DeviceRoot);
     }
 
+    [Fact]
+    public void DeleteRemovesWholeWorkbenchRootAfterIdentityCheck()
+    {
+        var root = Path.Combine(_testRoot, "Line1");
+        var catalog = CreateCatalog();
+        var created = catalog.Create("Line 1", root);
+        Directory.CreateDirectory(Path.Combine(root, "repository.git", "objects"));
+        Directory.CreateDirectory(Path.Combine(root, "worktrees", "master"));
+        var readOnly = Path.Combine(root, "repository.git", "objects", "pack.pack");
+        File.WriteAllText(readOnly, "pack");
+        File.SetAttributes(readOnly, FileAttributes.ReadOnly);
+
+        catalog.Delete(created);
+
+        Assert.False(Directory.Exists(root));
+        var error = Assert.Throws<WorkbenchCatalogException>(() => catalog.Load(root));
+        Assert.Equal("WORKBENCH_NOT_FOUND", error.Code);
+    }
+
+    [Fact]
+    public void DeleteRejectsForeignIdentityAndPreservesRoot()
+    {
+        var root = Path.Combine(_testRoot, "Line1");
+        var catalog = CreateCatalog();
+        var created = catalog.Create("Line 1", root);
+
+        var error = Assert.Throws<WorkbenchCatalogException>(() =>
+            catalog.Delete(created with { WorkbenchId = "foreign-id" }));
+
+        Assert.Equal("WORKBENCH_RELATIONSHIP_MISMATCH", error.Code);
+        Assert.True(File.Exists(Path.Combine(root, "workbench.json")));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_testRoot))

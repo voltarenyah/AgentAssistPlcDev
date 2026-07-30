@@ -45,12 +45,34 @@ describe('SessionDock', () => {
         onActivate={onActivate}
         onRename={vi.fn()}
         onRemove={vi.fn()}
+        onExport={vi.fn()}
       />,
     )
 
     act(() => host.querySelector<HTMLButtonElement>('[data-session-id="s1"]')?.click())
 
     expect(onActivate).toHaveBeenCalledWith('s1')
+  })
+
+  it('exports a saved session as markdown', async () => {
+    const onExport = vi.fn()
+    const { host } = render(
+      <SessionDock
+        sessions={sessions}
+        activeSessionId={null}
+        busy={false}
+        hidden={false}
+        onCreate={vi.fn()}
+        onActivate={vi.fn()}
+        onRename={vi.fn()}
+        onRemove={vi.fn()}
+        onExport={onExport}
+      />,
+    )
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Export Startup checks"]')?.click())
+
+    expect(onExport).toHaveBeenCalledWith('s1')
   })
 
   it('submits a trimmed inline rename', async () => {
@@ -65,6 +87,7 @@ describe('SessionDock', () => {
         onActivate={vi.fn()}
         onRename={onRename}
         onRemove={vi.fn()}
+        onExport={vi.fn()}
       />,
     )
 
