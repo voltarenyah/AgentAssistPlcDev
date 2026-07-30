@@ -180,6 +180,27 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task ChatEndpointStreamsSseErrorsAndDone()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/chat")
+        {
+            Content = JsonContent.Create(new { message = "what is the function of FB block and interface" }),
+        };
+
+        using var response = await fixture.Client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("\"kind\":\"error\"", body);
+        Assert.Contains("\"delta\":", body);
+        Assert.Contains("data: [DONE]", body);
+    }
+
+    [Fact]
     public async Task TiaComparisonStageAndPreviewAreNonDestructiveAndExposeFingerprintEvidence()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(

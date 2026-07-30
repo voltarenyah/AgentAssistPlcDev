@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Agent.Mcp;
@@ -176,12 +177,55 @@ public static class CompatibilityEndpoints
             chat.Clear(Device(state));
             return Results.NoContent();
         });
-        app.MapPost("/api/chat", async (JsonElement body, WorkbenchApiState state, ApiChatService chat, CancellationToken ct) =>
+        app.MapPost("/api/chat", async (HttpContext http, JsonElement body, WorkbenchApiState state, ApiChatService chat, CancellationToken ct) =>
         {
             var device = Device(state);
             var message = body.TryGetProperty("message", out var value) ? value.GetString() : null;
             if (string.IsNullOrWhiteSpace(message)) throw new ArgumentException("message is required.");
-            return Results.Ok(new { content = await chat.RunAsync(device, message, ct) });
+            http.Response.StatusCode = StatusCodes.Status200OK;
+            http.Response.ContentType = "text/event-stream";
+            http.Response.Headers.CacheControl = "no-cache";
+
+            var events = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false,
+            });
+
+            void Queue(object payload) =>
+                events.Writer.TryWrite("data: " + JsonSerializer.Serialize(payload) + "\n\n");
+
+            var producer = Task.Run(async () =>
+            {
+                try
+                {
+                    var answer = await chat.RunStreamingAsync(
+                        device,
+                        message,
+                        line => Queue(new { kind = "progress", delta = line }),
+                        (kind, delta) => Queue(new { kind, delta }),
+                        ct);
+                    Queue(new { kind = "answer", delta = answer });
+                }
+                catch (Exception exception)
+                {
+                    Queue(new { kind = "error", delta = exception.Message });
+                }
+                finally
+                {
+                    events.Writer.TryComplete();
+                }
+            }, ct);
+
+            await foreach (var item in events.Reader.ReadAllAsync(ct))
+            {
+                await http.Response.WriteAsync(item, ct);
+                await http.Response.Body.FlushAsync(ct);
+            }
+
+            await http.Response.WriteAsync("data: [DONE]\n\n", ct);
+            await http.Response.Body.FlushAsync(ct);
+            await producer;
         });
         app.MapGet("/api/config/key/status", (CompatibilityRuntimeState state, IConfiguration configuration) => Results.Ok(new
         {
@@ -446,7 +490,36 @@ internal sealed class ApiChatService(
         return session;
     }
 
-    public async Task<string> RunAsync(DeviceContext device, string message, CancellationToken token)
+    public Task<string> RunAsync(DeviceContext device, string message, CancellationToken token) =>
+        RunStreamingAsync(device, message, _ => { }, (_, _) => { }, token);
+
+    public async Task<string> RunStreamingAsync(
+        DeviceContext device,
+        string message,
+        Action<string> progress,
+        Action<string, string> streamDelta,
+        CancellationToken token)
+    {
+        var active = await EnsureActiveChatAsync(device, token);
+        void OnProgress(string line) => progress(line);
+        void OnDelta(string kind, string delta) => streamDelta(kind, delta);
+
+        active.Loop.Progress += OnProgress;
+        active.Loop.StreamDelta += OnDelta;
+        try
+        {
+            var answer = await active.Loop.RunAsync(message, token);
+            SaveActiveSession(device, active, message);
+            return answer;
+        }
+        finally
+        {
+            active.Loop.Progress -= OnProgress;
+            active.Loop.StreamDelta -= OnDelta;
+        }
+    }
+
+    private async Task<ActiveChat> EnsureActiveChatAsync(DeviceContext device, CancellationToken token)
     {
         var apiKey = state.ApiKey ?? configuration["DeepSeek:ApiKey"] ?? configuration["deepSeekApiKey"];
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -502,7 +575,12 @@ internal sealed class ApiChatService(
             active = new ActiveChat(loop, session);
             chats[contextKey] = active;
         }
-        var answer = await active.Loop.RunAsync(message, token);
+        return active;
+    }
+
+    private void SaveActiveSession(DeviceContext device, ActiveChat active, string message)
+    {
+        var contextKey = DeviceContextIdentity.Key(device);
         var updated = active.Session with
         {
             Messages = active.Loop.History.ToList(),
@@ -517,7 +595,6 @@ internal sealed class ApiChatService(
         };
         SessionManager.SaveSession(device, updated);
         chats[contextKey] = active with { Session = updated };
-        return answer;
     }
 
     internal static ChatRequestSettings Settings(
