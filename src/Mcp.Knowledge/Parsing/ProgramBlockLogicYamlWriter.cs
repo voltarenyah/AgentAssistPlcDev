@@ -177,7 +177,10 @@ public static class ProgramBlockLogicYamlWriter
                 continue;
             }
 
-            statements.Add($"{target} := {input};");
+            // Negated coil -(/)— writes the inverted RLO; Openness marks the negation on the
+            // "operand" pin (observed in V17 exports), "in" is accepted defensively.
+            var value = coil.IsNegated("operand") || coil.IsNegated("in") ? $"NOT ({input})" : input;
+            statements.Add($"{target} := {value};");
         }
 
         foreach (var coil in context.Parts.Values.Where(part => IsLatchCoil(part.Name)).OrderBy(part => part.Order))
@@ -191,6 +194,7 @@ public static class ProgramBlockLogicYamlWriter
 
         statements.AddRange(context.BuildSetResetPartStatements(notes));
         statements.AddRange(context.BuildPulseCoilStatements(notes));
+        statements.AddRange(context.BuildBitfieldStatements(notes));
 
         foreach (var call in context.Calls.OrderBy(call => call.Order))
         {
@@ -868,21 +872,95 @@ public static class ProgramBlockLogicYamlWriter
         public IReadOnlyList<string> BuildPulseCoilStatements(List<string> notes)
         {
             var statements = new List<string>();
-            foreach (var part in Parts.Values.Where(part => string.Equals(part.Name, "PCoil", StringComparison.OrdinalIgnoreCase)).OrderBy(part => part.Order))
+            foreach (var part in Parts.Values
+                .Where(part => MatchesAny(part.Name, "PCoil", "NCoil"))
+                .OrderBy(part => part.Order))
             {
                 var target = GetPinAccess(part.Uid, "operand");
                 var bit = GetPinAccess(part.Uid, "bit");
                 var input = EvaluateInput(part.Uid, "in", notes);
                 if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(bit) || string.IsNullOrWhiteSpace(input))
                 {
-                    notes.Add("Skipped PCoil because its operand, bit, or input could not be resolved.");
+                    notes.Add($"Skipped {part.Name} because its operand, bit, or input could not be resolved.");
                     continue;
                 }
 
-                statements.Add($"{target} := PULSE({input}, {bit});");
+                // PCoil fires on a rising RLO edge, NCoil on a falling edge; both need the
+                // edge memory bit and pass power flow through unchanged.
+                var edge = string.Equals(part.Name, "PCoil", StringComparison.OrdinalIgnoreCase) ? "PULSE" : "NPULSE";
+                statements.Add($"{target} := {edge}({input}, {bit});");
             }
 
             return statements;
+        }
+
+        public IReadOnlyList<string> BuildBitfieldStatements(List<string> notes)
+        {
+            var statements = new List<string>();
+            foreach (var part in Parts.Values
+                .Where(part => MatchesAny(part.Name, "SBitfield", "RBitfield"))
+                .OrderBy(part => part.Order))
+            {
+                var target = GetPinAccess(part.Uid, "operand");
+                var count = ResolveInputValue(part.Uid, "n", notes);
+                if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(count))
+                {
+                    notes.Add($"Skipped {part.Name} because its operand or bit count could not be resolved.");
+                    continue;
+                }
+
+                // SET_BF/RESET_BF write n consecutive bits starting at the operand when the
+                // RLO at EN is 1 (LAD/FBD only — no SCL builtin exists).
+                var isSet = string.Equals(part.Name, "SBitfield", StringComparison.OrdinalIgnoreCase);
+                var value = isSet ? "TRUE" : "FALSE";
+                var enable = EvaluateInput(part.Uid, "en", notes);
+                string statement;
+                if (TryExpandBitfieldAssignments(target, count, value, out var assignments))
+                {
+                    statement = string.Join("\n", assignments);
+                }
+                else
+                {
+                    notes.Add($"Rendered '{part.Name}' as a call; bits could not be expanded without a literal array index and count.");
+                    statement = $"{(isSet ? "SET_BF" : "RESET_BF")}({target}, N := {count});";
+                }
+
+                if (!string.IsNullOrWhiteSpace(enable) && !string.Equals(enable, "TRUE", StringComparison.OrdinalIgnoreCase))
+                {
+                    statement = $"IF {enable} THEN\n{statement}\nEND_IF;";
+                }
+
+                statements.Add(statement);
+            }
+
+            return statements;
+        }
+
+        private static bool TryExpandBitfieldAssignments(string target, string count, string value, out IReadOnlyList<string> assignments)
+        {
+            assignments = Array.Empty<string>();
+            if (!int.TryParse(count, out var bitCount) || bitCount < 1 || bitCount > 64)
+            {
+                return false;
+            }
+
+            var bracket = target.LastIndexOf('[');
+            if (bracket < 0 || !target.EndsWith("]", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var indexText = target.Substring(bracket + 1, target.Length - bracket - 2);
+            if (!int.TryParse(indexText, out var startIndex))
+            {
+                return false;
+            }
+
+            var arrayName = target.Substring(0, bracket);
+            assignments = Enumerable.Range(startIndex, bitCount)
+                .Select(index => $"{arrayName}[{index}] := {value};")
+                .ToArray();
+            return true;
         }
 
         public IReadOnlyList<string> BuildControlFlowStatements(List<string> notes)
@@ -1184,9 +1262,18 @@ public static class ProgramBlockLogicYamlWriter
 
             if (string.Equals(part.Name, "Coil", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(part.Name, "SCoil", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(part.Name, "RCoil", StringComparison.OrdinalIgnoreCase))
+                string.Equals(part.Name, "RCoil", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(part.Name, "PCoil", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(part.Name, "NCoil", StringComparison.OrdinalIgnoreCase))
             {
+                // All coil forms pass the incoming RLO through to their output pin unchanged.
                 return EvaluateInput(part.Uid, "in", notes);
+            }
+
+            if (MatchesAny(part.Name, "SBitfield", "RBitfield") && MatchesAny(pinName, "out", "eno"))
+            {
+                // SET_BF/RESET_BF pass the incoming RLO through to their output.
+                return EvaluateInput(part.Uid, "en", notes);
             }
 
             if (string.Equals(part.Name, "Move", StringComparison.OrdinalIgnoreCase) ||
@@ -1604,6 +1691,7 @@ public static class ProgramBlockLogicYamlWriter
                 "TONR",
                 "TP",
                 "R_TRIG",
+                "F_TRIG",
                 "CTU",
                 "SET_TIMEZONE",
                 "Program_Alarm",

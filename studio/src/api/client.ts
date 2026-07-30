@@ -347,8 +347,17 @@ export const openDeviceProject = (
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/tia/open`,
     withOperation(jsonRequest('POST'), operationId),
   )
-export const stageDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string) =>
-  workbenchRequest<unknown>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/stage`, withOperation(jsonRequest('POST'), operationId))
+export const stageDeviceRefresh = (
+  workbenchId: string,
+  worktreeId: string,
+  deviceId: string,
+  operationId?: string,
+  allowCompile = false,
+) =>
+  workbenchRequest<unknown>(
+    `${devicePath(workbenchId, worktreeId, deviceId)}/refresh/stage${allowCompile ? '?allowCompile=true' : ''}`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
 export const previewDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<ReconciliationPreview>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/preview`)
 export const applyDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string, previewId: string, approvedPaths: string[], operationId?: string) =>

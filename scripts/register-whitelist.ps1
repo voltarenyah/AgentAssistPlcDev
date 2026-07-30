@@ -22,11 +22,12 @@ $name = Split-Path $exe -Leaf
 $outDir = Split-Path $exe -Parent
 $regFile = Join-Path $outDir "register-whitelist.reg"
 
-# --- SHA-256 hash (Get-FileHash returns hex string -> convert to bytes -> base64)
-$hexHash = (Get-FileHash $exe -Algorithm SHA256).Hash
-$bytes = [byte[]]::new($hexHash.Length / 2)
-for ($i = 0; $i -lt $hexHash.Length; $i += 2) {
-    $bytes[$i / 2] = [Convert]::ToByte($hexHash.Substring($i, 2), 16)
+# --- SHA-256 hash as base64. Avoid Get-FileHash so older Windows PowerShell works.
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $bytes = $sha256.ComputeHash([System.IO.File]::ReadAllBytes($exe))
+} finally {
+    $sha256.Dispose()
 }
 $hash = [Convert]::ToBase64String($bytes)
 
@@ -51,14 +52,21 @@ $content | Out-File -FilePath $regFile -Encoding ascii
 
 Write-Host "[whitelist] .reg file generated: $regFile"
 
-# --- Attempt merge (succeeds only when elevated) -----------------------------
-try {
+# --- Attempt merge only when elevated. HKLM writes are optional for builds. ---
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+$isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if ($isElevated) {
     $output = & reg.exe import $regFile 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "[whitelist] merged into registry (elevated). TIA Openness firewall prompts should now be suppressed."
+        Write-Host "[whitelist] merged into registry. TIA Openness firewall prompts should now be suppressed."
     } else {
         Write-Host "[whitelist] reg.exe import returned exit code $LASTEXITCODE"
+        Write-Host $output
     }
-} catch {
+} else {
     Write-Host "[whitelist] not merged - run as Administrator or double-click $regFile to apply."
 }
+
+exit 0

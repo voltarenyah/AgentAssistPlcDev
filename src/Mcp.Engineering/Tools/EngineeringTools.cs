@@ -154,7 +154,9 @@ public sealed class EngineeringTools
 
     [McpServerTool(Name = "compile_plc")]
     [Description("Compile the whole PLC software, returning all messages (write: mutates project compile state).")]
-    public CallToolResult CompilePlc() => Invoke("compile_plc", () => _adapter.CompilePlc());
+    public CallToolResult CompilePlc(
+        [Description("PLC device name; optional for single-PLC projects and required when the project contains multiple PLCs.")] string? plcName = null)
+        => Invoke("compile_plc", () => _adapter.CompilePlc(plcName));
 
     [McpServerTool(Name = "open_block_in_editor")]
     [Description("Open a block in the TIA Portal editor window. Requires a UI-connected TIA session.")]

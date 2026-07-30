@@ -285,7 +285,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new SyncResult
             {
                 PlcName = "PLC_1",
-                Failed = new[] { new SyncChange { Name = "A", Reason = "export failed" } },
+                Failed = new[] { new SyncChange { Name = "A", Category = "FC", Reason = "export failed" } },
             },
         });
         var coordinator = Create(fixture, engineering: engineering);
@@ -294,8 +294,58 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             () => coordinator.StageRefreshAsync(fixture.Context, CancellationToken.None));
 
         Assert.Equal("DEVICE_EXPORT_INCOMPLETE", error.Code);
+        Assert.Contains("FC A", error.Message);
+        Assert.Contains("export failed", error.Message);
         Assert.Equal("previous", File.ReadAllText(
             Path.Combine(fixture.Context.StagingRoot, "sentinel.txt")));
+    }
+
+    [Fact]
+    public async Task StageRefreshRequestsCompileApprovalForInconsistentBlockWithoutCompiling()
+    {
+        var fixture = Fixture.Create(root);
+        var engineering = new MutatingExportCaller(new[]
+        {
+            new SyncResult
+            {
+                PlcName = "PLC_1",
+                ChecksumAfter = null,
+                Failed = new[]
+                {
+                    new SyncChange
+                    {
+                        Name = "A",
+                        Category = "FC",
+                        Reason = "Block 'A' is inconsistent. Compile it first before export.",
+                    },
+                },
+            },
+        });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(
+            () => coordinator.StageRefreshAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("PLC_COMPILE_REQUIRED", error.Code);
+        Assert.Contains("FC A", error.Message);
+        Assert.DoesNotContain("compile_plc", engineering.Calls);
+    }
+
+    [Fact]
+    public async Task StageRefreshCompilesSelectedPlcAndRetriesExportWhenApproved()
+    {
+        var fixture = Fixture.Create(root);
+        var engineering = new CompileRetryExportCaller();
+        var coordinator = Create(fixture, engineering: engineering);
+
+        await coordinator.StageRefreshAsync(
+            fixture.Context,
+            CancellationToken.None,
+            allowCompile: true);
+
+        Assert.Equal(new[] { "rebuild_export", "compile_plc", "rebuild_export" }, engineering.Calls);
+        Assert.Equal("PLC_1", Property<string>(engineering.CallArgs["compile_plc"].Single(), "plcName"));
+        Assert.True(File.Exists(Path.Combine(fixture.Context.StagingRoot, "metadata.json")));
     }
 
     [Fact]
@@ -720,6 +770,67 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             {
                 new SyncResult { PlcName = "PLC_1", ExportRoot = output },
             });
+        }
+    }
+
+    private sealed class CompileRetryExportCaller : FakeToolCaller
+    {
+        private int exportAttempts;
+
+        public override Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (!CallArgs.TryGetValue(tool, out var list))
+            {
+                list = new List<object>();
+                CallArgs[tool] = list;
+            }
+
+            list.Add(args);
+            if (tool == "compile_plc")
+            {
+                return Task.FromResult((T)(object)new CompileResult
+                {
+                    State = "success",
+                });
+            }
+
+            if (tool == "rebuild_export")
+            {
+                exportAttempts++;
+                var output = Property<string>(args, "outputDir");
+                Directory.CreateDirectory(output);
+                File.WriteAllText(Path.Combine(output, "metadata.json"), "{}");
+                if (exportAttempts == 1)
+                {
+                    return Task.FromResult((T)(object)new[]
+                    {
+                        new SyncResult
+                        {
+                            PlcName = "PLC_1",
+                            Failed = new[]
+                            {
+                                new SyncChange
+                                {
+                                    Name = "A",
+                                    Category = "FC",
+                                    Reason = "Block 'A' is inconsistent. Compile it first before export.",
+                                },
+                            },
+                        },
+                    });
+                }
+
+                return Task.FromResult((T)(object)new[]
+                {
+                    new SyncResult { PlcName = "PLC_1", ExportRoot = output },
+                });
+            }
+
+            throw new InvalidOperationException(tool);
         }
     }
 

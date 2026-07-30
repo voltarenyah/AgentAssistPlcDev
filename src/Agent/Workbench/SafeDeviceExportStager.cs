@@ -57,19 +57,36 @@ public sealed class SafeDeviceExportStager
         DeviceContext device,
         string plcName,
         CancellationToken cancellationToken = default,
-        IOperationProgress? progress = null) =>
+        IOperationProgress? progress = null,
+        bool allowCompile = false) =>
         operationLock.RunAsync(
             device,
-            token => StageCoreAsync(device, plcName, token, progress),
+            token => StageCoreAsync(device, plcName, token, progress, allowCompile),
             cancellationToken);
 
     private async Task<SyncResult[]> StageCoreAsync(
         DeviceContext device,
         string plcName,
         CancellationToken cancellationToken,
-        IOperationProgress? progress)
+        IOperationProgress? progress,
+        bool allowCompile)
     {
-        progress?.Report("Preparing export staging area...");
+        var attemptedCompile = false;
+        return await StageAttemptAsync(device, plcName, cancellationToken, progress, allowCompile, attemptedCompile)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<SyncResult[]> StageAttemptAsync(
+        DeviceContext device,
+        string plcName,
+        CancellationToken cancellationToken,
+        IOperationProgress? progress,
+        bool allowCompile,
+        bool attemptedCompile)
+    {
+        progress?.Report(attemptedCompile
+            ? "Preparing export staging area after compile..."
+            : "Preparing export staging area...");
         var incoming = WorkbenchPaths.ResolveRelative(
             device.DeviceRoot,
             $".staging-{Guid.NewGuid():N}.incoming");
@@ -94,11 +111,43 @@ public sealed class SafeDeviceExportStager
             if (selected.Length == 0 || selected.Any(item => item.Failed.Length > 0))
             {
                 var failed = selected.Sum(item => item.Failed.Length);
+                if (selected.Length > 0 && IsCompileRequired(selected) && !attemptedCompile)
+                {
+                    if (!allowCompile)
+                    {
+                        throw new WorkbenchLifecycleException(
+                            "PLC_COMPILE_REQUIRED",
+                            BuildCompileRequiredMessage(failed, selected));
+                    }
+
+                    progress?.Report("Compiling selected PLC before retrying export...");
+                    var compile = await engineering.CallAsync<CompileResult>(
+                            "compile_plc",
+                            new { plcName },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (string.Equals(compile.State, "error", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new WorkbenchLifecycleException(
+                            "PLC_COMPILE_FAILED",
+                            BuildCompileFailedMessage(plcName, compile));
+                    }
+
+                    return await StageAttemptAsync(
+                            device,
+                            plcName,
+                            cancellationToken,
+                            progress,
+                            allowCompile,
+                            attemptedCompile: true)
+                        .ConfigureAwait(false);
+                }
+
                 throw new WorkbenchLifecycleException(
                     "DEVICE_EXPORT_INCOMPLETE",
                     selected.Length == 0
                         ? $"The export did not return selected PLC '{plcName}'."
-                        : $"The selected PLC export failed for {failed} component(s); previous staging was preserved.");
+                        : BuildIncompleteExportMessage(failed, selected));
             }
 
             if (!files.FileExists(Path.Combine(incoming, "metadata.json")))
@@ -209,6 +258,43 @@ public sealed class SafeDeviceExportStager
         files.DeleteDirectory(path);
     }
 
+    private static string BuildIncompleteExportMessage(int failed, SyncResult[] selected)
+    {
+        var details = selected
+            .SelectMany(result => result.Failed)
+            .Select(DescribeFailure)
+            .Where(detail => !string.IsNullOrWhiteSpace(detail))
+            .Take(5)
+            .ToArray();
+        var message = $"The selected PLC export failed for {failed} component(s); previous staging was preserved.";
+        if (details.Length == 0)
+        {
+            return message;
+        }
+
+        var omitted = failed > details.Length
+            ? $" (+{failed - details.Length} more)"
+            : string.Empty;
+        return $"{message} Failed component(s): {string.Join("; ", details)}{omitted}.";
+    }
+
+    private static string DescribeFailure(SyncChange failure)
+    {
+        var identity = string.IsNullOrWhiteSpace(failure.Category)
+            ? failure.Name
+            : $"{failure.Category} {failure.Name}";
+        if (string.IsNullOrWhiteSpace(identity))
+        {
+            identity = string.IsNullOrWhiteSpace(failure.SourcePath)
+                ? "(unknown)"
+                : failure.SourcePath;
+        }
+
+        return string.IsNullOrWhiteSpace(failure.Reason)
+            ? identity
+            : $"{identity} — {failure.Reason}";
+    }
+
     private sealed class McpProgressBridge(IOperationProgress progress) : IProgress<ProgressNotificationValue>
     {
         public void Report(ProgressNotificationValue value)
@@ -218,5 +304,42 @@ public sealed class SafeDeviceExportStager
                 progress.Report(value.Message);
             }
         }
+    }
+
+    private static bool IsCompileRequired(SyncResult[] selected) =>
+        selected.Any(result => result.Failed.Any(failure =>
+            ContainsCompileSignal(failure.Reason)
+            || ContainsCompileSignal(failure.Name)
+            || ContainsCompileSignal(failure.SourcePath)));
+
+    private static bool ContainsCompileSignal(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && (value.Contains("compile", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("inconsistent", StringComparison.OrdinalIgnoreCase));
+
+    private static string BuildCompileRequiredMessage(int failed, SyncResult[] selected) =>
+        BuildIncompleteExportMessage(failed, selected)
+        + " The PLC appears to need a compile before TIA can export the selected source. Allow automatic compile, or compile manually in TIA Portal and retry.";
+
+    private static string BuildCompileFailedMessage(string plcName, CompileResult compile)
+    {
+        var details = compile.Messages
+            .Where(message => string.Equals(message.Type, "error", StringComparison.OrdinalIgnoreCase))
+            .Select(message =>
+            {
+                var location = string.IsNullOrWhiteSpace(message.BlockName)
+                    ? plcName
+                    : message.NetworkNumber is null
+                        ? message.BlockName
+                        : $"{message.BlockName} network {message.NetworkNumber}";
+                return $"{location}: {message.Text}";
+            })
+            .Where(detail => !string.IsNullOrWhiteSpace(detail))
+            .Take(5)
+            .ToArray();
+        var suffix = details.Length == 0
+            ? string.Empty
+            : $" Error(s): {string.Join("; ", details)}.";
+        return $"Automatic PLC compile failed for '{plcName}'. Previous staging was preserved.{suffix}";
     }
 }

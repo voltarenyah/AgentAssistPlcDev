@@ -33,10 +33,12 @@ Per network (`TranslateFlgNet`, `ProgramBlockLogicYamlWriter.cs:147`):
 
 1. Instance calls → `"InstanceName(IN := expr, ...);"` (optionally `IF <en> THEN ... END_IF;`
    wrapped), then procedure-function calls (`RD_LOC_T` style: `"NAME(pin := x, OUT => target);"`).
-2. Plain coils (`Coil`) → `"target := <input-expr>;"`.
+2. Plain coils (`Coil`) → `"target := <input-expr>;"` (negated coil → `"target := NOT (<input-expr>);"`).
 3. Latch coils (`SCoil`/`RCoil`) → `"IF <input> THEN target := TRUE|FALSE; END_IF;"`.
 4. Set/reset flip-flops (`Sr`/`Rs`) → ordered `IF` pairs — **dominant input last** (§A.4).
-5. Pulse coils (`PCoil`) → `"target := PULSE(<input>, <membit>);"`.
+5. Pulse coils (`PCoil`/`NCoil`) → `"target := PULSE|NPULSE(<input>, <membit>);"`, then bit-field
+   parts (`SBitfield`/`RBitfield`) → EN-gated per-bit assignments (or call-form when the bit range
+   is not a literal).
 6. `Call` elements (user FB/FC) → `"Name(param := value, out => target);"`.
 7. Control flow (`Jump`/`Return*`/`Inc`), then direct assignments from box outputs
    (`Move`, arithmetic, ...) → `"target := <expr>;"`, EN-gated as
@@ -58,11 +60,11 @@ produce a `Skipped ...` note and an empty/omitted statement — never an excepti
 | NC contact `-\|/\|-` | `Contact` w/ negated operand pin | ✅ `:1017` | same | Negation on the `operand` pin, not the part | `NOT <operand>` |
 | NO contact (FBD dialect) | `ContactF` (`tests`) | ✅ `:1008` | same | Same as `Contact` | folded |
 | Coil `-( )-` | `Coil` (`export`) | ✅ `:161` | in `in`, operand | Assignment | `target := <input>;` |
-| Negated coil `-(/)‌-` | `Coil` w/ negated `in` pin | 🟡 `:1017` pattern | same | Negation on input pin — confirm negated-`in` handling in kitchen-sink | `target := NOT <input>;` |
+| Negated coil `-(/)‌-` | `Coil` w/ negated `operand` pin (`export`) | ✅ | same | Openness marks coil negation on the `operand` pin (confirmed in FC_LAD_Instructions_BitLogicOperations export); writes inverted RLO | `target := NOT (<input>);` |
 | Set coil `-(S)-` | `SCoil` (`export`) | ✅ `:689` | in `in`, operand | Sets bit when RLO=1, holds otherwise | `IF <in> THEN t := TRUE; END_IF;` |
 | Reset coil `-(R)-` | `RCoil` (`export`) | ✅ `:689` | in `in`, operand | Clears bit when RLO=1, holds otherwise | `IF <in> THEN t := FALSE; END_IF;` |
-| Set bit field `SET_BF` | `unverified` (likely `Set_BF`/`SET_BF`) | ❌ | in, operand, `n` (count) | Sets n consecutive bits starting at operand when RLO=1 | `IF <in> THEN FOR i := 0 TO n-1 DO t[i] := TRUE; END_FOR; END_IF;` |
-| Reset bit field `RESET_BF` | `unverified` | ❌ | in, operand, `n` | Same, clearing | analogous with `FALSE` |
+| Set bit field `SET_BF` | `SBitfield` (`export`) | ✅ `BuildBitfieldStatements` | in `en`, operand (start bit), `n` (count) | Sets n consecutive bits starting at operand when RLO=1; passes RLO to `out` | Literal array index + count ≤ 64 → per-bit assignments `t[i] := TRUE;`; else call-form `SET_BF(t, N := n)` + note |
+| Reset bit field `RESET_BF` | `RBitfield` (`export`) | ✅ `BuildBitfieldStatements` | same | Same, clearing | analogous with `FALSE` |
 | Midline output `-(#)-` | `unverified` (likely `Coil` variant) | ❌ | in, operand, out | Stores RLO mid-branch; downstream uses stored bit | `t := <input>;` (order matters: before rest of branch) |
 
 ### A.2 Edge detection (all require an edge memory bit — the previous state)
@@ -71,11 +73,11 @@ produce a `Skipped ...` note and an empty/omitted statement — never an excepti
 |---|---|---|---|---|---|
 | Pos. signal edge contact `-\|P\|-` | `PContact` (`tests`) | ✅ `:1022` | operand, `bit` (mem), in `pre`, out | TRUE for one scan when operand rises | `PULSE(<op>, <mem>)` ANDed with upstream |
 | Neg. signal edge contact `-\|N\|-` | `NContact` (`tests`) | ✅ `:1022` | same | one scan on falling edge | `NPULSE(<op>, <mem>)` |
-| RLO pos. edge `-(P)-` coil | `PCoil` (`tests`) | ✅ `:833` | in, operand (target), `bit` (mem) | Sets target one scan when RLO rises | `t := PULSE(<in>, <mem>);` |
-| RLO neg. edge `-(N)-` coil | `NCoil` (`unverified`) | ❌ | in, operand, `bit` | falling-edge twin of `PCoil` | `t := NPULSE(<in>, <mem>);` |
+| RLO pos. edge `-(P)-` coil | `PCoil` (`export`) | ✅ `BuildPulseCoilStatements` | in, operand (target), `bit` (mem) | Sets target one scan when RLO rises; passes RLO through to `out` | `t := PULSE(<in>, <mem>);` |
+| RLO neg. edge `-(N)-` coil | `NCoil` (`export`) | ✅ `BuildPulseCoilStatements` | in, operand, `bit` | falling-edge twin of `PCoil`; passes RLO through | `t := NPULSE(<in>, <mem>);` |
 | RLO edge box `P` / `N` (FBD) | `PBox`/`NBox` (`tests`) | ✅ `:1105` | in, `bit`, out | Edge of input expression | `PULSE(<in>, <mem>)` / `NPULSE(...)` |
-| R_TRIG instruction (FB) | `R_TRIG` (`tests`) | ✅ instance call `:1461` | `CLK`, out `Q` | FB: Q one scan on rising CLK; state in instance DB | `"Inst(CLK := x);"`, refs → `Inst.Q` |
-| F_TRIG instruction (FB) | `F_TRIG` (`unverified`) | ❌ (add to `IsInstanceCallPart`) | `CLK`, out `Q` | falling-edge twin | same pattern as `R_TRIG` |
+| R_TRIG instruction (FB) | `R_TRIG` (`export`) | ✅ instance call `:1461` | `CLK`, out `Q` | FB: Q one scan on rising CLK; state in instance DB | `"Inst(CLK := x);"`, refs → `Inst.Q` |
+| F_TRIG instruction (FB) | `F_TRIG` (`export`) | ✅ instance call | `CLK`, out `Q` | falling-edge twin; unconnected `CLK` (OpenCon) keeps the instance-DB value | same pattern as `R_TRIG` |
 | Legacy `P_TRIG`/`N_TRIG` | `unverified` | ❌ | in, `bit`, out | S7-300/400 style RLO edge | treat like `PBox`/`NBox` |
 
 ### A.3 Set/reset flip-flops — **dominance is the trap**
@@ -265,7 +267,8 @@ always `"Inst(...);"` / `NAME(bindings);`; deep semantics are out of scope for l
    **Audit risk**: mixed SCoil+Sr on one operand in one network may reorder vs. TIA semantics.
 7. **`SHR` sign extension** — signed vs unsigned matters for the pattern comment, SCL `SHR`
    matches TIA.
-8. **Negated input pins on parts other than contacts** — not consulted today (see §1).
+8. **Negated input pins on parts other than contacts** — negated `Coil` (negation on `operand`)
+   is handled (2026-07-30); other parts still don't consult pin negation (see §1).
 
 ## 3. Kitchen-sink ground-truth procedure (user, on TIA V17 machine)
 
@@ -289,13 +292,13 @@ VAL_STRG, LEN, CONCAT, LEFT, RIGHT, MID, DELETE, INSERT, REPLACE, FIND, JOIN, SP
 
 ## 4. Coverage summary & roadmap
 
-**Today:** ~55 part names recognized (35 with real semantics + instance-call/call-form lists).
+**Today:** ~59 part names recognized (39 with real semantics + instance-call/call-form lists).
 **Known missing and silently dropped:** everything ❌ above.
 
-- **P0** (common in real projects): `CTD`, `CTUD`, `F_TRIG`, `Dec`, `Min`, `Max`, `Round`,
-  `Ceil`, `Floor`, `Swap`, `Sel`, `JumpN`, `Label`, word-logic `Xor`/`Inv`, `NCoil`,
+- **P0** (common in real projects): `CTD`, `CTUD`, `Dec`, `Min`, `Max`, `Round`,
+  `Ceil`, `Floor`, `Swap`, `Sel`, `JumpN`, `Label`, word-logic `Xor`/`Inv`,
   `WRREC`, `STRG_VAL`.
-- **P1**: `Shl/Shr/Rol/Ror`, string ops, `Deco/Enco/Mux/Demux`, `T_DIFF/T_COMP`, `Set_BF/Reset_BF`,
+- **P1**: `Shl/Shr/Rol/Ror`, string ops, `Deco/Enco/Mux/Demux`, `T_DIFF/T_COMP`,
   `UmoveBlk/UfillBlk`, `OK/Not_OK`, `WR_LOC_T`.
 - **P2**: diagnostics (`GET_DIAG`, `DeviceStates`, ...), `SCATTER/GATHER`, Serialize/Deserialize,
   legacy S5 timers, `JMP_LIST/SWITCH`, midline output edge cases.

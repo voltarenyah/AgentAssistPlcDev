@@ -54,7 +54,7 @@ public interface IEngineeringPlatform : IDisposable
     ImportResult ImportBlock(string blockName, string xmlFilePath, string? plcName = null);
 
     CompileResult CompileBlock(string blockName, string? plcName = null);
-    CompileResult CompilePlc();
+    CompileResult CompilePlc(string? plcName = null);
 
     /// <summary>Open a block in the TIA Portal editor window. Requires a UI-connected session.</summary>
     void OpenBlockInEditor(string blockName);

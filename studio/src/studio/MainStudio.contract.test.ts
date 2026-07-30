@@ -41,4 +41,11 @@ describe('MainStudio offline snapshot contract', () => {
   ])('reloads the persisted snapshot after %s', (name, nextName) => {
     expect(functionBody(name, nextName)).toContain('await reloadDeviceSnapshot(context)')
   })
+
+  it('shows compile approval before retrying a failed stage refresh with automatic compile', () => {
+    const body = functionBody('stageRefresh', 'openProjectInTia')
+    expect(body).toContain('allowCompile')
+    expect(body).toContain('PLC_COMPILE_REQUIRED')
+    expect(body).toContain('setCompilePrompt')
+  })
 })

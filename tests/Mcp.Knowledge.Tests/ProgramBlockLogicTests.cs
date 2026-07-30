@@ -565,6 +565,155 @@ public sealed class ProgramBlockLogicTests
     }
 
     [Fact]
+    public void TranslatesNegatedCoilAsInvertedAssignment()
+    {
+        var result = TranslateLadBlock(
+            "NegatedCoilLogic",
+            "cu-negated-coil",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-start"><Symbol><Component Name="StartButton" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-stop"><Symbol><Component Name="MotorStopped" /></Symbol></Access>
+                <Part Name="Contact" UId="p-contact" />
+                <Part Name="Coil" UId="p-coil"><Negated Name="operand" /></Part>
+              </Parts>
+              <Wires>
+                <Wire UId="w-power"><Powerrail /><NameCon UId="p-contact" Name="in" /></Wire>
+                <Wire UId="w-contact-op"><IdentCon UId="a-start" /><NameCon UId="p-contact" Name="operand" /></Wire>
+                <Wire UId="w-contact-out"><NameCon UId="p-contact" Name="out" /><NameCon UId="p-coil" Name="in" /></Wire>
+                <Wire UId="w-coil-op"><IdentCon UId="a-stop" /><NameCon UId="p-coil" Name="operand" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var statements = StatementsOf(result);
+        // Negated coil -(/)— writes the inverted RLO to its operand.
+        Assert.Contains("MotorStopped := NOT (StartButton);", statements);
+        Assert.DoesNotContain("MotorStopped := StartButton;", statements);
+        Assert.DoesNotContain("Skipped", Joined(result));
+    }
+
+    [Fact]
+    public void TranslatesNCoilAsNegativeEdgePulse()
+    {
+        var result = TranslateLadBlock(
+            "NCoilLogic",
+            "cu-ncoil",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-signal"><Symbol><Component Name="Signal" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-target"><Symbol><Component Name="FallingSeen" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-memory"><Symbol><Component Name="SignalMemory" /></Symbol></Access>
+                <Part Name="Contact" UId="p-contact" />
+                <Part Name="NCoil" UId="p-ncoil" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-power"><Powerrail /><NameCon UId="p-contact" Name="in" /></Wire>
+                <Wire UId="w-contact-op"><IdentCon UId="a-signal" /><NameCon UId="p-contact" Name="operand" /></Wire>
+                <Wire UId="w-contact-out"><NameCon UId="p-contact" Name="out" /><NameCon UId="p-ncoil" Name="in" /></Wire>
+                <Wire UId="w-ncoil-op"><IdentCon UId="a-target" /><NameCon UId="p-ncoil" Name="operand" /></Wire>
+                <Wire UId="w-ncoil-bit"><IdentCon UId="a-memory" /><NameCon UId="p-ncoil" Name="bit" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var statements = StatementsOf(result);
+        // -(N)- sets the operand for one scan on a falling RLO edge; bit is the edge memory.
+        Assert.Contains("FallingSeen := NPULSE(Signal, SignalMemory);", statements);
+        Assert.DoesNotContain("Skipped", Joined(result));
+        Assert.DoesNotContain("Unsupported LAD/FBD part 'NCoil'", Joined(result));
+    }
+
+    [Fact]
+    public void TranslatesBitfieldPartsByExpandingLiteralBits()
+    {
+        var result = TranslateLadBlock(
+            "BitfieldLogic",
+            "cu-bitfield",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-enable"><Symbol><Component Name="EnableFlags" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-setstart">
+                  <Symbol>
+                    <Component Name="Flags" AccessModifier="Array">
+                      <Access Scope="LiteralConstant"><Constant><ConstantType>DInt</ConstantType><ConstantValue>0</ConstantValue></Constant></Access>
+                    </Component>
+                  </Symbol>
+                </Access>
+                <Access Scope="LocalVariable" UId="a-resetstart">
+                  <Symbol>
+                    <Component Name="Flags" AccessModifier="Array">
+                      <Access Scope="LiteralConstant"><Constant><ConstantType>DInt</ConstantType><ConstantValue>4</ConstantValue></Constant></Access>
+                    </Component>
+                  </Symbol>
+                </Access>
+                <Access Scope="LiteralConstant" UId="a-one"><Constant><ConstantType>UInt</ConstantType><ConstantValue>1</ConstantValue></Constant></Access>
+                <Access Scope="LiteralConstant" UId="a-three"><Constant><ConstantType>UInt</ConstantType><ConstantValue>3</ConstantValue></Constant></Access>
+                <Part Name="Contact" UId="p-contact" />
+                <Part Name="SBitfield" UId="p-setbf" />
+                <Part Name="RBitfield" UId="p-resetbf" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-power"><Powerrail /><NameCon UId="p-contact" Name="in" /></Wire>
+                <Wire UId="w-contact-op"><IdentCon UId="a-enable" /><NameCon UId="p-contact" Name="operand" /></Wire>
+                <Wire UId="w-contact-out"><NameCon UId="p-contact" Name="out" /><NameCon UId="p-setbf" Name="en" /></Wire>
+                <Wire UId="w-setbf-op"><IdentCon UId="a-setstart" /><NameCon UId="p-setbf" Name="operand" /></Wire>
+                <Wire UId="w-setbf-n"><IdentCon UId="a-one" /><NameCon UId="p-setbf" Name="n" /></Wire>
+                <Wire UId="w-resetbf-en"><NameCon UId="p-setbf" Name="out" /><NameCon UId="p-resetbf" Name="en" /></Wire>
+                <Wire UId="w-resetbf-op"><IdentCon UId="a-resetstart" /><NameCon UId="p-resetbf" Name="operand" /></Wire>
+                <Wire UId="w-resetbf-n"><IdentCon UId="a-three" /><NameCon UId="p-resetbf" Name="n" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var joined = Joined(result);
+        // SET_BF/RESET_BF write n consecutive bits starting at the operand when EN is 1.
+        Assert.Contains("IF EnableFlags THEN\nFlags[0] := TRUE;\nEND_IF;", joined);
+        Assert.Contains("Flags[4] := FALSE;\nFlags[5] := FALSE;\nFlags[6] := FALSE;", joined);
+        Assert.DoesNotContain("Skipped", joined);
+        Assert.DoesNotContain("Unsupported LAD/FBD part", joined);
+    }
+
+    [Fact]
+    public void TranslatesFTrigAsInstanceCall()
+    {
+        var result = TranslateLadBlock(
+            "FTrigLogic",
+            "cu-ftrig",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-signal"><Symbol><Component Name="Signal" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-target"><Symbol><Component Name="FallingSeen" /></Symbol></Access>
+                <Part Name="Contact" UId="p-contact" />
+                <Part Name="F_TRIG" Version="1.0" UId="p-ftrig">
+                  <Instance Scope="GlobalVariable" UId="i-ftrig"><Component Name="F_TRIG_DB" /></Instance>
+                </Part>
+                <Part Name="Coil" UId="p-coil" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-power"><Powerrail /><NameCon UId="p-contact" Name="in" /></Wire>
+                <Wire UId="w-contact-op"><IdentCon UId="a-signal" /><NameCon UId="p-contact" Name="operand" /></Wire>
+                <Wire UId="w-contact-out"><NameCon UId="p-contact" Name="out" /><NameCon UId="p-ftrig" Name="en" /></Wire>
+                <Wire UId="w-clk"><IdentCon UId="a-signal" /><NameCon UId="p-ftrig" Name="CLK" /></Wire>
+                <Wire UId="w-q"><NameCon UId="p-ftrig" Name="Q" /><NameCon UId="p-coil" Name="in" /></Wire>
+                <Wire UId="w-coil-op"><IdentCon UId="a-target" /><NameCon UId="p-coil" Name="operand" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var statements = StatementsOf(result);
+        // F_TRIG is a stateful edge FB: instance call, Q read from the instance DB.
+        Assert.Contains("F_TRIG_DB(CLK := Signal);", statements);
+        Assert.Contains("FallingSeen := F_TRIG_DB.Q;", statements);
+        Assert.DoesNotContain("generically", Joined(result));
+        Assert.DoesNotContain("Skipped", Joined(result));
+    }
+
+    [Fact]
     public void TreatsEmptyStructuredTextNetworkAsExactEmpty()
     {
         const string xml = """

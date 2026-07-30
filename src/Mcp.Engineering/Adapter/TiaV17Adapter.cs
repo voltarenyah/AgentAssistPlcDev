@@ -286,6 +286,11 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             Directory.CreateDirectory(outputDir);
             try
             {
+                if (FailSafeBlocks.IsFailSafe(block))
+                {
+                    throw new AdapterException("BLOCK_EXPORT_NOT_PERMITTED",
+                        $"Block '{blockName}' is a fail-safe block ({block.ProgrammingLanguage}); TIA Openness does not permit exporting F-blocks.");
+                }
                 if (!block.IsConsistent)
                 {
                     throw new AdapterException("BLOCK_INCONSISTENT",
@@ -342,8 +347,23 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         var exportStartedUtc = DateTimeOffset.UtcNow;
         var results = new List<ExportResult>();
         var records = new List<ExportMetadataRecord>();
-        var blocks = BlockEnumerator.Enumerate(plc.BlockGroup).ToArray();
-        _logger.LogInformation("export_all_blocks: {Count} blocks to export ({Plc})", blocks.Length, plc.Name);
+        var blocks = new List<(PlcBlock Block, string? GroupPath)>();
+        foreach (var item in BlockEnumerator.Enumerate(plc.BlockGroup))
+        {
+            if (FailSafeBlocks.IsFailSafe(item.Block))
+            {
+                // F-blocks cannot be exported via Openness; skip them instead of failing the export.
+                _logger.LogWarning(
+                    "export_all_blocks: SKIPPED fail-safe block {Block} (ProgrammingLanguage: {Language}) — TIA Openness does not permit exporting F-blocks",
+                    item.Block.Name, item.Block.ProgrammingLanguage);
+                Report(progress, $"Skipping fail-safe block {item.Block.Name} (TIA Openness cannot export F-blocks)...");
+                continue;
+            }
+
+            blocks.Add(item);
+        }
+
+        _logger.LogInformation("export_all_blocks: {Count} blocks to export ({Plc})", blocks.Count, plc.Name);
         var index = 0;
         foreach (var (block, groupPath) in blocks)
         {
@@ -353,6 +373,16 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             {
                 Report(progress, $"Exporting block {block.Name}...");
                 result = ExportCore(block, dir);
+            }
+            catch (Exception ex) when (FailSafeBlocks.IsExportNotPermitted(ex))
+            {
+                // Openness refused the export outright (fail-safe block the language prefix did
+                // not identify) — skip it instead of failing the whole device export.
+                _logger.LogWarning(
+                    "export_all_blocks: SKIPPED {Block} — Openness: export not permitted (ProgrammingLanguage: {Language})",
+                    block.Name, block.ProgrammingLanguage);
+                Report(progress, $"Skipping block {block.Name} (TIA Openness: export not permitted)...");
+                continue;
             }
             catch (Exception ex)
             {
@@ -369,9 +399,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             {
                 _logger.LogWarning("export_all_blocks: FAILED {Block} — {Error}", block.Name, result.Error);
             }
-            else if (index % 25 == 0 || index == blocks.Length)
+            else if (index % 25 == 0 || index == blocks.Count)
             {
-                _logger.LogInformation("export_all_blocks: {Index}/{Total} ({Plc})", index, blocks.Length, plc.Name);
+                _logger.LogInformation("export_all_blocks: {Index}/{Total} ({Plc})", index, blocks.Count, plc.Name);
             }
 
             results.Add(result);
@@ -509,7 +539,27 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     break;
 
                 case SyncAction.ReExport:
-                    var record = ReExportComponent(dir, item.Live!, blocksById, tablesById, typesById, progress, out var exportResult);
+                    ExportMetadataRecord record;
+                    ExportResult exportResult;
+                    try
+                    {
+                        record = ReExportComponent(dir, item.Live!, blocksById, tablesById, typesById, progress, out exportResult);
+                    }
+                    catch (Exception ex) when (FailSafeBlocks.IsExportNotPermitted(ex))
+                    {
+                        // Openness refused the export outright (fail-safe component the language
+                        // prefix did not identify) — skip it and keep any previous record.
+                        _logger.LogWarning(
+                            "sync_export: SKIPPED {Component} — Openness: export not permitted",
+                            item.Live!.Name);
+                        Report(progress, $"Skipping {item.Live!.Name} (TIA Openness: export not permitted)...");
+                        if (item.Record is not null)
+                        {
+                            keptRecords.Add(item.Record);
+                        }
+                        break;
+                    }
+
                     var change = ToChange(record, item.Reason);
                     if (!exportResult.Success)
                     {
@@ -651,6 +701,12 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         var snapshot = new LiveSnapshot();
         foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
         {
+            // F-blocks cannot be exported via Openness; exclude them from sync planning.
+            if (FailSafeBlocks.IsFailSafe(block))
+            {
+                continue;
+            }
+
             var category = ExportManifest.CategoryOf(block);
             var sourcePath = ExportManifest.SourcePathOf(block.Name, groupPath);
             var id = StableId.Create(category, sourcePath);
@@ -1304,11 +1360,11 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
-    public CompileResult CompilePlc()
+    public CompileResult CompilePlc(string? plcName = null)
     {
         lock (_gate)
         {
-            var plc = PlcSoftwareResolver.Resolve(RequireProject(), null);
+            var plc = PlcSoftwareResolver.Resolve(RequireProject(), plcName);
             return CompileCore(plc, blockFilter: null);
         }
     }

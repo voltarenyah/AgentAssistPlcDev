@@ -333,13 +333,14 @@ public sealed class WorkbenchCoordinator
     public async Task<SyncResult[]> StageRefreshAsync(
         DeviceContext device,
         CancellationToken token,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        bool allowCompile = false)
     {
         var metadata = ReadDevice(device);
         await engineeringSession.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            return await StageRefreshCoreAsync(device, metadata.PlcName, token, progress)
+            return await StageRefreshCoreAsync(device, metadata.PlcName, token, progress, allowCompile)
                 .ConfigureAwait(false);
         }
         finally
@@ -352,9 +353,10 @@ public sealed class WorkbenchCoordinator
         DeviceContext device,
         string plcName,
         CancellationToken token,
-        IOperationProgress? progress)
+        IOperationProgress? progress,
+        bool allowCompile)
     {
-        var result = await stager.StageAsync(device, plcName, token, progress).ConfigureAwait(false);
+        var result = await stager.StageAsync(device, plcName, token, progress, allowCompile).ConfigureAwait(false);
         progress?.Report("Preparing refresh preview...");
         return result;
     }

@@ -62,6 +62,14 @@ type ActiveOperation = {
   label: string
   status: api.OperationStatus | null
 }
+type CompilePrompt = {
+  message: string
+  context: {
+    workbenchId: string
+    worktreeId: string
+    deviceId: string
+  }
+}
 
 const worktreeKey = (workbenchId: string, worktreeId: string) => `${workbenchId}:${worktreeId}`
 
@@ -148,6 +156,51 @@ function Metric({
   )
 }
 
+function CompileApprovalDialog({
+  prompt,
+  busy,
+  onCancel,
+  onApprove,
+}: {
+  prompt: CompilePrompt
+  busy: boolean
+  onCancel: () => void
+  onApprove: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-5 backdrop-blur-[2px]">
+      <div className="w-full max-w-[560px] overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+          <div className="grid h-9 w-9 place-items-center rounded-lg bg-amber-500/10">
+            <CloudCog className="h-4 w-4 text-amber-500" />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-sm font-semibold">PLC compile required</h2>
+            <p className="text-[10px] text-muted-foreground">The export can retry after compiling the selected PLC.</p>
+          </div>
+          <button className="icon-button" onClick={onCancel} disabled={busy}><X className="h-4 w-4" /></button>
+        </div>
+        <div className="space-y-3 p-5">
+          <div className="rounded-lg border bg-muted/25 p-3 text-[10px] leading-relaxed" style={{ borderColor: 'var(--border)' }}>
+            {prompt.message}
+          </div>
+          <div className="flex items-start gap-2 rounded-lg bg-amber-500/8 p-3 text-[9px] leading-relaxed text-amber-700 dark:text-amber-300">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            Compile updates TIA compile state for this PLC. It does not save the project source file.
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <button className="secondary-button" onClick={onCancel} disabled={busy}>Compile manually</button>
+          <button className="primary-button" onClick={onApprove} disabled={busy}>
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Compile and retry
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function MainStudio() {
   const [workbenches, setWorkbenches] = useState<api.Workbench[]>([])
   const [sessions, setSessions] = useState<api.SessionInfo[]>([])
@@ -170,6 +223,7 @@ export default function MainStudio() {
   const [createWorkbenchOpen, setCreateWorkbenchOpen] = useState(false)
   const [createWorktreeFor, setCreateWorktreeFor] = useState<api.Workbench | null>(null)
   const [preview, setPreview] = useState<api.ReconciliationPreview | null>(null)
+  const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
   const [relativePath, setRelativePath] = useState('')
   const [lastImport, setLastImport] = useState<api.ImportModifiedResult | null>(null)
 
@@ -537,17 +591,35 @@ export default function MainStudio() {
     }
   }
 
-  const stageRefresh = async () => {
+  const stageRefresh = async (allowCompile = false) => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+    setCompilePrompt(null)
     setOperation('stage-refresh')
-    const op = beginOperation('stage-refresh', 'Exporting live PLC to temporary comparison staging...')
+    const op = beginOperation(
+      'stage-refresh',
+      allowCompile
+        ? 'Compiling selected PLC and retrying export...'
+        : 'Exporting live PLC to temporary comparison staging...',
+    )
     try {
-      await api.stageDeviceRefresh(context.workbenchId, context.worktreeId, context.deviceId, op.id)
+      await api.stageDeviceRefresh(
+        context.workbenchId,
+        context.worktreeId,
+        context.deviceId,
+        op.id,
+        allowCompile,
+      )
       setPreview(await api.previewDeviceRefresh(context.workbenchId, context.worktreeId, context.deviceId))
       toast.success('Comparison ready; no tracked files changed.')
     } catch (error) {
-      toast.error(displayError(error))
+      if (!allowCompile
+        && error instanceof api.WorkbenchApiError
+        && error.code === 'PLC_COMPILE_REQUIRED') {
+        setCompilePrompt({ message: error.message, context })
+      } else {
+        toast.error(displayError(error))
+      }
     } finally {
       setOperation(null)
     }
@@ -892,7 +964,7 @@ export default function MainStudio() {
                     <ChatWorkspace
                       tabs={chatTabs}
                       busy={chatBusy}
-                      onFocus={sessionId => setChatTabs(previous => ({ ...previous, activeId: sessionId }))}
+                      onFocus={sessionId => void activateChatSession(sessionId)}
                       onSend={(sessionId, message) => void sendChatMessage(sessionId, message)}
                     />
                   </div>
@@ -1064,6 +1136,14 @@ export default function MainStudio() {
           busy={operation === 'apply-refresh'}
           onClose={() => setPreview(null)}
           onApply={applyRefresh}
+        />
+      )}
+      {compilePrompt && (
+        <CompileApprovalDialog
+          prompt={compilePrompt}
+          busy={operation === 'stage-refresh'}
+          onCancel={() => setCompilePrompt(null)}
+          onApprove={() => void stageRefresh(true)}
         />
       )}
     </div>

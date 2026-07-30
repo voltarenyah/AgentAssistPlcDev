@@ -231,9 +231,14 @@ public static class WorkbenchEndpoints
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/refresh/stage", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
-            WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
+            WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct,
+            bool allowCompile = false) =>
             await RunOperationAsync(http, operations, "stage-refresh", "Preparing export staging area...",
-                progress => c.StageRefreshAsync(s.Device(workbenchId, worktreeId, device).Context, ct, progress),
+                progress => c.StageRefreshAsync(
+                    s.Device(workbenchId, worktreeId, device).Context,
+                    ct,
+                    progress,
+                    allowCompile),
                 "Refresh staged.").ConfigureAwait(false));
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/refresh/preview", (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s, WorkbenchCoordinator c) =>
@@ -341,13 +346,18 @@ public static class WorkbenchEndpoints
             WorkbenchCoordinator c,
             OperationStatusRegistry operations,
             HttpContext http,
-            CancellationToken ct) =>
+            CancellationToken ct,
+            bool allowCompile = false) =>
             await RunOperationAsync(
                 http,
                 operations,
                 "stage-refresh",
                 "Preparing export staging area...",
-                progress => c.StageRefreshAsync(s.Device(device).Context, ct, progress),
+                progress => c.StageRefreshAsync(
+                    s.Device(device).Context,
+                    ct,
+                    progress,
+                    allowCompile),
                 "Refresh staged.").ConfigureAwait(false));
         app.MapGet("/api/devices/{device}/refresh/preview", (string device, WorkbenchApiState s, WorkbenchCoordinator c) => { var p = c.PreviewRefresh(s.Device(device).Context); s.Remember(p); return p; });
         app.MapPost("/api/devices/{device}/refresh/apply", async (
