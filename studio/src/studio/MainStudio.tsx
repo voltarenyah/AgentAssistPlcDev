@@ -12,6 +12,7 @@ import {
   FileCode2,
   GitBranch,
   GitMerge,
+  KeyRound,
   Loader2,
   MessageSquare,
   PanelRightClose,
@@ -201,6 +202,71 @@ function CompileApprovalDialog({
   )
 }
 
+function ApiKeyDialog({
+  onClose,
+  onSave,
+}: {
+  onClose: () => void
+  onSave: (apiKey: string) => Promise<void>
+}) {
+  const [apiKey, setApiKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const valid = Boolean(apiKey.trim())
+  const save = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await onSave(apiKey.trim())
+    } catch (saveError) {
+      setError(displayError(saveError))
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-5 backdrop-blur-[2px]">
+      <div className="w-full max-w-[500px] overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+          <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
+            <KeyRound className="h-4 w-4 text-chart-2" />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-sm font-semibold">DeepSeek API key</h2>
+            <p className="text-[10px] text-muted-foreground">Stored locally in the workbench config; live chats reset on save.</p>
+          </div>
+          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
+        </div>
+        <div className="space-y-3 p-5">
+          <label className="field-label">
+            <span>API key</span>
+            <input
+              className="field-input font-mono"
+              type="password"
+              value={apiKey}
+              onChange={event => setApiKey(event.target.value)}
+              placeholder="sk-..."
+              autoFocus
+            />
+          </label>
+          {error && (
+            <div className="flex items-start gap-2 rounded-lg bg-red-500/8 p-3 text-[9px] leading-relaxed text-red-700 dark:text-red-300">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary-button" disabled={!valid || busy} onClick={() => void save()}>
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Save key
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function MainStudio() {
   const [workbenches, setWorkbenches] = useState<api.Workbench[]>([])
   const [sessions, setSessions] = useState<api.SessionInfo[]>([])
@@ -224,6 +290,8 @@ export default function MainStudio() {
   const [createWorktreeFor, setCreateWorktreeFor] = useState<api.Workbench | null>(null)
   const [preview, setPreview] = useState<api.ReconciliationPreview | null>(null)
   const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
+  const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null)
+  const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
   const [relativePath, setRelativePath] = useState('')
   const [lastImport, setLastImport] = useState<api.ImportModifiedResult | null>(null)
 
@@ -264,6 +332,15 @@ export default function MainStudio() {
     return values
   }, [])
 
+  const reloadKeyStatus = useCallback(async () => {
+    try {
+      const status = await api.getKeyStatus()
+      setApiKeyConfigured(status.configured)
+    } catch {
+      setApiKeyConfigured(null)
+    }
+  }, [])
+
   const loadStartup = useCallback(async () => {
     setLoading(true)
     setFatalError(null)
@@ -282,7 +359,8 @@ export default function MainStudio() {
     } finally {
       setLoading(false)
     }
-  }, [reloadWorkbenches])
+    void reloadKeyStatus()
+  }, [reloadWorkbenches, reloadKeyStatus])
 
   useEffect(() => { void loadStartup() }, [loadStartup])
 
@@ -747,6 +825,13 @@ export default function MainStudio() {
     }
   }
 
+  const saveApiKey = async (apiKey: string) => {
+    await api.saveApiKey(apiKey)
+    await reloadKeyStatus()
+    setApiKeyDialogOpen(false)
+    toast.success('DeepSeek API key saved; live chats reset')
+  }
+
   const tabs: Array<{ id: StudioTab; label: string; icon: typeof Boxes }> = [
     { id: 'overview', label: 'Device overview', icon: Cpu },
     { id: 'chat', label: 'AI chat', icon: MessageSquare },
@@ -785,10 +870,16 @@ export default function MainStudio() {
               />
             </div>
           )}
-          <div className="flex items-center gap-1.5 rounded-full border px-2 py-1 text-[9px]" style={{ borderColor: 'var(--border)' }}>
-            <CircleDot className={`h-3 w-3 ${fatalError ? 'text-red-500' : 'text-emerald-500'}`} />
-            {fatalError ? 'API error' : 'API online'}
-          </div>
+          <button
+            className="flex items-center gap-1.5 rounded-full border px-2 py-1 text-[9px] transition-colors hover:bg-accent/50"
+            style={{ borderColor: 'var(--border)' }}
+            data-api-status
+            title="Manage DeepSeek API key"
+            onClick={() => setApiKeyDialogOpen(true)}
+          >
+            <CircleDot className={`h-3 w-3 ${fatalError ? 'text-red-500' : apiKeyConfigured === false ? 'text-amber-500' : 'text-emerald-500'}`} />
+            {fatalError ? 'API error' : apiKeyConfigured === false ? 'No valid API key' : 'API online'}
+          </button>
           <div className="flex items-center gap-1.5 rounded-full border px-2 py-1 text-[9px]" style={{ borderColor: 'var(--border)' }}>
             <Server className="h-3 w-3 text-chart-3" />
             {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
@@ -1137,6 +1228,12 @@ export default function MainStudio() {
           busy={operation === 'stage-refresh'}
           onCancel={() => setCompilePrompt(null)}
           onApprove={() => void stageRefresh(true)}
+        />
+      )}
+      {apiKeyDialogOpen && (
+        <ApiKeyDialog
+          onClose={() => setApiKeyDialogOpen(false)}
+          onSave={saveApiKey}
         />
       )}
     </div>

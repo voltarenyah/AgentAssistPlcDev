@@ -254,6 +254,18 @@ public static class CompatibilityEndpoints
             chat.Reset();
             return Results.NoContent();
         });
+        app.MapGet("/api/config/settings", (IConfiguration configuration, CompatibilityRuntimeState state) =>
+        {
+            var settings = ApiChatService.Settings(configuration, state);
+            return Results.Ok(new
+            {
+                model = settings.Model,
+                thinkingEnabled = settings.ThinkingEnabled,
+                reasoningEffort = settings.ReasoningEffort,
+                temperature = settings.Temperature,
+                topP = settings.TopP,
+            });
+        });
         app.MapGet("/api/chat/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
         app.MapPost("/api/chat/session/new", (WorkbenchApiState state, ApiChatService chat) =>
             chat.CreateSession(Device(state)));

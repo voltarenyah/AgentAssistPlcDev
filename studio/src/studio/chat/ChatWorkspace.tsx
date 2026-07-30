@@ -1,6 +1,8 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Ban, Loader2, MessageSquare, Send, Wrench, XCircle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import * as api from '@/api/client'
 import type { ChatMessage } from '@/api/client'
 import type { ChatTabsState } from './chatTabState'
 import { parseProgressContent, progressTitle } from './progressDisplay'
@@ -23,21 +25,37 @@ const messageTone = (message: ChatMessage) =>
     ? 'bg-muted/30 text-muted-foreground'
     : 'bg-card'
 
+type SettingsSaveState = 'idle' | 'saving' | 'saved' | 'error'
+
+const MODEL_OPTIONS = [
+  { value: 'deepseek-v4-flash', label: 'Flash' },
+  { value: 'deepseek-v4-pro', label: 'Pro' },
+]
+
+const EFFORT_OPTIONS = ['low', 'medium', 'high']
+
 function ChatComposer({
   sessionId,
   disabled,
   busy,
+  settings,
+  settingsState,
+  onSettingsChange,
   onSend,
 }: {
   sessionId: string
   disabled: boolean
   busy: boolean
+  settings: api.ChatSettings | null
+  settingsState: SettingsSaveState
+  onSettingsChange: (patch: Partial<api.ChatSettings>) => void
   onSend: (sessionId: string, message: string) => void
 }) {
+  const knownModel = Boolean(settings && MODEL_OPTIONS.some(option => option.value === settings.model))
   return (
     <form
       data-chat-composer={sessionId}
-      className="flex gap-2 border-t p-3"
+      className="border-t p-3"
       style={{ borderColor: 'var(--border)' }}
       onSubmit={event => {
         event.preventDefault()
@@ -48,15 +66,85 @@ function ChatComposer({
         event.currentTarget.reset()
       }}
     >
-      <textarea
-        name="message"
-        className="field-input min-h-16 flex-1 resize-none py-2"
-        disabled={disabled}
-        placeholder="Ask about this PLC device..."
-      />
-      <button className="primary-button h-16 px-3" disabled={disabled} aria-label="Send message">
-        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-      </button>
+      <div className="flex gap-2">
+        <textarea
+          name="message"
+          className="field-input min-h-16 flex-1 resize-none py-2"
+          disabled={disabled}
+          placeholder="Ask about this PLC device..."
+        />
+        <button className="primary-button h-16 px-3" disabled={disabled} aria-label="Send message">
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      <div
+        className="mt-2 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground"
+        data-chat-settings
+      >
+        <select
+          aria-label="Model"
+          className="field-input h-6 w-auto px-1 py-0 text-[9px]"
+          value={settings?.model ?? ''}
+          disabled={!settings}
+          onChange={event => onSettingsChange({ model: event.target.value })}
+        >
+          {!settings && <option value="">Loading…</option>}
+          {settings && !knownModel && <option value={settings.model}>{settings.model}</option>}
+          {MODEL_OPTIONS.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          aria-label="Toggle think mode"
+          aria-pressed={settings?.thinkingEnabled ?? false}
+          disabled={!settings}
+          className={`h-6 rounded-md border px-2 ${settings?.thinkingEnabled ? 'bg-accent text-foreground' : ''}`}
+          style={{ borderColor: 'var(--border)' }}
+          onClick={() => settings && onSettingsChange({ thinkingEnabled: !settings.thinkingEnabled })}
+        >
+          Think {settings?.thinkingEnabled ? 'on' : 'off'}
+        </button>
+        {settings?.thinkingEnabled && (
+          <select
+            aria-label="Think effort"
+            className="field-input h-6 w-auto px-1 py-0 text-[9px]"
+            value={settings.reasoningEffort}
+            onChange={event => onSettingsChange({ reasoningEffort: event.target.value })}
+          >
+            {!EFFORT_OPTIONS.includes(settings.reasoningEffort) && (
+              <option value={settings.reasoningEffort}>{settings.reasoningEffort}</option>
+            )}
+            {EFFORT_OPTIONS.map(effort => (
+              <option key={effort} value={effort}>{effort}</option>
+            ))}
+          </select>
+        )}
+        <label className="flex items-center gap-1">
+          Temp
+          <input
+            type="number"
+            aria-label="Temperature"
+            className="field-input h-6 w-14 px-1 py-0 text-[9px]"
+            min={0}
+            max={2}
+            step={0.1}
+            value={settings?.temperature ?? ''}
+            disabled={!settings}
+            onChange={event => {
+              if (event.target.value === '') return
+              const value = Number(event.target.value)
+              if (Number.isFinite(value)) onSettingsChange({ temperature: Math.min(2, Math.max(0, value)) })
+            }}
+          />
+        </label>
+        <span className="ml-auto" data-chat-settings-state>
+          {settingsState === 'saving' ? 'Saving…'
+            : settingsState === 'saved' ? 'Saved'
+              : settingsState === 'error' ? (settings ? 'Save failed' : 'Settings unavailable')
+                : ''}
+        </span>
+      </div>
     </form>
   )
 }
@@ -158,6 +246,41 @@ function MessageList({ messages, busy }: { messages: ChatMessage[], busy: boolea
 }
 
 export default function ChatWorkspace({ tabs, busy, onFocus, onSend }: Props) {
+  const [settings, setSettings] = useState<api.ChatSettings | null>(null)
+  const [settingsState, setSettingsState] = useState<SettingsSaveState>('idle')
+  const settingsRef = useRef<api.ChatSettings | null>(null)
+  const saveTimer = useRef<number | undefined>(undefined)
+
+  useEffect(() => {
+    let cancelled = false
+    api.getChatSettings()
+      .then(loaded => {
+        if (cancelled) return
+        settingsRef.current = loaded
+        setSettings(loaded)
+      })
+      .catch(() => { if (!cancelled) setSettingsState('error') })
+    return () => {
+      cancelled = true
+      window.clearTimeout(saveTimer.current)
+    }
+  }, [])
+
+  const changeSettings = useCallback((patch: Partial<api.ChatSettings>) => {
+    const base = settingsRef.current
+    if (!base) return
+    const next = { ...base, ...patch }
+    settingsRef.current = next
+    setSettings(next)
+    setSettingsState('saving')
+    window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      api.saveChatSettings(next)
+        .then(() => setSettingsState('saved'))
+        .catch(() => setSettingsState('error'))
+    }, 400)
+  }, [])
+
   if (tabs.tabs.length === 0) {
     return (
       <div className="grid h-full place-items-center p-8 text-center">
@@ -202,6 +325,9 @@ export default function ChatWorkspace({ tabs, busy, onFocus, onSend }: Props) {
                 sessionId={tab.sessionId}
                 disabled={busy || tab.sessionId !== tabs.activeId}
                 busy={busy && tab.sessionId === tabs.activeId}
+                settings={settings}
+                settingsState={settingsState}
+                onSettingsChange={changeSettings}
                 onSend={onSend}
               />
             </div>
