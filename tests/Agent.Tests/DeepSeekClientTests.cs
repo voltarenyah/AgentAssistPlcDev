@@ -124,7 +124,7 @@ public sealed class DeepSeekClientTests
         new("sk-test", "https://api.deepseek.com", new HttpClient(endpoint));
 
     [Fact]
-    public async Task SendsModelMessagesToolsThinkingAndAuthHeader()
+    public async Task SendsModelMessagesToolsFastDefaultsAndAuthHeader()
     {
         var endpoint = new FakeHttpEndpoint().RespondJson("""
             { "choices": [ { "finish_reason": "stop", "message": { "role": "assistant", "content": "hi" } } ],
@@ -148,11 +148,10 @@ public sealed class DeepSeekClientTests
         Assert.Equal("deepseek-v4-pro", body["model"]!.GetValue<string>());
         Assert.Equal("sys", body["messages"]![0]!["content"]!.GetValue<string>());
         Assert.Equal("search", body["tools"]![0]!["function"]!["name"]!.GetValue<string>());
-        Assert.Equal("enabled", body["thinking"]!["type"]!.GetValue<string>());
-        Assert.Equal("high", body["reasoning_effort"]!.GetValue<string>());
-        // Thinking mode: temperature/top_p are not sent.
-        Assert.Null(body["temperature"]);
-        Assert.Null(body["top_p"]);
+        Assert.Equal("disabled", body["thinking"]!["type"]!.GetValue<string>());
+        Assert.Null(body["reasoning_effort"]);
+        Assert.Equal(1.0, body["temperature"]!.GetValue<double>());
+        Assert.Equal(1.0, body["top_p"]!.GetValue<double>());
         Assert.Equal("hi", response.Content);
         Assert.Empty(response.ToolCalls);
         Assert.Equal(12, response.Usage!.TotalTokens);

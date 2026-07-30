@@ -47,11 +47,12 @@ public sealed record ChatRequestSettings
 {
     public const string DefaultModel = "deepseek-v4-flash";
     public const string DefaultReasoningEffort = "high";
+    public const bool DefaultThinkingEnabled = false;
 
     public string Model { get; init; } = DefaultModel;
 
     /// <summary>thinking: { type: enabled/disabled } — API default is enabled.</summary>
-    public bool ThinkingEnabled { get; init; } = true;
+    public bool ThinkingEnabled { get; init; } = DefaultThinkingEnabled;
 
     /// <summary>"high" | "max" (API maps low/medium → high). Only relevant when thinking is enabled.</summary>
     public string ReasoningEffort { get; init; } = DefaultReasoningEffort;
