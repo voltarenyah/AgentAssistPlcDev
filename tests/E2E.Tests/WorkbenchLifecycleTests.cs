@@ -71,7 +71,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             new DeviceReconciler(), resolver);
 
         var created = await coordinator.CreateWorkbenchAsync(new(
-            "Line 1", Path.Combine(root, "custom", "Line 1"), 42, @"C:\Fixture\Line.ap17"));
+            "Line 1", Path.Combine(root, "custom", "Line 1"), 42, null));
         Assert.Empty(catalog.ListDefaultRoot());
         Assert.Equal("do-not-touch", File.ReadAllText(legacySentinel));
 
@@ -324,7 +324,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                 "Offline line",
                 null,
                 42,
-                @"C:\Fixture\Offline.ap17"));
+                null));
 
             engineering.SetExport("PLC_1", "persisted");
             engineering.SetExport("PLC_2", "other-device");

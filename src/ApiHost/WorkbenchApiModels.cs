@@ -7,8 +7,9 @@ public sealed record WorkbenchSelection(string WorkbenchId, string? WorktreeId, 
 public sealed record CreateWorkbenchApiRequest(
     string Name,
     string? RootPath,
-    int EngineeringSessionId,
-    string EngineeringProjectPath);
+    int? EngineeringSessionId,
+    string? EngineeringProjectPath);
+public sealed record AttachTiaInstanceApiRequest(int SessionId);
 public sealed record OpenWorkbenchApiRequest(string RootPath);
 public sealed record CreateWorktreeApiRequest(string Name, string Branch, string? StartPoint);
 public sealed record RefreshApplyApiRequest(
@@ -150,6 +151,8 @@ public static class WorkbenchEndpoints
             return Results.NoContent();
         });
         app.MapGet("/api/workbenches", (WorkbenchApiState s) => s.List());
+        app.MapGet("/api/sandbox/roots", (SandboxConfig sandbox) =>
+            new { roots = sandbox.PathJail.Roots });
         app.MapPost("/api/workbenches/open", (OpenWorkbenchApiRequest r, WorkbenchApiState s) => s.Open(r.RootPath));
         app.MapPost("/api/workbenches", async (
             CreateWorkbenchApiRequest r,
@@ -217,6 +220,29 @@ public static class WorkbenchEndpoints
                     return new { opened = true };
                 },
                 "TIA project opened.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/tia/attach", async (
+            string workbenchId,
+            string worktreeId,
+            string device,
+            AttachTiaInstanceApiRequest r,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "attach-tia-instance",
+                "Attaching to running TIA Portal instance...",
+                async progress =>
+                {
+                    s.Device(workbenchId, worktreeId, device);
+                    await c.AttachTiaInstanceAsync(r.SessionId, ct, progress)
+                        .ConfigureAwait(false);
+                    return new { attached = true };
+                },
+                "TIA instance attached.").ConfigureAwait(false));
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}", (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
         {
@@ -538,6 +564,16 @@ public sealed class WorkbenchApiExceptionMiddleware(RequestDelegate next)
         {
             context.Response.StatusCode = 400;
             await context.Response.WriteAsJsonAsync(new { error = exception.Message });
+        }
+        catch (SandboxException exception)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = exception.Code,
+                message = exception.Message,
+                remediation = exception.Remediation,
+            });
         }
         catch (Exception exception) when (exception is WorkbenchCatalogException or WorkbenchLifecycleException)
         {

@@ -169,6 +169,7 @@ export type DeviceInfo = {
   exportedSourceRoot: string
   modifiedSourceRoot: string
   knowledgeDbPath: string
+  sourceProjectPath: string | null
 }
 
 export type KnowledgeVisualState = 'current' | 'stale' | 'missing' | 'failed'
@@ -306,8 +307,8 @@ export const openWorkbench = (rootPath: string) =>
   workbenchRequest<Workbench>('/workbenches/open', jsonRequest('POST', { rootPath }))
 export const createWorkbench = (
   name: string,
-  engineeringSessionId: number,
-  engineeringProjectPath: string,
+  engineeringSessionId: number | null,
+  engineeringProjectPath: string | null,
   rootPath?: string,
   operationId?: string,
 ) =>
@@ -317,6 +318,8 @@ export const createWorkbench = (
     engineeringProjectPath,
     rootPath: rootPath?.trim() || null,
   }), operationId))
+export const getSandboxRoots = () =>
+  workbenchRequest<{ roots: string[] }>('/sandbox/roots')
 export const selectWorkbench = (workbenchId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/select`, jsonRequest('POST'))
 export const listWorktrees = (workbenchId: string) =>
@@ -346,6 +349,17 @@ export const openDeviceProject = (
   workbenchRequest<{ opened: boolean }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/tia/open`,
     withOperation(jsonRequest('POST'), operationId),
+  )
+export const attachDeviceProject = (
+  workbenchId: string,
+  worktreeId: string,
+  deviceId: string,
+  sessionId: number,
+  operationId?: string,
+) =>
+  workbenchRequest<{ attached: boolean }>(
+    `${devicePath(workbenchId, worktreeId, deviceId)}/tia/attach`,
+    withOperation(jsonRequest('POST', { sessionId }), operationId),
   )
 export const stageDeviceRefresh = (
   workbenchId: string,

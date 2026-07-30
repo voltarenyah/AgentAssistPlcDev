@@ -2,6 +2,7 @@ using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Engineering;
 using Contracts.Knowledge;
+using Contracts.Sandbox;
 using System.Text.Json;
 using Xunit;
 
@@ -82,7 +83,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var createRoot = Path.Combine(root, "created");
 
         var creating = coordinator.CreateWorkbenchAsync(
-            new CreateWorkbenchRequest("Created", createRoot, 42, @"C:\Projects\Created.ap17"));
+            new CreateWorkbenchRequest("Created", createRoot, 42, null));
         await engineering.ProjectInfoEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var opening = coordinator.OpenProjectInTiaAsync(
             fixture.Context,
@@ -113,7 +114,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "Cancelled",
                 Path.Combine(root, "cancelled"),
                 42,
-                @"C:\Projects\Cancelled.ap17"),
+                null),
             cancellation.Token);
         await engineering.ProjectInfoEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -182,7 +183,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "Line",
                 Path.Combine(root, "Line"),
                 42,
-                @"C:\Projects\Line.ap17"),
+                null),
             progress: progress);
 
         Assert.Equal(
@@ -238,10 +239,172 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     "FailedCreate",
                     workbenchRoot,
                     42,
-                    @"C:\Projects\Line.ap17")));
+                    null)));
 
         Assert.False(File.Exists(Path.Combine(workbenchRoot, "workbench.json")));
         Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "repository.git")));
+        Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "worktrees")));
+    }
+
+    [Fact]
+    public async Task AttachTiaInstanceConnectsBySessionIdOnly()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller().Respond("connect", new { connected = true });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        await coordinator.AttachTiaInstanceAsync(4242, CancellationToken.None);
+
+        var args = engineering.CallArgs["connect"].Single();
+        Assert.Equal(4242, Property<int>(args, "sessionId"));
+        Assert.Null(args.GetType().GetProperty("projectPath"));
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(42, @"C:\Projects\Line.ap17")]
+    public async Task CreateRejectsAmbiguousEngineeringConnectionBeforeCreatingAnything(
+        int? sessionId,
+        string? projectPath)
+    {
+        var engineering = new FakeToolCaller();
+        var versionControl = new FakeToolCaller();
+        var catalog = new WorkbenchCatalog(
+            new AtomicJsonStore(),
+            Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var workbenchRoot = Path.Combine(root, $"Ambiguous-{Guid.NewGuid():N}");
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.CreateWorkbenchAsync(
+                new CreateWorkbenchRequest("Ambiguous", workbenchRoot, sessionId, projectPath)));
+
+        Assert.Equal("ENGINEERING_CONNECTION_INVALID", error.Code);
+        Assert.Empty(engineering.Calls);
+        Assert.Empty(versionControl.Calls);
+        Assert.False(Directory.Exists(workbenchRoot));
+    }
+
+    [Fact]
+    public async Task CreateWithProjectPathOpensNewTiaInstanceWithUi()
+    {
+        var calls = new List<string>();
+        var versionControl = Caller(calls).Respond("vc_init_shared", new object());
+        var engineering = Caller(calls)
+            .Respond("connect", new object())
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+                PlcDevices = new[] { "PLC_1" },
+            });
+        var catalog = new WorkbenchCatalog(
+            new AtomicJsonStore(),
+            Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        var result = await coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest(
+                "Line",
+                Path.Combine(root, "LineFromPath"),
+                null,
+                @"C:\Projects\Line.ap17"));
+
+        var args = engineering.CallArgs["connect"].Single();
+        Assert.Equal(@"C:\Projects\Line.ap17", Property<string>(args, "projectPath"));
+        Assert.True(Property<bool>(args, "withUI"));
+        Assert.Null(args.GetType().GetProperty("sessionId"));
+        Assert.Equal(
+            new[] { "version:vc_init_shared", "engineering:connect", "engineering:get_project_info" },
+            calls);
+        Assert.Equal(@"C:\Projects\Line.ap17", result.Workbench.SourceProjectPath);
+        Assert.Single(result.Devices);
+    }
+
+    [Fact]
+    public async Task CreateWithProjectPathOutsideSandboxFailsBeforeCreatingAnything()
+    {
+        var allowedRoot = Path.Combine(root, "allowed");
+        Directory.CreateDirectory(allowedRoot);
+        var engineering = new FakeToolCaller();
+        var versionControl = new FakeToolCaller();
+        var catalog = new WorkbenchCatalog(
+            new AtomicJsonStore(),
+            Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }),
+            pathJail: new PathJail(new[] { allowedRoot }));
+        var workbenchRoot = Path.Combine(root, "Denied");
+
+        var error = await Assert.ThrowsAsync<SandboxException>(() =>
+            coordinator.CreateWorkbenchAsync(
+                new CreateWorkbenchRequest(
+                    "Denied",
+                    workbenchRoot,
+                    null,
+                    @"C:\Projects\Line.ap17")));
+
+        Assert.Equal("SANDBOX_PATH_DENIED", error.Code);
+        Assert.Contains(allowedRoot, error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(engineering.Calls);
+        Assert.Empty(versionControl.Calls);
+        Assert.False(Directory.Exists(workbenchRoot));
+    }
+
+    [Fact]
+    public async Task CreateWithSessionProjectOutsideSandboxRollsBackWorkbench()
+    {
+        var allowedRoot = Path.Combine(root, "allowed");
+        Directory.CreateDirectory(allowedRoot);
+        var engineering = new FakeToolCaller()
+            .Respond("connect", new object())
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+                PlcDevices = new[] { "PLC_1" },
+            });
+        var versionControl = new FakeToolCaller().Respond("vc_init_shared", new object());
+        var catalog = new WorkbenchCatalog(
+            new AtomicJsonStore(),
+            Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }),
+            pathJail: new PathJail(new[] { allowedRoot }));
+        var workbenchRoot = Path.Combine(root, "SessionDenied");
+
+        var error = await Assert.ThrowsAsync<SandboxException>(() =>
+            coordinator.CreateWorkbenchAsync(
+                new CreateWorkbenchRequest("SessionDenied", workbenchRoot, 42, null)));
+
+        Assert.Equal("SANDBOX_PATH_DENIED", error.Code);
+        Assert.False(File.Exists(Path.Combine(workbenchRoot, "workbench.json")));
         Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "worktrees")));
     }
 

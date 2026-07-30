@@ -29,6 +29,9 @@ builder.Services.AddSingleton(_ => new TrustedWorkbenchRootRegistry(
             Guid.NewGuid().ToString("N"),
             "trusted-workbench-roots.json")
         : null)));
+builder.Services.AddSingleton(services => SandboxConfig.Load(
+    builder.Configuration["Sandbox:ConfigFile"] ?? SandboxConfig.DefaultFilePath,
+    services.GetRequiredService<TrustedWorkbenchRootRegistry>().FilePath));
 builder.Services.AddSingleton<DeviceOperationLock>();
 builder.Services.AddSingleton<DeviceReconciler>();
 builder.Services.AddSingleton<DeviceSnapshotReader>();
@@ -65,7 +68,8 @@ if (startExternalMcp)
         s.GetRequiredService<AtomicJsonStore>(),
         s.GetRequiredService<DeviceReconciler>(),
         s.GetRequiredService<DeviceSourceResolver>(),
-        s.GetRequiredService<DeviceOperationLock>()));
+        s.GetRequiredService<DeviceOperationLock>(),
+        s.GetRequiredService<SandboxConfig>().PathJail));
 }
 else
 {
@@ -83,7 +87,8 @@ else
         s.GetRequiredService<AtomicJsonStore>(),
         s.GetRequiredService<DeviceReconciler>(),
         s.GetRequiredService<DeviceSourceResolver>(),
-        s.GetRequiredService<DeviceOperationLock>()));
+        s.GetRequiredService<DeviceOperationLock>(),
+        s.GetRequiredService<SandboxConfig>().PathJail));
 }
 
 builder.Services.AddSingleton<WorkbenchApiState>();

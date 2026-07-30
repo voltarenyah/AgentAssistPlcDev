@@ -32,6 +32,7 @@ import WorkbenchNavigator, {
 import CreateWorkbenchDialog from '@/studio/workbench/CreateWorkbenchDialog'
 import OperationStatusLine from '@/studio/workbench/OperationStatusLine'
 import RefreshDialog from '@/studio/workbench/RefreshDialog'
+import SandboxDeniedDialog from '@/studio/workbench/SandboxDeniedDialog'
 import {
   applyDeviceSnapshot,
   beginDeviceSelection,
@@ -82,6 +83,9 @@ const newOperationId = () =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `op-${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+const normalizeProjectPath = (path: string) =>
+  path.trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
 
 function NewWorktreeDialog({
   workbench,
@@ -221,6 +225,8 @@ export default function MainStudio() {
   const [activeOperation, setActiveOperation] = useState<ActiveOperation | null>(null)
   const [fatalError, setFatalError] = useState<string | null>(null)
   const [createWorkbenchOpen, setCreateWorkbenchOpen] = useState(false)
+  const [sandboxRoots, setSandboxRoots] = useState<string[]>([])
+  const [sandboxDenial, setSandboxDenial] = useState<{ message: string; roots: string[] } | null>(null)
   const [createWorktreeFor, setCreateWorktreeFor] = useState<api.Workbench | null>(null)
   const [preview, setPreview] = useState<api.ReconciliationPreview | null>(null)
   const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
@@ -245,6 +251,13 @@ export default function MainStudio() {
     ? { [deviceInfo.deviceId]: activeKnowledge }
     : {}
   const activeOperationId = activeOperation?.id
+  const matchingTiaSession = useMemo(() => {
+    const source = deviceInfo?.sourceProjectPath
+    if (!source) return null
+    const normalized = normalizeProjectPath(source)
+    return sessions.find(session => session.projectPath
+      && normalizeProjectPath(session.projectPath) === normalized) ?? null
+  }, [deviceInfo?.sourceProjectPath, sessions])
   const selectedChatContext = useMemo(() => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return null
     return {
@@ -264,15 +277,20 @@ export default function MainStudio() {
     return values
   }, [])
 
+  const reloadSessions = useCallback(async () => {
+    const loadedSessions = await api.getSessions()
+    setSessions(loadedSessions)
+    return loadedSessions
+  }, [])
+
   const loadStartup = useCallback(async () => {
     setLoading(true)
     setFatalError(null)
     try {
-      const [loadedWorkbenches, loadedSessions] = await Promise.all([
+      const [loadedWorkbenches] = await Promise.all([
         reloadWorkbenches(),
-        api.getSessions(),
+        reloadSessions(),
       ])
-      setSessions(loadedSessions)
       if (loadedWorkbenches.length > 0) {
         const first = loadedWorkbenches[0]
         setSelection({ workbenchId: first.workbenchId, worktreeId: null, deviceId: null })
@@ -282,7 +300,7 @@ export default function MainStudio() {
     } finally {
       setLoading(false)
     }
-  }, [reloadWorkbenches])
+  }, [reloadWorkbenches, reloadSessions])
 
   useEffect(() => { void loadStartup() }, [loadStartup])
 
@@ -336,6 +354,13 @@ export default function MainStudio() {
     setActiveOperation(null)
     if (id) void api.dismissOperationStatus(id).catch(() => undefined)
   }, [activeOperation?.id])
+
+  const openCreateWorkbench = useCallback(() => {
+    setCreateWorkbenchOpen(true)
+    void api.getSandboxRoots()
+      .then(result => setSandboxRoots(result.roots))
+      .catch(() => setSandboxRoots([]))
+  }, [])
 
   const reloadDeviceSnapshot = useCallback(async (context: {
     workbenchId: string
@@ -408,9 +433,10 @@ export default function MainStudio() {
     setChatTabs(emptyChatTabs())
     setOperation('select-device')
     try {
-      const [snapshot, savedSessions] = await Promise.all([
+      const [snapshot, savedSessions, tiaSessions] = await Promise.all([
         api.getDeviceInfo(workbench.workbenchId, worktree.worktreeId, deviceId),
         api.listDeviceSessions(workbench.workbenchId, worktree.worktreeId, deviceId).catch(() => []),
+        api.getSessions().catch(() => null),
       ])
       if (selectionRequestId.current !== requestId) return
       if (snapshot.workbenchId !== workbench.workbenchId
@@ -418,6 +444,7 @@ export default function MainStudio() {
         || snapshot.deviceId !== deviceId) {
         throw new Error('Device snapshot identity does not match the requested context')
       }
+      if (tiaSessions) setSessions(tiaSessions)
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
       setDeviceSelection(previous => previous
         ? completeDeviceSelection(previous, requestId, snapshot, savedSessions)
@@ -436,16 +463,16 @@ export default function MainStudio() {
   const createWorkbench = async (values: {
     name: string
     rootPath?: string
-    engineeringSessionId: number
-    engineeringProjectPath: string
+    engineeringSessionId?: number
+    engineeringProjectPath?: string
   }) => {
     setOperation('create-workbench')
     const op = beginOperation('create-workbench', 'Preparing workbench storage...')
     try {
       const created = await api.createWorkbench(
         values.name,
-        values.engineeringSessionId,
-        values.engineeringProjectPath,
+        values.engineeringSessionId ?? null,
+        values.engineeringProjectPath ?? null,
         values.rootPath,
         op.id,
       )
@@ -457,7 +484,15 @@ export default function MainStudio() {
       if (master) await selectWorktree(workbench, master)
       toast.success(`Workbench “${workbench.name}” created`)
     } catch (error) {
-      toast.error(displayError(error))
+      if (error instanceof api.WorkbenchApiError && error.code === 'SANDBOX_PATH_DENIED') {
+        setCreateWorkbenchOpen(false)
+        const roots = await api.getSandboxRoots()
+          .then(result => result.roots)
+          .catch(() => sandboxRoots)
+        setSandboxDenial({ message: error.message, roots })
+      } else {
+        toast.error(displayError(error))
+      }
     } finally {
       setOperation(null)
     }
@@ -644,6 +679,26 @@ export default function MainStudio() {
     }
   }
 
+  const attachTiaInstance = async (sessionId: number) => {
+    if (!activeWorkbench || !activeWorktree || !selection.deviceId) return
+    setOperation('attach-tia-instance')
+    const op = beginOperation('attach-tia-instance', 'Attaching to running TIA Portal instance...')
+    try {
+      await api.attachDeviceProject(
+        activeWorkbench.workbenchId,
+        activeWorktree.worktreeId,
+        selection.deviceId,
+        sessionId,
+        op.id,
+      )
+      toast.success('Attached to the running TIA Portal instance')
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
   const applyRefresh = async (approvedPaths: string[]) => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !preview) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
@@ -813,7 +868,7 @@ export default function MainStudio() {
           selection={selection}
           knowledgeState={navigatorKnowledgeState}
           loading={loading}
-          onCreateWorkbench={() => setCreateWorkbenchOpen(true)}
+          onCreateWorkbench={openCreateWorkbench}
           onCreateWorktree={setCreateWorktreeFor}
           onRefresh={() => void loadStartup()}
           onSelectWorkbench={workbench => void selectWorkbench(workbench)}
@@ -848,7 +903,7 @@ export default function MainStudio() {
                   Choose a workbench, linked worktree, and PLC device. Every source, knowledge, Git, and chat operation is then bound to that exact context.
                 </p>
                 {workbenches.length === 0 && (
-                  <button className="primary-button mt-5" onClick={() => setCreateWorkbenchOpen(true)}>
+                  <button className="primary-button mt-5" onClick={openCreateWorkbench}>
                     <Plus className="h-3.5 w-3.5" /> Create workbench
                   </button>
                 )}
@@ -893,6 +948,11 @@ export default function MainStudio() {
                           <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void openProjectInTia()}>
                             <Server className="h-3.5 w-3.5" /> Open project in TIA
                           </button>
+                          {matchingTiaSession && (
+                            <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void attachTiaInstance(matchingTiaSession.id)}>
+                              <Server className="h-3.5 w-3.5" /> Re-attach TIA instance (PID {matchingTiaSession.id})
+                            </button>
+                          )}
                           <button className="primary-button" disabled={Boolean(operation)} onClick={() => void stageRefresh()}>
                             <RefreshCw className="h-3.5 w-3.5" /> Compare with TIA
                           </button>
@@ -1115,11 +1175,20 @@ export default function MainStudio() {
       {createWorkbenchOpen && (
         <CreateWorkbenchDialog
           sessions={sessions}
+          sandboxRoots={sandboxRoots}
           busy={operation === 'create-workbench'}
           operationStatus={activeOperation?.kind === 'create-workbench' ? activeOperation.status : null}
           onDismissOperation={dismissActiveOperation}
+          onRefreshSessions={async () => { await reloadSessions() }}
           onClose={() => setCreateWorkbenchOpen(false)}
           onCreate={createWorkbench}
+        />
+      )}
+      {sandboxDenial && (
+        <SandboxDeniedDialog
+          message={sandboxDenial.message}
+          roots={sandboxDenial.roots}
+          onClose={() => setSandboxDenial(null)}
         />
       )}
       {createWorktreeFor && (
