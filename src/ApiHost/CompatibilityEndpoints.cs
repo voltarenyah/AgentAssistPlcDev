@@ -212,6 +212,14 @@ public static class CompatibilityEndpoints
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
             return chat.LoadSession(Device(state), id) is { } session ? Results.Ok(session) : Results.NotFound();
         });
+        app.MapPost("/api/chat/session/rename", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
+        {
+            var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
+            var title = body.GetProperty("title").GetString() ?? throw new ArgumentException("title is required.");
+            return chat.RenameSession(Device(state), id, title) is { } session
+                ? Results.Ok(session)
+                : Results.NotFound();
+        });
         app.MapPost("/api/chat/session/delete", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
@@ -425,6 +433,29 @@ internal sealed class ApiChatService(
         return session;
     }
 
+    public ChatSessionData? RenameSession(
+        DeviceContext device,
+        string sessionId,
+        string title)
+    {
+        var session = SessionManager.RenameSession(device, sessionId, title);
+        if (session is null)
+            return null;
+
+        var key = DeviceContextIdentity.Key(device);
+        if (chats.TryGetValue(key, out var active)
+            && active.Session.Header.SessionId == sessionId)
+        {
+            chats[key] = active with { Session = session };
+        }
+        if (pendingSessions.TryGetValue(key, out var pending)
+            && pending.Header.SessionId == sessionId)
+        {
+            pendingSessions[key] = session;
+        }
+        return session;
+    }
+
     public async Task<string> RunAsync(DeviceContext device, string message, CancellationToken token)
     {
         var apiKey = state.ApiKey ?? configuration["DeepSeek:ApiKey"] ?? configuration["deepSeekApiKey"];
@@ -486,7 +517,13 @@ internal sealed class ApiChatService(
         {
             Messages = active.Loop.History.ToList(),
             RoundUsages = active.Loop.RoundUsages.ToList(),
-            Header = active.Session.Header with { UpdatedAt = DateTimeOffset.UtcNow.ToString("O") },
+            Header = active.Session.Header with
+            {
+                UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
+                Title = SessionManager.IsDefaultTitle(active.Session.Header.Title)
+                    ? SessionManager.DeriveTitle(message)
+                    : active.Session.Header.Title,
+            },
         };
         SessionManager.SaveSession(device, updated);
         chats[contextKey] = active with { Session = updated };
