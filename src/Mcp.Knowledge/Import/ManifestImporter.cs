@@ -165,6 +165,7 @@ public static class ManifestImporter
             }
         }
 
+        TiaXmlSemanticGraphImporter.LinkSymbolsToDbMembers(graph);
         return new ExportFolderImportResult(graph, diskFiles.Length, imported, warnings, "manifest");
     }
 

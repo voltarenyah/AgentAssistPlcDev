@@ -19,5 +19,7 @@ internal static class FixtureFiles
 
     public static string CabUdtPath => Path.Combine(DirectoryPath, "CAB.xml");
 
+    public static string SclAssignFcPath => Path.Combine(DirectoryPath, "SclAssign [FC10].xml");
+
     public static string ReadAllText(string path) => File.ReadAllText(path);
 }

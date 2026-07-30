@@ -50,7 +50,7 @@ internal sealed class FakeHttpEndpoint : HttpMessageHandler
         return chunk.ToJsonString();
     }
 
-    public static string FinalChunk(string finishReason, int promptTokens, int completionTokens, int reasoningTokens = 0)
+    public static string FinalChunk(string finishReason, int promptTokens, int completionTokens, int reasoningTokens = 0, int cacheHitTokens = 0, int cacheMissTokens = 0)
     {
         var usage = new JsonObject
         {
@@ -61,6 +61,12 @@ internal sealed class FakeHttpEndpoint : HttpMessageHandler
         if (reasoningTokens > 0)
         {
             usage["completion_tokens_details"] = new JsonObject { ["reasoning_tokens"] = reasoningTokens };
+        }
+
+        if (cacheHitTokens > 0 || cacheMissTokens > 0)
+        {
+            usage["prompt_cache_hit_tokens"] = cacheHitTokens;
+            usage["prompt_cache_miss_tokens"] = cacheMissTokens;
         }
 
         return new JsonObject
@@ -236,6 +242,30 @@ public sealed class DeepSeekClientTests
         Assert.Equal("tool", tool["role"]!.GetValue<string>());
         Assert.Equal("call_1", tool["tool_call_id"]!.GetValue<string>());
         Assert.Equal("{\"matches\":[]}", tool["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ParsesPromptCacheTokens()
+    {
+        var endpoint = new FakeHttpEndpoint()
+            .RespondJson("""
+                { "choices": [ { "finish_reason": "stop", "message": { "role": "assistant", "content": "hi" } } ],
+                  "usage": { "prompt_tokens": 100, "completion_tokens": 2, "total_tokens": 102,
+                    "prompt_cache_hit_tokens": 80, "prompt_cache_miss_tokens": 20 } }
+                """)
+            .RespondJson("""
+                { "choices": [ { "finish_reason": "stop", "message": { "role": "assistant", "content": "hi" } } ],
+                  "usage": { "prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12 } }
+                """);
+
+        var cached = await Client(endpoint).CompleteAsync(new[] { ChatMessage.User("x") }, null, Settings);
+        Assert.Equal(80, cached.Usage!.PromptCacheHitTokens);
+        Assert.Equal(20, cached.Usage.PromptCacheMissTokens);
+
+        // Absent cache fields default to 0 — the positional constructor stays source-compatible.
+        var uncached = await Client(endpoint).CompleteAsync(new[] { ChatMessage.User("x") }, null, Settings);
+        Assert.Equal(0, uncached.Usage!.PromptCacheHitTokens);
+        Assert.Equal(0, uncached.Usage.PromptCacheMissTokens);
     }
 
     [Fact]

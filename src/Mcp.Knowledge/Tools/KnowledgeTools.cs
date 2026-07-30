@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using Contracts.Knowledge;
 using Mcp.Knowledge.Graph;
 using Mcp.Knowledge.Import;
@@ -31,14 +33,10 @@ public sealed class KnowledgeTools
     }
 
     [McpServerTool(Name = "get_schema")]
-    [Description("SQLite property-graph schema of the PLC knowledge base: table DDL, node kinds, edge types and example read-only queries (read-only, static content).")]
-    public CallToolResult GetSchema() => Invoke(() => new
-    {
-        ddl = PlcSemanticGraphSqliteSchema.CreateScript,
-        nodeKinds = SchemaVocabulary.NodeKinds,
-        edgeTypes = SchemaVocabulary.EdgeTypes,
-        exampleQueries = SchemaVocabulary.ExampleQueries,
-    });
+    [Description("SQLite property-graph schema of the PLC knowledge base: table DDL, node kinds, edge types and example read-only queries (read-only, static content). The response carries a version hash; pass it as knownVersion on repeat calls to get back only {version, unchanged:true} instead of the full payload.")]
+    public CallToolResult GetSchema(
+        [Description("Version hash returned by an earlier get_schema call; when it still matches, the full payload is skipped.")] string? knownVersion = null)
+        => Invoke(() => SchemaPayload(knownVersion));
 
     [McpServerTool(Name = "ingest_source")]
     [Description("Build one device SQLite knowledge database from exported-source plus an optional sparse modified-source overlay (write: full rebuild of dbPath). The legacy exportRoot argument remains accepted.")]
@@ -81,12 +79,21 @@ public sealed class KnowledgeTools
         => Invoke(() => BlockDetail(dbPath, block));
 
     [McpServerTool(Name = "get_network")]
-    [Description("Get one network of a program block: title, language, logicStatements, symbols read/written and blocks called (read-only).")]
+    [Description("Get one network of a program block: title, language, logicStatements, symbols read/written and blocks called (read-only). Pass compact=true to omit the repeated block metadata and return only block id + name.")]
     public CallToolResult GetNetwork(
         [Description("Path to the plc-knowledge.db file.")] string dbPath,
         [Description("Block name, e.g. 'Main'.")] string block,
-        [Description("1-based network index.")] int networkIndex)
-        => Invoke(() => NetworkDetail(dbPath, block, networkIndex));
+        [Description("1-based network index.")] int networkIndex,
+        [Description("When true, the block wrapper carries only id + name.")] bool compact = false)
+        => Invoke(() => NetworkDetail(dbPath, block, networkIndex, compact));
+
+    [McpServerTool(Name = "get_variable_usage")]
+    [Description("Find every usage site of a PLC variable in one call: networks whose translated logic text mentions it (text is authoritative) plus READS/WRITES graph edges, including the linked DB-member chain. Each row is labeled read/write/mention with block and network ids. Prefer this for 'where is X read/written / how is X processed' questions instead of chaining search + query + get_network.")]
+    public CallToolResult GetVariableUsage(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Full dotted variable path (e.g. 'Cav_A.Cavity.CAB.PLS_Green_Cup.CAB') or a leaf name.")] string variable,
+        [Description("Maximum rows to return (default 200, hard cap 1000).")] int? maxRows = null)
+        => Invoke(() => VariableUsage(dbPath, variable, maxRows));
 
     [McpServerTool(Name = "search")]
     [Description("Case-insensitive substring search over node names and network title / logicStatements text (read-only).")]
@@ -476,7 +483,7 @@ public sealed class KnowledgeTools
         };
     }
 
-    private static object NetworkDetail(string dbPath, string block, int networkIndex)
+    private static object NetworkDetail(string dbPath, string block, int networkIndex, bool compact)
     {
         using var connection = OpenReadOnly(dbPath);
         var blockNode = FindBlockNode(connection, block);
@@ -491,9 +498,13 @@ public sealed class KnowledgeTools
                 "Pass a 1-based network index as listed by get_block.");
         }
 
+        // I10: compact mode drops the repeated per-call block metadata down to id + name.
+        object blockInfo = compact
+            ? new { id = blockNode.Id, name = blockNode.Name }
+            : blockNode;
         return new
         {
-            block = blockNode,
+            block = blockInfo,
             network,
             reads = ReadAccessNames(connection, network.Id, "READS"),
             writes = ReadAccessNames(connection, network.Id, "WRITES"),
@@ -562,6 +573,291 @@ public sealed class KnowledgeTools
 
         return new { text, kind, matches, truncated };
     }
+
+    private static string? _schemaVersion;
+
+    // I9: stable hash over the whole static schema payload; agents pass it back as knownVersion
+    // on repeat get_schema calls to skip the (~2.5k token) full payload.
+    private static object SchemaPayload(string? knownVersion)
+    {
+        var version = _schemaVersion ??= ComputeSchemaVersion();
+        if (!string.IsNullOrWhiteSpace(knownVersion) &&
+            string.Equals(knownVersion, version, StringComparison.OrdinalIgnoreCase))
+        {
+            return new { version, unchanged = true };
+        }
+
+        return new
+        {
+            version,
+            ddl = PlcSemanticGraphSqliteSchema.CreateScript,
+            nodeKinds = SchemaVocabulary.NodeKinds,
+            edgeTypes = SchemaVocabulary.EdgeTypes,
+            exampleQueries = SchemaVocabulary.ExampleQueries,
+        };
+    }
+
+    private static string ComputeSchemaVersion()
+    {
+        var builder = new StringBuilder();
+        builder.Append(PlcSemanticGraphSqliteSchema.CreateScript);
+        foreach (var kind in SchemaVocabulary.NodeKinds)
+        {
+            builder.Append('|').Append(kind);
+        }
+
+        foreach (var edgeType in SchemaVocabulary.EdgeTypes)
+        {
+            builder.Append('|').Append(edgeType);
+        }
+
+        foreach (var query in SchemaVocabulary.ExampleQueries)
+        {
+            builder.Append('|').Append(query.Name).Append(':').Append(query.Sql);
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()))).ToLowerInvariant();
+    }
+
+    // I4: one-call "where is X read/written". Text hits (logicStatements LIKE) are authoritative
+    // and labeled "mention" unless a READS/WRITES edge gives a direction for the same network;
+    // edge targets include the REFERS_TO-linked DB-member chain (I2) plus db-member ids derived
+    // from the dotted path, so the id space the agent guessed cannot strand the query.
+    private static object VariableUsage(string dbPath, string variable, int? maxRows)
+    {
+        if (string.IsNullOrWhiteSpace(variable))
+        {
+            throw new KnowledgeToolException(
+                "VARIABLE_REQUIRED",
+                "Variable path must not be empty.",
+                "Pass a full dotted path (e.g. 'Cav_A.Cavity.CAB.PLS_Green_Cup.CAB') or a leaf name.");
+        }
+
+        var trimmed = variable.Trim();
+        var limit = maxRows is null ? DefaultMaxRows : Math.Clamp(maxRows.Value, 1, HardMaxRows);
+        using var connection = OpenReadOnly(dbPath);
+
+        var matchedNodeIds = ResolveVariableNodeIds(connection, trimmed);
+        var directionsByNetwork = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        if (matchedNodeIds.Count > 0)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                SELECT e.type, e.from_node_id, src.kind, nid.value
+                FROM graph_edges e
+                JOIN graph_nodes src ON src.id = e.from_node_id
+                LEFT JOIN graph_edge_properties nid ON nid.edge_id = e.id AND nid.name = 'networkId'
+                WHERE e.type IN ('READS', 'WRITES') AND {InClause(command, "e.to_node_id", "t", matchedNodeIds)};
+                """;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var networkId = string.Equals(reader.GetString(2), SemanticNodeKind.Network, StringComparison.Ordinal)
+                    ? reader.GetString(1)
+                    : reader.IsDBNull(3) ? null : reader.GetString(3);
+                if (string.IsNullOrWhiteSpace(networkId))
+                {
+                    continue;
+                }
+
+                if (!directionsByNetwork.TryGetValue(networkId, out var directions))
+                {
+                    directions = new SortedSet<string>(StringComparer.Ordinal);
+                    directionsByNetwork.Add(networkId, directions);
+                }
+
+                directions.Add(string.Equals(reader.GetString(0), "WRITES", StringComparison.Ordinal) ? "write" : "read");
+            }
+        }
+
+        var pattern = "%" + EscapeLike(trimmed) + "%";
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT n.id
+                FROM graph_nodes n
+                JOIN graph_node_properties p ON p.node_id = n.id AND p.name = 'logicStatements'
+                WHERE n.kind = 'Network' AND p.value LIKE @pattern ESCAPE '\';
+                """;
+            command.Parameters.AddWithValue("@pattern", pattern);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                directionsByNetwork.TryAdd(reader.GetString(0), new SortedSet<string>(StringComparer.Ordinal));
+            }
+        }
+
+        var networkDetails = ReadNetworkDetails(connection, directionsByNetwork.Keys);
+        var rows = new List<VariableUsageRow>();
+        foreach (var entry in directionsByNetwork)
+        {
+            networkDetails.TryGetValue(entry.Key, out var detail);
+            var directions = entry.Value.Count == 0
+                ? (IEnumerable<string>)new[] { "mention" }
+                : entry.Value;
+            foreach (var direction in directions)
+            {
+                rows.Add(new VariableUsageRow(
+                    detail?.BlockName,
+                    detail?.BlockKind,
+                    detail?.Index,
+                    detail?.Title,
+                    direction,
+                    entry.Key));
+            }
+        }
+
+        var ordered = rows
+            .OrderBy(row => row.Block, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.NetworkIndex ?? int.MaxValue)
+            .ThenBy(row => row.Access, StringComparer.Ordinal)
+            .ToList();
+        var truncated = ordered.Count > limit;
+        if (truncated)
+        {
+            ordered.RemoveRange(limit, ordered.Count - limit);
+        }
+
+        return new
+        {
+            variable = trimmed,
+            matchedNodes = matchedNodeIds.OrderBy(id => id, StringComparer.Ordinal).ToArray(),
+            usages = ordered,
+            truncated,
+        };
+    }
+
+    private static List<string> ResolveVariableNodeIds(SqliteConnection connection, string variable)
+    {
+        var symbols = new List<(string Id, string Name)>();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT id, name
+                FROM graph_nodes
+                WHERE kind = 'Variable' AND (name = @variable COLLATE NOCASE OR name LIKE @suffix ESCAPE '\')
+                ORDER BY id;
+                """;
+            command.Parameters.AddWithValue("@variable", variable);
+            command.Parameters.AddWithValue("@suffix", "%." + EscapeLike(variable));
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                symbols.Add((reader.GetString(0), reader.GetString(1)));
+            }
+        }
+
+        var resolved = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in symbols)
+        {
+            resolved.Add(symbol.Id);
+        }
+
+        if (symbols.Count > 0)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = $"""
+                    SELECT to_node_id FROM graph_edges
+                    WHERE type = 'REFERS_TO' AND {InClause(command, "from_node_id", "s", symbols.Select(symbol => symbol.Id).ToList())};
+                    """;
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    resolved.Add(reader.GetString(0));
+                }
+            }
+
+            // Fallback for databases built before the REFERS_TO pass existed: derive the
+            // db-member id candidates from the dotted symbol names (deepest chain included).
+            var candidates = new List<string>();
+            foreach (var (id, name) in symbols)
+            {
+                var markerIndex = id.IndexOf("symbol:", StringComparison.Ordinal);
+                var prefix = markerIndex < 0 ? string.Empty : id.Substring(0, markerIndex);
+                var segments = name.Split('.');
+                for (var depth = 2; depth <= segments.Length; depth++)
+                {
+                    candidates.Add($"{prefix}db-member:{segments[0]}:{string.Join(".", segments.Skip(1).Take(depth - 1))}");
+                }
+            }
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = $"""
+                    SELECT id FROM graph_nodes
+                    WHERE kind = 'DB Member' AND {InClause(command, "id", "m", candidates)};
+                    """;
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    resolved.Add(reader.GetString(0));
+                }
+            }
+        }
+
+        return resolved.ToList();
+    }
+
+    private static Dictionary<string, VariableUsageNetwork> ReadNetworkDetails(
+        SqliteConnection connection,
+        IEnumerable<string> networkIds)
+    {
+        var ids = networkIds.ToList();
+        var details = new Dictionary<string, VariableUsageNetwork>(StringComparer.Ordinal);
+        if (ids.Count == 0)
+        {
+            return details;
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT n.id, idx.value, title.value, b.name, b.kind
+            FROM graph_nodes n
+            LEFT JOIN graph_node_properties idx ON idx.node_id = n.id AND idx.name = 'networkIndex'
+            LEFT JOIN graph_node_properties title ON title.node_id = n.id AND title.name = 'title'
+            LEFT JOIN graph_edges c ON c.to_node_id = n.id AND c.type = 'CONTAINS'
+            LEFT JOIN graph_nodes b ON b.id = c.from_node_id AND b.kind IN ('OB', 'FB', 'FC')
+            WHERE {InClause(command, "n.id", "n", ids)};
+            """;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var indexText = reader.IsDBNull(1) ? null : reader.GetString(1);
+            int? index = int.TryParse(indexText, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : null;
+            details[reader.GetString(0)] = new VariableUsageNetwork(
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                index,
+                reader.IsDBNull(2) ? null : reader.GetString(2));
+        }
+
+        return details;
+    }
+
+    private static string InClause(SqliteCommand command, string column, string parameterPrefix, IReadOnlyList<string> values)
+    {
+        var parameterNames = new List<string>();
+        for (var index = 0; index < values.Count; index++)
+        {
+            var parameterName = $"@{parameterPrefix}{index}";
+            command.Parameters.AddWithValue(parameterName, values[index]);
+            parameterNames.Add(parameterName);
+        }
+
+        return $"{column} IN ({string.Join(", ", parameterNames)})";
+    }
+
+    private static string EscapeLike(string text)
+    {
+        return text.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+    }
+
+    private sealed record VariableUsageNetwork(string? BlockName, string? BlockKind, int? Index, string? Title);
+
+    private sealed record VariableUsageRow(string? Block, string? BlockKind, int? NetworkIndex, string? NetworkTitle, string Access, string NetworkId);
 
     private static SqliteConnection OpenReadOnly(string dbPath)
     {

@@ -181,6 +181,13 @@ public static class CompatibilityEndpoints
                 id, parsed, DeviceContextIdentity.Key(device), requester));
         });
         app.MapGet("/api/logs", (CompatibilityRuntimeState state) => state.Logs.ToArray());
+        app.MapPost("/api/chat/grant-rounds", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
+        {
+            var additional = body.TryGetProperty("additional", out var value) && value.TryGetInt32(out var parsed)
+                ? parsed
+                : 6;
+            return chat.GrantMoreRounds(Device(state), additional) ? Results.NoContent() : Results.NotFound();
+        });
         app.MapGet("/api/chat/history", (WorkbenchApiState state, ApiChatService chat) =>
             chat.History(Device(state)));
         app.MapPost("/api/chat/clear", (WorkbenchApiState state, ApiChatService chat) =>
@@ -220,6 +227,22 @@ public static class CompatibilityEndpoints
                         line => Queue(new { kind = "progress", delta = line }),
                         (kind, delta) => Queue(new { kind, delta }),
                         ct);
+                    var snapshot = chat.TurnSnapshot(device);
+                    Queue(new
+                    {
+                        kind = "meta",
+                        hitRoundCap = snapshot.HitRoundCap,
+                        usage = snapshot.Usage is { } usage
+                            ? new
+                            {
+                                promptTokens = usage.PromptTokens,
+                                completionTokens = usage.CompletionTokens,
+                                totalTokens = usage.TotalTokens,
+                                promptCacheHitTokens = usage.PromptCacheHitTokens,
+                                promptCacheMissTokens = usage.PromptCacheMissTokens,
+                            }
+                            : null,
+                    });
                     Queue(new { kind = "progress", delta = "Saving chat session..." });
                     Queue(new { kind = "answer", delta = answer });
                 }
@@ -274,6 +297,7 @@ public static class CompatibilityEndpoints
                 reasoningEffort = settings.ReasoningEffort,
                 temperature = settings.Temperature,
                 topP = settings.TopP,
+                contextWindow = ApiChatService.ContextWindow(configuration),
             });
         });
         app.MapGet("/api/chat/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
@@ -427,6 +451,8 @@ public static class CompatibilityEndpoints
     }
 }
 
+public sealed record ChatTurnSnapshot(UsageInfo? Usage, bool HitRoundCap);
+
 internal sealed class ApiChatService(
     IServiceProvider services,
     IConfiguration configuration,
@@ -435,6 +461,7 @@ internal sealed class ApiChatService(
     PendingToolActions pending,
     SandboxPolicy policy)
 {
+    public const int DefaultContextWindow = 128_000;
     private sealed record ActiveChat(AgentLoop Loop, ChatSessionData Session);
     private readonly ConcurrentDictionary<string, ActiveChat> chats = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ChatSessionData> pendingSessions = new(StringComparer.Ordinal);
@@ -458,6 +485,22 @@ internal sealed class ApiChatService(
     public IReadOnlyList<ChatMessage> History(DeviceContext device) =>
         chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
             ? active.Loop.History : Array.Empty<ChatMessage>();
+
+    /// <summary>Last-turn state for the UI: exact context size (last billed prompt) and the round-cap flag.</summary>
+    public ChatTurnSnapshot TurnSnapshot(DeviceContext device) =>
+        chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
+            ? new ChatTurnSnapshot(
+                active.Loop.RoundUsages.LastOrDefault(usage => usage is not null),
+                active.Loop.LastTurnHitRoundCap)
+            : new ChatTurnSnapshot(null, false);
+
+    /// <summary>Extends the active loop's round budget (the "continue" affordance after a round cap).</summary>
+    public bool GrantMoreRounds(DeviceContext device, int additional)
+    {
+        if (!chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)) return false;
+        active.Loop.GrantMoreRounds(additional);
+        return true;
+    }
     public void Clear(DeviceContext device)
     {
         var key = DeviceContextIdentity.Key(device);
@@ -634,6 +677,12 @@ internal sealed class ApiChatService(
         SessionManager.SaveSession(device, updated);
         chats[contextKey] = active with { Session = updated };
     }
+
+    /// <summary>Model context window used for the "context: X / Y" display; overridable via chatSettings:contextWindow.</summary>
+    internal static int ContextWindow(IConfiguration configuration) =>
+        int.TryParse(configuration["chatSettings:contextWindow"] ?? configuration["deepSeekContextWindow"], out var window) && window > 0
+            ? window
+            : DefaultContextWindow;
 
     internal static ChatRequestSettings Settings(
         IConfiguration configuration,

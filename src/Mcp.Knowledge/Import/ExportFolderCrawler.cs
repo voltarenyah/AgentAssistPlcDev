@@ -296,6 +296,7 @@ public static class ExportFolderCrawler
             }
         }
 
+        TiaXmlSemanticGraphImporter.LinkSymbolsToDbMembers(graph);
         return new ExportFolderImportResult(graph, relativeFiles.Length, imported, warnings, "crawl");
     }
 

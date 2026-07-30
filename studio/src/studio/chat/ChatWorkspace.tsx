@@ -3,15 +3,17 @@ import { Ban, Loader2, MessageSquare, Send, Wrench, XCircle } from 'lucide-react
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import * as api from '@/api/client'
-import type { ChatMessage } from '@/api/client'
+import type { ChatMessage, ChatUsage } from '@/api/client'
 import type { ChatTabsState } from './chatTabState'
 import { parseProgressContent, progressTitle } from './progressDisplay'
+import { contextLabel } from './usageDisplay'
 
 type Props = {
   tabs: ChatTabsState
   busy: boolean
   onFocus: (sessionId: string) => void
   onSend: (sessionId: string, message: string) => void
+  onContinue: (sessionId: string) => void
 }
 
 const roleLabel = (message: ChatMessage) =>
@@ -40,6 +42,7 @@ function ChatComposer({
   busy,
   settings,
   settingsState,
+  usage,
   onSettingsChange,
   onSend,
 }: {
@@ -48,10 +51,12 @@ function ChatComposer({
   busy: boolean
   settings: api.ChatSettings | null
   settingsState: SettingsSaveState
+  usage?: ChatUsage | null
   onSettingsChange: (patch: Partial<api.ChatSettings>) => void
   onSend: (sessionId: string, message: string) => void
 }) {
   const knownModel = Boolean(settings && MODEL_OPTIONS.some(option => option.value === settings.model))
+  const context = contextLabel(usage, settings?.contextWindow)
   return (
     <form
       data-chat-composer={sessionId}
@@ -138,6 +143,9 @@ function ChatComposer({
             }}
           />
         </label>
+        {context && (
+          <span data-chat-context title={context}>{context}</span>
+        )}
         <span className="ml-auto" data-chat-settings-state>
           {settingsState === 'saving' ? 'Saving…'
             : settingsState === 'saved' ? 'Saved'
@@ -245,7 +253,7 @@ function MessageList({ messages, busy }: { messages: ChatMessage[], busy: boolea
   )
 }
 
-export default function ChatWorkspace({ tabs, busy, onFocus, onSend }: Props) {
+export default function ChatWorkspace({ tabs, busy, onFocus, onSend, onContinue }: Props) {
   const [settings, setSettings] = useState<api.ChatSettings | null>(null)
   const [settingsState, setSettingsState] = useState<SettingsSaveState>('idle')
   const settingsRef = useRef<api.ChatSettings | null>(null)
@@ -321,12 +329,25 @@ export default function ChatWorkspace({ tabs, busy, onFocus, onSend }: Props) {
               <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
                 <MessageList messages={tab.messages} busy={busy && tab.sessionId === tabs.activeId} />
               </div>
+              {tab.hitRoundCap && (
+                <div className="border-t px-3 pt-2" style={{ borderColor: 'var(--border)' }} data-round-cap={tab.sessionId}>
+                  <button
+                    type="button"
+                    className="secondary-button w-full"
+                    disabled={busy}
+                    onClick={() => onContinue(tab.sessionId)}
+                  >
+                    Round limit reached — Continue (+6 rounds)
+                  </button>
+                </div>
+              )}
               <ChatComposer
                 sessionId={tab.sessionId}
                 disabled={busy || tab.sessionId !== tabs.activeId}
                 busy={busy && tab.sessionId === tabs.activeId}
                 settings={settings}
                 settingsState={settingsState}
+                usage={tab.usage}
                 onSettingsChange={changeSettings}
                 onSend={onSend}
               />

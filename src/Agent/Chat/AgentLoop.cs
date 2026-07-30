@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agent.Mcp;
 
 namespace Agent.Chat;
@@ -11,8 +12,16 @@ namespace Agent.Chat;
 /// </summary>
 public sealed class AgentLoop
 {
+    /// <summary>Default tool-calling round cap per turn (see <see cref="RoundLimit"/>).</summary>
     public const int MaxRounds = 12;
+
     public const int ToolResultMaxChars = 8000;
+
+    /// <summary>Head kept when an old tool result is compacted (see <see cref="PromptTokenBudget"/>).</summary>
+    public const int ToolResultCompactChars = 500;
+
+    private const string FinalRoundInstruction =
+        "Tool budget exhausted. Answer now with what you have, cite what you found, and state clearly what remains unverified.";
 
     private readonly DeepSeekClient client;
     private readonly McpToolCatalog catalog;
@@ -45,11 +54,37 @@ public sealed class AgentLoop
     /// <summary>Project name the current session is bound to.</summary>
     public string? ProjectName { get; set; }
 
+    /// <summary>Tool-calling rounds allowed per turn. Defaults to <see cref="MaxRounds"/>; extendable via <see cref="GrantMoreRounds"/>.</summary>
+    public int RoundLimit { get; set; } = MaxRounds;
+
+    /// <summary>Cumulative prompt tokens per turn beyond which old tool results are compacted to their head.</summary>
+    public int PromptTokenBudget { get; set; } = 300_000;
+
+    /// <summary>Estimated next-prompt size that triggers a <see cref="Progress"/> warning before the API call.</summary>
+    public int PromptTokenWarningThreshold { get; set; } = 100_000;
+
+    /// <summary>True when the last <see cref="RunAsync"/> hit <see cref="RoundLimit"/> and ended with a forced no-tools answer.</summary>
+    public bool LastTurnHitRoundCap { get; private set; }
+
     /// <summary>The exact conversation sent to DeepSeek (system prompt first, rebuilt per turn).</summary>
     public IReadOnlyList<ChatMessage> History => messages;
 
     /// <summary>Token usage per API response, aligned 1:1 with the assistant messages in <see cref="History"/>.</summary>
     public IReadOnlyList<UsageInfo?> RoundUsages => roundUsages;
+
+    /// <summary>Extend this turn's tool-calling budget (the "continue" affordance after a cap).</summary>
+    public void GrantMoreRounds(int additional)
+    {
+        if (additional <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(additional), "Additional rounds must be positive.");
+        }
+
+        RoundLimit += additional;
+    }
+
+    /// <summary>Heuristic size of the next request (history + tool definitions), before any billing happens.</summary>
+    public int EstimateNextPromptTokens() => TokenEstimator.Estimate(messages, catalog.ToOpenAiToolsJson());
 
     public void ClearHistory()
     {
@@ -72,28 +107,29 @@ public sealed class AgentLoop
     /// <summary>Runs one user turn to completion; returns the assistant's final text.</summary>
     public async Task<string> RunAsync(string userText, CancellationToken cancellationToken = default)
     {
+        LastTurnHitRoundCap = false;
         RefreshSystemMessage();
         messages.Add(ChatMessage.User(userText));
+        var cumulativePromptTokens = 0;
+        var estimateWarned = false;
 
         for (var round = 1; ; round++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Progress?.Invoke($"round {round}: calling model");
-            var response = await client.CompleteStreamingAsync(
-                messages,
-                catalog.ToOpenAiToolsJson(),
-                Settings,
-                delta => StreamDelta?.Invoke(
-                    delta.ReasoningContent != null ? "reasoning" : "content",
-                    delta.ReasoningContent ?? delta.Content ?? string.Empty),
-                cancellationToken);
-            roundUsages.Add(response.Usage);
-            if (response.Usage != null)
+            CompactOldToolResultsIfOverBudget(cumulativePromptTokens);
+            if (!estimateWarned)
             {
-                var reasoning = response.Usage.ReasoningTokens > 0 ? $" ({response.Usage.ReasoningTokens} reasoning)" : string.Empty;
-                Progress?.Invoke(
-                    $"usage: {response.Usage.PromptTokens} prompt + {response.Usage.CompletionTokens} completion{reasoning} tokens");
+                var estimate = TokenEstimator.Estimate(messages, catalog.ToOpenAiToolsJson());
+                if (estimate >= PromptTokenWarningThreshold)
+                {
+                    estimateWarned = true;
+                    Progress?.Invoke($"warning: next prompt estimated at ~{estimate} tokens (threshold {PromptTokenWarningThreshold})");
+                }
             }
+
+            // ToOpenAiToolsJson per call: a JsonArray can only be parented into one request body.
+            var response = await CallModelAsync(catalog.ToOpenAiToolsJson(), round, cancellationToken);
+            cumulativePromptTokens += response.Usage?.PromptTokens ?? 0;
 
             if (response.ToolCalls.Count == 0)
             {
@@ -102,20 +138,107 @@ public sealed class AgentLoop
                 return answer;
             }
 
-            if (round >= MaxRounds)
+            await AppendToolRoundAsync(response, cancellationToken);
+
+            if (round >= RoundLimit)
             {
-                var note = $"Stopped after {MaxRounds} tool-calling rounds without a final answer.";
-                messages.Add(ChatMessage.Assistant(note, reasoningContent: response.ReasoningContent));
-                return note;
+                // Graceful final round (plan I3): pending tool calls are already in history; one last
+                // call with no tools offered must produce an answer from the gathered evidence.
+                LastTurnHitRoundCap = true;
+                Progress?.Invoke($"round cap reached ({RoundLimit}); requesting a final answer without tools");
+                messages.Add(ChatMessage.User(FinalRoundInstruction));
+                var finalResponse = await CallModelAsync(null, round + 1, cancellationToken);
+                var finalAnswer = finalResponse.Content ?? "(empty response from DeepSeek)";
+                messages.Add(ChatMessage.Assistant(finalAnswer, reasoningContent: finalResponse.ReasoningContent));
+                return finalAnswer;
+            }
+        }
+    }
+
+    private async Task<ChatResponse> CallModelAsync(JsonArray? tools, int round, CancellationToken cancellationToken)
+    {
+        Progress?.Invoke($"round {round}: calling model");
+        var response = await client.CompleteStreamingAsync(
+            messages,
+            tools,
+            Settings,
+            delta => StreamDelta?.Invoke(
+                delta.ReasoningContent != null ? "reasoning" : "content",
+                delta.ReasoningContent ?? delta.Content ?? string.Empty),
+            cancellationToken);
+        roundUsages.Add(response.Usage);
+        if (response.Usage != null)
+        {
+            var reasoning = response.Usage.ReasoningTokens > 0 ? $" ({response.Usage.ReasoningTokens} reasoning)" : string.Empty;
+            var cache = response.Usage.PromptCacheHitTokens + response.Usage.PromptCacheMissTokens > 0
+                ? $" (cache: {response.Usage.PromptCacheHitTokens} hit / {response.Usage.PromptCacheMissTokens} miss)"
+                : string.Empty;
+            Progress?.Invoke(
+                $"usage: {response.Usage.PromptTokens} prompt + {response.Usage.CompletionTokens} completion{reasoning}{cache} tokens");
+        }
+
+        return response;
+    }
+
+    private async Task AppendToolRoundAsync(ChatResponse response, CancellationToken cancellationToken)
+    {
+        messages.Add(ChatMessage.Assistant(response.Content, response.ToolCalls, response.ReasoningContent));
+        foreach (var call in response.ToolCalls)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Progress?.Invoke($"→ {call.Name}({Summarize(call.ArgumentsJson)})");
+            messages.Add(await ExecuteToolCallAsync(call, cancellationToken));
+        }
+    }
+
+    /// <summary>
+    /// Prompt-token budget guard (plan I7): once the turn's cumulative billed prompt tokens cross
+    /// <see cref="PromptTokenBudget"/>, tool results older than the last two tool rounds are shrunk
+    /// to their head. Only tool-role messages are touched; assistant↔tool_call pairing is preserved
+    /// because messages are never removed or reordered.
+    /// </summary>
+    private void CompactOldToolResultsIfOverBudget(int cumulativePromptTokens)
+    {
+        if (cumulativePromptTokens <= PromptTokenBudget)
+        {
+            return;
+        }
+
+        // Cutoff: the assistant message opening the second-from-last tool round; that round and
+        // the last one stay intact, everything older is eligible for compaction.
+        var cutoff = -1;
+        var toolRoundsSeen = 0;
+        for (var i = messages.Count - 1; i > 0; i--)
+        {
+            if (messages[i].Role == "assistant" && messages[i].ToolCalls is { Count: > 0 } && ++toolRoundsSeen == 2)
+            {
+                cutoff = i;
+                break;
+            }
+        }
+
+        if (cutoff < 0)
+        {
+            return;
+        }
+
+        var compacted = 0;
+        for (var i = 1; i < cutoff; i++) // index 0 is the system message; user messages are never compacted
+        {
+            var message = messages[i];
+            if (message.Role != "tool" || message.Content == null || message.Content.Length <= ToolResultCompactChars)
+            {
+                continue;
             }
 
-            messages.Add(ChatMessage.Assistant(response.Content, response.ToolCalls, response.ReasoningContent));
-            foreach (var call in response.ToolCalls)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                Progress?.Invoke($"→ {call.Name}({Summarize(call.ArgumentsJson)})");
-                messages.Add(await ExecuteToolCallAsync(call, cancellationToken));
-            }
+            messages[i] = message with { Content = message.Content[..ToolResultCompactChars] + "…[truncated]" };
+            compacted++;
+        }
+
+        if (compacted > 0)
+        {
+            Progress?.Invoke(
+                $"prompt budget exceeded ({cumulativePromptTokens} > {PromptTokenBudget} cumulative); compacted {compacted} old tool result(s)");
         }
     }
 

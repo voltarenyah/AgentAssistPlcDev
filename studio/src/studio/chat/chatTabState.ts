@@ -1,9 +1,14 @@
-import type { ChatMessage, ChatSessionData } from '@/api/client'
+import type { ChatMessage, ChatSessionData, ChatUsage } from '@/api/client'
+import { lastUsageOf } from './usageDisplay'
 
 export type ChatTab = {
   sessionId: string
   title: string
   messages: ChatMessage[]
+  /** Exact context size of the last billed API round (from the backend). */
+  usage?: ChatUsage | null
+  /** True when the last turn ended at the tool-round cap; offers "continue". */
+  hitRoundCap?: boolean
 }
 
 export type ChatTabsState = {
@@ -29,10 +34,14 @@ const touch = (mru: string[], sessionId: string) => [
 ]
 
 export function openTab(state: ChatTabsState, session: ChatSessionData): ChatTabsState {
+  const existing = state.tabs.find(value => value.sessionId === session.header.sessionId)
   const tab: ChatTab = {
     sessionId: session.header.sessionId,
     title: titleOf(session),
     messages: session.messages,
+    usage: lastUsageOf(session.roundUsages),
+    // The cap flag is stream-only (not persisted); keep it across session reloads of an open tab.
+    hitRoundCap: existing?.hitRoundCap ?? false,
   }
   const exists = state.tabs.some(value => value.sessionId === tab.sessionId)
   return {
@@ -41,6 +50,19 @@ export function openTab(state: ChatTabsState, session: ChatSessionData): ChatTab
       : [...state.tabs, tab],
     activeId: tab.sessionId,
     mru: touch(state.mru, tab.sessionId),
+  }
+}
+
+/** Applies the end-of-turn meta SSE event (exact usage + round-cap flag) to a tab. */
+export function setTurnMeta(
+  state: ChatTabsState,
+  sessionId: string,
+  usage: ChatUsage | null,
+  hitRoundCap: boolean,
+): ChatTabsState {
+  return {
+    ...state,
+    tabs: state.tabs.map(tab => tab.sessionId === sessionId ? { ...tab, usage, hitRoundCap } : tab),
   }
 }
 

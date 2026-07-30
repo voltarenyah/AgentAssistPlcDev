@@ -316,6 +316,11 @@ public static class ProgramSemanticReferenceBuilder
                 component.ExportedFile));
         }
 
+        // I1: SCL assignments are a flat token stream under <StructuredText>; an Access directly
+        // followed (skipping blanks/newlines) by a ':=' token is the assignment target → write.
+        // Everything else stays "unknown"; the graph importer falls back to an over-inclusive
+        // READS edge for those instead of dropping the access entirely.
+        var sclAssignmentTargetUids = InferSclAssignmentTargetUids(compileUnit);
         foreach (var access in accessByUid.Values)
         {
             if (classifiedAccessUids.Contains(access.Uid) ||
@@ -332,7 +337,7 @@ public static class ProgramSemanticReferenceBuilder
                 title,
                 access.Symbol,
                 "symbol",
-                "unknown",
+                sclAssignmentTargetUids.Contains(access.Uid) ? "write" : "unknown",
                 access.Scope,
                 string.Empty,
                 string.Empty,
@@ -342,6 +347,43 @@ public static class ProgramSemanticReferenceBuilder
         }
 
         return references;
+    }
+
+    private static IReadOnlySet<string> InferSclAssignmentTargetUids(XElement compileUnit)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var structuredText in compileUnit
+            .Descendants()
+            .Where(element => element.Name.LocalName == "StructuredText"))
+        {
+            var pendingAccessUid = string.Empty;
+            foreach (var element in structuredText.Elements())
+            {
+                switch (element.Name.LocalName)
+                {
+                    case "Access":
+                        pendingAccessUid = GetUid(element);
+                        break;
+                    case "Blank":
+                    case "NewLine":
+                        break;
+                    case "Token":
+                        if (string.Equals(((string?)element.Attribute("Text"))?.Trim(), ":=", StringComparison.Ordinal) &&
+                            !string.IsNullOrWhiteSpace(pendingAccessUid))
+                        {
+                            result.Add(pendingAccessUid);
+                        }
+
+                        pendingAccessUid = string.Empty;
+                        break;
+                    default:
+                        pendingAccessUid = string.Empty;
+                        break;
+                }
+            }
+        }
+
+        return result;
     }
 
     private static IEnumerable<StandaloneAccessClassification> InferStandaloneAccesses(
@@ -570,6 +612,37 @@ public static class ProgramSemanticReferenceBuilder
             if (MatchesAny(pinName, "s", "s1", "r", "r1"))
             {
                 return "read";
+            }
+
+            return string.Empty;
+        }
+
+        if (MatchesAny(partName, "Move"))
+        {
+            if (string.Equals(pinName, "in", StringComparison.OrdinalIgnoreCase))
+            {
+                return "read";
+            }
+
+            // Move outputs are named out1..outN in LAD exports.
+            if (pinName.StartsWith("out", StringComparison.OrdinalIgnoreCase))
+            {
+                return "write";
+            }
+
+            return string.Empty;
+        }
+
+        if (MatchesAny(partName, "Add", "Sub", "Mul", "Div"))
+        {
+            if (MatchesAny(pinName, "in1", "in2"))
+            {
+                return "read";
+            }
+
+            if (string.Equals(pinName, "out", StringComparison.OrdinalIgnoreCase))
+            {
+                return "write";
             }
 
             return string.Empty;

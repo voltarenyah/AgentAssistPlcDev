@@ -34,7 +34,14 @@ public sealed record ChatResponse(
     UsageInfo? Usage,
     string? ReasoningContent = null);
 
-public sealed record UsageInfo(int PromptTokens, int CompletionTokens, int TotalTokens, int ReasoningTokens = 0);
+/// <summary>Token usage of one API response. Cache hit/miss tokens are DeepSeek's server-side context caching.</summary>
+public sealed record UsageInfo(
+    int PromptTokens,
+    int CompletionTokens,
+    int TotalTokens,
+    int ReasoningTokens = 0,
+    int PromptCacheHitTokens = 0,
+    int PromptCacheMissTokens = 0);
 
 /// <summary>One streamed piece of a response (SSE delta).</summary>
 public sealed record ChatDelta(string? ReasoningContent, string? Content);

@@ -291,7 +291,9 @@ public sealed class DeepSeekClient
             usageElement.TryGetProperty("completion_tokens_details", out var details) &&
             details.TryGetProperty("reasoning_tokens", out var reasoning)
                 ? reasoning.GetInt32()
-                : 0);
+                : 0,
+            usageElement.TryGetProperty("prompt_cache_hit_tokens", out var cacheHit) ? cacheHit.GetInt32() : 0,
+            usageElement.TryGetProperty("prompt_cache_miss_tokens", out var cacheMiss) ? cacheMiss.GetInt32() : 0);
 
     private static void AccumulateToolCall(Dictionary<int, ToolCallAccumulator> toolCalls, JsonElement toolCallDelta)
     {

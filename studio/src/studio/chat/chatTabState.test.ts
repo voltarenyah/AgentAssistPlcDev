@@ -8,6 +8,7 @@ import {
   emptyChatTabs,
   openTab,
   renameTab,
+  setTurnMeta,
 } from './chatTabState'
 
 const session = (sessionId: string, title = `Session ${sessionId}`): ChatSessionData => ({
@@ -74,5 +75,34 @@ describe('chat tab state', () => {
 
     expect(closed.activeId).toBe('s1')
     expect(closed.tabs.map(tab => tab.sessionId)).toEqual(['s1'])
+  })
+
+  it('derives the context usage from the last billed round of a loaded session', () => {
+    const loaded: ChatSessionData = {
+      ...session('s1'),
+      roundUsages: [
+        { promptTokens: 1000, completionTokens: 10, totalTokens: 1010 },
+        null,
+        { promptTokens: 22678, completionTokens: 269, totalTokens: 22947 },
+      ],
+    }
+    const state = openTab(emptyChatTabs(), loaded)
+
+    expect(state.tabs[0]?.usage?.promptTokens).toBe(22678)
+    expect(state.tabs[0]?.hitRoundCap).toBe(false)
+  })
+
+  it('applies turn meta and keeps the cap flag across session reloads', () => {
+    let state = openTab(emptyChatTabs(), session('s1'))
+    state = setTurnMeta(state, 's1', { promptTokens: 22678, completionTokens: 269, totalTokens: 22947 }, true)
+
+    expect(state.tabs[0]?.hitRoundCap).toBe(true)
+    expect(state.tabs[0]?.usage?.promptTokens).toBe(22678)
+
+    state = openTab(state, session('s1'))
+    expect(state.tabs[0]?.hitRoundCap).toBe(true)
+
+    state = setTurnMeta(state, 's1', { promptTokens: 30000, completionTokens: 100, totalTokens: 30100 }, false)
+    expect(state.tabs[0]?.hitRoundCap).toBe(false)
   })
 })

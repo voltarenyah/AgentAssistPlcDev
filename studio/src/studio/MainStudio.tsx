@@ -56,6 +56,7 @@ import {
   emptyChatTabs,
   openTab,
   renameTab,
+  setTurnMeta,
   type ChatTabsState,
 } from '@/studio/chat/chatTabState'
 
@@ -362,7 +363,10 @@ export default function MainStudio() {
   const blocks = deviceView?.blocks ?? []
   const touchedCount = deviceView?.overlayCount ?? 0
   const activeKnowledge = deviceView?.knowledgeState ?? 'missing'
-  const isBrandNewDevice = Boolean(selection.deviceId) && blocks.length === 0 && activeKnowledge === 'missing'
+  const isBrandNewDevice = Boolean(selection.deviceId)
+    && deviceView?.snapshot.deviceId === selection.deviceId
+    && blocks.length === 0
+    && activeKnowledge === 'missing'
   const navigatorKnowledgeState = deviceInfo
     ? { [deviceInfo.deviceId]: activeKnowledge }
     : {}
@@ -412,10 +416,10 @@ export default function MainStudio() {
     setLoading(true)
     setFatalError(null)
     try {
-      const [loadedWorkbenches] = await Promise.all([
-        reloadWorkbenches(),
-        reloadSessions(),
-      ])
+      // TIA sessions come from the engineering server and may hang while TIA is
+      // busy; refresh them in the background instead of blocking startup.
+      void reloadSessions().catch(() => {})
+      const loadedWorkbenches = await reloadWorkbenches()
       if (loadedWorkbenches.length > 0) {
         const first = loadedWorkbenches[0]
         setSelection({ workbenchId: first.workbenchId, worktreeId: null, deviceId: null })
@@ -555,14 +559,16 @@ export default function MainStudio() {
     deviceId: string,
   ) => {
     const requestId = ++selectionRequestId.current
+    // Selection is a pure metadata operation: apply it instantly. The snapshot
+    // (per-block manifest work) loads in the background and fills the view.
+    setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
     setDeviceSelection(previous => beginDeviceSelection(previous, deviceId, requestId))
     setChatTabs(emptyChatTabs())
     setOperation('select-device')
     try {
-      const [snapshot, savedSessions, tiaSessions] = await Promise.all([
+      const [snapshot, savedSessions] = await Promise.all([
         api.getDeviceInfo(workbench.workbenchId, worktree.worktreeId, deviceId),
         api.listDeviceSessions(workbench.workbenchId, worktree.worktreeId, deviceId).catch(() => []),
-        api.getSessions().catch(() => null),
       ])
       if (selectionRequestId.current !== requestId) return
       if (snapshot.workbenchId !== workbench.workbenchId
@@ -570,8 +576,6 @@ export default function MainStudio() {
         || snapshot.deviceId !== deviceId) {
         throw new Error('Device snapshot identity does not match the requested context')
       }
-      if (tiaSessions) setSessions(tiaSessions)
-      setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
       setDeviceSelection(previous => previous
         ? completeDeviceSelection(previous, requestId, snapshot, savedSessions)
         : previous)
@@ -732,6 +736,8 @@ export default function MainStudio() {
           setChatTabs(previous => appendAssistantDelta(previous, sessionId, event.delta))
         } else if (event.kind === 'error') {
           setChatTabs(previous => appendProgressMessage(previous, sessionId, `Error: ${event.delta}`))
+        } else if (event.kind === 'meta') {
+          setChatTabs(previous => setTurnMeta(previous, sessionId, event.usage ?? null, event.hitRoundCap ?? false))
         }
       })
       const session = await api.loadChatSession(sessionId)
@@ -742,6 +748,21 @@ export default function MainStudio() {
     } finally {
       setChatBusy(false)
     }
+  }
+
+  const continueChat = async (sessionId: string) => {
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      if (chatTabs.activeId !== sessionId) await api.loadChatSession(sessionId)
+      await api.grantChatRounds(6)
+    } catch (error) {
+      toast.error(displayError(error))
+      setChatBusy(false)
+      return
+    }
+    setChatBusy(false)
+    await sendChatMessage(sessionId, 'continue')
   }
 
   const createWorktree = async (name: string, branch: string, startPoint?: string) => {
@@ -812,7 +833,21 @@ export default function MainStudio() {
       await runOpenProjectInTia(api.openDeviceProject, { ...context, operationId: op.id })
       toast.success('Registered project opened in TIA Portal')
     } catch (error) {
-      toast.error(displayError(error))
+      // A live session query is only warranted now: if the project is already
+      // open in a running TIA instance, surface the re-attach option instead of
+      // leaving the user with a bare "another user has it open" error.
+      const live = await api.getSessions().catch(() => null)
+      if (live) setSessions(live)
+      const source = deviceInfo?.sourceProjectPath
+      const match = source
+        ? live?.find(session => session.projectPath
+            && normalizeProjectPath(session.projectPath) === normalizeProjectPath(source))
+        : null
+      if (match) {
+        toast.error(`Project is already open in TIA (PID ${match.id}) — use Re-attach TIA instance instead.`)
+      } else {
+        toast.error(displayError(error))
+      }
     } finally {
       setOperation(null)
     }
@@ -1228,6 +1263,7 @@ export default function MainStudio() {
                       busy={chatBusy}
                       onFocus={sessionId => void activateChatSession(sessionId)}
                       onSend={(sessionId, message) => void sendChatMessage(sessionId, message)}
+                      onContinue={sessionId => void continueChat(sessionId)}
                     />
                   </div>
                 )}

@@ -56,6 +56,7 @@ public static class SemanticRelationshipType
     public const string ConnectedTo = "CONNECTED_TO";
     public const string ExecutesBefore = "EXECUTES_BEFORE";
     public const string ExecutesAfter = "EXECUTES_AFTER";
+    public const string RefersTo = "REFERS_TO";
 }
 
 public sealed class SemanticGraphNode
@@ -369,18 +370,29 @@ public static class TiaXmlSemanticGraphImporter
                         ["scope"] = reference.Scope
                     }));
 
-                if (string.Equals(reference.Access, "read", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(reference.Access, "inout", StringComparison.OrdinalIgnoreCase))
+                var isRead = string.Equals(reference.Access, "read", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(reference.Access, "inout", StringComparison.OrdinalIgnoreCase);
+                var isWrite = string.Equals(reference.Access, "write", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(reference.Access, "inout", StringComparison.OrdinalIgnoreCase);
+
+                if (isRead)
                 {
                     AddEdge(graph, blockId, symbolId, SemanticRelationshipType.Reads, BuildReferenceProperties(reference));
                     AddEdge(graph, reference.From, symbolId, SemanticRelationshipType.Reads, BuildReferenceProperties(reference));
                 }
 
-                if (string.Equals(reference.Access, "write", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(reference.Access, "inout", StringComparison.OrdinalIgnoreCase))
+                if (isWrite)
                 {
                     AddEdge(graph, blockId, symbolId, SemanticRelationshipType.Writes, BuildReferenceProperties(reference));
                     AddEdge(graph, reference.From, symbolId, SemanticRelationshipType.Writes, BuildReferenceProperties(reference));
+                }
+
+                if (!isRead && !isWrite)
+                {
+                    // I1: direction undeterminable — emit an over-inclusive READS edge instead of
+                    // dropping the access entirely (a missing edge strands "where is X used" queries).
+                    AddEdge(graph, blockId, symbolId, SemanticRelationshipType.Reads, BuildReferenceProperties(reference));
+                    AddEdge(graph, reference.From, symbolId, SemanticRelationshipType.Reads, BuildReferenceProperties(reference));
                 }
             }
         }
@@ -541,6 +553,57 @@ public static class TiaXmlSemanticGraphImporter
                 AddEdge(graph, row.Id, addressId, SemanticRelationshipType.ConnectedTo);
             }
         }
+    }
+
+    // I2 (buildnote/plan/agent-performance-improvement.md): struct-member Variable nodes
+    // (symbol:<dotted.path>) are disconnected from the DB Member chain
+    // (db-member:<db>:<path>), which strands queries that guess the wrong id space. This
+    // post-import pass links each symbol node to the deepest matching DB Member node with a
+    // REFERS_TO edge. Call after all components of a device are imported (import order of
+    // blocks vs DBs does not matter).
+    public static int LinkSymbolsToDbMembers(SemanticPlcGraph graph)
+    {
+        if (graph == null)
+        {
+            throw new ArgumentNullException(nameof(graph));
+        }
+
+        var linked = 0;
+        foreach (var node in graph.Nodes)
+        {
+            if (!string.Equals(node.Kind, SemanticNodeKind.Variable, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var markerIndex = node.Id.IndexOf("symbol:", StringComparison.Ordinal);
+            if (markerIndex < 0)
+            {
+                continue;
+            }
+
+            var prefix = node.Id.Substring(0, markerIndex);
+            var segments = node.Id.Substring(markerIndex + "symbol:".Length).Split('.');
+            if (segments.Length < 2)
+            {
+                continue;
+            }
+
+            // Deepest match wins: a full path may extend past the deepest DB member into a UDT.
+            for (var depth = segments.Length; depth >= 2; depth--)
+            {
+                var memberId = $"{prefix}db-member:{segments[0]}:{string.Join(".", segments.Skip(1).Take(depth - 1))}";
+                if (graph.TryGetNode(memberId, out var member) &&
+                    string.Equals(member.Kind, SemanticNodeKind.DataBlockMember, StringComparison.Ordinal))
+                {
+                    AddEdge(graph, node.Id, memberId, SemanticRelationshipType.RefersTo);
+                    linked++;
+                    break;
+                }
+            }
+        }
+
+        return linked;
     }
 
     private static void ImportDbMember(XElement member, string dbName, string parentNodeId, string parentPath, SemanticPlcGraph graph, string deviceName = "")

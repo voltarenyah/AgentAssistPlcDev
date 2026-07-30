@@ -37,6 +37,7 @@ public static class SchemaVocabulary
         SemanticRelationshipType.ConnectedTo,
         SemanticRelationshipType.ExecutesBefore,
         SemanticRelationshipType.ExecutesAfter,
+        SemanticRelationshipType.RefersTo,
     };
 
     public static readonly IReadOnlyList<SchemaExampleQuery> ExampleQueries = new[]

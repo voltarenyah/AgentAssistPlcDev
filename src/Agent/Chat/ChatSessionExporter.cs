@@ -106,10 +106,12 @@ public static class ChatSessionExporter
         markdown.AppendLine($"- Model: `{model}`");
         markdown.AppendLine($"- Endpoint: `{requestUri}`");
         markdown.AppendLine($"- Turns: {userTurns} user message(s) · {roundUsages.Count} API round(s)");
+        var lastPromptTokens = roundUsages.LastOrDefault(usage => usage != null)?.PromptTokens ?? 0;
+        var contextNote = lastPromptTokens > 0 ? $" · context size at last round: {lastPromptTokens}" : string.Empty;
         markdown.AppendLine(
             reasoningTokens > 0
-                ? $"- Tokens: {promptTokens} prompt + {completionTokens} completion = {promptTokens + completionTokens} total ({reasoningTokens} reasoning)"
-                : $"- Tokens: {promptTokens} prompt + {completionTokens} completion = {promptTokens + completionTokens} total");
+                ? $"- Tokens (cumulative billed input across rounds): {promptTokens} prompt + {completionTokens} completion = {promptTokens + completionTokens} total ({reasoningTokens} reasoning){contextNote}"
+                : $"- Tokens (cumulative billed input across rounds): {promptTokens} prompt + {completionTokens} completion = {promptTokens + completionTokens} total{contextNote}");
         markdown.AppendLine();
 
         var system = history.FirstOrDefault(message => message.Role == "system");

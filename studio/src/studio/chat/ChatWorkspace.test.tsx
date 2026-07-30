@@ -14,6 +14,7 @@ const settingsFixture: api.ChatSettings = {
   reasoningEffort: 'high',
   temperature: 1,
   topP: 1,
+  contextWindow: 128000,
 }
 
 vi.mock('@/api/client', async importOriginal => {
@@ -53,7 +54,7 @@ beforeEach(() => {
 describe('ChatWorkspace', () => {
   it('keeps inactive panes mounted while hiding them', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
     )
 
     expect(host.querySelector('[data-session-pane="s1"]')).not.toBeNull()
@@ -65,7 +66,7 @@ describe('ChatWorkspace', () => {
   it('sends text from the active session composer', async () => {
     const onSend = vi.fn()
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={onSend} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={onSend} onContinue={vi.fn()} />,
     )
 
     const activePane = host.querySelector<HTMLElement>('[data-session-pane="s2"]')
@@ -85,7 +86,7 @@ describe('ChatWorkspace', () => {
 
   it('shows active-session progress while a message is running', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={true} onFocus={vi.fn()} onSend={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={true} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
     )
 
     const activePane = host.querySelector<HTMLElement>('[data-session-pane="s2"]')
@@ -102,7 +103,7 @@ describe('ChatWorkspace', () => {
       ],
     }
     const { host } = render(
-      <ChatWorkspace tabs={streamed} busy={false} onFocus={vi.fn()} onSend={vi.fn()} />,
+      <ChatWorkspace tabs={streamed} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
     )
 
     expect(host.textContent).toContain('Progress')
@@ -118,7 +119,7 @@ describe('ChatWorkspace', () => {
       ],
     }
     const { host } = render(
-      <ChatWorkspace tabs={markdown} busy={false} onFocus={vi.fn()} onSend={vi.fn()} />,
+      <ChatWorkspace tabs={markdown} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
     )
 
     const body = host.querySelector('.markdown-body')
@@ -137,7 +138,7 @@ describe('ChatWorkspace', () => {
       ],
     }
     const { host } = render(
-      <ChatWorkspace tabs={plain} busy={false} onFocus={vi.fn()} onSend={vi.fn()} />,
+      <ChatWorkspace tabs={plain} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
     )
 
     expect(host.querySelector('.markdown-body')).toBeNull()
@@ -162,7 +163,7 @@ describe('ChatWorkspace', () => {
       ],
     }
     const { host } = render(
-      <ChatWorkspace tabs={toolCall} busy={false} onFocus={vi.fn()} onSend={vi.fn()} />,
+      <ChatWorkspace tabs={toolCall} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
     )
 
     expect(host.textContent).toContain('engineering.export_blocks')
@@ -173,7 +174,7 @@ describe('ChatWorkspace', () => {
 
   it('shows model and think controls below the composer', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
     )
     await act(async () => {})
 
@@ -188,7 +189,7 @@ describe('ChatWorkspace', () => {
 
   it('reveals think effort and saves when think mode is toggled', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
     )
     await act(async () => {})
 
@@ -206,7 +207,7 @@ describe('ChatWorkspace', () => {
 
   it('saves the selected model variant', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
     )
     await act(async () => {})
 
@@ -219,5 +220,72 @@ describe('ChatWorkspace', () => {
 
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 450)) })
     expect(api.saveChatSettings).toHaveBeenCalledWith({ ...settingsFixture, model: 'deepseek-v4-pro' })
+  })
+
+  it('shows the exact context size with cache breakdown under the composer', async () => {
+    const withUsage: ChatTabsState = {
+      activeId: 's1',
+      mru: ['s1'],
+      tabs: [
+        {
+          sessionId: 's1',
+          title: 'One',
+          messages: [{ role: 'assistant', content: 'ready', toolCallId: null, timestamp: '2026-07-30T00:00:00Z' }],
+          usage: { promptTokens: 22678, completionTokens: 269, totalTokens: 22947, promptCacheHitTokens: 20000, promptCacheMissTokens: 2678 },
+        },
+      ],
+    }
+    const { host } = render(
+      <ChatWorkspace tabs={withUsage} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+    )
+    await act(async () => {})
+
+    const activePane = host.querySelector<HTMLElement>('[data-session-pane="s1"]')
+    expect(activePane?.querySelector('[data-chat-context]')?.textContent)
+      .toBe('context: 22.7k / 128k (cache: 20k hit / 2.7k miss)')
+  })
+
+  it('hides the context indicator before any billed round', async () => {
+    const { host } = render(
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+    )
+    await act(async () => {})
+
+    const activePane = host.querySelector<HTMLElement>('[data-session-pane="s2"]')
+    expect(activePane?.querySelector('[data-chat-context]')).toBeNull()
+  })
+
+  it('offers continue only after a turn that hit the round cap', async () => {
+    const capped: ChatTabsState = {
+      activeId: 's1',
+      mru: ['s1'],
+      tabs: [
+        {
+          sessionId: 's1',
+          title: 'One',
+          messages: [{ role: 'assistant', content: 'partial', toolCallId: null, timestamp: '2026-07-30T00:00:00Z' }],
+          hitRoundCap: true,
+        },
+      ],
+    }
+    const onContinue = vi.fn()
+    const { host } = render(
+      <ChatWorkspace tabs={capped} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={onContinue} />,
+    )
+
+    const button = host.querySelector<HTMLButtonElement>('[data-round-cap="s1"] button')
+    expect(button?.textContent).toContain('Continue')
+    act(() => {
+      button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(onContinue).toHaveBeenCalledWith('s1')
+  })
+
+  it('hides the continue affordance for turns that finished normally', async () => {
+    const { host } = render(
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+    )
+
+    expect(host.querySelector('[data-round-cap]')).toBeNull()
   })
 })

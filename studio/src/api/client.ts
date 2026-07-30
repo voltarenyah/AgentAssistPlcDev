@@ -88,10 +88,19 @@ export type ChatSessionHeader = {
   updatedAt: string
 }
 
+export type ChatUsage = {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  reasoningTokens?: number
+  promptCacheHitTokens?: number
+  promptCacheMissTokens?: number
+}
+
 export type ChatSessionData = {
   header: ChatSessionHeader
   messages: ChatMessage[]
-  roundUsages?: unknown[]
+  roundUsages?: (ChatUsage | null)[]
 }
 
 export type ActiveSessionInfo = {
@@ -112,8 +121,11 @@ export type ConfirmationRequest = {
 }
 
 export type SSEEvent = {
-  kind: 'reasoning' | 'content' | 'progress' | 'answer' | 'error' | 'confirmation'
+  kind: 'reasoning' | 'content' | 'progress' | 'answer' | 'error' | 'confirmation' | 'meta'
   delta: string
+  /** meta events: exact context usage of the last billed API round, plus the round-cap flag. */
+  hitRoundCap?: boolean
+  usage?: ChatUsage | null
 } & Partial<ConfirmationRequest>
 
 export type ToolCallResult = {
@@ -643,6 +655,7 @@ export type ChatSettings = {
   reasoningEffort: string
   temperature: number
   topP: number
+  contextWindow?: number
 }
 
 export async function getChatSettings(): Promise<ChatSettings> {
@@ -754,6 +767,15 @@ export async function confirmTool(id: string, decision: 'allowOnce' | 'allowSess
   })
   if (!res.ok && res.status !== 404) throw new Error(`Confirm failed: ${res.status}`)
   return res.ok
+}
+
+export async function grantChatRounds(additional = 6): Promise<void> {
+  const res = await fetch(`${BASE}/chat/grant-rounds`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ additional }),
+  })
+  if (!res.ok) throw new Error(`Grant rounds failed: ${res.status}`)
 }
 
 /* ── Multi-project connection API ──────────────────── */
