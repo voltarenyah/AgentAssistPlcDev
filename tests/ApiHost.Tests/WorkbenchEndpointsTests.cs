@@ -195,7 +195,11 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
+        Assert.True(response.Headers.TryGetValues("X-Accel-Buffering", out var buffering));
+        Assert.Contains("no", buffering);
         var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("\"kind\":\"progress\"", body);
+        Assert.Contains("Preparing chat context", body);
         Assert.Contains("\"kind\":\"error\"", body);
         Assert.Contains("\"delta\":", body);
         Assert.Contains("data: [DONE]", body);

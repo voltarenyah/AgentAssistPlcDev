@@ -78,6 +78,7 @@ public sealed class AgentLoop
         for (var round = 1; ; round++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Progress?.Invoke($"round {round}: calling model");
             var response = await client.CompleteStreamingAsync(
                 messages,
                 catalog.ToOpenAiToolsJson(),

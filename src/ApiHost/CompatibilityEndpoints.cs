@@ -6,6 +6,7 @@ using Agent.Mcp;
 using Agent.Chat;
 using Agent.Workbench;
 using Contracts.Sandbox;
+using Microsoft.AspNetCore.Http.Features;
 
 public sealed record CompatibilityToolCallRequest(string Tool, Dictionary<string, object?>? Arguments);
 public sealed record CompatibilityPathRequest(string? FilePath, string? Message, string[]? Paths);
@@ -185,6 +186,9 @@ public static class CompatibilityEndpoints
             http.Response.StatusCode = StatusCodes.Status200OK;
             http.Response.ContentType = "text/event-stream";
             http.Response.Headers.CacheControl = "no-cache";
+            http.Response.Headers.Append("X-Accel-Buffering", "no");
+            http.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+            await http.Response.StartAsync(ct);
 
             var events = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
             {
@@ -199,12 +203,14 @@ public static class CompatibilityEndpoints
             {
                 try
                 {
+                    Queue(new { kind = "progress", delta = "Preparing chat context..." });
                     var answer = await chat.RunStreamingAsync(
                         device,
                         message,
                         line => Queue(new { kind = "progress", delta = line }),
                         (kind, delta) => Queue(new { kind, delta }),
                         ct);
+                    Queue(new { kind = "progress", delta = "Saving chat session..." });
                     Queue(new { kind = "answer", delta = answer });
                 }
                 catch (Exception exception)
