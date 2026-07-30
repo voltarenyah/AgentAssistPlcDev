@@ -9,7 +9,13 @@ public static class BlockInterfaceReader
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(blockName);
 
-        using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString();
+        using var connection = new SqliteConnection(connectionString);
         connection.Open();
 
         var block = Single(connection, """

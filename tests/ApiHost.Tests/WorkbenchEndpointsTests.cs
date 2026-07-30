@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Data.Sqlite;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Net;
@@ -198,6 +199,22 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Contains("\"kind\":\"error\"", body);
         Assert.Contains("\"delta\":", body);
         Assert.Contains("data: [DONE]", body);
+    }
+
+    [Fact]
+    public async Task BlockInterfaceEndpointReturnsCompactSummaryForSelectedDevice()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
+        SeedBlockInterfaceGraph(fixture.Context.KnowledgeDbPath);
+
+        var response = await fixture.Client.GetAsync(
+            "/api/knowledge/block-interface?blockName=FB_LAD_SimulateCylinder");
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("FB_LAD_SimulateCylinder", body.GetProperty("name").GetString());
+        Assert.Equal("FB_LAD_SimulateCylinder_DB", body.GetProperty("instanceDb").GetString());
+        Assert.Equal("Main", body.GetProperty("callSites")[0].GetProperty("callerBlock").GetString());
     }
 
     [Fact]
@@ -990,6 +1007,47 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Path.Combine(root, "worktree", "devices", "PLC", "staging"),
         Path.Combine(root, "worktree", "devices", "PLC", "plc-knowledge.db"));
 
+    private static void SeedBlockInterfaceGraph(string dbPath)
+    {
+        if (File.Exists(dbPath))
+            File.Delete(dbPath);
+
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE graph_nodes (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL);
+            CREATE TABLE graph_node_properties (node_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL);
+            CREATE TABLE graph_edges (id TEXT PRIMARY KEY, from_node_id TEXT NOT NULL, to_node_id TEXT NOT NULL, type TEXT NOT NULL);
+            CREATE TABLE graph_edge_properties (edge_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL);
+            INSERT INTO graph_nodes VALUES
+              ('block:FB_LAD_SimulateCylinder','FB','FB_LAD_SimulateCylinder'),
+              ('block:Main','OB','Main'),
+              ('db:FB_LAD_SimulateCylinder_DB','Instance DB','FB_LAD_SimulateCylinder_DB'),
+              ('db-member:FB_LAD_SimulateCylinder_DB:btn_forward','DB Member','btn_forward'),
+              ('network:FB_LAD_SimulateCylinder:1','Network','Network 1'),
+              ('network:Main:2','Network','Network 2');
+            INSERT INTO graph_node_properties VALUES
+              ('block:FB_LAD_SimulateCylinder','sourceFile','Blocks\FB_LAD_SimulateCylinder [FB1].xml'),
+              ('db-member:FB_LAD_SimulateCylinder_DB:btn_forward','path','btn_forward'),
+              ('network:FB_LAD_SimulateCylinder:1','logicStatements','outputGoForwardPos := TRUE;'),
+              ('network:FB_LAD_SimulateCylinder:1','language','LAD'),
+              ('network:FB_LAD_SimulateCylinder:1','index','1'),
+              ('network:Main:2','logicStatements','FB_LAD_SimulateCylinder(btn_forward := Btn_ForwardCommand);');
+            INSERT INTO graph_edges VALUES
+              ('edge:instance','db:FB_LAD_SimulateCylinder_DB','block:FB_LAD_SimulateCylinder','INSTANCE_OF'),
+              ('edge:member','db:FB_LAD_SimulateCylinder_DB','db-member:FB_LAD_SimulateCylinder_DB:btn_forward','CONTAINS'),
+              ('edge:contains-network','block:FB_LAD_SimulateCylinder','network:FB_LAD_SimulateCylinder:1','CONTAINS'),
+              ('edge:call','block:Main','block:FB_LAD_SimulateCylinder','CALLS');
+            INSERT INTO graph_edge_properties VALUES
+              ('edge:call','networkId','network:Main:2'),
+              ('edge:call','networkIndex','2'),
+              ('edge:call','sourceFile','Blocks\Main [OB1].xml');
+            """;
+        command.ExecuteNonQuery();
+        SqliteConnection.ClearAllPools();
+    }
+
     private sealed class RecordingToolCaller(string json = "{}") : IMcpToolCaller
     {
         public List<string> Calls { get; } = [];
@@ -1033,6 +1091,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         public HttpClient Client { get; }
         public ThrowingToolCaller Engineering { get; }
         public RecordingToolCaller VersionControl { get; }
+        public DeviceContext Context => context;
         public string DeviceId => context.DeviceId;
         public string DeviceRoute =>
             $"/api/workbenches/{context.WorkbenchId}/worktrees/{context.WorktreeId}/devices/{context.DeviceId}";

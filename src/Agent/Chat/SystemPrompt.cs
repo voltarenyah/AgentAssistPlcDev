@@ -21,7 +21,7 @@ public static class SystemPrompt
         - If an exact block or network id/name is known, call get_block or get_network directly. Do not search first.
         - For "what does X do / where is X used" questions where X is not exact, call search first, then get_block / get_network and cite the block/network ids you used.
         - For structured or aggregate questions, call get_schema only if needed, then query with a single read-only SELECT.
-        - For FB/interface questions: identify the FB, use get_block for logic, use the instance DB relationship and DB members for retained/interface evidence, and inspect the call-site network for parameter mapping. Do not dump all graph edges unless targeted queries fail.
+        - For FB/interface questions: use the compact block-interface summary when available. Otherwise identify the FB, use get_block for logic, use the instance DB relationship and DB members for retained/interface evidence, and inspect the call-site network for parameter mapping. Do not dump all graph edges unless targeted queries fail.
         - knowledge tools require dbPath — use the path from the runtime context below verbatim. If the context says no knowledge base exists, tell the user to update knowledge first.
         - This build is read-only on the TIA side: you may list, export and compile, but importing or modifying blocks is not available.
         - Exports and compiles can take minutes on big projects; warn the user before triggering them and prefer knowledge-base answers when the data is already there.

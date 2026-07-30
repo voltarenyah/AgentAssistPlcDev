@@ -312,6 +312,8 @@ public static class CompatibilityEndpoints
         });
         app.MapGet("/api/knowledge/node-kinds", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("query_node_kinds").CallAsync<JsonElement>("query_node_kinds", new { dbPath = Device(state).KnowledgeDbPath }, ct));
+        app.MapGet("/api/knowledge/block-interface", (string blockName, WorkbenchApiState state) =>
+            Results.Ok(BlockInterfaceReader.Read(Device(state).KnowledgeDbPath, blockName)));
         app.MapGet("/api/knowledge/nodes", async (string? kind, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("query_nodes").CallAsync<JsonElement>("query_nodes", new { dbPath = Device(state).KnowledgeDbPath, kind }, ct));
         app.MapGet("/api/knowledge/edge-types", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
