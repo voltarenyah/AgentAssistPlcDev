@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using Agent.Chat;
 using Agent.Mcp;
 using Agent.Workbench;
@@ -16,6 +17,32 @@ public sealed class WorkbenchLifecycleTests : IDisposable
 {
     private readonly string root = Path.Combine(
         Path.GetTempPath(), $"workbench-e2e-{Guid.NewGuid():N}");
+
+    [Fact]
+    public async Task PersistedDeviceRemainsUsableAfterEngineeringDisconnectAndApiRestart()
+    {
+        var fixture = await OfflineRestartFixture.CreateAsync(root);
+        var databaseHash = SHA256.HashData(
+            File.ReadAllBytes(fixture.Device.Context.KnowledgeDbPath));
+
+        fixture.DisconnectEngineering();
+        var snapshot = fixture.RestartAndReadPersistedSnapshot();
+        var otherSnapshot = fixture.RestartAndReadPersistedSnapshot(fixture.OtherDevice);
+
+        Assert.NotEmpty(snapshot.Blocks);
+        Assert.Equal("current", snapshot.Knowledge.State);
+        Assert.Equal(fixture.Device.Context.DeviceId, snapshot.DeviceId);
+        Assert.Equal(fixture.Device.Context.WorktreeId, snapshot.WorktreeId);
+        Assert.Equal(fixture.Device.Context.ExportedSourceRoot, snapshot.ExportedSourceRoot);
+        Assert.Equal(fixture.OtherDevice.Context.DeviceId, otherSnapshot.DeviceId);
+        Assert.Equal(fixture.OtherDevice.Context.WorktreeId, otherSnapshot.WorktreeId);
+        Assert.NotEqual(snapshot.ExportedSourceRoot, otherSnapshot.ExportedSourceRoot);
+        Assert.NotEqual(snapshot.KnowledgeDbPath, otherSnapshot.KnowledgeDbPath);
+        Assert.Equal(
+            databaseHash,
+            SHA256.HashData(File.ReadAllBytes(fixture.Device.Context.KnowledgeDbPath)));
+        Assert.Empty(fixture.EngineeringCallsAfterRestart);
+    }
 
     [Fact]
     public async Task CoordinatorDrivesApprovedLifecycleAcrossDevicesAndLinkedWorktrees()
@@ -75,7 +102,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         await coordinator.StageRefreshAsync(plc1, CancellationToken.None);
         var plc1Preview = coordinator.PreviewRefresh(plc1);
         var plc1Apply = await coordinator.ApplyRefreshAsync(
-            plc1, new(plc1Preview, new HashSet<string>()), CancellationToken.None);
+            plc1, ApproveAllChanges(plc1Preview), CancellationToken.None);
         Assert.Equal(RefreshApplyState.Committed, plc1Apply.State);
         Assert.NotNull(plc1Apply.CommitSha);
         Assert.Equal(
@@ -85,8 +112,9 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         Assert.False(ReadDevice(store, plc2).Knowledge.BaselineStale);
 
         await coordinator.StageRefreshAsync(plc2, CancellationToken.None);
+        var plc2Preview = coordinator.PreviewRefresh(plc2);
         var plc2Apply = await coordinator.ApplyRefreshAsync(
-            plc2, new(coordinator.PreviewRefresh(plc2), new HashSet<string>()),
+            plc2, ApproveAllChanges(plc2Preview),
             CancellationToken.None);
         Assert.Equal(RefreshApplyState.Committed, plc2Apply.State);
         var baselineCommitCount = RepositoryService.Log(plc1.WorktreeRoot, 20).Commits.Length;
@@ -137,8 +165,9 @@ public sealed class WorkbenchLifecycleTests : IDisposable
 
         engineering.SetExport("PLC_1", "post-edit-refresh");
         await coordinator.StageRefreshAsync(plc1, CancellationToken.None);
+        var postEditPreview = coordinator.PreviewRefresh(plc1);
         var postEditRefresh = await coordinator.ApplyRefreshAsync(
-            plc1, new(coordinator.PreviewRefresh(plc1), new HashSet<string>()),
+            plc1, ApproveAllChanges(postEditPreview),
             CancellationToken.None);
         Assert.Equal(RefreshApplyState.Committed, postEditRefresh.State);
         Assert.NotNull(postEditRefresh.CommitSha);
@@ -242,6 +271,116 @@ public sealed class WorkbenchLifecycleTests : IDisposable
     private static T Property<T>(object args, string name) =>
         (T)args.GetType().GetProperty(name)!.GetValue(args)!;
 
+    private static ApprovedReconciliation ApproveAllChanges(ReconciliationPreview preview) =>
+        new(
+            preview,
+            preview.Entries
+                .Where(entry => entry.Kind is not ReconciliationChangeKind.Unchanged)
+                .Select(entry => entry.RelativePath)
+                .ToHashSet(StringComparer.Ordinal));
+
+    private sealed class OfflineRestartFixture
+    {
+        private readonly string defaultParent;
+        private readonly string workbenchRoot;
+        private readonly EngineeringBoundary engineering;
+        private readonly int callsAtDisconnect;
+
+        private OfflineRestartFixture(
+            string defaultParent,
+            string workbenchRoot,
+            EngineeringBoundary engineering,
+            (DeviceContext Context, DeviceMetadata Metadata) device,
+            (DeviceContext Context, DeviceMetadata Metadata) otherDevice)
+        {
+            this.defaultParent = defaultParent;
+            this.workbenchRoot = workbenchRoot;
+            this.engineering = engineering;
+            Device = device;
+            OtherDevice = otherDevice;
+            callsAtDisconnect = engineering.Calls.Count;
+        }
+
+        public (DeviceContext Context, DeviceMetadata Metadata) Device { get; }
+        public (DeviceContext Context, DeviceMetadata Metadata) OtherDevice { get; }
+        public IReadOnlyList<string> EngineeringCallsAfterRestart =>
+            engineering.Calls.Skip(callsAtDisconnect).ToArray();
+
+        public static async Task<OfflineRestartFixture> CreateAsync(string root)
+        {
+            var defaultParent = Path.Combine(root, "offline-restart", "catalog");
+            var store = new AtomicJsonStore();
+            var catalog = new WorkbenchCatalog(store, defaultParent);
+            var engineering = new EngineeringBoundary();
+            var coordinator = new WorkbenchCoordinator(
+                engineering,
+                new KnowledgeBoundary(),
+                new GitBoundary(),
+                catalog,
+                store,
+                new DeviceReconciler(),
+                new DeviceSourceResolver(_ => { }));
+            var created = await coordinator.CreateWorkbenchAsync(new(
+                "Offline line",
+                null,
+                42,
+                @"C:\Fixture\Offline.ap17"));
+
+            engineering.SetExport("PLC_1", "persisted");
+            engineering.SetExport("PLC_2", "other-device");
+            var devices = created.Devices
+                .Select(metadata => (
+                    Context: catalog.ResolveDevice(created.Workbench, created.Worktree, metadata),
+                    Metadata: metadata))
+                .ToArray();
+
+            foreach (var device in devices)
+            {
+                await coordinator.StageRefreshAsync(device.Context, CancellationToken.None);
+                var preview = coordinator.PreviewRefresh(device.Context);
+                await coordinator.ApplyRefreshAsync(
+                    device.Context,
+                    ApproveAllChanges(preview),
+                    CancellationToken.None);
+                await coordinator.UpdateKnowledgeAsync(device.Context, CancellationToken.None);
+            }
+            SqliteConnection.ClearAllPools();
+
+            return new(
+                defaultParent,
+                created.Workbench.RootPath,
+                engineering,
+                devices[0],
+                devices[1]);
+        }
+
+        public void DisconnectEngineering() => engineering.Disconnect();
+
+        public DeviceSnapshot RestartAndReadPersistedSnapshot() =>
+            RestartAndReadPersistedSnapshot(Device);
+
+        public DeviceSnapshot RestartAndReadPersistedSnapshot(
+            (DeviceContext Context, DeviceMetadata Metadata) device)
+        {
+            var restartedStore = new AtomicJsonStore();
+            var restartedCatalog = new WorkbenchCatalog(restartedStore, defaultParent);
+            var workbench = restartedCatalog.Load(workbenchRoot);
+            var worktree = restartedStore.Read<WorktreeMetadata>(
+                Path.Combine(workbenchRoot, "worktrees", "master", "worktree.json"));
+            var metadata = restartedStore.Read<DeviceMetadata>(
+                Path.Combine(
+                    workbenchRoot,
+                    "worktrees",
+                    "master",
+                    "devices",
+                    device.Metadata.PlcName,
+                    "device.json"));
+            var selected = restartedCatalog.ResolveDevice(workbench, worktree, metadata);
+
+            return new DeviceSnapshotReader().Read(selected, metadata);
+        }
+    }
+
     private sealed class GitBoundary : IMcpToolCaller
     {
         public List<string[]> AddedPathBatches { get; } = [];
@@ -282,12 +421,18 @@ public sealed class WorkbenchLifecycleTests : IDisposable
     private sealed class EngineeringBoundary : IMcpToolCaller
     {
         private readonly Dictionary<string, string> versions = new(StringComparer.Ordinal);
+        private bool disconnected;
         public List<string> ImportCalls { get; } = [];
+        public List<string> Calls { get; } = [];
 
         public void SetExport(string plcName, string version) => versions[plcName] = version;
+        public void Disconnect() => disconnected = true;
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
+            Calls.Add(tool);
+            if (disconnected)
+                throw new InvalidOperationException("Engineering is disconnected.");
             object result = tool switch
             {
                 "connect" => new object(),
@@ -314,6 +459,9 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                 Path.Combine(AppContext.BaseDirectory, "Fixtures", "Main [OB1].xml"),
                 Path.Combine(output, "Blocks", "Main.xml"), true);
             var version = versions[plc];
+            File.AppendAllText(
+                Path.Combine(output, "Blocks", "Main.xml"),
+                $"{Environment.NewLine}<!-- fixture-version:{version} -->{Environment.NewLine}");
             File.WriteAllText(Path.Combine(output, "metadata.json"), JsonSerializer.Serialize(new
             {
                 schemaVersion = "1.0",

@@ -10,6 +10,7 @@ using Microsoft.Extensions.Configuration;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Net;
+using Contracts.Engineering;
 using Xunit;
 
 public sealed class WorkbenchEndpointsTests : IDisposable
@@ -176,6 +177,447 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             : await client.GetAsync(endpoint);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task TiaComparisonStageAndPreviewAreNonDestructiveAndExposeFingerprintEvidence()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, plcName) =>
+            {
+                Assert.Equal("PLC_1", plcName);
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        var before = fixture.PersistentArtifactHashes();
+
+        var stage = await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null);
+        stage.EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        Assert.Equal(before, fixture.PersistentArtifactHashes());
+        var entries = preview.GetProperty("entries").EnumerateArray().ToArray();
+        var entry = Assert.Single(entries, value =>
+            value.GetProperty("relativePath").GetString() == "Blocks/Main.xml");
+        Assert.Equal("stored-fingerprint", entry.GetProperty("storedFingerprints").GetString());
+        Assert.Equal("live-fingerprint", entry.GetProperty("liveFingerprints").GetString());
+        Assert.False(entry.GetProperty("fingerprintsMatch").GetBoolean());
+        var added = Assert.Single(entries, value =>
+            value.GetProperty("relativePath").GetString() == "Blocks/New.xml");
+        Assert.Equal(JsonValueKind.Null, added.GetProperty("storedFingerprints").ValueKind);
+        Assert.Equal("new-live-fingerprint", added.GetProperty("liveFingerprints").GetString());
+        Assert.Equal(JsonValueKind.Null, added.GetProperty("fingerprintsMatch").ValueKind);
+        Assert.Empty(fixture.VersionControl.Calls);
+    }
+
+    [Fact]
+    public async Task TiaComparisonApplyChangesOnlyExplicitlySelectedPaths()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null)).EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedPaths = new[] { "Blocks/Main.xml" },
+            });
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
+        Assert.False(fixture.BaselineExists("Blocks/New.xml"));
+        Assert.DoesNotContain(fixture.BaselineComponentIds(), id => id == "fb-new");
+        Assert.Equal(["vc_add", "vc_commit"], fixture.VersionControl.Calls);
+    }
+
+    [Fact]
+    public async Task LegacyRefreshPayloadAppliesAllAddedAndChangedPaths()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync($"/api/devices/{fixture.DeviceId}/refresh/stage", null))
+            .EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedRemovalPaths = Array.Empty<string>(),
+            });
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
+        Assert.Equal("<new/>", fixture.ReadBaseline("Blocks/New.xml"));
+    }
+
+    [Fact]
+    public async Task NewRefreshPayloadWithEmptyApprovedPathsAppliesNothing()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync($"/api/devices/{fixture.DeviceId}/refresh/stage", null))
+            .EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedPaths = Array.Empty<string>(),
+            });
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("<stored/>", fixture.ReadBaseline("Blocks/Main.xml"));
+        Assert.False(fixture.BaselineExists("Blocks/New.xml"));
+    }
+
+    [Fact]
+    public async Task LegacyRemovalApprovalRejectsAddedOrChangedEntries()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "New.xml"), "<new/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint", includeNew: true);
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null)).EnsureSuccessStatusCode();
+        foreach (var path in new[] { "Blocks/Main.xml", "Blocks/New.xml", "Blocks/Unknown.xml" })
+        {
+            var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+                $"/api/devices/{fixture.DeviceId}/refresh/preview");
+            var response = await fixture.Client.PostAsJsonAsync(
+                $"/api/devices/{fixture.DeviceId}/refresh/apply",
+                new
+                {
+                    previewId = preview.GetProperty("previewId").GetString(),
+                    approvedRemovalPaths = new[] { path },
+                });
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(
+                DeviceReconciler.ApprovalInvalidCode,
+                error.GetProperty("error").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task LegacyRemovalApprovalRejectsUnchangedEntry()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<stored/>");
+                WriteComparisonManifest(outputDir, "stored-fingerprint");
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null)).EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedRemovalPaths = new[] { "Blocks/Main.xml" },
+            });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            DeviceReconciler.ApprovalInvalidCode,
+            error.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task LegacyRemovalApprovalStillAppliesActualRemoval()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            stageExport: (outputDir, _) =>
+            {
+                Directory.CreateDirectory(outputDir);
+                File.WriteAllText(
+                    Path.Combine(outputDir, "metadata.json"),
+                    """{"schemaVersion":"1.0","components":[]}""");
+            });
+        fixture.WriteComparisonBaseline("stored-fingerprint");
+        (await fixture.Client.PostAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/stage",
+            null)).EnsureSuccessStatusCode();
+        var preview = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/devices/{fixture.DeviceId}/refresh/preview");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/devices/{fixture.DeviceId}/refresh/apply",
+            new
+            {
+                previewId = preview.GetProperty("previewId").GetString(),
+                approvedRemovalPaths = new[] { "Blocks/Main.xml" },
+            });
+
+        response.EnsureSuccessStatusCode();
+        Assert.False(fixture.BaselineExists("Blocks/Main.xml"));
+    }
+
+    private static void WriteComparisonManifest(
+        string rootPath,
+        string? fingerprints,
+        bool includeNew = false)
+    {
+        var components = new List<object>
+        {
+            new
+            {
+                id = "ob-main",
+                sourcePath = "Program/Main",
+                exportedFile = "Blocks/Main.xml",
+                fingerprints,
+            },
+        };
+        if (includeNew)
+        {
+            components.Add(new
+            {
+                id = "fb-new",
+                sourcePath = "Program/New",
+                exportedFile = "Blocks/New.xml",
+                fingerprints = "new-live-fingerprint",
+            });
+        }
+
+        File.WriteAllText(
+            Path.Combine(rootPath, "metadata.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                components,
+            }));
+    }
+
+    [Theory]
+    [InlineData(false, false, false, "missing")]
+    [InlineData(true, true, false, "stale")]
+    [InlineData(true, false, true, "stale")]
+    [InlineData(true, false, false, "current")]
+    public async Task SelectedDeviceSnapshotSerializesPersistedKnowledgeState(
+        bool databaseExists,
+        bool stale,
+        bool baselineStale,
+        string expected)
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists,
+            stale,
+            baselineStale);
+        fixture.WriteManifest();
+
+        var snapshot = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/project/info");
+
+        Assert.Equal(expected, snapshot.GetProperty("knowledge").GetProperty("state").GetString());
+        Assert.Single(snapshot.GetProperty("blocks").EnumerateArray());
+        Assert.Empty(fixture.Engineering.Calls);
+    }
+
+    [Fact]
+    public async Task SelectedDeviceSnapshotReportsMissingManifestWithoutEngineering()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+
+        var snapshot = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/project/info");
+
+        Assert.Empty(snapshot.GetProperty("blocks").EnumerateArray());
+        Assert.Contains(
+            snapshot.GetProperty("diagnostics").EnumerateArray(),
+            diagnostic => diagnostic.GetString()!.Contains("Export manifest is missing", StringComparison.Ordinal));
+        Assert.Empty(fixture.Engineering.Calls);
+    }
+
+    [Fact]
+    public async Task OpenProjectInTiaEndpointUsesExplicitOperationAndPreservesOfflineSnapshot()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            engineeringOffline: false,
+            sourceProjectPath: @"C:\Projects\Line.ap17");
+        fixture.WriteManifest();
+        var before = await fixture.Client.GetStringAsync("/api/project/info");
+        var artifactsBefore = fixture.PersistentArtifactHashes();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{fixture.DeviceRoute}/tia/open");
+        request.Headers.Add("X-Operation-Id", "open-1");
+
+        var response = await fixture.Client.SendAsync(request);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(["connect"], fixture.Engineering.Calls);
+        Assert.Equal(@"C:\Projects\Line.ap17",
+            fixture.Engineering.Arguments["connect"].GetProperty("projectPath").GetString());
+        Assert.True(fixture.Engineering.Arguments["connect"].GetProperty("withUI").GetBoolean());
+        Assert.Equal(before, await fixture.Client.GetStringAsync("/api/project/info"));
+        Assert.Equal(artifactsBefore, fixture.PersistentArtifactHashes());
+        var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/open-1");
+        Assert.Equal("open-tia-project", operation.GetProperty("operationType").GetString());
+        Assert.Equal("succeeded", operation.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task FailedOpenProjectInTiaPreservesOfflineSnapshot()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            sourceProjectPath: @"C:\Projects\Line.ap17");
+        fixture.WriteManifest();
+        var before = await fixture.Client.GetStringAsync("/api/project/info");
+        var artifactsBefore = fixture.PersistentArtifactHashes();
+
+        var response = await fixture.Client.PostAsync($"{fixture.DeviceRoute}/tia/open", null);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(before, await fixture.Client.GetStringAsync("/api/project/info"));
+        Assert.Equal(artifactsBefore, fixture.PersistentArtifactHashes());
+    }
+
+    [Fact]
+    public async Task ExplicitTiaOpenIgnoresMutableSelectionAndUsesRequestedWorktree()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            engineeringOffline: false,
+            sourceProjectPath: @"C:\Projects\Master.ap17");
+        var other = fixture.AddWorktree("wt-2", "other", @"C:\Projects\Other.ap17");
+        await fixture.Client.GetAsync("/api/workbenches");
+        (await fixture.Client.PostAsync(other.SelectRoute, null)).EnsureSuccessStatusCode();
+
+        var response = await fixture.Client.PostAsync($"{fixture.DeviceRoute}/tia/open", null);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(@"C:\Projects\Master.ap17",
+            fixture.Engineering.Arguments["connect"].GetProperty("projectPath").GetString());
+    }
+
+    [Fact]
+    public async Task ExplicitDeviceSnapshotIgnoresSelectionFlipWithSharedDeviceId()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            sourceProjectPath: @"C:\Projects\Master.ap17");
+        var other = fixture.AddWorktree("wt-2", "other", @"C:\Projects\Other.ap17");
+        await fixture.Client.GetAsync("/api/workbenches");
+        (await fixture.Client.PostAsync(other.SelectRoute, null)).EnsureSuccessStatusCode();
+
+        var master = await fixture.Client.GetFromJsonAsync<JsonElement>(fixture.DeviceRoute);
+        var selectedOther = await fixture.Client.GetFromJsonAsync<JsonElement>(other.DeviceRoute);
+
+        Assert.Equal("wt-1", master.GetProperty("worktreeId").GetString());
+        Assert.Equal("wt-2", selectedOther.GetProperty("worktreeId").GetString());
+        Assert.Equal(fixture.DeviceId, master.GetProperty("deviceId").GetString());
+        Assert.Equal(fixture.DeviceId, selectedOther.GetProperty("deviceId").GetString());
+    }
+
+    [Fact]
+    public async Task MissingProjectPathFailsOperationBeforeEngineeringCall()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            engineeringOffline: false);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{fixture.DeviceRoute}/tia/open");
+        request.Headers.Add("X-Operation-Id", "open-missing");
+
+        var response = await fixture.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(fixture.Engineering.Calls);
+        var operation = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            "/api/operations/open-missing");
+        Assert.Equal("failed", operation.GetProperty("state").GetString());
+        Assert.Contains("No engineering project path is registered",
+            operation.GetProperty("errorMessage").GetString());
+    }
+
+    [Fact]
+    public async Task SelectedDeviceBlocksComeFromPersistedSnapshotWithoutEngineering()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+        fixture.WriteManifest();
+
+        var blocks = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/blocks");
+
+        var block = Assert.Single(blocks.EnumerateArray());
+        Assert.Equal("Main", block.GetProperty("name").GetString());
+        Assert.Equal("OB", block.GetProperty("blockType").GetString());
+        Assert.Empty(fixture.Engineering.Calls);
     }
 
     [Fact]
@@ -535,7 +977,257 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         {
             Calls.Add(tool);
             Arguments.Add(JsonSerializer.SerializeToElement(args));
-            return Task.FromResult((T)(object)JsonDocument.Parse(json).RootElement.Clone());
+            if (typeof(T) == typeof(JsonElement))
+            {
+                return Task.FromResult(
+                    (T)(object)JsonDocument.Parse(json).RootElement.Clone());
+            }
+
+            return Task.FromResult(JsonSerializer.Deserialize<T>(json)!);
+        }
+    }
+
+    private sealed class SelectedApiFixture : IAsyncDisposable
+    {
+        private readonly WebApplicationFactory<Program> factory;
+        private readonly DeviceContext context;
+        private readonly WorkbenchCatalog catalog;
+
+        private SelectedApiFixture(
+            WebApplicationFactory<Program> factory,
+            HttpClient client,
+            ThrowingToolCaller engineering,
+            RecordingToolCaller versionControl,
+            DeviceContext context,
+            WorkbenchCatalog catalog)
+        {
+            this.factory = factory;
+            Client = client;
+            Engineering = engineering;
+            VersionControl = versionControl;
+            this.context = context;
+            this.catalog = catalog;
+        }
+
+        public HttpClient Client { get; }
+        public ThrowingToolCaller Engineering { get; }
+        public RecordingToolCaller VersionControl { get; }
+        public string DeviceId => context.DeviceId;
+        public string DeviceRoute =>
+            $"/api/workbenches/{context.WorkbenchId}/worktrees/{context.WorktreeId}/devices/{context.DeviceId}";
+
+        public static async Task<SelectedApiFixture> CreateAsync(
+            string fixtureRoot,
+            bool databaseExists,
+            bool stale = false,
+            bool baselineStale = false,
+            bool engineeringOffline = true,
+            string? sourceProjectPath = null,
+            Action<string, string>? stageExport = null)
+        {
+            var store = new AtomicJsonStore();
+            var catalog = new WorkbenchCatalog(store, fixtureRoot);
+            var workbench = catalog.Create("Line", null);
+            const string worktreeId = "wt-1";
+            const string deviceId = "dev-1";
+            workbench = catalog.RegisterWorktree(
+                workbench,
+                new WorkbenchWorktreeRegistration(worktreeId, "master", "master", "master"));
+            var worktreeRoot = Path.Combine(workbench.RootPath, "worktrees", "master");
+            var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+            var context = new DeviceContext(
+                workbench.WorkbenchId,
+                worktreeId,
+                deviceId,
+                workbench.RootPath,
+                worktreeRoot,
+                deviceRoot,
+                Path.Combine(deviceRoot, "exported-source"),
+                Path.Combine(deviceRoot, "modified-source"),
+                Path.Combine(deviceRoot, "staging"),
+                Path.Combine(deviceRoot, "plc-knowledge.db"));
+            Directory.CreateDirectory(context.ExportedSourceRoot);
+            Directory.CreateDirectory(context.ModifiedSourceRoot);
+            Directory.CreateDirectory(context.StagingRoot);
+            store.Write(
+                Path.Combine(worktreeRoot, "worktree.json"),
+                new WorktreeMetadata(
+                    "1.0", worktreeId, workbench.WorkbenchId, "master", "master",
+                    DateTimeOffset.UtcNow.ToString("O"), null, null, sourceProjectPath, [deviceId], null));
+            store.Write(
+                Path.Combine(deviceRoot, "device.json"),
+                new DeviceMetadata(
+                    "1.0", deviceId, worktreeId, "PLC_1", "PLC:1", null, null, null,
+                    new KnowledgeState(stale, new Dictionary<string, string>(), "2026-07-29T08:00:00Z", baselineStale),
+                    []));
+            if (databaseExists)
+                await File.WriteAllBytesAsync(context.KnowledgeDbPath, [1]);
+
+            var engineering = new ThrowingToolCaller(engineeringOffline, stageExport);
+            var versionControl = new RecordingToolCaller();
+            var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
+            {
+                host.UseEnvironment("Testing");
+                host.ConfigureServices(services =>
+                {
+                    services.RemoveAll<WorkbenchCatalog>();
+                    services.RemoveAll<AtomicJsonStore>();
+                    services.RemoveAll<WorkbenchApiState>();
+                    services.RemoveAll<ApiMcpGateway>();
+                    services.RemoveAll<WorkbenchCoordinator>();
+                    services.AddSingleton(store);
+                    services.AddSingleton(catalog);
+                    services.AddSingleton<WorkbenchApiState>();
+                    services.AddSingleton(new ApiMcpGateway(
+                        engineering,
+                        new RecordingToolCaller(),
+                        versionControl,
+                        new RecordingToolCaller()));
+                    services.AddSingleton(sp => new WorkbenchCoordinator(
+                        engineering,
+                        new RecordingToolCaller(),
+                        versionControl,
+                        catalog,
+                        store,
+                        sp.GetRequiredService<DeviceReconciler>(),
+                        sp.GetRequiredService<DeviceSourceResolver>(),
+                        sp.GetRequiredService<DeviceOperationLock>()));
+                });
+            });
+            var client = factory.CreateClient();
+            var select = await client.PostAsync(
+                $"/api/workbenches/{workbench.WorkbenchId}/worktrees/{worktreeId}/devices/{deviceId}/select",
+                null);
+            select.EnsureSuccessStatusCode();
+            return new SelectedApiFixture(factory, client, engineering, versionControl, context, catalog);
+        }
+
+        public void WriteComparisonBaseline(string? fingerprints)
+        {
+            Directory.CreateDirectory(Path.Combine(context.ExportedSourceRoot, "Blocks"));
+            File.WriteAllText(Path.Combine(context.ExportedSourceRoot, "Blocks", "Main.xml"), "<stored/>");
+            WriteComparisonManifest(context.ExportedSourceRoot, fingerprints);
+        }
+
+        public string ReadBaseline(string relativePath) =>
+            File.ReadAllText(Path.Combine(
+                context.ExportedSourceRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+        public bool BaselineExists(string relativePath) =>
+            File.Exists(Path.Combine(
+                context.ExportedSourceRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+        public string?[] BaselineComponentIds()
+        {
+            using var manifest = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(context.ExportedSourceRoot, "metadata.json")));
+            return manifest.RootElement.GetProperty("components")
+                .EnumerateArray()
+                .Select(component => component.GetProperty("id").GetString())
+                .ToArray();
+        }
+
+        public void WriteManifest()
+        {
+            File.WriteAllText(
+                Path.Combine(context.ExportedSourceRoot, "metadata.json"),
+                """
+                {
+                  "schemaVersion": "1.0",
+                  "components": [
+                    {
+                      "id": "ob-main",
+                      "name": "Main",
+                      "category": "OB",
+                      "status": "Exported",
+                      "exportedFile": "Blocks/Main [OB1].xml",
+                      "sourcePath": "Area/Main",
+                      "number": 1,
+                      "programmingLanguage": "LAD"
+                    }
+                  ]
+                }
+                """);
+        }
+
+        public string[] PersistentArtifactHashes() =>
+            Directory.EnumerateFiles(context.DeviceRoot, "*", SearchOption.AllDirectories)
+                .Where(path => !path.StartsWith(
+                    context.StagingRoot + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .Select(path =>
+                    $"{Path.GetRelativePath(context.DeviceRoot, path).Replace('\\', '/')}:" +
+                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                        File.ReadAllBytes(path))))
+                .ToArray();
+
+        public (string SelectRoute, string DeviceRoute) AddWorktree(
+            string worktreeId,
+            string relativePath,
+            string sourceProjectPath)
+        {
+            var workbench = catalog.Load(context.WorkbenchRoot);
+            workbench = catalog.RegisterWorktree(
+                workbench,
+                new WorkbenchWorktreeRegistration(worktreeId, relativePath, relativePath, relativePath));
+            var worktreeRoot = Path.Combine(workbench.RootPath, "worktrees", relativePath);
+            var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+            Directory.CreateDirectory(deviceRoot);
+            var store = new AtomicJsonStore();
+            store.Write(
+                Path.Combine(worktreeRoot, "worktree.json"),
+                new WorktreeMetadata(
+                    "1.0", worktreeId, workbench.WorkbenchId, relativePath, relativePath,
+                    DateTimeOffset.UtcNow.ToString("O"), null, null, sourceProjectPath,
+                    [context.DeviceId], null));
+            store.Write(
+                Path.Combine(deviceRoot, "device.json"),
+                new DeviceMetadata(
+                    "1.0", context.DeviceId, worktreeId, "PLC_1", "PLC:1", null, null, null,
+                    new KnowledgeState(true, new Dictionary<string, string>(), null), []));
+            var baseRoute =
+                $"/api/workbenches/{workbench.WorkbenchId}/worktrees/{worktreeId}/devices/{context.DeviceId}";
+            return ($"{baseRoute}/select", baseRoute);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Client.Dispose();
+            await factory.DisposeAsync();
+        }
+    }
+
+    private sealed class ThrowingToolCaller(
+        bool throwOnCall = true,
+        Action<string, string>? stageExport = null) : IMcpToolCaller
+    {
+        public List<string> Calls { get; } = [];
+        public Dictionary<string, JsonElement> Arguments { get; } = [];
+
+        public Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            Arguments[tool] = JsonSerializer.SerializeToElement(args);
+            if (tool == "rebuild_export" && stageExport is not null)
+            {
+                var arguments = Arguments[tool];
+                var outputDir = arguments.GetProperty("outputDir").GetString()!;
+                var plcName = arguments.GetProperty("plcName").GetString()!;
+                stageExport(outputDir, plcName);
+                return Task.FromResult((T)(object)new[]
+                {
+                    new SyncResult { PlcName = plcName, ExportRoot = outputDir, Status = "updated" },
+                });
+            }
+            if (throwOnCall)
+                throw new InvalidOperationException("Engineering is offline.");
+            return Task.FromResult((T)(object)new object());
         }
     }
 

@@ -238,25 +238,15 @@ public static class CompatibilityEndpoints
             });
         });
 
-        app.MapGet("/api/project/info", (WorkbenchApiState state) =>
+        app.MapGet("/api/project/info", (WorkbenchApiState state, DeviceSnapshotReader snapshots) =>
         {
             var selected = state.Device(Device(state).DeviceId);
-            return Results.Ok(new
-            {
-                selected.Context.WorkbenchId,
-                selected.Context.WorktreeId,
-                selected.Context.DeviceId,
-                selected.Metadata.PlcName,
-                selected.Metadata.EngineeringIdentity,
-                selected.Context.ExportedSourceRoot,
-                selected.Context.ModifiedSourceRoot,
-                selected.Context.KnowledgeDbPath,
-            });
+            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata));
         });
-        app.MapGet("/api/blocks", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
+        app.MapGet("/api/blocks", (WorkbenchApiState state, DeviceSnapshotReader snapshots) =>
         {
             var selected = state.Device(Device(state).DeviceId);
-            return await gateway.For("list_blocks").CallAsync<JsonElement>("list_blocks", new { plcName = selected.Metadata.PlcName }, ct);
+            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata).Blocks);
         });
         app.MapGet("/api/blocks/{blockName}/source-code", async (string blockName, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("get_block").CallAsync<JsonElement>("get_block", new { dbPath = Device(state).KnowledgeDbPath, blockName }, ct));

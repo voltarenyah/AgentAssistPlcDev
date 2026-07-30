@@ -33,7 +33,7 @@ public sealed record CreateWorktreeRequest(
 
 public sealed record ApprovedReconciliation(
     ReconciliationPreview Preview,
-    IReadOnlySet<string> ApprovedRemovalPaths,
+    IReadOnlySet<string> ApprovedPaths,
     bool Approved = true)
 {
     public static ApprovedReconciliation Rejected(ReconciliationPreview preview) =>
@@ -80,6 +80,7 @@ public sealed class WorkbenchCoordinator
     private readonly DeviceSourceResolver sourceResolver;
     private readonly DeviceOperationLock operationLock;
     private readonly SafeDeviceExportStager stager;
+    private readonly SemaphoreSlim engineeringSession = new(1, 1);
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> knownWorkbenches =
         new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, WorktreeMetadata> knownWorktrees =
@@ -106,6 +107,36 @@ public sealed class WorkbenchCoordinator
         stager = new SafeDeviceExportStager(engineering, this.operationLock);
     }
 
+    public async Task OpenProjectInTiaAsync(
+        DeviceContext device,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var worktree = store.Read<WorktreeMetadata>(
+            Path.Combine(device.WorktreeRoot, "worktree.json"));
+        if (string.IsNullOrWhiteSpace(worktree.SourceProjectPath))
+        {
+            throw new WorkbenchCatalogException(
+                "ENGINEERING_PROJECT_PATH_MISSING",
+                $"No engineering project path is registered for worktree '{device.WorktreeId}'.");
+        }
+
+        progress?.Report("Opening registered project in TIA Portal...");
+        await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await engineering.CallAsync<object>(
+                "connect",
+                new { projectPath = worktree.SourceProjectPath, withUI = true },
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+    }
+
     public async Task<CreateWorkbenchResult> CreateWorkbenchAsync(
         CreateWorkbenchRequest request,
         CancellationToken cancellationToken = default,
@@ -123,16 +154,25 @@ public sealed class WorkbenchCoordinator
                 "vc_init_shared",
                 new { workbenchRoot = workbench.RootPath, masterWorktreePath = masterPath },
                 cancellationToken).ConfigureAwait(false);
-            progress?.Report("Attaching to TIA Portal...");
-            await engineering.CallAsync<object>(
-                "connect",
-                new { sessionId = request.EngineeringSessionId },
-                cancellationToken).ConfigureAwait(false);
-            progress?.Report("Discovering PLC devices...");
-            var project = await engineering.CallAsync<ProjectInfo>(
-                "get_project_info",
-                new { },
-                cancellationToken).ConfigureAwait(false);
+            ProjectInfo project;
+            await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                progress?.Report("Attaching to TIA Portal...");
+                await engineering.CallAsync<object>(
+                    "connect",
+                    new { sessionId = request.EngineeringSessionId },
+                    cancellationToken).ConfigureAwait(false);
+                progress?.Report("Discovering PLC devices...");
+                project = await engineering.CallAsync<ProjectInfo>(
+                    "get_project_info",
+                    new { },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                engineeringSession.Release();
+            }
 
             progress?.Report("Creating device folders...");
             var worktreeId = Guid.NewGuid().ToString("N");
@@ -290,13 +330,22 @@ public sealed class WorkbenchCoordinator
         }
     }
 
-    public Task<SyncResult[]> StageRefreshAsync(
+    public async Task<SyncResult[]> StageRefreshAsync(
         DeviceContext device,
         CancellationToken token,
         IOperationProgress? progress = null)
     {
         var metadata = ReadDevice(device);
-        return StageRefreshCoreAsync(device, metadata.PlcName, token, progress);
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            return await StageRefreshCoreAsync(device, metadata.PlcName, token, progress)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
     }
 
     private async Task<SyncResult[]> StageRefreshCoreAsync(
@@ -337,7 +386,7 @@ public sealed class WorkbenchCoordinator
                 var outcome = reconciler.Apply(
                     device,
                     approval.Preview,
-                    approval.ApprovedRemovalPaths);
+                    approval.ApprovedPaths);
                 if (outcome.ChangedPaths.Count == 0)
                 {
                     progress?.Report("PLC source is already current.");
@@ -520,12 +569,16 @@ public sealed class WorkbenchCoordinator
                 ingest.DbPath, relativePaths, hashes, Array.Empty<string>());
         }, token);
 
-    public Task<ImportModifiedResult> ImportModifiedAsync(
+    public async Task<ImportModifiedResult> ImportModifiedAsync(
         DeviceContext device,
         string relativePath,
         CancellationToken token,
-        IOperationProgress? progress = null) =>
-        operationLock.RunAsync(
+        IOperationProgress? progress = null)
+    {
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            return await operationLock.RunAsync(
             device,
             async cancellationToken =>
             {
@@ -587,7 +640,13 @@ public sealed class WorkbenchCoordinator
                     warnings,
                     record.Error);
             },
-            token);
+            token).ConfigureAwait(false);
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+    }
 
     public async Task<object> MergeWorktreeAsync(
         string workbenchId,

@@ -125,7 +125,12 @@ public sealed class DeviceReconcilerTests : IDisposable
         var outcome = reconciler.Apply(
             fixture.Context,
             preview,
-            new HashSet<string>(StringComparer.Ordinal) { @"Blocks\ApprovedRemoval.xml" });
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                "Blocks/Changed.xml",
+                "Blocks/Added.xml",
+                @"Blocks\ApprovedRemoval.xml",
+            });
 
         Assert.Equal("same", File.ReadAllText(unchangedPath));
         Assert.Equal(oldTimestamp, File.GetLastWriteTimeUtc(unchangedPath));
@@ -169,6 +174,46 @@ public sealed class DeviceReconcilerTests : IDisposable
     }
 
     [Fact]
+    public void ApplyUpdatesOnlyExplicitlySelectedChangesAndKeepsManifestConsistent()
+    {
+        var fixture = CreateFixture();
+        fixture.WriteBaseline("Blocks/Changed.xml", "old");
+        fixture.WriteBaseline("Blocks/Removed.xml", "retain");
+        fixture.WriteBaselineManifest(
+            Component("changed", "Blocks/Changed.xml"),
+            Component("removed", "Blocks/Removed.xml"));
+        fixture.WriteStaging("Blocks/Changed.xml", "new");
+        fixture.WriteStaging("Blocks/Added.xml", "added");
+        fixture.WriteStagingManifest(
+            Component("changed", "Blocks/Changed.xml"),
+            Component("added", "Blocks/Added.xml"));
+        var reconciler = new DeviceReconciler();
+        var preview = reconciler.Preview(fixture.Context);
+
+        var outcome = reconciler.Apply(
+            fixture.Context,
+            preview,
+            new HashSet<string>(StringComparer.Ordinal) { "Blocks/Changed.xml" });
+
+        Assert.Equal("new", File.ReadAllText(fixture.BaselinePath("Blocks/Changed.xml")));
+        Assert.False(File.Exists(fixture.BaselinePath("Blocks/Added.xml")));
+        Assert.Equal("retain", File.ReadAllText(fixture.BaselinePath("Blocks/Removed.xml")));
+        using var manifest = JsonDocument.Parse(
+            File.ReadAllText(fixture.BaselinePath("metadata.json")));
+        var ids = manifest.RootElement.GetProperty("components")
+            .EnumerateArray()
+            .Select(component => component.GetProperty("id").GetString()!)
+            .ToArray();
+        Assert.Equal(["changed", "removed"], ids.OrderBy(value => value).ToArray());
+        Assert.Contains(outcome.ChangedPaths, path =>
+            path.EndsWith("exported-source/Blocks/Changed.xml", StringComparison.Ordinal));
+        Assert.DoesNotContain(outcome.ChangedPaths, path =>
+            path.EndsWith("exported-source/Blocks/Added.xml", StringComparison.Ordinal));
+        Assert.DoesNotContain(outcome.ChangedPaths, path =>
+            path.EndsWith("exported-source/Blocks/Removed.xml", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ApplyRollsBackEveryTrackedMutationWhenLaterReplacementFails()
     {
         var fixture = CreateFixture();
@@ -191,7 +236,11 @@ public sealed class DeviceReconcilerTests : IDisposable
             reconciler.Apply(
                 fixture.Context,
                 preview,
-                new HashSet<string>(StringComparer.Ordinal)));
+                new HashSet<string>(StringComparer.Ordinal)
+                {
+                    "Blocks/A.xml",
+                    "Blocks/B.xml",
+                }));
 
         Assert.Equal("Injected move failure.", exception.Message);
         Assert.Equal(before, fixture.SnapshotBaseline());
