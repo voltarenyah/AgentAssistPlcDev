@@ -1,4 +1,4 @@
-import { Edit3, MessageSquare, Plus, Trash2, X } from 'lucide-react'
+import { Download, Edit3, MessageSquare, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import type { ChatSessionInfo } from '@/api/client'
 
@@ -11,6 +11,7 @@ type Props = {
   onActivate: (sessionId: string) => void
   onRename: (sessionId: string, title: string) => void
   onRemove: (sessionId: string) => void
+  onExport: (sessionId: string) => void
 }
 
 const displayDate = (value: string) => {
@@ -27,6 +28,7 @@ export default function SessionDock({
   onActivate,
   onRename,
   onRemove,
+  onExport,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [removeId, setRemoveId] = useState<string | null>(null)
@@ -105,6 +107,9 @@ export default function SessionDock({
                         </button>
                         <button className="icon-button h-6 w-6" aria-label={`Rename ${session.title}`} disabled={busy} onClick={() => setEditingId(session.sessionId)}>
                           <Edit3 className="h-3 w-3" />
+                        </button>
+                        <button className="icon-button h-6 w-6" aria-label={`Export ${session.title}`} disabled={busy} onClick={() => onExport(session.sessionId)}>
+                          <Download className="h-3 w-3" />
                         </button>
                         <button className="icon-button h-6 w-6" aria-label={`Delete ${session.title}`} disabled={busy} onClick={() => setRemoveId(session.sessionId)}>
                           <Trash2 className="h-3 w-3" />

@@ -7,6 +7,85 @@ namespace Agent.Tests;
 public sealed class ChatSessionExporterTests
 {
     [Fact]
+    public void ExportPersistedRendersStoredSessionWithoutLiveToolCatalog()
+    {
+        var session = new ChatSessionData(
+            new ChatSessionHeader(
+                "s1",
+                "wb-1",
+                "wt-1",
+                "dev-1",
+                @"C:\worktrees\master",
+                @"C:\worktrees\master\devices\PLC_1\plc-knowledge.db",
+                "2026-07-30T00:00:00Z",
+                "2026-07-30T01:00:00Z",
+                new ChatRequestSettings { Model = "deepseek-chat" },
+                null,
+                "Startup checks"),
+            new List<ChatMessage>
+            {
+                ChatMessage.System("SYS-PROMPT persisted"),
+                ChatMessage.User("hello deepseek"),
+                ChatMessage.Assistant("Hi! How can I help?"),
+            },
+            new List<UsageInfo?> { new(100, 10, 110) });
+
+        var markdown = ChatSessionExporter.ExportPersisted(session);
+
+        Assert.Contains("# Chat session export", markdown);
+        Assert.Contains("Model: `deepseek-chat`", markdown);
+        Assert.Contains("1 user message(s) · 1 API round(s)", markdown);
+        Assert.Contains("## System prompt (as saved in the session file)", markdown);
+        Assert.Contains("SYS-PROMPT persisted", markdown);
+        Assert.Contains("## Tool definitions", markdown);
+        Assert.Contains("not persisted in session files", markdown);
+        Assert.DoesNotContain("sent with every request", markdown);
+        Assert.Contains("hello deepseek", markdown);
+        Assert.Contains("*usage: 100 prompt + 10 completion = 110 tokens*", markdown);
+        Assert.Contains("Hi! How can I help?", markdown);
+    }
+
+    [Fact]
+    public void ResolveSessionExportPathSanitizesTitleUnderWorktreeSessionExportFolder()
+    {
+        var worktreeRoot = Path.Combine(Path.GetTempPath(), $"session-export-{Guid.NewGuid():N}");
+        try
+        {
+            var path = ChatSessionExporter.ResolveSessionExportPath(
+                worktreeRoot,
+                "Startup: checks / valves?",
+                "s1");
+
+            var directory = Path.Combine(Path.GetFullPath(worktreeRoot), "sessionexport");
+            Assert.True(Directory.Exists(directory));
+            Assert.StartsWith(directory + Path.DirectorySeparatorChar, path);
+            Assert.Equal("Startup_ checks _ valves_.md", Path.GetFileName(path));
+        }
+        finally
+        {
+            if (Directory.Exists(worktreeRoot))
+                Directory.Delete(worktreeRoot, true);
+        }
+    }
+
+    [Fact]
+    public void ResolveSessionExportPathFallsBackToSessionIdForBlankTitle()
+    {
+        var worktreeRoot = Path.Combine(Path.GetTempPath(), $"session-export-{Guid.NewGuid():N}");
+        try
+        {
+            var path = ChatSessionExporter.ResolveSessionExportPath(worktreeRoot, "   ", "abc123");
+
+            Assert.Equal("abc123.md", Path.GetFileName(path));
+        }
+        finally
+        {
+            if (Directory.Exists(worktreeRoot))
+                Directory.Delete(worktreeRoot, true);
+        }
+    }
+
+    [Fact]
     public void ExportContainsAllSectionsInOrder()
     {
         var history = new List<ChatMessage>

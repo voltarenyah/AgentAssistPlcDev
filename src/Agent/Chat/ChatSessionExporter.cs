@@ -17,7 +17,82 @@ public static class ChatSessionExporter
         JsonArray toolsJson,
         int toolCount,
         string model,
-        string requestUri)
+        string requestUri) =>
+        Build(
+            history,
+            roundUsages,
+            model,
+            requestUri,
+            "current — rebuilt from live context before every turn",
+            markdown =>
+            {
+                markdown.AppendLine($"## Tool definitions sent with every request ({toolCount})");
+                markdown.AppendLine();
+                AppendFenced(markdown, "json", toolsJson.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            });
+
+    /// <summary>
+    /// Renders a persisted session file as the same Markdown audit. Tool definitions are
+    /// not persisted in session files, so that section is replaced with an explicit note.
+    /// </summary>
+    public static string ExportPersisted(ChatSessionData session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return Build(
+            session.Messages,
+            session.RoundUsages,
+            session.Header.Settings.Model,
+            "(persisted session export)",
+            "as saved in the session file",
+            markdown =>
+            {
+                markdown.AppendLine("## Tool definitions");
+                markdown.AppendLine();
+                markdown.AppendLine(
+                    "Tool definitions are not persisted in session files; the live catalog is rebuilt for every chat runtime.");
+            });
+    }
+
+    /// <summary>Export path for a persisted session: {worktreeRoot}\sessionexport\{safe-title-or-id}.md.</summary>
+    public static string ResolveSessionExportPath(string worktreeRoot, string? title, string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(worktreeRoot) || !Path.IsPathFullyQualified(worktreeRoot))
+            throw new ArgumentException("Worktree root must be an absolute path.", nameof(worktreeRoot));
+
+        var directory = Path.Combine(Path.GetFullPath(worktreeRoot), "sessionexport");
+        Directory.CreateDirectory(directory);
+        var name = SanitizeFileName(title) ?? SanitizeFileName(sessionId) ?? "session";
+        var candidate = Path.GetFullPath(Path.Combine(directory, $"{name}.md"));
+        var prefix = directory.EndsWith(Path.DirectorySeparatorChar)
+            ? directory
+            : directory + Path.DirectorySeparatorChar;
+        if (!candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Session export name escapes the export directory.", nameof(title));
+
+        return candidate;
+    }
+
+    private static string? SanitizeFileName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(
+            value.Trim().Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
+        if (cleaned.Length > 60)
+            cleaned = cleaned[..60].TrimEnd();
+
+        return cleaned is { Length: > 0 } and not "." and not ".." ? cleaned : null;
+    }
+
+    private static string Build(
+        IReadOnlyList<ChatMessage> history,
+        IReadOnlyList<UsageInfo?> roundUsages,
+        string model,
+        string requestUri,
+        string systemPromptCaption,
+        Action<StringBuilder> appendToolSection)
     {
         var userTurns = history.Count(message => message.Role == "user");
         var promptTokens = roundUsages.Sum(usage => usage?.PromptTokens ?? 0);
@@ -38,14 +113,12 @@ public static class ChatSessionExporter
         markdown.AppendLine();
 
         var system = history.FirstOrDefault(message => message.Role == "system");
-        markdown.AppendLine("## System prompt (current — rebuilt from live context before every turn)");
+        markdown.AppendLine($"## System prompt ({systemPromptCaption})");
         markdown.AppendLine();
         AppendFenced(markdown, "text", system?.Content ?? "(none)");
         markdown.AppendLine();
 
-        markdown.AppendLine($"## Tool definitions sent with every request ({toolCount})");
-        markdown.AppendLine();
-        AppendFenced(markdown, "json", toolsJson.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        appendToolSection(markdown);
         markdown.AppendLine();
 
         markdown.AppendLine("## Conversation");

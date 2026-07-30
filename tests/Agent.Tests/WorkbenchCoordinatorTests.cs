@@ -652,6 +652,198 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Single(ReadDevice(fixture).Imports);
     }
 
+    [Fact]
+    public async Task BootstrapStagesExportCommitsInitialBaselineAndIngestsKnowledge()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: true);
+        var calls = new List<string>();
+        var engineering = new BootstrapExportCaller(calls);
+        var versionControl = Caller(calls)
+            .Respond("vc_add", new AddResult())
+            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "base001" });
+        var knowledge = Caller(calls)
+            .Respond("ingest_source", new IngestResult { DbPath = fixture.Context.KnowledgeDbPath });
+        var coordinator = Create(
+            fixture,
+            engineering: engineering,
+            knowledge: knowledge,
+            versionControl: versionControl);
+
+        var result = await coordinator.BootstrapDeviceAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal(RefreshApplyState.Committed, result.Baseline.State);
+        Assert.Equal("base001", result.Baseline.CommitSha);
+        Assert.Equal(new[] { "engineering:rebuild_export", "version:vc_add", "version:vc_commit", "knowledge:ingest_source" }, calls);
+        Assert.Equal("<a />", File.ReadAllText(
+            Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+        Assert.Equal(
+            "initial baseline: full export",
+            Property<string>(versionControl.CallArgs["vc_commit"].Single(), "message"));
+        var device = ReadDevice(fixture);
+        Assert.False(device.Knowledge.Stale);
+        Assert.False(device.Knowledge.BaselineStale);
+        Assert.Equal("base001", device.LastReconciliationCommit);
+    }
+
+    [Fact]
+    public async Task BootstrapSurfacesCompileRequiredWithoutCompilingCommittingOrIngesting()
+    {
+        var fixture = Fixture.Create(root);
+        var engineering = new MutatingExportCaller(new[]
+        {
+            new SyncResult
+            {
+                PlcName = "PLC_1",
+                ChecksumAfter = null,
+                Failed = new[]
+                {
+                    new SyncChange
+                    {
+                        Name = "A",
+                        Category = "FC",
+                        Reason = "Block 'A' is inconsistent. Compile it first before export.",
+                    },
+                },
+            },
+        });
+        var versionControl = new FakeToolCaller();
+        var knowledge = new FakeToolCaller();
+        var coordinator = Create(
+            fixture,
+            engineering: engineering,
+            knowledge: knowledge,
+            versionControl: versionControl);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(
+            () => coordinator.BootstrapDeviceAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("PLC_COMPILE_REQUIRED", error.Code);
+        Assert.Empty(versionControl.Calls);
+        Assert.Empty(knowledge.Calls);
+        Assert.DoesNotContain("compile_plc", engineering.Calls);
+        Assert.False(File.Exists(Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+    }
+
+    [Fact]
+    public async Task BootstrapFailsWhenBaselineCommitFails()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: true);
+        var engineering = new BootstrapExportCaller();
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_add", new AddResult())
+            .Fail("vc_commit", "GIT_ERROR", "identity unavailable");
+        var knowledge = new FakeToolCaller();
+        var coordinator = Create(
+            fixture,
+            engineering: engineering,
+            knowledge: knowledge,
+            versionControl: versionControl);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(
+            () => coordinator.BootstrapDeviceAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("BOOTSTRAP_COMMIT_FAILED", error.Code);
+        Assert.Empty(knowledge.Calls);
+    }
+
+    [Fact]
+    public async Task DeleteWorkbenchRemovesWorktreesDeletesRootAndDropsRegistrations()
+    {
+        var catalog = new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "catalog"));
+        var workbench = catalog.Create("Line", Path.Combine(root, "Line"));
+        workbench = catalog.RegisterWorktree(
+            workbench,
+            new WorkbenchWorktreeRegistration("wt-1", "master", "master", "master"));
+        workbench = catalog.RegisterWorktree(
+            workbench,
+            new WorkbenchWorktreeRegistration("wt-2", "feature", "feature", "feature"));
+        var masterRoot = Path.Combine(workbench.RootPath, "worktrees", "master");
+        var featureRoot = Path.Combine(workbench.RootPath, "worktrees", "feature");
+        Directory.CreateDirectory(masterRoot);
+        Directory.CreateDirectory(featureRoot);
+        Directory.CreateDirectory(workbench.RepositoryPath);
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_remove_worktree", new object())
+            .Respond("vc_remove_worktree", new object());
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        coordinator.RegisterWorkbench(workbench);
+
+        await coordinator.DeleteWorkbenchAsync(workbench, CancellationToken.None);
+
+        Assert.Equal(new[] { "vc_remove_worktree", "vc_remove_worktree" }, versionControl.Calls);
+        var removals = versionControl.CallArgs["vc_remove_worktree"]
+            .Select(args => Property<string>(args, "worktreePath"))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(new[] { featureRoot, masterRoot }.Order(StringComparer.Ordinal), removals);
+        Assert.All(
+            versionControl.CallArgs["vc_remove_worktree"],
+            args => Assert.Equal(workbench.RepositoryPath, Property<string>(args, "repositoryPath")));
+        Assert.False(Directory.Exists(workbench.RootPath));
+        var missing = Assert.Throws<WorkbenchCatalogException>(() => catalog.Load(workbench.RootPath));
+        Assert.Equal("WORKBENCH_NOT_FOUND", missing.Code);
+    }
+
+    [Fact]
+    public async Task DeleteWorkbenchRejectsIdentityMismatchAndPreservesDirectory()
+    {
+        var catalog = new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "catalog"));
+        var workbench = catalog.Create("Line", Path.Combine(root, "Line"));
+        var versionControl = new FakeToolCaller();
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        var error = await Assert.ThrowsAsync<WorkbenchCatalogException>(() =>
+            coordinator.DeleteWorkbenchAsync(
+                workbench with { WorkbenchId = "foreign-id" },
+                CancellationToken.None));
+
+        Assert.Equal("WORKBENCH_RELATIONSHIP_MISMATCH", error.Code);
+        Assert.Empty(versionControl.Calls);
+        Assert.True(Directory.Exists(workbench.RootPath));
+        Assert.True(File.Exists(Path.Combine(workbench.RootPath, "workbench.json")));
+    }
+
+    [Fact]
+    public async Task DeleteWorkbenchToleratesAlreadyMissingCheckout()
+    {
+        var catalog = new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "catalog"));
+        var workbench = catalog.Create("Line", Path.Combine(root, "Line"));
+        workbench = catalog.RegisterWorktree(
+            workbench,
+            new WorkbenchWorktreeRegistration("wt-1", "master", "master", "master"));
+        Directory.CreateDirectory(workbench.RepositoryPath);
+        // The master checkout was deleted manually before the workbench delete.
+        var versionControl = new FakeToolCaller()
+            .Fail("vc_remove_worktree", "WORKTREE_REMOVE_FAILED", "not a registered worktree");
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        await coordinator.DeleteWorkbenchAsync(workbench, CancellationToken.None);
+
+        Assert.Equal(new[] { "vc_remove_worktree" }, versionControl.Calls);
+        Assert.False(Directory.Exists(workbench.RootPath));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root))
@@ -714,6 +906,46 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         public List<string> Messages { get; } = [];
         public void Report(string message) => Messages.Add(message);
+    }
+
+    private sealed class BootstrapExportCaller(List<string>? order = null) : FakeToolCaller
+    {
+        public override Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            CallArgs[tool] = new List<object> { args };
+            order?.Add($"engineering:{tool}");
+            var output = Property<string>(args, "outputDir");
+            Directory.CreateDirectory(Path.Combine(output, "Blocks"));
+            File.WriteAllText(Path.Combine(output, "Blocks", "A.xml"), "<a />");
+            File.WriteAllText(
+                Path.Combine(output, "metadata.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    exportStartedUtc = "2026-07-30T00:00:00Z",
+                    exportFinishedUtc = "2026-07-30T00:00:01Z",
+                    exportRoot = output,
+                    components = new[]
+                    {
+                        new
+                        {
+                            name = "A",
+                            sourcePath = "Program blocks/A",
+                            category = "FC",
+                            status = "Exported",
+                            exportedFile = "Blocks/A.xml",
+                        },
+                    },
+                }));
+            return Task.FromResult((T)(object)new[]
+            {
+                new SyncResult { PlcName = "PLC_1", ExportRoot = output },
+            });
+        }
     }
 
     private sealed class MutatingExportCaller : FakeToolCaller

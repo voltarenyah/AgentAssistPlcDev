@@ -38,6 +38,13 @@ public sealed class VersionControlTools
             branchName,
             startPoint));
 
+    [McpServerTool(Name = "vc_remove_worktree")]
+    [Description("Remove a linked worktree from a shared bare repository (git worktree remove --force). DESTRUCTIVE: discards the checkout and any uncommitted changes in it.")]
+    public CallToolResult VcRemoveWorktree(
+        [Description("Path to the shared bare repository.")] string repositoryPath,
+        [Description("Path of the linked checkout to remove. Must be inside the workbench root.")] string worktreePath)
+        => Invoke(() => RepositoryService.RemoveWorktree(repositoryPath, worktreePath));
+
     [McpServerTool(Name = "vc_worktrees")]
     [Description("List complete linked worktrees registered with a shared bare repository. Read-only.")]
     public CallToolResult VcWorktrees(

@@ -53,6 +53,10 @@ public sealed record RefreshApplyResult(
     string? CommitSha,
     string? Error);
 
+public sealed record DeviceBootstrapResult(
+    RefreshApplyResult Baseline,
+    KnowledgeUpdateResult Knowledge);
+
 public sealed record ImportModifiedResult(
     string RelativePath,
     bool ImportSucceeded,
@@ -368,7 +372,8 @@ public sealed class WorkbenchCoordinator
         DeviceContext device,
         ApprovedReconciliation approval,
         CancellationToken token,
-        IOperationProgress? progress = null) =>
+        IOperationProgress? progress = null,
+        string? commitMessage = null) =>
         operationLock.RunAsync(
             device,
             async cancellationToken =>
@@ -433,7 +438,7 @@ public sealed class WorkbenchCoordinator
                         new
                         {
                             repoPath = device.WorktreeRoot,
-                            message = BuildRefreshCommitMessage(device, outcome),
+                            message = commitMessage ?? BuildRefreshCommitMessage(device, outcome),
                         },
                         cancellationToken).ConfigureAwait(false);
                     var metadata = ReadDevice(device) with
@@ -570,6 +575,91 @@ public sealed class WorkbenchCoordinator
             return new KnowledgeUpdateResult(
                 ingest.DbPath, relativePaths, hashes, Array.Empty<string>());
         }, token);
+
+    /// <summary>
+    /// Bootstraps a brand-new device without any user confirmation: full export staging,
+    /// application of every staged file as the initial baseline commit, then a full
+    /// knowledge ingest. A PLC_COMPILE_REQUIRED stage failure is surfaced as-is; the
+    /// bootstrap never compiles implicitly.
+    /// </summary>
+    public async Task<DeviceBootstrapResult> BootstrapDeviceAsync(
+        DeviceContext device,
+        CancellationToken token,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        await StageRefreshAsync(device, token, progress).ConfigureAwait(false);
+        var preview = reconciler.Preview(device);
+        var approved = preview.Entries
+            .Where(entry => entry.Kind is ReconciliationChangeKind.Added or ReconciliationChangeKind.Changed)
+            .Select(entry => entry.RelativePath)
+            .ToHashSet(StringComparer.Ordinal);
+        var baseline = await ApplyRefreshAsync(
+                device,
+                new ApprovedReconciliation(preview, approved),
+                token,
+                progress,
+                "initial baseline: full export")
+            .ConfigureAwait(false);
+        if (baseline.State == RefreshApplyState.FilesUpdatedCommitFailed)
+        {
+            throw new WorkbenchLifecycleException(
+                "BOOTSTRAP_COMMIT_FAILED",
+                $"The baseline files were updated but the initial commit failed: {baseline.Error}");
+        }
+
+        var knowledge = await RebuildKnowledgeAsync(device, token, progress).ConfigureAwait(false);
+        return new DeviceBootstrapResult(baseline, knowledge);
+    }
+
+    /// <summary>
+    /// Permanently deletes a registered workbench: removes every linked worktree from the
+    /// shared bare repository, deletes the whole workbench root directory, and drops the
+    /// in-memory registrations. The catalog re-validates the persisted root before any
+    /// directory is removed.
+    /// </summary>
+    public async Task DeleteWorkbenchAsync(
+        WorkbenchMetadata workbench,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        var persisted = catalog.Load(workbench.RootPath);
+        if (!string.Equals(persisted.WorkbenchId, workbench.WorkbenchId, StringComparison.Ordinal))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKBENCH_RELATIONSHIP_MISMATCH",
+                "Workbench metadata does not match the persisted catalog entry.");
+        }
+
+        foreach (var registration in persisted.Worktrees)
+        {
+            var worktreeRoot = WorkbenchPaths.ResolveWorktree(
+                persisted.RootPath,
+                registration.RelativePath);
+            progress?.Report($"Removing linked worktree '{registration.Name}'...");
+            try
+            {
+                await versionControl.CallAsync<object>(
+                    "vc_remove_worktree",
+                    new { repositoryPath = persisted.RepositoryPath, worktreePath = worktreeRoot },
+                    token).ConfigureAwait(false);
+            }
+            catch (ToolCallException) when (!Directory.Exists(worktreeRoot))
+            {
+                // A worktree whose checkout is already gone cannot be removed by git;
+                // the wholesale directory delete below finishes the cleanup.
+            }
+        }
+
+        progress?.Report("Deleting workbench directory...");
+        catalog.Delete(persisted);
+        knownWorkbenches.TryRemove(persisted.WorkbenchId, out _);
+        foreach (var registration in persisted.Worktrees)
+        {
+            knownWorktrees.TryRemove(registration.WorktreeId, out _);
+        }
+    }
 
     public async Task<ImportModifiedResult> ImportModifiedAsync(
         DeviceContext device,

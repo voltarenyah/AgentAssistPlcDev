@@ -20,6 +20,8 @@ import {
   RefreshCw,
   Server,
   ShieldCheck,
+  Sparkles,
+  Trash2,
   UploadCloud,
   X,
 } from 'lucide-react'
@@ -135,6 +137,50 @@ function NewWorktreeDialog({
   )
 }
 
+function DeleteWorkbenchDialog({
+  workbench,
+  busy,
+  onClose,
+  onDelete,
+}: {
+  workbench: api.Workbench
+  busy: boolean
+  onClose: () => void
+  onDelete: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-5 backdrop-blur-[2px]">
+      <div className="w-full max-w-[520px] overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+          <div className="grid h-9 w-9 place-items-center rounded-lg bg-red-500/10">
+            <Trash2 className="h-4 w-4 text-red-500" />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-sm font-semibold">Delete “{workbench.name}”?</h2>
+            <p className="text-[10px] text-muted-foreground">This action cannot be undone</p>
+          </div>
+          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
+        </div>
+        <div className="space-y-3 p-5">
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            This permanently deletes the workbench directory — all linked worktrees, the shared Git repository with its full history, exported baselines, knowledge databases, and saved chat sessions.
+          </p>
+          <div className="break-all rounded-lg border bg-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
+            {workbench.rootPath}
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary-button bg-red-600 hover:bg-red-500" onClick={onDelete} disabled={busy}>
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Delete permanently
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Metric({
   label,
   value,
@@ -222,6 +268,7 @@ export default function MainStudio() {
   const [fatalError, setFatalError] = useState<string | null>(null)
   const [createWorkbenchOpen, setCreateWorkbenchOpen] = useState(false)
   const [createWorktreeFor, setCreateWorktreeFor] = useState<api.Workbench | null>(null)
+  const [deleteWorkbenchFor, setDeleteWorkbenchFor] = useState<api.Workbench | null>(null)
   const [preview, setPreview] = useState<api.ReconciliationPreview | null>(null)
   const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
   const [relativePath, setRelativePath] = useState('')
@@ -241,6 +288,7 @@ export default function MainStudio() {
   const blocks = deviceView?.blocks ?? []
   const touchedCount = deviceView?.overlayCount ?? 0
   const activeKnowledge = deviceView?.knowledgeState ?? 'missing'
+  const isBrandNewDevice = Boolean(selection.deviceId) && blocks.length === 0 && activeKnowledge === 'missing'
   const navigatorKnowledgeState = deviceInfo
     ? { [deviceInfo.deviceId]: activeKnowledge }
     : {}
@@ -545,6 +593,19 @@ export default function MainStudio() {
     }
   }
 
+  const exportChatSession = async (sessionId: string) => {
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      const result = await api.exportChatSession(sessionId)
+      toast.success(`Session exported to ${result.path}`)
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
   const sendChatMessage = async (sessionId: string, message: string) => {
     setChatBusy(true)
     setChatTabs(previous => appendLocalUserMessage(previous, sessionId, message))
@@ -747,6 +808,45 @@ export default function MainStudio() {
     }
   }
 
+  const deleteWorkbench = async () => {
+    if (!deleteWorkbenchFor) return
+    const workbench = deleteWorkbenchFor
+    setOperation('delete-workbench')
+    const op = beginOperation('delete-workbench', 'Deleting workbench...')
+    try {
+      await api.deleteWorkbench(workbench.workbenchId, op.id)
+      setDeleteWorkbenchFor(null)
+      if (selection.workbenchId === workbench.workbenchId) {
+        setSelection({ workbenchId: null, worktreeId: null, deviceId: null })
+        setDeviceSelection(null)
+        setChatTabs(emptyChatTabs())
+      }
+      await reloadWorkbenches()
+      toast.success(`Workbench “${workbench.name}” deleted`)
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const bootstrapDevice = async () => {
+    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
+    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+    setOperation('bootstrap-device')
+    const op = beginOperation('bootstrap-device', 'Generating PLC context: export, baseline commit, knowledge ingest...')
+    try {
+      await api.bootstrapDevice(context.workbenchId, context.worktreeId, context.deviceId, op.id)
+      await reloadDeviceSnapshot(context)
+      setActiveTab('chat')
+      toast.success('PLC context ready — start chatting to explore your project.')
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
   const tabs: Array<{ id: StudioTab; label: string; icon: typeof Boxes }> = [
     { id: 'overview', label: 'Device overview', icon: Cpu },
     { id: 'chat', label: 'AI chat', icon: MessageSquare },
@@ -819,6 +919,7 @@ export default function MainStudio() {
           onSelectWorkbench={workbench => void selectWorkbench(workbench)}
           onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
           onSelectDevice={(workbench, worktree, deviceId) => void selectDevice(workbench, worktree, deviceId)}
+          onDeleteWorkbench={workbench => setDeleteWorkbenchFor(workbench)}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -926,6 +1027,23 @@ export default function MainStudio() {
                         </div>
                       </div>
                     </section>
+
+                    {isBrandNewDevice && (
+                      <section className="flex flex-wrap items-center gap-4 rounded-xl border border-chart-2/40 bg-chart-2/5 p-5">
+                        <div className="grid h-10 w-10 place-items-center rounded-lg bg-chart-2/10">
+                          <Sparkles className="h-5 w-5 text-chart-2" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h2 className="text-sm font-semibold">Start by generating the PLC context</h2>
+                          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                            Exports the full PLC from TIA, commits it as the initial baseline, and builds the offline knowledge database — no confirmations needed.
+                          </p>
+                        </div>
+                        <button className="primary-button" disabled={Boolean(operation)} onClick={() => void bootstrapDevice()}>
+                          <Sparkles className="h-3.5 w-3.5" /> Generate PLC context
+                        </button>
+                      </section>
+                    )}
 
                     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                       <Metric label="PLC blocks" value={blocks.length} />
@@ -1108,6 +1226,7 @@ export default function MainStudio() {
             onActivate={sessionId => void activateChatSession(sessionId)}
             onRename={(sessionId, title) => void renameChatSession(sessionId, title)}
             onRemove={sessionId => void removeChatSession(sessionId)}
+            onExport={sessionId => void exportChatSession(sessionId)}
           />
         )}
       </div>
@@ -1128,6 +1247,14 @@ export default function MainStudio() {
           busy={operation === 'create-worktree'}
           onClose={() => setCreateWorktreeFor(null)}
           onCreate={createWorktree}
+        />
+      )}
+      {deleteWorkbenchFor && (
+        <DeleteWorkbenchDialog
+          workbench={deleteWorkbenchFor}
+          busy={operation === 'delete-workbench'}
+          onClose={() => setDeleteWorkbenchFor(null)}
+          onDelete={() => void deleteWorkbench()}
         />
       )}
       {preview && (

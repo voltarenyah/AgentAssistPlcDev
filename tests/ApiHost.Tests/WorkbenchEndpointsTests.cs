@@ -998,6 +998,126 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Empty(host.VersionControl!.EnvironmentVariables);
     }
 
+    [Fact]
+    public async Task BootstrapEndpointStagesCommitsInitialBaselineAndCompletesOperation()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: false,
+            stageExport: (outputDir, plcName) =>
+            {
+                Assert.Equal("PLC_1", plcName);
+                Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
+                WriteComparisonManifest(outputDir, "live-fingerprint");
+            });
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{fixture.DeviceRoute}/bootstrap");
+        request.Headers.Add("X-Operation-Id", "bootstrap-1");
+
+        var response = await fixture.Client.SendAsync(request);
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            (int)RefreshApplyState.Committed,
+            body.GetProperty("baseline").GetProperty("state").GetInt32());
+        Assert.True(body.TryGetProperty("knowledge", out _));
+        Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
+        Assert.Equal(["vc_add", "vc_commit"], fixture.VersionControl.Calls);
+        Assert.Equal(
+            "initial baseline: full export",
+            fixture.VersionControl.Arguments[^1].GetProperty("message").GetString());
+        var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/bootstrap-1");
+        Assert.Equal("bootstrap-device", operation.GetProperty("operationType").GetString());
+        Assert.Equal("succeeded", operation.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task BootstrapEndpointSurfacesCompileRequiredWithoutCommitting()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: false,
+            stageExport: (_, _) =>
+                throw new WorkbenchLifecycleException("PLC_COMPILE_REQUIRED", "Compile PLC_1 first."));
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{fixture.DeviceRoute}/bootstrap");
+        request.Headers.Add("X-Operation-Id", "bootstrap-2");
+
+        var response = await fixture.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("PLC_COMPILE_REQUIRED", error.GetProperty("error").GetString());
+        Assert.Empty(fixture.VersionControl.Calls);
+        Assert.False(fixture.BaselineExists("Blocks/Main.xml"));
+        var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/bootstrap-2");
+        Assert.Equal("failed", operation.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task SessionExportWritesMarkdownUnderWorktreeSessionExportFolder()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
+        var created = await (await fixture.Client.PostAsync("/api/chat/session/new", null))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var sessionId = created.GetProperty("header").GetProperty("sessionId").GetString()!;
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            "/api/chat/session/export",
+            new { sessionId });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var path = body.GetProperty("path").GetString()!;
+        Assert.StartsWith(
+            Path.Combine(fixture.Context.WorktreeRoot, "sessionexport") + Path.DirectorySeparatorChar,
+            path);
+        Assert.True(File.Exists(path));
+        Assert.Contains("# Chat session export", File.ReadAllText(path));
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await fixture.Client.PostAsJsonAsync(
+                "/api/chat/session/export",
+                new { sessionId = SessionManager.NewSessionId() })).StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteWorkbenchRemovesRootPrunesStateAndCompletesOperation()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
+        var workbenchRoot = fixture.Context.WorkbenchRoot;
+        Assert.True(Directory.Exists(workbenchRoot));
+        using var request = new HttpRequestMessage(
+            HttpMethod.Delete,
+            $"/api/workbenches/{fixture.Context.WorkbenchId}");
+        request.Headers.Add("X-Operation-Id", "delete-1");
+
+        var response = await fixture.Client.SendAsync(request);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(["vc_remove_worktree"], fixture.VersionControl.Calls);
+        Assert.False(Directory.Exists(workbenchRoot));
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await fixture.Client.GetAsync($"/api/workbenches/{fixture.Context.WorkbenchId}")).StatusCode);
+        Assert.Empty(await fixture.Client.GetFromJsonAsync<JsonElement[]>("/api/workbenches") ?? []);
+        var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/delete-1");
+        Assert.Equal("delete-workbench", operation.GetProperty("operationType").GetString());
+        Assert.Equal("succeeded", operation.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task DeleteUnknownWorkbenchMapsToNotFound()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        var response = await client.DeleteAsync("/api/workbenches/missing");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root)) Directory.Delete(root, true);

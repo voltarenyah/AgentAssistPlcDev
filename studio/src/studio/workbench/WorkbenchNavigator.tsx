@@ -7,8 +7,15 @@ import {
   GitBranch,
   Plus,
   RefreshCw,
+  Trash2,
 } from 'lucide-react'
 import type { Workbench, WorkbenchRegistration } from '@/api/client'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
 
 export type WorkbenchSelection = {
   workbenchId: string | null
@@ -28,6 +35,7 @@ type Props = {
   onSelectWorkbench: (workbench: Workbench) => void
   onSelectWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onSelectDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
+  onDeleteWorkbench: (workbench: Workbench) => void
 }
 
 const worktreeKey = (workbenchId: string, worktreeId: string) => `${workbenchId}:${worktreeId}`
@@ -44,6 +52,7 @@ export default function WorkbenchNavigator({
   onSelectWorkbench,
   onSelectWorktree,
   onSelectDevice,
+  onDeleteWorkbench,
 }: Props) {
   return (
     <aside className="flex min-h-0 w-[310px] shrink-0 flex-col border-r bg-sidebar" style={{ borderColor: 'var(--border)' }}>
@@ -77,24 +86,37 @@ export default function WorkbenchNavigator({
           const workbenchSelected = selection.workbenchId === workbench.workbenchId
           return (
             <section key={workbench.workbenchId} className="mb-1">
-              <div
-                className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 ${workbenchSelected ? 'bg-accent' : 'hover:bg-accent/50'}`}
-                onClick={() => onSelectWorkbench(workbench)}
-              >
-                {workbenchSelected ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                <Boxes className="h-3.5 w-3.5 text-chart-2" />
-                <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{workbench.name}</span>
-                <button
-                  className="icon-button opacity-0 group-hover:opacity-100"
-                  title="New linked worktree"
-                  onClick={event => {
-                    event.stopPropagation()
-                    onCreateWorktree(workbench)
-                  }}
-                >
-                  <Plus className="h-3 w-3" />
-                </button>
-              </div>
+              <ContextMenu>
+                <ContextMenuTrigger asChild>
+                  <div
+                    className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 ${workbenchSelected ? 'bg-accent' : 'hover:bg-accent/50'}`}
+                    onClick={() => onSelectWorkbench(workbench)}
+                  >
+                    {workbenchSelected ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    <Boxes className="h-3.5 w-3.5 text-chart-2" />
+                    <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{workbench.name}</span>
+                    <button
+                      className="icon-button opacity-0 group-hover:opacity-100"
+                      title="New linked worktree"
+                      onClick={event => {
+                        event.stopPropagation()
+                        onCreateWorktree(workbench)
+                      }}
+                    >
+                      <Plus className="h-3 w-3" />
+                    </button>
+                  </div>
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem
+                    variant="destructive"
+                    onSelect={() => onDeleteWorkbench(workbench)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete this project
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
 
               {workbenchSelected && (
                 <div className="ml-4 border-l pl-2" style={{ borderColor: 'var(--border)' }}>

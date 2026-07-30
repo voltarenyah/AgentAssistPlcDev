@@ -304,6 +304,8 @@ const withOperation = (init: RequestInit, operationId?: string): RequestInit => 
 export const listWorkbenches = () => workbenchRequest<Workbench[]>('/workbenches')
 export const openWorkbench = (rootPath: string) =>
   workbenchRequest<Workbench>('/workbenches/open', jsonRequest('POST', { rootPath }))
+export const deleteWorkbench = (workbenchId: string, operationId?: string) =>
+  workbenchRequest<{ deleted: boolean }>(`/workbenches/${encodeURIComponent(workbenchId)}`, withOperation({ method: 'DELETE' }, operationId))
 export const createWorkbench = (
   name: string,
   engineeringSessionId: number,
@@ -369,6 +371,12 @@ export const updateDeviceKnowledge = (workbenchId: string, worktreeId: string, d
   workbenchRequest<KnowledgeUpdateResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/knowledge/update`, withOperation(jsonRequest('POST'), operationId))
 export const rebuildDeviceKnowledge = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string) =>
   workbenchRequest<KnowledgeUpdateResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/knowledge/rebuild`, withOperation(jsonRequest('POST'), operationId))
+export type DeviceBootstrapResult = {
+  baseline: RefreshApplyResult
+  knowledge: KnowledgeUpdateResult
+}
+export const bootstrapDevice = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string) =>
+  workbenchRequest<DeviceBootstrapResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/bootstrap`, withOperation(jsonRequest('POST'), operationId))
 export const prepareDeviceEdit = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string) =>
   workbenchRequest<string>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/prepare-edit`, jsonRequest('POST', { relativePath }))
 export const importDeviceSource = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string, operationId?: string) =>
@@ -695,6 +703,19 @@ export async function deleteChatSession(sessionId: string, _projectName?: string
     const body = await res.text()
     throw new Error(body || `Delete session failed: ${res.status}`)
   }
+}
+
+export async function exportChatSession(sessionId: string): Promise<{ path: string }> {
+  const res = await fetch(`${BASE}/chat/session/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(body || `Export session failed: ${res.status}`)
+  }
+  return res.json()
 }
 
 export async function getActiveSessionInfo(): Promise<ActiveSessionInfo> {
