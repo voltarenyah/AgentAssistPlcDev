@@ -62,7 +62,7 @@ export default function RefreshDialog({ preview, busy, onClose, onApply }: Props
           ))}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-3">
           {compared.length === 0 ? (
             <div className="grid min-h-40 place-items-center text-center">
               <div>
@@ -122,6 +122,24 @@ export default function RefreshDialog({ preview, busy, onClose, onApply }: Props
               Select every source change you want to apply ({approvedPaths.size}/{actionable.length} selected).
             </div>
           ) : <div className="flex-1" />}
+          {actionable.length > 0 && (
+            <>
+              <button
+                className="secondary-button"
+                disabled={busy || approvedPaths.size === actionable.length}
+                onClick={() => setApprovedPaths(new Set(actionable.map(entry => entry.relativePath)))}
+              >
+                Check all
+              </button>
+              <button
+                className="secondary-button"
+                disabled={busy || approvedPaths.size === 0}
+                onClick={() => setApprovedPaths(new Set())}
+              >
+                Uncheck all
+              </button>
+            </>
+          )}
           <button className="secondary-button" onClick={onClose} disabled={busy}>Reject</button>
           <button
             className="primary-button"

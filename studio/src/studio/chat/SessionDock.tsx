@@ -45,7 +45,7 @@ export default function SessionDock({
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-2">
         {sessions.length === 0 ? (
           <div className="grid h-full place-items-center px-5 text-center text-[10px] text-muted-foreground">
             <div>
