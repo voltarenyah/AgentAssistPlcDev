@@ -25,6 +25,7 @@ public sealed record DeviceSnapshot(
     string ExportedSourceRoot,
     string ModifiedSourceRoot,
     string KnowledgeDbPath,
+    string? SourceProjectPath,
     DeviceKnowledgeSnapshot Knowledge,
     IReadOnlyList<OfflineBlockInfo> Blocks,
     int OverlayCount,
@@ -51,10 +52,29 @@ public sealed class DeviceSnapshotReader
             context.ExportedSourceRoot,
             context.ModifiedSourceRoot,
             context.KnowledgeDbPath,
+            ReadSourceProjectPath(context),
             new DeviceKnowledgeSnapshot(state, metadata.Knowledge.UpdatedAt),
             blocks,
             overlayCount,
             diagnostics);
+    }
+
+    private static string? ReadSourceProjectPath(DeviceContext context)
+    {
+        var metadataPath = Path.Combine(context.WorktreeRoot, "worktree.json");
+        if (!File.Exists(metadataPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return new AtomicJsonStore().Read<WorktreeMetadata>(metadataPath).SourceProjectPath;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException)
+        {
+            return null;
+        }
     }
 
     private static IReadOnlyList<OfflineBlockInfo> ReadBlocks(

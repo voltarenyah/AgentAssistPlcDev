@@ -1,19 +1,21 @@
 import { useMemo, useState } from 'react'
-import { Boxes, FolderOpen, Loader2, X } from 'lucide-react'
+import { Boxes, FileCode2, FolderOpen, Loader2, RefreshCw, Server, X } from 'lucide-react'
 import type { OperationStatus, SessionInfo } from '@/api/client'
 import OperationStatusLine from '@/studio/workbench/OperationStatusLine'
 
 type Props = {
   sessions: SessionInfo[]
+  sandboxRoots: string[]
   busy: boolean
   operationStatus: OperationStatus | null
   onDismissOperation: () => void
+  onRefreshSessions: () => Promise<void>
   onClose: () => void
   onCreate: (values: {
     name: string
     rootPath?: string
-    engineeringSessionId: number
-    engineeringProjectPath: string
+    engineeringSessionId?: number
+    engineeringProjectPath?: string
   }) => Promise<void>
 }
 
@@ -24,24 +26,49 @@ const sanitized = (name: string) =>
     .join('')
     .replace(/[. ]+$/g, '') || '<workbench-name>'
 
+const isTiaProjectFile = (path: string) => /\.ap17$/i.test(path.trim())
+
+const normalizePath = (path: string) =>
+  path.trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
+
 export default function CreateWorkbenchDialog({
   sessions,
+  sandboxRoots,
   busy,
   operationStatus,
   onDismissOperation,
+  onRefreshSessions,
   onClose,
   onCreate,
 }: Props) {
   const [name, setName] = useState('')
   const [rootPath, setRootPath] = useState('')
+  const [mode, setMode] = useState<'session' | 'file'>('session')
   const [sessionId, setSessionId] = useState(sessions[0]?.id?.toString() ?? '')
+  const [projectFile, setProjectFile] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
   const selectedSession = sessions.find(session => session.id.toString() === sessionId)
   const defaultPreview = useMemo(
     () => `%LOCALAPPDATA%\\AutomationWorkbench\\Project\\${sanitized(name)}`,
     [name],
   )
-  const projectPath = selectedSession?.projectPath ?? ''
-  const valid = Boolean(name.trim() && projectPath)
+  const trimmedProjectFile = projectFile.trim()
+  const projectFileValid = isTiaProjectFile(projectFile)
+  const projectFileOutsideSandbox = projectFileValid
+    && sandboxRoots.length > 0
+    && !sandboxRoots.some(root => normalizePath(trimmedProjectFile).startsWith(normalizePath(root)))
+  const valid = Boolean(name.trim()) && (mode === 'session'
+    ? Boolean(selectedSession?.projectPath)
+    : projectFileValid)
+
+  const refreshSessions = async () => {
+    setRefreshing(true)
+    try {
+      await onRefreshSessions()
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-5 backdrop-blur-[2px]">
@@ -63,20 +90,71 @@ export default function CreateWorkbenchDialog({
             <input className="field-input" value={name} onChange={event => setName(event.target.value)} placeholder="Line-7 commissioning" autoFocus />
           </label>
 
-          <label className="field-label">
+          <div className="field-label">
             <span>TIA project</span>
-            <select className="field-input" value={sessionId} onChange={event => setSessionId(event.target.value)}>
-              <option value="">Select an open TIA project…</option>
-              {sessions.map(session => (
-                <option key={session.id} value={session.id}>
-                  PID {session.id} · {session.projectPath ?? 'No project loaded'}
-                </option>
-              ))}
-            </select>
-            {sessions.length === 0 && (
-              <span className="text-[9px] text-amber-500">Open the engineering project in TIA Portal, then refresh sessions.</span>
-            )}
-          </label>
+            <div className="flex gap-1.5">
+              <button
+                className={`secondary-button flex-1 ${mode === 'session' ? 'border-chart-2 text-foreground' : 'text-muted-foreground'}`}
+                onClick={() => setMode('session')}
+              >
+                <Server className="h-3.5 w-3.5" /> Attach to running TIA
+              </button>
+              <button
+                className={`secondary-button flex-1 ${mode === 'file' ? 'border-chart-2 text-foreground' : 'text-muted-foreground'}`}
+                onClick={() => setMode('file')}
+              >
+                <FileCode2 className="h-3.5 w-3.5" /> Open project file (.ap17)
+              </button>
+            </div>
+          </div>
+
+          {mode === 'session' ? (
+            <label className="field-label">
+              <span>Running TIA session</span>
+              <div className="flex gap-1.5">
+                <select className="field-input flex-1" value={sessionId} onChange={event => setSessionId(event.target.value)}>
+                  <option value="">Select an open TIA project…</option>
+                  {sessions.map(session => (
+                    <option key={session.id} value={session.id}>
+                      PID {session.id} · {session.projectPath ?? 'No project loaded'}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="icon-button self-center"
+                  aria-label="Refresh TIA sessions"
+                  title="Refresh TIA sessions"
+                  disabled={refreshing || busy}
+                  onClick={() => void refreshSessions()}
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+              {sessions.length === 0 && (
+                <span className="text-[9px] text-amber-500">Open the engineering project in TIA Portal, then refresh sessions.</span>
+              )}
+            </label>
+          ) : (
+            <label className="field-label">
+              <span>TIA project file</span>
+              <div className="relative">
+                <FileCode2 className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <input
+                  className="field-input pl-9 font-mono"
+                  value={projectFile}
+                  onChange={event => setProjectFile(event.target.value)}
+                  placeholder="C:\\Users\\…\\Documents\\Automation\\Line\\Line.ap17"
+                />
+              </div>
+              <span className="text-[9px] text-muted-foreground">A new TIA Portal instance is launched with this project open.</span>
+              {trimmedProjectFile && !projectFileValid && (
+                <span className="text-[9px] text-amber-500">Enter the full path to a TIA Portal project file (.ap17).</span>
+              )}
+              {projectFileOutsideSandbox && (
+                <span className="text-[9px] text-amber-500">This path is outside the sandbox whitelist. Move the project under an allowed root, or creation will be denied.</span>
+              )}
+            </label>
+          )}
 
           <label className="field-label">
             <span>Custom root <em className="font-normal text-muted-foreground">optional</em></span>
@@ -108,12 +186,17 @@ export default function CreateWorkbenchDialog({
             <button
               className="primary-button"
               disabled={!valid || busy}
-              onClick={() => onCreate({
-                name: name.trim(),
-                rootPath: rootPath.trim() || undefined,
-                engineeringSessionId: Number(sessionId),
-                engineeringProjectPath: projectPath,
-              })}
+              onClick={() => onCreate(mode === 'session'
+                ? {
+                    name: name.trim(),
+                    rootPath: rootPath.trim() || undefined,
+                    engineeringSessionId: Number(sessionId),
+                  }
+                : {
+                    name: name.trim(),
+                    rootPath: rootPath.trim() || undefined,
+                    engineeringProjectPath: trimmedProjectFile,
+                  })}
             >
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Create workbench

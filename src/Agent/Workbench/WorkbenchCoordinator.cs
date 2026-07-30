@@ -1,6 +1,7 @@
 using Agent.Mcp;
 using Contracts.Engineering;
 using Contracts.Knowledge;
+using Contracts.Sandbox;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 
@@ -17,8 +18,8 @@ public sealed class WorkbenchLifecycleException : Exception
 public sealed record CreateWorkbenchRequest(
     string Name,
     string? RootPath,
-    int EngineeringSessionId,
-    string EngineeringProjectPath);
+    int? EngineeringSessionId,
+    string? EngineeringProjectPath);
 
 public sealed record CreateWorkbenchResult(
     WorkbenchMetadata Workbench,
@@ -80,6 +81,7 @@ public sealed class WorkbenchCoordinator
     private readonly DeviceSourceResolver sourceResolver;
     private readonly DeviceOperationLock operationLock;
     private readonly SafeDeviceExportStager stager;
+    private readonly PathJail? pathJail;
     private readonly SemaphoreSlim engineeringSession = new(1, 1);
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> knownWorkbenches =
         new(StringComparer.Ordinal);
@@ -94,7 +96,8 @@ public sealed class WorkbenchCoordinator
         AtomicJsonStore store,
         DeviceReconciler reconciler,
         DeviceSourceResolver sourceResolver,
-        DeviceOperationLock? operationLock = null)
+        DeviceOperationLock? operationLock = null,
+        PathJail? pathJail = null)
     {
         this.engineering = engineering ?? throw new ArgumentNullException(nameof(engineering));
         this.knowledge = knowledge ?? throw new ArgumentNullException(nameof(knowledge));
@@ -104,6 +107,7 @@ public sealed class WorkbenchCoordinator
         this.reconciler = reconciler ?? throw new ArgumentNullException(nameof(reconciler));
         this.sourceResolver = sourceResolver ?? throw new ArgumentNullException(nameof(sourceResolver));
         this.operationLock = operationLock ?? new DeviceOperationLock();
+        this.pathJail = pathJail;
         stager = new SafeDeviceExportStager(engineering, this.operationLock);
     }
 
@@ -137,12 +141,50 @@ public sealed class WorkbenchCoordinator
         }
     }
 
+    /// <summary>
+    /// Re-attaches a still-running TIA instance (by session id) that already holds the
+    /// registered project, e.g. after this application was restarted.
+    /// </summary>
+    public async Task AttachTiaInstanceAsync(
+        int sessionId,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null)
+    {
+        progress?.Report("Attaching to running TIA Portal instance...");
+        await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await engineering.CallAsync<object>(
+                "connect",
+                new { sessionId },
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+    }
+
     public async Task<CreateWorkbenchResult> CreateWorkbenchAsync(
         CreateWorkbenchRequest request,
         CancellationToken cancellationToken = default,
         IOperationProgress? progress = null)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var hasSession = request.EngineeringSessionId is not null;
+        var hasProjectPath = !string.IsNullOrWhiteSpace(request.EngineeringProjectPath);
+        if (hasSession == hasProjectPath)
+        {
+            throw new WorkbenchLifecycleException(
+                "ENGINEERING_CONNECTION_INVALID",
+                "Provide exactly one of an engineering session ID or an engineering project path.");
+        }
+
+        // Jail the engineering project path BEFORE any workbench artifact is created, so a
+        // project outside the sandbox fails here instead of later at tia/open time.
+        var validatedProjectPath = hasProjectPath && pathJail is not null
+            ? pathJail.Validate(request.EngineeringProjectPath!, "engineeringProjectPath")
+            : request.EngineeringProjectPath?.Trim();
         progress?.Report("Preparing workbench storage...");
         var workbench = catalog.Create(request.Name, request.RootPath);
         var masterPath = Path.Combine(workbench.RootPath, "worktrees", "master");
@@ -158,10 +200,12 @@ public sealed class WorkbenchCoordinator
             await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                progress?.Report("Attaching to TIA Portal...");
+                progress?.Report(hasSession ? "Attaching to TIA Portal..." : "Opening project in TIA Portal...");
                 await engineering.CallAsync<object>(
                     "connect",
-                    new { sessionId = request.EngineeringSessionId },
+                    hasSession
+                        ? (object)new { sessionId = request.EngineeringSessionId!.Value }
+                        : new { projectPath = validatedProjectPath, withUI = true },
                     cancellationToken).ConfigureAwait(false);
                 progress?.Report("Discovering PLC devices...");
                 project = await engineering.CallAsync<ProjectInfo>(
@@ -174,6 +218,14 @@ public sealed class WorkbenchCoordinator
                 engineeringSession.Release();
             }
 
+            var sourceProjectPath = project.Path ?? validatedProjectPath;
+            if (sourceProjectPath is not null
+                && pathJail is not null
+                && !string.Equals(sourceProjectPath, validatedProjectPath, StringComparison.OrdinalIgnoreCase))
+            {
+                sourceProjectPath = pathJail.Validate(sourceProjectPath, "engineeringProjectPath");
+            }
+
             progress?.Report("Creating device folders...");
             var worktreeId = Guid.NewGuid().ToString("N");
             var registration = new WorkbenchWorktreeRegistration(
@@ -182,7 +234,7 @@ public sealed class WorkbenchCoordinator
                 workbench with
                 {
                     EngineeringProjectId = ProjectIdentity(project),
-                    SourceProjectPath = project.Path ?? request.EngineeringProjectPath,
+                    SourceProjectPath = sourceProjectPath,
                 },
                 registration);
             // RegisterWorktree writes the supplied updated workbench.

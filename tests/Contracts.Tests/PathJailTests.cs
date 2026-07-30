@@ -74,6 +74,15 @@ public sealed class PathJailTests : IDisposable
     }
 
     [Fact]
+    public void DenialMessageListsTheAllowedRoots()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "somewhere-else", "file.ap17");
+        var ex = Assert.Throws<SandboxException>(() => jail.Validate(outside, "projectPath"));
+        Assert.Equal("SANDBOX_PATH_DENIED", ex.Code);
+        Assert.Contains(root, ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void TraversalEscapingTheRootIsDenied()
     {
         var escaped = Path.Combine(root, "..", "escape.xml");

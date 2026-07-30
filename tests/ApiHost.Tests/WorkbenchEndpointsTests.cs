@@ -647,6 +647,155 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task AttachTiaInstanceEndpointConnectsBySessionIdOnly()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            engineeringOffline: false,
+            sourceProjectPath: @"C:\Projects\Line.ap17");
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{fixture.DeviceRoute}/tia/attach")
+        {
+            Content = JsonContent.Create(new { sessionId = 4242 }),
+        };
+        request.Headers.Add("X-Operation-Id", "attach-1");
+
+        var response = await fixture.Client.SendAsync(request);
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(["connect"], fixture.Engineering.Calls);
+        Assert.Equal(4242,
+            fixture.Engineering.Arguments["connect"].GetProperty("sessionId").GetInt32());
+        Assert.False(fixture.Engineering.Arguments["connect"].TryGetProperty("projectPath", out _));
+        var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/attach-1");
+        Assert.Equal("attach-tia-instance", operation.GetProperty("operationType").GetString());
+        Assert.Equal("succeeded", operation.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task AttachTiaInstanceRejectsUnknownDevice()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            engineeringOffline: false,
+            sourceProjectPath: @"C:\Projects\Line.ap17");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"{fixture.DeviceRoute}x/tia/attach",
+            new { sessionId = 4242 });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Empty(fixture.Engineering.Calls);
+    }
+
+    [Fact]
+    public async Task SandboxRootsEndpointListsAllowedRoots()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        var body = await client.GetFromJsonAsync<JsonElement>("/api/sandbox/roots");
+
+        var roots = body.GetProperty("roots").EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        Assert.Contains(roots, value => value.Contains("AutomationWorkbench", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task CreateWorkbenchWithProjectPathLaunchesNewTiaInstance()
+    {
+        var projectPath = Path.Combine(root, "Line.ap17");
+        var engineering = new RecordingToolCaller(JsonSerializer.Serialize(new
+        {
+            Name = "Line",
+            Path = projectPath,
+            PlcDevices = new[] { "PLC_1" },
+        }));
+        var versionControl = new RecordingToolCaller();
+        var sandboxFile = Path.Combine(root, "sandbox.json");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(sandboxFile, JsonSerializer.Serialize(new { allowedRoots = new[] { root } }));
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<SandboxConfig>();
+                services.AddSingleton(SandboxConfig.Load(sandboxFile));
+                services.RemoveAll<WorkbenchCoordinator>();
+                services.AddSingleton(sp => new WorkbenchCoordinator(
+                    engineering,
+                    new RecordingToolCaller(),
+                    versionControl,
+                    sp.GetRequiredService<WorkbenchCatalog>(),
+                    sp.GetRequiredService<AtomicJsonStore>(),
+                    sp.GetRequiredService<DeviceReconciler>(),
+                    sp.GetRequiredService<DeviceSourceResolver>(),
+                    sp.GetRequiredService<DeviceOperationLock>(),
+                    sp.GetRequiredService<SandboxConfig>().PathJail));
+            });
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/workbenches", new
+        {
+            name = "Line",
+            rootPath = Path.Combine(root, "wb-from-path"),
+            engineeringProjectPath = projectPath,
+        });
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(["connect", "get_project_info"], engineering.Calls);
+        Assert.Equal(projectPath, engineering.Arguments[0].GetProperty("projectPath").GetString());
+        Assert.True(engineering.Arguments[0].GetProperty("withUI").GetBoolean());
+        Assert.Equal(["vc_init_shared"], versionControl.Calls);
+    }
+
+    [Fact]
+    public async Task CreateWorkbenchRejectsAmbiguousEngineeringConnection()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/workbenches", new
+        {
+            name = "Line",
+            engineeringSessionId = 42,
+            engineeringProjectPath = @"C:\Projects\Line.ap17",
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("ENGINEERING_CONNECTION_INVALID", error.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task CreateWorkbenchRejectsProjectPathOutsideSandboxWithAllowedRoots()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/workbenches", new
+        {
+            name = "Line",
+            engineeringProjectPath = Path.Combine(root, "outside", "Line.ap17"),
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("SANDBOX_PATH_DENIED", error.GetProperty("error").GetString());
+        Assert.Contains("AutomationWorkbench",
+            error.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task SelectedDeviceBlocksComeFromPersistedSnapshotWithoutEngineering()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
