@@ -1,6 +1,11 @@
 # New-project UX fixes — TODO note (2026-07-30)
 
-Points to fix in a later modification round. Not yet implemented.
+> Status 2026-07-30: all 14 points implemented via 4 parallel worktree branches
+> (fix/chat-ui, fix/agent-config, fix/tia-session, fix/project-lifecycle) and
+> merged into master (merge commits dbb3615..9669338). Notes below kept as the
+> original spec.
+
+Points to fix in a later modification round. ~~Not yet implemented.~~ (Done — see status above.)
 
 ## 1. Refresh TIA session button on "create new project"
 
