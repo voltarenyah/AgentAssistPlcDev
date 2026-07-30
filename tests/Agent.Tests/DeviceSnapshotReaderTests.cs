@@ -67,6 +67,24 @@ public sealed class DeviceSnapshotReaderTests
     }
 
     [Fact]
+    public void ReadScalesToLargeManifestsWithoutRepeatedPathValidation()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest(Enumerable.Range(1, 2000)
+            .Select(i => Component($"fb{i}", $"Block{i}", "FB", $"Blocks/Block{i} [FB{i}].xml", i, "LAD", "Area"))
+            .ToArray());
+
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+
+        Assert.Equal(2000, snapshot.Blocks.Count);
+        Assert.True(
+            elapsed < TimeSpan.FromSeconds(1),
+            $"Snapshot read over 600 components took {elapsed.TotalMilliseconds:F0} ms; expected sub-second.");
+    }
+
+    [Fact]
     public void ReadMergesModifiedAndOverlayOnlyBlocks()
     {
         using var fixture = SnapshotFixture.Create();

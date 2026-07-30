@@ -86,6 +86,11 @@ public sealed class DeviceSnapshotReader
             ? Directory.EnumerateFiles(context.ModifiedSourceRoot, "*.xml", SearchOption.AllDirectories).Count()
             : 0;
 
+        // Validate the roots once: per-component ResolveRelative would re-walk the full
+        // reparse-point chain for every manifest entry (quadratic on deep workbench paths).
+        var exportedRoot = WorkbenchPaths.ValidateResolvedRoot(context.ExportedSourceRoot);
+        var modifiedRoot = WorkbenchPaths.ValidateResolvedRoot(context.ModifiedSourceRoot);
+
         var manifestPath = Path.Combine(context.ExportedSourceRoot, "metadata.json");
         if (!File.Exists(manifestPath))
         {
@@ -139,8 +144,8 @@ public sealed class DeviceSnapshotReader
                 string normalizedPath;
                 try
                 {
-                    var fullPath = WorkbenchPaths.ResolveRelative(context.ExportedSourceRoot, exportedFile);
-                    normalizedPath = Path.GetRelativePath(context.ExportedSourceRoot, fullPath).Replace('\\', '/');
+                    var fullPath = WorkbenchPaths.ResolveRelativeBelowValidatedRoot(exportedRoot, exportedFile);
+                    normalizedPath = Path.GetRelativePath(exportedRoot, fullPath).Replace('\\', '/');
                 }
                 catch (Exception ex) when (ex is ArgumentException or WorkbenchPathException)
                 {
@@ -167,8 +172,8 @@ public sealed class DeviceSnapshotReader
                     GroupPathOf(sourcePath),
                     normalizedPath,
                     false);
-                var modifiedPath = WorkbenchPaths.ResolveRelative(
-                    context.ModifiedSourceRoot,
+                var modifiedPath = WorkbenchPaths.ResolveRelativeBelowValidatedRoot(
+                    modifiedRoot,
                     normalizedPath);
                 var modified = File.Exists(modifiedPath);
                 if (modified)
