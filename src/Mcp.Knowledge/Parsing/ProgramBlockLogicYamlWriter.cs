@@ -195,6 +195,7 @@ public static class ProgramBlockLogicYamlWriter
         statements.AddRange(context.BuildSetResetPartStatements(notes));
         statements.AddRange(context.BuildPulseCoilStatements(notes));
         statements.AddRange(context.BuildBitfieldStatements(notes));
+        statements.AddRange(context.BuildTimerCoilStatements(notes));
 
         foreach (var call in context.Calls.OrderBy(call => call.Order))
         {
@@ -264,6 +265,16 @@ public static class ProgramBlockLogicYamlWriter
     private static bool IsSetResetPart(string partName)
     {
         return MatchesAny(partName, "Sr", "Rs");
+    }
+
+    private static bool IsIecTimerBoxPart(string partName)
+    {
+        return MatchesAny(partName, "TON", "TOF", "TONR", "TP");
+    }
+
+    private static bool IsTimerCoilPart(string partName)
+    {
+        return MatchesAny(partName, "CoilTON", "CoilTOF", "CoilTP", "CoilTONR", "PtCoil", "ResetIECTimerCoil");
     }
 
     private static bool MatchesAny(string value, params string[] candidates)
@@ -803,7 +814,12 @@ public static class ProgramBlockLogicYamlWriter
                     notes.Add($"Rendered '{part.Name}' generically; pin semantics not verified.");
                 }
 
-                statements.Add($"{part.InstanceName}({string.Join(", ", bindings)});");
+                // IEC timer boxes (TON/TOF/TONR/TP) call the typed instruction on the instance —
+                // the bare instance call would lose which timer instruction it is (the instance
+                // type is IEC_TIMER for all four).
+                statements.Add(IsIecTimerBoxPart(part.Name)
+                    ? $"{part.InstanceName}.{part.Name.ToUpperInvariant()}({string.Join(", ", bindings)});"
+                    : $"{part.InstanceName}({string.Join(", ", bindings)});");
             }
 
             return statements;
@@ -961,6 +977,56 @@ public static class ProgramBlockLogicYamlWriter
                 .Select(index => $"{arrayName}[{index}] := {value};")
                 .ToArray();
             return true;
+        }
+
+        public IReadOnlyList<string> BuildTimerCoilStatements(List<string> notes)
+        {
+            var statements = new List<string>();
+            foreach (var part in Parts.Values.Where(part => IsTimerCoilPart(part.Name)).OrderBy(part => part.Order))
+            {
+                var instance = GetPinAccess(part.Uid, "operand");
+                var input = EvaluateInput(part.Uid, "in", notes);
+                if (string.IsNullOrWhiteSpace(instance) || string.IsNullOrWhiteSpace(input))
+                {
+                    notes.Add($"Skipped {part.Name} because its timer instance or input could not be resolved.");
+                    continue;
+                }
+
+                if (MatchesAny(part.Name, "CoilTON", "CoilTOF", "CoilTP", "CoilTONR"))
+                {
+                    var preset = ResolveInputValue(part.Uid, "value", notes);
+                    if (string.IsNullOrWhiteSpace(preset))
+                    {
+                        notes.Add($"Skipped {part.Name} for {instance} because its preset value could not be resolved.");
+                        continue;
+                    }
+
+                    // IEC timer as coil: the RLO drives IN and the value pin carries the preset —
+                    // semantically identical to the box form, so render the same SCL method call.
+                    var instruction = part.Name.Substring("Coil".Length).ToUpperInvariant();
+                    statements.Add($"{instance}.{instruction}(IN := {input}, PT := {preset});");
+                    continue;
+                }
+
+                if (string.Equals(part.Name, "ResetIECTimerCoil", StringComparison.OrdinalIgnoreCase))
+                {
+                    // RESET_TIMER coil: resets the IEC timer when the RLO is 1.
+                    statements.Add($"IF {input} THEN RESET_TIMER(T := {instance}); END_IF;");
+                    continue;
+                }
+
+                // PtCoil (PRESET_TIMER): loads a new preset into the IEC timer when the RLO is 1.
+                var pt = ResolveInputValue(part.Uid, "pt", notes);
+                if (string.IsNullOrWhiteSpace(pt))
+                {
+                    notes.Add($"Skipped PtCoil for {instance} because its preset value could not be resolved.");
+                    continue;
+                }
+
+                statements.Add($"IF {input} THEN PRESET_TIMER(PT := {pt}, T := {instance}); END_IF;");
+            }
+
+            return statements;
         }
 
         public IReadOnlyList<string> BuildControlFlowStatements(List<string> notes)

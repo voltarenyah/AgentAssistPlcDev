@@ -95,13 +95,19 @@ with `1` in the pin name), emit its statement **last**.
 
 | TIA instruction | Part name | Status | Pins | Semantics | SCL pattern |
 |---|---|---|---|---|---|
-| On delay `TON` | `TON` (`export`) | ✅ instance call | `IN`, `PT`; outs `Q`, `ET` | Q rises after PT of continuous IN; instance DB holds state | `"Inst(IN := x, PT := t);"`, refs → `Inst.Q` / `Inst.ET` |
-| Off delay `TOF` | `TOF` (`tests`) | ✅ instance call | same | Q falls PT after IN falls | same |
-| Pulse `TP` | `TP` (`unverified`) | ✅ instance call (in list `:1468`) | same | Q high for PT regardless of IN | same |
-| Retentive on delay `TONR` | `TONR` (`unverified`) | ✅ instance call | `IN`, `PT`, `R`; outs `Q`, `ET` | Accumulates; `R` resets ET | same, `R` bound |
-| Reset timer `-(RT)-` | `unverified` (likely `RtTimer`/`ResetTimer`) | ❌ | in, operand (timer instance) | Coil form: resets a TONR-style instance | `Inst.R := TRUE;`-style or `RESET_TIMER(...)` — decide after export |
-| Preset timer `-(PT)-` | `unverified` | ❌ | in, operand, duration | Coil form: loads PT into instance | decide after export |
+| On delay `TON` | `TON` (`export`) | ✅ instance method call | `IN`, `PT`; outs `Q`, `ET` | Q rises after PT of continuous IN; instance DB holds state | `"Inst.TON(IN := x, PT := t);"`, refs → `Inst.Q` / `Inst.ET` |
+| Off delay `TOF` | `TOF` (`export`) | ✅ instance method call | same | Q falls PT after IN falls | `"Inst.TOF(...);"` |
+| Pulse `TP` | `TP` (`export`) | ✅ instance method call | same | Q high for PT regardless of IN | `"Inst.TP(...);"` |
+| Retentive on delay `TONR` | `TONR` (`export`) | ✅ instance method call | `IN`, `PT`, `R`; outs `Q`, `ET` | Accumulates; `R` resets ET | `"Inst.TONR(..., R := r);"` |
+| Timer as coil `TON/TOF/TP/TONR` | `CoilTON`/`CoilTOF`/`CoilTP`/`CoilTONR` (`export`) | ✅ timer-coil builder | `in` (RLO), `value` (preset), `operand` (instance) | Coil form of the box: RLO drives IN, value is PT | `"Inst.TON(IN := rlo, PT := v);"` (same method form) |
+| Reset timer `-(RT)-` | `ResetIECTimerCoil` (`export`) | ✅ timer-coil builder | `in`, `operand` (timer instance) | Resets the IEC timer when RLO is 1 | `IF rlo THEN RESET_TIMER(T := Inst); END_IF;` |
+| Preset timer `-(PT)-` | `PtCoil` (`export`) | ✅ timer-coil builder | `in`, `pt`, `operand` (instance) | Loads a new preset into the timer when RLO is 1 | `IF rlo THEN PRESET_TIMER(PT := v, T := Inst); END_IF;` |
 | Legacy S5 timers (`S_PULSE` etc.) | `unverified` | ❌ | many | S7-300/400 only; rare in V17 projects | defer (P2) |
+
+Note (2026-07-31): IEC timer *boxes* render as instance **method** calls (`Inst.TON(...)`) — the
+instance type is `IEC_TIMER` for all four instructions, so the bare `Inst(...)` call lost which
+timer it was. Verified against exported blocks `FC_LAD_Instructions_BitLogicOperations [FC2]`
+(bit logic) and `FB_LAD_Instructions_TimerOperations [FB2]` (all timer forms).
 
 ## C. Counter operations
 

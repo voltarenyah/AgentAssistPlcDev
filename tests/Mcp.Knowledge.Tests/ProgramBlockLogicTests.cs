@@ -1097,7 +1097,7 @@ public sealed class ProgramBlockLogicTests
 
         var statements = StatementsOf(result);
         Assert.Contains("Alarm := T_OverPressure.Q;", statements);
-        Assert.Contains("T_OverPressure(IN := OverPressure, PT := T#2s);", statements);
+        Assert.Contains("T_OverPressure.TON(IN := OverPressure, PT := T#2s);", statements);
     }
 
     [Fact]
@@ -1343,7 +1343,7 @@ public sealed class ProgramBlockLogicTests
             """);
 
         var statements = StatementsOf(result);
-        Assert.Contains("OffDelay(IN := Start, PT := T#5s);", statements);
+        Assert.Contains("OffDelay.TOF(IN := Start, PT := T#5s);", statements);
         Assert.Contains("RiseEdge(CLK := Start);", statements);
         Assert.Contains("Counter(CU := RiseEdge.Q);", statements);
         Assert.Contains("Done := OffDelay.Q;", statements);
@@ -1616,6 +1616,127 @@ public sealed class ProgramBlockLogicTests
         Assert.Contains("IEC_CTD(PV := 5, CD := Start);", statements);
         Assert.Contains("Motor := IEC_CTD.Q;", statements);
         Assert.Contains("// Translated generically: pin semantics of one or more instructions were not verified.", statements);
+    }
+
+    [Fact]
+    public void IecTimerBoxPreservesInstructionTypeOnInstanceCall()
+    {
+        // The instance type is IEC_TIMER for TON/TOF/TP/TONR alike — the bare instance call
+        // loses the instruction, so render the SCL method form instance.TON(...) (2026-07-31).
+        var result = TranslateLadBlock(
+            "TimerBox",
+            "cu-ton",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-start"><Symbol><Component Name="Start" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-preset"><Symbol><Component Name="Preset" /></Symbol></Access>
+                <Part Name="Contact" UId="p-contact" />
+                <Part Name="TON" Version="1.0" UId="p-ton">
+                  <Instance Scope="LocalVariable" UId="a-inst"><Component Name="TimerInst" /></Instance>
+                  <TemplateValue Name="time_type" Type="Type">Time</TemplateValue>
+                </Part>
+              </Parts>
+              <Wires>
+                <Wire UId="w-rail"><Powerrail /><NameCon UId="p-contact" Name="in" /></Wire>
+                <Wire UId="w-op"><IdentCon UId="a-start" /><NameCon UId="p-contact" Name="operand" /></Wire>
+                <Wire UId="w-in"><NameCon UId="p-contact" Name="out" /><NameCon UId="p-ton" Name="IN" /></Wire>
+                <Wire UId="w-pt"><IdentCon UId="a-preset" /><NameCon UId="p-ton" Name="PT" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        var statements = StatementsOf(result);
+        Assert.Contains("TimerInst.TON(IN := Start, PT := Preset);", statements);
+        Assert.DoesNotContain("TimerInst(IN := Start, PT := Preset);", statements);
+    }
+
+    [Theory]
+    [InlineData("CoilTP", "TP")]
+    [InlineData("CoilTON", "TON")]
+    [InlineData("CoilTOF", "TOF")]
+    [InlineData("CoilTONR", "TONR")]
+    public void IecTimerCoilRendersAsInstanceMethodCall(string coilPart, string instruction)
+    {
+        // IEC timer as coil: RLO drives IN, the value pin is the preset — the same semantics as
+        // the box form, so the same SCL method call is emitted (2026-07-31: previously dropped).
+        var result = TranslateLadBlock(
+            "TimerCoil",
+            "cu-coil",
+            $$"""
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-start"><Symbol><Component Name="Start" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-timer"><Symbol><Component Name="TimerInst" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-preset"><Symbol><Component Name="Preset" /></Symbol></Access>
+                <Part Name="Contact" UId="p-contact" />
+                <Part Name="{{coilPart}}" UId="p-coil"><TemplateValue Name="time_type" Type="Type">Time</TemplateValue></Part>
+              </Parts>
+              <Wires>
+                <Wire UId="w-rail"><Powerrail /><NameCon UId="p-contact" Name="in" /></Wire>
+                <Wire UId="w-op"><IdentCon UId="a-start" /><NameCon UId="p-contact" Name="operand" /></Wire>
+                <Wire UId="w-in"><NameCon UId="p-contact" Name="out" /><NameCon UId="p-coil" Name="in" /></Wire>
+                <Wire UId="w-val"><IdentCon UId="a-preset" /><NameCon UId="p-coil" Name="value" /></Wire>
+                <Wire UId="w-timer"><IdentCon UId="a-timer" /><NameCon UId="p-coil" Name="operand" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        Assert.Contains($"TimerInst.{instruction}(IN := Start, PT := Preset);", StatementsOf(result));
+    }
+
+    [Fact]
+    public void ResetIecTimerCoilRendersResetTimerCall()
+    {
+        var result = TranslateLadBlock(
+            "TimerReset",
+            "cu-reset",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-start"><Symbol><Component Name="Start" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-timer"><Symbol><Component Name="TimerInst" /></Symbol></Access>
+                <Part Name="Contact" UId="p-contact" />
+                <Part Name="ResetIECTimerCoil" UId="p-coil" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-rail"><Powerrail /><NameCon UId="p-contact" Name="in" /></Wire>
+                <Wire UId="w-op"><IdentCon UId="a-start" /><NameCon UId="p-contact" Name="operand" /></Wire>
+                <Wire UId="w-in"><NameCon UId="p-contact" Name="out" /><NameCon UId="p-coil" Name="in" /></Wire>
+                <Wire UId="w-timer"><IdentCon UId="a-timer" /><NameCon UId="p-coil" Name="operand" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        Assert.Contains("IF Start THEN RESET_TIMER(T := TimerInst); END_IF;", StatementsOf(result));
+    }
+
+    [Fact]
+    public void PtCoilRendersPresetTimerCall()
+    {
+        var result = TranslateLadBlock(
+            "TimerPreset",
+            "cu-preset",
+            """
+            <FlgNet xmlns="http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4">
+              <Parts>
+                <Access Scope="LocalVariable" UId="a-start"><Symbol><Component Name="Start" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-timer"><Symbol><Component Name="TimerInst" /></Symbol></Access>
+                <Access Scope="LocalVariable" UId="a-preset"><Symbol><Component Name="Preset" /></Symbol></Access>
+                <Part Name="Contact" UId="p-contact" />
+                <Part Name="PtCoil" UId="p-coil" />
+              </Parts>
+              <Wires>
+                <Wire UId="w-rail"><Powerrail /><NameCon UId="p-contact" Name="in" /></Wire>
+                <Wire UId="w-op"><IdentCon UId="a-start" /><NameCon UId="p-contact" Name="operand" /></Wire>
+                <Wire UId="w-in"><NameCon UId="p-contact" Name="out" /><NameCon UId="p-coil" Name="in" /></Wire>
+                <Wire UId="w-pt"><IdentCon UId="a-preset" /><NameCon UId="p-coil" Name="pt" /></Wire>
+                <Wire UId="w-timer"><IdentCon UId="a-timer" /><NameCon UId="p-coil" Name="operand" /></Wire>
+              </Wires>
+            </FlgNet>
+            """);
+
+        Assert.Contains("IF Start THEN PRESET_TIMER(PT := Preset, T := TimerInst); END_IF;", StatementsOf(result));
     }
 
     private static IReadOnlyDictionary<string, string> Translate(string xml, ProgramBlockComponent component)
