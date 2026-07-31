@@ -1,72 +1,88 @@
-# Automation Workbench backend
+# PLC AI Assistant
 
-The backend manages PLC engineering source as explicit workbench projects. A user
-chooses a workbench name and may choose its root directory. When no root is supplied,
-the default is:
+An AI-assisted workbench for industrial PLC engineering, starting with **Siemens TIA
+Portal V17**. It brings program understanding, safe source editing, version control,
+and an AI agent into one local desktop workflow — without ever giving the AI direct,
+unchecked access to your PLC project.
 
-```text
-%LOCALAPPDATA%\AutomationWorkbench\Project\<workbench-name>
-```
+## What it does
 
-Each workbench owns one shared bare Git repository and one or more complete linked
-worktrees. Each engineering device has an independent baseline, sparse edit overlay,
-staging area, metadata, and knowledge database:
+Working with a large PLC project means reading hundreds of blocks, networks, and tag
+tables before you can change anything safely. PLC AI Assistant turns that project into
+a navigable, queryable, versioned source tree that an AI agent can reason about — and
+that you can browse, edit, and roll back like ordinary source code.
 
-```text
-<workbench>\
-  workbench.json
-  repository.git\
-  worktrees\
-    master\
-      worktree.json
-      devices\
-        <device>\
-          device.json
-          exported-source\
-          modified-source\
-          staging\
-          plc-knowledge.db
-      .automation\sessions\
-```
+- **Read the project without opening TIA** — blocks, networks, tags, and UDTs are
+  exported once and persisted, so browsing, searching, editing, and AI queries work
+  fully offline.
+- **Ask questions in natural language** — a grounded AI agent answers against the
+  actual program content via a knowledge graph, not guesswork.
+- **Edit with guardrails** — every write to the PLC is previewed, explicitly approved,
+  validated, and snapshotted first. Nothing touches the live project silently.
+- **Keep full history** — every device baseline lives in Git, so each refresh and each
+  edit is a reviewable commit, with diff, restore, and branching built in.
 
-`exported-source` and `modified-source` are Git tracked. `staging`,
-`plc-knowledge.db`, and `.automation` are ignored. A refresh exports completely into
-staging, produces a content preview, and changes the tracked baseline only after user
-confirmation. Approved changes are committed automatically without rewriting
-unchanged files.
+## Key concepts
 
-`modified-source` contains only files edited in that worktree. These overlays remain
-for the worktree lifetime after PLC import and compile. Update the device knowledge
-database once after a batch of edits and before relying on it again.
+### Workbench projects
 
-## Offline workflow and TIA synchronization
+All work happens inside a named **workbench** — a folder containing one shared Git
+repository and one or more worktrees. Each PLC device gets its own tracked source
+baseline, a sparse overlay of your edits, and its own knowledge database. Multiple
+worktrees let you experiment on branches in parallel and merge results back.
 
-Normal block browsing, overlay editing, Git work, and knowledge queries use the
-persisted device artifacts and do not require TIA Portal. Closing TIA or restarting
-the application does not clear `exported-source`, `modified-source`, Git history, or
-`plc-knowledge.db`. The block index is reconstructed from the tracked
-`exported-source/metadata.json` and merged with sparse overlays.
+### Offline-first, explicit synchronization
 
-The device overview reports knowledge state from disk and `device.json`:
+The stored baseline and the live PLC are only ever reconciled through explicit,
+non-destructive actions: **compare** exports the live PLC to a temporary staging area
+and shows you a diff; **approve** applies the changes you select; **import & compile**
+sends only your selected edits to TIA. Closing TIA or restarting the app never loses
+your baseline, edits, history, or knowledge data.
 
-- `missing`: `plc-knowledge.db` does not exist.
-- `stale`: the database exists, but persisted metadata records baseline or overlay
-  changes that have not been ingested.
-- `current`: the database exists and no persisted stale flag is set.
+### Knowledge graph
 
-Use **Open project in TIA** before an explicit **Compare with TIA** or **Import &
-compile** operation. Compare exports the live PLC into temporary `staging`, then
-shows stored and live fingerprints. It is non-destructive: tracked baseline files,
-overlays, Git history, and the knowledge database remain unchanged until the
-engineer explicitly approves selected baseline changes. Import & compile is also an
-explicit action and sends only the selected modified source to TIA.
+Exported sources are ingested into a per-device SQLite graph: blocks, networks, tags,
+cross-references, and translated logic statements. The agent and the UI answer
+questions from this graph, and the UI reports its freshness (`missing` / `stale` /
+`current`) so you always know whether the AI is looking at up-to-date content.
 
-Existing `%LOCALAPPDATA%\PlcAiAssistant\exports` directories are legacy data. New
-workbenches do not migrate, list, modify, or delete them.
+### MCP-based architecture
 
-For a user-selected custom root, the trusted host validates persisted workbench
-metadata and registers the canonical, non-reparse root in
-`%APPDATA%\AutomationWorkbench\trusted-workbench-roots.json`. Engineering and source
-editor child processes receive only the host-owned registry location; tool arguments
-cannot grant themselves a new filesystem root. Unregistered and reparse-point roots
-remain sandbox-denied.
+Every capability is an independent [Model Context Protocol](https://modelcontextprotocol.io)
+server, so the built-in agent — or any MCP-compatible client — can use them:
+
+| Server | Purpose |
+|---|---|
+| Engineering | TIA Portal connection, export/import, compile (TIA Openness) |
+| Knowledge | Source ingest and graph queries |
+| Source editor | Protected parse, preview, apply, diff, validate |
+| Version control | Git status, commit, diff, snapshot, restore, branches |
+
+### Safety by design
+
+Tools are tiered by risk, file access is jailed to registered workbench roots,
+destructive operations require confirmation, and every action is recorded in an audit
+log. Tool arguments and model output cannot grant themselves new filesystem access.
+
+## Application layout
+
+- `studio/` — React + Vite workbench UI
+- `src/ApiHost/` — ASP.NET Core API hosting the UI and bridging chat/logs
+- `src/Agent/` — AI agent loop (DeepSeek) with sandboxed tool routing
+- `src/Mcp.*` — the MCP servers described above
+- `src/Contracts/` — shared contracts and sandbox policy
+
+## Requirements
+
+- Windows with Siemens TIA Portal V17 and the Openness API (user must be in the
+  "Siemens TIA Openness" group)
+- .NET Framework 4.8 and .NET 8 SDKs
+- Node.js for the studio UI
+- A DeepSeek API key for the AI agent
+
+## Status
+
+Active development. Engineering, knowledge, version-control, and chat/agent slices are
+implemented and tested; the safe generate → review → apply edit workflow and live-TIA
+acceptance for the source editor are in progress. See `buildnote/plan/` for the phased
+build plan and current milestone status.
