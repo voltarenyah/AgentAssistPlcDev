@@ -150,7 +150,8 @@ internal static class ExportManifest
         string exportRoot,
         DateTimeOffset exportStartedUtc,
         List<ExportMetadataRecord> records,
-        IReadOnlyCollection<string> replacedCategories)
+        IReadOnlyCollection<string> replacedCategories,
+        DeviceMetadata? device = null)
     {
         var path = Path.Combine(exportRoot, MetadataFileName);
         ExportMetadataDocument? existing = null;
@@ -171,6 +172,7 @@ internal static class ExportManifest
             ExportStartedUtc = existing?.ExportStartedUtc ?? exportStartedUtc,
             ExportFinishedUtc = DateTimeOffset.UtcNow,
             ExportRoot = existing?.ExportRoot ?? exportRoot,
+            Device = device ?? existing?.Device,
             Components = records
                 .Concat(existing?.Components.Where(r => !replacedCategories.Contains(r.Category))
                     ?? Enumerable.Empty<ExportMetadataRecord>())
@@ -180,7 +182,7 @@ internal static class ExportManifest
     }
 
     /// <summary>export_block: replace the record with the same id, keep other records, preserve exportStartedUtc.</summary>
-    public static void Upsert(string exportRoot, ExportMetadataRecord record)
+    public static void Upsert(string exportRoot, ExportMetadataRecord record, DeviceMetadata? device = null)
     {
         var path = Path.Combine(exportRoot, MetadataFileName);
         ExportMetadataDocument document;
@@ -202,6 +204,7 @@ internal static class ExportManifest
                 Components = { record },
             };
         }
+        document.Device = device ?? document.Device;
         document.ExportFinishedUtc = DateTimeOffset.UtcNow;
         Write(exportRoot, document);
     }

@@ -8,6 +8,9 @@ namespace Mcp.Engineering.Export;
 // naming/order and the stable-id formula are byte-for-byte compatible with the reference.
 // Adaptations for this codebase: mutable DTOs (single-block export upserts re-read and rewrite
 // the manifest), and a System.Text.Json-based Deserialize added for that upsert read path.
+// Amendment 2026-07-31: additive top-level "device" object (DeviceMetadata) — not part of the
+// reference schema, but additive-only and ignored by the tolerant readers (mcp-knowledge's
+// System.Text.Json DTO import skips unknown properties), so the interop contract is preserved.
 
 /// <summary>metadata.json document — schemaVersion "1.0" (locked 2026-07-18).</summary>
 public sealed class ExportMetadataDocument
@@ -17,7 +20,49 @@ public sealed class ExportMetadataDocument
     public DateTimeOffset ExportFinishedUtc { get; set; }
     public string ExportRoot { get; set; } = string.Empty;
 
+    /// <summary>Device-level identity + project-level metadata captured from TIA Openness at
+    /// export time (additive 2026-07-31 — consumers tolerate the extra field; see
+    /// <see cref="DeviceMetadata"/>). Null for manifests written before this field existed.</summary>
+    public DeviceMetadata? Device { get; set; }
+
     public List<ExportMetadataRecord> Components { get; set; } = new();
+}
+
+/// <summary>Project- and device-level metadata TIA Openness exposes (properties verified in
+/// buildnote/bestpractice/openness-v17-api-surface.md §1/§2), stored per device so a UI page can
+/// display it without a live TIA session. Project-level values repeat across devices of the same
+/// project by design — the per-device metadata.json is the single read source for one device.</summary>
+public sealed class DeviceMetadata
+{
+    /// <summary>PLC software name (PlcSoftware.Name) — the device's folder name at the export root.</summary>
+    public string? PlcName { get; set; }
+
+    /// <summary>Name of the hardware Device the PLC software belongs to (rack station).</summary>
+    public string? DeviceName { get; set; }
+
+    /// <summary>TypeIdentifier of the PLC module device item — the CPU order number plus firmware
+    /// version (e.g. "OrderNumber:6ES7515-2AM02-0AB0/V2.9").</summary>
+    public string? TypeIdentifier { get; set; }
+
+    public string? ProjectName { get; set; }
+
+    /// <summary>ProjectBase.Author.</summary>
+    public string? ProjectAuthor { get; set; }
+
+    /// <summary>ProjectBase.Comment.</summary>
+    public string? ProjectComment { get; set; }
+
+    /// <summary>ProjectBase.Version (TIA project version string).</summary>
+    public string? ProjectVersion { get; set; }
+
+    /// <summary>ProjectBase.Copyright.</summary>
+    public string? ProjectCopyright { get; set; }
+
+    public DateTimeOffset? ProjectCreationTime { get; set; }
+    public DateTimeOffset? ProjectLastModified { get; set; }
+
+    /// <summary>ProjectBase.LastModifiedBy.</summary>
+    public string? ProjectLastModifiedBy { get; set; }
 }
 
 public sealed class ExportMetadataRecord
@@ -61,6 +106,7 @@ internal static class ExportMetadataJsonSerializer
         WriteProperty(builder, 1, "exportStartedUtc", document.ExportStartedUtc.ToString("O"), appendComma: true);
         WriteProperty(builder, 1, "exportFinishedUtc", document.ExportFinishedUtc.ToString("O"), appendComma: true);
         WriteProperty(builder, 1, "exportRoot", document.ExportRoot, appendComma: true);
+        WriteDevice(builder, document.Device);
         Indent(builder, 1).AppendLine("\"components\": [");
 
         for (var index = 0; index < document.Components.Count; index++)
@@ -84,6 +130,7 @@ internal static class ExportMetadataJsonSerializer
             ExportStartedUtc = GetDate(root, "exportStartedUtc") ?? DateTimeOffset.UtcNow,
             ExportFinishedUtc = GetDate(root, "exportFinishedUtc") ?? DateTimeOffset.UtcNow,
             ExportRoot = GetString(root, "exportRoot") ?? string.Empty,
+            Device = GetDevice(root),
         };
         if (root.TryGetProperty("components", out var components) && components.ValueKind == JsonValueKind.Array)
         {
@@ -143,6 +190,53 @@ internal static class ExportMetadataJsonSerializer
             && DateTimeOffset.TryParse(value.GetString(), out var date)
             ? date
             : null;
+
+    private static DeviceMetadata? GetDevice(JsonElement root)
+    {
+        if (!root.TryGetProperty("device", out var device) || device.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new DeviceMetadata
+        {
+            PlcName = GetString(device, "plcName"),
+            DeviceName = GetString(device, "deviceName"),
+            TypeIdentifier = GetString(device, "typeIdentifier"),
+            ProjectName = GetString(device, "projectName"),
+            ProjectAuthor = GetString(device, "projectAuthor"),
+            ProjectComment = GetString(device, "projectComment"),
+            ProjectVersion = GetString(device, "projectVersion"),
+            ProjectCopyright = GetString(device, "projectCopyright"),
+            ProjectCreationTime = GetDate(device, "projectCreationTime"),
+            ProjectLastModified = GetDate(device, "projectLastModified"),
+            ProjectLastModifiedBy = GetString(device, "projectLastModifiedBy"),
+        };
+    }
+
+    private static void WriteDevice(StringBuilder builder, DeviceMetadata? device)
+    {
+        Indent(builder, 1).Append("\"device\": ");
+        if (device is null)
+        {
+            builder.AppendLine("null,");
+            return;
+        }
+
+        builder.AppendLine("{");
+        WriteProperty(builder, 2, "plcName", device.PlcName, appendComma: true);
+        WriteProperty(builder, 2, "deviceName", device.DeviceName, appendComma: true);
+        WriteProperty(builder, 2, "typeIdentifier", device.TypeIdentifier, appendComma: true);
+        WriteProperty(builder, 2, "projectName", device.ProjectName, appendComma: true);
+        WriteProperty(builder, 2, "projectAuthor", device.ProjectAuthor, appendComma: true);
+        WriteProperty(builder, 2, "projectComment", device.ProjectComment, appendComma: true);
+        WriteProperty(builder, 2, "projectVersion", device.ProjectVersion, appendComma: true);
+        WriteProperty(builder, 2, "projectCopyright", device.ProjectCopyright, appendComma: true);
+        WriteProperty(builder, 2, "projectCreationTime", device.ProjectCreationTime?.ToString("O"), appendComma: true);
+        WriteProperty(builder, 2, "projectLastModified", device.ProjectLastModified?.ToString("O"), appendComma: true);
+        WriteProperty(builder, 2, "projectLastModifiedBy", device.ProjectLastModifiedBy, appendComma: false);
+        Indent(builder, 1).AppendLine("},");
+    }
 
     private static void WriteRecord(StringBuilder builder, ExportMetadataRecord record, bool appendComma)
     {

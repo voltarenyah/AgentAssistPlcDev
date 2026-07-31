@@ -26,6 +26,7 @@ const snapshot: api.DeviceSnapshot = {
   modifiedSourceRoot: 'C:/wb/modified',
   knowledgeDbPath: 'C:/wb/plc-knowledge.db',
   sourceProjectPath: 'D:/proj.ap17',
+  device: null,
   knowledge: { state: 'missing', updatedAt: null },
   blocks: [
     { id: 'b1', name: 'Main', number: 1, blockType: 'OB', programmingLanguage: 'LAD', groupPath: 'Area', relativePath: 'Blocks/Main [OB1].xml', modified: false },

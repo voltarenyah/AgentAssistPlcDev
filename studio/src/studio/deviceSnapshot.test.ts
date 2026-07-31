@@ -28,6 +28,7 @@ const snapshot = (overrides: Partial<DeviceSnapshot> = {}): DeviceSnapshot => ({
   exportedSourceRoot: 'C:/workbench/exported-source',
   modifiedSourceRoot: 'C:/workbench/modified-source',
   knowledgeDbPath: 'C:/workbench/plc-knowledge.db',
+  device: null,
   knowledge: { state: 'missing', updatedAt: null },
   blocks: [],
   overlayCount: 0,

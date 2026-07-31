@@ -197,7 +197,22 @@ export type OfflineBlockInfo = {
   modified: boolean
 }
 
+export type DeviceExportMetadata = {
+  plcName: string | null
+  deviceName: string | null
+  typeIdentifier: string | null
+  projectName: string | null
+  projectAuthor: string | null
+  projectComment: string | null
+  projectVersion: string | null
+  projectCopyright: string | null
+  projectCreationTime: string | null
+  projectLastModified: string | null
+  projectLastModifiedBy: string | null
+}
+
 export type DeviceSnapshot = DeviceInfo & {
+  device: DeviceExportMetadata | null
   knowledge: {
     state: KnowledgeVisualState
     updatedAt: string | null
