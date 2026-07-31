@@ -8,20 +8,14 @@ namespace Agent.Chat;
 public sealed record AgentToolSpec(string Name, string? Description, JsonElement InputSchema, IMcpToolCaller Caller, string ServerName);
 
 /// <summary>
-/// All tools of both MCP servers as OpenAI function definitions, with name → caller routing.
-/// Discovered live via tools/list so the agent always matches what the servers were tested with.
+/// All tools of the connected MCP servers (engineering, knowledge, versioncontrol, sourceeditor)
+/// as OpenAI function definitions, with name → caller routing. Discovered live via tools/list so
+/// the agent always matches what the servers were tested with. Safety is enforced per call by the
+/// sandbox tiers (AgentSandbox + EngineeringGuard), not by hiding tools: import_block is exposed
+/// and gated as destructive — the user confirms each import (agent.md rules 6-7).
 /// </summary>
 public sealed class McpToolCatalog
 {
-    /// <summary>
-    /// Never exposed to the model: import_block writes into TIA, and agent.md rule 6 forbids
-    /// importing without a vc_snapshot (the version-control MCP does not exist yet).
-    /// </summary>
-    public static readonly IReadOnlySet<string> ExcludedToolNames = new HashSet<string>(StringComparer.Ordinal)
-    {
-        "import_block",
-    };
-
     private static readonly JsonObject EmptySchema = new()
     {
         ["type"] = "object",
@@ -34,13 +28,10 @@ public sealed class McpToolCatalog
     {
         foreach (var spec in specs)
         {
-            if (!ExcludedToolNames.Contains(spec.Name))
-            {
-                if (byName.TryGetValue(spec.Name, out var existing))
-                    throw new InvalidOperationException(
-                        $"Duplicate MCP tool name '{spec.Name}' from '{existing.ServerName}' and '{spec.ServerName}'.");
-                byName.Add(spec.Name, spec);
-            }
+            if (byName.TryGetValue(spec.Name, out var existing))
+                throw new InvalidOperationException(
+                    $"Duplicate MCP tool name '{spec.Name}' from '{existing.ServerName}' and '{spec.ServerName}'.");
+            byName.Add(spec.Name, spec);
         }
     }
 
@@ -74,7 +65,7 @@ public sealed class McpToolCatalog
         return tools;
     }
 
-    /// <summary>Lists tools on both servers of the host and builds the catalog (excluded names filtered).</summary>
+    /// <summary>Lists tools on every server of the host and builds the catalog.</summary>
     public static async Task<McpToolCatalog> BuildAsync(McpHost host, CancellationToken cancellationToken = default)
     {
         var specs = new List<AgentToolSpec>();

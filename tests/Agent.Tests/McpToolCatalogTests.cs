@@ -25,17 +25,17 @@ public sealed class McpToolCatalogTests
         new(name, $"desc {name}", JsonDocument.Parse(schema).RootElement, caller, "test");
 
     [Fact]
-    public void ImportBlockIsExcluded()
+    public void ImportBlockIsExposed()
     {
+        var importCaller = new FakeToolCaller();
         var catalog = new McpToolCatalog(new[]
         {
-            Spec("import_block", new FakeToolCaller()),
+            Spec("import_block", importCaller),
             Spec("search", new FakeToolCaller()),
         });
 
-        Assert.DoesNotContain(catalog.Tools, spec => spec.Name == "import_block");
-        Assert.Contains(catalog.Tools, spec => spec.Name == "search");
-        Assert.Throws<KeyNotFoundException>(() => catalog.Resolve("import_block"));
+        Assert.Contains(catalog.Tools, spec => spec.Name == "import_block");
+        Assert.Same(importCaller, catalog.Resolve("import_block").Caller);
     }
 
     [Fact]

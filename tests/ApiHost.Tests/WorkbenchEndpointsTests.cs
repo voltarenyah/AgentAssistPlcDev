@@ -935,6 +935,27 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public void ImportBlockBindsToExistingModifiedSourceOnly()
+    {
+        var context = Context();
+        var modified = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(modified)!);
+        File.WriteAllText(modified, "<a/>");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var bound = binder.Bind(
+            "import_block",
+            new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
+            context);
+        Assert.Equal(modified, bound["xmlFilePath"]);
+        Assert.False(bound.ContainsKey("relativePath"));
+        Assert.Throws<FileNotFoundException>(() => binder.Bind(
+            "import_block", new Dictionary<string, object?> { ["relativePath"] = "Blocks/Missing.xml" }, context));
+        Assert.Throws<Agent.Workbench.WorkbenchPathException>(() => binder.Bind(
+            "import_block", new Dictionary<string, object?> { ["xmlFilePath"] = Path.Combine(root, "foreign.xml") }, context));
+    }
+
+    [Fact]
     public async Task ExpiryActivelyDeniesWaitingConfirmation()
     {
         var pending = new PendingToolActions(TimeProvider.System, TimeSpan.FromMilliseconds(30));

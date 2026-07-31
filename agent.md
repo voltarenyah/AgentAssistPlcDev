@@ -71,11 +71,11 @@ AgentAssistPlcDev.sln
 
 3. **Openness dependency:** TIA Portal V17 DLLs at `C:\Program Files\Siemens\Automation\Portal V17\PublicAPI\V17\`. Windows user must be in "Siemens TIA Openness" group.
 
-4. **DeepSeek config:** API key entered once in the App chat panel (first-run setup); stored as `deepSeekApiKey` in `%APPDATA%/PlcAiAssistant/config.json` (git-ignored), never logged. Chat parameters adjustable in the UI and persisted: `deepSeekModel` (default `deepseek-v4-flash`; `deepseek-chat`/`deepseek-reasoner` retired 2026-07-24), `deepSeekThinkingEnabled` (default true), `deepSeekReasoningEffort` (`high`/`max`), `deepSeekTemperature`/`deepSeekTopP` (only effective with thinking off). `deepSeekBaseUrl` default `https://api.deepseek.com` (OpenAI-compatible). Agent-loop limits are tunable via `chatSettings:*` keys (POST `/api/config/settings` or config): `roundLimit`, `promptTokenBudget`, `promptTokenWarningThreshold`, `toolResultMaxChars`, `toolResultCompactChars`, `historyTokenThreshold`, `recentTurnsToKeep`, `collapsedAnswerChars` — applied when a chat loop is (re)created. The agent exposes all MCP tools except `import_block` (see rule 6).
+4. **DeepSeek config:** API key entered once in the App chat panel (first-run setup); stored as `deepSeekApiKey` in `%APPDATA%/PlcAiAssistant/config.json` (git-ignored), never logged. Chat parameters adjustable in the UI and persisted: `deepSeekModel` (default `deepseek-v4-flash`; `deepseek-chat`/`deepseek-reasoner` retired 2026-07-24), `deepSeekThinkingEnabled` (default true), `deepSeekReasoningEffort` (`high`/`max`), `deepSeekTemperature`/`deepSeekTopP` (only effective with thinking off). `deepSeekBaseUrl` default `https://api.deepseek.com` (OpenAI-compatible). Agent-loop limits are tunable via `chatSettings:*` keys (POST `/api/config/settings` or config): `roundLimit`, `promptTokenBudget`, `promptTokenWarningThreshold`, `toolResultMaxChars`, `toolResultCompactChars`, `historyTokenThreshold`, `recentTurnsToKeep`, `collapsedAnswerChars` — applied when a chat loop is (re)created. The agent exposes all MCP tools, including `import_block` (destructive; per-call user confirmation, rule 7).
 
 5. **Platform expansion:** Adapter contracts should be written generically from the start. Rockwell ControlLogix (L5X XML) is the planned second platform.
 
-6. **Safety:** Never import a block into TIA without a `vc_snapshot` first. Always `src_validate` before `import_block`. Dry-run mode must produce diff-on-disk without importing.
+6. **Safety:** Never import a block into TIA without a `vc_snapshot` first. Always `src_validate` before `import_block`. Dry-run mode must produce diff-on-disk without importing. The chat agent can call `import_block` (destructive tier, per-call user confirmation) — the system prompt enforces the snapshot → validate → import → compile order.
 
 7. **Agent sandbox (2026-07-20):** Every MCP tool call is tier-classified before it runs: `read` auto-allow, `write` allow + audit, `destructive` (save_project, import_block) needs user confirmation within a per-session budget, `deny` is blocked; unclassified tools fail closed. Tiers live in `Contracts.Sandbox.SandboxPolicy.Defaults`; overrides in `%APPDATA%/PlcAiAssistant/sandbox.json` (`tiers`, `allowedRoots` — extends the defaults, `maxDestructiveCallsPerSession`). Enforcement is two-sided: Mcp.Engineering's `EngineeringGuard` classifies + jails all path arguments (outputDir, xmlFilePath, projectPath) to the allowed roots for ANY MCP client; the chat agent's `AgentSandbox` adds the confirmation dialog + budget. Audit trail (JSONL, per decision): `%LOCALAPPDATA%/PlcAiAssistant/audit/{agent,engineering}.jsonl`. When adding a new MCP tool, classify it in `SandboxPolicy.Defaults` — `SandboxPolicyTests.EveryCurrentMcpToolIsClassified` fails otherwise.
 
@@ -93,7 +93,7 @@ AgentAssistPlcDev.sln
 - `buildnote/plan/export-sync.md` — incremental context refresh: PLC checksum gate, TIA fingerprints, per-XML content hashes (done 2026-07-20)
 - `buildnote/plan/mcp-knowledge.md` — Phase 2 step 1 detailed design for the knowledge MCP server
 - `buildnote/plan/app.md` — Phase 2 step 7a design for the WPF App (read-only shell + Read Project Context)
-- `buildnote/plan/agent.md` — Phase 2 step 6 chat slice: DeepSeek client, tool catalog (import_block excluded), AgentLoop, first-run key UI
+- `buildnote/plan/agent.md` — Phase 2 step 6 chat slice: DeepSeek client, tool catalog, AgentLoop, first-run key UI
 - `buildnote/bestpractice/tia-v17-lad-instruction-catalog.md` — TIA V17 LAD/FBD instruction catalog: FlgNet part names, semantics (e.g. SR/RS dominance), SCL patterns, translator coverage + roadmap
 - `agent.md` — this file; concise rules and context for AI agents
 - `%APPDATA%/PlcAiAssistant/config.json` — local config (git-ignored)
@@ -106,7 +106,7 @@ AgentAssistPlcDev.sln
 | ------ | ----- | --------- |
 | Engineering | 1 (done) | `check_environment`, `list_sessions`, `connect`, `disconnect`, `save_project`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `export_tag_tables`, `export_udts`, `sync_export` (incremental, hash/fingerprint-based), `get_context_status` (read-only consistency check), `compare_context` (read-only per-file diff), `import_block` (destructive), `compile_block`, `compile_plc` |
 | Knowledge | 2, step 1 + depth | `ingest_source`, `query` (read-only SQL), `get_schema`, `get_block`, `get_single_network`, `get_all_networks`, `get_variable_usage`, `search` |
-| Source Editor | 2, step 4 (automated complete; TIA acceptance open) | `src_parse_block`, `src_preview_edits`, `src_apply_edits`, `src_diff`, `src_validate` |
+| Source Editor | 2, step 4 (chat-driven edit→import→compile enabled; real-TIA acceptance open) | `src_parse_block`, `src_preview_edits`, `src_apply_edits`, `src_diff`, `src_validate` |
 | Version Control | 2, step 5 | `vc_init`, `vc_status`, `vc_add`, `vc_commit`, `vc_log`, `vc_diff`, `vc_snapshot`, `vc_restore` (destructive), `vc_branches`, `vc_config` |
 | Simulation | 5 | instance lifecycle, tag I/O, cycle control |
 
