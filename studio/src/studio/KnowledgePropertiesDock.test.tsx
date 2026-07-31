@@ -12,6 +12,8 @@ vi.mock('@/api/client', () => ({
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
+const context: api.KnowledgeGraphContext = { workbenchId: 'wb1', worktreeId: 'wt1', deviceId: 'dev1' }
+
 const mocked = api as unknown as {
   getKnowledgeNodeProperties: ReturnType<typeof vi.fn>
   getKnowledgeEdgeProperties: ReturnType<typeof vi.fn>
@@ -53,7 +55,7 @@ afterEach(() => {
 describe('KnowledgePropertiesDock', () => {
   it('shows an empty hint when nothing is selected', async () => {
     const { host } = await render(
-      <KnowledgePropertiesDock projectName="PLC_1" node={null} edge={null} hidden={false} />,
+      <KnowledgePropertiesDock context={context} node={null} edge={null} hidden={false} />,
     )
 
     expect(host.textContent).toContain('Select a node or edge to inspect its properties')
@@ -63,21 +65,21 @@ describe('KnowledgePropertiesDock', () => {
 
   it('loads and displays node properties for the selected node', async () => {
     const { host } = await render(
-      <KnowledgePropertiesDock projectName="PLC_1" node={node} edge={null} hidden={false} />,
+      <KnowledgePropertiesDock context={context} node={node} edge={null} hidden={false} />,
     )
 
-    expect(mocked.getKnowledgeNodeProperties).toHaveBeenCalledWith('PLC_1', 'node:OB:Main')
+    expect(mocked.getKnowledgeNodeProperties).toHaveBeenCalledWith(context, 'node:OB:Main')
     expect(host.textContent).toContain('language')
     expect(host.textContent).toContain('LAD')
   })
 
   it('displays both edge and node properties when both are selected', async () => {
     const { host } = await render(
-      <KnowledgePropertiesDock projectName="PLC_1" node={node} edge={edge} hidden={false} />,
+      <KnowledgePropertiesDock context={context} node={node} edge={edge} hidden={false} />,
     )
 
-    expect(mocked.getKnowledgeEdgeProperties).toHaveBeenCalledWith('PLC_1', 'edge:CALLS:Main->Motor')
-    expect(mocked.getKnowledgeNodeProperties).toHaveBeenCalledWith('PLC_1', 'node:OB:Main')
+    expect(mocked.getKnowledgeEdgeProperties).toHaveBeenCalledWith(context, 'edge:CALLS:Main->Motor')
+    expect(mocked.getKnowledgeNodeProperties).toHaveBeenCalledWith(context, 'node:OB:Main')
     expect(host.textContent).toContain('network')
     expect(host.textContent).toContain('LAD')
     expect(host.textContent).toContain('node:OB:Main → node:FB:Motor')
@@ -86,7 +88,7 @@ describe('KnowledgePropertiesDock', () => {
   it('shows an error when the properties request fails', async () => {
     mocked.getKnowledgeNodeProperties.mockRejectedValue(new Error('boom'))
     const { host } = await render(
-      <KnowledgePropertiesDock projectName="PLC_1" node={node} edge={null} hidden={false} />,
+      <KnowledgePropertiesDock context={context} node={node} edge={null} hidden={false} />,
     )
 
     expect(host.textContent).toContain('boom')

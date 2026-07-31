@@ -3,7 +3,7 @@ import { Database, Loader2 } from 'lucide-react'
 import * as api from '@/api/client'
 
 type Props = {
-  projectName: string
+  context: api.KnowledgeGraphContext
   node: api.GraphNode | null
   edge: api.GraphEdge | null
   hidden: boolean
@@ -15,7 +15,7 @@ type PropertiesState = {
   error: string | null
 }
 
-function useProperties(kind: 'node' | 'edge', projectName: string, id: string | null): PropertiesState {
+function useProperties(kind: 'node' | 'edge', context: api.KnowledgeGraphContext, id: string | null): PropertiesState {
   const [properties, setProperties] = useState<api.GraphProperty[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -31,14 +31,14 @@ function useProperties(kind: 'node' | 'edge', projectName: string, id: string | 
     setLoading(true)
     setError(null)
     const request = kind === 'node'
-      ? api.getKnowledgeNodeProperties(projectName, id)
-      : api.getKnowledgeEdgeProperties(projectName, id)
+      ? api.getKnowledgeNodeProperties(context, id)
+      : api.getKnowledgeEdgeProperties(context, id)
     request
       .then(data => { if (!cancelled) setProperties(data.properties) })
       .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load properties') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [kind, projectName, id])
+  }, [kind, context, id])
 
   return { properties, loading, error }
 }
@@ -85,9 +85,9 @@ function PropertySection({ title, badge, badgeColor, subtitle, state }: {
   )
 }
 
-export default function KnowledgePropertiesDock({ projectName, node, edge, hidden }: Props) {
-  const nodeState = useProperties('node', projectName, node?.id ?? null)
-  const edgeState = useProperties('edge', projectName, edge?.id ?? null)
+export default function KnowledgePropertiesDock({ context, node, edge, hidden }: Props) {
+  const nodeState = useProperties('node', context, node?.id ?? null)
+  const edgeState = useProperties('edge', context, edge?.id ?? null)
 
   return (
     <aside

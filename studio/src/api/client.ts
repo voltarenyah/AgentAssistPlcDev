@@ -613,45 +613,54 @@ export async function getBlockSourceCode(blockName: string, plcName?: string): P
 
 /* ── Knowledge graph API ──────────────────────────────── */
 
-export async function getKnowledgeNodeKinds(projectName: string): Promise<{ kinds: string[] }> {
-  const res = await fetch(`${BASE}/knowledge/node-kinds?projectName=${encodeURIComponent(projectName)}`)
-  if (!res.ok) throw new Error(`Node kinds failed: ${res.status}`)
+export type KnowledgeGraphContext = {
+  workbenchId: string
+  worktreeId: string
+  deviceId: string
+}
+
+const knowledgePath = (ctx: KnowledgeGraphContext, suffix: string) =>
+  `${devicePath(ctx.workbenchId, ctx.worktreeId, ctx.deviceId)}/knowledge/${suffix}`
+
+async function knowledgeRequest<T>(url: string, label: string): Promise<T> {
+  const res = await fetch(url)
+  if (!res.ok) {
+    const error = new Error(`${label} failed: ${res.status}`) as Error & { status: number }
+    error.status = res.status
+    throw error
+  }
   return res.json()
 }
 
-export async function getKnowledgeNodes(projectName: string, kind?: string): Promise<{ nodes: GraphNode[] }> {
-  const params = new URLSearchParams({ projectName })
+export async function getKnowledgeNodeKinds(ctx: KnowledgeGraphContext): Promise<{ kinds: string[] }> {
+  return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'node-kinds')}`, 'Node kinds')
+}
+
+export async function getKnowledgeNodes(ctx: KnowledgeGraphContext, kind?: string): Promise<{ nodes: GraphNode[] }> {
+  const params = new URLSearchParams()
   if (kind) params.set('kind', kind)
-  const res = await fetch(`${BASE}/knowledge/nodes?${params}`)
-  if (!res.ok) throw new Error(`Nodes failed: ${res.status}`)
-  return res.json()
+  const query = params.size > 0 ? `?${params}` : ''
+  return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'nodes')}${query}`, 'Nodes')
 }
 
-export async function getKnowledgeEdgeTypes(projectName: string): Promise<{ types: string[] }> {
-  const res = await fetch(`${BASE}/knowledge/edge-types?projectName=${encodeURIComponent(projectName)}`)
-  if (!res.ok) throw new Error(`Edge types failed: ${res.status}`)
-  return res.json()
+export async function getKnowledgeEdgeTypes(ctx: KnowledgeGraphContext): Promise<{ types: string[] }> {
+  return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'edge-types')}`, 'Edge types')
 }
 
-export async function getKnowledgeEdges(projectName: string, nodeId?: string, type?: string): Promise<{ edges: GraphEdge[]; truncated?: boolean }> {
-  const params = new URLSearchParams({ projectName })
+export async function getKnowledgeEdges(ctx: KnowledgeGraphContext, nodeId?: string, type?: string): Promise<{ edges: GraphEdge[]; truncated?: boolean }> {
+  const params = new URLSearchParams()
   if (nodeId) params.set('nodeId', nodeId)
   if (type) params.set('type', type)
-  const res = await fetch(`${BASE}/knowledge/edges?${params}`)
-  if (!res.ok) throw new Error(`Edges failed: ${res.status}`)
-  return res.json()
+  const query = params.size > 0 ? `?${params}` : ''
+  return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'edges')}${query}`, 'Edges')
 }
 
-export async function getKnowledgeNodeProperties(projectName: string, nodeId: string): Promise<{ properties: GraphProperty[] }> {
-  const res = await fetch(`${BASE}/knowledge/node-properties?projectName=${encodeURIComponent(projectName)}&nodeId=${encodeURIComponent(nodeId)}`)
-  if (!res.ok) throw new Error(`Node properties failed: ${res.status}`)
-  return res.json()
+export async function getKnowledgeNodeProperties(ctx: KnowledgeGraphContext, nodeId: string): Promise<{ properties: GraphProperty[] }> {
+  return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'node-properties')}?nodeId=${encodeURIComponent(nodeId)}`, 'Node properties')
 }
 
-export async function getKnowledgeEdgeProperties(projectName: string, edgeId: string): Promise<{ properties: GraphProperty[] }> {
-  const res = await fetch(`${BASE}/knowledge/edge-properties?projectName=${encodeURIComponent(projectName)}&edgeId=${encodeURIComponent(edgeId)}`)
-  if (!res.ok) throw new Error(`Edge properties failed: ${res.status}`)
-  return res.json()
+export async function getKnowledgeEdgeProperties(ctx: KnowledgeGraphContext, edgeId: string): Promise<{ properties: GraphProperty[] }> {
+  return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'edge-properties')}?edgeId=${encodeURIComponent(edgeId)}`, 'Edge properties')
 }
 
 export async function getKeyStatus(): Promise<{ configured: boolean }> {

@@ -16,6 +16,8 @@ vi.mock('@/api/client', () => ({
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
+const context: api.KnowledgeGraphContext = { workbenchId: 'wb1', worktreeId: 'wt1', deviceId: 'dev1' }
+
 const nodes: api.GraphNode[] = [
   { id: 'node:OB:Main', kind: 'OB', name: 'Main' },
   { id: 'node:FB:Motor', kind: 'FB', name: 'Motor' },
@@ -68,9 +70,9 @@ afterEach(() => {
 
 describe('NodeEdgesView', () => {
   it('loads nodes and all edges on mount', async () => {
-    const { host } = await render(<NodeEdgesView projectName="PLC_1" />)
+    const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" />)
 
-    expect(mocked.getKnowledgeEdges).toHaveBeenCalledWith('PLC_1', undefined, undefined)
+    expect(mocked.getKnowledgeEdges).toHaveBeenCalledWith(context, undefined, undefined)
     expect(rowByText(host, 'Main')).toBeTruthy()
     expect(rowByText(host, 'edge:CALLS:Main->Motor')).toBeTruthy()
     expect(rowByText(host, 'edge:CONTAINS:Motor->Var')).toBeTruthy()
@@ -80,20 +82,20 @@ describe('NodeEdgesView', () => {
     const onNodeSelect = vi.fn()
     const onEdgeSelect = vi.fn()
     const { host } = await render(
-      <NodeEdgesView projectName="PLC_1" onNodeSelect={onNodeSelect} onEdgeSelect={onEdgeSelect} />,
+      <NodeEdgesView context={context} projectName="PLC_1" onNodeSelect={onNodeSelect} onEdgeSelect={onEdgeSelect} />,
     )
     mocked.getKnowledgeEdges.mockClear()
 
     await act(async () => rowByText(host, 'Motor', 0)?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
-    expect(mocked.getKnowledgeEdges).toHaveBeenCalledWith('PLC_1', 'node:FB:Motor', undefined)
+    expect(mocked.getKnowledgeEdges).toHaveBeenCalledWith(context, 'node:FB:Motor', undefined)
     expect(onNodeSelect).toHaveBeenCalledWith(nodes[1])
     expect(onEdgeSelect).toHaveBeenCalledWith(null)
   })
 
   it('reports edge selection when an edge row is clicked', async () => {
     const onEdgeSelect = vi.fn()
-    const { host } = await render(<NodeEdgesView projectName="PLC_1" onEdgeSelect={onEdgeSelect} />)
+    const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" onEdgeSelect={onEdgeSelect} />)
 
     await act(async () => rowByText(host, 'edge:CALLS:Main->Motor')?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
@@ -101,7 +103,7 @@ describe('NodeEdgesView', () => {
   })
 
   it('filters node rows by the node search box', async () => {
-    const { host } = await render(<NodeEdgesView projectName="PLC_1" />)
+    const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" />)
     const input = host.querySelector<HTMLInputElement>('input[placeholder="Search nodes..."]')!
 
     await act(async () => typeInto(input, 'motor'))
@@ -111,7 +113,7 @@ describe('NodeEdgesView', () => {
   })
 
   it('filters edge rows by the edge search box', async () => {
-    const { host } = await render(<NodeEdgesView projectName="PLC_1" />)
+    const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" />)
     const input = host.querySelector<HTMLInputElement>('input[placeholder="Search edges..."]')!
 
     await act(async () => typeInto(input, 'contains'))
@@ -121,7 +123,7 @@ describe('NodeEdgesView', () => {
   })
 
   it('refetches nodes when the kind filter changes', async () => {
-    const { host } = await render(<NodeEdgesView projectName="PLC_1" />)
+    const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" />)
     mocked.getKnowledgeNodes.mockClear()
     const select = host.querySelector('select')!
 
@@ -131,6 +133,6 @@ describe('NodeEdgesView', () => {
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })
 
-    expect(mocked.getKnowledgeNodes).toHaveBeenCalledWith('PLC_1', 'FB')
+    expect(mocked.getKnowledgeNodes).toHaveBeenCalledWith(context, 'FB')
   })
 })

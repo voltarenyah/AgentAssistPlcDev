@@ -5,6 +5,7 @@ import * as api from '@/api/client'
 /* ── Props ────────────────────────────────────────────── */
 
 interface NodeEdgesViewProps {
+  context: api.KnowledgeGraphContext
   projectName: string
   onNodeSelect?: (node: api.GraphNode | null) => void
   onEdgeSelect?: (edge: api.GraphEdge | null) => void
@@ -12,10 +13,11 @@ interface NodeEdgesViewProps {
 
 /* ── Component ────────────────────────────────────────── */
 
-export default function NodeEdgesView({ projectName, onNodeSelect, onEdgeSelect }: NodeEdgesViewProps) {
+export default function NodeEdgesView({ context, projectName, onNodeSelect, onEdgeSelect }: NodeEdgesViewProps) {
   /* ── DB existence check ───────────────────────────── */
   const [dbExists, setDbExists] = useState(true)
   const [initialCheckDone, setInitialCheckDone] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
 
   /* ── Node state ───────────────────────────────────── */
   const [nodes, setNodes] = useState<api.GraphNode[]>([])
@@ -62,35 +64,43 @@ export default function NodeEdgesView({ projectName, onNodeSelect, onEdgeSelect 
 
   /* ── Initial DB check ─────────────────────────────── */
   useEffect(() => {
-    // Check if the knowledge DB exists by fetching node kinds
-    api.getKnowledgeNodeKinds(projectName)
+    // A 404 means the knowledge DB has not been built yet; anything else is a real error.
+    setCheckError(null)
+    api.getKnowledgeNodeKinds(context)
       .then(() => { setDbExists(true); setInitialCheckDone(true) })
-      .catch(() => { setDbExists(false); setInitialCheckDone(true) })
-  }, [projectName])
+      .catch(e => {
+        if ((e as { status?: number }).status === 404) {
+          setDbExists(false)
+        } else {
+          setCheckError(e instanceof Error ? e.message : 'Failed to reach the knowledge API')
+        }
+        setInitialCheckDone(true)
+      })
+  }, [context])
 
   /* ── Fetch node kinds on mount ─────────────────────── */
   useEffect(() => {
     setNodesLoading(true)
     setNodesError(null)
-    api.getKnowledgeNodeKinds(projectName)
+    api.getKnowledgeNodeKinds(context)
       .then(data => setNodeKinds(data.kinds))
       .catch(e => setNodesError(e instanceof Error ? e.message : 'Failed to load node kinds'))
       .finally(() => setNodesLoading(false))
-  }, [projectName])
+  }, [context])
 
   /* ── Fetch nodes when kind filter changes ──────────── */
   const fetchNodes = useCallback(async () => {
     setNodesLoading(true)
     setNodesError(null)
     try {
-      const data = await api.getKnowledgeNodes(projectName, selectedKind || undefined)
+      const data = await api.getKnowledgeNodes(context, selectedKind || undefined)
       setNodes(data.nodes)
     } catch (e) {
       setNodesError(e instanceof Error ? e.message : 'Failed to load nodes')
     } finally {
       setNodesLoading(false)
     }
-  }, [projectName, selectedKind])
+  }, [context, selectedKind])
 
   useEffect(() => {
     if (initialCheckDone && dbExists) {
@@ -100,17 +110,17 @@ export default function NodeEdgesView({ projectName, onNodeSelect, onEdgeSelect 
 
   /* ── Fetch edge types ──────────────────────────────── */
   useEffect(() => {
-    api.getKnowledgeEdgeTypes(projectName)
+    api.getKnowledgeEdgeTypes(context)
       .then(data => setEdgeTypes(data.types))
       .catch(() => { /* non-critical */ })
-  }, [projectName])
+  }, [context])
 
   /* ── Fetch edges; a selected node filters to its related edges (from OR to) ── */
   const fetchEdges = useCallback(async (nodeId?: string) => {
     setEdgesLoading(true)
     setEdgesError(null)
     try {
-      const data = await api.getKnowledgeEdges(projectName, nodeId, selectedEdgeType || undefined)
+      const data = await api.getKnowledgeEdges(context, nodeId, selectedEdgeType || undefined)
       setEdges(data.edges)
       setEdgesTruncated(data.truncated ?? false)
     } catch (e) {
@@ -118,7 +128,7 @@ export default function NodeEdgesView({ projectName, onNodeSelect, onEdgeSelect 
     } finally {
       setEdgesLoading(false)
     }
-  }, [projectName, selectedEdgeType])
+  }, [context, selectedEdgeType])
 
   useEffect(() => {
     if (initialCheckDone && dbExists) {
@@ -232,6 +242,21 @@ export default function NodeEdgesView({ projectName, onNodeSelect, onEdgeSelect 
         <Loader2 className="h-6 w-6 animate-spin" style={{ color: 'var(--primary)' }} />
         <span className="text-xs" style={{ color: 'var(--muted-foreground)' }}>
           Loading knowledge graph...
+        </span>
+      </div>
+    )
+  }
+
+  /* ── Knowledge API error (not a missing DB) ────────── */
+  if (checkError) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6">
+        <Database className="h-8 w-8" style={{ color: 'var(--destructive)' }} />
+        <span className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>
+          Failed to load the knowledge graph
+        </span>
+        <span className="text-xs text-center max-w-md" style={{ color: 'var(--destructive)' }}>
+          {checkError}
         </span>
       </div>
     )

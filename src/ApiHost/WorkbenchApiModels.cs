@@ -267,6 +267,51 @@ public static class WorkbenchEndpoints
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s) => { s.Worktree(id, wt); s.Select(id, wt); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.ListDevices(id, wt));
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
+
+        // Device-scoped knowledge-graph browsing. Unlike the compatibility /api/knowledge/* endpoints,
+        // these resolve the device from explicit path identity, so they work without a prior /select POST.
+        static async Task<IResult> KnowledgeQuery(
+            WorkbenchApiState s,
+            ApiMcpGateway gateway,
+            string id,
+            string wt,
+            string device,
+            string tool,
+            IReadOnlyDictionary<string, object?> args,
+            CancellationToken ct)
+        {
+            var context = s.Device(id, wt, device).Context;
+            if (!File.Exists(context.KnowledgeDbPath))
+            {
+                return Results.NotFound(new
+                {
+                    error = "DB_NOT_FOUND",
+                    message = $"Knowledge database '{context.KnowledgeDbPath}' was not found. Run knowledge update or rebuild first.",
+                });
+            }
+
+            var arguments = new Dictionary<string, object?>(args) { ["dbPath"] = context.KnowledgeDbPath };
+            return Results.Ok(await gateway.For(tool).CallAsync<System.Text.Json.JsonElement>(tool, arguments, ct));
+        }
+
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/node-kinds",
+            async (string id, string wt, string device, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+                await KnowledgeQuery(s, gateway, id, wt, device, "query_node_kinds", new Dictionary<string, object?>(), ct));
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/nodes",
+            async (string id, string wt, string device, string? kind, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+                await KnowledgeQuery(s, gateway, id, wt, device, "query_nodes", new Dictionary<string, object?> { ["kind"] = kind }, ct));
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/edge-types",
+            async (string id, string wt, string device, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+                await KnowledgeQuery(s, gateway, id, wt, device, "query_edge_types", new Dictionary<string, object?>(), ct));
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/edges",
+            async (string id, string wt, string device, string? nodeId, string? type, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+                await KnowledgeQuery(s, gateway, id, wt, device, "query_edges", new Dictionary<string, object?> { ["nodeId"] = nodeId, ["type"] = type }, ct));
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/node-properties",
+            async (string id, string wt, string device, string nodeId, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+                await KnowledgeQuery(s, gateway, id, wt, device, "query_node_properties", new Dictionary<string, object?> { ["nodeId"] = nodeId }, ct));
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/edge-properties",
+            async (string id, string wt, string device, string edgeId, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+                await KnowledgeQuery(s, gateway, id, wt, device, "query_edge_properties", new Dictionary<string, object?> { ["edgeId"] = edgeId }, ct));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/tia/open", async (
             string workbenchId,
             string worktreeId,

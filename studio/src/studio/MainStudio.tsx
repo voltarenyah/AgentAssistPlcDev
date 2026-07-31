@@ -365,6 +365,12 @@ export default function MainStudio() {
     () => activeWorkbench?.worktrees.find(worktree => worktree.worktreeId === selection.worktreeId) ?? null,
     [activeWorkbench, selection.worktreeId],
   )
+  const knowledgeContext = useMemo<api.KnowledgeGraphContext | null>(
+    () => selection.workbenchId && selection.worktreeId && selection.deviceId
+      ? { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+      : null,
+    [selection.workbenchId, selection.worktreeId, selection.deviceId],
+  )
   const deviceView = deviceSelection?.view ?? null
   const deviceSessions = deviceSelection?.sessions ?? []
   const deviceInfo = deviceView?.snapshot ?? null
@@ -1487,11 +1493,14 @@ export default function MainStudio() {
                     </section>
                     </div>
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
-                      <NodeEdgesView
-                        projectName={deviceInfo?.plcName ?? selection.deviceId ?? ''}
-                        onNodeSelect={node => setKnowledgeSelection(previous => ({ ...previous, node }))}
-                        onEdgeSelect={edge => setKnowledgeSelection(previous => ({ ...previous, edge }))}
-                      />
+                      {knowledgeContext && (
+                        <NodeEdgesView
+                          context={knowledgeContext}
+                          projectName={deviceInfo?.plcName ?? selection.deviceId ?? ''}
+                          onNodeSelect={node => setKnowledgeSelection(previous => ({ ...previous, node }))}
+                          onEdgeSelect={edge => setKnowledgeSelection(previous => ({ ...previous, edge }))}
+                        />
+                      )}
                     </div>
                   </div>
                 )}
@@ -1509,9 +1518,9 @@ export default function MainStudio() {
             </>
           )}
         </main>
-        {selection.deviceId && activeTab === 'knowledge' && (
+        {selection.deviceId && activeTab === 'knowledge' && knowledgeContext && (
           <KnowledgePropertiesDock
-            projectName={deviceInfo?.plcName ?? selection.deviceId}
+            context={knowledgeContext}
             node={knowledgeSelection.node}
             edge={knowledgeSelection.edge}
             hidden={!sessionDockVisible}
