@@ -94,7 +94,7 @@ public static class ChatSessionExporter
         string systemPromptCaption,
         Action<StringBuilder> appendToolSection)
     {
-        var userTurns = history.Count(message => message.Role == "user");
+        var userTurns = history.Count(message => message.Role == "user" && !SystemPrompt.IsContextMessage(message));
         var promptTokens = roundUsages.Sum(usage => usage?.PromptTokens ?? 0);
         var completionTokens = roundUsages.Sum(usage => usage?.CompletionTokens ?? 0);
         var reasoningTokens = roundUsages.Sum(usage => usage?.ReasoningTokens ?? 0);
@@ -136,6 +136,12 @@ public static class ChatSessionExporter
             {
                 case "system":
                     continue; // rendered above
+                case "user" when SystemPrompt.IsContextMessage(message):
+                    markdown.AppendLine($"### {messageIndex}. runtime context — {timestamp}");
+                    markdown.AppendLine();
+                    AppendFenced(markdown, "text", message.Content ?? string.Empty);
+                    markdown.AppendLine();
+                    break;
                 case "user":
                     markdown.AppendLine($"### {messageIndex}. user — {timestamp}");
                     markdown.AppendLine();

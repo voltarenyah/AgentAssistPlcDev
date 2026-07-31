@@ -232,6 +232,7 @@ public static class CompatibilityEndpoints
                     {
                         kind = "meta",
                         hitRoundCap = snapshot.HitRoundCap,
+                        compactions = snapshot.Compactions,
                         usage = snapshot.Usage is { } usage
                             ? new
                             {
@@ -290,6 +291,7 @@ public static class CompatibilityEndpoints
         app.MapGet("/api/config/settings", (IConfiguration configuration, CompatibilityRuntimeState state) =>
         {
             var settings = ApiChatService.Settings(configuration, state);
+            var policy = ApiChatService.LoopPolicy(configuration, state);
             return Results.Ok(new
             {
                 model = settings.Model,
@@ -298,6 +300,14 @@ public static class CompatibilityEndpoints
                 temperature = settings.Temperature,
                 topP = settings.TopP,
                 contextWindow = ApiChatService.ContextWindow(configuration),
+                roundLimit = policy.RoundLimit,
+                promptTokenBudget = policy.PromptTokenBudget,
+                promptTokenWarningThreshold = policy.PromptTokenWarningThreshold,
+                toolResultMaxChars = policy.ToolResultMaxChars,
+                toolResultCompactChars = policy.ToolResultCompactChars,
+                historyTokenThreshold = policy.HistoryTokenThreshold,
+                recentTurnsToKeep = policy.RecentTurnsToKeep,
+                collapsedAnswerChars = policy.CollapsedAnswerChars,
             });
         });
         app.MapGet("/api/chat/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
@@ -451,7 +461,7 @@ public static class CompatibilityEndpoints
     }
 }
 
-public sealed record ChatTurnSnapshot(UsageInfo? Usage, bool HitRoundCap);
+public sealed record ChatTurnSnapshot(UsageInfo? Usage, bool HitRoundCap, int Compactions);
 
 internal sealed class ApiChatService(
     IServiceProvider services,
@@ -486,13 +496,14 @@ internal sealed class ApiChatService(
         chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
             ? active.Loop.History : Array.Empty<ChatMessage>();
 
-    /// <summary>Last-turn state for the UI: exact context size (last billed prompt) and the round-cap flag.</summary>
+    /// <summary>Last-turn state for the UI: exact context size (last billed prompt), the round-cap flag, compaction count.</summary>
     public ChatTurnSnapshot TurnSnapshot(DeviceContext device) =>
         chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
             ? new ChatTurnSnapshot(
                 active.Loop.RoundUsages.LastOrDefault(usage => usage is not null),
-                active.Loop.LastTurnHitRoundCap)
-            : new ChatTurnSnapshot(null, false);
+                active.Loop.LastTurnHitRoundCap,
+                active.Loop.LastTurnCompactions)
+            : new ChatTurnSnapshot(null, false, 0);
 
     /// <summary>Extends the active loop's round budget (the "continue" affordance after a round cap).</summary>
     public bool GrantMoreRounds(DeviceContext device, int additional)
@@ -652,6 +663,7 @@ internal sealed class ApiChatService(
                     $"Knowledge DB: {device.KnowledgeDbPath}"),
                 Settings(configuration, state),
                 sandbox);
+            loop.Apply(LoopPolicy(configuration, state));
             if (restored is not null) loop.RestoreFrom(restored.Messages, restored.RoundUsages);
             active = new ActiveChat(loop, session);
             chats[contextKey] = active;
@@ -683,6 +695,30 @@ internal sealed class ApiChatService(
         int.TryParse(configuration["chatSettings:contextWindow"] ?? configuration["deepSeekContextWindow"], out var window) && window > 0
             ? window
             : DefaultContextWindow;
+
+    /// <summary>Tunable AgentLoop limits: live chat-settings JSON first, then chatSettings:* config.</summary>
+    internal static ChatLoopPolicy LoopPolicy(
+        IConfiguration configuration,
+        CompatibilityRuntimeState state)
+    {
+        var live = state.ChatSettings;
+        string? Live(string name) => live is { ValueKind: JsonValueKind.Object } value
+            && value.TryGetProperty(name, out var property) ? property.ToString() : null;
+        int Int(string name, int fallback) =>
+            int.TryParse(Live(name) ?? configuration[$"chatSettings:{name}"], out var value) && value > 0 ? value : fallback;
+        var defaults = new ChatLoopPolicy();
+        return new ChatLoopPolicy
+        {
+            RoundLimit = Int("roundLimit", defaults.RoundLimit),
+            PromptTokenBudget = Int("promptTokenBudget", defaults.PromptTokenBudget),
+            PromptTokenWarningThreshold = Int("promptTokenWarningThreshold", defaults.PromptTokenWarningThreshold),
+            ToolResultMaxChars = Int("toolResultMaxChars", defaults.ToolResultMaxChars),
+            ToolResultCompactChars = Int("toolResultCompactChars", defaults.ToolResultCompactChars),
+            HistoryTokenThreshold = Int("historyTokenThreshold", defaults.HistoryTokenThreshold),
+            RecentTurnsToKeep = Int("recentTurnsToKeep", defaults.RecentTurnsToKeep),
+            CollapsedAnswerChars = Int("collapsedAnswerChars", defaults.CollapsedAnswerChars),
+        };
+    }
 
     internal static ChatRequestSettings Settings(
         IConfiguration configuration,

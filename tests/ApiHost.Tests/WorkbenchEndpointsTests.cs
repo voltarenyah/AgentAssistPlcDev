@@ -1036,15 +1036,17 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var generation = runtimeState.ChatGeneration;
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync(
             "/api/config/settings",
-            new { model = "new-model", thinkingEnabled = false, reasoningEffort = "low", temperature = 0.2, topP = 0.8 })).StatusCode);
+            new { model = "new-model", thinkingEnabled = false, reasoningEffort = "low", temperature = 0.2, topP = 0.8, historyTokenThreshold = 12345 })).StatusCode);
         Assert.Equal(generation + 1, runtimeState.ChatGeneration);
         Assert.Equal("new-model", runtimeState.ChatSettings!.Value.GetProperty("model").GetString());
+        Assert.Equal(12_345, runtimeState.ChatSettings!.Value.GetProperty("historyTokenThreshold").GetInt32());
         var resolvedSettings = await client.GetFromJsonAsync<JsonElement>("/api/config/settings");
         Assert.Equal("new-model", resolvedSettings.GetProperty("model").GetString());
         Assert.False(resolvedSettings.GetProperty("thinkingEnabled").GetBoolean());
         Assert.Equal("low", resolvedSettings.GetProperty("reasoningEffort").GetString());
         Assert.Equal(0.2, resolvedSettings.GetProperty("temperature").GetDouble());
         Assert.Equal(0.8, resolvedSettings.GetProperty("topP").GetDouble());
+        Assert.Equal(12_345, resolvedSettings.GetProperty("historyTokenThreshold").GetInt32());
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync(
             "/api/config/key", new { apiKey = "replacement" })).StatusCode);
         Assert.Equal(generation + 2, runtimeState.ChatGeneration);

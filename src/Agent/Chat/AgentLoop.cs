@@ -7,18 +7,23 @@ namespace Agent.Chat;
 /// <summary>
 /// The tool-calling conversation loop (buildnote/plan/agent.md): user text → DeepSeek (streaming)
 /// → MCP tool calls → final answer. Conversation history (including tool messages and assistant
-/// reasoning_content — required by the API on tool-call turns) persists across turns; the system
-/// message is rebuilt per run from the live context.
+/// reasoning_content — required by the API on tool-call turns) persists across turns. The system
+/// message is static; the volatile runtime context rides in trailing marked user messages appended
+/// only when it changes, so the byte-stable prompt prefix keeps hitting DeepSeek's context cache
+/// (plan I11). When the history grows past <see cref="HistoryTokenThreshold"/>, old turns are
+/// compacted at turn start (see <see cref="CompactHistoryIfOverThreshold"/>) so the prompt stays
+/// inside the context window.
 /// </summary>
 public sealed class AgentLoop
 {
     /// <summary>Default tool-calling round cap per turn (see <see cref="RoundLimit"/>).</summary>
     public const int MaxRounds = 12;
 
-    public const int ToolResultMaxChars = 8000;
+    /// <summary>Hard cap applied to every tool result before it enters the history.</summary>
+    public int ToolResultMaxChars { get; set; } = 8000;
 
     /// <summary>Head kept when an old tool result is compacted (see <see cref="PromptTokenBudget"/>).</summary>
-    public const int ToolResultCompactChars = 500;
+    public int ToolResultCompactChars { get; set; } = 500;
 
     private const string FinalRoundInstruction =
         "Tool budget exhausted. Answer now with what you have, cite what you found, and state clearly what remains unverified.";
@@ -29,6 +34,9 @@ public sealed class AgentLoop
     private readonly AgentSandbox? sandbox;
     private readonly List<ChatMessage> messages = new();
     private readonly List<UsageInfo?> roundUsages = new();
+
+    /// <summary>Last runtime context appended to the history; null when none was appended this run.</summary>
+    private string? lastContext;
 
     public AgentLoop(DeepSeekClient client, McpToolCatalog catalog, Func<string> contextProvider, ChatRequestSettings? settings = null, AgentSandbox? sandbox = null)
     {
@@ -63,14 +71,45 @@ public sealed class AgentLoop
     /// <summary>Estimated next-prompt size that triggers a <see cref="Progress"/> warning before the API call.</summary>
     public int PromptTokenWarningThreshold { get; set; } = 100_000;
 
+    /// <summary>Estimated or last-billed prompt size that triggers cross-turn history compaction at turn start.</summary>
+    public int HistoryTokenThreshold { get; set; } = 90_000;
+
+    /// <summary>Newest user turns never touched by cross-turn compaction.</summary>
+    public int RecentTurnsToKeep { get; set; } = 2;
+
+    /// <summary>Head kept from a collapsed turn's final assistant answer (see <see cref="CollapseOldestTurn"/>).</summary>
+    public int CollapsedAnswerChars { get; set; } = 500;
+
+    /// <summary>Head kept from a collapsed turn's user message.</summary>
+    public const int CollapsedUserChars = 1000;
+
+    private const string CollapsedMarker = "…[earlier tool rounds omitted]";
+
     /// <summary>True when the last <see cref="RunAsync"/> hit <see cref="RoundLimit"/> and ended with a forced no-tools answer.</summary>
     public bool LastTurnHitRoundCap { get; private set; }
 
-    /// <summary>The exact conversation sent to DeepSeek (system prompt first, rebuilt per turn).</summary>
+    /// <summary>Number of history-compaction events during the last <see cref="RunAsync"/> turn.</summary>
+    public int LastTurnCompactions { get; private set; }
+
+    /// <summary>The exact conversation sent to DeepSeek (static system prompt first).</summary>
     public IReadOnlyList<ChatMessage> History => messages;
 
     /// <summary>Token usage per API response, aligned 1:1 with the assistant messages in <see cref="History"/>.</summary>
     public IReadOnlyList<UsageInfo?> RoundUsages => roundUsages;
+
+    /// <summary>Applies tunable loop limits (see <see cref="ChatLoopPolicy"/>).</summary>
+    public void Apply(ChatLoopPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        RoundLimit = policy.RoundLimit;
+        PromptTokenBudget = policy.PromptTokenBudget;
+        PromptTokenWarningThreshold = policy.PromptTokenWarningThreshold;
+        ToolResultMaxChars = policy.ToolResultMaxChars;
+        ToolResultCompactChars = policy.ToolResultCompactChars;
+        HistoryTokenThreshold = policy.HistoryTokenThreshold;
+        RecentTurnsToKeep = policy.RecentTurnsToKeep;
+        CollapsedAnswerChars = policy.CollapsedAnswerChars;
+    }
 
     /// <summary>Extend this turn's tool-calling budget (the "continue" affordance after a cap).</summary>
     public void GrantMoreRounds(int additional)
@@ -90,6 +129,7 @@ public sealed class AgentLoop
     {
         messages.Clear();
         roundUsages.Clear();
+        lastContext = null;
     }
 
     /// <summary>
@@ -102,13 +142,27 @@ public sealed class AgentLoop
         messages.AddRange(history);
         roundUsages.Clear();
         roundUsages.AddRange(usages);
+
+        // Recover the last appended runtime context so an unchanged one is not duplicated.
+        lastContext = null;
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            if (SystemPrompt.ContextBody(messages[i]) is { } body)
+            {
+                lastContext = body;
+                break;
+            }
+        }
     }
 
     /// <summary>Runs one user turn to completion; returns the assistant's final text.</summary>
     public async Task<string> RunAsync(string userText, CancellationToken cancellationToken = default)
     {
         LastTurnHitRoundCap = false;
+        LastTurnCompactions = 0;
+        CompactHistoryIfOverThreshold();
         RefreshSystemMessage();
+        AppendContextIfChanged();
         messages.Add(ChatMessage.User(userText));
         var cumulativePromptTokens = 0;
         var estimateWarned = false;
@@ -237,9 +291,253 @@ public sealed class AgentLoop
 
         if (compacted > 0)
         {
+            LastTurnCompactions++;
             Progress?.Invoke(
                 $"prompt budget exceeded ({cumulativePromptTokens} > {PromptTokenBudget} cumulative); compacted {compacted} old tool result(s)");
         }
+    }
+
+    /// <summary>
+    /// Cross-turn history guard: when the conversation has grown past <see cref="HistoryTokenThreshold"/>
+    /// (estimated for the next prompt, or actually billed on the last round), old turns are compacted
+    /// at turn start in three stages — truncate old tool results, strip old reasoning_content, then
+    /// collapse whole oldest turns to their user message plus a truncated final answer. Only turns
+    /// older than the last <see cref="RecentTurnsToKeep"/> user turns are touched; the system message
+    /// and assistant↔tool pairing are preserved, and RoundUsages stays aligned 1:1 with assistant
+    /// messages. The per-turn <see cref="CompactOldToolResultsIfOverBudget"/> guard is unaffected.
+    /// </summary>
+    private void CompactHistoryIfOverThreshold()
+    {
+        var lastBilled = roundUsages.LastOrDefault(usage => usage is not null)?.PromptTokens ?? 0;
+        var estimate = EstimateNextPromptTokens();
+        if (estimate < HistoryTokenThreshold && lastBilled < HistoryTokenThreshold)
+        {
+            return;
+        }
+
+        Progress?.Invoke(
+            $"history over threshold ({estimate} estimated / {lastBilled} last billed >= {HistoryTokenThreshold}); compacting old turns");
+        var keepFrom = KeepWindowStart();
+
+        // Stage 1: shrink tool results in old turns to their head (pairing untouched).
+        var truncated = 0;
+        for (var i = 1; i < keepFrom; i++) // index 0 is the system message
+        {
+            var message = messages[i];
+            if (message.Role == "tool" && message.Content is { } content && content.Length > ToolResultCompactChars)
+            {
+                messages[i] = message with { Content = content[..ToolResultCompactChars] + "…[truncated]" };
+                truncated++;
+            }
+        }
+
+        if (truncated > 0)
+        {
+            LastTurnCompactions++;
+            Progress?.Invoke(
+                $"history compacted: truncated {truncated} old tool result(s) (~{EstimateNextPromptTokens()} estimated tokens)");
+        }
+
+        // Stage 1b: drop stale runtime-context messages in old turns — the current one travels
+        // with the keep window (see KeepWindowStart), and AppendContextIfChanged re-appends the
+        // context at the tail when compaction removed every copy of it.
+        var droppedContext = 0;
+        for (var i = keepFrom - 1; i > 0; i--)
+        {
+            if (SystemPrompt.IsContextMessage(messages[i]))
+            {
+                messages.RemoveAt(i);
+                droppedContext++;
+            }
+        }
+
+        if (droppedContext > 0)
+        {
+            keepFrom = KeepWindowStart(); // removals shifted the indices below the keep window
+            LastTurnCompactions++;
+            Progress?.Invoke($"history compacted: dropped {droppedContext} stale runtime context message(s)");
+        }
+
+        // Stage 2: drop reasoning_content from old assistant messages — the API only needs it
+        // replayed within the current tool-call chain, and it is large in thinking mode.
+        var stripped = 0;
+        for (var i = 1; i < keepFrom; i++)
+        {
+            if (messages[i].ReasoningContent != null)
+            {
+                messages[i] = messages[i] with { ReasoningContent = null };
+                stripped++;
+            }
+        }
+
+        if (stripped > 0)
+        {
+            LastTurnCompactions++;
+            Progress?.Invoke($"history compacted: stripped reasoning from {stripped} old assistant message(s)");
+        }
+
+        // Stage 3: collapse whole oldest turns while still over threshold. Each iteration
+        // strictly shrinks the history or stops, so the loop always terminates.
+        while (EstimateNextPromptTokens() >= HistoryTokenThreshold && CollapseOldestTurn())
+        {
+        }
+    }
+
+    /// <summary>
+    /// Index from which messages are protected from cross-turn compaction: the user message opening
+    /// the last <see cref="RecentTurnsToKeep"/> turns, extended backwards over the runtime-context
+    /// message traveling with that turn; 1 when fewer turns exist (everything protected).
+    /// Machine-generated context messages never open a turn (see <see cref="IsTurnBoundary"/>).
+    /// </summary>
+    private int KeepWindowStart()
+    {
+        var seen = 0;
+        for (var i = messages.Count - 1; i > 0; i--)
+        {
+            if (!IsTurnBoundary(messages[i]) || ++seen != RecentTurnsToKeep)
+            {
+                continue;
+            }
+
+            while (i > 1 && SystemPrompt.IsContextMessage(messages[i - 1]))
+            {
+                i--; // a context update immediately precedes its user message — keep them together
+            }
+
+            return i;
+        }
+
+        return 1;
+    }
+
+    /// <summary>True for real user turns; machine-generated context messages never open a turn.</summary>
+    private static bool IsTurnBoundary(ChatMessage message) =>
+        message.Role == "user" && !SystemPrompt.IsContextMessage(message);
+
+    /// <summary>
+    /// Collapses the oldest turn outside the keep window to its (truncated) user message plus its
+    /// (truncated) final assistant answer, dropping the tool rounds in between together with their
+    /// RoundUsages entries. Returns false when there is nothing left worth collapsing.
+    /// </summary>
+    private bool CollapseOldestTurn()
+    {
+        var keepFrom = KeepWindowStart();
+
+        // Oldest eligible turn: [start, end), bounded by the next user message. Turns are only
+        // ever cut at user-message boundaries, so assistant↔tool pairing survives intact.
+        var start = -1;
+        for (var i = 1; i < keepFrom; i++)
+        {
+            if (IsTurnBoundary(messages[i]))
+            {
+                start = i;
+                break;
+            }
+        }
+
+        if (start < 0)
+        {
+            return false;
+        }
+
+        var end = keepFrom;
+        for (var i = start + 1; i < keepFrom; i++)
+        {
+            if (IsTurnBoundary(messages[i]))
+            {
+                end = i;
+                break;
+            }
+        }
+
+        var answerIndex = -1;
+        var hadToolRounds = false;
+        var assistantsBefore = 0;
+        var assistantsInSpan = 0;
+        long oldChars = 0;
+        for (var i = 1; i < end; i++)
+        {
+            var message = messages[i];
+            if (i > start)
+            {
+                oldChars += MessageChars(message);
+                if (message.Role == "tool" || message.ToolCalls is { Count: > 0 })
+                {
+                    hadToolRounds = true;
+                }
+            }
+
+            if (message.Role != "assistant")
+            {
+                continue;
+            }
+
+            if (i < start)
+            {
+                assistantsBefore++;
+            }
+            else if (i > start)
+            {
+                assistantsInSpan++;
+                if (message.ToolCalls is not { Count: > 0 })
+                {
+                    answerIndex = i; // last plain assistant message: the turn's final answer
+                }
+            }
+        }
+
+        oldChars += MessageChars(messages[start]);
+        var collapsedUser = Truncate(messages[start].Content ?? string.Empty, CollapsedUserChars);
+        var collapsedAnswer = Truncate(
+            answerIndex >= 0 ? messages[answerIndex].Content ?? "(empty response from DeepSeek)" : "(no final answer recorded)",
+            CollapsedAnswerChars);
+        if (hadToolRounds)
+        {
+            collapsedAnswer += CollapsedMarker;
+        }
+
+        // Stop when collapsing would not shrink the history (already-collapsed or minimal turn).
+        if (collapsedUser.Length + collapsedAnswer.Length >= oldChars)
+        {
+            return false;
+        }
+
+        // RoundUsages is aligned 1:1 with assistant messages: drop the span's entries and add one
+        // (null — the replacement answer is not an API round) to keep the alignment exact.
+        if (assistantsInSpan > 0 && assistantsBefore < roundUsages.Count)
+        {
+            roundUsages.RemoveRange(assistantsBefore, Math.Min(assistantsInSpan, roundUsages.Count - assistantsBefore));
+        }
+
+        roundUsages.Insert(Math.Min(assistantsBefore, roundUsages.Count), null);
+
+        var replacement = answerIndex >= 0
+            ? messages[answerIndex] with { Content = collapsedAnswer, ReasoningContent = null, ToolCalls = null }
+            : ChatMessage.Assistant(collapsedAnswer);
+        messages[start] = messages[start] with { Content = collapsedUser };
+        messages.RemoveRange(start + 1, end - start - 1);
+        messages.Insert(start + 1, replacement);
+        LastTurnCompactions++;
+        Progress?.Invoke(
+            $"history compacted: collapsed turn into user + truncated answer ({end - start} messages -> 2, ~{EstimateNextPromptTokens()} estimated tokens)");
+        return true;
+    }
+
+    private static long MessageChars(ChatMessage message)
+    {
+        long chars = message.Content?.Length ?? 0;
+        chars += message.ReasoningContent?.Length ?? 0;
+        if (message.ToolCalls == null)
+        {
+            return chars;
+        }
+
+        foreach (var call in message.ToolCalls)
+        {
+            chars += call.Id.Length + call.Name.Length + call.ArgumentsJson.Length;
+        }
+
+        return chars;
     }
 
     private async Task<ChatMessage> ExecuteToolCallAsync(ChatToolCall call, CancellationToken cancellationToken)
@@ -285,9 +583,40 @@ public sealed class AgentLoop
         return ChatMessage.Tool(call.Id, content);
     }
 
+    /// <summary>
+    /// Appends the runtime context as a trailing marked user message, but only when it changed
+    /// since the last append (DeepSeek context caching, plan I11): the system prompt and all prior
+    /// history stay byte-stable, so a context update costs a small tail append instead of busting
+    /// the cache for the whole conversation. Also re-appends when cross-turn compaction removed
+    /// every copy of the current context.
+    /// </summary>
+    private void AppendContextIfChanged()
+    {
+        var context = contextProvider();
+        if (string.IsNullOrWhiteSpace(context))
+        {
+            return;
+        }
+
+        if (context == lastContext && messages.Any(SystemPrompt.IsContextMessage))
+        {
+            return;
+        }
+
+        messages.Add(ChatMessage.User(SystemPrompt.ContextMessage(context)));
+        if (lastContext != null)
+        {
+            Progress?.Invoke("runtime context refreshed; appended at the tail (cache prefix kept)");
+        }
+
+        lastContext = context;
+    }
+
     private void RefreshSystemMessage()
     {
-        var system = ChatMessage.System(SystemPrompt.Build(contextProvider()));
+        // Static rules only — identical bytes every turn, so rewriting is cache-neutral and
+        // transparently migrates restored sessions whose system message predates this shape.
+        var system = ChatMessage.System(SystemPrompt.Build());
         if (messages.Count > 0 && messages[0].Role == "system")
         {
             messages[0] = system;

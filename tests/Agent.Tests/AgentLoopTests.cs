@@ -35,7 +35,10 @@ public sealed class AgentLoopTests
         return FakeHttpEndpoint.Sse(chunks.ToArray());
     }
 
-    private static (AgentLoop Loop, FakeHttpEndpoint Endpoint, FakeToolCaller Caller, List<string> Progress, List<(string Kind, string Text)> Deltas) Create()
+    private static (AgentLoop Loop, FakeHttpEndpoint Endpoint, FakeToolCaller Caller, List<string> Progress, List<(string Kind, string Text)> Deltas) Create() =>
+        Create(() => ContextMarker);
+
+    private static (AgentLoop Loop, FakeHttpEndpoint Endpoint, FakeToolCaller Caller, List<string> Progress, List<(string Kind, string Text)> Deltas) Create(Func<string> contextProvider)
     {
         var endpoint = new FakeHttpEndpoint();
         var caller = new FakeToolCaller();
@@ -46,7 +49,7 @@ public sealed class AgentLoopTests
         var client = new DeepSeekClient("sk-test", "https://api.deepseek.com", new HttpClient(endpoint));
         var progress = new List<string>();
         var deltas = new List<(string, string)>();
-        var loop = new AgentLoop(client, catalog, () => ContextMarker);
+        var loop = new AgentLoop(client, catalog, contextProvider);
         loop.Progress += progress.Add;
         loop.StreamDelta += (kind, text) => deltas.Add((kind, text));
         return (loop, endpoint, caller, progress, deltas);
@@ -81,10 +84,14 @@ public sealed class AgentLoopTests
         Assert.Equal("call_1", toolMessage["tool_call_id"]!.GetValue<string>());
         Assert.Contains("network:000_Main_PC:12", toolMessage["content"]!.GetValue<string>());
 
-        // System prompt with the runtime context led the first request.
+        // Static system prompt leads; the runtime context follows as a marked user message.
         var firstRequest = JsonNode.Parse(endpoint.RequestBodies[0])!["messages"]!;
         Assert.Equal("system", firstRequest[0]!["role"]!.GetValue<string>());
-        Assert.Contains(ContextMarker, firstRequest[0]!["content"]!.GetValue<string>());
+        Assert.DoesNotContain(ContextMarker, firstRequest[0]!["content"]!.GetValue<string>());
+        var contextMessage = firstRequest[1]!;
+        Assert.Equal("user", contextMessage["role"]!.GetValue<string>());
+        Assert.StartsWith(SystemPrompt.ContextMessageMarker, contextMessage["content"]!.GetValue<string>());
+        Assert.Contains(ContextMarker, contextMessage["content"]!.GetValue<string>());
 
         Assert.Contains(progress, line => line.StartsWith("→ search(", StringComparison.Ordinal));
         Assert.Contains(progress, line => line.Contains("usage: 10 prompt + 5 completion tokens"));
@@ -231,13 +238,238 @@ public sealed class AgentLoopTests
         Assert.Equal("call_1", compacted["tool_call_id"]!.GetValue<string>());
         var compactedContent = compacted["content"]!.GetValue<string>();
         Assert.EndsWith("…[truncated]", compactedContent);
-        Assert.Equal(AgentLoop.ToolResultCompactChars + "…[truncated]".Length, compactedContent.Length);
-        Assert.Equal(bigResult.GetRawText()[..AgentLoop.ToolResultCompactChars], compactedContent[..AgentLoop.ToolResultCompactChars]);
+        Assert.Equal(loop.ToolResultCompactChars + "…[truncated]".Length, compactedContent.Length);
+        Assert.Equal(bigResult.GetRawText()[..loop.ToolResultCompactChars], compactedContent[..loop.ToolResultCompactChars]);
 
         Assert.Equal(smallResult.GetRawText(), toolMessages[1]!["content"]!.GetValue<string>());
         Assert.Equal(smallResult.GetRawText(), toolMessages[2]!["content"]!.GetValue<string>());
 
         AssertToolCallPairing(loop.History);
+    }
+
+    [Fact]
+    public async Task CrossTurnToolResultsCompactedWhenOverThreshold()
+    {
+        var (loop, endpoint, caller, progress, _) = Create();
+        var bigResult = JsonDocument.Parse($$"""{"text":"{{new string('x', 2000)}}"}""").RootElement;
+        endpoint
+            .RespondJson(SseToolCall("call_1", "search", "{}"))
+            .RespondJson(SseText("turn one answer"))
+            .RespondJson(SseText("turn two answer"))
+            .RespondJson(SseText("turn three answer"));
+        caller.Respond("search", bigResult);
+
+        await loop.RunAsync("turn one");
+        await loop.RunAsync("turn two");
+
+        // Trigger compaction at the next turn start, with enough margin that stage 1
+        // (saves ~1500 chars) brings the estimate back under the threshold on its own.
+        loop.RecentTurnsToKeep = 1;
+        loop.HistoryTokenThreshold = loop.EstimateNextPromptTokens() - 150;
+        await loop.RunAsync("turn three");
+
+        Assert.Contains(progress, line => line.Contains("history compacted") && line.Contains("tool result"));
+
+        // Turn three's request carries turn one's tool result shrunk to its head…
+        var requestMessages = JsonNode.Parse(endpoint.RequestBodies[^1])!["messages"]!.AsArray();
+        var toolMessage = requestMessages.Single(node => node!["role"]!.GetValue<string>() == "tool")!;
+        Assert.EndsWith("…[truncated]", toolMessage["content"]!.GetValue<string>());
+
+        // …while the kept turn survives intact, and nothing was collapsed (stage 3 not reached).
+        Assert.Contains(requestMessages, node => node!["content"]?.GetValue<string>() == "turn two answer");
+        Assert.Contains(requestMessages, node => node!["content"]?.GetValue<string>() == "turn one answer");
+        AssertToolCallPairing(loop.History);
+    }
+
+    [Fact]
+    public async Task OldReasoningStrippedAboveThreshold()
+    {
+        var (loop, endpoint, caller, progress, _) = Create();
+        endpoint
+            .RespondJson(SseToolCall("call_1", "search", "{}", reasoning: new string('r', 800)))
+            .RespondJson(SseText("turn one answer", reasoning: "turn one final thinking"))
+            .RespondJson(SseText("turn two answer"))
+            .RespondJson(SseText("turn three answer"));
+        caller.Respond("search", JsonDocument.Parse("{}").RootElement);
+
+        await loop.RunAsync("turn one");
+        await loop.RunAsync("turn two");
+
+        // Stage 2 alone (~820 chars of old reasoning) lands the estimate back under the threshold.
+        loop.RecentTurnsToKeep = 1;
+        loop.HistoryTokenThreshold = loop.EstimateNextPromptTokens() - 100;
+        await loop.RunAsync("turn three");
+
+        Assert.Contains(progress, line => line.Contains("stripped reasoning"));
+
+        // No reasoning_content is replayed for old turns; the turn itself was never collapsed.
+        var requestMessages = JsonNode.Parse(endpoint.RequestBodies[^1])!["messages"]!.AsArray();
+        Assert.DoesNotContain(requestMessages, node => node!["reasoning_content"] != null);
+        Assert.Contains(requestMessages, node => node!["content"]?.GetValue<string>() == "turn one answer");
+        AssertToolCallPairing(loop.History);
+    }
+
+    [Fact]
+    public async Task OldestTurnsCollapsedKeepingPairingAndRecentTurns()
+    {
+        var (loop, endpoint, caller, progress, _) = Create();
+        var bigResult = JsonDocument.Parse($$"""{"text":"{{new string('x', 3000)}}"}""").RootElement;
+        endpoint
+            .RespondJson(SseToolCall("call_1", "search", "{}"))
+            .RespondJson(SseText("turn one answer"))
+            .RespondJson(SseToolCall("call_2", "search", "{}"))
+            .RespondJson(SseText("turn two answer"))
+            .RespondJson(SseText("turn three answer"));
+        caller.Respond("search", bigResult).Respond("search", bigResult);
+
+        await loop.RunAsync("turn one");
+        await loop.RunAsync("turn two");
+
+        loop.RecentTurnsToKeep = 1;
+        loop.HistoryTokenThreshold = 1; // force every stage; collapses everything eligible
+        await loop.RunAsync("turn three");
+
+        Assert.Contains(progress, line => line.Contains("collapsed turn"));
+
+        // Turn one collapsed to user + truncated final answer; its tool rounds are gone.
+        var history = loop.History;
+        Assert.DoesNotContain(history, message => message.ToolCallId == "call_1");
+        var collapsed = history.First(message => message.Content?.Contains("turn one answer") == true);
+        Assert.Equal("assistant", collapsed.Role);
+        Assert.EndsWith("…[earlier tool rounds omitted]", collapsed.Content);
+        Assert.Null(collapsed.ReasoningContent);
+
+        // The keep window (turns two and three) stays fully intact.
+        Assert.Contains(history, message => message.ToolCallId == "call_2");
+        Assert.Contains(history, message => message.Content == "turn two answer");
+        Assert.Contains(history, message => message.Content == "turn three answer");
+
+        AssertToolCallPairing(history);
+
+        // Compaction events are counted for the turn snapshot.
+        Assert.True(loop.LastTurnCompactions > 0);
+
+        // RoundUsages stays aligned 1:1 with the assistant messages in History.
+        Assert.Equal(history.Count(message => message.Role == "assistant"), loop.RoundUsages.Count);
+    }
+
+    [Fact]
+    public async Task ContextAppendedOnceWhenUnchanged()
+    {
+        var (loop, endpoint, _, _, _) = Create();
+        endpoint.RespondJson(SseText("one")).RespondJson(SseText("two"));
+
+        await loop.RunAsync("first");
+        await loop.RunAsync("second");
+
+        Assert.Equal(1, loop.History.Count(SystemPrompt.IsContextMessage));
+        var secondRequest = JsonNode.Parse(endpoint.RequestBodies[1])!["messages"]!.AsArray();
+        Assert.Equal(
+            1,
+            secondRequest.Count(node =>
+                node!["content"]?.GetValue<string>().StartsWith(SystemPrompt.ContextMessageMarker, StringComparison.Ordinal) == true));
+    }
+
+    [Fact]
+    public async Task ContextChangeAppendsAtTailKeepingPrefixStable()
+    {
+        var context = "CTX v1";
+        var (loop, endpoint, _, progress, _) = Create(() => context);
+        endpoint.RespondJson(SseText("answer one")).RespondJson(SseText("answer two"));
+
+        await loop.RunAsync("question one");
+        context = "CTX v2 — knowledge now stale";
+        await loop.RunAsync("question two");
+
+        var first = JsonNode.Parse(endpoint.RequestBodies[0])!["messages"]!.AsArray();
+        var second = JsonNode.Parse(endpoint.RequestBodies[1])!["messages"]!.AsArray();
+
+        // The shared prefix (system + ctx1 + user1 + assistant1) is byte-identical across turns.
+        Assert.True(second.Count > first.Count);
+        for (var i = 0; i < first.Count; i++)
+        {
+            Assert.Equal(first[i]!.ToJsonString(), second[i]!.ToJsonString());
+        }
+
+        // The update rides at the tail, right before the new user message.
+        Assert.Equal("user", second[^2]!["role"]!.GetValue<string>());
+        Assert.Contains("CTX v2", second[^2]!["content"]!.GetValue<string>());
+        Assert.Equal("question two", second[^1]!["content"]!.GetValue<string>());
+
+        // Both context versions are kept frozen in history; the update was narrated.
+        Assert.Equal(2, loop.History.Count(SystemPrompt.IsContextMessage));
+        Assert.Contains(progress, line => line.Contains("runtime context refreshed"));
+    }
+
+    [Fact]
+    public async Task ContextMessageNotATurnBoundaryForCompaction()
+    {
+        var context = "CTX v1";
+        var (loop, endpoint, caller, progress, _) = Create(() => context);
+        var bigResult = JsonDocument.Parse($$"""{"text":"{{new string('x', 3000)}}"}""").RootElement;
+        endpoint
+            .RespondJson(SseToolCall("call_1", "search", "{}"))
+            .RespondJson(SseText("turn one answer"))
+            .RespondJson(SseText("turn two answer"))
+            .RespondJson(SseText("turn three answer"));
+        caller.Respond("search", bigResult);
+
+        await loop.RunAsync("turn one");
+        context = "CTX v2";
+        await loop.RunAsync("turn two");
+
+        loop.RecentTurnsToKeep = 1;
+        loop.HistoryTokenThreshold = 1; // force every stage
+        await loop.RunAsync("turn three");
+
+        // Stage-3 collapse still ran (context messages do not block it as degenerate turns)…
+        Assert.Contains(progress, line => line.Contains("collapsed turn"));
+        AssertToolCallPairing(loop.History);
+        Assert.Contains(loop.History, message => message.Content == "turn three answer");
+
+        // …and the current context message survived inside the keep window.
+        Assert.Contains(
+            loop.History,
+            message => SystemPrompt.IsContextMessage(message) && message.Content!.Contains("CTX v2"));
+    }
+
+    [Fact]
+    public async Task ContextNotDuplicatedAfterRestore()
+    {
+        var (loop, endpoint, _, _, _) = Create();
+        endpoint.RespondJson(SseText("one")).RespondJson(SseText("two"));
+
+        await loop.RunAsync("first");
+        loop.RestoreFrom(loop.History.ToList(), loop.RoundUsages.ToList());
+        await loop.RunAsync("second");
+
+        Assert.Equal(1, loop.History.Count(SystemPrompt.IsContextMessage));
+    }
+
+    [Fact]
+    public void ApplyPolicyUpdatesAllKnobs()
+    {
+        var (loop, _, _, _, _) = Create();
+        loop.Apply(new ChatLoopPolicy
+        {
+            RoundLimit = 3,
+            PromptTokenBudget = 1_000,
+            PromptTokenWarningThreshold = 2_000,
+            ToolResultMaxChars = 100,
+            ToolResultCompactChars = 50,
+            HistoryTokenThreshold = 4_000,
+            RecentTurnsToKeep = 5,
+            CollapsedAnswerChars = 60,
+        });
+
+        Assert.Equal(3, loop.RoundLimit);
+        Assert.Equal(1_000, loop.PromptTokenBudget);
+        Assert.Equal(2_000, loop.PromptTokenWarningThreshold);
+        Assert.Equal(100, loop.ToolResultMaxChars);
+        Assert.Equal(50, loop.ToolResultCompactChars);
+        Assert.Equal(4_000, loop.HistoryTokenThreshold);
+        Assert.Equal(5, loop.RecentTurnsToKeep);
+        Assert.Equal(60, loop.CollapsedAnswerChars);
     }
 
     private static void AssertToolCallPairing(IReadOnlyList<ChatMessage> history)
@@ -272,7 +504,7 @@ public sealed class AgentLoopTests
 
         var toolMessage = Last(JsonNode.Parse(endpoint.RequestBodies[1])!["messages"]!);
         var content = toolMessage["content"]!.GetValue<string>();
-        Assert.Equal(AgentLoop.ToolResultMaxChars + 1, content.Length); // +1 for the ellipsis
+        Assert.Equal(loop.ToolResultMaxChars + 1, content.Length); // +1 for the ellipsis
         Assert.EndsWith("…", content);
     }
 

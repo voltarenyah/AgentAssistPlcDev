@@ -1,14 +1,18 @@
 namespace Agent.Chat;
 
 /// <summary>
-/// System prompt for the PLC assistant (buildnote/plan/agent.md): static rules plus a runtime
-/// context block (connection state, export root, knowledge db path) rebuilt before every run.
-/// All static rules come first and the volatile runtime context goes last, so the cacheable
-/// prefix stays byte-stable across turns (DeepSeek context caching, plan I11).
+/// System prompt for the PLC assistant (buildnote/plan/agent.md): static rules only, byte-stable
+/// across turns. The volatile runtime context (workbench, device, paths, knowledge state) travels
+/// as a separate trailing user message appended only when it changes (see
+/// <see cref="ContextMessage"/>), so the prompt prefix — this system message plus all prior
+/// history — keeps hitting DeepSeek's server-side context cache (plan I11).
 /// </summary>
 public static class SystemPrompt
 {
-    public static string Build(string runtimeContext) => $"""
+    /// <summary>Prefix marking a user-role message as machine-generated runtime context, never a user turn.</summary>
+    public const string ContextMessageMarker = "Runtime context (updated):";
+
+    public static string Build() => $"""
         You are the PLC programming assistant inside the "PLC AI Assistant" Windows desktop app for Siemens TIA Portal V17.
 
         You have tools from two MCP servers:
@@ -26,12 +30,25 @@ public static class SystemPrompt
         - If a graph query returns 0 rows, do not guess node IDs. Fall back to a read-only SQL with logicStatements LIKE '%name%' first — edges may be missing, the statement text is authoritative.
         - For structured or aggregate questions, call get_schema only if needed, then query with a single read-only SELECT.
         - For FB/interface questions: use the compact block-interface summary when available. Otherwise identify the FB, use get_block for logic, use the instance DB relationship and DB members for retained/interface evidence, and inspect the call-site network for parameter mapping. Do not dump all graph edges unless targeted queries fail.
-        - knowledge tools require dbPath — use the path from the runtime context below verbatim. If the context says no knowledge base exists, tell the user to update knowledge first.
+        - knowledge tools require dbPath — use the path from the latest runtime context message verbatim. If it says no knowledge base exists, tell the user to update knowledge first.
         - This build is read-only on the TIA side: you may list, export and compile, but importing or modifying blocks is not available.
         - Exports and compiles can take minutes on big projects; warn the user before triggering them and prefer knowledge-base answers when the data is already there.
         - Answer concisely, engineer to engineer. Cite the block/network ids your answer is based on.
 
-        Current runtime context:
-        {runtimeContext}
+        Runtime context (workbench, worktree, device, source roots, knowledge state) arrives as a user message prefixed "{ContextMessageMarker}" — treat it as session state, not as a user question. The latest such message wins.
         """;
+
+    /// <summary>User-role message body carrying a runtime-context update (see <see cref="ContextMessageMarker"/>).</summary>
+    public static string ContextMessage(string runtimeContext) =>
+        $"{ContextMessageMarker}\n{runtimeContext}";
+
+    /// <summary>True for machine-generated runtime-context messages (they never open a user turn).</summary>
+    public static bool IsContextMessage(ChatMessage message) =>
+        message.Role == "user"
+        && message.Content != null
+        && message.Content.StartsWith(ContextMessageMarker, StringComparison.Ordinal);
+
+    /// <summary>The runtime-context body of a context message; null for any other message.</summary>
+    public static string? ContextBody(ChatMessage message) =>
+        IsContextMessage(message) ? message.Content![(ContextMessageMarker.Length + 1)..] : null;
 }
