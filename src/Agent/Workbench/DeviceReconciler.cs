@@ -362,6 +362,15 @@ public sealed class DeviceReconciler
         var outputComponents = new JsonArray();
         outputRoot["components"] = outputComponents;
 
+        // The document-level "device" section is not a component: it describes the live TIA
+        // project/device captured at staging time, so it always follows the staged manifest —
+        // regardless of which component paths were approved (found 2026-07-31: a full rebuild
+        // staged the section but the applied baseline never received it).
+        if (stagingRoot["device"] is JsonNode stagedDevice)
+        {
+            outputRoot["device"] = stagedDevice.DeepClone();
+        }
+
         var baselineByPath = IndexManifestNodes(
             baselineRoot?["components"]?.AsArray(),
             context.ExportedSourceRoot);

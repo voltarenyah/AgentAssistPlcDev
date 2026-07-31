@@ -237,6 +237,45 @@ public sealed class DeviceReconcilerTests : IDisposable
     }
 
     [Fact]
+    public void ApplyCarriesStagedDeviceSectionIntoBaselineManifest()
+    {
+        // 2026-07-31: the baseline manifest is rebuilt from a baseline clone, so a staged
+        // document-level "device" section was silently dropped on apply — the overview card
+        // never appeared even after a full rebuild.
+        var fixture = CreateFixture();
+        fixture.WriteBaseline("Blocks/Changed.xml", "old");
+        fixture.WriteBaselineManifest(Component("changed", "Blocks/Changed.xml"));
+        fixture.WriteStaging("Blocks/Changed.xml", "new");
+        File.WriteAllText(
+            fixture.StagingPath("metadata.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                device = new
+                {
+                    plcName = "PLC_1",
+                    typeIdentifier = "OrderNumber:6ES7 511-1AK02-0AB0/V2.9",
+                },
+                components = new[] { Component("changed", "Blocks/Changed.xml") },
+            }));
+        var reconciler = new DeviceReconciler();
+        var preview = reconciler.Preview(fixture.Context);
+
+        reconciler.Apply(
+            fixture.Context,
+            preview,
+            new HashSet<string>(StringComparer.Ordinal) { "Blocks/Changed.xml" });
+
+        using var manifest = JsonDocument.Parse(
+            File.ReadAllText(fixture.BaselinePath("metadata.json")));
+        var device = manifest.RootElement.GetProperty("device");
+        Assert.Equal("PLC_1", device.GetProperty("plcName").GetString());
+        Assert.Equal(
+            "OrderNumber:6ES7 511-1AK02-0AB0/V2.9",
+            device.GetProperty("typeIdentifier").GetString());
+    }
+
+    [Fact]
     public void ApplyRollsBackEveryTrackedMutationWhenLaterReplacementFails()
     {
         var fixture = CreateFixture();
