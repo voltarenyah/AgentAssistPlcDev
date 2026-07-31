@@ -849,6 +849,36 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task BootstrapCompilesAndRetriesExportWhenUserApprovedCompile()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: true);
+        var engineering = new CompileRetryBootstrapCaller();
+        var calls = new List<string>();
+        var versionControl = Caller(calls)
+            .Respond("vc_add", new AddResult())
+            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "base002" });
+        var knowledge = Caller(calls)
+            .Respond("ingest_source", new IngestResult { DbPath = fixture.Context.KnowledgeDbPath });
+        var coordinator = Create(
+            fixture,
+            engineering: engineering,
+            knowledge: knowledge,
+            versionControl: versionControl);
+
+        var result = await coordinator.BootstrapDeviceAsync(
+            fixture.Context,
+            CancellationToken.None,
+            allowCompile: true);
+
+        Assert.Equal(RefreshApplyState.Committed, result.Baseline.State);
+        Assert.Equal(
+            new[] { "rebuild_export", "compile_plc", "rebuild_export" },
+            engineering.Calls);
+        Assert.Equal("PLC_1", Property<string>(engineering.CallArgs["compile_plc"].Single(), "plcName"));
+        Assert.Equal("base002", result.Baseline.CommitSha);
+    }
+
+    [Fact]
     public async Task BootstrapSurfacesCompileRequiredWithoutCompilingCommittingOrIngesting()
     {
         var fixture = Fixture.Create(root);
@@ -1082,6 +1112,81 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             CallArgs[tool] = new List<object> { args };
             order?.Add($"engineering:{tool}");
             var output = Property<string>(args, "outputDir");
+            Directory.CreateDirectory(Path.Combine(output, "Blocks"));
+            File.WriteAllText(Path.Combine(output, "Blocks", "A.xml"), "<a />");
+            File.WriteAllText(
+                Path.Combine(output, "metadata.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    exportStartedUtc = "2026-07-30T00:00:00Z",
+                    exportFinishedUtc = "2026-07-30T00:00:01Z",
+                    exportRoot = output,
+                    components = new[]
+                    {
+                        new
+                        {
+                            name = "A",
+                            sourcePath = "Program blocks/A",
+                            category = "FC",
+                            status = "Exported",
+                            exportedFile = "Blocks/A.xml",
+                        },
+                    },
+                }));
+            return Task.FromResult((T)(object)new[]
+            {
+                new SyncResult { PlcName = "PLC_1", ExportRoot = output },
+            });
+        }
+    }
+
+    /// <summary>First rebuild_export fails with an inconsistent block; compile_plc succeeds;
+    /// the retried export stages the same manifest + file as <see cref="BootstrapExportCaller"/>.</summary>
+    private sealed class CompileRetryBootstrapCaller : FakeToolCaller
+    {
+        private int exportAttempts;
+
+        public override Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (!CallArgs.TryGetValue(tool, out var list))
+            {
+                list = new List<object>();
+                CallArgs[tool] = list;
+            }
+
+            list.Add(args);
+            if (tool == "compile_plc")
+            {
+                return Task.FromResult((T)(object)new CompileResult { State = "success" });
+            }
+
+            var output = Property<string>(args, "outputDir");
+            if (++exportAttempts == 1)
+            {
+                Directory.CreateDirectory(output);
+                return Task.FromResult((T)(object)new[]
+                {
+                    new SyncResult
+                    {
+                        PlcName = "PLC_1",
+                        Failed = new[]
+                        {
+                            new SyncChange
+                            {
+                                Name = "A",
+                                Category = "FC",
+                                Reason = "Block 'A' is inconsistent. Compile it first before export.",
+                            },
+                        },
+                    },
+                });
+            }
+
             Directory.CreateDirectory(Path.Combine(output, "Blocks"));
             File.WriteAllText(Path.Combine(output, "Blocks", "A.xml"), "<a />");
             File.WriteAllText(

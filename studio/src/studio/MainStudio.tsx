@@ -70,6 +70,7 @@ type ActiveOperation = {
 }
 type CompilePrompt = {
   message: string
+  flow: 'compare' | 'rebuild'
   context: {
     workbenchId: string
     worktreeId: string
@@ -813,7 +814,7 @@ export default function MainStudio() {
       if (!allowCompile
         && error instanceof api.WorkbenchApiError
         && error.code === 'PLC_COMPILE_REQUIRED') {
-        setCompilePrompt({ message: error.message, context })
+        setCompilePrompt({ message: error.message, flow: 'compare', context })
       } else {
         toast.error(displayError(error))
       }
@@ -1026,17 +1027,29 @@ export default function MainStudio() {
 
   const [rebuildArmed, setRebuildArmed] = useState(false)
 
-  const rebuildProject = async () => {
+  const rebuildProject = async (allowCompile = false) => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+    setCompilePrompt(null)
     setOperation('bootstrap-device')
-    const op = beginOperation('bootstrap-device', 'Rebuilding project: full export, baseline commit, knowledge ingest...')
+    const op = beginOperation(
+      'bootstrap-device',
+      allowCompile
+        ? 'Compiling selected PLC and retrying rebuild...'
+        : 'Rebuilding project: full export, baseline commit, knowledge ingest...',
+    )
     try {
-      await api.bootstrapDevice(context.workbenchId, context.worktreeId, context.deviceId, op.id, 'rebuild: full export')
+      await api.bootstrapDevice(context.workbenchId, context.worktreeId, context.deviceId, op.id, 'rebuild: full export', allowCompile)
       await reloadDeviceSnapshot(context)
       toast.success('Project rebuilt from TIA — baseline and knowledge refreshed.')
     } catch (error) {
-      toast.error(displayError(error))
+      if (!allowCompile
+        && error instanceof api.WorkbenchApiError
+        && error.code === 'PLC_COMPILE_REQUIRED') {
+        setCompilePrompt({ message: error.message, flow: 'rebuild', context })
+      } else {
+        toast.error(displayError(error))
+      }
     } finally {
       setOperation(null)
     }
@@ -1537,9 +1550,9 @@ export default function MainStudio() {
       {compilePrompt && (
         <CompileApprovalDialog
           prompt={compilePrompt}
-          busy={operation === 'stage-refresh'}
+          busy={operation === 'stage-refresh' || operation === 'bootstrap-device'}
           onCancel={() => setCompilePrompt(null)}
-          onApprove={() => void stageRefresh(true)}
+          onApprove={() => void (compilePrompt.flow === 'rebuild' ? rebuildProject(true) : stageRefresh(true))}
         />
       )}
       {apiKeyDialogOpen && (

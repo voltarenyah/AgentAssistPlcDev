@@ -633,16 +633,19 @@ public sealed class WorkbenchCoordinator
     /// every staged file as a baseline commit, then a full knowledge ingest. Serves both the
     /// brand-new "generate PLC context" flow and the on-demand full rebuild of an established
     /// device (<paramref name="commitMessage"/> distinguishes the two in Git history).
-    /// A PLC_COMPILE_REQUIRED stage failure is surfaced as-is; the bootstrap never compiles implicitly.
+    /// A PLC_COMPILE_REQUIRED stage failure is surfaced as-is; the bootstrap only compiles when
+    /// the user explicitly acknowledged it (<paramref name="allowCompile"/>, same contract as
+    /// the compare-with-TIA stage flow).
     /// </summary>
     public async Task<DeviceBootstrapResult> BootstrapDeviceAsync(
         DeviceContext device,
         CancellationToken token,
         IOperationProgress? progress = null,
-        string commitMessage = "initial baseline: full export")
+        string commitMessage = "initial baseline: full export",
+        bool allowCompile = false)
     {
         ArgumentNullException.ThrowIfNull(device);
-        await StageRefreshAsync(device, token, progress).ConfigureAwait(false);
+        await StageRefreshAsync(device, token, progress, allowCompile).ConfigureAwait(false);
         var preview = reconciler.Preview(device);
         var approved = preview.Entries
             .Where(entry => entry.Kind is ReconciliationChangeKind.Added or ReconciliationChangeKind.Changed)

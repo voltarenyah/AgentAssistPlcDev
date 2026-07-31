@@ -331,13 +331,15 @@ public static class WorkbenchEndpoints
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/bootstrap", async (
             string workbenchId, string worktreeId, string device, BootstrapApiRequest? r, WorkbenchApiState s,
-            WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
+            WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct,
+            bool allowCompile = false) =>
             await RunOperationAsync(http, operations, "bootstrap-device", "Generating PLC context...",
                 progress => c.BootstrapDeviceAsync(
                     s.Device(workbenchId, worktreeId, device).Context,
                     ct,
                     progress,
-                    r?.CommitMessage ?? "initial baseline: full export"),
+                    r?.CommitMessage ?? "initial baseline: full export",
+                    allowCompile),
                 "PLC context generated.").ConfigureAwait(false));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/update", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
