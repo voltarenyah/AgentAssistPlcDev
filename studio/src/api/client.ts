@@ -416,8 +416,8 @@ export type DeviceBootstrapResult = {
   baseline: RefreshApplyResult
   knowledge: KnowledgeUpdateResult
 }
-export const bootstrapDevice = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string) =>
-  workbenchRequest<DeviceBootstrapResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/bootstrap`, withOperation(jsonRequest('POST'), operationId))
+export const bootstrapDevice = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string, commitMessage?: string) =>
+  workbenchRequest<DeviceBootstrapResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/bootstrap`, withOperation(jsonRequest('POST', commitMessage ? { commitMessage } : {}), operationId))
 export const prepareDeviceEdit = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string) =>
   workbenchRequest<string>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/prepare-edit`, jsonRequest('POST', { relativePath }))
 export const importDeviceSource = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string, operationId?: string) =>

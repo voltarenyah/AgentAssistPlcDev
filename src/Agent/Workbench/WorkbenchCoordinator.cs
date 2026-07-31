@@ -629,15 +629,17 @@ public sealed class WorkbenchCoordinator
         }, token);
 
     /// <summary>
-    /// Bootstraps a brand-new device without any user confirmation: full export staging,
-    /// application of every staged file as the initial baseline commit, then a full
-    /// knowledge ingest. A PLC_COMPILE_REQUIRED stage failure is surfaced as-is; the
-    /// bootstrap never compiles implicitly.
+    /// Bootstraps a device without any user confirmation: full export staging, application of
+    /// every staged file as a baseline commit, then a full knowledge ingest. Serves both the
+    /// brand-new "generate PLC context" flow and the on-demand full rebuild of an established
+    /// device (<paramref name="commitMessage"/> distinguishes the two in Git history).
+    /// A PLC_COMPILE_REQUIRED stage failure is surfaced as-is; the bootstrap never compiles implicitly.
     /// </summary>
     public async Task<DeviceBootstrapResult> BootstrapDeviceAsync(
         DeviceContext device,
         CancellationToken token,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        string commitMessage = "initial baseline: full export")
     {
         ArgumentNullException.ThrowIfNull(device);
         await StageRefreshAsync(device, token, progress).ConfigureAwait(false);
@@ -651,7 +653,7 @@ public sealed class WorkbenchCoordinator
                 new ApprovedReconciliation(preview, approved),
                 token,
                 progress,
-                "initial baseline: full export")
+                commitMessage)
             .ConfigureAwait(false);
         if (baseline.State == RefreshApplyState.FilesUpdatedCommitFailed)
         {

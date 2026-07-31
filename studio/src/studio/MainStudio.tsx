@@ -19,6 +19,7 @@ import {
   PanelRightOpen,
   Plus,
   RefreshCw,
+  RotateCw,
   Server,
   ShieldCheck,
   Sparkles,
@@ -1023,6 +1024,24 @@ export default function MainStudio() {
     }
   }
 
+  const [rebuildArmed, setRebuildArmed] = useState(false)
+
+  const rebuildProject = async () => {
+    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
+    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+    setOperation('bootstrap-device')
+    const op = beginOperation('bootstrap-device', 'Rebuilding project: full export, baseline commit, knowledge ingest...')
+    try {
+      await api.bootstrapDevice(context.workbenchId, context.worktreeId, context.deviceId, op.id, 'rebuild: full export')
+      await reloadDeviceSnapshot(context)
+      toast.success('Project rebuilt from TIA — baseline and knowledge refreshed.')
+    } catch (error) {
+      toast.error(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
   const tabs: Array<{ id: StudioTab; label: string; icon: typeof Boxes }> = [
     { id: 'overview', label: 'Device overview', icon: Cpu },
     { id: 'chat', label: 'AI chat', icon: MessageSquare },
@@ -1185,6 +1204,23 @@ export default function MainStudio() {
                           <button className="primary-button" disabled={Boolean(operation)} onClick={() => void stageRefresh()}>
                             <RefreshCw className="h-3.5 w-3.5" /> Compare with TIA
                           </button>
+                          {!isBrandNewDevice && (
+                            <button
+                              className={rebuildArmed ? 'primary-button' : 'secondary-button'}
+                              disabled={Boolean(operation)}
+                              onClick={() => {
+                                if (!rebuildArmed) {
+                                  setRebuildArmed(true)
+                                  setTimeout(() => setRebuildArmed(false), 4000)
+                                  return
+                                }
+                                setRebuildArmed(false)
+                                void rebuildProject()
+                              }}
+                            >
+                              <RotateCw className="h-3.5 w-3.5" /> {rebuildArmed ? 'Confirm full rebuild?' : 'Rebuild project'}
+                            </button>
+                          )}
                           <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void updateKnowledge(false)}>
                             <Database className="h-3.5 w-3.5" /> Update knowledge
                           </button>

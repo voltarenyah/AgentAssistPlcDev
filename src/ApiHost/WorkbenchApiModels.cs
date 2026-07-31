@@ -17,6 +17,10 @@ public sealed record RefreshApplyApiRequest(
     string[]? ApprovedPaths,
     string[]? ApprovedRemovalPaths = null);
 public sealed record SourcePathApiRequest(string RelativePath);
+
+/// <summary>Optional bootstrap/rebuild body: lets the full-rebuild button label its baseline
+/// commit differently from the initial "generate PLC context" commit.</summary>
+public sealed record BootstrapApiRequest(string? CommitMessage);
 public sealed record MergeWorktreeApiRequest(string TargetWorktreeId);
 public sealed record SessionCreateApiRequest(Agent.Chat.ChatRequestSettings Settings, string? RuntimeContext);
 public sealed record SessionSaveApiRequest(ChatSessionData Session);
@@ -326,10 +330,14 @@ public static class WorkbenchEndpoints
                 "Refresh applied.").ConfigureAwait(false);
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/bootstrap", async (
-            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            string workbenchId, string worktreeId, string device, BootstrapApiRequest? r, WorkbenchApiState s,
             WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
             await RunOperationAsync(http, operations, "bootstrap-device", "Generating PLC context...",
-                progress => c.BootstrapDeviceAsync(s.Device(workbenchId, worktreeId, device).Context, ct, progress),
+                progress => c.BootstrapDeviceAsync(
+                    s.Device(workbenchId, worktreeId, device).Context,
+                    ct,
+                    progress,
+                    r?.CommitMessage ?? "initial baseline: full export"),
                 "PLC context generated.").ConfigureAwait(false));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/update", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
