@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Ban, Loader2, MessageSquare, Send, Wrench, XCircle } from 'lucide-react'
+import { Ban, Loader2, MessageSquare, Send, Square, Wrench, XCircle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import * as api from '@/api/client'
@@ -13,6 +13,7 @@ type Props = {
   busy: boolean
   onFocus: (sessionId: string) => void
   onSend: (sessionId: string, message: string) => void
+  onStop: () => void
   onContinue: (sessionId: string) => void
 }
 
@@ -45,6 +46,7 @@ function ChatComposer({
   usage,
   onSettingsChange,
   onSend,
+  onStop,
 }: {
   sessionId: string
   disabled: boolean
@@ -54,6 +56,7 @@ function ChatComposer({
   usage?: ChatUsage | null
   onSettingsChange: (patch: Partial<api.ChatSettings>) => void
   onSend: (sessionId: string, message: string) => void
+  onStop: () => void
 }) {
   const knownModel = Boolean(settings && MODEL_OPTIONS.some(option => option.value === settings.model))
   const context = contextLabel(usage, settings?.contextWindow)
@@ -78,9 +81,21 @@ function ChatComposer({
           disabled={disabled}
           placeholder="Ask about this PLC device..."
         />
-        <button className="primary-button h-16 px-3" disabled={disabled} aria-label="Send message">
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-        </button>
+        {busy ? (
+          <button
+            type="button"
+            className="secondary-button h-16 px-3 text-red-600 dark:text-red-400"
+            onClick={onStop}
+            aria-label="Stop generation"
+            title="Stop generation"
+          >
+            <Square className="h-3.5 w-3.5 fill-current" />
+          </button>
+        ) : (
+          <button className="primary-button h-16 px-3" disabled={disabled} aria-label="Send message">
+            <Send className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       <div
         className="mt-2 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground"
@@ -253,7 +268,7 @@ function MessageList({ messages, busy }: { messages: ChatMessage[], busy: boolea
   )
 }
 
-export default function ChatWorkspace({ tabs, busy, onFocus, onSend, onContinue }: Props) {
+export default function ChatWorkspace({ tabs, busy, onFocus, onSend, onStop, onContinue }: Props) {
   const [settings, setSettings] = useState<api.ChatSettings | null>(null)
   const [settingsState, setSettingsState] = useState<SettingsSaveState>('idle')
   const settingsRef = useRef<api.ChatSettings | null>(null)
@@ -350,6 +365,7 @@ export default function ChatWorkspace({ tabs, busy, onFocus, onSend, onContinue 
                 usage={tab.usage}
                 onSettingsChange={changeSettings}
                 onSend={onSend}
+                onStop={onStop}
               />
             </div>
           </section>

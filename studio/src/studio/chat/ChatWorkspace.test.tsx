@@ -54,7 +54,7 @@ beforeEach(() => {
 describe('ChatWorkspace', () => {
   it('keeps inactive panes mounted while hiding them', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
 
     expect(host.querySelector('[data-session-pane="s1"]')).not.toBeNull()
@@ -66,7 +66,7 @@ describe('ChatWorkspace', () => {
   it('sends text from the active session composer', async () => {
     const onSend = vi.fn()
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={onSend} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={onSend} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
 
     const activePane = host.querySelector<HTMLElement>('[data-session-pane="s2"]')
@@ -86,12 +86,40 @@ describe('ChatWorkspace', () => {
 
   it('shows active-session progress while a message is running', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={true} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={true} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
 
     const activePane = host.querySelector<HTMLElement>('[data-session-pane="s2"]')
     expect(activePane?.textContent).toContain('Assistant is working...')
     expect(activePane?.querySelector<HTMLTextAreaElement>('textarea')?.disabled).toBe(true)
+  })
+
+  it('replaces the send button with a stop button while busy and stops on click', async () => {
+    const onStop = vi.fn()
+    const { host } = render(
+      <ChatWorkspace tabs={state} busy={true} onFocus={vi.fn()} onSend={vi.fn()} onStop={onStop} onContinue={vi.fn()} />,
+    )
+
+    const activePane = host.querySelector<HTMLElement>('[data-session-pane="s2"]')!
+    expect(activePane.querySelector('button[aria-label="Send message"]')).toBeNull()
+    const stop = activePane.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]')
+    expect(stop).not.toBeNull()
+
+    act(() => {
+      stop!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(onStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the send button while idle', async () => {
+    const { host } = render(
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
+    )
+
+    const activePane = host.querySelector<HTMLElement>('[data-session-pane="s2"]')!
+    expect(activePane.querySelector('button[aria-label="Send message"]')).not.toBeNull()
+    expect(activePane.querySelector('button[aria-label="Stop generation"]')).toBeNull()
   })
 
   it('renders streamed progress messages', async () => {
@@ -103,7 +131,7 @@ describe('ChatWorkspace', () => {
       ],
     }
     const { host } = render(
-      <ChatWorkspace tabs={streamed} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={streamed} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
 
     expect(host.textContent).toContain('Progress')
@@ -119,7 +147,7 @@ describe('ChatWorkspace', () => {
       ],
     }
     const { host } = render(
-      <ChatWorkspace tabs={markdown} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={markdown} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
 
     const body = host.querySelector('.markdown-body')
@@ -138,7 +166,7 @@ describe('ChatWorkspace', () => {
       ],
     }
     const { host } = render(
-      <ChatWorkspace tabs={plain} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={plain} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
 
     expect(host.querySelector('.markdown-body')).toBeNull()
@@ -163,7 +191,7 @@ describe('ChatWorkspace', () => {
       ],
     }
     const { host } = render(
-      <ChatWorkspace tabs={toolCall} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={toolCall} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
 
     expect(host.textContent).toContain('engineering.export_blocks')
@@ -174,7 +202,7 @@ describe('ChatWorkspace', () => {
 
   it('shows model and think controls below the composer', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
     await act(async () => {})
 
@@ -189,7 +217,7 @@ describe('ChatWorkspace', () => {
 
   it('reveals think effort and saves when think mode is toggled', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
     await act(async () => {})
 
@@ -207,7 +235,7 @@ describe('ChatWorkspace', () => {
 
   it('saves the selected model variant', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
     await act(async () => {})
 
@@ -236,7 +264,7 @@ describe('ChatWorkspace', () => {
       ],
     }
     const { host } = render(
-      <ChatWorkspace tabs={withUsage} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={withUsage} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
     await act(async () => {})
 
@@ -247,7 +275,7 @@ describe('ChatWorkspace', () => {
 
   it('hides the context indicator before any billed round', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
     await act(async () => {})
 
@@ -270,7 +298,7 @@ describe('ChatWorkspace', () => {
     }
     const onContinue = vi.fn()
     const { host } = render(
-      <ChatWorkspace tabs={capped} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={onContinue} />,
+      <ChatWorkspace tabs={capped} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={onContinue} />,
     )
 
     const button = host.querySelector<HTMLButtonElement>('[data-round-cap="s1"] button')
@@ -283,7 +311,7 @@ describe('ChatWorkspace', () => {
 
   it('hides the continue affordance for turns that finished normally', async () => {
     const { host } = render(
-      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onContinue={vi.fn()} />,
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
     )
 
     expect(host.querySelector('[data-round-cap]')).toBeNull()

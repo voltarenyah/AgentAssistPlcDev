@@ -334,6 +334,7 @@ export default function MainStudio() {
   })
   const [deviceSelection, setDeviceSelection] = useState<DeviceSelectionState | null>(null)
   const selectionRequestId = useRef(0)
+  const chatAbortRef = useRef<AbortController | null>(null)
   const [activeTab, setActiveTab] = useState<StudioTab>('overview')
   const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
   const [sessionDockVisible, setSessionDockVisible] = useState(true)
@@ -747,6 +748,8 @@ export default function MainStudio() {
   const sendChatMessage = async (sessionId: string, message: string) => {
     setChatBusy(true)
     setChatTabs(previous => appendLocalUserMessage(previous, sessionId, message))
+    const controller = new AbortController()
+    chatAbortRef.current = controller
     try {
       await ensureChatContext()
       if (chatTabs.activeId !== sessionId) await api.loadChatSession(sessionId)
@@ -760,16 +763,27 @@ export default function MainStudio() {
         } else if (event.kind === 'meta') {
           setChatTabs(previous => setTurnMeta(previous, sessionId, event.usage ?? null, event.hitRoundCap ?? false))
         }
-      })
+      }, controller.signal)
       const session = await api.loadChatSession(sessionId)
       setChatTabs(previous => openTab(previous, session))
       await refreshChatSessions()
     } catch (error) {
-      toast.error(displayError(error))
+      // Aborting the fetch also cancels the server-side generation via the request token;
+      // keep whatever partial text streamed in and mark the turn as stopped.
+      if (controller.signal.aborted) {
+        setChatTabs(previous => appendProgressMessage(previous, sessionId, 'Generation stopped by user.'))
+      } else {
+        toast.error(displayError(error))
+      }
     } finally {
+      if (chatAbortRef.current === controller) chatAbortRef.current = null
       setChatBusy(false)
     }
   }
+
+  const stopChatGeneration = useCallback(() => {
+    chatAbortRef.current?.abort()
+  }, [])
 
   const continueChat = async (sessionId: string) => {
     setChatBusy(true)
@@ -1374,6 +1388,7 @@ export default function MainStudio() {
                       busy={chatBusy}
                       onFocus={sessionId => void activateChatSession(sessionId)}
                       onSend={(sessionId, message) => void sendChatMessage(sessionId, message)}
+                      onStop={stopChatGeneration}
                       onContinue={sessionId => void continueChat(sessionId)}
                     />
                   </div>
