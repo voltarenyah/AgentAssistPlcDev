@@ -7,6 +7,7 @@ using Mcp.Engineering.Sessions;
 using Microsoft.Extensions.Logging;
 using Siemens.Engineering;
 using Siemens.Engineering.Compiler;
+using Siemens.Engineering.HW;
 using Siemens.Engineering.SW;
 using Siemens.Engineering.SW.Blocks;
 using Siemens.Engineering.SW.Tags;
@@ -283,6 +284,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         {
             var plc = PlcSoftwareResolver.Resolve(RequireProject(), null);
             var (block, groupPath) = BlockEnumerator.FindWithPath(plc.BlockGroup, blockName);
+            var device = CaptureDeviceMetadata(RequireProject(), plc);
             Directory.CreateDirectory(outputDir);
             try
             {
@@ -297,7 +299,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                         $"Block '{blockName}' is inconsistent. Compile it first before export.");
                 }
                 var result = ExportCore(block, outputDir);
-                ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, result));
+                ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, result), device);
                 return result;
             }
             catch (Exception ex)
@@ -311,7 +313,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     Error = ex.Message,
                     ExportedAt = DateTime.Now,
                 };
-                try { ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, failed)); }
+                try { ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, failed), device); }
                 catch { }
                 throw;
             }
@@ -408,7 +410,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             records.Add(ExportManifest.CreateRecord(block, groupPath, dir, result));
         }
 
-        ExportManifest.WriteAll(dir, exportStartedUtc, records, ExportManifest.BlockCategories);
+        ExportManifest.WriteAll(
+            dir, exportStartedUtc, records, ExportManifest.BlockCategories, CaptureDeviceMetadata(RequireProject(), plc));
         if (writeProjectMetadata)
         {
             ProjectMetadata.SetPlcSoftwareChecksum(
@@ -599,7 +602,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             }
         }
 
-        ExportManifest.WriteAll(dir, manifest.ExportStartedUtc, keptRecords, ExportManifest.AllCategories);
+        ExportManifest.WriteAll(
+            dir, manifest.ExportStartedUtc, keptRecords, ExportManifest.AllCategories,
+            CaptureDeviceMetadata(RequireProject(), plc));
         ProjectMetadata.SetPlcSoftwareChecksum(projectRoot, plc.Name, checksum);
         result.Status = "updated";
         result.Added = added.ToArray();
@@ -990,6 +995,96 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
+    /// <summary>Project- and device-level metadata for the manifest's device section (lets a UI
+    /// page display PLC type / project author/comment/version without a live TIA session).
+    /// Guarded throughout — a failed Openness read degrades the capture to null rather than
+    /// failing the export it rides along with.</summary>
+    private static DeviceMetadata? CaptureDeviceMetadata(Project project, PlcSoftware plc)
+    {
+        try
+        {
+            var (deviceName, typeIdentifier) = ReadDeviceIdentity(plc);
+            return new DeviceMetadata
+            {
+                PlcName = plc.Name,
+                DeviceName = deviceName,
+                TypeIdentifier = typeIdentifier,
+                ProjectName = TryRead(() => project.Name),
+                ProjectAuthor = TryRead(() => project.Author),
+                ProjectComment = TryRead(() => ReadMultilingual(project.Comment)),
+                ProjectVersion = TryRead(() => project.Version),
+                ProjectCopyright = TryRead(() => project.Copyright),
+                ProjectCreationTime = TryRead(() => (DateTimeOffset?)project.CreationTime),
+                ProjectLastModified = TryRead(() => (DateTimeOffset?)project.LastModified),
+                ProjectLastModifiedBy = TryRead(() => project.LastModifiedBy),
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Walks from the PLC software up the device tree: the first (deepest) device-item
+    /// TypeIdentifier is the CPU module's order number + firmware version; the Device name is the
+    /// station name. Each read is guarded — items without an identifier degrade to null.</summary>
+    private static (string? DeviceName, string? TypeIdentifier) ReadDeviceIdentity(PlcSoftware plc)
+    {
+        string? deviceName = null;
+        string? typeIdentifier = null;
+        try
+        {
+            for (var node = plc.Parent; node is not null; node = node.Parent)
+            {
+                if (typeIdentifier is null && node is DeviceItem item)
+                {
+                    typeIdentifier = TryRead(() => item.TypeIdentifier);
+                }
+
+                if (node is Device device)
+                {
+                    deviceName = TryRead(() => device.Name);
+                    break; // Station level reached — the PLC module sits below it.
+                }
+            }
+        }
+        catch
+        {
+            // Parent chain unreadable — return whatever was collected so far.
+        }
+
+        return (deviceName, typeIdentifier);
+    }
+
+    private static T? TryRead<T>(Func<T> read)
+    {
+        try
+        {
+            return read();
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
+    /// <summary>First entry of a multilingual text — project comments are single-language in
+    /// practice; null when the text has no entries.</summary>
+    private static string? ReadMultilingual(MultilingualText? text)
+    {
+        if (text is null)
+        {
+            return null;
+        }
+
+        foreach (MultilingualTextItem item in text.Items)
+        {
+            return item.Text;
+        }
+
+        return null;
+    }
+
     /// <summary>Block timestamps for the sync diff — same guarded read as the manifest metadata
     /// (know-how-protected blocks can throw; nulls make the planner re-export conservatively).</summary>
     private static (DateTimeOffset? Modified, DateTimeOffset? CodeModified, DateTimeOffset? InterfaceModified)
@@ -1129,6 +1224,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         IProgress<EngineeringProgress>? progress = null)
     {
         Directory.CreateDirectory(dir);
+        var device = CaptureDeviceMetadata(RequireProject(), plc);
         var results = new List<ExportResult>();
         var items = enumerate(plc).ToArray();
         _logger.LogInformation("{Label}: {Count} objects to export ({Plc})", label, items.Length, plc.Name);
@@ -1148,7 +1244,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             }
 
             results.Add(result);
-            ExportManifest.Upsert(dir, createRecord(item, groupPath, dir, result));
+            ExportManifest.Upsert(dir, createRecord(item, groupPath, dir, result), device);
         }
         return results.ToArray();
     }

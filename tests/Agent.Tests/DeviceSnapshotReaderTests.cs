@@ -85,6 +85,59 @@ public sealed class DeviceSnapshotReaderTests
     }
 
     [Fact]
+    public void ReadSurfacesManifestDeviceSection()
+    {
+        using var fixture = SnapshotFixture.Create();
+        File.WriteAllText(
+            Path.Combine(fixture.Context.ExportedSourceRoot, "metadata.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                device = new
+                {
+                    plcName = "PLC_1",
+                    deviceName = "Station_1",
+                    typeIdentifier = "OrderNumber:6ES7515-2AM02-0AB0/V2.9",
+                    projectName = "TestPLCExportDemo",
+                    projectAuthor = "Ansel",
+                    projectComment = "demo project",
+                    projectVersion = "V17",
+                    projectCopyright = (string?)null,
+                    projectCreationTime = "2026-07-01T08:00:00.0000000+00:00",
+                    projectLastModified = "2026-07-30T09:30:00.0000000+00:00",
+                    projectLastModifiedBy = "Ansel",
+                },
+                components = Array.Empty<object>(),
+            }));
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.NotNull(snapshot.Device);
+        Assert.Equal("PLC_1", snapshot.Device!.PlcName);
+        Assert.Equal("Station_1", snapshot.Device.DeviceName);
+        Assert.Equal("OrderNumber:6ES7515-2AM02-0AB0/V2.9", snapshot.Device.TypeIdentifier);
+        Assert.Equal("TestPLCExportDemo", snapshot.Device.ProjectName);
+        Assert.Equal("Ansel", snapshot.Device.ProjectAuthor);
+        Assert.Equal("demo project", snapshot.Device.ProjectComment);
+        Assert.Equal("V17", snapshot.Device.ProjectVersion);
+        Assert.Null(snapshot.Device.ProjectCopyright);
+        Assert.Equal(new DateTimeOffset(2026, 7, 1, 8, 0, 0, TimeSpan.Zero), snapshot.Device.ProjectCreationTime);
+        Assert.Equal(new DateTimeOffset(2026, 7, 30, 9, 30, 0, TimeSpan.Zero), snapshot.Device.ProjectLastModified);
+        Assert.Equal("Ansel", snapshot.Device.ProjectLastModifiedBy);
+    }
+
+    [Fact]
+    public void ReadWithoutDeviceSection_ReturnsNullDevice()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest(Component("ob", "Main", "OB", "Blocks/Main [OB1].xml", 1, "LAD", "Area/Main"));
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.Null(snapshot.Device);
+    }
+
+    [Fact]
     public void ReadMergesModifiedAndOverlayOnlyBlocks()
     {
         using var fixture = SnapshotFixture.Create();

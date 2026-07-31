@@ -42,6 +42,14 @@ Three-tier change detection, cheapest first:
 ## 2. Manifest (metadata.json) — additive, schemaVersion stays "1.0"
 
 - Document: `plcSoftwareChecksum` (string|null).
+- Document (per-device, 2026-07-31): additive `device` object — project/device identity captured
+  from Openness at export time for UI display without a live session: `plcName`, `deviceName`
+  (station), `typeIdentifier` (CPU order number + firmware), `projectName`, `projectAuthor`,
+  `projectComment`, `projectVersion`, `projectCopyright`, `projectCreationTime`,
+  `projectLastModified`, `projectLastModifiedBy`. Written by every manifest-writing export path
+  (`export_block`, `export_all_blocks`, `export_tag_tables`/`export_udts`, `sync_export`);
+  WriteAll/Upsert preserve the stored section when a write has no fresh capture. Not part of the
+  reference add-in schema — additive-only, tolerated by the mcp-knowledge reader.
 - Record: `contentHash` (SHA-256 base64url of `XmlCompare.Normalize`'d XML — `<Created>` and CR
   stripped) and `fingerprints` (canonical `Id=Value;…`, sorted). The mcp-knowledge reader DTO
   ignores unknown fields (guarded by `ManifestWithSyncExportFieldsStillImports`).

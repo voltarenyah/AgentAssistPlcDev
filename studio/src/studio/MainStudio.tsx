@@ -360,6 +360,7 @@ export default function MainStudio() {
   const deviceView = deviceSelection?.view ?? null
   const deviceSessions = deviceSelection?.sessions ?? []
   const deviceInfo = deviceView?.snapshot ?? null
+  const deviceMeta = deviceInfo?.device ?? null
   const blocks = deviceView?.blocks ?? []
   const touchedCount = deviceView?.overlayCount ?? 0
   const activeKnowledge = deviceView?.knowledgeState ?? 'missing'
@@ -1164,6 +1165,14 @@ export default function MainStudio() {
                       <div className="min-w-0 flex-1">
                         <h1 className="text-lg font-semibold">{deviceInfo?.plcName ?? selection.deviceId}</h1>
                         <p className="mt-0.5 font-mono text-[9px] text-muted-foreground">{deviceInfo?.engineeringIdentity ?? selection.deviceId}</p>
+                        {(deviceMeta?.typeIdentifier || deviceMeta?.deviceName) && (
+                          <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+                            <Cpu className="h-3 w-3" />
+                            {deviceMeta.typeIdentifier?.replace(/^OrderNumber:/, '') ?? ''}
+                            {deviceMeta.typeIdentifier && deviceMeta.deviceName ? ' · ' : ''}
+                            {deviceMeta.deviceName ?? ''}
+                          </p>
+                        )}
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void openProjectInTia()}>
                             <Server className="h-3.5 w-3.5" /> Open project in TIA
@@ -1230,6 +1239,41 @@ export default function MainStudio() {
                       <Metric label="Saved sessions" value={deviceSessions.length} />
                       <Metric label="Knowledge state" value={activeKnowledge} tone={activeKnowledge === 'current' ? 'good' : activeKnowledge === 'failed' ? 'danger' : 'warning'} />
                     </div>
+
+                    {deviceMeta && (
+                      <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
+                        <div className="flex items-center gap-3">
+                          <Boxes className="h-5 w-5 text-chart-2" />
+                          <div>
+                            <h2 className="text-sm font-semibold">TIA project</h2>
+                            <p className="text-[9px] text-muted-foreground">Captured at last export · refreshes on the next export or sync</p>
+                          </div>
+                        </div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                          {([
+                            ['Project', deviceMeta.projectName],
+                            ['Author', deviceMeta.projectAuthor],
+                            ['Version', deviceMeta.projectVersion],
+                            ['Copyright', deviceMeta.projectCopyright],
+                            ['Created', deviceMeta.projectCreationTime ? new Date(deviceMeta.projectCreationTime).toLocaleString() : null],
+                            ['Last modified', deviceMeta.projectLastModified ? new Date(deviceMeta.projectLastModified).toLocaleString() : null],
+                            ['Modified by', deviceMeta.projectLastModifiedBy],
+                            ['PLC type', deviceMeta.typeIdentifier?.replace(/^OrderNumber:/, '') ?? null],
+                          ] as [string, string | null][]).filter(([, value]) => value).map(([label, value]) => (
+                            <div key={label} className="rounded-lg border bg-muted/30 p-3" style={{ borderColor: 'var(--border)' }}>
+                              <div className="text-[8px] uppercase tracking-[0.15em] text-muted-foreground">{label}</div>
+                              <div className="mt-1.5 break-all text-[10px] leading-relaxed">{value}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {deviceMeta.projectComment && (
+                          <div className="mt-3 rounded-lg border bg-muted/30 p-3" style={{ borderColor: 'var(--border)' }}>
+                            <div className="text-[8px] uppercase tracking-[0.15em] text-muted-foreground">Project comment</div>
+                            <div className="mt-1.5 whitespace-pre-wrap text-[10px] leading-relaxed">{deviceMeta.projectComment}</div>
+                          </div>
+                        )}
+                      </section>
+                    )}
 
                     <section className="grid gap-3 lg:grid-cols-3">
                       {[

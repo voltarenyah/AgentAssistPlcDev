@@ -6,6 +6,22 @@ namespace Agent.Workbench;
 
 public sealed record DeviceKnowledgeSnapshot(string State, string? UpdatedAt);
 
+/// <summary>Project/device identity captured by mcp-engineering into the export manifest's
+/// additive "device" section (buildnote/plan/export-sync.md §2, 2026-07-31). Null on legacy
+/// manifests (pre-feature exports) — the UI hides the section then.</summary>
+public sealed record DeviceExportMetadata(
+    string? PlcName,
+    string? DeviceName,
+    string? TypeIdentifier,
+    string? ProjectName,
+    string? ProjectAuthor,
+    string? ProjectComment,
+    string? ProjectVersion,
+    string? ProjectCopyright,
+    DateTimeOffset? ProjectCreationTime,
+    DateTimeOffset? ProjectLastModified,
+    string? ProjectLastModifiedBy);
+
 public sealed record OfflineBlockInfo(
     string Id,
     string Name,
@@ -29,7 +45,8 @@ public sealed record DeviceSnapshot(
     DeviceKnowledgeSnapshot Knowledge,
     IReadOnlyList<OfflineBlockInfo> Blocks,
     int OverlayCount,
-    IReadOnlyList<string> Diagnostics);
+    IReadOnlyList<string> Diagnostics,
+    DeviceExportMetadata? Device);
 
 public sealed class DeviceSnapshotReader
 {
@@ -56,8 +73,55 @@ public sealed class DeviceSnapshotReader
             new DeviceKnowledgeSnapshot(state, metadata.Knowledge.UpdatedAt),
             blocks,
             overlayCount,
-            diagnostics);
+            diagnostics,
+            ReadDeviceExportMetadata(context));
     }
+
+    /// <summary>Manifest "device" section — tolerant read: missing/legacy manifest, missing
+    /// property, or unparseable JSON all degrade to null (ReadBlocks reports manifest problems
+    /// as diagnostics already, so this stays silent).</summary>
+    private static DeviceExportMetadata? ReadDeviceExportMetadata(DeviceContext context)
+    {
+        var manifestPath = Path.Combine(context.ExportedSourceRoot, "metadata.json");
+        if (!File.Exists(manifestPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (manifest.RootElement.ValueKind != JsonValueKind.Object
+                || !manifest.RootElement.TryGetProperty("device", out var device)
+                || device.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return new DeviceExportMetadata(
+                ReadString(device, "plcName"),
+                ReadString(device, "deviceName"),
+                ReadString(device, "typeIdentifier"),
+                ReadString(device, "projectName"),
+                ReadString(device, "projectAuthor"),
+                ReadString(device, "projectComment"),
+                ReadString(device, "projectVersion"),
+                ReadString(device, "projectCopyright"),
+                ReadDate(device, "projectCreationTime"),
+                ReadDate(device, "projectLastModified"),
+                ReadString(device, "projectLastModifiedBy"));
+        }
+        catch (Exception ex) when (ex is JsonException or IOException)
+        {
+            return null;
+        }
+    }
+
+    private static DateTimeOffset? ReadDate(JsonElement owner, string property) =>
+        owner.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(value.GetString(), out var date)
+            ? date
+            : null;
 
     private static string? ReadSourceProjectPath(DeviceContext context)
     {
