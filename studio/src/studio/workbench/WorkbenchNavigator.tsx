@@ -9,7 +9,7 @@ import {
   RefreshCw,
   Trash2,
 } from 'lucide-react'
-import type { Workbench, WorkbenchRegistration } from '@/api/client'
+import type { DeviceSummary, Workbench, WorkbenchRegistration } from '@/api/client'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -25,7 +25,7 @@ export type WorkbenchSelection = {
 
 type Props = {
   workbenches: Workbench[]
-  devicesByWorktree: Record<string, string[]>
+  devicesByWorktree: Record<string, DeviceSummary[]>
   selection: WorkbenchSelection
   knowledgeState: Record<string, 'current' | 'stale' | 'missing' | 'failed'>
   loading: boolean
@@ -141,17 +141,18 @@ export default function WorkbenchNavigator({
                           <div className="ml-4 border-l pl-2" style={{ borderColor: 'var(--border)' }}>
                             {devices.length === 0 ? (
                               <div className="px-2 py-2 text-[9px] text-muted-foreground">No registered PLC devices</div>
-                            ) : devices.map(deviceId => {
-                              const selected = selection.deviceId === deviceId
-                              const state = knowledgeState[deviceId] ?? 'missing'
+                            ) : devices.map(device => {
+                              const selected = selection.deviceId === device.deviceId
+                              const state = knowledgeState[device.deviceId] ?? 'missing'
                               return (
                                 <button
-                                  key={deviceId}
-                                  onClick={() => onSelectDevice(workbench, worktree, deviceId)}
+                                  key={device.deviceId}
+                                  title={device.deviceId}
+                                  onClick={() => onSelectDevice(workbench, worktree, device.deviceId)}
                                   className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left ${selected ? 'bg-chart-2/10 ring-1 ring-chart-2/30' : 'hover:bg-accent/40'}`}
                                 >
                                   <Cpu className={`h-3.5 w-3.5 ${selected ? 'text-chart-2' : 'text-muted-foreground'}`} />
-                                  <span className="min-w-0 flex-1 truncate font-mono text-[9px]">{deviceId}</span>
+                                  <span className="min-w-0 flex-1 truncate text-[10px]">{device.plcName}</span>
                                   <Database className={`h-3 w-3 ${
                                     state === 'current' ? 'text-emerald-500'
                                       : state === 'stale' ? 'text-amber-500'

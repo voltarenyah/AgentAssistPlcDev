@@ -323,7 +323,7 @@ function ApiKeyDialog({
 export default function MainStudio() {
   const [workbenches, setWorkbenches] = useState<api.Workbench[]>([])
   const [sessions, setSessions] = useState<api.SessionInfo[]>([])
-  const [devicesByWorktree, setDevicesByWorktree] = useState<Record<string, string[]>>({})
+  const [devicesByWorktree, setDevicesByWorktree] = useState<Record<string, api.DeviceSummary[]>>({})
   const [selection, setSelection] = useState<WorkbenchSelection>({
     workbenchId: null,
     worktreeId: null,
@@ -547,7 +547,7 @@ export default function MainStudio() {
       setDeviceSelection(null)
       setChatTabs(emptyChatTabs())
       if (devices.length === 1) {
-        await selectDevice(workbench, worktree, devices[0])
+        await selectDevice(workbench, worktree, devices[0].deviceId)
       }
     } catch (error) {
       toast.error(displayError(error))

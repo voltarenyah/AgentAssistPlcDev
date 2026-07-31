@@ -361,8 +361,12 @@ export const createWorktree = (workbenchId: string, name: string, branch: string
   }), operationId))
 export const selectWorktree = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/select`, jsonRequest('POST'))
+export type DeviceSummary = {
+  deviceId: string
+  plcName: string
+}
 export const listDevices = (workbenchId: string, worktreeId: string) =>
-  workbenchRequest<string[]>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices`)
+  workbenchRequest<DeviceSummary[]>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices`)
 export const selectDevice = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/select`, jsonRequest('POST'))
 const devicePath = (workbenchId: string, worktreeId: string, deviceId: string) =>

@@ -21,6 +21,9 @@ public sealed record SourcePathApiRequest(string RelativePath);
 /// <summary>Optional bootstrap/rebuild body: lets the full-rebuild button label its baseline
 /// commit differently from the initial "generate PLC context" commit.</summary>
 public sealed record BootstrapApiRequest(string? CommitMessage);
+
+/// <summary>Device list entry: opaque object id plus the human-readable PLC name from device.json.</summary>
+public sealed record DeviceSummary(string DeviceId, string PlcName);
 public sealed record MergeWorktreeApiRequest(string TargetWorktreeId);
 public sealed record SessionCreateApiRequest(Agent.Chat.ChatRequestSettings Settings, string? RuntimeContext);
 public sealed record SessionSaveApiRequest(ChatSessionData Session);
@@ -132,6 +135,37 @@ public sealed class WorkbenchApiState
         return (catalog.ResolveDevice(wb, wt, metadataPath.device), metadataPath.device);
     }
     public void Select(string wb, string? wt = null, string? device = null) => Selection = new(wb, wt, device);
+
+    /// <summary>Registered devices of a worktree with their human-readable PLC names (from each
+    /// device.json; falls back to the device folder name, then the raw id). The navigator displays
+    /// these instead of the opaque device object ids.</summary>
+    public IReadOnlyList<DeviceSummary> ListDevices(string workbenchId, string worktreeId)
+    {
+        var wb = Workbench(workbenchId);
+        var wt = Worktree(workbenchId, worktreeId);
+        var reg = wb.Worktrees.Single(x => x.WorktreeId == wt.WorktreeId);
+        var wtRoot = WorkbenchPaths.ResolveWorktree(wb.RootPath, reg.RelativePath);
+        var devicesRoot = WorkbenchPaths.ResolveRelative(wtRoot, "devices");
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (Directory.Exists(devicesRoot))
+        {
+            foreach (var directory in Directory.EnumerateDirectories(devicesRoot))
+            {
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    throw new WorkbenchPathException($"Device directory '{directory}' is a reparse point.");
+                var path = Path.Combine(directory, "device.json");
+                if (!File.Exists(path)) continue;
+                var metadata = store.Read<DeviceMetadata>(path);
+                names[metadata.DeviceId] = string.IsNullOrWhiteSpace(metadata.PlcName)
+                    ? Path.GetFileName(directory)
+                    : metadata.PlcName;
+            }
+        }
+
+        return wt.DeviceIds
+            .Select(id => new DeviceSummary(id, names.TryGetValue(id, out var name) ? name : id))
+            .ToArray();
+    }
     /// <summary>Drops a deleted workbench from memory and clears a selection that referenced it.</summary>
     public void Remove(string id)
     {
@@ -231,7 +265,7 @@ public static class WorkbenchEndpoints
             return result;
         });
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s) => { s.Worktree(id, wt); s.Select(id, wt); return Results.NoContent(); });
-        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.Worktree(id, wt).DeviceIds);
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.ListDevices(id, wt));
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/tia/open", async (
             string workbenchId,
