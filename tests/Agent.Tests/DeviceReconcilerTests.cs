@@ -11,6 +11,29 @@ public sealed class DeviceReconcilerTests : IDisposable
         Path.Combine(Path.GetTempPath(), $"device-reconciler-tests-{Guid.NewGuid():N}");
 
     [Fact]
+    public void PreviewTreatsCreatedTimestampOnlyDifferenceAsUnchanged()
+    {
+        // The 2026-07-31 "everything is different" bug: a staged refresh is a full rebuild_export,
+        // and every TIA export stamps a fresh <Created> line. Raw byte hashes therefore always
+        // differed; the normalized content hash must see through it.
+        var fixture = CreateFixture();
+        fixture.WriteBaseline(
+            "Blocks/Main [OB1].xml",
+            "<Document>\n  <Created>2026-07-20T08:00:00</Created>\n  <SW.Blocks.OB><AttributeList><Name>Main</Name></AttributeList></SW.Blocks.OB>\n</Document>");
+        fixture.WriteBaselineManifest(Component("main", @"Blocks\Main [OB1].xml"));
+        fixture.WriteStaging(
+            "Blocks/Main [OB1].xml",
+            "<Document>\r\n  <Created>2026-07-31T14:20:00</Created>\r\n  <SW.Blocks.OB><AttributeList><Name>Main</Name></AttributeList></SW.Blocks.OB>\r\n</Document>");
+        fixture.WriteStagingManifest(Component("main", @"Blocks\Main [OB1].xml"));
+
+        var preview = new DeviceReconciler().Preview(fixture.Context);
+
+        var entry = Assert.Single(preview.Entries);
+        Assert.Equal(ReconciliationChangeKind.Unchanged, entry.Kind);
+        Assert.Equal(entry.BaselineHash, entry.StagingHash);
+    }
+
+    [Fact]
     public void PreviewReportsManifestControlledChangesWithNormalizedPaths()
     {
         var fixture = CreateFixture();

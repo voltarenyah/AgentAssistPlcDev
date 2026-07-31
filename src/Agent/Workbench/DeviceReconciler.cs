@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Contracts.Engineering;
 
 [assembly: InternalsVisibleTo("Agent.Tests")]
 
@@ -750,12 +751,15 @@ public sealed class DeviceReconciler
         return HashFile(path);
     }
 
+    /// <summary>Normalized content hash (<see cref="XmlContentHash"/>) — never a raw byte hash.
+    /// Every staged refresh is a full rebuild_export, and each TIA export stamps a fresh
+    /// &lt;Created&gt; timestamp, so raw bytes always differ; comparing raw hashes reported every
+    /// component as changed even when nothing was edited (found 2026-07-31).</summary>
     private static string HashFile(string path)
     {
         try
         {
-            using var stream = File.OpenRead(path);
-            return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+            return XmlContentHash.Compute(File.ReadAllText(path));
         }
         catch (Exception exception) when (
             exception is IOException
