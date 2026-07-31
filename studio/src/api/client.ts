@@ -671,6 +671,15 @@ export type ChatSettings = {
   temperature: number
   topP: number
   contextWindow?: number
+  // AgentLoop policy knobs (optional so they round-trip untouched when absent)
+  roundLimit?: number
+  promptTokenBudget?: number
+  promptTokenWarningThreshold?: number
+  toolResultMaxChars?: number
+  toolResultCompactChars?: number
+  historyTokenThreshold?: number
+  recentTurnsToKeep?: number
+  collapsedAnswerChars?: number
 }
 
 export async function getChatSettings(): Promise<ChatSettings> {

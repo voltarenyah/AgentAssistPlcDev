@@ -47,6 +47,29 @@ public sealed record UsageInfo(
 public sealed record ChatDelta(string? ReasoningContent, string? Content);
 
 /// <summary>
+/// Tunable AgentLoop limits (round budget, token thresholds, tool-result caps). Defaults mirror
+/// the built-in AgentLoop values; overridable via chatSettings:* config (see ApiHost).
+/// </summary>
+public sealed record ChatLoopPolicy
+{
+    public int RoundLimit { get; init; } = AgentLoop.MaxRounds;
+
+    public int PromptTokenBudget { get; init; } = 300_000;
+
+    public int PromptTokenWarningThreshold { get; init; } = 100_000;
+
+    public int ToolResultMaxChars { get; init; } = 8_000;
+
+    public int ToolResultCompactChars { get; init; } = 500;
+
+    public int HistoryTokenThreshold { get; init; } = 90_000;
+
+    public int RecentTurnsToKeep { get; init; } = 2;
+
+    public int CollapsedAnswerChars { get; init; } = 500;
+}
+
+/// <summary>
 /// Per-request chat parameters (api-docs.deepseek.com/guides/thinking_mode).
 /// Thinking mode ignores temperature/top_p — they are only sent when thinking is disabled.
 /// </summary>

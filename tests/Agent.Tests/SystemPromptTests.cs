@@ -8,7 +8,7 @@ public sealed class SystemPromptTests
     [Fact]
     public void PromptPrefersOfflineKnowledgeBeforeLiveEngineering()
     {
-        var prompt = SystemPrompt.Build("Knowledge DB: C:\\db\\plc-knowledge.db");
+        var prompt = SystemPrompt.Build();
 
         Assert.Contains("use the offline knowledge DB first", prompt);
         Assert.Contains("Do not call live engineering tools", prompt);
@@ -18,12 +18,32 @@ public sealed class SystemPromptTests
     [Fact]
     public void PromptConstrainsCommonFbInterfaceWorkflow()
     {
-        var prompt = SystemPrompt.Build("Knowledge DB: C:\\db\\plc-knowledge.db");
+        var prompt = SystemPrompt.Build();
 
         Assert.Contains("For FB/interface questions", prompt);
         Assert.Contains("get_block", prompt);
         Assert.Contains("instance DB", prompt);
         Assert.Contains("call-site network", prompt);
         Assert.Contains("Prefer 1-3 tool calls", prompt);
+    }
+
+    [Fact]
+    public void PromptPointsAtContextMessageForRuntimeContext()
+    {
+        var prompt = SystemPrompt.Build();
+
+        Assert.Contains(SystemPrompt.ContextMessageMarker, prompt);
+        Assert.Contains("latest runtime context message", prompt);
+    }
+
+    [Fact]
+    public void ContextMessageCarriesMarkerAndBody()
+    {
+        var message = ChatMessage.User(SystemPrompt.ContextMessage("Knowledge DB: C:\\db\\k.db"));
+
+        Assert.True(SystemPrompt.IsContextMessage(message));
+        Assert.Equal("Knowledge DB: C:\\db\\k.db", SystemPrompt.ContextBody(message));
+        Assert.False(SystemPrompt.IsContextMessage(ChatMessage.User("ordinary question")));
+        Assert.False(SystemPrompt.IsContextMessage(ChatMessage.Assistant(SystemPrompt.ContextMessageMarker)));
     }
 }

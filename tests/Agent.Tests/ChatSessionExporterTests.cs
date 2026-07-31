@@ -91,6 +91,7 @@ public sealed class ChatSessionExporterTests
         var history = new List<ChatMessage>
         {
             ChatMessage.System("SYS-PROMPT with runtime context"),
+            ChatMessage.User(SystemPrompt.ContextMessage("Workbench: wb-1")),
             ChatMessage.User("hello deepseek"),
             ChatMessage.Assistant("Hi! How can I help?"),
             ChatMessage.User("list sessions"),
@@ -114,12 +115,15 @@ public sealed class ChatSessionExporterTests
 
         Assert.Contains("# Chat session export", markdown);
         Assert.Contains("Model: `deepseek-chat`", markdown);
-        Assert.Contains("2 user message(s) · 3 API round(s)", markdown);
+        Assert.Contains("2 user message(s) · 3 API round(s)", markdown); // context messages are not user turns
         Assert.Contains("600 prompt + 60 completion = 660 total", markdown);
 
         Assert.Contains("SYS-PROMPT with runtime context", markdown);
         Assert.Contains("## Tool definitions sent with every request (1)", markdown);
         Assert.Contains("list_sessions", markdown);
+
+        Assert.Contains("runtime context —", markdown);
+        Assert.Contains("Workbench: wb-1", markdown);
 
         Assert.Contains("hello deepseek", markdown);
         Assert.Contains("*usage: 100 prompt + 10 completion = 110 tokens*", markdown);

@@ -39,6 +39,43 @@ public sealed class ChatTurnEndpointsTests
     }
 
     [Fact]
+    public async Task ChatSettingsExposeDefaultLoopPolicy()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        var settings = await client.GetFromJsonAsync<JsonElement>("/api/config/settings");
+
+        Assert.Equal(12, settings.GetProperty("roundLimit").GetInt32());
+        Assert.Equal(300_000, settings.GetProperty("promptTokenBudget").GetInt32());
+        Assert.Equal(100_000, settings.GetProperty("promptTokenWarningThreshold").GetInt32());
+        Assert.Equal(8_000, settings.GetProperty("toolResultMaxChars").GetInt32());
+        Assert.Equal(500, settings.GetProperty("toolResultCompactChars").GetInt32());
+        Assert.Equal(90_000, settings.GetProperty("historyTokenThreshold").GetInt32());
+        Assert.Equal(2, settings.GetProperty("recentTurnsToKeep").GetInt32());
+        Assert.Equal(500, settings.GetProperty("collapsedAnswerChars").GetInt32());
+    }
+
+    [Fact]
+    public async Task LoopPolicyIsConfigurable()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Testing");
+                builder.UseSetting("chatSettings:historyTokenThreshold", "12345");
+                builder.UseSetting("chatSettings:recentTurnsToKeep", "4");
+            });
+        using var client = factory.CreateClient();
+
+        var settings = await client.GetFromJsonAsync<JsonElement>("/api/config/settings");
+
+        Assert.Equal(12_345, settings.GetProperty("historyTokenThreshold").GetInt32());
+        Assert.Equal(4, settings.GetProperty("recentTurnsToKeep").GetInt32());
+    }
+
+    [Fact]
     public async Task GrantRoundsWithoutDeviceSelectionReturnsBadRequest()
     {
         await using var factory = new WebApplicationFactory<Program>()
