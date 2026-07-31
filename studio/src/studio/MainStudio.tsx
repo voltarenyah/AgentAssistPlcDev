@@ -49,6 +49,8 @@ import * as api from '@/api/client'
 import { runOpenProjectInTia } from '@/studio/deviceActions'
 import ChatWorkspace from '@/studio/chat/ChatWorkspace'
 import SessionDock from '@/studio/chat/SessionDock'
+import NodeEdgesView from '@/studio/NodeEdgesView'
+import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
 import {
   appendAssistantDelta,
   appendLocalUserMessage,
@@ -333,6 +335,10 @@ export default function MainStudio() {
   const [activeTab, setActiveTab] = useState<StudioTab>('overview')
   const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
   const [sessionDockVisible, setSessionDockVisible] = useState(true)
+  const [knowledgeSelection, setKnowledgeSelection] = useState<{
+    node: api.GraphNode | null
+    edge: api.GraphEdge | null
+  }>({ node: null, edge: null })
   const [chatBusy, setChatBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [operation, setOperation] = useState<string | null>(null)
@@ -435,6 +441,11 @@ export default function MainStudio() {
   }, [reloadWorkbenches, reloadSessions, reloadKeyStatus])
 
   useEffect(() => { void loadStartup() }, [loadStartup])
+
+  // Knowledge browser selection belongs to one device's graph; drop it when the device changes.
+  useEffect(() => {
+    setKnowledgeSelection({ node: null, edge: null })
+  }, [selection.deviceId])
 
   useEffect(() => {
     if (!activeOperationId) return undefined
@@ -1097,7 +1108,7 @@ export default function MainStudio() {
           {selection.deviceId && (
             <button
               className="icon-button"
-              aria-label={sessionDockVisible ? 'Hide AI sessions' : 'Show AI sessions'}
+              aria-label={sessionDockVisible ? 'Hide side panel' : 'Show side panel'}
               onClick={() => setSessionDockVisible(value => !value)}
             >
               {sessionDockVisible ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
@@ -1414,7 +1425,8 @@ export default function MainStudio() {
                 )}
 
                 {activeTab === 'knowledge' && (
-                  <div className="mx-auto grid max-w-5xl gap-4 p-5 lg:grid-cols-2">
+                  <div className="flex h-full min-h-[560px] flex-col gap-4 p-5">
+                    <div className="grid shrink-0 gap-4 lg:grid-cols-2">
                     <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
                       <div className="flex items-center gap-3">
                         <Database className="h-5 w-5 text-chart-2" />
@@ -1460,6 +1472,14 @@ export default function MainStudio() {
                         Applied hashes are checked before stale state clears.
                       </div>
                     </section>
+                    </div>
+                    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
+                      <NodeEdgesView
+                        projectName={deviceInfo?.plcName ?? selection.deviceId ?? ''}
+                        onNodeSelect={node => setKnowledgeSelection(previous => ({ ...previous, node }))}
+                        onEdgeSelect={edge => setKnowledgeSelection(previous => ({ ...previous, edge }))}
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -1476,7 +1496,15 @@ export default function MainStudio() {
             </>
           )}
         </main>
-        {selection.deviceId && (
+        {selection.deviceId && activeTab === 'knowledge' && (
+          <KnowledgePropertiesDock
+            projectName={deviceInfo?.plcName ?? selection.deviceId}
+            node={knowledgeSelection.node}
+            edge={knowledgeSelection.edge}
+            hidden={!sessionDockVisible}
+          />
+        )}
+        {selection.deviceId && activeTab !== 'knowledge' && (
           <SessionDock
             sessions={deviceSessions}
             activeSessionId={chatTabs.activeId}
