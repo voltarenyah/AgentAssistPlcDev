@@ -45,6 +45,7 @@ public static class ComponentProvenanceStore
         connection.Open();
         Execute(connection, null, "PRAGMA foreign_keys = ON;");
         EnsureProvenanceAvailable(connection);
+        SqliteSemanticGraphStore.EnsureSchema(connection);
 
         using var transaction = connection.BeginTransaction();
         ValidateStoredIdentity(connection, transaction, replacement);
@@ -130,6 +131,7 @@ public static class ComponentProvenanceStore
         }
 
         Save(connection, transaction, new[] { replacement });
+        SqliteSemanticGraphStore.RebuildDerivedData(connection, transaction);
         transaction.Commit();
     }
 

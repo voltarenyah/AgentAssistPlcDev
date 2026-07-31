@@ -971,6 +971,11 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
         {
             host.UseEnvironment("Testing");
+            host.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["chatSettings:reasoningEffort"] = ChatRequestSettings.DefaultReasoningEffort,
+                }));
             host.ConfigureServices(services =>
             {
                 services.RemoveAll<WorkbenchCatalog>();

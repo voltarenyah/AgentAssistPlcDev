@@ -22,7 +22,7 @@ Nothing else is in scope: no LLM audit tables, no source editing, no git, no UI.
 4. **Rebuild-only ingest.** Delete-all + bulk insert in one transaction, same as the reference. Incremental re-ingest remains a Phase-3 item (`initialLaunch` §Phase 3).
 5. **Scope = what engineering exports today.** mcp-engineering Phase 1 exports blocks only (OB/FB/FC/DB, including instance DBs). Tag-table and UDT import paths are **not** ported now; they land in the same step that adds tag/UDT export to mcp-engineering (§13). The dispatch is designed so those categories slot in without schema changes. **(2026-07-18, stage 4: the knowledge-side import of `Tags`/`UDT` categories and `SW.Tags.PlcTagTable`/`SW.Types.PlcStruct` root elements is now ported and wired into both ingest paths; engineering-side export lands in parallel.)**
 6. **`logicStatements` (SCL-like network text) deferred.** It comes from `ProgramBlockLogicYamlWriter.cs` (2 097 lines, the largest file). Network nodes already carry title + reads/writes/calls without it; it ports in the step that builds `get_block`/`get_network` for the comment workflow. **(DONE 2026-07-18, stage 5: translator ported to `Parsing/ProgramBlockLogicYamlWriter.cs` — FlgNet→SCL-like statements only, YAML file generation stays behind. Network nodes carry `logicStatements` (newline-joined statements, empty networks omit it), mirroring reference commit `2b3dace`; translation conventions follow the polished reference output the user maintains in `translate\program-blocks.yaml`.)**
-7. **Tool surface this step = 3 tools** (`ingest_source`, `query`, `get_schema`), following the shipped mcp-engineering convention of plain verb_noun names with no server prefix. **(stage 5 added `get_block`, `get_network`, `search` — 6 tools total.)**
+7. **Tool surface this step = 3 tools** (`ingest_source`, `query`, `get_schema`), following the shipped mcp-engineering convention of plain verb_noun names with no server prefix. **(stage 5 added `get_block`, `get_single_network`, `get_all_networks`, `get_variable_usage`, `search`.)**
 
 ## 3. Input contract with mcp-engineering
 
@@ -94,7 +94,8 @@ Vocabulary produced by this step (subset of the reference; ~~UDT/tag kinds arriv
 | `query` | read | `{ dbPath: string, sql: string, maxRows?: int }` | `{ columns[], rows[][], truncated: bool }` | Read-only SQL. Connection opened with `Mode=ReadOnly`; single statement, must start with `SELECT`/`WITH`/`EXPLAIN`; `maxRows` default 200, hard cap 1000, `truncated` flag set when cut |
 | `get_schema` | read | — | `{ ddl: string, nodeKinds[], edgeTypes[], exampleQueries[] }` | Static content; no DB needed |
 | `get_block` (stage 5) | read | `{ dbPath: string, block: string }` | `{ block, networks[] }` | OB/FB/FC by name (case-insensitive); networks carry index, compileUnitId, title, language, logicStatements (omitted when empty) |
-| `get_network` (stage 5) | read | `{ dbPath: string, block: string, networkIndex: int }` | `{ block, network, reads[], writes[], calls[] }` | Network detail; reads/writes are distinct symbol names, calls via Instruction nodes |
+| `get_single_network` (stage 5) | read | `{ dbPath: string, block: string, networkIndex: int, include?: string[] }` | One requested network plus selected logic/access/calls | Exact extraction when the block and 1-based network index are known |
+| `get_all_networks` (stage 5) | read | `{ dbPath: string, block: string, include?: string[], maxLogicCharsPerNetwork?: int }` | Compact network summaries by default | Block overview; opt into bounded logic/access/calls |
 | `search` (stage 5) | read | `{ dbPath: string, text: string, kind?: string, maxRows?: int }` | `{ text, kind?, matches[], truncated }` | Case-insensitive substring match over node names + `title`/`logicStatements` properties; `maxRows` default 50, hard cap 200; snippets capped at 300 chars |
 
 `IngestResult`:
@@ -110,7 +111,7 @@ Vocabulary produced by this step (subset of the reference; ~~UDT/tag kinds arriv
 }
 ```
 
-Deferred to later steps: ~~`get_block`, `get_network`, `search` (arrive with `logicStatements` and the comment workflow)~~ **(done, stage 5)**; UDT/tag import (arrives with engineering-side export).
+Deferred to later steps: ~~`get_block`, `get_single_network`, `get_all_networks`, `search` (arrive with `logicStatements` and the comment workflow)~~ **(done, stage 5)**; UDT/tag import (arrives with engineering-side export).
 
 ## 7. Ingest pipeline
 
@@ -198,14 +199,14 @@ tests/Mcp.Knowledge.Tests/
 
 ## 12. Non-goals (this step)
 
-- UDT / tag-table import, incremental re-ingest, `logicStatements` text, `get_block`/`get_network`/`search`, `llm_runs`, source editing, version control, agent, UI.
+- UDT / tag-table import, incremental re-ingest, `logicStatements` text, `get_block`/`get_single_network`/`get_all_networks`/`search`, `llm_runs`, source editing, version control, agent, UI.
 - No changes to mcp-engineering (its export output is already sufficient input).
 
 ## 13. Remaining Phase 2 steps (the split, for roadmap context)
 
 1. **mcp-knowledge ingest** ← this document
 2. Engineering exports tag tables + UDTs; knowledge imports them (`TagTable.cs` / `UdtTypeTable.cs` port) — **knowledge side DONE 2026-07-18 (stage 4)**; engineering-side `export_tag_tables`/`export_udts` in parallel at that date
-3. `logicStatements` port + knowledge query helpers (`get_block`, `get_network`, `search`) — **DONE 2026-07-18 (stage 5)**
+3. `logicStatements` port + knowledge query helpers (`get_block`, `get_single_network`, `get_all_networks`, `search`) — **DONE 2026-07-18 (stage 5)**
 4. mcp-source-editor MVP (parse/comment-edit/validate)
 5. mcp-version-control MVP (`vc_snapshot` before write-back)
 6. Agent (DeepSeek) + comment-generation workflow

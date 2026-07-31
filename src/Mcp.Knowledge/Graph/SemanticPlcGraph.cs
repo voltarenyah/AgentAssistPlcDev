@@ -867,11 +867,55 @@ public static class PlcSemanticGraphSqliteSchema
             FOREIGN KEY (edge_id) REFERENCES graph_edges(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS knowledge_networks (
+            network_id TEXT NOT NULL PRIMARY KEY,
+            block_id TEXT NOT NULL,
+            network_index INTEGER NOT NULL,
+            compile_unit_id TEXT,
+            title TEXT,
+            language TEXT,
+            logic_statements TEXT,
+            source_file TEXT,
+            UNIQUE (block_id, network_index),
+            FOREIGN KEY (network_id) REFERENCES graph_nodes(id) ON DELETE CASCADE,
+            FOREIGN KEY (block_id) REFERENCES graph_nodes(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS knowledge_network_accesses (
+            network_id TEXT NOT NULL,
+            target_node_id TEXT NOT NULL,
+            variable_name TEXT NOT NULL,
+            access TEXT NOT NULL,
+            PRIMARY KEY (network_id, target_node_id, access),
+            FOREIGN KEY (network_id) REFERENCES graph_nodes(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_node_id) REFERENCES graph_nodes(id) ON DELETE CASCADE
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_search USING fts5(
+            node_id UNINDEXED,
+            kind UNINDEXED,
+            field UNINDEXED,
+            content,
+            tokenize = 'trigram'
+        );
+
         CREATE INDEX IF NOT EXISTS ix_graph_nodes_kind ON graph_nodes(kind);
         CREATE INDEX IF NOT EXISTS ix_graph_nodes_name ON graph_nodes(name);
+        CREATE INDEX IF NOT EXISTS ix_graph_nodes_kind_name_nocase
+            ON graph_nodes(kind, name COLLATE NOCASE, id);
         CREATE INDEX IF NOT EXISTS ix_graph_edges_type ON graph_edges(type);
         CREATE INDEX IF NOT EXISTS ix_graph_edges_from ON graph_edges(from_node_id);
         CREATE INDEX IF NOT EXISTS ix_graph_edges_to ON graph_edges(to_node_id);
+        CREATE INDEX IF NOT EXISTS ix_graph_edges_from_type_to
+            ON graph_edges(from_node_id, type, to_node_id);
+        CREATE INDEX IF NOT EXISTS ix_graph_edges_to_type_from
+            ON graph_edges(to_node_id, type, from_node_id);
+        CREATE INDEX IF NOT EXISTS ix_knowledge_networks_block_index
+            ON knowledge_networks(block_id, network_index);
+        CREATE INDEX IF NOT EXISTS ix_knowledge_network_accesses_target
+            ON knowledge_network_accesses(target_node_id, access, network_id);
+        CREATE INDEX IF NOT EXISTS ix_knowledge_network_accesses_network
+            ON knowledge_network_accesses(network_id, access, target_node_id);
         CREATE INDEX IF NOT EXISTS ix_source_component_nodes_node ON source_component_nodes(node_id);
         CREATE INDEX IF NOT EXISTS ix_source_component_edges_edge ON source_component_edges(edge_id);
         """;
@@ -963,7 +1007,112 @@ public static class SqliteSemanticGraphStore
         }
 
         ComponentProvenanceStore.Save(connection, transaction, graph.ComponentImports);
+        RebuildDerivedData(connection, transaction);
         transaction.Commit();
+    }
+
+    internal static void EnsureSchema(SqliteConnection connection)
+    {
+        ExecuteNonQuery(connection, PlcSemanticGraphSqliteSchema.CreateScript);
+    }
+
+    internal static void RebuildDerivedData(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
+    {
+        ExecuteNonQuery(
+            connection,
+            "DELETE FROM knowledge_network_accesses; DELETE FROM knowledge_networks; DELETE FROM knowledge_search;",
+            transaction);
+
+        ExecuteNonQuery(
+            connection,
+            """
+            INSERT INTO knowledge_networks (
+                network_id, block_id, network_index, compile_unit_id,
+                title, language, logic_statements, source_file)
+            SELECT
+                network.id,
+                contains.from_node_id,
+                CAST(network_index.value AS INTEGER),
+                compile_unit.value,
+                title.value,
+                language.value,
+                logic.value,
+                source_file.value
+            FROM graph_nodes network
+            JOIN graph_edges contains
+              ON contains.to_node_id = network.id
+             AND contains.type = 'CONTAINS'
+            JOIN graph_nodes block
+              ON block.id = contains.from_node_id
+             AND block.kind IN ('OB', 'FB', 'FC')
+            JOIN graph_node_properties network_index
+              ON network_index.node_id = network.id
+             AND network_index.name = 'networkIndex'
+            LEFT JOIN graph_node_properties compile_unit
+              ON compile_unit.node_id = network.id
+             AND compile_unit.name = 'compileUnitId'
+            LEFT JOIN graph_node_properties title
+              ON title.node_id = network.id
+             AND title.name = 'title'
+            LEFT JOIN graph_node_properties language
+              ON language.node_id = network.id
+             AND language.name = 'language'
+            LEFT JOIN graph_node_properties logic
+              ON logic.node_id = network.id
+             AND logic.name = 'logicStatements'
+            LEFT JOIN graph_node_properties source_file
+              ON source_file.node_id = network.id
+             AND source_file.name = 'sourceFile'
+            WHERE network.kind = 'Network';
+            """,
+            transaction);
+
+        ExecuteNonQuery(
+            connection,
+            """
+            INSERT INTO knowledge_network_accesses (
+                network_id, target_node_id, variable_name, access)
+            SELECT DISTINCT
+                CASE
+                    WHEN source.kind = 'Network' THEN edge.from_node_id
+                    ELSE network_id.value
+                END,
+                edge.to_node_id,
+                target.name,
+                edge.type
+            FROM graph_edges edge
+            JOIN graph_nodes source ON source.id = edge.from_node_id
+            JOIN graph_nodes target ON target.id = edge.to_node_id
+            LEFT JOIN graph_edge_properties network_id
+              ON network_id.edge_id = edge.id
+             AND network_id.name = 'networkId'
+            JOIN knowledge_networks network
+              ON network.network_id = CASE
+                    WHEN source.kind = 'Network' THEN edge.from_node_id
+                    ELSE network_id.value
+                 END
+            WHERE edge.type IN ('READS', 'WRITES');
+            """,
+            transaction);
+
+        ExecuteNonQuery(
+            connection,
+            """
+            INSERT INTO knowledge_search (node_id, kind, field, content)
+            SELECT id, kind, 'name', name
+            FROM graph_nodes
+            WHERE name <> '';
+
+            INSERT INTO knowledge_search (node_id, kind, field, content)
+            SELECT node.id, node.kind, property.name, property.value
+            FROM graph_node_properties property
+            JOIN graph_nodes node ON node.id = property.node_id
+            WHERE property.name IN ('title', 'logicStatements')
+              AND property.value <> '';
+            """,
+            transaction);
     }
 
     public static SemanticPlcGraph Load(string dbPath)

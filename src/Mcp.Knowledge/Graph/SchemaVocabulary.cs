@@ -167,5 +167,11 @@ public static class SchemaVocabulary
               AND logic.value LIKE '%Time_Base%'
             ORDER BY network.id;
             """),
+        new SchemaExampleQuery(
+            "List compact network projections",
+            "SELECT block_id, network_index, title, language\nFROM knowledge_networks\nWHERE block_id = 'block:Main'\nORDER BY network_index;"),
+        new SchemaExampleQuery(
+            "Read one network access chain",
+            "SELECT network.network_index, access.access, access.variable_name\nFROM knowledge_networks network\nJOIN knowledge_network_accesses access ON access.network_id = network.network_id\nWHERE network.block_id = 'block:Main' AND network.network_index = 1\nORDER BY access.access, access.variable_name;"),
     };
 }

@@ -78,17 +78,37 @@ public sealed class KnowledgeTools
         [Description("Block name, e.g. 'Main'.")] string block)
         => Invoke(() => BlockDetail(dbPath, block));
 
-    [McpServerTool(Name = "get_network")]
-    [Description("Get one network of a program block: title, language, logicStatements, symbols read/written and blocks called (read-only). Pass compact=true to omit the repeated block metadata and return only block id + name.")]
+    // Retained as a source-compatible wrapper for callers compiled against the old API.
+    // It is intentionally not advertised as an MCP tool; agents should choose between
+    // get_single_network and get_all_networks explicitly.
+    [Description("Deprecated compatibility name for get_single_network. Use get_single_network when the block and network index are known.")]
     public CallToolResult GetNetwork(
         [Description("Path to the plc-knowledge.db file.")] string dbPath,
         [Description("Block name, e.g. 'Main'.")] string block,
         [Description("1-based network index.")] int networkIndex,
         [Description("When true, the block wrapper carries only id + name.")] bool compact = false)
-        => Invoke(() => NetworkDetail(dbPath, block, networkIndex, compact));
+        => Invoke(() => SingleNetworkDetail(dbPath, block, networkIndex, compact, null));
+
+    [McpServerTool(Name = "get_single_network")]
+    [Description("Inspect exactly one PLC network. Use this when the block name and 1-based network index are already known. The response contains only that network plus its reads, writes and calls.")]
+    public CallToolResult GetSingleNetwork(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Program block name, e.g. 'Main'.")] string block,
+        [Description("1-based network index.")] int networkIndex,
+        [Description("Optional fields: logic, access, calls. Defaults to all fields.")] string[]? include = null)
+        => Invoke(() => SingleNetworkDetail(dbPath, block, networkIndex, false, include));
+
+    [McpServerTool(Name = "get_all_networks")]
+    [Description("List networks in one PLC block. Defaults to compact summaries; request include=['logic'] only when full translated logic is needed. Use get_single_network for one known network.")]
+    public CallToolResult GetAllNetworks(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Program block name, e.g. 'Main'.")] string block,
+        [Description("Optional fields: logic, access, calls. Defaults to summary only.")] string[]? include = null,
+        [Description("Maximum logic characters per network; 1200 by default when logic is requested.")] int? maxLogicCharsPerNetwork = null)
+        => Invoke(() => AllNetworksDetail(dbPath, block, include, maxLogicCharsPerNetwork));
 
     [McpServerTool(Name = "get_variable_usage")]
-    [Description("Find every usage site of a PLC variable in one call: networks whose translated logic text mentions it (text is authoritative) plus READS/WRITES graph edges, including the linked DB-member chain. Each row is labeled read/write/mention with block and network ids. Prefer this for 'where is X read/written / how is X processed' questions instead of chaining search + query + get_network.")]
+    [Description("Find every usage site of a PLC variable in one call: networks whose translated logic text mentions it (text is authoritative) plus READS/WRITES graph edges, including the linked DB-member chain. Each row is labeled read/write/mention with block and network ids. Prefer this for 'where is X read/written / how is X processed' questions instead of chaining search + query + get_single_network.")]
     public CallToolResult GetVariableUsage(
         [Description("Path to the plc-knowledge.db file.")] string dbPath,
         [Description("Full dotted variable path (e.g. 'Cav_A.Cavity.CAB.PLS_Green_Cup.CAB') or a leaf name.")] string variable,
@@ -483,14 +503,19 @@ public sealed class KnowledgeTools
         };
     }
 
-    private static object NetworkDetail(string dbPath, string block, int networkIndex, bool compact)
+    private static object SingleNetworkDetail(
+        string dbPath,
+        string block,
+        int networkIndex,
+        bool compact,
+        IReadOnlyCollection<string>? include)
     {
         using var connection = OpenReadOnly(dbPath);
         var blockNode = FindBlockNode(connection, block);
-        var networks = ReadNetworks(connection, blockNode.Id);
-        var network = networks.FirstOrDefault(item => item.Index == networkIndex);
+        var network = ReadNetwork(connection, blockNode.Id, networkIndex);
         if (network == null)
         {
+            var networks = ReadNetworks(connection, blockNode.Id);
             var available = string.Join(", ", networks.Select(item => item.Index?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?"));
             throw new KnowledgeToolException(
                 "NETWORK_NOT_FOUND",
@@ -502,13 +527,94 @@ public sealed class KnowledgeTools
         object blockInfo = compact
             ? new { id = blockNode.Id, name = blockNode.Name }
             : blockNode;
+        var fields = NormalizeInclude(include, allByDefault: true);
         return new
         {
             block = blockInfo,
-            network,
-            reads = ReadAccessNames(connection, network.Id, "READS"),
-            writes = ReadAccessNames(connection, network.Id, "WRITES"),
-            calls = ReadCalls(connection, network.Id),
+            network = ProjectNetwork(connection, network, fields, logicLimit: null),
+            reads = fields.Contains("access") ? ReadAccessNames(connection, network.Id, "READS") : Array.Empty<string>(),
+            writes = fields.Contains("access") ? ReadAccessNames(connection, network.Id, "WRITES") : Array.Empty<string>(),
+            calls = fields.Contains("calls") ? ReadCalls(connection, network.Id) : Array.Empty<CallInfo>(),
+        };
+    }
+
+    private static object AllNetworksDetail(
+        string dbPath,
+        string block,
+        IReadOnlyCollection<string>? include,
+        int? maxLogicCharsPerNetwork)
+    {
+        using var connection = OpenReadOnly(dbPath);
+        var blockNode = FindBlockNode(connection, block);
+        var fields = NormalizeInclude(include, allByDefault: false);
+        var logicLimit = fields.Contains("logic")
+            ? Math.Clamp(maxLogicCharsPerNetwork ?? 1200, 1, 8000)
+            : 0;
+        var networks = ReadNetworks(connection, blockNode.Id)
+            .Select(network => ProjectNetwork(connection, network, fields, logicLimit))
+            .ToArray();
+
+        return new
+        {
+            block = new { id = blockNode.Id, kind = blockNode.Kind, name = blockNode.Name },
+            networks,
+            meta = new
+            {
+                returned = networks.Length,
+                include = fields.OrderBy(item => item, StringComparer.Ordinal).ToArray(),
+                logicLimit,
+            },
+        };
+    }
+
+    private static HashSet<string> NormalizeInclude(
+        IReadOnlyCollection<string>? include,
+        bool allByDefault)
+    {
+        var fields = include is null
+            ? new HashSet<string>(allByDefault ? new[] { "logic", "access", "calls" } : Array.Empty<string>(), StringComparer.OrdinalIgnoreCase)
+            : include
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(item => item.Trim())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var unsupported = fields.Where(item => item is not ("logic" or "access" or "calls")).ToArray();
+        if (unsupported.Length > 0)
+        {
+            throw new KnowledgeToolException(
+                "NETWORK_INCLUDE_INVALID",
+                $"Unsupported network fields: {string.Join(", ", unsupported)}.",
+                "Use only 'logic', 'access' or 'calls'.");
+        }
+
+        return fields;
+    }
+
+    private static object ProjectNetwork(
+        SqliteConnection connection,
+        NetworkInfo network,
+        IReadOnlySet<string> fields,
+        int? logicLimit)
+    {
+        var logic = fields.Contains("logic") ? network.LogicStatements : null;
+        var logicTruncated = false;
+        if (logicLimit is > 0 && logic is { Length: > 0 } && logic.Length > logicLimit.Value)
+        {
+            logic = logic[..logicLimit.Value];
+            logicTruncated = true;
+        }
+
+        return new
+        {
+            id = network.Id,
+            index = network.Index,
+            compileUnitId = network.CompileUnitId,
+            title = network.Title,
+            language = network.Language,
+            logicStatements = logic,
+            logicTruncated,
+            reads = fields.Contains("access") ? ReadAccessNames(connection, network.Id, "READS") : null,
+            writes = fields.Contains("access") ? ReadAccessNames(connection, network.Id, "WRITES") : null,
+            calls = fields.Contains("calls") ? ReadCalls(connection, network.Id) : null,
         };
     }
 
@@ -527,19 +633,33 @@ public sealed class KnowledgeTools
         var hasKind = !string.IsNullOrWhiteSpace(kind);
         using var connection = OpenReadOnly(dbPath);
         using var command = connection.CreateCommand();
-        command.CommandText = $"""
-            SELECT id, kind, name, 'name' AS matchedIn, NULL AS snippet
-            FROM graph_nodes
-            WHERE name LIKE @pattern ESCAPE '\' {(hasKind ? "AND kind = @kind" : string.Empty)}
-            UNION ALL
-            SELECT n.id, n.kind, n.name, p.name AS matchedIn, p.value AS snippet
-            FROM graph_nodes n
-            JOIN graph_node_properties p ON p.node_id = n.id AND p.name IN ('title', 'logicStatements')
-            WHERE p.value LIKE @pattern ESCAPE '\' {(hasKind ? "AND n.kind = @kind" : string.Empty)}
-            ORDER BY kind, id
-            LIMIT @limit;
-            """;
-        command.Parameters.AddWithValue("@pattern", pattern);
+        var useFts = text.Trim().Length >= 3 && TableExists(connection, "knowledge_search");
+        command.CommandText = useFts
+            ? $"""
+                SELECT s.node_id, n.kind, n.name, s.field AS matchedIn, s.content AS snippet
+                FROM knowledge_search s
+                JOIN graph_nodes n ON n.id = s.node_id
+                WHERE knowledge_search MATCH @ftsQuery
+                  AND s.field IN ('name', 'title', 'logicStatements')
+                  {(hasKind ? "AND s.kind = @kind" : string.Empty)}
+                ORDER BY n.kind, n.id
+                LIMIT @limit;
+                """
+            : $"""
+                SELECT id, kind, name, 'name' AS matchedIn, NULL AS snippet
+                FROM graph_nodes
+                WHERE name LIKE @pattern ESCAPE '\' {(hasKind ? "AND kind = @kind" : string.Empty)}
+                UNION ALL
+                SELECT n.id, n.kind, n.name, p.name AS matchedIn, p.value AS snippet
+                FROM graph_nodes n
+                JOIN graph_node_properties p ON p.node_id = n.id AND p.name IN ('title', 'logicStatements')
+                WHERE p.value LIKE @pattern ESCAPE '\' {(hasKind ? "AND n.kind = @kind" : string.Empty)}
+                ORDER BY kind, id
+                LIMIT @limit;
+                """;
+        command.Parameters.AddWithValue(
+            useFts ? "@ftsQuery" : "@pattern",
+            useFts ? FtsLiteral(text.Trim()) : pattern);
         if (hasKind)
         {
             command.Parameters.AddWithValue("@kind", kind);
@@ -642,19 +762,28 @@ public sealed class KnowledgeTools
         if (matchedNodeIds.Count > 0)
         {
             using var command = connection.CreateCommand();
-            command.CommandText = $"""
-                SELECT e.type, e.from_node_id, src.kind, nid.value
-                FROM graph_edges e
-                JOIN graph_nodes src ON src.id = e.from_node_id
-                LEFT JOIN graph_edge_properties nid ON nid.edge_id = e.id AND nid.name = 'networkId'
-                WHERE e.type IN ('READS', 'WRITES') AND {InClause(command, "e.to_node_id", "t", matchedNodeIds)};
-                """;
+            var useAccessProjection = TableExists(connection, "knowledge_network_accesses");
+            command.CommandText = useAccessProjection
+                ? $"""
+                    SELECT access, network_id
+                    FROM knowledge_network_accesses
+                    WHERE {InClause(command, "target_node_id", "t", matchedNodeIds)};
+                    """
+                : $"""
+                    SELECT e.type, e.from_node_id, src.kind, nid.value
+                    FROM graph_edges e
+                    JOIN graph_nodes src ON src.id = e.from_node_id
+                    LEFT JOIN graph_edge_properties nid ON nid.edge_id = e.id AND nid.name = 'networkId'
+                    WHERE e.type IN ('READS', 'WRITES') AND {InClause(command, "e.to_node_id", "t", matchedNodeIds)};
+                    """;
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                var networkId = string.Equals(reader.GetString(2), SemanticNodeKind.Network, StringComparison.Ordinal)
+                var networkId = useAccessProjection
                     ? reader.GetString(1)
-                    : reader.IsDBNull(3) ? null : reader.GetString(3);
+                    : string.Equals(reader.GetString(2), SemanticNodeKind.Network, StringComparison.Ordinal)
+                        ? reader.GetString(1)
+                        : reader.IsDBNull(3) ? null : reader.GetString(3);
                 if (string.IsNullOrWhiteSpace(networkId))
                 {
                     continue;
@@ -666,20 +795,34 @@ public sealed class KnowledgeTools
                     directionsByNetwork.Add(networkId, directions);
                 }
 
-                directions.Add(string.Equals(reader.GetString(0), "WRITES", StringComparison.Ordinal) ? "write" : "read");
+                directions.Add(string.Equals(reader.GetString(0), "WRITES", StringComparison.Ordinal) ||
+                              string.Equals(reader.GetString(0), "WRITES", StringComparison.OrdinalIgnoreCase)
+                    ? "write"
+                    : "read");
             }
         }
 
         var pattern = "%" + EscapeLike(trimmed) + "%";
         using (var command = connection.CreateCommand())
         {
-            command.CommandText = """
-                SELECT n.id
-                FROM graph_nodes n
-                JOIN graph_node_properties p ON p.node_id = n.id AND p.name = 'logicStatements'
-                WHERE n.kind = 'Network' AND p.value LIKE @pattern ESCAPE '\';
-                """;
-            command.Parameters.AddWithValue("@pattern", pattern);
+            var useFts = trimmed.Length >= 3 && TableExists(connection, "knowledge_search");
+            command.CommandText = useFts
+                ? """
+                    SELECT s.node_id
+                    FROM knowledge_search s
+                    WHERE knowledge_search MATCH @ftsQuery
+                      AND s.kind = 'Network'
+                      AND s.field = 'logicStatements';
+                    """
+                : """
+                    SELECT n.id
+                    FROM graph_nodes n
+                    JOIN graph_node_properties p ON p.node_id = n.id AND p.name = 'logicStatements'
+                    WHERE n.kind = 'Network' AND p.value LIKE @pattern ESCAPE '\';
+                    """;
+            command.Parameters.AddWithValue(
+                useFts ? "@ftsQuery" : "@pattern",
+                useFts ? FtsLiteral(trimmed) : pattern);
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -855,6 +998,9 @@ public sealed class KnowledgeTools
         return text.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
+    private static string FtsLiteral(string text) =>
+        "\"" + text.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
     private sealed record VariableUsageNetwork(string? BlockName, string? BlockKind, int? Index, string? Title);
 
     private sealed record VariableUsageRow(string? Block, string? BlockKind, int? NetworkIndex, string? NetworkTitle, string Access, string NetworkId);
@@ -878,6 +1024,14 @@ public sealed class KnowledgeTools
         var connection = new SqliteConnection(connectionString);
         connection.Open();
         return connection;
+    }
+
+    private static bool TableExists(SqliteConnection connection, string tableName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name = @name;";
+        command.Parameters.AddWithValue("@name", tableName);
+        return Convert.ToInt64(command.ExecuteScalar()) > 0;
     }
 
     private static BlockNodeInfo FindBlockNode(SqliteConnection connection, string block)
@@ -936,8 +1090,111 @@ public sealed class KnowledgeTools
         return new BlockNodeInfo(id, kind, name, sourceFile, folderPath);
     }
 
+    private static NetworkInfo? ReadNetwork(
+        SqliteConnection connection,
+        string blockId,
+        int networkIndex)
+    {
+        if (TableExists(connection, "knowledge_networks"))
+        {
+            using var projected = connection.CreateCommand();
+            projected.CommandText = """
+                SELECT network_id, network_index, compile_unit_id,
+                       title, language, logic_statements
+                FROM knowledge_networks
+                WHERE block_id = @blockId AND network_index = @networkIndex
+                LIMIT 1;
+                """;
+            projected.Parameters.AddWithValue("@blockId", blockId);
+            projected.Parameters.AddWithValue("@networkIndex", networkIndex);
+            using var projectedReader = projected.ExecuteReader();
+            return projectedReader.Read() ? ReadProjectedNetworkInfo(projectedReader) : null;
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+              network.id,
+              idx.value,
+              cu.value,
+              title.value,
+              lang.value,
+              logic.value
+            FROM graph_edges e
+            JOIN graph_nodes network ON network.id = e.to_node_id AND network.kind = 'Network'
+            JOIN graph_node_properties idx
+              ON idx.node_id = network.id
+             AND idx.name = 'networkIndex'
+             AND idx.value = @networkIndex
+            LEFT JOIN graph_node_properties cu ON cu.node_id = network.id AND cu.name = 'compileUnitId'
+            LEFT JOIN graph_node_properties title ON title.node_id = network.id AND title.name = 'title'
+            LEFT JOIN graph_node_properties lang ON lang.node_id = network.id AND lang.name = 'language'
+            LEFT JOIN graph_node_properties logic ON logic.node_id = network.id AND logic.name = 'logicStatements'
+            WHERE e.type = 'CONTAINS' AND e.from_node_id = @blockId
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("@blockId", blockId);
+        command.Parameters.AddWithValue(
+            "@networkIndex",
+            networkIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadNetworkInfo(reader) : null;
+    }
+
+    private static NetworkInfo ReadProjectedNetworkInfo(SqliteDataReader reader)
+    {
+        return new NetworkInfo(
+            reader.GetString(0),
+            reader.GetInt32(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? null : reader.GetString(5));
+    }
+
+    private static NetworkInfo ReadNetworkInfo(SqliteDataReader reader)
+    {
+        var indexText = reader.IsDBNull(1) ? null : reader.GetString(1);
+        int? index = int.TryParse(
+            indexText,
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var parsed)
+            ? parsed
+            : null;
+        return new NetworkInfo(
+            reader.GetString(0),
+            index,
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? null : reader.GetString(5));
+    }
+
     private static List<NetworkInfo> ReadNetworks(SqliteConnection connection, string blockId)
     {
+        if (TableExists(connection, "knowledge_networks"))
+        {
+            using var projected = connection.CreateCommand();
+            projected.CommandText = """
+                SELECT network_id, network_index, compile_unit_id,
+                       title, language, logic_statements
+                FROM knowledge_networks
+                WHERE block_id = @blockId
+                ORDER BY network_index;
+                """;
+            projected.Parameters.AddWithValue("@blockId", blockId);
+            var projectedNetworks = new List<NetworkInfo>();
+            using var projectedReader = projected.ExecuteReader();
+            while (projectedReader.Read())
+            {
+                projectedNetworks.Add(ReadProjectedNetworkInfo(projectedReader));
+            }
+
+            return projectedNetworks;
+        }
+
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT

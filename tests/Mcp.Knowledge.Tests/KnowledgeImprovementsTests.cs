@@ -1,6 +1,6 @@
 // Tests for the agent-performance improvements (buildnote/plan/agent-performance-improvement.md):
 // I1 unclassified accesses still produce edges, I2 symbol→db-member REFERS_TO links,
-// I4 get_variable_usage, I9 get_schema version short-circuit, I10 get_network compact mode.
+// I4 get_variable_usage, I9 get_schema version short-circuit, I10 network detail compact mode.
 using System;
 using System.IO;
 using System.Linq;

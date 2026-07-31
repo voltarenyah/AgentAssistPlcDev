@@ -1,4 +1,4 @@
-// Tool tests for the stage-5 query helpers get_block / get_network / search (buildnote/plan/mcp-knowledge.md §6).
+// Tool tests for the stage-5 query helpers get_block / get_single_network / get_all_networks / search (buildnote/plan/mcp-knowledge.md §6).
 // Runs against a temp SQLite DB ingested from the committed fixtures, via the real MCP tool surface.
 using System;
 using System.IO;
@@ -68,6 +68,60 @@ public sealed class QueryHelperToolTests
         var call = Assert.Single(calls);
         Assert.Equal("FC_LAD_SimulateCylinder_Call", call.GetProperty("name").GetString());
         Assert.Equal("FC", call.GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public void GetSingleNetworkReturnsOnlyRequestedNetwork()
+    {
+        using var db = new FixtureDb();
+        var tools = new KnowledgeTools();
+
+        var result = ToolResults.OkJson(tools.GetSingleNetwork(
+            db.Path,
+            "Main",
+            1,
+            new[] { "logic", "access", "calls" }));
+
+        Assert.Equal("network:Main:1", result.GetProperty("network").GetProperty("id").GetString());
+        Assert.Contains("FC_LAD_SimulateCylinder_Call(", result.GetProperty("network").GetProperty("logicStatements").GetString());
+        Assert.DoesNotContain(result.GetProperty("network").GetProperty("id").GetString(), new[] { "network:Main:2" });
+        Assert.Contains("Btn_ForwardCommand", result.GetProperty("reads").EnumerateArray().Select(item => item.GetString()));
+    }
+
+    [Fact]
+    public void GetAllNetworksDefaultsToSummaries()
+    {
+        using var db = new FixtureDb();
+        var tools = new KnowledgeTools();
+
+        var result = ToolResults.OkJson(tools.GetAllNetworks(db.Path, "Main"));
+        var networks = result.GetProperty("networks").EnumerateArray().ToArray();
+
+        Assert.Equal(2, networks.Length);
+        Assert.False(networks[0].TryGetProperty("logicStatements", out _));
+        Assert.Equal(2, result.GetProperty("meta").GetProperty("returned").GetInt32());
+    }
+
+    [Fact]
+    public void GetAllNetworksBoundsRequestedLogic()
+    {
+        using var db = new FixtureDb();
+        var tools = new KnowledgeTools();
+
+        var result = ToolResults.OkJson(tools.GetAllNetworks(
+            db.Path,
+            "Main",
+            new[] { "logic" },
+            40));
+        var networks = result.GetProperty("networks").EnumerateArray().ToArray();
+
+        Assert.All(networks, network =>
+        {
+            if (network.TryGetProperty("logicStatements", out var logic))
+            {
+                Assert.True(logic.GetString()!.Length <= 40);
+            }
+        });
     }
 
     [Fact]

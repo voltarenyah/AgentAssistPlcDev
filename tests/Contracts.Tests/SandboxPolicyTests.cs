@@ -70,7 +70,7 @@ public sealed class SandboxPolicyTests
             "list_blocks", "export_block", "export_all_blocks", "export_tag_tables", "export_udts",
             "import_block", "compile_block", "compile_plc",
             "ingest_source", "update_components", "query", "get_schema", "get_block", "get_network",
-            "get_variable_usage", "search",
+            "get_single_network", "get_all_networks", "get_variable_usage", "search",
             "vc_init", "vc_status", "vc_add", "vc_commit", "vc_log",
             "vc_diff", "vc_snapshot", "vc_restore", "vc_branches", "vc_config",
             "vc_init_shared", "vc_add_worktree", "vc_worktrees", "vc_merge",
