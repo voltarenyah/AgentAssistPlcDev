@@ -310,6 +310,21 @@
   scrollbar-color: color-mix(in srgb, var(--muted-foreground, #737373) 48%, transparent) transparent;
 }
 
+/* ── Native selects follow the theme ─────────────────── */
+
+select {
+  color-scheme: light;
+}
+
+.dark select {
+  color-scheme: dark;
+}
+
+select option {
+  background-color: var(--card);
+  color: var(--card-foreground);
+}
+
 /* ── Popover scroll ──────────────────────────────────── */
 
 [data-slot='popover-content'] {

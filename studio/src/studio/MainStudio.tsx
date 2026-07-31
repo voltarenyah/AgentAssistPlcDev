@@ -51,6 +51,7 @@ import ChatWorkspace from '@/studio/chat/ChatWorkspace'
 import SessionDock from '@/studio/chat/SessionDock'
 import NodeEdgesView from '@/studio/NodeEdgesView'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
+import DevicePropertiesDock from '@/studio/DevicePropertiesDock'
 import {
   appendAssistantDelta,
   appendLocalUserMessage,
@@ -1306,53 +1307,53 @@ export default function MainStudio() {
                       <Metric label="Knowledge state" value={activeKnowledge} tone={activeKnowledge === 'current' ? 'good' : activeKnowledge === 'failed' ? 'danger' : 'warning'} />
                     </div>
 
-                    {deviceMeta && (
+                    <div className="grid gap-4 lg:grid-cols-2">
                       <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
                         <div className="flex items-center gap-3">
-                          <Boxes className="h-5 w-5 text-chart-2" />
+                          <Database className="h-5 w-5 text-chart-2" />
                           <div>
-                            <h2 className="text-sm font-semibold">TIA project</h2>
-                            <p className="text-[9px] text-muted-foreground">Captured at last export · refreshes on the next export or sync</p>
+                            <h2 className="text-sm font-semibold">Device-owned knowledge</h2>
+                            <p className="text-[9px] text-muted-foreground">No cross-device lifecycle coupling</p>
                           </div>
                         </div>
-                        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                          {([
-                            ['Project', deviceMeta.projectName],
-                            ['Author', deviceMeta.projectAuthor],
-                            ['Version', deviceMeta.projectVersion],
-                            ['Copyright', deviceMeta.projectCopyright],
-                            ['Created', deviceMeta.projectCreationTime ? new Date(deviceMeta.projectCreationTime).toLocaleString() : null],
-                            ['Last modified', deviceMeta.projectLastModified ? new Date(deviceMeta.projectLastModified).toLocaleString() : null],
-                            ['Modified by', deviceMeta.projectLastModifiedBy],
-                            ['PLC type', deviceMeta.typeIdentifier?.replace(/^OrderNumber:/, '') ?? null],
-                          ] as [string, string | null][]).filter(([, value]) => value).map(([label, value]) => (
-                            <div key={label} className="rounded-lg border bg-muted/30 p-3" style={{ borderColor: 'var(--border)' }}>
-                              <div className="text-[8px] uppercase tracking-[0.15em] text-muted-foreground">{label}</div>
-                              <div className="mt-1.5 break-all text-[10px] leading-relaxed">{value}</div>
-                            </div>
-                          ))}
+                        <div className="mt-5 rounded-lg border bg-muted/30 p-4" style={{ borderColor: 'var(--border)' }}>
+                          <div className="text-[8px] uppercase tracking-[0.16em] text-muted-foreground">State</div>
+                          <div className="mt-2 flex items-center gap-2 text-lg font-semibold capitalize">
+                            <CircleDot className={`h-4 w-4 ${activeKnowledge === 'current' ? 'text-emerald-500' : activeKnowledge === 'failed' ? 'text-red-500' : 'text-amber-500'}`} />
+                            {activeKnowledge}
+                          </div>
+                          <div className="mt-2 text-[9px] text-muted-foreground">
+                            Last updated: {deviceView?.knowledgeUpdatedAt
+                              ? new Date(deviceView.knowledgeUpdatedAt).toLocaleString()
+                              : 'Never'}
+                          </div>
                         </div>
-                        {deviceMeta.projectComment && (
-                          <div className="mt-3 rounded-lg border bg-muted/30 p-3" style={{ borderColor: 'var(--border)' }}>
-                            <div className="text-[8px] uppercase tracking-[0.15em] text-muted-foreground">Project comment</div>
-                            <div className="mt-1.5 whitespace-pre-wrap text-[10px] leading-relaxed">{deviceMeta.projectComment}</div>
+                        {activeKnowledge !== 'current' && (
+                          <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-500/8 p-3 text-[9px] leading-relaxed text-amber-600 dark:text-amber-400">
+                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                            Update once after your edit batch and before relying on graph or block context.
                           </div>
                         )}
                       </section>
-                    )}
-
-                    <section className="grid gap-3 lg:grid-cols-3">
-                      {[
-                        ['Exported baseline', deviceInfo?.exportedSourceRoot],
-                        ['Modified overlay', deviceInfo?.modifiedSourceRoot],
-                        ['Device knowledge DB', deviceInfo?.knowledgeDbPath],
-                      ].map(([label, value]) => (
-                        <div key={label} className="rounded-lg border bg-card p-4" style={{ borderColor: 'var(--border)' }}>
-                          <div className="text-[8px] uppercase tracking-[0.15em] text-muted-foreground">{label}</div>
-                          <div className="mt-2 break-all font-mono text-[9px] leading-relaxed">{value ?? 'Loading…'}</div>
+                      <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
+                        <h2 className="text-sm font-semibold">Maintenance actions</h2>
+                        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                          Normal update batches all stale overlays. Rebuild ingests the full exported baseline plus sparse overlay.
+                        </p>
+                        <div className="mt-5 space-y-2">
+                          <button className="primary-button w-full" disabled={Boolean(operation)} onClick={() => void updateKnowledge(false)}>
+                            <ArrowDownToLine className="h-3.5 w-3.5" /> Update changed components
+                          </button>
+                          <button className="secondary-button w-full" disabled={Boolean(operation)} onClick={() => void updateKnowledge(true)}>
+                            <RefreshCw className="h-3.5 w-3.5" /> Full device rebuild
+                          </button>
                         </div>
-                      ))}
-                    </section>
+                        <div className="mt-5 flex items-center gap-2 text-[9px] text-muted-foreground">
+                          <ShieldCheck className="h-4 w-4 text-emerald-500" />
+                          Applied hashes are checked before stale state clears.
+                        </div>
+                      </section>
+                    </div>
 
                     {lastImport && (
                       <section className={`rounded-lg border p-4 ${lastImport.importSucceeded ? 'bg-emerald-500/5' : 'bg-red-500/5'}`} style={{ borderColor: 'var(--border)' }}>
@@ -1444,54 +1445,7 @@ export default function MainStudio() {
                 )}
 
                 {activeTab === 'knowledge' && (
-                  <div className="flex h-full min-h-[560px] flex-col gap-4 p-5">
-                    <div className="grid shrink-0 gap-4 lg:grid-cols-2">
-                    <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-                      <div className="flex items-center gap-3">
-                        <Database className="h-5 w-5 text-chart-2" />
-                        <div>
-                          <h2 className="text-sm font-semibold">Device-owned knowledge</h2>
-                          <p className="text-[9px] text-muted-foreground">No cross-device lifecycle coupling</p>
-                        </div>
-                      </div>
-                      <div className="mt-5 rounded-lg border bg-muted/30 p-4" style={{ borderColor: 'var(--border)' }}>
-                        <div className="text-[8px] uppercase tracking-[0.16em] text-muted-foreground">State</div>
-                        <div className="mt-2 flex items-center gap-2 text-lg font-semibold capitalize">
-                          <CircleDot className={`h-4 w-4 ${activeKnowledge === 'current' ? 'text-emerald-500' : activeKnowledge === 'failed' ? 'text-red-500' : 'text-amber-500'}`} />
-                          {activeKnowledge}
-                        </div>
-                        <div className="mt-2 text-[9px] text-muted-foreground">
-                          Last updated: {deviceView?.knowledgeUpdatedAt
-                            ? new Date(deviceView.knowledgeUpdatedAt).toLocaleString()
-                            : 'Never'}
-                        </div>
-                      </div>
-                      {activeKnowledge !== 'current' && (
-                        <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-500/8 p-3 text-[9px] leading-relaxed text-amber-600 dark:text-amber-400">
-                          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                          Update once after your edit batch and before relying on graph or block context.
-                        </div>
-                      )}
-                    </section>
-                    <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-                      <h2 className="text-sm font-semibold">Maintenance actions</h2>
-                      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                        Normal update batches all stale overlays. Rebuild ingests the full exported baseline plus sparse overlay.
-                      </p>
-                      <div className="mt-5 space-y-2">
-                        <button className="primary-button w-full" disabled={Boolean(operation)} onClick={() => void updateKnowledge(false)}>
-                          <ArrowDownToLine className="h-3.5 w-3.5" /> Update changed components
-                        </button>
-                        <button className="secondary-button w-full" disabled={Boolean(operation)} onClick={() => void updateKnowledge(true)}>
-                          <RefreshCw className="h-3.5 w-3.5" /> Full device rebuild
-                        </button>
-                      </div>
-                      <div className="mt-5 flex items-center gap-2 text-[9px] text-muted-foreground">
-                        <ShieldCheck className="h-4 w-4 text-emerald-500" />
-                        Applied hashes are checked before stale state clears.
-                      </div>
-                    </section>
-                    </div>
+                  <div className="flex h-full min-h-[560px] flex-col p-5">
                     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
                       {knowledgeContext && (
                         <NodeEdgesView
@@ -1518,6 +1472,13 @@ export default function MainStudio() {
             </>
           )}
         </main>
+        {selection.deviceId && activeTab === 'overview' && (
+          <DevicePropertiesDock
+            meta={deviceMeta}
+            info={deviceInfo}
+            hidden={!sessionDockVisible}
+          />
+        )}
         {selection.deviceId && activeTab === 'knowledge' && knowledgeContext && (
           <KnowledgePropertiesDock
             context={knowledgeContext}
@@ -1526,7 +1487,7 @@ export default function MainStudio() {
             hidden={!sessionDockVisible}
           />
         )}
-        {selection.deviceId && activeTab !== 'knowledge' && (
+        {selection.deviceId && activeTab !== 'overview' && activeTab !== 'knowledge' && (
           <SessionDock
             sessions={deviceSessions}
             activeSessionId={chatTabs.activeId}
