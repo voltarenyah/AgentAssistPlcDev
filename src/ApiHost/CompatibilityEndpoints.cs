@@ -20,7 +20,7 @@ public sealed class ApiMcpGateway(
     private static readonly IReadOnlySet<string> KnowledgeTools = new HashSet<string>(StringComparer.Ordinal)
     {
         "ingest_source", "update_components", "query", "get_schema", "get_block",
-        "get_network", "search", "query_node_kinds", "query_nodes", "query_edge_types",
+        "get_network", "get_single_network", "get_all_networks", "get_variable_usage", "search", "query_node_kinds", "query_nodes", "query_edge_types",
         "query_edges", "query_node_properties", "query_edge_properties",
     };
     public IMcpToolCaller For(string tool)

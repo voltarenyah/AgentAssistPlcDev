@@ -29,6 +29,7 @@ public sealed class AgentLoop
     private readonly AgentSandbox? sandbox;
     private readonly List<ChatMessage> messages = new();
     private readonly List<UsageInfo?> roundUsages = new();
+    private readonly HashSet<string> failedToolCalls = new(StringComparer.Ordinal);
 
     public AgentLoop(DeepSeekClient client, McpToolCatalog catalog, Func<string> contextProvider, ChatRequestSettings? settings = null, AgentSandbox? sandbox = null)
     {
@@ -108,6 +109,7 @@ public sealed class AgentLoop
     public async Task<string> RunAsync(string userText, CancellationToken cancellationToken = default)
     {
         LastTurnHitRoundCap = false;
+        failedToolCalls.Clear();
         RefreshSystemMessage();
         messages.Add(ChatMessage.User(userText));
         var cumulativePromptTokens = 0;
@@ -231,7 +233,7 @@ public sealed class AgentLoop
                 continue;
             }
 
-            messages[i] = message with { Content = message.Content[..ToolResultCompactChars] + "…[truncated]" };
+            messages[i] = message with { Content = CompactHistoricalToolResult(message.Content, ToolResultCompactChars) };
             compacted++;
         }
 
@@ -244,6 +246,23 @@ public sealed class AgentLoop
 
     private async Task<ChatMessage> ExecuteToolCallAsync(ChatToolCall call, CancellationToken cancellationToken)
     {
+        var fingerprint = ToolCallFingerprint(call);
+        if (failedToolCalls.Contains(fingerprint))
+        {
+            return ChatMessage.Tool(
+                call.Id,
+                JsonSerializer.Serialize(new
+                {
+                    error = new
+                    {
+                        code = "REPEATED_TOOL_ERROR",
+                        message = "This tool call already failed earlier in this turn.",
+                        retryable = false,
+                        remediation = "Change the arguments or use the remediation from the previous error.",
+                    },
+                }));
+        }
+
         // Sandbox gate first: unknown/denied/budget-stopped/user-denied calls never reach the server.
         if (sandbox != null)
         {
@@ -261,23 +280,49 @@ public sealed class AgentLoop
             var spec = catalog.Resolve(call.Name);
             using var arguments = JsonDocument.Parse(
                 string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            var validationError = ToolArgumentValidator.Validate(spec.InputSchema, arguments.RootElement);
+            if (validationError != null)
+            {
+                failedToolCalls.Add(fingerprint);
+                content = JsonSerializer.Serialize(new
+                {
+                    error = new
+                    {
+                        code = "TOOL_ARGUMENT_INVALID",
+                        message = validationError,
+                        retryable = false,
+                        remediation = "Correct the arguments using the tool schema and call the tool again.",
+                    },
+                });
+                Progress?.Invoke($"  ✗ {call.Name}: {validationError}");
+                return ChatMessage.Tool(call.Id, content);
+            }
+
             var result = await spec.Caller.CallAsync<JsonElement>(spec.Name, arguments.RootElement, cancellationToken);
-            content = Truncate(result.GetRawText(), ToolResultMaxChars);
+            content = ToolResultCompactor.Compact(result, ToolResultMaxChars);
         }
         catch (ToolCallException ex)
         {
+            failedToolCalls.Add(fingerprint);
             // Structured server error ({ code, message, remediation }) — hand it to the model so it can recover.
             content = JsonSerializer.Serialize(new
             {
-                error = new { code = ex.Code, message = ex.Message, remediation = ex.Remediation },
+                error = new
+                {
+                    code = ex.Code,
+                    message = ex.Message,
+                    retryable = IsRetryable(ex.Code),
+                    remediation = ex.Remediation,
+                },
             });
             Progress?.Invoke($"  ✗ {call.Name}: {ex.Code} — {ex.Message}");
         }
         catch (Exception ex) when (ex is KeyNotFoundException or JsonException)
         {
+            failedToolCalls.Add(fingerprint);
             content = JsonSerializer.Serialize(new
             {
-                error = new { code = "AGENT_TOOL_ERROR", message = ex.Message, remediation = (string?)null },
+                error = new { code = "AGENT_TOOL_ERROR", message = ex.Message, retryable = false, remediation = (string?)null },
             });
             Progress?.Invoke($"  ✗ {call.Name}: {ex.Message}");
         }
@@ -300,6 +345,36 @@ public sealed class AgentLoop
 
     private static string Summarize(string argumentsJson) =>
         Truncate(argumentsJson, 160);
+
+    private static string ToolCallFingerprint(ChatToolCall call)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            return call.Name + "|" + document.RootElement.GetRawText();
+        }
+        catch (JsonException)
+        {
+            return call.Name + "|" + call.ArgumentsJson.Trim();
+        }
+    }
+
+    private static bool IsRetryable(string code) =>
+        code is "DB_LOCKED" or "MCP_TRANSPORT_ERROR" or "UNEXPECTED_ERROR";
+
+    private static string CompactHistoricalToolResult(string content, int maxChars)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            return ToolResultCompactor.Compact(document.RootElement, maxChars);
+        }
+        catch (JsonException)
+        {
+            return content[..maxChars] + "...[truncated]";
+        }
+    }
 
     private static string Truncate(string text, int maxChars) =>
         text.Length <= maxChars ? text : text[..maxChars] + "…";

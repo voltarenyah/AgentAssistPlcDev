@@ -70,7 +70,7 @@ public sealed class McpServerConnection : IProgressMcpToolCaller, IAsyncDisposab
         }
 
         var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
-        return tools.Select(tool => (tool.Name, tool.Description, tool.JsonSchema)).ToArray();
+        return tools.Select(tool => (tool.Name, (string?)tool.Description, tool.JsonSchema)).ToArray();
     }
 
     public async Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)

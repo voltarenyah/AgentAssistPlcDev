@@ -154,25 +154,24 @@ public sealed class ChatSessionExporterTests
     }
 
     [Fact]
-    public void ResolveExportPathCreatesDirectoryUnderLocalAppData()
+    public void ResolveSessionExportPathCreatesWritableFileUnderWorktree()
     {
-        var path = ChatSessionExporter.ResolveExportPath();
-
-        Assert.True(Directory.Exists(Path.GetDirectoryName(path)!));
-        Assert.EndsWith(Path.Combine("PlcAiAssistant", "chat-exports", Path.GetFileName(path)), path);
-        Assert.StartsWith("chat-", Path.GetFileName(path));
-        Assert.EndsWith(".md", path);
-
-        // Same write the ExportChat command performs.
-        File.WriteAllText(path, "# probe");
+        var worktreeRoot = Path.Combine(Path.GetTempPath(), $"session-export-{Guid.NewGuid():N}");
         try
         {
+            var path = ChatSessionExporter.ResolveSessionExportPath(worktreeRoot, "chat", "s1");
+
+            Assert.True(Directory.Exists(Path.GetDirectoryName(path)!));
+            Assert.EndsWith(Path.Combine("sessionexport", "chat.md"), path);
+
+            File.WriteAllText(path, "# probe");
             Assert.True(File.Exists(path));
             Assert.Equal("# probe", File.ReadAllText(path));
         }
         finally
         {
-            File.Delete(path);
+            if (Directory.Exists(worktreeRoot))
+                Directory.Delete(worktreeRoot, true);
         }
     }
 

@@ -133,6 +133,47 @@ public sealed class AgentLoopTests
     }
 
     [Fact]
+    public async Task RepeatedIdenticalToolErrorDoesNotReachTheCallerAgain()
+    {
+        var (loop, endpoint, caller, _, _) = Create();
+        endpoint
+            .RespondJson(SseToolCall("call_1", "search", """{"text":"x"}"""))
+            .RespondJson(SseToolCall("call_2", "search", """{"text":"x"}"""))
+            .RespondJson(SseText("I cannot find that in the knowledge base."));
+        caller.Fail("search", "DB_NOT_FOUND", "Knowledge db not found.");
+
+        await loop.RunAsync("find x");
+
+        Assert.Single(caller.Calls);
+        var secondToolMessage = Last(JsonNode.Parse(endpoint.RequestBodies[2])!["messages"]!);
+        Assert.Contains("REPEATED_TOOL_ERROR", secondToolMessage["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task InvalidRequiredArgumentsAreRejectedBeforeCaller()
+    {
+        var endpoint = new FakeHttpEndpoint();
+        var caller = new FakeToolCaller();
+        var schema = JsonDocument.Parse("""{"type":"object","required":["text"],"properties":{"text":{"type":"string"}}}""");
+        var catalog = new McpToolCatalog(new[]
+        {
+            new AgentToolSpec("search", "find text", schema.RootElement, caller, "test"),
+        });
+        var client = new DeepSeekClient("sk-test", "https://api.deepseek.com", new HttpClient(endpoint));
+        var loop = new AgentLoop(client, catalog, () => ContextMarker);
+        endpoint
+            .RespondJson(SseToolCall("call_1", "search", "{}"))
+            .RespondJson(SseText("The required argument was missing."));
+
+        await loop.RunAsync("search");
+
+        Assert.Empty(caller.Calls);
+        var toolMessage = Last(JsonNode.Parse(endpoint.RequestBodies[1])!["messages"]!);
+        Assert.Contains("TOOL_ARGUMENT_INVALID", toolMessage["content"]!.GetValue<string>());
+        Assert.Contains("text", toolMessage["content"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task CapHitExecutesPendingToolsAndForcesFinalAnswer()
     {
         var (loop, endpoint, caller, progress, _) = Create();
@@ -230,9 +271,9 @@ public sealed class AgentLoopTests
         Assert.Equal("tool", compacted["role"]!.GetValue<string>());
         Assert.Equal("call_1", compacted["tool_call_id"]!.GetValue<string>());
         var compactedContent = compacted["content"]!.GetValue<string>();
-        Assert.EndsWith("…[truncated]", compactedContent);
-        Assert.Equal(AgentLoop.ToolResultCompactChars + "…[truncated]".Length, compactedContent.Length);
-        Assert.Equal(bigResult.GetRawText()[..AgentLoop.ToolResultCompactChars], compactedContent[..AgentLoop.ToolResultCompactChars]);
+        var compactedJson = JsonNode.Parse(compactedContent)!.AsObject();
+        Assert.True(compactedJson["_truncated"]!.GetValue<bool>());
+        Assert.True(compactedContent.Length <= AgentLoop.ToolResultCompactChars);
 
         Assert.Equal(smallResult.GetRawText(), toolMessages[1]!["content"]!.GetValue<string>());
         Assert.Equal(smallResult.GetRawText(), toolMessages[2]!["content"]!.GetValue<string>());
@@ -272,8 +313,10 @@ public sealed class AgentLoopTests
 
         var toolMessage = Last(JsonNode.Parse(endpoint.RequestBodies[1])!["messages"]!);
         var content = toolMessage["content"]!.GetValue<string>();
-        Assert.Equal(AgentLoop.ToolResultMaxChars + 1, content.Length); // +1 for the ellipsis
-        Assert.EndsWith("…", content);
+        var compacted = JsonNode.Parse(content)!.AsObject();
+        Assert.True(compacted["_truncated"]!.GetValue<bool>());
+        Assert.True(content.Length <= AgentLoop.ToolResultMaxChars);
+        Assert.Contains("...", content);
     }
 
     [Fact]

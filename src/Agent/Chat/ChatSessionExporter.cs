@@ -194,17 +194,6 @@ public static class ChatSessionExporter
         return markdown.ToString();
     }
 
-    /// <summary>Default export path: %LOCALAPPDATA%\PlcAiAssistant\chat-exports\chat-&lt;timestamp&gt;.md.</summary>
-    public static string ResolveExportPath()
-    {
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PlcAiAssistant",
-            "chat-exports");
-        Directory.CreateDirectory(directory);
-        return Path.Combine(directory, $"chat-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.md");
-    }
-
     private static void AppendFenced(StringBuilder markdown, string language, string content)
     {
         // A payload may itself contain ``` fences; switch to tildes so the block stays intact.

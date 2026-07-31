@@ -60,7 +60,9 @@ public sealed class SandboxPolicy
             ["query"] = SandboxTier.Read,
             ["get_schema"] = SandboxTier.Read,
             ["get_block"] = SandboxTier.Read,
-            ["get_network"] = SandboxTier.Read,
+            ["get_single_network"] = SandboxTier.Read,
+            ["get_all_networks"] = SandboxTier.Read,
+            ["get_variable_usage"] = SandboxTier.Read,
             ["search"] = SandboxTier.Read,
             // Source editor — inspection and comparison.
             ["src_parse_block"] = SandboxTier.Read,
