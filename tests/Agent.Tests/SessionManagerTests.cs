@@ -355,7 +355,8 @@ public sealed class SessionManagerTests : IDisposable
                 $"Exported source: {device.ExportedSourceRoot}",
                 $"Modified source: {device.ModifiedSourceRoot}",
                 $"Knowledge DB: {device.KnowledgeDbPath}",
-                "Knowledge state: stale; run update_components before reuse"),
+                "Knowledge state: stale; run update_components before reuse",
+                "Source files: (none — refresh the device export first)"),
             runtimeContext);
     }
 

@@ -660,7 +660,8 @@ internal sealed class ApiChatService(
                     $"Device: {device.DeviceId}",
                     $"Exported source: {device.ExportedSourceRoot}",
                     $"Modified source: {device.ModifiedSourceRoot}",
-                    $"Knowledge DB: {device.KnowledgeDbPath}"),
+                    $"Knowledge DB: {device.KnowledgeDbPath}",
+                    SourceFileListing.Format(device)),
                 Settings(configuration, state),
                 sandbox);
             loop.Apply(LoopPolicy(configuration, state));

@@ -281,7 +281,8 @@ public static class SessionManager
             $"Exported source: {device.ExportedSourceRoot}",
             $"Modified source: {device.ModifiedSourceRoot}",
             $"Knowledge DB: {device.KnowledgeDbPath}",
-            $"Knowledge state: {knowledgeState}");
+            $"Knowledge state: {knowledgeState}",
+            SourceFileListing.Format(device));
     }
 
     private static ChatSessionInfo? ReadSessionInfo(string filePath)
