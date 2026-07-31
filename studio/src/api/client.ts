@@ -633,8 +633,9 @@ export async function getKnowledgeEdgeTypes(projectName: string): Promise<{ type
   return res.json()
 }
 
-export async function getKnowledgeEdges(projectName: string, fromNodeId: string, type?: string): Promise<{ edges: GraphEdge[] }> {
-  const params = new URLSearchParams({ projectName, fromNodeId })
+export async function getKnowledgeEdges(projectName: string, nodeId?: string, type?: string): Promise<{ edges: GraphEdge[]; truncated?: boolean }> {
+  const params = new URLSearchParams({ projectName })
+  if (nodeId) params.set('nodeId', nodeId)
   if (type) params.set('type', type)
   const res = await fetch(`${BASE}/knowledge/edges?${params}`)
   if (!res.ok) throw new Error(`Edges failed: ${res.status}`)

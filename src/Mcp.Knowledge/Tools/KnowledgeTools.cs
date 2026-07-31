@@ -23,6 +23,8 @@ public sealed class KnowledgeTools
     private const int HardMaxRows = 1000;
     private const int DefaultSearchMaxRows = 50;
     private const int HardSearchMaxRows = 200;
+    private const int DefaultBrowseMaxRows = 1000;
+    private const int HardBrowseMaxRows = 10000;
     private const int SearchSnippetMaxLength = 300;
 
     private readonly ILogger<KnowledgeTools>? _logger;
@@ -123,6 +125,49 @@ public sealed class KnowledgeTools
         [Description("Optional node-kind filter, e.g. 'Network', 'OB', 'Variable'.")] string? kind = null,
         [Description("Maximum matches to return (default 50, hard cap 200).")] int? maxRows = null)
         => Invoke(() => SearchGraph(dbPath, text, kind, maxRows));
+
+    [McpServerTool(Name = "query_node_kinds")]
+    [Description("List the distinct node kinds present in a PLC knowledge base (read-only).")]
+    public CallToolResult QueryNodeKinds(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath)
+        => Invoke(() => NodeKinds(dbPath));
+
+    [McpServerTool(Name = "query_nodes")]
+    [Description("List graph nodes (id, kind, name), optionally filtered by one kind (read-only).")]
+    public CallToolResult QueryNodes(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Optional node-kind filter, e.g. 'Network', 'OB', 'Variable'.")] string? kind = null,
+        [Description("Maximum rows to return (default 1000, hard cap 10000).")] int? maxRows = null)
+        => Invoke(() => BrowseNodes(dbPath, kind, maxRows));
+
+    [McpServerTool(Name = "query_edge_types")]
+    [Description("List the distinct edge types present in a PLC knowledge base (read-only).")]
+    public CallToolResult QueryEdgeTypes(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath)
+        => Invoke(() => EdgeTypes(dbPath));
+
+    [McpServerTool(Name = "query_edges")]
+    [Description("List graph edges (id, from_node_id, to_node_id, type). The optional nodeId matches edges where the node is either endpoint (from OR to); the optional type filters by edge type (read-only).")]
+    public CallToolResult QueryEdges(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Optional node id; matches edges where the node is the from- or to-endpoint.")] string? nodeId = null,
+        [Description("Optional edge-type filter, e.g. 'CONTAINS', 'CALLS'.")] string? type = null,
+        [Description("Maximum rows to return (default 1000, hard cap 10000).")] int? maxRows = null)
+        => Invoke(() => BrowseEdges(dbPath, nodeId, type, maxRows));
+
+    [McpServerTool(Name = "query_node_properties")]
+    [Description("List the name/value properties of one graph node (read-only).")]
+    public CallToolResult QueryNodeProperties(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Graph node id.")] string nodeId)
+        => Invoke(() => BrowseProperties(dbPath, "graph_node_properties", "node_id", nodeId, "nodeId"));
+
+    [McpServerTool(Name = "query_edge_properties")]
+    [Description("List the name/value properties of one graph edge (read-only).")]
+    public CallToolResult QueryEdgeProperties(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Graph edge id.")] string edgeId)
+        => Invoke(() => BrowseProperties(dbPath, "graph_edge_properties", "edge_id", edgeId, "edgeId"));
 
     private object Ingest(
         string exportRoot,
@@ -692,6 +737,143 @@ public sealed class KnowledgeTools
         }
 
         return new { text, kind, matches, truncated };
+    }
+
+    private static object NodeKinds(string dbPath)
+    {
+        using var connection = OpenReadOnly(dbPath);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT DISTINCT kind FROM graph_nodes ORDER BY kind;";
+        var kinds = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            kinds.Add(reader.GetString(0));
+        }
+
+        return new { kinds };
+    }
+
+    private static object BrowseNodes(string dbPath, string? kind, int? maxRows)
+    {
+        var limit = maxRows is null ? DefaultBrowseMaxRows : Math.Clamp(maxRows.Value, 1, HardBrowseMaxRows);
+        var hasKind = !string.IsNullOrWhiteSpace(kind);
+        using var connection = OpenReadOnly(dbPath);
+        using var command = connection.CreateCommand();
+        command.CommandText = hasKind
+            ? "SELECT id, kind, name FROM graph_nodes WHERE kind = @kind ORDER BY name COLLATE NOCASE, id LIMIT @limit;"
+            : "SELECT id, kind, name FROM graph_nodes ORDER BY kind, name COLLATE NOCASE, id LIMIT @limit;";
+        if (hasKind)
+        {
+            command.Parameters.AddWithValue("@kind", kind);
+        }
+
+        command.Parameters.AddWithValue("@limit", limit + 1);
+
+        var nodes = new List<object>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            nodes.Add(new { id = reader.GetString(0), kind = reader.GetString(1), name = reader.GetString(2) });
+        }
+
+        var truncated = nodes.Count > limit;
+        if (truncated)
+        {
+            nodes.RemoveAt(nodes.Count - 1);
+        }
+
+        return new { nodes, truncated };
+    }
+
+    private static object EdgeTypes(string dbPath)
+    {
+        using var connection = OpenReadOnly(dbPath);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT DISTINCT type FROM graph_edges ORDER BY type;";
+        var types = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            types.Add(reader.GetString(0));
+        }
+
+        return new { types };
+    }
+
+    private static object BrowseEdges(string dbPath, string? nodeId, string? type, int? maxRows)
+    {
+        var limit = maxRows is null ? DefaultBrowseMaxRows : Math.Clamp(maxRows.Value, 1, HardBrowseMaxRows);
+        var hasNode = !string.IsNullOrWhiteSpace(nodeId);
+        var hasType = !string.IsNullOrWhiteSpace(type);
+        using var connection = OpenReadOnly(dbPath);
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT id, from_node_id, to_node_id, type
+            FROM graph_edges
+            WHERE 1 = 1
+              {(hasNode ? "AND (from_node_id = @nodeId OR to_node_id = @nodeId)" : string.Empty)}
+              {(hasType ? "AND type = @type" : string.Empty)}
+            ORDER BY id
+            LIMIT @limit;
+            """;
+        if (hasNode)
+        {
+            command.Parameters.AddWithValue("@nodeId", nodeId);
+        }
+
+        if (hasType)
+        {
+            command.Parameters.AddWithValue("@type", type);
+        }
+
+        command.Parameters.AddWithValue("@limit", limit + 1);
+
+        var edges = new List<object>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            edges.Add(new
+            {
+                id = reader.GetString(0),
+                from_node_id = reader.GetString(1),
+                to_node_id = reader.GetString(2),
+                type = reader.GetString(3),
+            });
+        }
+
+        var truncated = edges.Count > limit;
+        if (truncated)
+        {
+            edges.RemoveAt(edges.Count - 1);
+        }
+
+        return new { edges, truncated };
+    }
+
+    private static object BrowseProperties(string dbPath, string table, string keyColumn, string key, string keyArgumentName)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new KnowledgeToolException(
+                "PROPERTIES_KEY_REQUIRED",
+                $"The {keyArgumentName} argument must not be empty.",
+                $"Pass the {keyArgumentName} of a node or edge listed by query_nodes / query_edges.");
+        }
+
+        using var connection = OpenReadOnly(dbPath);
+        using var command = connection.CreateCommand();
+        // table / keyColumn are fixed internal constants, never caller-supplied.
+        command.CommandText = $"SELECT name, value FROM {table} WHERE {keyColumn} = @key ORDER BY name;";
+        command.Parameters.AddWithValue("@key", key);
+        var properties = new List<object>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            properties.Add(new { name = reader.GetString(0), value = reader.GetString(1) });
+        }
+
+        return new { properties };
     }
 
     private static string? _schemaVersion;
