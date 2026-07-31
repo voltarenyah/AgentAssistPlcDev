@@ -12,6 +12,7 @@ public sealed class SandboxPolicyTests
     [InlineData("export_all_blocks")]
     [InlineData("query")]
     [InlineData("search")]
+    [InlineData("get_variable_usage")]
     [InlineData("vc_status")]
     [InlineData("vc_log")]
     [InlineData("vc_diff")]
@@ -68,7 +69,8 @@ public sealed class SandboxPolicyTests
             "check_environment", "list_sessions", "connect", "disconnect", "save_project", "get_project_info",
             "list_blocks", "export_block", "export_all_blocks", "export_tag_tables", "export_udts",
             "import_block", "compile_block", "compile_plc",
-            "ingest_source", "update_components", "query", "get_schema", "get_block", "get_network", "search",
+            "ingest_source", "update_components", "query", "get_schema", "get_block", "get_network",
+            "get_variable_usage", "search",
             "vc_init", "vc_status", "vc_add", "vc_commit", "vc_log",
             "vc_diff", "vc_snapshot", "vc_restore", "vc_branches", "vc_config",
             "vc_init_shared", "vc_add_worktree", "vc_worktrees", "vc_merge",
