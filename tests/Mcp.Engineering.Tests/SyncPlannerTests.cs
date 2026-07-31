@@ -55,6 +55,38 @@ public sealed class SyncPlannerTests
     }
 
     [Fact]
+    public void MatchingFingerprints_MovedTimestamp_VerifiedLocalFile_Skip()
+    {
+        // The user's compare complaint (2026-07-31): fingerprints identical, yet every diff
+        // reported "different" — TIA-side timestamp movement (compile ripple, precision drift)
+        // with no real edit. Matching fingerprints + a local export file verified untouched
+        // since the last export leaves no change source → same, no re-export.
+        var plan = SyncPlanner.Plan(
+            new[] { Record(fingerprints: "fp1") },
+            new[] { Live(fingerprints: "fp1", modified: T1) },
+            new HashSet<string>(StringComparer.Ordinal) { "id1" });
+
+        var item = Assert.Single(plan);
+        Assert.Equal(SyncAction.Skip, item.Action);
+        Assert.Equal(SyncPlanner.ReasonFingerprintVerified, item.Reason);
+    }
+
+    [Fact]
+    public void MatchingFingerprints_MovedTimestamp_UnverifiedLocalFile_ReExportForHashVerdict()
+    {
+        // Without the local-file verification the signal-lag safety net stays conservative:
+        // the moved timestamp still nominates, the content hash decides.
+        var plan = SyncPlanner.Plan(
+            new[] { Record(fingerprints: "fp1") },
+            new[] { Live(fingerprints: "fp1", modified: T1) },
+            new HashSet<string>(StringComparer.Ordinal));
+
+        var item = Assert.Single(plan);
+        Assert.Equal(SyncAction.ReExport, item.Action);
+        Assert.Equal(SyncPlanner.ReasonTimestamp, item.Reason);
+    }
+
+    [Fact]
     public void InstanceDB_AlwaysReExportedForHashVerdict()
     {
         // Instance DBs can change system-side (parent FB static-area edit) with neither

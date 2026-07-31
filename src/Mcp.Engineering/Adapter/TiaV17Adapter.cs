@@ -504,7 +504,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         var typesById = snapshot.TypesById;
 
         // Tier 2: execute the plan — re-export candidates, hash each result, classify, delete removals.
-        var plan = SyncPlanner.Plan(manifest.Components, live);
+        var plan = SyncPlanner.Plan(manifest.Components, live, VerifiedLocalFileIds(dir, manifest.Components));
         if (live.Count > 0 && live.All(item => item.Fingerprints is null))
         {
             _logger.LogWarning(
@@ -781,7 +781,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 var liveChecksum = TryReadSoftwareChecksum(plc);
                 var manifestExists = ExportManifest.TryRead(dir, out var manifest) && manifest is not null;
                 var records = manifestExists ? manifest!.Components : new List<ExportMetadataRecord>();
-                var plan = SyncPlanner.Plan(records, CaptureLiveSnapshot(plc).Live);
+                var plan = SyncPlanner.Plan(records, CaptureLiveSnapshot(plc).Live, VerifiedLocalFileIds(dir, records));
                 var entries = plan
                     .Select(item => new ContextCompareEntry
                     {
@@ -942,6 +942,37 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         ExportedFile = record.ExportedFile,
         Reason = reason,
     };
+
+    /// <summary>Ids of manifest records whose exported file on disk still hashes to the recorded
+    /// content hash — proof the local export was not modified in place since the last export
+    /// (local edits belong in the modified-source overlay, never in the export folder itself).
+    /// The manifest is user-writable, so the recorded relative path is re-validated to resolve
+    /// inside the export root before it is read (same jail as <see cref="DeleteComponentFile"/>).</summary>
+    private static HashSet<string> VerifiedLocalFileIds(string exportRoot, IReadOnlyList<ExportMetadataRecord> records)
+    {
+        var root = Path.GetFullPath(exportRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var verified = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var record in records)
+        {
+            if (record.ContentHash is null || record.ExportedFile is null)
+            {
+                continue;
+            }
+
+            var fullPath = Path.GetFullPath(Path.Combine(root, record.ExportedFile));
+            if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (string.Equals(ContentHasher.TryCompute(fullPath), record.ContentHash, StringComparison.Ordinal))
+            {
+                verified.Add(record.Id);
+            }
+        }
+
+        return verified;
+    }
 
     /// <summary>Station-level software checksum (PlcChecksumProvider.Software): null when the PLC
     /// does not support checksums (GetService → null) or the program is not compiled (Software →
