@@ -2,6 +2,12 @@ namespace Agent.Workbench;
 
 public sealed class DeviceSourceResolver
 {
+    /// <summary>Suffix of disposable preview outputs next to an overlay; never imported or listed as an overlay.</summary>
+    public const string PreviewFileSuffix = ".preview.xml";
+
+    public static bool IsPreviewFile(string path) =>
+        path.EndsWith(PreviewFileSuffix, StringComparison.OrdinalIgnoreCase);
+
     private readonly Action<DeviceContext> markKnowledgeStale;
 
     public DeviceSourceResolver(Action<DeviceContext> markKnowledgeStale)
@@ -196,7 +202,7 @@ public sealed class DeviceSourceResolver
                     continue;
                 }
 
-                if (!File.Exists(entry))
+                if (!File.Exists(entry) || IsPreviewFile(entry))
                 {
                     continue;
                 }

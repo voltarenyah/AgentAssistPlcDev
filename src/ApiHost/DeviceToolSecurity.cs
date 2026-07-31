@@ -13,6 +13,15 @@ public static class DeviceContextIdentity
 
 public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
 {
+    private static string PreviewPath(string overlayPath)
+    {
+        var directory = Path.GetDirectoryName(overlayPath)
+            ?? throw new ArgumentException($"Overlay path has no parent directory: {overlayPath}");
+        return Path.Combine(
+            directory,
+            $"{Path.GetFileNameWithoutExtension(overlayPath)}{DeviceSourceResolver.PreviewFileSuffix}");
+    }
+
     public Dictionary<string, object?> Bind(string tool, IDictionary<string, object?> supplied, DeviceContext device)
     {
         if (tool is "export_block" or "export_all_blocks" or "export_tag_tables" or "export_udts")
@@ -43,9 +52,27 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
                 ?? RelativeFromTrustedInput(args, "xmlFilePath", device)
                 ?? throw new ArgumentException("relativePath or a trusted xmlFilePath is required.");
             var effective = resolver.ResolveEffective(device, relative);
-            var output = resolver.PrepareEditable(device, relative);
+            var overlay = resolver.PrepareEditable(device, relative);
             Force(args, "xmlFilePath", effective);
-            Force(args, "outputFilePath", output);
+            if (tool == "src_preview_edits")
+            {
+                // Disposable sibling preview: every re-draft overwrites it, never the overlay.
+                Force(args, "outputFilePath", PreviewPath(overlay));
+                ForceFlag(args, "overwriteOutput");
+            }
+            else if (PathsEqual(effective, overlay))
+            {
+                // Re-editing an existing overlay: atomic in-place replace.
+                Force(args, "outputFilePath", overlay);
+                ForceFlag(args, "inPlace");
+                ForceFlag(args, "confirmInPlace");
+            }
+            else
+            {
+                // First apply: overwrite the copy-on-write duplicate PrepareEditable just made.
+                Force(args, "outputFilePath", overlay);
+                ForceFlag(args, "overwriteOutput");
+            }
             args.Remove("relativePath");
         }
         if (tool == "src_parse_block")
@@ -67,6 +94,8 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
                 ?? RelativeUnder(device.ModifiedSourceRoot, StringValue(args, "xmlFilePath"))
                 ?? throw new ArgumentException("An existing modified-source path is required.");
             var modified = WorkbenchPaths.ResolveRelative(device.ModifiedSourceRoot, relative);
+            if (DeviceSourceResolver.IsPreviewFile(modified))
+                throw new ArgumentException("Preview files are disposable; import the applied overlay instead.");
             if (!File.Exists(modified)) throw new FileNotFoundException("Modified source was not found.", modified);
             Force(args, "xmlFilePath", modified);
             args.Remove("relativePath");
@@ -126,6 +155,22 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
         if (StringValue(args, key) is { } supplied && !PathsEqual(supplied, trusted))
             throw new ArgumentException($"{key} conflicts with the selected device context.");
         args[key] = trusted;
+    }
+    private static void ForceFlag(IDictionary<string, object?> args, string key)
+    {
+        if (args.TryGetValue(key, out var supplied) && supplied is not null)
+        {
+            var isTrue = supplied switch
+            {
+                bool b => b,
+                JsonElement { ValueKind: JsonValueKind.True } => true,
+                JsonElement { ValueKind: JsonValueKind.False } => false,
+                _ => true,
+            };
+            if (!isTrue)
+                throw new ArgumentException($"{key}=false conflicts with the selected device context.");
+        }
+        args[key] = true;
     }
     private static string? StringValue(IDictionary<string, object?> args, string key)
     {

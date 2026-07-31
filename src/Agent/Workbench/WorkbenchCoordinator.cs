@@ -734,6 +734,11 @@ public sealed class WorkbenchCoordinator
                 progress?.Report("Preparing modified source import...");
                 var metadata = ReadDevice(device);
                 var normalized = relativePath.Replace('\\', '/');
+                if (DeviceSourceResolver.IsPreviewFile(normalized))
+                {
+                    throw new ArgumentException(
+                        "Preview files are disposable; import the applied overlay instead.");
+                }
                 var modifiedPath = WorkbenchPaths.ResolveRelative(
                     device.ModifiedSourceRoot,
                     normalized);
