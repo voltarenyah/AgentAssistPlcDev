@@ -4,6 +4,8 @@ import {
   ArrowDownToLine,
   Boxes,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   CircleDot,
   CloudCog,
   Code2,
@@ -20,6 +22,7 @@ import {
   Plus,
   RefreshCw,
   RotateCw,
+  Search,
   Server,
   ShieldCheck,
   Sparkles,
@@ -360,6 +363,8 @@ export default function MainStudio() {
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
   const [relativePath, setRelativePath] = useState('')
   const [lastImport, setLastImport] = useState<api.ImportModifiedResult | null>(null)
+  const [blockIndexExpanded, setBlockIndexExpanded] = useState(false)
+  const [blockFilter, setBlockFilter] = useState('')
 
   const activeWorkbench = useMemo(
     () => workbenches.find(workbench => workbench.workbenchId === selection.workbenchId) ?? null,
@@ -379,8 +384,17 @@ export default function MainStudio() {
   const deviceSessions = deviceSelection?.sessions ?? []
   const deviceInfo = deviceView?.snapshot ?? null
   const deviceMeta = deviceInfo?.device ?? null
-  const blocks = deviceView?.blocks ?? []
+  const blocks = useMemo(() => deviceView?.blocks ?? [], [deviceView])
   const touchedCount = deviceView?.overlayCount ?? 0
+  const modifiedBlocks = useMemo(() => blocks.filter(block => block.modified), [blocks])
+  const filteredBlocks = useMemo(() => {
+    const query = blockFilter.trim().toLowerCase()
+    if (!query) return blocks
+    return blocks.filter(block =>
+      block.name.toLowerCase().includes(query)
+      || block.relativePath.toLowerCase().includes(query)
+      || `${block.blockType}${block.number ?? ''}`.toLowerCase().includes(query))
+  }, [blocks, blockFilter])
   const activeKnowledge = deviceView?.knowledgeState ?? 'missing'
   const isBrandNewDevice = Boolean(selection.deviceId)
     && deviceView?.snapshot.deviceId === selection.deviceId
@@ -1478,9 +1492,42 @@ export default function MainStudio() {
 
                     <section className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
                       <div className="flex items-center border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
+                        <span className="text-[10px] font-semibold">Modified sources</span>
+                        <span className="ml-auto text-[9px] text-muted-foreground">{modifiedBlocks.length} modified</span>
+                      </div>
+                      {modifiedBlocks.length === 0 ? (
+                        <div className="p-8 text-center text-[10px] text-muted-foreground">
+                          No modified sources yet. Pick a block from the index below to prepare an overlay.
+                        </div>
+                      ) : (
+                        <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+                          {modifiedBlocks.map(block => (
+                            <button
+                              key={`${block.blockType}:${block.name}:${block.number}`}
+                              className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
+                              onClick={() => setRelativePath(block.relativePath)}
+                            >
+                              <FileCode2 className="h-3.5 w-3.5 text-chart-3" />
+                              <span className="min-w-0 flex-1 truncate text-[10px]">{block.name}</span>
+                              <span className="font-mono text-[9px] text-muted-foreground">{block.blockType}{block.number}</span>
+                              <span className="text-[9px] text-muted-foreground">{block.programmingLanguage}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
+                      <button
+                        className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-accent/40"
+                        onClick={() => setBlockIndexExpanded(previous => !previous)}
+                      >
+                        {blockIndexExpanded
+                          ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                          : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
                         <span className="text-[10px] font-semibold">Persisted PLC block index</span>
                         <span className="ml-auto text-[9px] text-muted-foreground">{blocks.length} blocks</span>
-                      </div>
+                      </button>
                       {deviceView?.diagnostics.map(diagnostic => (
                         <div
                           key={diagnostic}
@@ -1491,23 +1538,42 @@ export default function MainStudio() {
                           <span className="break-all">{diagnostic}</span>
                         </div>
                       ))}
-                      {blocks.length === 0 ? (
-                        <div className="p-8 text-center text-[10px] text-muted-foreground">No persisted block index.</div>
-                      ) : (
-                        <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-                          {blocks.map(block => (
-                            <button
-                              key={`${block.blockType}:${block.name}:${block.number}`}
-                              className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
-                              onClick={() => setRelativePath(block.relativePath)}
-                            >
-                              <FileCode2 className="h-3.5 w-3.5 text-muted-foreground" />
-                              <span className="min-w-0 flex-1 truncate text-[10px]">{block.name}</span>
-                              <span className="font-mono text-[9px] text-muted-foreground">{block.blockType}{block.number}</span>
-                              <span className="text-[9px] text-muted-foreground">{block.programmingLanguage}</span>
-                            </button>
-                          ))}
-                        </div>
+                      {blockIndexExpanded && (
+                        blocks.length === 0 ? (
+                          <div className="p-8 text-center text-[10px] text-muted-foreground">No persisted block index.</div>
+                        ) : (
+                          <>
+                            <div className="border-b px-4 py-2" style={{ borderColor: 'var(--border)' }}>
+                              <div className="relative">
+                                <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                                <input
+                                  className="field-input w-full pl-7"
+                                  value={blockFilter}
+                                  onChange={event => setBlockFilter(event.target.value)}
+                                  placeholder="Filter by name, path, or type…"
+                                />
+                              </div>
+                            </div>
+                            <div className="max-h-[420px] divide-y overflow-y-auto" style={{ borderColor: 'var(--border)' }}>
+                              {filteredBlocks.length === 0 ? (
+                                <div className="p-8 text-center text-[10px] text-muted-foreground">No blocks match this filter.</div>
+                              ) : (
+                                filteredBlocks.map(block => (
+                                  <button
+                                    key={`${block.blockType}:${block.name}:${block.number}`}
+                                    className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
+                                    onClick={() => setRelativePath(block.relativePath)}
+                                  >
+                                    <FileCode2 className="h-3.5 w-3.5 text-muted-foreground" />
+                                    <span className="min-w-0 flex-1 truncate text-[10px]">{block.name}</span>
+                                    <span className="font-mono text-[9px] text-muted-foreground">{block.blockType}{block.number}</span>
+                                    <span className="text-[9px] text-muted-foreground">{block.programmingLanguage}</span>
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          </>
+                        )
                       )}
                     </section>
                   </div>
