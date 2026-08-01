@@ -1,12 +1,14 @@
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Sandbox;
+using System.Diagnostics;
 using ModelContextProtocol;
 using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 var isTesting = builder.Environment.IsEnvironment("Testing");
 var isDevelopment = builder.Environment.IsDevelopment();
+var isProduction = builder.Environment.IsProduction();
 if (isTesting)
 {
     var testWebRoot = Path.Combine(AppContext.BaseDirectory, "TestWebRoot");
@@ -29,6 +31,12 @@ builder.Configuration.AddJsonFile(currentConfigPath, optional: true, reloadOnCha
 // Re-apply external providers after compatibility files: env/CLI must remain authoritative.
 builder.Configuration.AddEnvironmentVariables();
 if (args.Length > 0) builder.Configuration.AddCommandLine(args);
+var startupOptions = ApplicationStartupOptions.From(
+    builder.Configuration,
+    builder.Environment.EnvironmentName);
+var configuredUrls = builder.Configuration["urls"] ?? builder.Configuration["ASPNETCORE_URLS"];
+if (isProduction || string.IsNullOrWhiteSpace(configuredUrls))
+    builder.WebHost.UseUrls(startupOptions.Url);
 builder.Services.AddCors(options =>
 {
     if (isTesting)
@@ -155,7 +163,21 @@ app.UseMiddleware<WorkbenchApiExceptionMiddleware>();
 app.MapGet("/api/status", () => Results.Ok(new { storage = "workbench", legacyProjects = false }));
 app.MapWorkbenchEndpoints();
 app.MapCompatibilityEndpoints();
-app.Run();
+var browserUrl = isProduction || string.IsNullOrWhiteSpace(configuredUrls)
+    ? startupOptions.Url
+    : configuredUrls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).First();
+try
+{
+    await app.StartAsync();
+    if (startupOptions.OpenBrowserOnStart)
+        BrowserLauncher.Open(browserUrl);
+    await app.WaitForShutdownAsync();
+}
+catch (Exception exception) when (ApplicationStartupOptions.IsAddressInUse(exception))
+{
+    Console.Error.WriteLine(ApplicationStartupOptions.PortInUseMessage(startupOptions));
+    Environment.ExitCode = 1;
+}
 
 public partial class Program { }
 
@@ -225,4 +247,13 @@ internal sealed class UnavailableCaller : IMcpToolCaller
 {
     public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default) =>
         throw new InvalidOperationException($"No MCP test double was registered for '{tool}'.");
+}
+
+internal static class BrowserLauncher
+{
+    public static void Open(string url) => Process.Start(new ProcessStartInfo
+    {
+        FileName = url,
+        UseShellExecute = true,
+    });
 }

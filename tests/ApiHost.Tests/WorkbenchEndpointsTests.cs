@@ -120,6 +120,54 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public void ProductionStartupDefaultsToLoopbackPort5239AndBrowserLaunch()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+
+        var options = ApplicationStartupOptions.From(configuration, "Production");
+
+        Assert.Equal("127.0.0.1", options.Host);
+        Assert.Equal(5239, options.Port);
+        Assert.Equal("http://127.0.0.1:5239", options.Url);
+        Assert.True(options.OpenBrowserOnStart);
+    }
+
+    [Fact]
+    public void StartupHonorsCustomPortButTestingNeverLaunchesBrowser()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Application:Host"] = "127.0.0.1",
+                ["Application:Port"] = "5299",
+                ["Application:OpenBrowserOnStart"] = "true",
+            })
+            .Build();
+
+        var options = ApplicationStartupOptions.From(configuration, "Testing");
+
+        Assert.Equal(5299, options.Port);
+        Assert.Equal("http://127.0.0.1:5299", options.Url);
+        Assert.False(options.OpenBrowserOnStart);
+    }
+
+    [Fact]
+    public void StartupReportsActionablePortCollisionMessage()
+    {
+        var options = new ApplicationStartupOptions("127.0.0.1", 5239, true);
+
+        var message = ApplicationStartupOptions.PortInUseMessage(options);
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "Automation Workbench could not start because port 5239 on 127.0.0.1 is already in use.",
+                string.Empty,
+                "Close the other application or configure Application:Port to another loopback port."),
+            message);
+    }
+
+    [Fact]
     public async Task SessionsListsTiaProcessesBeforeAWorkbenchIsSelected()
     {
         var engineering = new RecordingToolCaller("[{\"sessionId\":17,\"projectName\":\"Demo\"}]");
