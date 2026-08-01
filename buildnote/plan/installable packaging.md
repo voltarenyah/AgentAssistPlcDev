@@ -45,6 +45,7 @@ Do not include these in Track A:
 * delta patching
 * background updater service
 * bundled Git
+* Git availability checks (system Git stays an unvalidated prerequisite in Track A; record it as a known limitation in the Track A report)
 * TIA V18+ support
 
 ## Release gate
@@ -89,6 +90,8 @@ packaging-a6: create initial Inno installer
 packaging-a7: validate installer upgrade locking
 packaging-a8: complete install upgrade uninstall validation
 ```
+
+Merge each approved phase to `main` promptly — in particular A1–A3, which touch shared files (`McpExecutableResolver.cs`, `Program.cs`, project files) — so parallel bugfix work always builds on the new layout.
 
 Avoid unrelated refactoring.
 
@@ -619,6 +622,8 @@ AutomationWorkbench.OpennessWhitelist.exe
 ```
 
 Add it to the solution.
+
+Target framework: `net48`. .NET Framework 4.8 is inbox on supported Windows 10/11, so the helper runs at installer time without any runtime bootstrap, and it matches the engineering component's registry idioms.
 
 ### Commands
 
