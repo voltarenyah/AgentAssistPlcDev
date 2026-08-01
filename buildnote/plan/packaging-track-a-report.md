@@ -6,9 +6,9 @@ Branch: `feature/windows-packaging`
 ## Result
 
 The Windows packaging lifecycle is operational for the tested Windows x64
-environment without TIA Portal V17. Release creation, installer creation,
-clean installation, active-process replacement, repair, and uninstall all
-passed. Real TIA V17 Openness validation remains outstanding.
+environment. Release creation, installer creation, clean installation,
+active-process replacement, repair, uninstall, and real TIA V17 Openness
+validation all passed.
 
 ## Installed layout
 
@@ -138,11 +138,13 @@ path, timestamp, Base64 SHA-256 hash, and value names.
 
 ## Real TIA V17 validation
 
-Not completed in this environment. The tested machine did not provide a real
-TIA Portal V17 Openness operation or Siemens TIA Openness group membership.
-The missing-TIA path was exercised through successful warning-tolerant
-installation, helper exit-code behavior, repair, and uninstall, but the final
-Siemens firewall-prompt check must still be run on a TIA V17 machine.
+Passed on the TIA V17 environment:
+
+* elevated helper registration returned exit code `0`;
+* helper verification returned exit code `0`;
+* opening a project succeeded;
+* exporting blocks succeeded;
+* no unexpected Siemens firewall prompt was observed.
 
 ## Known limitations and deferred work
 
@@ -154,6 +156,6 @@ Siemens firewall-prompt check must still be run on a TIA V17 machine.
 
 ## Recommendation
 
-Track A packaging is ready for continued TIA V17 validation. Do not declare
-external-release readiness or begin Track B until the real TIA V17 whitelist,
-Openness operation, and firewall-prompt checks pass.
+Track A is complete for the validated Windows x64 environments. Track B may
+begin on a dedicated branch, preserving the Track A installer layout and
+keeping `Mcp.Engineering` on net48.
