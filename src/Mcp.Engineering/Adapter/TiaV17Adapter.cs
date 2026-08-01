@@ -31,6 +31,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     /// <summary>True when we started the portal process (open mode); false when attached to a user's session.</summary>
     private bool _ownsPortal;
 
+    /// <summary>OS process id of the connected portal, used to detect a portal that exited on its own.</summary>
+    private int? _portalProcessId;
+
     public TiaV17Adapter(ILogger<TiaV17Adapter> logger)
     {
         _logger = logger;
@@ -45,7 +48,16 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         lock (_gate)
         {
             if (_portal is not null)
-                throw new AdapterException("ALREADY_CONNECTED", "Already connected. Call disconnect first.");
+            {
+                if (IsPortalProcessAlive())
+                    throw new AdapterException("ALREADY_CONNECTED", "Already connected. Call disconnect first.");
+                // The portal process exited on its own (crash or killed externally) while we
+                // still hold stale handles. Clean up silently and fall through to reconnect.
+                _logger.LogWarning(
+                    "Previous TIA Portal connection is stale (process {ProcessId} exited); cleaning up before reconnecting.",
+                    _portalProcessId);
+                CleanupStaleConnection();
+            }
             if (options.SessionId is not null && options.ProjectPath is not null)
                 throw new AdapterException("AMBIGUOUS_CONNECT", "Provide sessionId or projectPath, not both.");
             if (options.SessionId is null && options.ProjectPath is null)
@@ -55,6 +67,42 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 ? Attach(options.SessionId.Value, options.TimeoutSeconds)
                 : Open(options.ProjectPath!, options.WithUI);
         }
+    }
+
+    /// <summary>
+    /// True while the OS process behind the current connection is still running. When no
+    /// process id was recorded we cannot prove the portal died, so we report alive and keep
+    /// the safe ALREADY_CONNECTED behavior.
+    /// </summary>
+    private bool IsPortalProcessAlive()
+    {
+        if (_portalProcessId is not int pid)
+            return true;
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            // Guard against pid reuse by an unrelated process.
+            return !process.HasExited
+                && process.ProcessName.StartsWith("Siemens.Automation.Portal", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // ArgumentException: no process with that id — the portal is gone.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Releases stale handles after the portal process died on its own. Does not touch
+    /// _project — any access would round-trip to the dead process.
+    /// </summary>
+    private void CleanupStaleConnection()
+    {
+        try { _portal?.Dispose(); } catch { }
+        _portal = null;
+        _project = null;
+        _ownsPortal = false;
+        _portalProcessId = null;
     }
 
     private ConnectionInfo Attach(int processId, int timeoutSeconds)
@@ -112,6 +160,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
 
         _ownsPortal = false;
+        _portalProcessId = processId;
         // A project that is still loading shows as an empty Projects collection for a while —
         // same bounded retry as the attach acquisition above before declaring failure.
         for (var attempt = 1; attempt <= 3 && _portal!.Projects.Count == 0; attempt++)
@@ -126,6 +175,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         {
             _portal.Dispose();
             _portal = null;
+            _portalProcessId = null;
             throw new AdapterException("PROJECT_NOT_FOUND", "TIA is running but no project is open.",
                 "Open a project in that TIA session (or connect with projectPath instead). If the project is still loading, retry once TIA shows it fully loaded; if it is open in a different TIA version, attach to that session instead.");
         }
@@ -148,9 +198,27 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         var mode = withUI ? TiaPortalMode.WithUserInterface : TiaPortalMode.WithoutUserInterface;
         try
         {
+            // Snapshot running TIA pids so we can identify the process we are about to start.
+            var knownPids = new HashSet<int>();
+            try
+            {
+                foreach (var p in TiaPortal.GetProcesses())
+                    knownPids.Add(p.Id);
+            }
+            catch { /* pid tracking is best-effort; liveness falls back to safe behavior */ }
+
             _portal = new TiaPortal(mode);
             _ownsPortal = true;
             _project = _portal.Projects.Open(new FileInfo(projectPath));
+
+            try
+            {
+                _portalProcessId = TiaPortal.GetProcesses()
+                    .Where(p => !knownPids.Contains(p.Id))
+                    .Select(p => (int?)p.Id)
+                    .FirstOrDefault();
+            }
+            catch { /* best-effort, as above */ }
         }
         catch (Exception ex)
         {
@@ -158,6 +226,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             try { _portal?.Dispose(); } catch { }
             _portal = null;
             _project = null;
+            _portalProcessId = null;
             throw new AdapterException("PROJECT_NOT_FOUND",
                 $"Could not open project '{projectPath}': {ex.Message}",
                 "Check the project exists, is a V17 project, and is not open in another TIA instance.");
@@ -191,6 +260,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             _project = null;
             _portal = null;
             _ownsPortal = false;
+            _portalProcessId = null;
             return result;
         }
     }
