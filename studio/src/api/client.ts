@@ -807,6 +807,19 @@ export async function confirmTool(id: string, decision: 'allowOnce' | 'allowSess
   return res.ok
 }
 
+export type PendingConfirmation = {
+  id: string
+  toolName: string
+  arguments: string
+}
+
+/** Raw server log lines; chat destructive-tool confirmations appear here as JSON entries. */
+export async function getLogs(): Promise<string[]> {
+  const res = await fetch(`${BASE}/logs`)
+  if (!res.ok) throw new Error(`Logs failed: ${res.status}`)
+  return res.json()
+}
+
 export async function grantChatRounds(additional = 6): Promise<void> {
   const res = await fetch(`${BASE}/chat/grant-rounds`, {
     method: 'POST',

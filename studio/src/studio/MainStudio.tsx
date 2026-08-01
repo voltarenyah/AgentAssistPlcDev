@@ -343,6 +343,8 @@ export default function MainStudio() {
     edge: api.GraphEdge | null
   }>({ node: null, edge: null })
   const [chatBusy, setChatBusy] = useState(false)
+  const [pendingConfirmation, setPendingConfirmation] = useState<api.PendingConfirmation | null>(null)
+  const resolvedConfirmations = useRef<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [operation, setOperation] = useState<string | null>(null)
   const [activeOperation, setActiveOperation] = useState<ActiveOperation | null>(null)
@@ -792,6 +794,48 @@ export default function MainStudio() {
   const stopChatGeneration = useCallback(() => {
     chatAbortRef.current?.abort()
   }, [])
+
+  // Destructive chat tool calls (import_block, vc_restore, save_project) park server-side
+  // waiting for an approve/deny decision, announced as JSON entries in /api/logs.
+  // Poll them only while a turn runs; show the first unresolved one as a card.
+  useEffect(() => {
+    if (!chatBusy) return undefined
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const lines = await api.getLogs()
+        if (cancelled) return
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line) as { kind?: string; id?: string; toolName?: string; arguments?: string }
+            if (entry.kind === 'confirmation' && typeof entry.id === 'string'
+              && !resolvedConfirmations.current.has(entry.id)) {
+              setPendingConfirmation(previous => previous?.id === entry.id
+                ? previous
+                : { id: entry.id!, toolName: entry.toolName ?? '', arguments: entry.arguments ?? '' })
+              return
+            }
+          } catch { /* non-JSON log line */ }
+        }
+      } catch { /* logs unavailable; retry next tick */ }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [chatBusy])
+
+  const decideConfirmation = async (decision: 'allowOnce' | 'deny') => {
+    const pending = pendingConfirmation
+    if (!pending) return
+    resolvedConfirmations.current.add(pending.id)
+    setPendingConfirmation(null)
+    try {
+      await api.confirmTool(pending.id, decision)
+    } catch { /* expired or already resolved server-side */ }
+  }
 
   const continueChat = async (sessionId: string) => {
     setChatBusy(true)
@@ -1394,6 +1438,8 @@ export default function MainStudio() {
                     <ChatWorkspace
                       tabs={chatTabs}
                       busy={chatBusy}
+                      confirmation={pendingConfirmation}
+                      onConfirm={decision => void decideConfirmation(decision)}
                       onFocus={sessionId => void activateChatSession(sessionId)}
                       onSend={(sessionId, message) => void sendChatMessage(sessionId, message)}
                       onStop={stopChatGeneration}

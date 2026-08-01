@@ -45,6 +45,21 @@ public sealed class SourceFileListingTests : IDisposable
     }
 
     [Fact]
+    public void FormatMarksFilesThatHaveAnOverlay()
+    {
+        var device = CreateDeviceContext();
+        Write(device.ExportedSourceRoot, "Blocks/A.xml");
+        Write(device.ExportedSourceRoot, "Blocks/B.xml");
+        Write(device.ModifiedSourceRoot, "Blocks/B.xml");
+
+        var formatted = SourceFileListing.Format(device);
+        var lines = formatted.Split(Environment.NewLine);
+
+        Assert.Contains("- Blocks/A.xml", lines);
+        Assert.Contains("- Blocks/B.xml (overlay)", lines);
+    }
+
+    [Fact]
     public void FormatCapsLongListingsWithOverflowSummary()
     {
         var device = CreateDeviceContext();

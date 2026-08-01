@@ -11,6 +11,8 @@ import { contextLabel } from './usageDisplay'
 type Props = {
   tabs: ChatTabsState
   busy: boolean
+  confirmation?: api.PendingConfirmation | null
+  onConfirm?: (decision: 'allowOnce' | 'deny') => void
   onFocus: (sessionId: string) => void
   onSend: (sessionId: string, message: string) => void
   onStop: () => void
@@ -268,7 +270,7 @@ function MessageList({ messages, busy }: { messages: ChatMessage[], busy: boolea
   )
 }
 
-export default function ChatWorkspace({ tabs, busy, onFocus, onSend, onStop, onContinue }: Props) {
+export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onFocus, onSend, onStop, onContinue }: Props) {
   const [settings, setSettings] = useState<api.ChatSettings | null>(null)
   const [settingsState, setSettingsState] = useState<SettingsSaveState>('idle')
   const settingsRef = useRef<api.ChatSettings | null>(null)
@@ -354,6 +356,34 @@ export default function ChatWorkspace({ tabs, busy, onFocus, onSend, onStop, onC
                   >
                     Round limit reached — Continue (+6 rounds)
                   </button>
+                </div>
+              )}
+              {confirmation && tab.sessionId === tabs.activeId && (
+                <div className="border-t px-3 pt-2" style={{ borderColor: 'var(--border)' }} data-confirmation={confirmation.id}>
+                  <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
+                    <div className="text-[10px] font-medium text-foreground">
+                      Approval needed: <span className="font-mono">{confirmation.toolName}</span>
+                    </div>
+                    {confirmation.arguments && (
+                      <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{confirmation.arguments}</pre>
+                    )}
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        className="primary-button h-7 px-3"
+                        onClick={() => onConfirm?.('allowOnce')}
+                      >
+                        Allow once
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button h-7 px-3 text-red-600 dark:text-red-400"
+                        onClick={() => onConfirm?.('deny')}
+                      >
+                        Deny
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
               <ChatComposer

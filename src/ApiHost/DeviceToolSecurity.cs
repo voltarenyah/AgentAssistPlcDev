@@ -56,6 +56,10 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
                 ?? throw new ArgumentException("relativePath or a trusted xmlFilePath is required.");
             var effective = resolver.ResolveEffective(device, relative);
             var overlay = resolver.PrepareEditable(device, relative);
+            // The relative form fully determines both paths; drop the caller's originals
+            // so Force never conflicts with a pre-resolution value.
+            args.Remove("xmlFilePath");
+            args.Remove("relativePath");
             Force(args, "xmlFilePath", effective);
             if (tool == "src_preview_edits")
             {
@@ -76,7 +80,6 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
                 Force(args, "outputFilePath", overlay);
                 ForceFlag(args, "overwriteOutput");
             }
-            args.Remove("relativePath");
         }
         if (tool == "src_parse_block")
             BindReadable(args, "xmlFilePath", device);
@@ -100,8 +103,9 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
             if (DeviceSourceResolver.IsPreviewFile(modified))
                 throw new ArgumentException("Preview files are disposable; import the applied overlay instead.");
             if (!File.Exists(modified)) throw new FileNotFoundException("Modified source was not found.", modified);
-            Force(args, "xmlFilePath", modified);
+            args.Remove("xmlFilePath");
             args.Remove("relativePath");
+            Force(args, "xmlFilePath", modified);
         }
         return args;
     }
@@ -112,6 +116,24 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
     {
         var path = StringValue(args, key)
             ?? throw new ArgumentException($"{key} is required.");
+        if (!Path.IsPathRooted(path))
+        {
+            // Bare relative path as listed in the runtime context: resolve it against the
+            // device roots directly (never against the host process working directory).
+            string? fallback = null;
+            foreach (var root in new[] { device.ModifiedSourceRoot, device.ExportedSourceRoot })
+            {
+                var candidate = WorkbenchPaths.ResolveRelative(root, path);
+                fallback ??= candidate;
+                if (File.Exists(candidate))
+                {
+                    args[key] = candidate;
+                    return;
+                }
+            }
+            args[key] = fallback!;
+            return;
+        }
         foreach (var root in new[] { device.ModifiedSourceRoot, device.ExportedSourceRoot })
         {
             try
@@ -131,6 +153,12 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
     private static string? RelativeUnder(string root, string? path)
     {
         if (path is null) return null;
+        if (!Path.IsPathRooted(path))
+        {
+            var normalized = path.Replace('\\', '/');
+            _ = WorkbenchPaths.ResolveRelative(root, normalized);
+            return normalized;
+        }
         var relative = Path.GetRelativePath(root, Path.GetFullPath(path));
         _ = WorkbenchPaths.ResolveRelative(root, relative);
         return relative.StartsWith("..", StringComparison.Ordinal) ? null : relative.Replace('\\', '/');
@@ -140,6 +168,14 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
     {
         var value = StringValue(args, key);
         if (value is null) return null;
+        if (!Path.IsPathRooted(value))
+        {
+            // Bare relative path as listed in the runtime context: validate the form
+            // (rejects traversal) and keep it relative for ResolveEffective/PrepareEditable.
+            var normalized = value.Replace('\\', '/');
+            _ = WorkbenchPaths.ResolveRelative(device.ExportedSourceRoot, normalized);
+            return normalized;
+        }
         foreach (var root in new[] { device.ModifiedSourceRoot, device.ExportedSourceRoot })
         {
             try

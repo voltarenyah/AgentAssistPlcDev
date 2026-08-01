@@ -1042,6 +1042,56 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public void SourceToolsAcceptListedRelativeXmlFilePath()
+    {
+        var context = Context();
+        var baseline = Path.Combine(context.ExportedSourceRoot, "Blocks", "A.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(baseline)!);
+        File.WriteAllText(baseline, "<a/>");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        // src_parse_block with the bare listed path resolves into the device roots.
+        var parsed = binder.Bind(
+            "src_parse_block",
+            new Dictionary<string, object?> { ["xmlFilePath"] = "Blocks/A.xml" },
+            context);
+        Assert.Equal(baseline, parsed["xmlFilePath"]);
+
+        // An existing overlay wins over the baseline for reads.
+        var overlay = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(overlay)!);
+        File.WriteAllText(overlay, "<b/>");
+        var parsedOverlay = binder.Bind(
+            "src_parse_block",
+            new Dictionary<string, object?> { ["xmlFilePath"] = "Blocks/A.xml" },
+            context);
+        Assert.Equal(overlay, parsedOverlay["xmlFilePath"]);
+
+        // src_preview_edits with the bare listed path behaves like relativePath.
+        var preview = binder.Bind(
+            "src_preview_edits",
+            new Dictionary<string, object?> { ["xmlFilePath"] = "Blocks/A.xml" },
+            context);
+        Assert.Equal(overlay, preview["xmlFilePath"]);
+        Assert.Equal(
+            Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.preview.xml"),
+            preview["outputFilePath"]);
+
+        // import_block with the bare listed path resolves into modified-source.
+        var import = binder.Bind(
+            "import_block",
+            new Dictionary<string, object?> { ["xmlFilePath"] = "Blocks/A.xml" },
+            context);
+        Assert.Equal(overlay, import["xmlFilePath"]);
+
+        // Traversal is still rejected.
+        Assert.Throws<Agent.Workbench.WorkbenchPathException>(() => binder.Bind(
+            "src_parse_block",
+            new Dictionary<string, object?> { ["xmlFilePath"] = "../outside.xml" },
+            context));
+    }
+
+    [Fact]
     public async Task ExpiryActivelyDeniesWaitingConfirmation()
     {
         var pending = new PendingToolActions(TimeProvider.System, TimeSpan.FromMilliseconds(30));

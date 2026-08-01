@@ -71,9 +71,13 @@ public static class SourceFileListing
 
         var lines = new List<string>
         {
-            "Source files (pass one of these as relativePath to the src_* tools):",
+            "Source files (pass one of these as relativePath to the src_* tools; \"(overlay)\" marks files whose edited copy in modified-source is not in TIA until imported):",
         };
-        lines.AddRange(paths.Take(MaxListed).Select(path => $"- {path}"));
+        lines.AddRange(paths.Take(MaxListed).Select(path =>
+        {
+            var overlay = WorkbenchPaths.ResolveRelative(device.ModifiedSourceRoot, path);
+            return File.Exists(overlay) ? $"- {path} (overlay)" : $"- {path}";
+        }));
         if (paths.Count > MaxListed)
         {
             lines.Add($"… and {paths.Count - MaxListed} more");

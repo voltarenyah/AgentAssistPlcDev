@@ -14,7 +14,8 @@ public sealed record SourceEdit(SourceEditOperation Operation, EditTarget? Targe
 public sealed record MultilingualValue(string Culture, string Value);
 public sealed record NetworkInspection(int NetworkNumber, string XmlId, IReadOnlyList<MultilingualValue> Titles, IReadOnlyList<MultilingualValue> Comments);
 public sealed record SourceInspection(string BlockName, string BlockType, int? BlockNumber, string? ProgrammingLanguage,
-    string XmlId, IReadOnlyList<NetworkInspection> Networks, IReadOnlyList<string> SafeProperties, string Sha256);
+    string XmlId, IReadOnlyList<NetworkInspection> Networks, IReadOnlyList<string> SafeProperties, string Sha256,
+    string? FilePath = null);
 public sealed record ValidationFinding(string Severity, string Code, string Message, string? Path = null);
 public sealed record SourceValidationResult(bool IsValid, bool ProtectedContentMatches, IReadOnlyList<ValidationFinding> Findings);
 public sealed record EditableFieldChange(string OwnerKind, string OwnerXmlId, int? NetworkNumber, string Field,

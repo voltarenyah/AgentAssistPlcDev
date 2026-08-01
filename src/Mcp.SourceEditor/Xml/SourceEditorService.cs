@@ -28,7 +28,8 @@ public sealed class SourceEditorService
             units.Select((unit, index) => new NetworkInspection(index + 1, Attr(unit, "ID"),
                 TextValues(unit, "Title"), TextValues(unit, "Comment"))).ToArray(),
             new[] { "blockHeaderAuthor", "blockHeaderFamily", "blockHeaderName" },
-            HashFile(source.Path));
+            HashFile(source.Path),
+            source.Path);
     }
 
     public EditBatchResult Preview(string xmlFilePath, IReadOnlyList<SourceEdit> edits,
