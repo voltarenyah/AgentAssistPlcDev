@@ -65,6 +65,12 @@ public sealed class SandboxPolicy
             ["get_all_networks"] = SandboxTier.Read,
             ["get_variable_usage"] = SandboxTier.Read,
             ["search"] = SandboxTier.Read,
+            ["query_node_kinds"] = SandboxTier.Read,
+            ["query_nodes"] = SandboxTier.Read,
+            ["query_edge_types"] = SandboxTier.Read,
+            ["query_edges"] = SandboxTier.Read,
+            ["query_node_properties"] = SandboxTier.Read,
+            ["query_edge_properties"] = SandboxTier.Read,
             // Source editor — inspection and comparison.
             ["src_parse_block"] = SandboxTier.Read,
             ["src_diff"] = SandboxTier.Read,

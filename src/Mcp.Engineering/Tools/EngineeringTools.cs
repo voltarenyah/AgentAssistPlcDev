@@ -188,7 +188,8 @@ public sealed class EngineeringTools
         }
         catch (Exception ex)
         {
-            return ToolJson.Fail(OpennessErrorMapper.CodeFor(ex), ex.Message);
+            var mapped = OpennessErrorMapper.Map(ex);
+            return ToolJson.Fail(mapped.Code, ex.Message, mapped.Remediation);
         }
     }
 

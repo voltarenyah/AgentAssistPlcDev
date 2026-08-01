@@ -36,6 +36,8 @@ public sealed class SystemPromptTests
         Assert.Contains("kind='FB'", prompt);
         Assert.Contains("sourceFile", prompt);
         Assert.Contains("device roots", prompt);
+        Assert.Contains("repoPath", prompt);
+        Assert.Contains("host-bound", prompt);
         Assert.DoesNotContain("runtime context lists the device's exported source files", prompt);
     }
 

@@ -11,6 +11,12 @@ public sealed class SandboxPolicyTests
     [InlineData("list_blocks")]
     [InlineData("export_all_blocks")]
     [InlineData("query")]
+    [InlineData("query_node_kinds")]
+    [InlineData("query_nodes")]
+    [InlineData("query_edge_types")]
+    [InlineData("query_edges")]
+    [InlineData("query_node_properties")]
+    [InlineData("query_edge_properties")]
     [InlineData("search")]
     [InlineData("get_variable_usage")]
     [InlineData("vc_status")]
@@ -71,6 +77,8 @@ public sealed class SandboxPolicyTests
             "import_block", "compile_block", "compile_plc",
             "ingest_source", "update_components", "query", "get_schema", "get_block", "get_network",
             "get_single_network", "get_all_networks", "get_variable_usage", "search",
+            "query_node_kinds", "query_nodes", "query_edge_types", "query_edges",
+            "query_node_properties", "query_edge_properties",
             "vc_init", "vc_status", "vc_add", "vc_commit", "vc_log",
             "vc_diff", "vc_snapshot", "vc_restore", "vc_branches", "vc_config",
             "vc_init_shared", "vc_add_worktree", "vc_worktrees", "vc_merge",
