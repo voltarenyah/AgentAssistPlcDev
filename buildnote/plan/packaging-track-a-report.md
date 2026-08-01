@@ -148,7 +148,12 @@ Passed on the TIA V17 environment:
 
 ## Known limitations and deferred work
 
-* real TIA V17 registration and an Openness operation remain required;
+* additional pre-production matrix coverage is deferred, including missing
+  Openness-group membership and non-ASCII user-name environments;
+* full workbench persistence and actual user-repository preservation coverage
+  is deferred to pre-production;
+* real-TIA uninstall whitelist removal and shortcut/browser checks are deferred
+  to pre-production;
 * signed-build hash validation is deferred until executable signing exists;
 * .NET 10 migration is deferred to Track B;
 * credential protection, single-instance behavior, and production update
@@ -156,6 +161,8 @@ Passed on the TIA V17 environment:
 
 ## Recommendation
 
-Track A is complete for the validated Windows x64 environments. Track B may
-begin on a dedicated branch, preserving the Track A installer layout and
-keeping `Mcp.Engineering` on net48.
+Stop here for today. Treat this repository state as the first installable
+development-environment version. The package is ready for internal use and
+controlled validation; complete the deferred checks during the next
+pre-production action before any supported public release. Track B is
+intentionally deferred.

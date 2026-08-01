@@ -47,6 +47,23 @@ Do not include these in Track A:
 * bundled Git
 * TIA V18+ support
 
+## Execution disposition — first installable development version
+
+As of 2026-08-01, stop Track A implementation here. The current repository
+state is accepted as the first installable development-environment version of
+Automation Workbench. It is suitable for internal development and controlled
+validation, not as a supported public release.
+
+The remaining validation matrix is intentionally deferred to a future
+pre-production action. That action should cover the missing Openness-group
+membership case, non-ASCII user names, full workbench persistence workflows,
+shortcut and browser behavior, repair whitelist restoration, real-TIA
+uninstall whitelist removal, and preservation of actual user repositories,
+databases, audit logs, and exports.
+
+Do not begin the .NET 10 migration today. Track B and Track C remain planned
+future work and must preserve the validated Track A layout.
+
 ## Release gate
 
 The Track A package is for internal development and validation.
