@@ -9,10 +9,9 @@
 #endif
 
 #define AppName "Automation Workbench"
-#define AppId "{B1D4D6BF-0C2A-4A17-BD08-9D8EF4D2A0C8}"
 
 [Setup]
-AppId={#AppId}
+AppId={{B1D4D6BF-0C2A-4A17-BD08-9D8EF4D2A0C8}
 AppName={#AppName}
 AppVersion={#MyAppVersion}
 AppPublisher=Automation Workbench
@@ -20,7 +19,6 @@ AppPublisherURL=https://example.invalid/automation-workbench
 DefaultDirName={autopf}\Automation Workbench
 DefaultGroupName=Automation Workbench
 UninstallDisplayName=Automation Workbench
-UninstallDisplayVersion={#MyAppVersion}
 OutputDir={#OutputDir}
 OutputBaseFilename=AutomationWorkbench-{#MyAppVersion}-win-x64-setup
 PrivilegesRequired=admin
@@ -74,8 +72,7 @@ procedure ShowEngineeringWarning(const Detail: String);
 begin
   MsgBox(
     'Automation Workbench was installed, but engineering integration is unavailable.' + #13#10#13#10 +
-    'TIA Portal V17 is required. Install TIA V17 and rerun whitelist registration through Repair.' +
-    #13#10#13#10 + Detail,
+    'TIA Portal V17 is required. Install TIA V17 and rerun whitelist registration through Repair.' + #13#10#13#10 + Detail,
     mbError, MB_OK);
 end;
 
