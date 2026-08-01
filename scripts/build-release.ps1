@@ -17,6 +17,7 @@ $knowledgeProject = Join-Path $repoRoot 'src\Mcp.Knowledge\Mcp.Knowledge.csproj'
 $sourceEditorProject = Join-Path $repoRoot 'src\Mcp.SourceEditor\Mcp.SourceEditor.csproj'
 $versionControlProject = Join-Path $repoRoot 'src\Mcp.VersionControl\Mcp.VersionControl.csproj'
 $engineeringProject = Join-Path $repoRoot 'src\Mcp.Engineering\Mcp.Engineering.csproj'
+$whitelistProject = Join-Path $repoRoot 'src\Tools.OpennessWhitelist\Tools.OpennessWhitelist.csproj'
 $studioRoot = Join-Path $repoRoot 'studio'
 
 function Invoke-Tool {
@@ -104,7 +105,19 @@ $versionProperties = @(
 
 Write-Host "Building Automation Workbench $Version ($gitCommit)."
 Invoke-Tool 'dotnet' @('restore', $solution, '--runtime', 'win-x64')
-Invoke-Tool 'dotnet' @('test', $solution, '--configuration', 'Release', '--no-restore')
+$testProjects = @(
+    'tests\Contracts.Tests\Contracts.Tests.csproj',
+    'tests\Mcp.Knowledge.Tests\Mcp.Knowledge.Tests.csproj',
+    'tests\Agent.Tests\Agent.Tests.csproj',
+    'tests\Mcp.Engineering.Tests\Mcp.Engineering.Tests.csproj',
+    'tests\Mcp.VersionControl.Tests\Mcp.VersionControl.Tests.csproj',
+    'tests\Mcp.SourceEditor.Tests\Mcp.SourceEditor.Tests.csproj',
+    'tests\ApiHost.Tests\ApiHost.Tests.csproj',
+    'tests\E2E.Tests\E2E.Tests.csproj'
+)
+foreach ($testProject in $testProjects) {
+    Invoke-Tool 'dotnet' @('test', (Join-Path $repoRoot $testProject), '--configuration', 'Release', '--no-restore')
+}
 
 Push-Location $studioRoot
 try {
@@ -126,12 +139,14 @@ $knowledgeStage = Join-Path $stagingRoot 'Mcp.Knowledge'
 $sourceEditorStage = Join-Path $stagingRoot 'Mcp.SourceEditor'
 $versionControlStage = Join-Path $stagingRoot 'Mcp.VersionControl'
 $engineeringStage = Join-Path $stagingRoot 'Mcp.Engineering'
+$whitelistStage = Join-Path $stagingRoot 'OpennessWhitelist'
 
 Invoke-Tool 'dotnet' (@('publish', $apiHostProject, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $apiStage, '-p:BuildStudio=true') + $publishProperties)
 Invoke-Tool 'dotnet' (@('publish', $knowledgeProject, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $knowledgeStage) + $publishProperties)
 Invoke-Tool 'dotnet' (@('publish', $sourceEditorProject, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $sourceEditorStage) + $publishProperties)
 Invoke-Tool 'dotnet' (@('publish', $versionControlProject, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $versionControlStage) + $publishProperties)
 Invoke-Tool 'dotnet' (@('build', $engineeringProject, '--configuration', 'Release', '--framework', 'net48', '--no-restore', '--output', $engineeringStage) + $versionProperties)
+Invoke-Tool 'dotnet' (@('build', $whitelistProject, '--configuration', 'Release', '--framework', 'net48', '--no-restore', '--output', $whitelistStage) + $versionProperties)
 
 $apiDestination = $releaseRootFull
 $mcpRoot = Join-Path $releaseRootFull 'mcp'
@@ -139,11 +154,13 @@ $knowledgeDestination = Join-Path $mcpRoot 'knowledge'
 $sourceEditorDestination = Join-Path $mcpRoot 'source-editor'
 $versionControlDestination = Join-Path $mcpRoot 'version-control'
 $engineeringDestination = Join-Path $mcpRoot 'engineering'
+$toolsDestination = Join-Path $releaseRootFull 'tools'
 Copy-DirectoryContents $apiStage $apiDestination
 Copy-DirectoryContents $knowledgeStage $knowledgeDestination
 Copy-DirectoryContents $sourceEditorStage $sourceEditorDestination
 Copy-DirectoryContents $versionControlStage $versionControlDestination
 Copy-DirectoryContents $engineeringStage $engineeringDestination
+Copy-DirectoryContents $whitelistStage $toolsDestination
 
 $engineeringConfig = Join-Path $engineeringDestination 'Mcp.Engineering.exe.config'
 Require-File (Join-Path $engineeringDestination 'Mcp.Engineering.exe')
@@ -163,6 +180,7 @@ if ($libGitNative.Count -eq 0) {
 
 $requiredExecutables = @(
     (Join-Path $releaseRootFull 'ApiHost.exe'),
+    (Join-Path $toolsDestination 'AutomationWorkbench.OpennessWhitelist.exe'),
     (Join-Path $engineeringDestination 'Mcp.Engineering.exe'),
     (Join-Path $knowledgeDestination 'Mcp.Knowledge.exe'),
     (Join-Path $sourceEditorDestination 'Mcp.SourceEditor.exe'),

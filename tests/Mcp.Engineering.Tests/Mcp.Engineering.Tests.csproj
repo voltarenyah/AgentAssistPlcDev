@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Mcp.Engineering\Mcp.Engineering.csproj" />
+    <ProjectReference Include="..\..\src\Tools.OpennessWhitelist\Tools.OpennessWhitelist.csproj" />
   </ItemGroup>
 
 </Project>
