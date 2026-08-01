@@ -118,6 +118,7 @@ internal sealed class McpRuntime : IAsyncDisposable
         TrustedWorkbenchRootRegistry trustedRoots)
     {
         var paths = McpExecutableResolver.Resolve(configuration, AppContext.BaseDirectory);
+        McpExecutableResolver.Validate(paths);
         var sandboxEnvironment = new Dictionary<string, string?>
         {
             [TrustedWorkbenchRootRegistry.EnvironmentVariableName] = trustedRoots.FilePath,

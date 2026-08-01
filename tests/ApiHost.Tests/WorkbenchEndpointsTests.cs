@@ -107,6 +107,138 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public void ResolverUsesExplicitConfigurationOverridesBeforeInstalledDefaults()
+    {
+        var installedRoot = Path.Combine(root, "installed layout with spaces");
+        var configuredEngineering = Path.Combine(root, "configured", "Mcp.Engineering.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(configuredEngineering)!);
+        File.WriteAllText(configuredEngineering, string.Empty);
+        CreateInstalledMcpExecutables(installedRoot);
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Mcp:Engineering"] = configuredEngineering,
+            })
+            .Build();
+
+        var paths = McpExecutableResolver.Resolve(configuration, installedRoot);
+
+        Assert.Equal(configuredEngineering, paths.Engineering);
+        Assert.Equal(
+            Path.Combine(installedRoot, "mcp", "knowledge", "Mcp.Knowledge.exe"),
+            paths.Knowledge);
+    }
+
+    [Fact]
+    public void ResolverUsesExecutableRelativeInstalledLayoutWithoutSolutionFile()
+    {
+        var installedRoot = Path.Combine(root, "installed layout with spaces");
+        CreateInstalledMcpExecutables(installedRoot);
+
+        var paths = McpExecutableResolver.Resolve(
+            new ConfigurationBuilder().Build(),
+            installedRoot);
+
+        Assert.Equal(
+            Path.Combine(installedRoot, "mcp", "engineering", "Mcp.Engineering.exe"),
+            paths.Engineering);
+        Assert.Equal(
+            Path.Combine(installedRoot, "mcp", "source-editor", "Mcp.SourceEditor.exe"),
+            paths.SourceEditor);
+    }
+
+    [Fact]
+    public void ResolverUsesDevelopmentRepositoryFallbackWhenInstalledFilesAreAbsent()
+    {
+        var repositoryRoot = Path.Combine(root, "development repository");
+        Directory.CreateDirectory(repositoryRoot);
+        File.WriteAllText(Path.Combine(repositoryRoot, "AgentAssistPlcDev.sln"), string.Empty);
+        CreateDevelopmentMcpExecutables(repositoryRoot);
+
+        var paths = McpExecutableResolver.Resolve(
+            new ConfigurationBuilder().Build(),
+            Path.Combine(repositoryRoot, "src", "ApiHost", "bin", "Debug", "net8.0"));
+
+        Assert.Equal(
+            Path.Combine(repositoryRoot, "src", "Mcp.Engineering", "bin", "Debug", "net48", "Mcp.Engineering.exe"),
+            paths.Engineering);
+        Assert.Equal(
+            Path.Combine(repositoryRoot, "src", "Mcp.VersionControl", "bin", "Debug", "net8.0", "Mcp.VersionControl.exe"),
+            paths.VersionControl);
+    }
+
+    [Fact]
+    public void ResolverValidationReportsOneMissingExecutable()
+    {
+        Directory.CreateDirectory(root);
+        var paths = new McpExecutablePaths(
+            Path.Combine(root, "engineering.exe"),
+            Path.Combine(root, "knowledge.exe"),
+            Path.Combine(root, "version-control.exe"),
+            Path.Combine(root, "source-editor.exe"));
+        File.WriteAllText(paths.Engineering, string.Empty);
+        File.WriteAllText(paths.Knowledge, string.Empty);
+        File.WriteAllText(paths.SourceEditor, string.Empty);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => McpExecutableResolver.Validate(paths));
+
+        Assert.Contains($"VersionControl: {paths.VersionControl}", exception.Message);
+        Assert.DoesNotContain("Knowledge:", exception.Message);
+    }
+
+    [Fact]
+    public void ResolverValidationReportsAllMissingExecutablesTogether()
+    {
+        var paths = new McpExecutablePaths(
+            Path.Combine(root, "engineering.exe"),
+            Path.Combine(root, "knowledge.exe"),
+            Path.Combine(root, "version-control.exe"),
+            Path.Combine(root, "source-editor.exe"));
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => McpExecutableResolver.Validate(paths));
+
+        Assert.Contains($"Engineering: {paths.Engineering}", exception.Message);
+        Assert.Contains($"Knowledge: {paths.Knowledge}", exception.Message);
+        Assert.Contains($"SourceEditor: {paths.SourceEditor}", exception.Message);
+        Assert.Contains($"VersionControl: {paths.VersionControl}", exception.Message);
+        Assert.Contains("Repair the installation or configure the corresponding Mcp path.", exception.Message);
+    }
+
+    private static void CreateInstalledMcpExecutables(string root)
+    {
+        foreach (var relativePath in new[]
+        {
+            Path.Combine("mcp", "engineering", "Mcp.Engineering.exe"),
+            Path.Combine("mcp", "knowledge", "Mcp.Knowledge.exe"),
+            Path.Combine("mcp", "source-editor", "Mcp.SourceEditor.exe"),
+            Path.Combine("mcp", "version-control", "Mcp.VersionControl.exe"),
+        })
+        {
+            var path = Path.Combine(root, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, string.Empty);
+        }
+    }
+
+    private static void CreateDevelopmentMcpExecutables(string root)
+    {
+        foreach (var relativePath in new[]
+        {
+            Path.Combine("src", "Mcp.Engineering", "bin", "Debug", "net48", "Mcp.Engineering.exe"),
+            Path.Combine("src", "Mcp.Knowledge", "bin", "Debug", "net8.0", "Mcp.Knowledge.exe"),
+            Path.Combine("src", "Mcp.SourceEditor", "bin", "Debug", "net8.0", "Mcp.SourceEditor.exe"),
+            Path.Combine("src", "Mcp.VersionControl", "bin", "Debug", "net8.0", "Mcp.VersionControl.exe"),
+        })
+        {
+            var path = Path.Combine(root, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, string.Empty);
+        }
+    }
+
+    [Fact]
     public async Task ProductionHostCanReachListeningPipelineWithExternalStartupDisabled()
     {
         await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
@@ -1303,7 +1435,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public void McpHostPassesOnlyTrustedRegistryLocationToSandboxedServers()
+    public void McpHostPassesTrustedRegistryLocationToAllServers()
     {
         var registryPath = Path.Combine(root, "trusted-roots.json");
         var environment = new Dictionary<string, string?>
@@ -1317,8 +1449,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             host.Engineering.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
         Assert.Equal(registryPath,
             host.SourceEditor!.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
-        Assert.Empty(host.Knowledge.EnvironmentVariables);
-        Assert.Empty(host.VersionControl!.EnvironmentVariables);
+        Assert.Equal(registryPath,
+            host.Knowledge.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
+        Assert.Equal(registryPath,
+            host.VersionControl!.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
     }
 
     [Fact]
