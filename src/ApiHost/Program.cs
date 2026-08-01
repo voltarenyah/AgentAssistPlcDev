@@ -1,9 +1,24 @@
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Sandbox;
+using System.Diagnostics;
+using System.Reflection;
 using ModelContextProtocol;
+using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
+var isTesting = builder.Environment.IsEnvironment("Testing");
+var isDevelopment = builder.Environment.IsDevelopment();
+var isProduction = builder.Environment.IsProduction();
+if (isTesting)
+{
+    var testWebRoot = Path.Combine(AppContext.BaseDirectory, "TestWebRoot");
+    if (Directory.Exists(testWebRoot))
+    {
+        builder.Environment.WebRootPath = testWebRoot;
+        builder.Environment.WebRootFileProvider = new PhysicalFileProvider(testWebRoot);
+    }
+}
 var legacyConfigPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
     "PlcAiAssistant", "config.json");
@@ -17,7 +32,29 @@ builder.Configuration.AddJsonFile(currentConfigPath, optional: true, reloadOnCha
 // Re-apply external providers after compatibility files: env/CLI must remain authoritative.
 builder.Configuration.AddEnvironmentVariables();
 if (args.Length > 0) builder.Configuration.AddCommandLine(args);
-builder.Services.AddCors();
+var startupOptions = ApplicationStartupOptions.From(
+    builder.Configuration,
+    builder.Environment.EnvironmentName);
+var configuredUrls = builder.Configuration["urls"] ?? builder.Configuration["ASPNETCORE_URLS"];
+if (isProduction || string.IsNullOrWhiteSpace(configuredUrls))
+    builder.WebHost.UseUrls(startupOptions.Url);
+builder.Services.AddCors(options =>
+{
+    if (isTesting)
+    {
+        options.AddPolicy("WorkbenchCors", policy => policy
+            .WithOrigins(builder.Configuration["Cors:TestingOrigin"] ?? "http://testing.local")
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+    }
+    else if (isDevelopment)
+    {
+        options.AddPolicy("WorkbenchCors", policy => policy
+            .WithOrigins(builder.Configuration["Cors:ViteOrigin"] ?? "http://localhost:5173")
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+    }
+});
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
 builder.Services.AddSingleton(_ => new TrustedWorkbenchRootRegistry(
@@ -101,12 +138,56 @@ builder.Services.AddSingleton<PendingToolActions>();
 builder.Services.AddSingleton<SandboxedToolExecutor>();
 
 var app = builder.Build();
-app.UseCors(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
+if (isTesting || isDevelopment)
+    app.UseCors("WorkbenchCors");
+app.UseDefaultFiles();
+app.UseStaticFiles();
+app.Use(async (context, next) =>
+{
+    await next();
+
+    if (context.Response.StatusCode != StatusCodes.Status404NotFound
+        || context.Response.HasStarted
+        || context.Request.Method is not ("GET" or "HEAD")
+        || context.Request.Path.StartsWithSegments("/api"))
+        return;
+
+    var indexPath = Path.Combine(app.Environment.WebRootPath ?? string.Empty, "index.html");
+    if (!File.Exists(indexPath))
+        return;
+
+    context.Response.Clear();
+    context.Response.ContentType = "text/html; charset=utf-8";
+    await context.Response.SendFileAsync(indexPath);
+});
 app.UseMiddleware<WorkbenchApiExceptionMiddleware>();
-app.MapGet("/api/status", () => Results.Ok(new { storage = "workbench", legacyProjects = false }));
+var applicationVersion = typeof(Program).Assembly
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+    ?? typeof(Program).Assembly.GetName().Version?.ToString()
+    ?? "unknown";
+app.MapGet("/api/status", () => Results.Ok(new
+{
+    storage = "workbench",
+    legacyProjects = false,
+    version = applicationVersion,
+}));
 app.MapWorkbenchEndpoints();
 app.MapCompatibilityEndpoints();
-app.Run();
+var browserUrl = isProduction || string.IsNullOrWhiteSpace(configuredUrls)
+    ? startupOptions.Url
+    : configuredUrls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).First();
+try
+{
+    await app.StartAsync();
+    if (startupOptions.OpenBrowserOnStart)
+        BrowserLauncher.Open(browserUrl);
+    await app.WaitForShutdownAsync();
+}
+catch (Exception exception) when (ApplicationStartupOptions.IsAddressInUse(exception))
+{
+    Console.Error.WriteLine(ApplicationStartupOptions.PortInUseMessage(startupOptions));
+    Environment.ExitCode = 1;
+}
 
 public partial class Program { }
 
@@ -118,6 +199,7 @@ internal sealed class McpRuntime : IAsyncDisposable
         TrustedWorkbenchRootRegistry trustedRoots)
     {
         var paths = McpExecutableResolver.Resolve(configuration, AppContext.BaseDirectory);
+        McpExecutableResolver.Validate(paths);
         var sandboxEnvironment = new Dictionary<string, string?>
         {
             [TrustedWorkbenchRootRegistry.EnvironmentVariableName] = trustedRoots.FilePath,
@@ -175,4 +257,13 @@ internal sealed class UnavailableCaller : IMcpToolCaller
 {
     public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default) =>
         throw new InvalidOperationException($"No MCP test double was registered for '{tool}'.");
+}
+
+internal static class BrowserLauncher
+{
+    public static void Open(string url) => Process.Start(new ProcessStartInfo
+    {
+        FileName = url,
+        UseShellExecute = true,
+    });
 }

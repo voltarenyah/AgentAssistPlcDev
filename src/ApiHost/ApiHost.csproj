@@ -4,6 +4,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <BuildStudio Condition="'$(BuildStudio)' == ''">false</BuildStudio>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,5 +14,24 @@
   <ItemGroup>
     <ProjectReference Include="..\Agent\Agent.csproj" />
   </ItemGroup>
+
+  <Target Name="BuildStudioAssets"
+          BeforeTargets="ComputeFilesToPublish"
+          Condition="'$(BuildStudio)' == 'true' and '$(BuildStudioAssetsRan)' != 'true'">
+    <PropertyGroup>
+      <BuildStudioAssetsRan>true</BuildStudioAssetsRan>
+    </PropertyGroup>
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)\..\..\studio" Command="npm ci" />
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)\..\..\studio" Command="npm run build" />
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\..\..\studio\dist\index.html')"
+           Text="Studio build completed without producing studio/dist/index.html." />
+    <ItemGroup>
+      <_StudioDistFiles Include="$(MSBuildProjectDirectory)\..\..\studio\dist\**\*" />
+      <ResolvedFileToPublish Include="@(_StudioDistFiles)">
+        <RelativePath>wwwroot\%(_StudioDistFiles.RecursiveDir)%(_StudioDistFiles.Filename)%(_StudioDistFiles.Extension)</RelativePath>
+        <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 
 </Project>

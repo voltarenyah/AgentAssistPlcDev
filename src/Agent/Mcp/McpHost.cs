@@ -16,13 +16,13 @@ public sealed class McpHost : IAsyncDisposable
         IReadOnlyDictionary<string, string?>? sandboxEnvironment = null)
     {
         Engineering = new McpServerConnection("engineering", engineeringServerPath, sandboxEnvironment);
-        Knowledge = new McpServerConnection("knowledge", knowledgeServerPath);
+        Knowledge = new McpServerConnection("knowledge", knowledgeServerPath, sandboxEnvironment);
         Engineering.StderrLine += line => ServerLog?.Invoke(line);
         Knowledge.StderrLine += line => ServerLog?.Invoke(line);
 
         if (!string.IsNullOrWhiteSpace(versionControlServerPath))
         {
-            VersionControl = new McpServerConnection("versioncontrol", versionControlServerPath);
+            VersionControl = new McpServerConnection("versioncontrol", versionControlServerPath, sandboxEnvironment);
             VersionControl.StderrLine += line => ServerLog?.Invoke(line);
         }
         if (!string.IsNullOrWhiteSpace(sourceEditorServerPath))

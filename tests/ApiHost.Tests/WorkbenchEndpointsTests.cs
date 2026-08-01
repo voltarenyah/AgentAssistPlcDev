@@ -33,6 +33,141 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task TestingHostServesSpaStaticAssetsAndKeepsApiRoutesOutOfFallback()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        var home = await client.GetAsync("/");
+        var asset = await client.GetAsync("/assets/test.css");
+        var spaRoute = await client.GetAsync("/workbenches/example");
+        var apiRoute = await client.GetAsync("/api/does-not-exist");
+        var status = await client.GetAsync("/api/status");
+
+        var index = await home.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.OK, home.StatusCode);
+        Assert.Equal("text/html", home.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("Automation Workbench Test Studio", index);
+        Assert.Equal(HttpStatusCode.OK, asset.StatusCode);
+        Assert.Equal("text/css", asset.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("#123456", await asset.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, spaRoute.StatusCode);
+        Assert.Equal(index, await spaRoute.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, apiRoute.StatusCode);
+        Assert.NotEqual("text/html", apiRoute.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
+        Assert.Equal("application/json", status.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task TestingCorsAllowsOnlyTheDeterministicTestingOrigin()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        using var allowedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        allowedRequest.Headers.TryAddWithoutValidation("Origin", "http://testing.local");
+        using var deniedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        deniedRequest.Headers.TryAddWithoutValidation("Origin", "http://unexpected.local");
+
+        var allowed = await client.SendAsync(allowedRequest);
+        var denied = await client.SendAsync(deniedRequest);
+
+        Assert.True(allowed.Headers.TryGetValues("Access-Control-Allow-Origin", out var origins));
+        Assert.Equal("http://testing.local", Assert.Single(origins));
+        Assert.False(denied.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
+    [Fact]
+    public async Task DevelopmentCorsAllowsConfiguredViteOrigin()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Development");
+                builder.UseSetting("Mcp:StartExternal", "false");
+                builder.UseSetting("Cors:ViteOrigin", "http://localhost:5173");
+            });
+        using var client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        request.Headers.TryAddWithoutValidation("Origin", "http://localhost:5173");
+
+        var response = await client.SendAsync(request);
+
+        Assert.True(response.Headers.TryGetValues("Access-Control-Allow-Origin", out var origins));
+        Assert.Equal("http://localhost:5173", Assert.Single(origins));
+    }
+
+    [Fact]
+    public async Task ProductionDoesNotEmitCrossOriginAccessHeaders()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Production");
+                builder.UseSetting("Mcp:StartExternal", "false");
+            });
+        using var client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        request.Headers.TryAddWithoutValidation("Origin", "http://localhost:5173");
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
+    [Fact]
+    public void ProductionStartupDefaultsToLoopbackPort5239AndBrowserLaunch()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+
+        var options = ApplicationStartupOptions.From(configuration, "Production");
+
+        Assert.Equal("127.0.0.1", options.Host);
+        Assert.Equal(5239, options.Port);
+        Assert.Equal("http://127.0.0.1:5239", options.Url);
+        Assert.True(options.OpenBrowserOnStart);
+    }
+
+    [Fact]
+    public void StartupHonorsCustomPortButTestingNeverLaunchesBrowser()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Application:Host"] = "127.0.0.1",
+                ["Application:Port"] = "5299",
+                ["Application:OpenBrowserOnStart"] = "true",
+            })
+            .Build();
+
+        var options = ApplicationStartupOptions.From(configuration, "Testing");
+
+        Assert.Equal(5299, options.Port);
+        Assert.Equal("http://127.0.0.1:5299", options.Url);
+        Assert.False(options.OpenBrowserOnStart);
+    }
+
+    [Fact]
+    public void StartupReportsActionablePortCollisionMessage()
+    {
+        var options = new ApplicationStartupOptions("127.0.0.1", 5239, true);
+
+        var message = ApplicationStartupOptions.PortInUseMessage(options);
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "Automation Workbench could not start because port 5239 on 127.0.0.1 is already in use.",
+                string.Empty,
+                "Close the other application or configure Application:Port to another loopback port."),
+            message);
+    }
+
+    [Fact]
     public async Task SessionsListsTiaProcessesBeforeAWorkbenchIsSelected()
     {
         var engineering = new RecordingToolCaller("[{\"sessionId\":17,\"projectName\":\"Demo\"}]");
@@ -102,9 +237,147 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var configuration = new ConfigurationBuilder().Build();
         var paths = McpExecutableResolver.Resolve(configuration, AppContext.BaseDirectory);
 
-        Assert.EndsWith(Path.Combine("Mcp.Engineering", "bin", "Debug", "net48", "Mcp.Engineering.exe"), paths.Engineering);
-        Assert.EndsWith(Path.Combine("Mcp.Knowledge", "bin", "Debug", "net8.0", "Mcp.Knowledge.exe"), paths.Knowledge);
+        Assert.EndsWith(Path.Combine("Mcp.Engineering", "bin", BuildConfiguration, "net48", "Mcp.Engineering.exe"), paths.Engineering);
+        Assert.EndsWith(Path.Combine("Mcp.Knowledge", "bin", BuildConfiguration, "net8.0", "Mcp.Knowledge.exe"), paths.Knowledge);
     }
+
+    [Fact]
+    public void ResolverUsesExplicitConfigurationOverridesBeforeInstalledDefaults()
+    {
+        var installedRoot = Path.Combine(root, "installed layout with spaces");
+        var configuredEngineering = Path.Combine(root, "configured", "Mcp.Engineering.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(configuredEngineering)!);
+        File.WriteAllText(configuredEngineering, string.Empty);
+        CreateInstalledMcpExecutables(installedRoot);
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Mcp:Engineering"] = configuredEngineering,
+            })
+            .Build();
+
+        var paths = McpExecutableResolver.Resolve(configuration, installedRoot);
+
+        Assert.Equal(configuredEngineering, paths.Engineering);
+        Assert.Equal(
+            Path.Combine(installedRoot, "mcp", "knowledge", "Mcp.Knowledge.exe"),
+            paths.Knowledge);
+    }
+
+    [Fact]
+    public void ResolverUsesExecutableRelativeInstalledLayoutWithoutSolutionFile()
+    {
+        var installedRoot = Path.Combine(root, "installed layout with spaces");
+        CreateInstalledMcpExecutables(installedRoot);
+
+        var paths = McpExecutableResolver.Resolve(
+            new ConfigurationBuilder().Build(),
+            installedRoot);
+
+        Assert.Equal(
+            Path.Combine(installedRoot, "mcp", "engineering", "Mcp.Engineering.exe"),
+            paths.Engineering);
+        Assert.Equal(
+            Path.Combine(installedRoot, "mcp", "source-editor", "Mcp.SourceEditor.exe"),
+            paths.SourceEditor);
+    }
+
+    [Fact]
+    public void ResolverUsesDevelopmentRepositoryFallbackWhenInstalledFilesAreAbsent()
+    {
+        var repositoryRoot = Path.Combine(root, "development repository");
+        Directory.CreateDirectory(repositoryRoot);
+        File.WriteAllText(Path.Combine(repositoryRoot, "AgentAssistPlcDev.sln"), string.Empty);
+        CreateDevelopmentMcpExecutables(repositoryRoot);
+
+        var paths = McpExecutableResolver.Resolve(
+            new ConfigurationBuilder().Build(),
+            Path.Combine(repositoryRoot, "src", "ApiHost", "bin", BuildConfiguration, "net8.0"));
+
+        Assert.Equal(
+            Path.Combine(repositoryRoot, "src", "Mcp.Engineering", "bin", BuildConfiguration, "net48", "Mcp.Engineering.exe"),
+            paths.Engineering);
+        Assert.Equal(
+            Path.Combine(repositoryRoot, "src", "Mcp.VersionControl", "bin", BuildConfiguration, "net8.0", "Mcp.VersionControl.exe"),
+            paths.VersionControl);
+    }
+
+    [Fact]
+    public void ResolverValidationReportsOneMissingExecutable()
+    {
+        Directory.CreateDirectory(root);
+        var paths = new McpExecutablePaths(
+            Path.Combine(root, "engineering.exe"),
+            Path.Combine(root, "knowledge.exe"),
+            Path.Combine(root, "version-control.exe"),
+            Path.Combine(root, "source-editor.exe"));
+        File.WriteAllText(paths.Engineering, string.Empty);
+        File.WriteAllText(paths.Knowledge, string.Empty);
+        File.WriteAllText(paths.SourceEditor, string.Empty);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => McpExecutableResolver.Validate(paths));
+
+        Assert.Contains($"VersionControl: {paths.VersionControl}", exception.Message);
+        Assert.DoesNotContain("Knowledge:", exception.Message);
+    }
+
+    [Fact]
+    public void ResolverValidationReportsAllMissingExecutablesTogether()
+    {
+        var paths = new McpExecutablePaths(
+            Path.Combine(root, "engineering.exe"),
+            Path.Combine(root, "knowledge.exe"),
+            Path.Combine(root, "version-control.exe"),
+            Path.Combine(root, "source-editor.exe"));
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => McpExecutableResolver.Validate(paths));
+
+        Assert.Contains($"Engineering: {paths.Engineering}", exception.Message);
+        Assert.Contains($"Knowledge: {paths.Knowledge}", exception.Message);
+        Assert.Contains($"SourceEditor: {paths.SourceEditor}", exception.Message);
+        Assert.Contains($"VersionControl: {paths.VersionControl}", exception.Message);
+        Assert.Contains("Repair the installation or configure the corresponding Mcp path.", exception.Message);
+    }
+
+    private static void CreateInstalledMcpExecutables(string root)
+    {
+        foreach (var relativePath in new[]
+        {
+            Path.Combine("mcp", "engineering", "Mcp.Engineering.exe"),
+            Path.Combine("mcp", "knowledge", "Mcp.Knowledge.exe"),
+            Path.Combine("mcp", "source-editor", "Mcp.SourceEditor.exe"),
+            Path.Combine("mcp", "version-control", "Mcp.VersionControl.exe"),
+        })
+        {
+            var path = Path.Combine(root, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, string.Empty);
+        }
+    }
+
+    private static void CreateDevelopmentMcpExecutables(string root)
+    {
+        foreach (var relativePath in new[]
+        {
+            Path.Combine("src", "Mcp.Engineering", "bin", BuildConfiguration, "net48", "Mcp.Engineering.exe"),
+            Path.Combine("src", "Mcp.Knowledge", "bin", BuildConfiguration, "net8.0", "Mcp.Knowledge.exe"),
+            Path.Combine("src", "Mcp.SourceEditor", "bin", BuildConfiguration, "net8.0", "Mcp.SourceEditor.exe"),
+            Path.Combine("src", "Mcp.VersionControl", "bin", BuildConfiguration, "net8.0", "Mcp.VersionControl.exe"),
+        })
+        {
+            var path = Path.Combine(root, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, string.Empty);
+        }
+    }
+
+#if DEBUG
+    private const string BuildConfiguration = "Debug";
+#else
+    private const string BuildConfiguration = "Release";
+#endif
 
     [Fact]
     public async Task ProductionHostCanReachListeningPipelineWithExternalStartupDisabled()
@@ -1303,7 +1576,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public void McpHostPassesOnlyTrustedRegistryLocationToSandboxedServers()
+    public void McpHostPassesTrustedRegistryLocationToAllServers()
     {
         var registryPath = Path.Combine(root, "trusted-roots.json");
         var environment = new Dictionary<string, string?>
@@ -1317,8 +1590,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             host.Engineering.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
         Assert.Equal(registryPath,
             host.SourceEditor!.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
-        Assert.Empty(host.Knowledge.EnvironmentVariables);
-        Assert.Empty(host.VersionControl!.EnvironmentVariables);
+        Assert.Equal(registryPath,
+            host.Knowledge.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
+        Assert.Equal(registryPath,
+            host.VersionControl!.EnvironmentVariables[TrustedWorkbenchRootRegistry.EnvironmentVariableName]);
     }
 
     [Fact]
