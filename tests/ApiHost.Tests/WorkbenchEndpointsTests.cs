@@ -33,6 +33,93 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task TestingHostServesSpaStaticAssetsAndKeepsApiRoutesOutOfFallback()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        var home = await client.GetAsync("/");
+        var asset = await client.GetAsync("/assets/test.css");
+        var spaRoute = await client.GetAsync("/workbenches/example");
+        var apiRoute = await client.GetAsync("/api/does-not-exist");
+        var status = await client.GetAsync("/api/status");
+
+        var index = await home.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.OK, home.StatusCode);
+        Assert.Equal("text/html", home.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("Automation Workbench Test Studio", index);
+        Assert.Equal(HttpStatusCode.OK, asset.StatusCode);
+        Assert.Equal("text/css", asset.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("#123456", await asset.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, spaRoute.StatusCode);
+        Assert.Equal(index, await spaRoute.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, apiRoute.StatusCode);
+        Assert.NotEqual("text/html", apiRoute.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
+        Assert.Equal("application/json", status.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task TestingCorsAllowsOnlyTheDeterministicTestingOrigin()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        using var allowedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        allowedRequest.Headers.TryAddWithoutValidation("Origin", "http://testing.local");
+        using var deniedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        deniedRequest.Headers.TryAddWithoutValidation("Origin", "http://unexpected.local");
+
+        var allowed = await client.SendAsync(allowedRequest);
+        var denied = await client.SendAsync(deniedRequest);
+
+        Assert.True(allowed.Headers.TryGetValues("Access-Control-Allow-Origin", out var origins));
+        Assert.Equal("http://testing.local", Assert.Single(origins));
+        Assert.False(denied.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
+    [Fact]
+    public async Task DevelopmentCorsAllowsConfiguredViteOrigin()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Development");
+                builder.UseSetting("Mcp:StartExternal", "false");
+                builder.UseSetting("Cors:ViteOrigin", "http://localhost:5173");
+            });
+        using var client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        request.Headers.TryAddWithoutValidation("Origin", "http://localhost:5173");
+
+        var response = await client.SendAsync(request);
+
+        Assert.True(response.Headers.TryGetValues("Access-Control-Allow-Origin", out var origins));
+        Assert.Equal("http://localhost:5173", Assert.Single(origins));
+    }
+
+    [Fact]
+    public async Task ProductionDoesNotEmitCrossOriginAccessHeaders()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Production");
+                builder.UseSetting("Mcp:StartExternal", "false");
+            });
+        using var client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/status");
+        request.Headers.TryAddWithoutValidation("Origin", "http://localhost:5173");
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+    }
+
+    [Fact]
     public async Task SessionsListsTiaProcessesBeforeAWorkbenchIsSelected()
     {
         var engineering = new RecordingToolCaller("[{\"sessionId\":17,\"projectName\":\"Demo\"}]");

@@ -2,8 +2,20 @@ using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Sandbox;
 using ModelContextProtocol;
+using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
+var isTesting = builder.Environment.IsEnvironment("Testing");
+var isDevelopment = builder.Environment.IsDevelopment();
+if (isTesting)
+{
+    var testWebRoot = Path.Combine(AppContext.BaseDirectory, "TestWebRoot");
+    if (Directory.Exists(testWebRoot))
+    {
+        builder.Environment.WebRootPath = testWebRoot;
+        builder.Environment.WebRootFileProvider = new PhysicalFileProvider(testWebRoot);
+    }
+}
 var legacyConfigPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
     "PlcAiAssistant", "config.json");
@@ -17,7 +29,23 @@ builder.Configuration.AddJsonFile(currentConfigPath, optional: true, reloadOnCha
 // Re-apply external providers after compatibility files: env/CLI must remain authoritative.
 builder.Configuration.AddEnvironmentVariables();
 if (args.Length > 0) builder.Configuration.AddCommandLine(args);
-builder.Services.AddCors();
+builder.Services.AddCors(options =>
+{
+    if (isTesting)
+    {
+        options.AddPolicy("WorkbenchCors", policy => policy
+            .WithOrigins(builder.Configuration["Cors:TestingOrigin"] ?? "http://testing.local")
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+    }
+    else if (isDevelopment)
+    {
+        options.AddPolicy("WorkbenchCors", policy => policy
+            .WithOrigins(builder.Configuration["Cors:ViteOrigin"] ?? "http://localhost:5173")
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+    }
+});
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
 builder.Services.AddSingleton(_ => new TrustedWorkbenchRootRegistry(
@@ -101,7 +129,28 @@ builder.Services.AddSingleton<PendingToolActions>();
 builder.Services.AddSingleton<SandboxedToolExecutor>();
 
 var app = builder.Build();
-app.UseCors(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
+if (isTesting || isDevelopment)
+    app.UseCors("WorkbenchCors");
+app.UseDefaultFiles();
+app.UseStaticFiles();
+app.Use(async (context, next) =>
+{
+    await next();
+
+    if (context.Response.StatusCode != StatusCodes.Status404NotFound
+        || context.Response.HasStarted
+        || context.Request.Method is not ("GET" or "HEAD")
+        || context.Request.Path.StartsWithSegments("/api"))
+        return;
+
+    var indexPath = Path.Combine(app.Environment.WebRootPath ?? string.Empty, "index.html");
+    if (!File.Exists(indexPath))
+        return;
+
+    context.Response.Clear();
+    context.Response.ContentType = "text/html; charset=utf-8";
+    await context.Response.SendFileAsync(indexPath);
+});
 app.UseMiddleware<WorkbenchApiExceptionMiddleware>();
 app.MapGet("/api/status", () => Results.Ok(new { storage = "workbench", legacyProjects = false }));
 app.MapWorkbenchEndpoints();

@@ -15,4 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ApiHost\ApiHost.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="TestWebRoot\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
