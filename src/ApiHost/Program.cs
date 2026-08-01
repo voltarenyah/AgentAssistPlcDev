@@ -1,6 +1,7 @@
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Sandbox;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
 using ModelContextProtocol;
@@ -261,9 +262,21 @@ internal sealed class UnavailableCaller : IMcpToolCaller
 
 internal static class BrowserLauncher
 {
-    public static void Open(string url) => Process.Start(new ProcessStartInfo
+    public static void Open(string url)
     {
-        FileName = url,
-        UseShellExecute = true,
-    });
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
+        {
+            // Browser launch is a convenience. It must not take down a healthy
+            // API process when ShellExecute is unavailable or denied.
+            Console.Error.WriteLine($"Could not open browser at {url}: {exception.Message}");
+        }
+    }
 }

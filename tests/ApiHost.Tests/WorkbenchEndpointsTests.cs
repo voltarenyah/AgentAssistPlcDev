@@ -1323,7 +1323,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         File.WriteAllText(baseline, "<a/>");
         var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
 
-        // src_parse_block with the bare listed path resolves into the device roots.
+        // src_parse_block with the relative sourceFile returned by get_block resolves into the device roots.
         var parsed = binder.Bind(
             "src_parse_block",
             new Dictionary<string, object?> { ["xmlFilePath"] = "Blocks/A.xml" },
@@ -1340,7 +1340,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             context);
         Assert.Equal(overlay, parsedOverlay["xmlFilePath"]);
 
-        // src_preview_edits with the bare listed path behaves like relativePath.
+        // src_preview_edits with the relative sourceFile behaves like relativePath.
         var preview = binder.Bind(
             "src_preview_edits",
             new Dictionary<string, object?> { ["xmlFilePath"] = "Blocks/A.xml" },
@@ -1350,7 +1350,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.preview.xml"),
             preview["outputFilePath"]);
 
-        // import_block with the bare listed path resolves into modified-source.
+        // import_block with the relative sourceFile resolves into modified-source.
         var import = binder.Bind(
             "import_block",
             new Dictionary<string, object?> { ["xmlFilePath"] = "Blocks/A.xml" },

@@ -118,7 +118,7 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
             ?? throw new ArgumentException($"{key} is required.");
         if (!Path.IsPathRooted(path))
         {
-            // Bare relative path as listed in the runtime context: resolve it against the
+            // Bare relative sourceFile returned by the knowledge DB: resolve it against the
             // device roots directly (never against the host process working directory).
             string? fallback = null;
             foreach (var root in new[] { device.ModifiedSourceRoot, device.ExportedSourceRoot })
@@ -170,7 +170,7 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
         if (value is null) return null;
         if (!Path.IsPathRooted(value))
         {
-            // Bare relative path as listed in the runtime context: validate the form
+            // Bare relative sourceFile returned by the knowledge DB: validate the form
             // (rejects traversal) and keep it relative for ResolveEffective/PrepareEditable.
             var normalized = value.Replace('\\', '/');
             _ = WorkbenchPaths.ResolveRelative(device.ExportedSourceRoot, normalized);

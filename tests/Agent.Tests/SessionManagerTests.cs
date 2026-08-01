@@ -355,9 +355,31 @@ public sealed class SessionManagerTests : IDisposable
                 $"Exported source: {device.ExportedSourceRoot}",
                 $"Modified source: {device.ModifiedSourceRoot}",
                 $"Knowledge DB: {device.KnowledgeDbPath}",
-                "Knowledge state: stale; run update_components before reuse",
-                "Source files: (none — refresh the device export first)"),
+                "Knowledge state: stale; run update_components before reuse"),
             runtimeContext);
+    }
+
+    [Fact]
+    public void BuildRuntimeContext_does_not_enumerate_source_file_names()
+    {
+        var device = CreateDeviceContext();
+        var source = Path.Combine(device.ExportedSourceRoot, "Blocks", "CoolingCoupelleSWT2 [FB92].xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "<block />");
+
+        var runtimeContext = SessionManager.BuildRuntimeContext(
+            device,
+            "Packaging Line",
+            "Valve tuning",
+            "feature/valves",
+            "PLC_1",
+            knowledgeStale: false);
+
+        Assert.Contains($"Exported source: {device.ExportedSourceRoot}", runtimeContext);
+        Assert.Contains($"Modified source: {device.ModifiedSourceRoot}", runtimeContext);
+        Assert.Contains($"Knowledge DB: {device.KnowledgeDbPath}", runtimeContext);
+        Assert.DoesNotContain("Source files", runtimeContext);
+        Assert.DoesNotContain("CoolingCoupelleSWT2 [FB92].xml", runtimeContext);
     }
 
     [Fact]

@@ -28,6 +28,18 @@ public sealed class SystemPromptTests
     }
 
     [Fact]
+    public void PromptRequiresKnowledgeSourceFileLookupForSourceEdits()
+    {
+        var prompt = SystemPrompt.Build();
+
+        Assert.Contains("search", prompt);
+        Assert.Contains("kind='FB'", prompt);
+        Assert.Contains("sourceFile", prompt);
+        Assert.Contains("device roots", prompt);
+        Assert.DoesNotContain("runtime context lists the device's exported source files", prompt);
+    }
+
+    [Fact]
     public void PromptPointsAtContextMessageForRuntimeContext()
     {
         var prompt = SystemPrompt.Build();

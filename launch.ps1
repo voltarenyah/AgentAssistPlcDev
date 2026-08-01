@@ -40,7 +40,7 @@ if (-not $NoKill) {
 # 2. Build (unless flagged off)
 if (-not $NoBuild) {
     Write-Host ">>> Building solution..." -ForegroundColor Cyan
-    dotnet build "$root\AgentAssistPlcDev.sln" --no-restore -v q
+    dotnet build "$root\AgentAssistPlcDev.sln" -v q
     if ($LASTEXITCODE -ne 0) {
         Write-Host "!!! Build failed - fix errors before launching." -ForegroundColor Red
         exit 1
@@ -61,12 +61,25 @@ if (-not $NoBuild) {
 }
 
 # 3. Launch ApiHost in a new window
+#    The frontend is launched separately below, so don't ask ApiHost to open a
+#    browser. This also keeps the backend alive in environments where Windows
+#    cannot ShellExecute an http:// URL from a child process.
 Write-Host ">>> Starting ApiHost (port 5239)..." -ForegroundColor Cyan
-Start-Process -WindowStyle Normal -FilePath "dotnet" -ArgumentList "run", "--project", "$root\src\ApiHost\ApiHost.csproj"
+$apiProject = Join-Path $root "src\ApiHost\ApiHost.csproj"
+Start-Process `
+    -WindowStyle Normal `
+    -WorkingDirectory $root `
+    -FilePath "dotnet" `
+    -ArgumentList @("run", "--project", $apiProject, "--", "Application:OpenBrowserOnStart=false")
 
 # 4. Launch Studio Vite dev server in a new window
 Write-Host ">>> Starting Studio (port 5173)..." -ForegroundColor Cyan
-Start-Process -WindowStyle Normal -FilePath "cmd.exe" -ArgumentList "/c", "cd /d `"$root\studio`" && npx vite --host"
+$studioRoot = Join-Path $root "studio"
+Start-Process `
+    -WindowStyle Normal `
+    -WorkingDirectory $studioRoot `
+    -FilePath "npm.cmd" `
+    -ArgumentList @("run", "dev", "--", "--host")
 
 Write-Host ""
 Write-Host "=== Launched ===" -ForegroundColor Green

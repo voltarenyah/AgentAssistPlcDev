@@ -141,6 +141,13 @@ public sealed class AgentLoop
     {
         messages.Clear();
         messages.AddRange(history);
+
+        // Migrate sessions created before runtime context was reduced to device-level roots.
+        // Keeping the legacy source-file listing would reintroduce the stale payload on the
+        // next request even though the current context provider no longer emits it.
+        messages.RemoveAll(message =>
+            SystemPrompt.ContextBody(message)?.Contains("Source files (", StringComparison.Ordinal) == true);
+
         roundUsages.Clear();
         roundUsages.AddRange(usages);
 

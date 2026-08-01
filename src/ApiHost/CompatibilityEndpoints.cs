@@ -662,8 +662,7 @@ internal sealed class ApiChatService(
                     $"Device: {device.DeviceId}",
                     $"Exported source: {device.ExportedSourceRoot}",
                     $"Modified source: {device.ModifiedSourceRoot}",
-                    $"Knowledge DB: {device.KnowledgeDbPath}",
-                    SourceFileListing.Format(device)),
+                    $"Knowledge DB: {device.KnowledgeDbPath}"),
                 Settings(configuration, state),
                 sandbox);
             loop.Apply(LoopPolicy(configuration, state));
@@ -763,7 +762,7 @@ internal sealed class ApiChatService(
                 throw new ToolCallException(
                     "TOOL_ARGUMENT_BINDING_FAILED",
                     ex.Message,
-                    "Correct the arguments and call the tool again — pass relativePath exactly as listed in the runtime context source files.");
+                    "Correct the arguments and call the tool again — use the relative sourceFile returned by get_block.");
             }
             return inner.CallAsync<T>(tool, bound, cancellationToken);
         }

@@ -511,6 +511,27 @@ public sealed class AgentLoopTests
     }
 
     [Fact]
+    public void RestoreFromDropsLegacySourceFileListingContext()
+    {
+        var (loop, _, _, _, _) = Create();
+        var history = new List<ChatMessage>
+        {
+            ChatMessage.System(SystemPrompt.Build()),
+            ChatMessage.User(SystemPrompt.ContextMessage(
+                "Exported source: C:\\device\\exported-source\r\n" +
+                "Source files (pass one of these as relativePath):\r\n" +
+                "- Blocks\\CoolingCoupelleSWT2 [FB92].xml")),
+            ChatMessage.User("continue"),
+        };
+
+        loop.RestoreFrom(history, new List<UsageInfo?>());
+
+        Assert.DoesNotContain(
+            loop.History,
+            message => SystemPrompt.ContextBody(message)?.Contains("Source files (") == true);
+    }
+
+    [Fact]
     public void ApplyPolicyUpdatesAllKnobs()
     {
         var (loop, _, _, _, _) = Create();
