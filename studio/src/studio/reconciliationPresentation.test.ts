@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ReconciliationEntry } from '@/api/client'
 import {
   actionableEntries,
+  comparedEntries,
   comparisonState,
   toggleApprovedPath,
 } from './reconciliationPresentation'
@@ -54,6 +55,24 @@ describe('TIA comparison presentation', () => {
     const selected = toggleApprovedPath(new Set<string>(), 'Blocks/Changed.xml', true)
     expect([...selected]).toEqual(['Blocks/Changed.xml'])
     expect(toggleApprovedPath(selected, 'Blocks/Changed.xml', false).size).toBe(0)
+  })
+
+  it('hides unchanged entries unless a genuine fingerprint mismatch exists', () => {
+    const entries = [
+      entry('Added', null, null, 'new'),
+      { ...entry('Changed', false), relativePath: 'Blocks/Changed.xml' },
+      { ...entry('Unchanged', true, 'same', 'same'), relativePath: 'Blocks/Same.xml' },
+      // Tag tables carry no fingerprints: equal hashes must not earn a row.
+      { ...entry('Unchanged', null, 'same', 'same'), relativePath: 'TagTables/Tags.xml' },
+      // Fingerprint moved but exported content did not — worth surfacing.
+      { ...entry('Unchanged', false, 'same', 'same'), relativePath: 'Blocks/Drifted.xml' },
+    ]
+
+    expect(comparedEntries(entries).map(value => value.relativePath)).toEqual([
+      'Blocks/Main.xml',
+      'Blocks/Changed.xml',
+      'Blocks/Drifted.xml',
+    ])
   })
 
   it('uses content evidence when one or both fingerprint sides are unavailable', () => {

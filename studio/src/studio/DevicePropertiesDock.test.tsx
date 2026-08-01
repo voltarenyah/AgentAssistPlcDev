@@ -60,6 +60,24 @@ describe('DevicePropertiesDock', () => {
     expect(host.textContent).toContain('C:/wb/plc-knowledge.db')
   })
 
+  it('groups device-level metadata into its own section', async () => {
+    const { host } = await render(<DevicePropertiesDock meta={meta} info={info} hidden={false} />)
+
+    expect(host.textContent).toContain('Device')
+    expect(host.textContent).toContain('PLC_1')
+    expect(host.textContent).toContain('CPU 1516')
+  })
+
+  it('shows the project comment under TIA project properties', async () => {
+    const { host } = await render(
+      <DevicePropertiesDock meta={{ ...meta, projectComment: 'Line 1\nLine 2' }} info={info} hidden={false} />,
+    )
+
+    expect(host.textContent).toContain('Project comment')
+    expect(host.textContent).toContain('Line 1')
+    expect(host.textContent).toContain('Line 2')
+  })
+
   it('omits properties that have no value', async () => {
     const { host } = await render(<DevicePropertiesDock meta={meta} info={info} hidden={false} />)
 

@@ -32,8 +32,13 @@ export default function DevicePropertiesDock({ meta, info, hidden }: Props) {
         ['Created', meta.projectCreationTime ? new Date(meta.projectCreationTime).toLocaleString() : null],
         ['Last modified', meta.projectLastModified ? new Date(meta.projectLastModified).toLocaleString() : null],
         ['Modified by', meta.projectLastModifiedBy],
-        ['PLC type', meta.typeIdentifier?.replace(/^OrderNumber:/, '') ?? null],
+      ]
+    : []
+  const deviceRows: [string, string | null][] = meta
+    ? [
+        ['PLC name', meta.plcName],
         ['Device name', meta.deviceName],
+        ['PLC type', meta.typeIdentifier?.replace(/^OrderNumber:/, '') ?? null],
       ]
     : []
   const pathRows: [string, string | null][] = [
@@ -63,6 +68,15 @@ export default function DevicePropertiesDock({ meta, info, hidden }: Props) {
           </div>
         ) : (
           <div className="space-y-2">
+            {meta && deviceRows.some(([, value]) => value) && (
+              <section className="rounded-md border bg-background" style={{ borderColor: 'var(--border)' }}>
+                <div className="border-b px-2 py-1.5" style={{ borderColor: 'var(--border)' }}>
+                  <div className="text-[10px] font-medium">Device</div>
+                  <div className="mt-0.5 text-[8px] text-muted-foreground">Captured at last export</div>
+                </div>
+                <PropertyRows rows={deviceRows} />
+              </section>
+            )}
             {meta && projectRows.some(([, value]) => value) && (
               <section className="rounded-md border bg-background" style={{ borderColor: 'var(--border)' }}>
                 <div className="border-b px-2 py-1.5" style={{ borderColor: 'var(--border)' }}>

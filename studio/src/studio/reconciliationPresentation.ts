@@ -12,6 +12,13 @@ const kindName = (kind: ReconciliationEntry['kind']) => {
 export const actionableEntries = (entries: ReconciliationEntry[]) =>
   entries.filter(entry => kindName(entry.kind) !== 'Unchanged')
 
+// Entries worth listing in the confirmation dialog. An Unchanged entry only
+// earns a row on a genuine fingerprint mismatch — when fingerprints are simply
+// unavailable (tag tables have none), equal hashes already prove it unchanged.
+export const comparedEntries = (entries: ReconciliationEntry[]) =>
+  entries.filter(entry =>
+    kindName(entry.kind) !== 'Unchanged' || entry.fingerprintsMatch === false)
+
 export const toggleApprovedPath = (
   current: ReadonlySet<string>,
   relativePath: string,

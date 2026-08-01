@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { ReconciliationEntry, ReconciliationPreview } from '@/api/client'
 import {
   actionableEntries,
+  comparedEntries,
   comparisonState,
   toggleApprovedPath,
 } from '@/studio/reconciliationPresentation'
@@ -30,8 +31,7 @@ const colorOf = (kind: ReconciliationEntry['kind']) => ({
 
 export default function RefreshDialog({ preview, busy, onClose, onApply }: Props) {
   const [approvedPaths, setApprovedPaths] = useState<Set<string>>(() => new Set())
-  const compared = preview.entries.filter(entry =>
-    nameOf(entry.kind) !== 'Unchanged' || entry.fingerprintsMatch !== true)
+  const compared = comparedEntries(preview.entries)
   const actionable = actionableEntries(preview.entries)
   const counts = preview.entries.reduce<Record<string, number>>((result, entry) => {
     const name = nameOf(entry.kind)
