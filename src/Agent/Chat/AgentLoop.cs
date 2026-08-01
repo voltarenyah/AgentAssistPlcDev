@@ -625,6 +625,18 @@ public sealed class AgentLoop
             Progress?.Invoke($"  ✗ {call.Name}: {ex.Message}");
         }
 
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Safety net: no tool-side failure (binder, transport, server crash) may kill the
+            // whole turn — the model gets the error as a tool result and can recover or report.
+            failedToolCalls.Add(fingerprint);
+            content = JsonSerializer.Serialize(new
+            {
+                error = new { code = "AGENT_TOOL_ERROR", message = ex.Message, retryable = false, remediation = (string?)null },
+            });
+            Progress?.Invoke($"  ✗ {call.Name}: {ex.Message}");
+        }
+
         return ChatMessage.Tool(call.Id, content);
     }
 

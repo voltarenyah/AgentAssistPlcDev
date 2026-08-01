@@ -99,6 +99,26 @@ public sealed class AgentLoopTests
     }
 
     [Fact]
+    public async Task UnexpectedToolExceptionBecomesToolErrorAndTurnContinues()
+    {
+        var (loop, endpoint, caller, _, _) = Create();
+        endpoint
+            .RespondJson(SseToolCall("call_1", "search", """{"text":"x"}"""))
+            .RespondJson(SseText("The search tool failed; I reported the blocker."));
+        caller.Throw("search", new ArgumentException("relativePath or a trusted xmlFilePath is required."));
+
+        var answer = await loop.RunAsync("do something");
+
+        Assert.Equal("The search tool failed; I reported the blocker.", answer);
+        var secondRequest = JsonNode.Parse(endpoint.RequestBodies[1])!["messages"]!;
+        var toolMessage = Last(secondRequest);
+        Assert.Equal("tool", toolMessage["role"]!.GetValue<string>());
+        var payload = toolMessage["content"]!.GetValue<string>();
+        Assert.Contains("AGENT_TOOL_ERROR", payload);
+        Assert.Contains("relativePath or a trusted xmlFilePath is required.", payload);
+    }
+
+    [Fact]
     public async Task ReasoningContentIsPassedBackOnToolCallTurns()
     {
         // Thinking mode: the API returns 400 if the assistant reasoning_content is not replayed

@@ -1,9 +1,12 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Agent.Chat;
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Sandbox;
+
+[assembly: InternalsVisibleTo("ApiHost.Tests")]
 
 public static class DeviceContextIdentity
 {

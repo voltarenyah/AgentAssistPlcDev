@@ -600,14 +600,16 @@ internal sealed class ApiChatService(
         active.Loop.StreamDelta += OnDelta;
         try
         {
-            var answer = await active.Loop.RunAsync(message, token);
-            SaveActiveSession(device, active, message);
-            return answer;
+            return await active.Loop.RunAsync(message, token);
         }
         finally
         {
             active.Loop.Progress -= OnProgress;
             active.Loop.StreamDelta -= OnDelta;
+            // Persist even a failed/aborted turn: the loop history holds everything
+            // up to the failure, and losing it lets a later session load wipe the
+            // messages the user already saw from the chat view.
+            SaveActiveSession(device, active, message);
         }
     }
 
@@ -738,7 +740,7 @@ internal sealed class ApiChatService(
         };
     }
 
-    private sealed class BoundMcpCaller(
+    internal sealed class BoundMcpCaller(
         IMcpToolCaller inner,
         DeviceToolArgumentBinder binder,
         DeviceContext device) : IMcpToolCaller
@@ -747,7 +749,23 @@ internal sealed class ApiChatService(
         {
             var supplied = JsonSerializer.Deserialize<Dictionary<string, object?>>(
                 JsonSerializer.Serialize(args)) ?? new();
-            return inner.CallAsync<T>(tool, binder.Bind(tool, supplied, device), cancellationToken);
+            Dictionary<string, object?> bound;
+            try
+            {
+                bound = binder.Bind(tool, supplied, device);
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException
+                or WorkbenchPathException or WorkbenchLifecycleException)
+            {
+                // Binding failures are model-fixable argument problems (wrong/missing
+                // relativePath, unknown file): surface them as a structured tool error
+                // so the agent loop can recover instead of dying with the turn.
+                throw new ToolCallException(
+                    "TOOL_ARGUMENT_BINDING_FAILED",
+                    ex.Message,
+                    "Correct the arguments and call the tool again — pass relativePath exactly as listed in the runtime context source files.");
+            }
+            return inner.CallAsync<T>(tool, bound, cancellationToken);
         }
     }
 }

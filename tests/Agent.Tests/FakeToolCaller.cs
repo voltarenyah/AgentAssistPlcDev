@@ -27,6 +27,12 @@ internal class FakeToolCaller : IMcpToolCaller
         return this;
     }
 
+    public FakeToolCaller Throw(string tool, Exception exception)
+    {
+        Enqueue(tool, () => throw exception);
+        return this;
+    }
+
     public virtual Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
     {
         Calls.Add(tool);

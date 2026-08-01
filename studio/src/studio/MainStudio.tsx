@@ -753,17 +753,25 @@ export default function MainStudio() {
     try {
       await ensureChatContext()
       if (chatTabs.activeId !== sessionId) await api.loadChatSession(sessionId)
+      let turnFailed = false
       await api.sendChatMessage(message, event => {
         if (event.kind === 'progress') {
           setChatTabs(previous => appendProgressMessage(previous, sessionId, event.delta))
         } else if (event.kind === 'content' || event.kind === 'reasoning') {
           setChatTabs(previous => appendAssistantDelta(previous, sessionId, event.delta))
         } else if (event.kind === 'error') {
+          turnFailed = true
           setChatTabs(previous => appendProgressMessage(previous, sessionId, `Error: ${event.delta}`))
         } else if (event.kind === 'meta') {
           setChatTabs(previous => setTurnMeta(previous, sessionId, event.usage ?? null, event.hitRoundCap ?? false))
         }
       }, controller.signal)
+      if (turnFailed) {
+        // The server ended the turn with an error; keep the local view (user message,
+        // streamed text, error note) instead of swapping in an older persisted session.
+        await refreshChatSessions().catch(() => undefined)
+        return
+      }
       const session = await api.loadChatSession(sessionId)
       setChatTabs(previous => openTab(previous, session))
       await refreshChatSessions()

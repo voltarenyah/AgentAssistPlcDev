@@ -1024,6 +1024,24 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task BoundCallerConvertsBinderFailuresIntoToolCallException()
+    {
+        var bound = new ApiChatService.BoundMcpCaller(
+            new RecordingToolCaller(),
+            new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { })),
+            Context());
+
+        var exception = await Assert.ThrowsAsync<ToolCallException>(() =>
+            bound.CallAsync<JsonElement>(
+                "import_block",
+                new Dictionary<string, object?> { ["relativePath"] = "Blocks/Missing.xml" },
+                CancellationToken.None));
+
+        Assert.Equal("TOOL_ARGUMENT_BINDING_FAILED", exception.Code);
+        Assert.NotNull(exception.Remediation);
+    }
+
+    [Fact]
     public async Task ExpiryActivelyDeniesWaitingConfirmation()
     {
         var pending = new PendingToolActions(TimeProvider.System, TimeSpan.FromMilliseconds(30));
