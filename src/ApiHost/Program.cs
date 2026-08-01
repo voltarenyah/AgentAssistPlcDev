@@ -2,6 +2,7 @@ using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Sandbox;
 using System.Diagnostics;
+using System.Reflection;
 using ModelContextProtocol;
 using Microsoft.Extensions.FileProviders;
 
@@ -160,7 +161,16 @@ app.Use(async (context, next) =>
     await context.Response.SendFileAsync(indexPath);
 });
 app.UseMiddleware<WorkbenchApiExceptionMiddleware>();
-app.MapGet("/api/status", () => Results.Ok(new { storage = "workbench", legacyProjects = false }));
+var applicationVersion = typeof(Program).Assembly
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+    ?? typeof(Program).Assembly.GetName().Version?.ToString()
+    ?? "unknown";
+app.MapGet("/api/status", () => Results.Ok(new
+{
+    storage = "workbench",
+    legacyProjects = false,
+    version = applicationVersion,
+}));
 app.MapWorkbenchEndpoints();
 app.MapCompatibilityEndpoints();
 var browserUrl = isProduction || string.IsNullOrWhiteSpace(configuredUrls)

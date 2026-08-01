@@ -237,8 +237,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var configuration = new ConfigurationBuilder().Build();
         var paths = McpExecutableResolver.Resolve(configuration, AppContext.BaseDirectory);
 
-        Assert.EndsWith(Path.Combine("Mcp.Engineering", "bin", "Debug", "net48", "Mcp.Engineering.exe"), paths.Engineering);
-        Assert.EndsWith(Path.Combine("Mcp.Knowledge", "bin", "Debug", "net8.0", "Mcp.Knowledge.exe"), paths.Knowledge);
+        Assert.EndsWith(Path.Combine("Mcp.Engineering", "bin", BuildConfiguration, "net48", "Mcp.Engineering.exe"), paths.Engineering);
+        Assert.EndsWith(Path.Combine("Mcp.Knowledge", "bin", BuildConfiguration, "net8.0", "Mcp.Knowledge.exe"), paths.Knowledge);
     }
 
     [Fact]
@@ -292,13 +292,13 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         var paths = McpExecutableResolver.Resolve(
             new ConfigurationBuilder().Build(),
-            Path.Combine(repositoryRoot, "src", "ApiHost", "bin", "Debug", "net8.0"));
+            Path.Combine(repositoryRoot, "src", "ApiHost", "bin", BuildConfiguration, "net8.0"));
 
         Assert.Equal(
-            Path.Combine(repositoryRoot, "src", "Mcp.Engineering", "bin", "Debug", "net48", "Mcp.Engineering.exe"),
+            Path.Combine(repositoryRoot, "src", "Mcp.Engineering", "bin", BuildConfiguration, "net48", "Mcp.Engineering.exe"),
             paths.Engineering);
         Assert.Equal(
-            Path.Combine(repositoryRoot, "src", "Mcp.VersionControl", "bin", "Debug", "net8.0", "Mcp.VersionControl.exe"),
+            Path.Combine(repositoryRoot, "src", "Mcp.VersionControl", "bin", BuildConfiguration, "net8.0", "Mcp.VersionControl.exe"),
             paths.VersionControl);
     }
 
@@ -361,10 +361,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     {
         foreach (var relativePath in new[]
         {
-            Path.Combine("src", "Mcp.Engineering", "bin", "Debug", "net48", "Mcp.Engineering.exe"),
-            Path.Combine("src", "Mcp.Knowledge", "bin", "Debug", "net8.0", "Mcp.Knowledge.exe"),
-            Path.Combine("src", "Mcp.SourceEditor", "bin", "Debug", "net8.0", "Mcp.SourceEditor.exe"),
-            Path.Combine("src", "Mcp.VersionControl", "bin", "Debug", "net8.0", "Mcp.VersionControl.exe"),
+            Path.Combine("src", "Mcp.Engineering", "bin", BuildConfiguration, "net48", "Mcp.Engineering.exe"),
+            Path.Combine("src", "Mcp.Knowledge", "bin", BuildConfiguration, "net8.0", "Mcp.Knowledge.exe"),
+            Path.Combine("src", "Mcp.SourceEditor", "bin", BuildConfiguration, "net8.0", "Mcp.SourceEditor.exe"),
+            Path.Combine("src", "Mcp.VersionControl", "bin", BuildConfiguration, "net8.0", "Mcp.VersionControl.exe"),
         })
         {
             var path = Path.Combine(root, relativePath);
@@ -372,6 +372,12 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             File.WriteAllText(path, string.Empty);
         }
     }
+
+#if DEBUG
+    private const string BuildConfiguration = "Debug";
+#else
+    private const string BuildConfiguration = "Release";
+#endif
 
     [Fact]
     public async Task ProductionHostCanReachListeningPipelineWithExternalStartupDisabled()
