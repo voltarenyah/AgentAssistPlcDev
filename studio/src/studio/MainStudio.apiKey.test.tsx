@@ -45,6 +45,8 @@ describe('MainStudio API key entrance', () => {
 
     const indicator = host.querySelector<HTMLButtonElement>('[data-api-status]')
     expect(indicator?.textContent).toContain('No valid API key')
+    expect(host.querySelector('header')?.textContent).not.toContain('No valid API key')
+    expect(host.querySelector('footer')?.textContent).toContain('0 TIA sessions')
   })
 
   it('shows API online when a key is configured', async () => {

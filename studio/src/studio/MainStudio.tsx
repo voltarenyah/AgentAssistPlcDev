@@ -1250,20 +1250,6 @@ export default function MainStudio() {
             </div>
           )}
           <button
-            className="flex items-center gap-1.5 rounded-full border px-2 py-1 text-[9px] transition-colors hover:bg-accent/50"
-            style={{ borderColor: 'var(--border)' }}
-            data-api-status
-            title="Manage DeepSeek API key"
-            onClick={() => setApiKeyDialogOpen(true)}
-          >
-            <CircleDot className={`h-3 w-3 ${fatalError ? 'text-red-500' : apiKeyConfigured === false ? 'text-amber-500' : 'text-emerald-500'}`} />
-            {fatalError ? 'API error' : apiKeyConfigured === false ? 'No valid API key' : 'API online'}
-          </button>
-          <div className="flex items-center gap-1.5 rounded-full border px-2 py-1 text-[9px]" style={{ borderColor: 'var(--border)' }}>
-            <Server className="h-3 w-3 text-chart-3" />
-            {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
-          </div>
-          <button
             data-dock-toggle="right"
             className="icon-button"
             aria-label={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
@@ -1736,8 +1722,20 @@ export default function MainStudio() {
         <span className="studio-status-indicator">● Ready</span>
         <span>{deviceInfo?.plcName ?? 'No device'}</span>
         <span className="font-mono">{activeWorktree?.branch ?? 'no worktree'}</span>
+        <button
+          className="studio-status-item studio-status-api"
+          data-api-status
+          title="Manage DeepSeek API key"
+          onClick={() => setApiKeyDialogOpen(true)}
+        >
+          <CircleDot className={`h-3 w-3 ${fatalError ? 'text-red-500' : apiKeyConfigured === false ? 'text-amber-500' : 'text-emerald-500'}`} />
+          {fatalError ? 'API error' : apiKeyConfigured === false ? 'No valid API key' : 'API online'}
+        </button>
+        <span className="studio-status-item">
+          <Server className="h-3 w-3 text-chart-3" />
+          {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
+        </span>
         <span className="flex-1" />
-        <span>{sessions.length} TIA session{sessions.length === 1 ? '' : 's'}</span>
         <button className="icon-button" aria-label="Refresh status" title="Refresh status" onClick={() => void loadStartup()}>
           <RefreshCw className="h-3 w-3" />
         </button>
