@@ -1,6 +1,5 @@
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
-using System.Text;
 
 internal static class NativeFileDialog
 {
@@ -40,20 +39,35 @@ internal static class NativeFileDialog
 
     private static string? ShowDialog()
     {
-        var selectedPath = new StringBuilder(32_768);
+        const int maxPathCharacters = 32_768;
+        var filter = Marshal.StringToHGlobalUni("TIA Portal project (*.ap17)\0*.ap17\0All files (*.*)\0*.*\0\0");
+        var file = Marshal.StringToHGlobalUni(new string('\0', maxPathCharacters));
+        var initialDirectory = Marshal.StringToHGlobalUni(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
+        var title = Marshal.StringToHGlobalUni("Select a TIA Portal project");
+
         var dialog = new OpenFileName
         {
             StructSize = Marshal.SizeOf<OpenFileName>(),
-            Filter = "TIA Portal project (*.ap17)\0*.ap17\0All files (*.*)\0*.*\0\0",
+            Filter = filter,
             FilterIndex = 1,
-            File = selectedPath,
-            MaxFile = selectedPath.Capacity,
-            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            Title = "Select a TIA Portal project",
+            File = file,
+            MaxFile = maxPathCharacters,
+            InitialDirectory = initialDirectory,
+            Title = title,
             Flags = OfnExplorer | OfnFileMustExist | OfnHideReadOnly | OfnNoChangeDir | OfnPathMustExist,
         };
 
-        return GetOpenFileName(ref dialog) ? selectedPath.ToString() : null;
+        try
+        {
+            return GetOpenFileName(ref dialog) ? Marshal.PtrToStringUni(dialog.File) : null;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(filter);
+            Marshal.FreeHGlobal(file);
+            Marshal.FreeHGlobal(initialDirectory);
+            Marshal.FreeHGlobal(title);
+        }
     }
 
     [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -65,23 +79,23 @@ internal static class NativeFileDialog
         public int StructSize;
         public IntPtr Owner;
         public IntPtr Instance;
-        public string? Filter;
-        public string? CustomFilter;
+        public IntPtr Filter;
+        public IntPtr CustomFilter;
         public int MaxCustFilter;
         public int FilterIndex;
-        public StringBuilder File;
+        public IntPtr File;
         public int MaxFile;
-        public StringBuilder? FileTitle;
+        public IntPtr FileTitle;
         public int MaxFileTitle;
-        public string? InitialDirectory;
-        public string? Title;
+        public IntPtr InitialDirectory;
+        public IntPtr Title;
         public int Flags;
         public short FileOffset;
         public short FileExtension;
-        public string? DefaultExtension;
+        public IntPtr DefaultExtension;
         public IntPtr CustData;
         public IntPtr Hook;
-        public string? TemplateName;
+        public IntPtr TemplateName;
         public IntPtr Reserved;
         public int Reserved2;
         public int FlagsEx;
