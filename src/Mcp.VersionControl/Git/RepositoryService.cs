@@ -402,7 +402,10 @@ internal static class RepositoryService
         if (!string.IsNullOrWhiteSpace(filePath))
         {
             var filter = new CommitFilter { SortBy = CommitSortStrategies.Topological | CommitSortStrategies.Time };
-            commits = repo.Commits.QueryBy(filePath.Replace('/', '\\'), filter).Take(cap).Select(c => c.Commit);
+            // Git tree paths are repository-relative and always use '/'. Keeping the
+            // caller's path in that form is required by LibGit2Sharp's QueryBy on
+            // Windows linked worktrees; converting to '\\' silently returns no commits.
+            commits = repo.Commits.QueryBy(filePath.Replace('\\', '/'), filter).Take(cap).Select(c => c.Commit);
         }
         else
         {

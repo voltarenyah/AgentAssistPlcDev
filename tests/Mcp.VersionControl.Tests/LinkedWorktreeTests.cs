@@ -71,6 +71,26 @@ public sealed class LinkedWorktreeTests : IDisposable
     }
 
     [Fact]
+    public void StatusAndLogSupportLinkedWorktreeAfterAnOverlayWasCommitted()
+    {
+        var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
+        var featurePath = Path.Combine(root, "workbench", "worktrees", "feature-a");
+        RepositoryService.AddWorktree(repositoryPath, featurePath, "feature-a", firstSha);
+
+        Directory.CreateDirectory(Path.Combine(featurePath, "Blocks"));
+        File.WriteAllText(Path.Combine(featurePath, "Blocks", "A.xml"), "<a>first</a>");
+        RepositoryService.Add(featurePath);
+        RepositoryService.Commit(featurePath, "import A", null);
+        File.WriteAllText(Path.Combine(featurePath, "Blocks", "A.xml"), "<a>second</a>");
+
+        var status = RepositoryService.Status(featurePath);
+        var log = RepositoryService.Log(featurePath, filePath: "Blocks/A.xml");
+
+        Assert.Contains(status.Entries, entry => entry.FilePath == "Blocks/A.xml" && entry.State == "Modified");
+        Assert.Contains(log.Commits, commit => commit.Message == "import A");
+    }
+
+    [Fact]
     public void RemoveWorktreeDeletesCheckoutAndUnregistersIt()
     {
         var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
