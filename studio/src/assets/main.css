@@ -150,6 +150,9 @@
   flex-wrap: wrap;
   gap: 10px;
   padding: 14px 16px;
+  min-width: 0;
+  max-height: min(14rem, calc(100dvh - 3rem));
+  overflow: hidden;
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.18);
 }
 
@@ -159,8 +162,14 @@
 
 [data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-content] {
   min-width: 0;
+  min-height: 0;
   flex: 1 1 calc(100% - 30px);
+  max-height: min(10rem, calc(100dvh - 7rem));
   gap: 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  padding-right: 2px;
 }
 
 [data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-button] {

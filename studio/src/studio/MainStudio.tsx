@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { ThemeToggle } from '@/catalog/ThemeToggle'
+import { showErrorToast } from '@/components/ui/toast'
 import GitPanel from '@/studio/panels/GitPanel'
 import WorkbenchNavigator, {
   type WorkbenchSelection,
@@ -555,7 +556,7 @@ export default function MainStudio() {
       setDeviceSelection(previous => previous
         ? { ...previous, view: retainSnapshotOnError(previous.view, error) }
         : previous)
-      toast.error(`Offline device state could not be refreshed: ${displayError(error)}`)
+      showErrorToast(`Offline device state could not be refreshed: ${displayError(error)}`)
       return null
     }
   }, [])
@@ -566,7 +567,7 @@ export default function MainStudio() {
       setDeviceSelection(null)
       setChatTabs(emptyChatTabs())
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     }
   }
 
@@ -585,7 +586,7 @@ export default function MainStudio() {
         await selectDevice(workbench, worktree, devices[0].deviceId)
       }
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setOperation(null)
     }
@@ -622,7 +623,7 @@ export default function MainStudio() {
       setDeviceSelection(previous => previous
         ? failDeviceSelection(previous, requestId)
         : previous)
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       if (selectionRequestId.current === requestId) setOperation(null)
     }
@@ -659,7 +660,7 @@ export default function MainStudio() {
           .catch(() => sandboxRoots)
         setSandboxDenial({ message: error.message, roots })
       } else {
-        toast.error(displayError(error))
+        showErrorToast(displayError(error))
       }
     } finally {
       setOperation(null)
@@ -695,7 +696,7 @@ export default function MainStudio() {
       setActiveTab('chat')
       await refreshChatSessions()
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setChatBusy(false)
     }
@@ -713,7 +714,7 @@ export default function MainStudio() {
       setChatTabs(previous => openTab(previous, session))
       setActiveTab('chat')
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
       await refreshChatSessions().catch(() => undefined)
     } finally {
       setChatBusy(false)
@@ -728,7 +729,7 @@ export default function MainStudio() {
       setChatTabs(previous => renameTab(previous, sessionId, session.header.title?.trim() || title))
       await refreshChatSessions()
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setChatBusy(false)
     }
@@ -742,7 +743,7 @@ export default function MainStudio() {
       setChatTabs(previous => closeTab(previous, sessionId))
       await refreshChatSessions()
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setChatBusy(false)
     }
@@ -755,7 +756,7 @@ export default function MainStudio() {
       const result = await api.exportChatSession(sessionId)
       toast.success(`Session exported to ${result.path}`)
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setChatBusy(false)
     }
@@ -797,7 +798,7 @@ export default function MainStudio() {
       if (controller.signal.aborted) {
         setChatTabs(previous => appendProgressMessage(previous, sessionId, 'Generation stopped by user.'))
       } else {
-        toast.error(displayError(error))
+        showErrorToast(displayError(error))
       }
     } finally {
       if (chatAbortRef.current === controller) chatAbortRef.current = null
@@ -858,7 +859,7 @@ export default function MainStudio() {
       if (chatTabs.activeId !== sessionId) await api.loadChatSession(sessionId)
       await api.grantChatRounds(6)
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
       setChatBusy(false)
       return
     }
@@ -881,7 +882,7 @@ export default function MainStudio() {
       }
       toast.success(`Linked worktree “${name}” created`)
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setOperation(null)
     }
@@ -914,7 +915,7 @@ export default function MainStudio() {
         && error.code === 'PLC_COMPILE_REQUIRED') {
         setCompilePrompt({ message: error.message, flow: 'compare', context })
       } else {
-        toast.error(displayError(error))
+        showErrorToast(displayError(error))
       }
     } finally {
       setOperation(null)
@@ -945,9 +946,9 @@ export default function MainStudio() {
             && normalizeProjectPath(session.projectPath) === normalizeProjectPath(source))
         : null
       if (match) {
-        toast.error(`Project is already open in TIA (PID ${match.id}) — use Re-attach TIA instance instead.`)
+        showErrorToast(`Project is already open in TIA (PID ${match.id}) — use Re-attach TIA instance instead.`)
       } else {
-        toast.error(displayError(error))
+        showErrorToast(displayError(error))
       }
     } finally {
       setOperation(null)
@@ -968,7 +969,7 @@ export default function MainStudio() {
       )
       toast.success('Attached to the running TIA Portal instance')
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setOperation(null)
     }
@@ -994,9 +995,9 @@ export default function MainStudio() {
       const message = displayError(error)
       if (error instanceof api.WorkbenchApiError && error.code.includes('STALE')) {
         setPreview(null)
-        toast.error('The preview is stale. Stage and review the export again.')
+        showErrorToast('The preview is stale. Stage and review the export again.')
       } else {
-        toast.error(message)
+        showErrorToast(message)
       }
     } finally {
       setOperation(null)
@@ -1018,7 +1019,7 @@ export default function MainStudio() {
       await reloadDeviceSnapshot(context)
       toast.success(`${result.updatedComponents.length} component${result.updatedComponents.length === 1 ? '' : 's'} updated`)
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setOperation(null)
     }
@@ -1033,7 +1034,7 @@ export default function MainStudio() {
       await reloadDeviceSnapshot(context)
       toast.success('Sparse overlay prepared. Edit the modified-source copy.')
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setOperation(null)
     }
@@ -1054,7 +1055,7 @@ export default function MainStudio() {
         toast.warning(result.error || `Compile state: ${result.compileState}`)
       }
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setOperation(null)
     }
@@ -1071,7 +1072,7 @@ export default function MainStudio() {
       toast.success(`${activeWorktree.branch} merged into master`)
       await reloadWorkbenches()
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setOperation(null)
     }
@@ -1100,7 +1101,7 @@ export default function MainStudio() {
       await reloadWorkbenches()
       toast.success(`Workbench “${workbench.name}” deleted`)
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setOperation(null)
     }
@@ -1117,7 +1118,7 @@ export default function MainStudio() {
       setActiveTab('chat')
       toast.success('PLC context ready — start chatting to explore your project.')
     } catch (error) {
-      toast.error(displayError(error))
+      showErrorToast(displayError(error))
     } finally {
       setOperation(null)
     }
@@ -1146,7 +1147,7 @@ export default function MainStudio() {
         && error.code === 'PLC_COMPILE_REQUIRED') {
         setCompilePrompt({ message: error.message, flow: 'rebuild', context })
       } else {
-        toast.error(displayError(error))
+        showErrorToast(displayError(error))
       }
     } finally {
       setOperation(null)
