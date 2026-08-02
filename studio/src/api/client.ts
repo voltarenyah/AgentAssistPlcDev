@@ -349,6 +349,12 @@ export const createWorkbench = (
   }), operationId))
 export const getSandboxRoots = () =>
   workbenchRequest<{ roots: string[] }>('/sandbox/roots')
+export const browseTiaProjectFile = async (): Promise<string | null> => {
+  const res = await fetch(`${BASE}/dialogs/tia-project`)
+  if (!res.ok) throw new Error(`TIA project picker failed: ${res.status}`)
+  const body = await res.json() as { path?: string | null }
+  return body.path ?? null
+}
 export const selectWorkbench = (workbenchId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/select`, jsonRequest('POST'))
 export const listWorktrees = (workbenchId: string) =>

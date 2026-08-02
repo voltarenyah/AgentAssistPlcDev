@@ -10,6 +10,7 @@ type Props = {
   operationStatus: OperationStatus | null
   onDismissOperation: () => void
   onRefreshSessions: () => Promise<void>
+  onBrowseProjectFile: () => Promise<string | null>
   onClose: () => void
   onCreate: (values: {
     name: string
@@ -38,6 +39,7 @@ export default function CreateWorkbenchDialog({
   operationStatus,
   onDismissOperation,
   onRefreshSessions,
+  onBrowseProjectFile,
   onClose,
   onCreate,
 }: Props) {
@@ -47,6 +49,8 @@ export default function CreateWorkbenchDialog({
   const [sessionId, setSessionId] = useState(sessions[0]?.id?.toString() ?? '')
   const [projectFile, setProjectFile] = useState('')
   const [refreshing, setRefreshing] = useState(false)
+  const [browsing, setBrowsing] = useState(false)
+  const [browseError, setBrowseError] = useState<string | null>(null)
   const selectedSession = sessions.find(session => session.id.toString() === sessionId)
   const defaultPreview = useMemo(
     () => `%LOCALAPPDATA%\\AutomationWorkbench\\Project\\${sanitized(name)}`,
@@ -67,6 +71,19 @@ export default function CreateWorkbenchDialog({
       await onRefreshSessions()
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const browseProjectFile = async () => {
+    setBrowsing(true)
+    setBrowseError(null)
+    try {
+      const selectedPath = await onBrowseProjectFile()
+      if (selectedPath) setProjectFile(selectedPath)
+    } catch (error) {
+      setBrowseError(error instanceof Error ? error.message : 'Could not open the TIA project picker.')
+    } finally {
+      setBrowsing(false)
     }
   }
 
@@ -139,14 +156,27 @@ export default function CreateWorkbenchDialog({
               <span>TIA project file</span>
               <div className="relative">
                 <FileCode2 className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <input
-                  className="field-input pl-9 font-mono"
-                  value={projectFile}
-                  onChange={event => setProjectFile(event.target.value)}
-                  placeholder="C:\\Users\\…\\Documents\\Automation\\Line\\Line.ap17"
-                />
+                <div className="flex gap-1.5">
+                  <input
+                    className="field-input min-w-0 flex-1 pl-9 font-mono"
+                    value={projectFile}
+                    onChange={event => setProjectFile(event.target.value)}
+                    placeholder="C:\\Users\\…\\Documents\\Automation\\Line\\Line.ap17"
+                  />
+                  <button
+                    className="secondary-button shrink-0"
+                    type="button"
+                    aria-label="Browse for TIA project file"
+                    onClick={() => void browseProjectFile()}
+                    disabled={browsing || busy}
+                  >
+                    {browsing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
+                    Browse
+                  </button>
+                </div>
               </div>
               <span className="text-[9px] text-muted-foreground">A new TIA Portal instance is launched with this project open.</span>
+              {browseError && <span className="text-[9px] text-amber-500">{browseError}</span>}
               {trimmedProjectFile && !projectFileValid && (
                 <span className="text-[9px] text-amber-500">Enter the full path to a TIA Portal project file (.ap17).</span>
               )}

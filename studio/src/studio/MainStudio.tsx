@@ -1645,6 +1645,7 @@ export default function MainStudio() {
           operationStatus={activeOperation?.kind === 'create-workbench' ? activeOperation.status : null}
           onDismissOperation={dismissActiveOperation}
           onRefreshSessions={async () => { await reloadSessions() }}
+          onBrowseProjectFile={api.browseTiaProjectFile}
           onClose={() => setCreateWorkbenchOpen(false)}
           onCreate={createWorkbench}
         />

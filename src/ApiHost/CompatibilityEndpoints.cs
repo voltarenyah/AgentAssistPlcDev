@@ -392,6 +392,11 @@ public static class CompatibilityEndpoints
             coordinator.PreviewRefresh(Device(state)));
         app.MapGet("/api/check-environment", async (ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("check_environment").CallAsync<JsonElement>("check_environment", new { }, ct));
+        app.MapGet("/api/dialogs/tia-project", () =>
+        {
+            var path = NativeFileDialog.SelectTiaProject();
+            return Results.Ok(new { path });
+        });
         app.MapGet("/api/browse", (string? path, WorkbenchApiState state) =>
         {
             var device = Device(state);

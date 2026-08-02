@@ -27,6 +27,7 @@ const renderDialog = (overrides: Partial<Parameters<typeof CreateWorkbenchDialog
     operationStatus: null,
     onDismissOperation: vi.fn(),
     onRefreshSessions: vi.fn(() => Promise.resolve()),
+    onBrowseProjectFile: vi.fn(() => Promise.resolve(null)),
     onClose: vi.fn(),
     onCreate: vi.fn(() => Promise.resolve()),
     ...overrides,
@@ -99,6 +100,21 @@ describe('CreateWorkbenchDialog', () => {
       rootPath: undefined,
       engineeringProjectPath: 'C:\\Projects\\Line.ap17',
     })
+  })
+
+  it('fills the project path from the native file picker', async () => {
+    const onBrowseProjectFile = vi.fn(() => Promise.resolve('C:\\Projects\\Line.ap17'))
+    const { host } = renderDialog({ onBrowseProjectFile })
+    const fileModeButton = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.includes('Open project file'))!
+
+    act(() => fileModeButton.click())
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Browse for TIA project file"]')?.click()
+    })
+
+    expect(onBrowseProjectFile).toHaveBeenCalledTimes(1)
+    expect(host.querySelector<HTMLInputElement>('input[placeholder*="Line.ap17"]')?.value).toBe('C:\\Projects\\Line.ap17')
   })
 
   it('warns when the project file is outside the sandbox whitelist', () => {
