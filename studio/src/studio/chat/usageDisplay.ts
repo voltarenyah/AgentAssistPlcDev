@@ -2,7 +2,8 @@
 // (AgentLoop.RoundUsages → ApiHost meta SSE event / session roundUsages)
 // for the context-size indicator in the chat composer.
 
-import type { ChatUsage } from '@/api/client'
+import type { ChatMessage, ChatToolStats, ChatUsage } from '@/api/client'
+import { parseProgressContent } from './progressDisplay'
 
 /** Fallback denominator when the backend does not report a context window. */
 export const DEFAULT_CONTEXT_WINDOW = 128_000
@@ -21,6 +22,28 @@ export const formatTokenCount = (count: number): string => {
   if (count < 1000) return String(count)
   const rounded = (count / 1000).toFixed(1)
   return `${rounded.endsWith('.0') ? rounded.slice(0, -2) : rounded}k`
+}
+
+export const contextPercentage = (
+  usage: ChatUsage,
+  contextWindow: number = DEFAULT_CONTEXT_WINDOW,
+): number => {
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) return 0
+  return Number(Math.min(100, Math.max(0, (usage.promptTokens / contextWindow) * 100)).toFixed(1))
+}
+
+/** Fallback for older sessions that have no streamed meta event with explicit MCP totals. */
+export const toolCallStats = (messages: ChatMessage[]): ChatToolStats => {
+  let calls = 0
+  let failed = 0
+  for (const message of messages) {
+    if (message.role !== 'tool' || !message.content) continue
+    for (const entry of parseProgressContent(message.content)) {
+      if (entry.kind === 'tool-call') calls += 1
+      if (entry.kind === 'tool-error') failed += 1
+    }
+  }
+  return { succeeded: Math.max(0, calls - failed), failed }
 }
 
 /** e.g. "context: 22.7k / 128k (cache: 20.0k hit / 2.7k miss)" — null when nothing billed yet. */

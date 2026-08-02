@@ -780,7 +780,7 @@ export default function MainStudio() {
           turnFailed = true
           setChatTabs(previous => appendProgressMessage(previous, sessionId, `Error: ${event.delta}`))
         } else if (event.kind === 'meta') {
-          setChatTabs(previous => setTurnMeta(previous, sessionId, event.usage ?? null, event.hitRoundCap ?? false))
+          setChatTabs(previous => setTurnMeta(previous, sessionId, event.usage ?? null, event.hitRoundCap ?? false, event.toolCalls ?? null))
         }
       }, controller.signal)
       if (turnFailed) {

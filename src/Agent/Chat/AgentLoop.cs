@@ -35,6 +35,8 @@ public sealed class AgentLoop
     private readonly List<ChatMessage> messages = new();
     private readonly List<UsageInfo?> roundUsages = new();
     private readonly HashSet<string> failedToolCalls = new(StringComparer.Ordinal);
+    private int successfulToolCalls;
+    private int failedToolCallCount;
 
     /// <summary>Last runtime context appended to the history; null when none was appended this run.</summary>
     private string? lastContext;
@@ -97,6 +99,9 @@ public sealed class AgentLoop
 
     /// <summary>Token usage per API response, aligned 1:1 with the assistant messages in <see cref="History"/>.</summary>
     public IReadOnlyList<UsageInfo?> RoundUsages => roundUsages;
+
+    /// <summary>Successful and failed MCP calls from the most recent turn.</summary>
+    public ToolCallStats LastTurnToolCalls => new(successfulToolCalls, failedToolCallCount);
 
     /// <summary>Applies tunable loop limits (see <see cref="ChatLoopPolicy"/>).</summary>
     public void Apply(ChatLoopPolicy policy)
@@ -170,6 +175,8 @@ public sealed class AgentLoop
         LastTurnCompactions = 0;
         CompactHistoryIfOverThreshold();
         failedToolCalls.Clear();
+        successfulToolCalls = 0;
+        failedToolCallCount = 0;
         RefreshSystemMessage();
         AppendContextIfChanged();
         messages.Add(ChatMessage.User(userText));
@@ -558,6 +565,7 @@ public sealed class AgentLoop
             const string remediation =
                 "Call get_schema first, inspect its ddl/nodeKinds/edgeTypes/exampleQueries, then retry the query using those exact table and column names.";
             Progress?.Invoke("  ! query blocked until get_schema is read in this chat");
+            failedToolCallCount++;
             return ChatMessage.Tool(
                 call.Id,
                 JsonSerializer.Serialize(new
@@ -575,6 +583,7 @@ public sealed class AgentLoop
         var fingerprint = ToolCallFingerprint(call);
         if (failedToolCalls.Contains(fingerprint))
         {
+            failedToolCallCount++;
             return ChatMessage.Tool(
                 call.Id,
                 JsonSerializer.Serialize(new
@@ -596,6 +605,7 @@ public sealed class AgentLoop
             if (verdict != null)
             {
                 Progress?.Invoke($"  ⛔ {call.Name}: {verdict.Note}");
+                failedToolCallCount++;
                 return ChatMessage.Tool(call.Id, verdict.ErrorJson);
             }
         }
@@ -609,7 +619,7 @@ public sealed class AgentLoop
             var validationError = ToolArgumentValidator.Validate(spec.InputSchema, arguments.RootElement);
             if (validationError != null)
             {
-                failedToolCalls.Add(fingerprint);
+                MarkToolFailure(fingerprint);
                 content = JsonSerializer.Serialize(new
                 {
                     error = new
@@ -626,10 +636,11 @@ public sealed class AgentLoop
 
             var result = await spec.Caller.CallAsync<JsonElement>(spec.Name, arguments.RootElement, cancellationToken);
             content = ToolResultCompactor.Compact(result, ToolResultMaxChars);
+            successfulToolCalls++;
         }
         catch (ToolCallException ex)
         {
-            failedToolCalls.Add(fingerprint);
+            MarkToolFailure(fingerprint);
             // Structured server error ({ code, message, remediation }) — hand it to the model so it can recover.
             content = JsonSerializer.Serialize(new
             {
@@ -645,7 +656,7 @@ public sealed class AgentLoop
         }
         catch (Exception ex) when (ex is KeyNotFoundException or JsonException)
         {
-            failedToolCalls.Add(fingerprint);
+            MarkToolFailure(fingerprint);
             content = JsonSerializer.Serialize(new
             {
                 error = new { code = "AGENT_TOOL_ERROR", message = ex.Message, retryable = false, remediation = (string?)null },
@@ -657,7 +668,7 @@ public sealed class AgentLoop
         {
             // Safety net: no tool-side failure (binder, transport, server crash) may kill the
             // whole turn — the model gets the error as a tool result and can recover or report.
-            failedToolCalls.Add(fingerprint);
+            MarkToolFailure(fingerprint);
             content = JsonSerializer.Serialize(new
             {
                 error = new { code = "AGENT_TOOL_ERROR", message = ex.Message, retryable = false, remediation = (string?)null },
@@ -666,6 +677,12 @@ public sealed class AgentLoop
         }
 
         return ChatMessage.Tool(call.Id, content);
+    }
+
+    private void MarkToolFailure(string fingerprint)
+    {
+        failedToolCalls.Add(fingerprint);
+        failedToolCallCount++;
     }
 
     private bool HasKnowledgeSchemaFact()

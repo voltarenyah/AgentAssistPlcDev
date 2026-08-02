@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextLabel, formatTokenCount, lastUsageOf } from './usageDisplay'
+import { contextLabel, contextPercentage, formatTokenCount, lastUsageOf, toolCallStats } from './usageDisplay'
 
 describe('usage display', () => {
   it('formats token counts in k units above one thousand', () => {
@@ -43,5 +43,18 @@ describe('usage display', () => {
       promptCacheHitTokens: 20000,
       promptCacheMissTokens: 2678,
     })).toBe('context: 22.7k / 128k (cache: 20k hit / 2.7k miss)')
+  })
+
+  it('calculates context usage as a clamped percentage', () => {
+    expect(contextPercentage({ promptTokens: 22678, completionTokens: 269, totalTokens: 22947 }, 128000)).toBe(17.7)
+    expect(contextPercentage({ promptTokens: 200000, completionTokens: 0, totalTokens: 200000 }, 128000)).toBe(100)
+  })
+
+  it('counts successful and failed tool calls from progress entries', () => {
+    expect(toolCallStats([
+      { role: 'tool', content: '→ engineering.get_block({})', toolCallId: null, timestamp: null },
+      { role: 'tool', content: '  ✗ engineering.get_block: TOOL_FAILED — unavailable', toolCallId: null, timestamp: null },
+      { role: 'tool', content: '→ engineering.get_schema({})', toolCallId: null, timestamp: null },
+    ])).toEqual({ succeeded: 1, failed: 1 })
   })
 })

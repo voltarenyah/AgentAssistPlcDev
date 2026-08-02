@@ -43,6 +43,9 @@ public sealed record UsageInfo(
     int PromptCacheHitTokens = 0,
     int PromptCacheMissTokens = 0);
 
+/// <summary>Number of MCP tool calls that completed successfully or returned an error in a turn.</summary>
+public sealed record ToolCallStats(int Succeeded, int Failed);
+
 /// <summary>One streamed piece of a response (SSE delta).</summary>
 public sealed record ChatDelta(string? ReasoningContent, string? Content);
 

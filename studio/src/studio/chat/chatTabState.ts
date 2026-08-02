@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatSessionData, ChatUsage } from '@/api/client'
+import type { ChatMessage, ChatSessionData, ChatToolStats, ChatUsage } from '@/api/client'
 import { lastUsageOf } from './usageDisplay'
 
 export type ChatTab = {
@@ -9,6 +9,8 @@ export type ChatTab = {
   usage?: ChatUsage | null
   /** True when the last turn ended at the tool-round cap; offers "continue". */
   hitRoundCap?: boolean
+  /** MCP tool outcomes from the last streamed turn. */
+  toolCalls?: ChatToolStats | null
 }
 
 export type ChatTabsState = {
@@ -42,6 +44,7 @@ export function openTab(state: ChatTabsState, session: ChatSessionData): ChatTab
     usage: lastUsageOf(session.roundUsages),
     // The cap flag is stream-only (not persisted); keep it across session reloads of an open tab.
     hitRoundCap: existing?.hitRoundCap ?? false,
+    toolCalls: existing?.toolCalls ?? null,
   }
   const exists = state.tabs.some(value => value.sessionId === tab.sessionId)
   return {
@@ -59,10 +62,11 @@ export function setTurnMeta(
   sessionId: string,
   usage: ChatUsage | null,
   hitRoundCap: boolean,
+  toolCalls?: ChatToolStats | null,
 ): ChatTabsState {
   return {
     ...state,
-    tabs: state.tabs.map(tab => tab.sessionId === sessionId ? { ...tab, usage, hitRoundCap } : tab),
+    tabs: state.tabs.map(tab => tab.sessionId === sessionId ? { ...tab, usage, hitRoundCap, toolCalls: toolCalls ?? null } : tab),
   }
 }
 

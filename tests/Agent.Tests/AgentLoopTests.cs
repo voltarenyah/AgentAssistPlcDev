@@ -96,6 +96,7 @@ public sealed class AgentLoopTests
         Assert.Contains(progress, line => line.StartsWith("→ search(", StringComparison.Ordinal));
         Assert.Contains(progress, line => line.Contains("usage: 10 prompt + 5 completion tokens"));
         Assert.Contains(deltas, delta => delta.Kind == "content" && delta.Text.Contains("Network 12"));
+        Assert.Equal(new ToolCallStats(1, 0), loop.LastTurnToolCalls);
     }
 
     [Fact]
@@ -149,6 +150,7 @@ public sealed class AgentLoopTests
         var payload = toolMessage["content"]!.GetValue<string>();
         Assert.Contains("AGENT_TOOL_ERROR", payload);
         Assert.Contains("relativePath or a trusted xmlFilePath is required.", payload);
+        Assert.Equal(new ToolCallStats(0, 1), loop.LastTurnToolCalls);
     }
 
     [Fact]

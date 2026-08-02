@@ -247,6 +247,11 @@ public static class CompatibilityEndpoints
                                 promptCacheMissTokens = usage.PromptCacheMissTokens,
                             }
                             : null,
+                        toolCalls = new
+                        {
+                            succeeded = snapshot.ToolCalls.Succeeded,
+                            failed = snapshot.ToolCalls.Failed,
+                        },
                     });
                     Queue(new { kind = "progress", delta = "Saving chat session..." });
                     Queue(new { kind = "answer", delta = answer });
@@ -484,7 +489,7 @@ public static class CompatibilityEndpoints
     }
 }
 
-public sealed record ChatTurnSnapshot(UsageInfo? Usage, bool HitRoundCap, int Compactions);
+public sealed record ChatTurnSnapshot(UsageInfo? Usage, bool HitRoundCap, int Compactions, ToolCallStats ToolCalls);
 
 internal sealed class ApiChatService(
     IServiceProvider services,
@@ -534,8 +539,9 @@ internal sealed class ApiChatService(
             ? new ChatTurnSnapshot(
                 active.Loop.RoundUsages.LastOrDefault(usage => usage is not null),
                 active.Loop.LastTurnHitRoundCap,
-                active.Loop.LastTurnCompactions)
-            : new ChatTurnSnapshot(null, false, 0);
+                active.Loop.LastTurnCompactions,
+                active.Loop.LastTurnToolCalls)
+            : new ChatTurnSnapshot(null, false, 0, new ToolCallStats(0, 0));
 
     /// <summary>Extends the active loop's round budget (the "continue" affordance after a round cap).</summary>
     public bool GrantMoreRounds(DeviceContext device, int additional)

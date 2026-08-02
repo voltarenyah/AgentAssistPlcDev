@@ -97,6 +97,11 @@ export type ChatUsage = {
   promptCacheMissTokens?: number
 }
 
+export type ChatToolStats = {
+  succeeded: number
+  failed: number
+}
+
 export type ChatSessionData = {
   header: ChatSessionHeader
   messages: ChatMessage[]
@@ -126,6 +131,7 @@ export type SSEEvent = {
   /** meta events: exact context usage of the last billed API round, plus the round-cap flag. */
   hitRoundCap?: boolean
   usage?: ChatUsage | null
+  toolCalls?: ChatToolStats | null
 } & Partial<ConfirmationRequest>
 
 export type ToolCallResult = {

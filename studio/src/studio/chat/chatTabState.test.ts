@@ -92,15 +92,17 @@ describe('chat tab state', () => {
     expect(state.tabs[0]?.hitRoundCap).toBe(false)
   })
 
-  it('applies turn meta and keeps the cap flag across session reloads', () => {
+  it('applies turn meta and keeps the cap and tool stats across session reloads', () => {
     let state = openTab(emptyChatTabs(), session('s1'))
-    state = setTurnMeta(state, 's1', { promptTokens: 22678, completionTokens: 269, totalTokens: 22947 }, true)
+    state = setTurnMeta(state, 's1', { promptTokens: 22678, completionTokens: 269, totalTokens: 22947 }, true, { succeeded: 2, failed: 1 })
 
     expect(state.tabs[0]?.hitRoundCap).toBe(true)
     expect(state.tabs[0]?.usage?.promptTokens).toBe(22678)
+    expect(state.tabs[0]?.toolCalls).toEqual({ succeeded: 2, failed: 1 })
 
     state = openTab(state, session('s1'))
     expect(state.tabs[0]?.hitRoundCap).toBe(true)
+    expect(state.tabs[0]?.toolCalls).toEqual({ succeeded: 2, failed: 1 })
 
     state = setTurnMeta(state, 's1', { promptTokens: 30000, completionTokens: 100, totalTokens: 30100 }, false)
     expect(state.tabs[0]?.hitRoundCap).toBe(false)

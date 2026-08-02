@@ -3,10 +3,10 @@ import { Ban, Loader2, MessageSquare, Send, Square, Wrench, XCircle } from 'luci
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import * as api from '@/api/client'
-import type { ChatMessage, ChatUsage } from '@/api/client'
+import type { ChatMessage, ChatToolStats, ChatUsage } from '@/api/client'
 import type { ChatTabsState } from './chatTabState'
 import { parseProgressContent, progressTitle } from './progressDisplay'
-import { contextLabel } from './usageDisplay'
+import { contextLabel, contextPercentage, toolCallStats } from './usageDisplay'
 
 type Props = {
   tabs: ChatTabsState
@@ -46,6 +46,8 @@ function ChatComposer({
   settings,
   settingsState,
   usage,
+  toolCalls,
+  messages,
   onSettingsChange,
   onSend,
   onStop,
@@ -56,12 +58,21 @@ function ChatComposer({
   settings: api.ChatSettings | null
   settingsState: SettingsSaveState
   usage?: ChatUsage | null
+  toolCalls?: ChatToolStats | null
+  messages: ChatMessage[]
   onSettingsChange: (patch: Partial<api.ChatSettings>) => void
   onSend: (sessionId: string, message: string) => void
   onStop: () => void
 }) {
   const knownModel = Boolean(settings && MODEL_OPTIONS.some(option => option.value === settings.model))
   const context = contextLabel(usage, settings?.contextWindow)
+  const percentage = usage ? contextPercentage(usage, settings?.contextWindow) : null
+  const stats = toolCalls ?? toolCallStats(messages)
+  const composerDraft = onDraftChange ? draft ?? '' : localDraft
+  const updateDraft = (value: string) => {
+    if (onDraftChange) onDraftChange(sessionId, value)
+    else setLocalDraft(value)
+  }
   return (
     <form
       data-chat-composer={sessionId}
@@ -127,7 +138,7 @@ function ChatComposer({
         >
           Think {settings?.thinkingEnabled ? 'on' : 'off'}
         </button>
-        {settings?.thinkingEnabled && (
+        {settings?.thinkingEnabled ? (
           <select
             aria-label="Think effort"
             className="field-input h-6 w-auto px-1 py-0 text-[9px]"
@@ -141,27 +152,66 @@ function ChatComposer({
               <option key={effort} value={effort}>{effort}</option>
             ))}
           </select>
+        ) : (
+          <>
+            <label className="flex items-center gap-1">
+              Temp
+              <input
+                type="number"
+                aria-label="Temperature"
+                className="field-input h-6 w-14 px-1 py-0 text-[9px]"
+                min={0}
+                max={2}
+                step={0.1}
+                value={settings?.temperature ?? ''}
+                disabled={!settings}
+                onChange={event => {
+                  if (event.target.value === '') return
+                  const value = Number(event.target.value)
+                  if (Number.isFinite(value)) onSettingsChange({ temperature: Math.min(2, Math.max(0, value)) })
+                }}
+              />
+            </label>
+            <label className="flex items-center gap-1">
+              Top P
+              <input
+                type="number"
+                aria-label="Top P"
+                className="field-input h-6 w-14 px-1 py-0 text-[9px]"
+                min={0}
+                max={1}
+                step={0.1}
+                value={settings?.topP ?? ''}
+                disabled={!settings}
+                onChange={event => {
+                  if (event.target.value === '') return
+                  const value = Number(event.target.value)
+                  if (Number.isFinite(value)) onSettingsChange({ topP: Math.min(1, Math.max(0, value)) })
+                }}
+              />
+            </label>
+          </>
         )}
-        <label className="flex items-center gap-1">
-          Temp
-          <input
-            type="number"
-            aria-label="Temperature"
-            className="field-input h-6 w-14 px-1 py-0 text-[9px]"
-            min={0}
-            max={2}
-            step={0.1}
-            value={settings?.temperature ?? ''}
-            disabled={!settings}
-            onChange={event => {
-              if (event.target.value === '') return
-              const value = Number(event.target.value)
-              if (Number.isFinite(value)) onSettingsChange({ temperature: Math.min(2, Math.max(0, value)) })
-            }}
-          />
-        </label>
         {context && (
-          <span data-chat-context title={context}>{context}</span>
+          <div className="flex min-w-[150px] items-center gap-1.5" data-chat-context title={context}>
+            <span className="whitespace-nowrap">{context} · {percentage}%</span>
+            <span
+              className="h-1.5 w-16 overflow-hidden rounded-full bg-muted/60"
+              role="progressbar"
+              data-chat-context-progress
+              aria-label="Context buffer used"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percentage ?? 0}
+            >
+              <span className="block h-full rounded-full bg-chart-3" style={{ width: `${percentage ?? 0}%` }} />
+            </span>
+          </div>
+        )}
+        {(stats.succeeded > 0 || stats.failed > 0) && (
+          <span data-chat-tool-stats title="MCP tool call results">
+            tools: {stats.succeeded} succeeded / {stats.failed} failed
+          </span>
         )}
         <span className="ml-auto" data-chat-settings-state>
           {settingsState === 'saving' ? 'Saving…'
@@ -393,6 +443,8 @@ export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onF
                 settings={settings}
                 settingsState={settingsState}
                 usage={tab.usage}
+                toolCalls={tab.toolCalls}
+                messages={tab.messages}
                 onSettingsChange={changeSettings}
                 onSend={onSend}
                 onStop={onStop}

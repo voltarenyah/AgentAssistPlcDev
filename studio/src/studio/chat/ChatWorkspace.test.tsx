@@ -213,6 +213,7 @@ describe('ChatWorkspace', () => {
     expect(row?.querySelector<HTMLButtonElement>('button[aria-label="Toggle think mode"]')?.getAttribute('aria-pressed')).toBe('false')
     expect(row?.querySelector('select[aria-label="Think effort"]')).toBeNull()
     expect(row?.querySelector<HTMLInputElement>('input[aria-label="Temperature"]')?.value).toBe('1')
+    expect(row?.querySelector<HTMLInputElement>('input[aria-label="Top P"]')?.value).toBe('1')
   })
 
   it('reveals think effort and saves when think mode is toggled', async () => {
@@ -227,6 +228,8 @@ describe('ChatWorkspace', () => {
         ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     expect(activePane?.querySelector('select[aria-label="Think effort"]')).not.toBeNull()
+    expect(activePane?.querySelector('input[aria-label="Temperature"]')).toBeNull()
+    expect(activePane?.querySelector('input[aria-label="Top P"]')).toBeNull()
 
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 450)) })
     expect(api.saveChatSettings).toHaveBeenCalledWith({ ...settingsFixture, thinkingEnabled: true })
@@ -270,7 +273,9 @@ describe('ChatWorkspace', () => {
 
     const activePane = host.querySelector<HTMLElement>('[data-session-pane="s1"]')
     expect(activePane?.querySelector('[data-chat-context]')?.textContent)
-      .toBe('context: 22.7k / 128k (cache: 20k hit / 2.7k miss)')
+      .toContain('17.7%')
+    expect(activePane?.querySelector('[data-chat-context-progress]')?.getAttribute('aria-valuenow'))
+      .toBe('17.7')
   })
 
   it('hides the context indicator before any billed round', async () => {
@@ -281,6 +286,30 @@ describe('ChatWorkspace', () => {
 
     const activePane = host.querySelector<HTMLElement>('[data-session-pane="s2"]')
     expect(activePane?.querySelector('[data-chat-context]')).toBeNull()
+  })
+
+  it('shows MCP tool success and failure totals in the composer', async () => {
+    const withTools: ChatTabsState = {
+      activeId: 's1',
+      mru: ['s1'],
+      tabs: [
+        {
+          sessionId: 's1',
+          title: 'One',
+          messages: [
+            { role: 'tool', content: '→ engineering.get_block({})', toolCallId: null, timestamp: null },
+            { role: 'tool', content: '→ engineering.get_schema({})\n  ✗ engineering.get_schema: TOOL_FAILED — unavailable', toolCallId: null, timestamp: null },
+          ],
+        },
+      ],
+    }
+    const { host } = render(
+      <ChatWorkspace tabs={withTools} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
+    )
+    await act(async () => {})
+
+    expect(host.querySelector('[data-chat-tool-stats]')?.textContent)
+      .toBe('tools: 1 succeeded / 1 failed')
   })
 
   it('offers continue only after a turn that hit the round cap', async () => {
