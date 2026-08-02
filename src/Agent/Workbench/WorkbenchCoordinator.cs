@@ -702,10 +702,13 @@ public sealed class WorkbenchCoordinator
                     new { repositoryPath = persisted.RepositoryPath, worktreePath = worktreeRoot },
                     token).ConfigureAwait(false);
             }
-            catch (ToolCallException) when (!Directory.Exists(worktreeRoot))
+            catch (ToolCallException exception) when (
+                !Directory.Exists(worktreeRoot)
+                || IsMissingWorktreeRegistration(exception))
             {
-                // A worktree whose checkout is already gone cannot be removed by git;
-                // the wholesale directory delete below finishes the cleanup.
+                // A checkout that is already gone, or whose Git registration is stale,
+                // cannot be removed by git; the wholesale directory delete below
+                // finishes the project cleanup.
             }
         }
 
@@ -716,6 +719,12 @@ public sealed class WorkbenchCoordinator
         {
             knownWorktrees.TryRemove(registration.WorktreeId, out _);
         }
+    }
+
+    private static bool IsMissingWorktreeRegistration(ToolCallException exception)
+    {
+        return string.Equals(exception.Code, "WORKTREE_REMOVE_FAILED", StringComparison.Ordinal)
+            && exception.Message.Contains("is not a working tree", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<ImportModifiedResult> ImportModifiedAsync(

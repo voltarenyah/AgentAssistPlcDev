@@ -1037,6 +1037,34 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.False(Directory.Exists(workbench.RootPath));
     }
 
+    [Fact]
+    public async Task DeleteWorkbenchToleratesCheckoutDirectoryThatIsNotARegisteredWorktree()
+    {
+        var catalog = new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "catalog"));
+        var workbench = catalog.Create("Line", Path.Combine(root, "Line"));
+        workbench = catalog.RegisterWorktree(
+            workbench,
+            new WorkbenchWorktreeRegistration("wt-1", "master", "master", "master"));
+        Directory.CreateDirectory(workbench.RepositoryPath);
+        Directory.CreateDirectory(Path.Combine(workbench.RootPath, "worktrees", "master"));
+
+        var versionControl = new FakeToolCaller()
+            .Fail("vc_remove_worktree", "WORKTREE_REMOVE_FAILED", "fatal: 'master' is not a working tree");
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        await coordinator.DeleteWorkbenchAsync(workbench, CancellationToken.None);
+
+        Assert.Equal(new[] { "vc_remove_worktree" }, versionControl.Calls);
+        Assert.False(Directory.Exists(workbench.RootPath));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root))
