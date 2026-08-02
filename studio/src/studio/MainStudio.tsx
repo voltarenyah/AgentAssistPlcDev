@@ -64,6 +64,7 @@ import {
   emptyChatTabs,
   openTab,
   renameTab,
+  setDraft,
   setTurnMeta,
   type ChatTabsState,
 } from '@/studio/chat/chatTabState'
@@ -1457,6 +1458,7 @@ export default function MainStudio() {
                       onConfirm={decision => void decideConfirmation(decision)}
                       onFocus={sessionId => void activateChatSession(sessionId)}
                       onSend={(sessionId, message) => void sendChatMessage(sessionId, message)}
+                      onDraftChange={(sessionId, draft) => setChatTabs(previous => setDraft(previous, sessionId, draft))}
                       onStop={stopChatGeneration}
                       onContinue={sessionId => void continueChat(sessionId)}
                     />

@@ -5,6 +5,8 @@ export type ChatTab = {
   sessionId: string
   title: string
   messages: ChatMessage[]
+  /** Unsent composer text, kept while the chat page is temporarily unmounted. */
+  draft?: string
   /** Exact context size of the last billed API round (from the backend). */
   usage?: ChatUsage | null
   /** True when the last turn ended at the tool-round cap; offers "continue". */
@@ -41,6 +43,7 @@ export function openTab(state: ChatTabsState, session: ChatSessionData): ChatTab
     sessionId: session.header.sessionId,
     title: titleOf(session),
     messages: session.messages,
+    draft: existing?.draft ?? '',
     usage: lastUsageOf(session.roundUsages),
     // The cap flag is stream-only (not persisted); keep it across session reloads of an open tab.
     hitRoundCap: existing?.hitRoundCap ?? false,
@@ -77,6 +80,17 @@ export function renameTab(state: ChatTabsState, sessionId: string, title: string
   }
 }
 
+export function setDraft(
+  state: ChatTabsState,
+  sessionId: string,
+  draft: string,
+): ChatTabsState {
+  return {
+    ...state,
+    tabs: state.tabs.map(tab => tab.sessionId === sessionId ? { ...tab, draft } : tab),
+  }
+}
+
 export function appendLocalUserMessage(
   state: ChatTabsState,
   sessionId: string,
@@ -91,6 +105,7 @@ export function appendLocalUserMessage(
             ...tab.messages,
             { role: 'user', content, toolCallId: null, timestamp: timestamp() },
           ],
+          draft: '',
         }
       : tab),
   }

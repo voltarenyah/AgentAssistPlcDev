@@ -15,6 +15,7 @@ type Props = {
   onConfirm?: (decision: 'allowOnce' | 'deny') => void
   onFocus: (sessionId: string) => void
   onSend: (sessionId: string, message: string) => void
+  onDraftChange?: (sessionId: string, draft: string) => void
   onStop: () => void
   onContinue: (sessionId: string) => void
 }
@@ -50,6 +51,8 @@ function ChatComposer({
   messages,
   onSettingsChange,
   onSend,
+  draft,
+  onDraftChange,
   onStop,
 }: {
   sessionId: string
@@ -62,8 +65,11 @@ function ChatComposer({
   messages: ChatMessage[]
   onSettingsChange: (patch: Partial<api.ChatSettings>) => void
   onSend: (sessionId: string, message: string) => void
+  draft?: string
+  onDraftChange?: (sessionId: string, draft: string) => void
   onStop: () => void
 }) {
+  const [localDraft, setLocalDraft] = useState(draft ?? '')
   const knownModel = Boolean(settings && MODEL_OPTIONS.some(option => option.value === settings.model))
   const context = contextLabel(usage, settings?.contextWindow)
   const percentage = usage ? contextPercentage(usage, settings?.contextWindow) : null
@@ -84,7 +90,7 @@ function ChatComposer({
         const message = data.get('message')?.toString().trim() ?? ''
         if (!message) return
         onSend(sessionId, message)
-        event.currentTarget.reset()
+        updateDraft('')
       }}
     >
       <div className="flex gap-2">
@@ -93,6 +99,8 @@ function ChatComposer({
           className="field-input min-h-16 flex-1 resize-none py-2"
           disabled={disabled}
           placeholder="Ask about this PLC device..."
+          value={composerDraft}
+          onChange={event => updateDraft(event.target.value)}
         />
         {busy ? (
           <button
@@ -320,7 +328,7 @@ function MessageList({ messages, busy }: { messages: ChatMessage[], busy: boolea
   )
 }
 
-export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onFocus, onSend, onStop, onContinue }: Props) {
+export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onFocus, onSend, onDraftChange, onStop, onContinue }: Props) {
   const [settings, setSettings] = useState<api.ChatSettings | null>(null)
   const [settingsState, setSettingsState] = useState<SettingsSaveState>('idle')
   const settingsRef = useRef<api.ChatSettings | null>(null)
@@ -447,6 +455,8 @@ export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onF
                 messages={tab.messages}
                 onSettingsChange={changeSettings}
                 onSend={onSend}
+                draft={tab.draft}
+                onDraftChange={onDraftChange}
                 onStop={onStop}
               />
             </div>

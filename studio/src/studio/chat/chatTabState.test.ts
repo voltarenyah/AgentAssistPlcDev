@@ -42,6 +42,18 @@ describe('chat tab state', () => {
     expect(next.tabs[0]?.title).toBe('Updated title')
   })
 
+  it('preserves an unsent draft when a session is reopened', () => {
+    const opened = openTab(emptyChatTabs(), session('s1'))
+    const withDraft: ChatTabsState = {
+      ...opened,
+      tabs: opened.tabs.map(tab => ({ ...tab, draft: 'keep this text' })),
+    }
+
+    const reopened = openTab(withDraft, session('s1'))
+
+    expect(reopened.tabs[0]).toMatchObject({ draft: 'keep this text' })
+  })
+
   it('renames an open tab', () => {
     const state = renameTab(openTab(emptyChatTabs(), session('s1')), 's1', 'Valve diagnosis')
 

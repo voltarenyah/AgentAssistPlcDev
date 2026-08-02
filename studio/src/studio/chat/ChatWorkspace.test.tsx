@@ -84,6 +84,23 @@ describe('ChatWorkspace', () => {
     expect(onSend).toHaveBeenCalledWith('s2', 'resume this')
   })
 
+  it('reports unsent composer text to the parent tab state', () => {
+    const onDraftChange = vi.fn()
+    const { host } = render(
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onDraftChange={onDraftChange} onStop={vi.fn()} onContinue={vi.fn()} />,
+    )
+
+    const activePane = host.querySelector<HTMLElement>('[data-session-pane="s2"]')
+    const input = activePane!.querySelector<HTMLTextAreaElement>('textarea')
+    act(() => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      setValue?.call(input, 'keep this draft')
+      input!.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }))
+    })
+
+    expect(onDraftChange).toHaveBeenLastCalledWith('s2', 'keep this draft')
+  })
+
   it('shows active-session progress while a message is running', async () => {
     const { host } = render(
       <ChatWorkspace tabs={state} busy={true} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,

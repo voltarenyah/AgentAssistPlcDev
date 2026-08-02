@@ -409,9 +409,124 @@ public static class ProgramBlockLogicYamlWriter
 
     private static IReadOnlyList<string> SplitSclStatements(string source)
     {
-        return string.IsNullOrWhiteSpace(source)
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return Array.Empty<string>();
+        }
+
+        // SCL comments are rendered together with executable tokens, so remove
+        // them after rendering the source rather than classifying XML nodes.
+        var executableSource = string.Join(
+            "\n",
+            StripSclComments(source)
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace('\r', '\n')
+                .Split('\n')
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Select(line => line.TrimEnd()))
+            .Trim();
+
+        return string.IsNullOrWhiteSpace(executableSource)
             ? Array.Empty<string>()
-            : new[] { source.Trim() };
+            : new[] { executableSource };
+    }
+
+    private static string StripSclComments(string source)
+    {
+        var builder = new StringBuilder(source.Length);
+        var blockCommentDepth = 0;
+        var lineComment = false;
+        var inString = false;
+
+        for (var index = 0; index < source.Length; index++)
+        {
+            var current = source[index];
+            var next = index + 1 < source.Length ? source[index + 1] : '\0';
+
+            if (lineComment)
+            {
+                if (current is '\r' or '\n')
+                {
+                    lineComment = false;
+                    builder.Append(current);
+                }
+
+                continue;
+            }
+
+            if (blockCommentDepth > 0)
+            {
+                if (current == '(' && next == '*')
+                {
+                    blockCommentDepth++;
+                    index++;
+                }
+                else if (current == '*' && next == ')')
+                {
+                    blockCommentDepth--;
+                    index++;
+                }
+                else if (current is '\r' or '\n')
+                {
+                    builder.Append(current);
+                }
+
+                continue;
+            }
+
+            if (inString)
+            {
+                builder.Append(current);
+                if (current == '\'' && next == '\'')
+                {
+                    builder.Append(next);
+                    index++;
+                }
+                else if (current == '\'')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (current == '\'')
+            {
+                if (next == '\'')
+                {
+                    builder.Append(current);
+                    builder.Append(next);
+                    index++;
+                }
+                else
+                {
+                    inString = true;
+                    builder.Append(current);
+                }
+            }
+            else if (current == '/' && next == '/')
+            {
+                lineComment = true;
+                index++;
+            }
+            else if (current == '(' && next == '*')
+            {
+                if (builder.Length > 0 && !char.IsWhiteSpace(builder[^1]))
+                {
+                    builder.Append(' ');
+                }
+
+                blockCommentDepth = 1;
+                index++;
+            }
+            else
+            {
+                builder.Append(current);
+            }
+        }
+
+        return builder.ToString();
     }
 
     private static bool IsEmptyNetworkSource(XElement compileUnit)

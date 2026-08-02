@@ -211,6 +211,83 @@ public sealed class ProgramBlockLogicTests
     }
 
     [Fact]
+    public void ExcludesCommentOnlySclLinesFromLogicStatements()
+    {
+        const string xml = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <Document>
+              <SW.Blocks.FB ID="0">
+                <AttributeList><Name>CoolingCoupellesWT2</Name><ProgrammingLanguage>SCL</ProgrammingLanguage></AttributeList>
+                <ObjectList>
+                  <SW.Blocks.CompileUnit ID="cu-network-32">
+                    <AttributeList>
+                      <NetworkSource>
+                        <StructuredText>
+                          <Token Text="// CoolingCoupellesWT2 := FALSE;" />
+                          <NewLine />
+                          <Token Text="CoolingCoupellesWT2 := TRUE;" />
+                          <NewLine />
+                        </StructuredText>
+                      </NetworkSource>
+                      <ProgrammingLanguage>SCL</ProgrammingLanguage>
+                    </AttributeList>
+                  </SW.Blocks.CompileUnit>
+                </ObjectList>
+              </SW.Blocks.FB>
+            </Document>
+            """;
+
+        var result = Translate(xml, new ProgramBlockComponent(
+            "CoolingCoupellesWT2", "FB", "Blocks/CoolingCoupellesWT2", "CoolingCoupellesWT2.xml"));
+
+        Assert.Equal("CoolingCoupellesWT2 := TRUE;", result["cu-network-32"]);
+        Assert.DoesNotContain("CoolingCoupellesWT2 := FALSE;", result["cu-network-32"]);
+    }
+
+    [Fact]
+    public void ExcludesMultilineBlockCommentedSclLinesFromLogicStatements()
+    {
+        const string xml = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <Document>
+              <SW.Blocks.FB ID="0">
+                <AttributeList><Name>CoolingCoupellesWT2</Name><ProgrammingLanguage>SCL</ProgrammingLanguage></AttributeList>
+                <ObjectList>
+                  <SW.Blocks.CompileUnit ID="cu-network-32-block-comment">
+                    <AttributeList>
+                      <NetworkSource>
+                        <StructuredText>
+                          <Token Text="(* IF #G.%X8 THEN" />
+                          <NewLine />
+                          <Token Text="#statProductData[1] := #statProductData[0];" />
+                          <NewLine />
+                          <Token Text="//#statProductData[0] := #statProductDataEmpty;" />
+                          <NewLine />
+                          <Token Text="END_IF; *)" />
+                          <NewLine />
+                          <Token Text="(*...*)" />
+                          <NewLine />
+                          <Token Text="#statProductData[0] := #statProductDataEmpty;" />
+                          <NewLine />
+                        </StructuredText>
+                      </NetworkSource>
+                      <ProgrammingLanguage>SCL</ProgrammingLanguage>
+                    </AttributeList>
+                  </SW.Blocks.CompileUnit>
+                </ObjectList>
+              </SW.Blocks.FB>
+            </Document>
+            """;
+
+        var result = Translate(xml, new ProgramBlockComponent(
+            "CoolingCoupellesWT2", "FB", "Blocks/CoolingCoupellesWT2", "CoolingCoupellesWT2.xml"));
+
+        Assert.Equal("#statProductData[0] := #statProductDataEmpty;", result["cu-network-32-block-comment"]);
+        Assert.DoesNotContain("#statProductData[1] := #statProductData[0];", result["cu-network-32-block-comment"]);
+        Assert.DoesNotContain("IF #G.%X8", result["cu-network-32-block-comment"]);
+    }
+
+    [Fact]
     public void TranslatesLadSliceAccessModifiersAsBitAccesses()
     {
         var result = TranslateLadBlock(
