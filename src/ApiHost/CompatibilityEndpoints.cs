@@ -294,6 +294,34 @@ public static class CompatibilityEndpoints
         {
             configured = !string.IsNullOrWhiteSpace(state.ApiKey ?? configuration["DeepSeek:ApiKey"] ?? configuration["deepSeekApiKey"]),
         }));
+        app.MapGet("/api/config/balance", async (
+            CompatibilityRuntimeState state,
+            IConfiguration configuration,
+            DeepSeekBalanceClient balanceClient,
+            CancellationToken ct) =>
+        {
+            var apiKey = ResolveApiKey(state, configuration);
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                return Results.Problem(
+                    statusCode: StatusCodes.Status400BadRequest,
+                    title: "DeepSeek API key is required.",
+                    detail: "DEEPSEEK_API_KEY_REQUIRED: Configure a DeepSeek API key before refreshing the balance.");
+            }
+
+            var result = await balanceClient.FetchAsync(
+                apiKey,
+                configuration["DeepSeek:BaseUrl"] ?? "https://api.deepseek.com",
+                ct);
+            if (!result.IsSuccess)
+            {
+                return Results.Json(
+                    new { error = result.Error ?? "DeepSeek balance request failed." },
+                    statusCode: (int)result.StatusCode);
+            }
+
+            return Results.Ok(result.Balance);
+        });
         app.MapPost("/api/config/key", (JsonElement body, CompatibilityRuntimeState state, CompatibilityConfigStore store, ApiChatService chat) =>
         {
             state.ApiKey = body.TryGetProperty("apiKey", out var apiKey)
@@ -442,6 +470,11 @@ public static class CompatibilityEndpoints
         return app;
 
     }
+
+    private static string? ResolveApiKey(CompatibilityRuntimeState state, IConfiguration configuration) =>
+        !string.IsNullOrWhiteSpace(state.ApiKey) ? state.ApiKey
+        : !string.IsNullOrWhiteSpace(configuration["DeepSeek:ApiKey"]) ? configuration["DeepSeek:ApiKey"]
+        : configuration["deepSeekApiKey"];
 
     private static void ApplyDevicePaths(string tool, IDictionary<string, object?> args, DeviceContext device)
     {

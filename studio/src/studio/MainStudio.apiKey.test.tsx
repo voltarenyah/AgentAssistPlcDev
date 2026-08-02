@@ -8,6 +8,11 @@ import MainStudio from './MainStudio'
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const keyState = vi.hoisted(() => ({ configured: false }))
+const balanceRequest = vi.hoisted(() => vi.fn(async () => ({
+  isAvailable: true,
+  balances: [{ currency: 'USD', totalBalance: '10.42', grantedBalance: '0.00', toppedUpBalance: '10.42' }],
+  fetchedAt: '2026-08-02T00:00:00.000Z',
+})))
 
 vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
@@ -16,6 +21,7 @@ vi.mock('@/api/client', async importOriginal => {
     listWorkbenches: vi.fn(async () => []),
     getSessions: vi.fn(async () => []),
     getKeyStatus: vi.fn(async () => ({ configured: keyState.configured })),
+    getDeepSeekBalance: balanceRequest,
     saveApiKey: vi.fn(async () => { keyState.configured = true }),
   }
 })
@@ -35,6 +41,7 @@ afterEach(() => {
 beforeEach(() => {
   vi.clearAllMocks()
   keyState.configured = false
+  balanceRequest.mockClear()
   window.localStorage.clear()
 })
 
@@ -56,6 +63,26 @@ describe('MainStudio API key entrance', () => {
 
     const indicator = host.querySelector<HTMLButtonElement>('[data-api-status]')
     expect(indicator?.textContent).toContain('API online')
+  })
+
+  it('loads the DeepSeek balance during startup and shows it in the status bar', async () => {
+    keyState.configured = true
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    expect(balanceRequest).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('[data-api-balance]')?.textContent).toContain('$10.42')
+  })
+
+  it('refreshes the DeepSeek balance when the status-bar refresh button is clicked', async () => {
+    keyState.configured = true
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    act(() => host.querySelector<HTMLButtonElement>('[data-api-balance-refresh]')?.click())
+    await act(async () => {})
+
+    expect(balanceRequest).toHaveBeenCalledTimes(2)
   })
 
   it('saves a key from the dialog and refreshes the indicator', async () => {

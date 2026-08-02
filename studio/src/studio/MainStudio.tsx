@@ -439,6 +439,8 @@ export default function MainStudio() {
   const [preview, setPreview] = useState<api.ReconciliationPreview | null>(null)
   const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null)
+  const [apiBalance, setApiBalance] = useState<api.DeepSeekBalance | null>(null)
+  const [apiBalanceBusy, setApiBalanceBusy] = useState(false)
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
   const [relativePath, setRelativePath] = useState('')
   const [lastImport, setLastImport] = useState<api.ImportModifiedResult | null>(null)
@@ -549,8 +551,24 @@ export default function MainStudio() {
     try {
       const status = await api.getKeyStatus()
       setApiKeyConfigured(status.configured)
+      return status
     } catch {
       setApiKeyConfigured(null)
+      return null
+    }
+  }, [])
+
+  const reloadBalance = useCallback(async () => {
+    setApiBalanceBusy(true)
+    try {
+      const balance = await api.getDeepSeekBalance()
+      setApiBalance(balance)
+      return balance
+    } catch {
+      setApiBalance(null)
+      return null
+    } finally {
+      setApiBalanceBusy(false)
     }
   }, [])
 
@@ -577,8 +595,10 @@ export default function MainStudio() {
     } finally {
       setLoading(false)
     }
-    void reloadKeyStatus()
-  }, [reloadWorkbenches, reloadSessions, reloadKeyStatus])
+    void reloadKeyStatus().then(status => {
+      if (status?.configured) void reloadBalance()
+    })
+  }, [reloadWorkbenches, reloadSessions, reloadKeyStatus, reloadBalance])
 
   useEffect(() => { void loadStartup() }, [loadStartup])
 
@@ -1220,7 +1240,8 @@ export default function MainStudio() {
 
   const saveApiKey = async (apiKey: string) => {
     await api.saveApiKey(apiKey)
-    await reloadKeyStatus()
+    const status = await reloadKeyStatus()
+    if (status?.configured) await reloadBalance()
     setApiKeyDialogOpen(false)
     toast.success('DeepSeek API key saved; live chats reset')
   }
@@ -1867,6 +1888,23 @@ export default function MainStudio() {
           <CircleDot className={`h-3 w-3 ${fatalError ? 'text-red-500' : apiKeyConfigured === false ? 'text-amber-500' : 'text-emerald-500'}`} />
           {fatalError ? 'API error' : apiKeyConfigured === false ? 'No valid API key' : 'API online'}
         </button>
+        {apiKeyConfigured && (
+          <span className="studio-status-item" data-api-balance title={apiBalance?.fetchedAt ? `Fetched ${new Date(apiBalance.fetchedAt).toLocaleString()}` : 'DeepSeek account balance'}>
+            <span>
+              Balance {apiBalance?.balances.map(balance => `${balance.currency === 'USD' ? '$' : `${balance.currency} `}${balance.totalBalance}`).join(' · ') ?? '—'}
+            </span>
+            <button
+              className="icon-button h-4 w-4"
+              aria-label="Refresh DeepSeek balance"
+              data-api-balance-refresh
+              title="Refresh DeepSeek balance"
+              disabled={apiBalanceBusy}
+              onClick={() => void reloadBalance()}
+            >
+              <RefreshCw className={`h-3 w-3 ${apiBalanceBusy ? 'animate-spin' : ''}`} />
+            </button>
+          </span>
+        )}
         <span className="studio-status-item">
           <Server className="h-3 w-3 text-chart-3" />
           {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}

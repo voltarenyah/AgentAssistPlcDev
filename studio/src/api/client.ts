@@ -687,6 +687,23 @@ export async function getKeyStatus(): Promise<{ configured: boolean }> {
   return res.json()
 }
 
+export type DeepSeekBalance = {
+  isAvailable: boolean
+  balances: {
+    currency: string
+    totalBalance: string
+    grantedBalance: string
+    toppedUpBalance: string
+  }[]
+  fetchedAt: string
+}
+
+export async function getDeepSeekBalance(): Promise<DeepSeekBalance> {
+  const res = await fetch(`${BASE}/config/balance`)
+  if (!res.ok) throw new Error(`DeepSeek balance failed: ${res.status}`)
+  return res.json()
+}
+
 export async function saveApiKey(key: string): Promise<void> {
   const res = await fetch(`${BASE}/config/key`, {
     method: 'POST',

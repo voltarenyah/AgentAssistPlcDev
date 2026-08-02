@@ -1,4 +1,5 @@
 using Agent.Mcp;
+using Agent.Chat;
 using Agent.Workbench;
 using Contracts.Sandbox;
 using System.ComponentModel;
@@ -132,6 +133,8 @@ else
 builder.Services.AddSingleton<WorkbenchApiState>();
 builder.Services.AddSingleton<CompatibilityRuntimeState>();
 builder.Services.AddSingleton(_ => new CompatibilityConfigStore());
+builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
+builder.Services.AddSingleton<DeepSeekBalanceClient>();
 builder.Services.AddSingleton<ApiChatService>();
 builder.Services.AddSingleton<SandboxPolicy>();
 builder.Services.AddSingleton<DeviceToolArgumentBinder>();
