@@ -5,6 +5,8 @@ using Contracts.Sandbox;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using ModelContextProtocol;
 using Microsoft.Extensions.FileProviders;
 
@@ -169,6 +171,25 @@ var applicationVersion = typeof(Program).Assembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
     ?? typeof(Program).Assembly.GetName().Version?.ToString()
     ?? "unknown";
+app.MapPost("/api/lifecycle/shutdown", (
+    HttpRequest request,
+    IConfiguration configuration,
+    IHostApplicationLifetime lifetime) =>
+{
+    var expected = configuration["Application:ShutdownToken"];
+    var supplied = request.Headers["X-AutomationWorkbench-Shutdown-Token"].ToString();
+    if (string.IsNullOrWhiteSpace(expected) || string.IsNullOrWhiteSpace(supplied))
+        return Results.Unauthorized();
+
+    var expectedBytes = Encoding.UTF8.GetBytes(expected);
+    var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
+    if (expectedBytes.Length != suppliedBytes.Length
+        || !CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes))
+        return Results.Unauthorized();
+
+    lifetime.StopApplication();
+    return Results.Accepted();
+});
 app.MapGet("/api/status", () => Results.Ok(new
 {
     storage = "workbench",

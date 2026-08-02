@@ -6,12 +6,18 @@ Agents must read this guide before performing packaging or installer operations.
 
 ## 1. Scope and safety rules
 
-The installer contains the self-contained Windows release. It does not use the repository's `bin` folders at runtime and does not require the .NET SDK or Node.js on the target machine.
+The installer contains the self-contained Windows release. It does not use the repository's `bin` folders at runtime and does not require the .NET SDK or Node.js on the target machine. The user-facing entry point is the WebView2 desktop shell; `ApiHost.exe` and the MCP executables are internal child processes.
 
 The installed application is normally located at:
 
 ```text
 C:\Program Files\Automation Workbench
+```
+
+The user-facing executable is:
+
+```text
+C:\Program Files\Automation Workbench\AutomationWorkbench.exe
 ```
 
 The installer does not own or delete user data. Treat these locations as user data and do not remove them during package testing or uninstall:
@@ -26,6 +32,8 @@ The installer does not own or delete user data. Treat these locations as user da
 Important runtime rules:
 
 - Do not run the installed and development `ApiHost` processes on the same default port (`5239`) at the same time. Use a separate development port such as `5255` for smoke tests.
+- Launch the installed application through `AutomationWorkbench.exe`; do not use `ApiHost.exe` as the desktop shortcut target.
+- The packaged shell starts the backend without a console window and displays Studio in an embedded WebView2 window. It must not open Chrome.
 - Do not open the same workbench root concurrently from installed and development environments. SQLite databases, Git worktrees, exports, and staging files are workbench data.
 - Stop only processes belonging to the installation or test root being operated on. Do not kill unrelated TIA Portal or `ApiHost` processes.
 - Use the uninstaller for removal. Do not manually delete `C:\Program Files\Automation Workbench` while application processes are running.
@@ -122,6 +130,7 @@ $install = Start-Process -FilePath $installer `
 
 [pscustomobject]@{
     InstallerExitCode = $install.ExitCode
+    ShellPresent = Test-Path "$root\AutomationWorkbench.exe"
     ApiHostPresent = Test-Path "$root\ApiHost.exe"
     Version = if (Test-Path "$root\ApiHost.exe") {
         (Get-Item "$root\ApiHost.exe").VersionInfo.ProductVersion
@@ -129,7 +138,7 @@ $install = Start-Process -FilePath $installer `
 }
 ```
 
-Expected result: exit code `0`, `ApiHostPresent = True`, and the requested package version.
+Expected result: exit code `0`, `ShellPresent = True`, `ApiHostPresent = True`, and the requested package version.
 
 ## 5. API smoke test
 
@@ -149,6 +158,27 @@ Stop-Process -Id $api.Id -Force -ErrorAction SilentlyContinue
 ```
 
 Expected result: HTTP status `200`, with the requested application version. If the request fails, check that `ApiHost.exe` exists, that the selected port is free, and that the process was started with `$root` as its working directory.
+
+## 5.1 Desktop shell smoke test
+
+Run the installed shell from an elevated test session after confirming that port `5239` is free:
+
+```powershell
+$shell = Start-Process "$root\AutomationWorkbench.exe" -WorkingDirectory $root -PassThru
+Start-Sleep 10
+$status = Invoke-RestMethod 'http://127.0.0.1:5239/api/status'
+$status
+
+[pscustomobject]@{
+    ShellProcessRunning = -not $shell.HasExited
+    ApiHostRunning = @(Get-CimInstance Win32_Process | Where-Object {
+        $_.ExecutablePath -eq "$root\ApiHost.exe"
+    }).Count -eq 1
+    ShellWindow = Test-Path "$root\AutomationWorkbench.exe"
+}
+```
+
+Expected result: a native Automation Workbench window displays the Studio UI, the API reports the requested version, no console window is visible, and Chrome is not opened. Close the window and confirm the shell-owned `ApiHost.exe` and MCP child processes exit.
 
 ## 6. Upgrade test
 
@@ -285,6 +315,10 @@ If required, provide the compiler explicitly:
     -InnoSetupPath 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
 ```
 
+### `AutomationWorkbench.exe` cannot start
+
+Check `%LOCALAPPDATA%\AutomationWorkbench\logs\backend.log`. Confirm that the WebView2 Runtime is installed and that port `5239` is free. The shell starts `ApiHost.exe` with its working directory set to the installation root and passes `Application:OpenBrowserOnStart=false`.
+
 ### `ApiHost.exe` cannot start
 
 Check that the working directory exists and that the process was started with the installation root as `-WorkingDirectory`. Check for a port collision:
@@ -298,7 +332,7 @@ Use another free port for a smoke test rather than stopping an unrelated process
 
 ### Installation files cannot be removed
 
-An installed `ApiHost` or MCP process is still holding files open. Stop only processes whose `ExecutablePath` is beneath the exact installation or test root, wait a few seconds, and then run the uninstaller again. Do not force-delete the directory while files are locked.
+An installed shell, `ApiHost`, or MCP process is still holding files open. Stop only processes whose `ExecutablePath` is beneath the exact installation or test root, wait a few seconds, and then run the uninstaller again. Do not force-delete the directory while files are locked.
 
 ### Whitelist helper returns a nonzero code
 
@@ -314,6 +348,7 @@ For each package intended for distribution or pre-production testing, record:
 - release test result;
 - installer SHA-256;
 - clean-install API status;
+- desktop shell window, hidden-process, and WebView2 result;
 - upgrade result, if performed;
 - repair result, if performed;
 - uninstall result and user-data preservation result;

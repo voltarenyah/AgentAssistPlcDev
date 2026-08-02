@@ -47,8 +47,11 @@ Name: "launch"; Description: "Launch Automation Workbench after setup"; GroupDes
 Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Automation Workbench"; Filename: "{app}\ApiHost.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\Automation Workbench"; Filename: "{app}\ApiHost.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Automation Workbench"; Filename: "{app}\AutomationWorkbench.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Automation Workbench"; Filename: "{app}\AutomationWorkbench.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\AutomationWorkbench.exe"; Description: "Launch Automation Workbench"; Flags: nowait postinstall skipifsilent; Tasks: launch
 
 [Code]
 const

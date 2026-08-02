@@ -18,6 +18,7 @@ $sourceEditorProject = Join-Path $repoRoot 'src\Mcp.SourceEditor\Mcp.SourceEdito
 $versionControlProject = Join-Path $repoRoot 'src\Mcp.VersionControl\Mcp.VersionControl.csproj'
 $engineeringProject = Join-Path $repoRoot 'src\Mcp.Engineering\Mcp.Engineering.csproj'
 $whitelistProject = Join-Path $repoRoot 'src\Tools.OpennessWhitelist\Tools.OpennessWhitelist.csproj'
+$desktopProject = Join-Path $repoRoot 'src\AutomationWorkbench.Desktop\AutomationWorkbench.Desktop.csproj'
 $studioRoot = Join-Path $repoRoot 'studio'
 
 function Invoke-Tool {
@@ -113,6 +114,7 @@ $testProjects = @(
     'tests\Mcp.VersionControl.Tests\Mcp.VersionControl.Tests.csproj',
     'tests\Mcp.SourceEditor.Tests\Mcp.SourceEditor.Tests.csproj',
     'tests\ApiHost.Tests\ApiHost.Tests.csproj',
+    'tests\AutomationWorkbench.Desktop.Tests\AutomationWorkbench.Desktop.Tests.csproj',
     'tests\E2E.Tests\E2E.Tests.csproj'
 )
 foreach ($testProject in $testProjects) {
@@ -134,12 +136,16 @@ $publishProperties = $versionProperties + @(
     '-p:PublishTrimmed=false',
     '-p:PublishReadyToRun=false'
 )
+$desktopPublishProperties = $publishProperties + @(
+    '-p:PublishSingleFile=true'
+)
 $apiStage = Join-Path $stagingRoot 'ApiHost'
 $knowledgeStage = Join-Path $stagingRoot 'Mcp.Knowledge'
 $sourceEditorStage = Join-Path $stagingRoot 'Mcp.SourceEditor'
 $versionControlStage = Join-Path $stagingRoot 'Mcp.VersionControl'
 $engineeringStage = Join-Path $stagingRoot 'Mcp.Engineering'
 $whitelistStage = Join-Path $stagingRoot 'OpennessWhitelist'
+$desktopStage = Join-Path $stagingRoot 'AutomationWorkbench.Desktop'
 
 Invoke-Tool 'dotnet' (@('publish', $apiHostProject, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $apiStage, '-p:BuildStudio=true') + $publishProperties)
 Invoke-Tool 'dotnet' (@('publish', $knowledgeProject, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $knowledgeStage) + $publishProperties)
@@ -147,6 +153,7 @@ Invoke-Tool 'dotnet' (@('publish', $sourceEditorProject, '--configuration', 'Rel
 Invoke-Tool 'dotnet' (@('publish', $versionControlProject, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $versionControlStage) + $publishProperties)
 Invoke-Tool 'dotnet' (@('build', $engineeringProject, '--configuration', 'Release', '--framework', 'net48', '--no-restore', '--output', $engineeringStage) + $versionProperties)
 Invoke-Tool 'dotnet' (@('build', $whitelistProject, '--configuration', 'Release', '--framework', 'net48', '--no-restore', '--output', $whitelistStage) + $versionProperties)
+Invoke-Tool 'dotnet' (@('publish', $desktopProject, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $desktopStage) + $desktopPublishProperties)
 
 $apiDestination = $releaseRootFull
 $mcpRoot = Join-Path $releaseRootFull 'mcp'
@@ -161,6 +168,7 @@ Copy-DirectoryContents $sourceEditorStage $sourceEditorDestination
 Copy-DirectoryContents $versionControlStage $versionControlDestination
 Copy-DirectoryContents $engineeringStage $engineeringDestination
 Copy-DirectoryContents $whitelistStage $toolsDestination
+Copy-DirectoryContents $desktopStage $releaseRootFull
 
 $engineeringConfig = Join-Path $engineeringDestination 'Mcp.Engineering.exe.config'
 Require-File (Join-Path $engineeringDestination 'Mcp.Engineering.exe')
@@ -184,7 +192,8 @@ $requiredExecutables = @(
     (Join-Path $engineeringDestination 'Mcp.Engineering.exe'),
     (Join-Path $knowledgeDestination 'Mcp.Knowledge.exe'),
     (Join-Path $sourceEditorDestination 'Mcp.SourceEditor.exe'),
-    (Join-Path $versionControlDestination 'Mcp.VersionControl.exe')
+    (Join-Path $versionControlDestination 'Mcp.VersionControl.exe'),
+    (Join-Path $releaseRootFull 'AutomationWorkbench.exe')
 )
 foreach ($requiredExecutable in $requiredExecutables) {
     Require-File $requiredExecutable
@@ -212,6 +221,7 @@ $manifest = [ordered]@{
         McpSourceEditor = 'net8.0'
         McpVersionControl = 'net8.0'
         McpEngineering = 'net48'
+        DesktopShell = 'net8.0-windows'
     }
     files = $manifestFiles
 }
