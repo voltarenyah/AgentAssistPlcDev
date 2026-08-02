@@ -329,6 +329,10 @@
     @apply inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap;
   }
 
+  .studio-status-context {
+    @apply inline-flex min-w-0 items-center gap-1.5 truncate;
+  }
+
   .studio-status-api {
     @apply rounded-full border px-2 py-0.5 transition-colors hover:bg-accent/50;
     border-color: var(--border);

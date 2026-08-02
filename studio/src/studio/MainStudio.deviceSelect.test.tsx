@@ -118,8 +118,8 @@ describe('MainStudio device selection resilience', () => {
     clickText(host, 'master')
     await act(async () => {})
 
-    expect(host.querySelector('header')?.textContent).toContain('dev1')
-    expect(host.querySelector('header')?.textContent).not.toContain('no device')
+    expect(host.querySelector('footer')?.textContent).toContain('dev1')
+    expect(host.querySelector('footer')?.textContent).not.toContain('no device')
     // While the snapshot is still loading, the brand-new bootstrap panel must not flash.
     expect(host.textContent).not.toContain('Generate PLC context')
   })
@@ -139,8 +139,8 @@ describe('MainStudio device selection resilience', () => {
     await act(async () => {})
     await act(async () => {})
 
-    expect(host.querySelector('header')?.textContent).toContain('PLC_Demo')
-    expect(host.querySelector('header')?.textContent).not.toContain('no device')
+    expect(host.querySelector('footer')?.textContent).toContain('PLC_Demo')
+    expect(host.querySelector('footer')?.textContent).not.toContain('no device')
     // Established device (snapshot has blocks): no bootstrap panel.
     expect(host.textContent).not.toContain('Generate PLC context')
   })
