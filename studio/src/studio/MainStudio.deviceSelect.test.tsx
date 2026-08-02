@@ -88,19 +88,19 @@ describe('MainStudio device selection resilience', () => {
     const rightToggle = host.querySelector<HTMLButtonElement>('[data-dock-toggle="right"]')
     expect(leftToggle).not.toBeNull()
     expect(rightToggle).not.toBeNull()
-    expect(host.querySelector('[data-dock="left"]')).not.toBeNull()
-    expect(host.querySelector('[data-dock="right"]')).not.toBeNull()
+    expect(host.querySelector('[data-dock="left"]')?.getAttribute('data-dock-state')).toBe('open')
+    expect(host.querySelector('[data-dock="right"]')?.getAttribute('data-dock-state')).toBe('open')
 
     act(() => leftToggle?.click())
-    expect(host.querySelector('[data-dock="left"]')).toBeNull()
-    expect(host.querySelector('[data-dock="right"]')).not.toBeNull()
+    expect(host.querySelector('[data-dock="left"]')?.getAttribute('data-dock-state')).toBe('closed')
+    expect(host.querySelector('[data-dock="right"]')?.getAttribute('data-dock-state')).toBe('open')
 
     act(() => rightToggle?.click())
-    expect(host.querySelector('[data-dock="right"]')).toBeNull()
+    expect(host.querySelector('[data-dock="right"]')?.getAttribute('data-dock-state')).toBe('closed')
     expect(host.querySelector('[data-status-bar]')).not.toBeNull()
 
     act(() => leftToggle?.click())
-    expect(host.querySelector('[data-dock="left"]')).not.toBeNull()
+    expect(host.querySelector('[data-dock="left"]')?.getAttribute('data-dock-state')).toBe('open')
   })
 
   it('applies device selection instantly without waiting for the snapshot or engineering server', async () => {

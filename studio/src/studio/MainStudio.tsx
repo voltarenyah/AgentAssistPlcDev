@@ -1277,33 +1277,36 @@ export default function MainStudio() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {shellLayout.leftOpen && (
-          <>
-            <div data-dock="left" className="min-h-0 shrink-0" style={{ width: shellLayout.leftWidth }}>
-              <WorkbenchNavigator
-                workbenches={workbenches}
-                devicesByWorktree={devicesByWorktree}
-                selection={selection}
-                knowledgeState={navigatorKnowledgeState}
-                loading={loading}
-                onCreateWorkbench={openCreateWorkbench}
-                onCreateWorktree={setCreateWorktreeFor}
-                onRefresh={() => void loadStartup()}
-                onSelectWorkbench={workbench => void selectWorkbench(workbench)}
-                onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
-                onSelectDevice={(workbench, worktree, deviceId) => void selectDevice(workbench, worktree, deviceId)}
-                onDeleteWorkbench={workbench => setDeleteWorkbenchFor(workbench)}
-              />
-            </div>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize workbench project tree"
-              className="dock-resize-handle"
-              onPointerDown={event => startDockResize('left', event.clientX)}
-            />
-          </>
-        )}
+        <div
+          data-dock="left"
+          data-dock-state={shellLayout.leftOpen ? 'open' : 'closed'}
+          aria-hidden={!shellLayout.leftOpen}
+          className="dock-shell dock-shell-left min-h-0 shrink-0"
+          style={{ width: shellLayout.leftOpen ? shellLayout.leftWidth : 0 }}
+        >
+          <WorkbenchNavigator
+            workbenches={workbenches}
+            devicesByWorktree={devicesByWorktree}
+            selection={selection}
+            knowledgeState={navigatorKnowledgeState}
+            loading={loading}
+            onCreateWorkbench={openCreateWorkbench}
+            onCreateWorktree={setCreateWorktreeFor}
+            onRefresh={() => void loadStartup()}
+            onSelectWorkbench={workbench => void selectWorkbench(workbench)}
+            onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
+            onSelectDevice={(workbench, worktree, deviceId) => void selectDevice(workbench, worktree, deviceId)}
+            onDeleteWorkbench={workbench => setDeleteWorkbenchFor(workbench)}
+          />
+        </div>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize workbench project tree"
+          className="dock-resize-handle"
+          data-dock-state={shellLayout.leftOpen ? 'open' : 'closed'}
+          onPointerDown={event => startDockResize('left', event.clientX)}
+        />
 
         <main className="flex min-w-0 flex-1 flex-col">
           {fatalError ? (
@@ -1679,16 +1682,23 @@ export default function MainStudio() {
             </>
           )}
         </main>
-        {shellLayout.rightOpen && selection.deviceId && (
+        {selection.deviceId && (
           <>
             <div
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize context dock"
               className="dock-resize-handle"
+              data-dock-state={shellLayout.rightOpen ? 'open' : 'closed'}
               onPointerDown={event => startDockResize('right', event.clientX)}
             />
-            <div data-dock="right" className="min-h-0 shrink-0" style={{ width: shellLayout.rightWidth }}>
+            <div
+              data-dock="right"
+              data-dock-state={shellLayout.rightOpen ? 'open' : 'closed'}
+              aria-hidden={!shellLayout.rightOpen}
+              className="dock-shell dock-shell-right min-h-0 shrink-0"
+              style={{ width: shellLayout.rightOpen ? shellLayout.rightWidth : 0 }}
+            >
               {activeTab === 'overview' && (
                 <DevicePropertiesDock
                   meta={deviceMeta}

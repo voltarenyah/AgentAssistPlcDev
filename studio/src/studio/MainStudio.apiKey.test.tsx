@@ -91,7 +91,7 @@ describe('MainStudio API key entrance', () => {
     act(() => host.querySelector<HTMLButtonElement>('[data-dock-toggle="left"]')?.click())
     act(() => host.querySelector<HTMLButtonElement>('[data-dock-toggle="right"]')?.click())
 
-    expect(host.querySelector('[data-dock="left"]')).toBeNull()
+    expect(host.querySelector('[data-dock="left"]')?.getAttribute('data-dock-state')).toBe('closed')
     expect(host.querySelector('[data-dock="right"]')).toBeNull()
     expect(host.querySelector('[data-status-bar]')).not.toBeNull()
 
