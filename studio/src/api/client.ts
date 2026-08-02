@@ -371,6 +371,11 @@ export const createWorktree = (workbenchId: string, name: string, branch: string
     branch,
     startPoint: startPoint?.trim() || null,
   }), operationId))
+export const deleteWorktree = (workbenchId: string, worktreeId: string, operationId?: string) =>
+  workbenchRequest<{ deleted: boolean }>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}`,
+    withOperation({ method: 'DELETE' }, operationId),
+  )
 export const selectWorktree = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/select`, jsonRequest('POST'))
 export type DeviceSummary = {
@@ -390,10 +395,11 @@ export const openDeviceProject = (
   worktreeId: string,
   deviceId: string,
   operationId?: string,
+  withUI = true,
 ) =>
   workbenchRequest<{ opened: boolean }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/tia/open`,
-    withOperation(jsonRequest('POST'), operationId),
+    withOperation(jsonRequest('POST', { withUI }), operationId),
   )
 export const attachDeviceProject = (
   workbenchId: string,

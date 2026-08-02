@@ -842,6 +842,23 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenProjectInTiaEndpointCanUseHeadlessMode()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            engineeringOffline: false,
+            sourceProjectPath: @"C:\Projects\Line.ap17");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"{fixture.DeviceRoute}/tia/open",
+            new { withUI = false });
+
+        response.EnsureSuccessStatusCode();
+        Assert.False(fixture.Engineering.Arguments["connect"].GetProperty("withUI").GetBoolean());
+    }
+
+    [Fact]
     public async Task FailedOpenProjectInTiaPreservesOfflineSnapshot()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
@@ -1661,6 +1678,43 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/delete-1");
         Assert.Equal("delete-workbench", operation.GetProperty("operationType").GetString());
         Assert.Equal("succeeded", operation.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task DeleteMasterWorktreeIsRejectedWithoutChangingTheWorkbench()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Delete,
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}");
+
+        var response = await fixture.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("MASTER_WORKTREE_PROTECTED", error.GetProperty("error").GetString());
+        Assert.True(Directory.Exists(fixture.Context.WorktreeRoot));
+    }
+
+    [Fact]
+    public async Task DeleteLinkedWorktreeRemovesCheckoutAndRegistration()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
+        fixture.AddWorktree("wt-2", "feature", @"C:\Projects\Feature.ap17");
+        _ = await fixture.Client.GetFromJsonAsync<JsonElement[]>("/api/workbenches");
+
+        var response = await fixture.Client.DeleteAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/wt-2");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Contains("vc_remove_worktree", fixture.VersionControl.Calls);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Context.WorkbenchRoot, "worktrees", "feature")));
+        var workbench = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}");
+        Assert.Single(workbench.GetProperty("worktrees").EnumerateArray());
+        Assert.DoesNotContain(
+            workbench.GetProperty("worktrees").EnumerateArray(),
+            worktree => worktree.GetProperty("worktreeId").GetString() == "wt-2");
     }
 
     [Fact]

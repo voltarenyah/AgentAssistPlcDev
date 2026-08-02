@@ -118,7 +118,8 @@ public sealed class WorkbenchCoordinator
     public async Task OpenProjectInTiaAsync(
         DeviceContext device,
         CancellationToken cancellationToken = default,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        bool withUI = true)
     {
         ArgumentNullException.ThrowIfNull(device);
         var worktree = store.Read<WorktreeMetadata>(
@@ -136,7 +137,7 @@ public sealed class WorkbenchCoordinator
         {
             await engineering.CallAsync<object>(
                 "connect",
-                new { projectPath = worktree.SourceProjectPath, withUI = true },
+                new { projectPath = worktree.SourceProjectPath, withUI },
                 cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -352,6 +353,59 @@ public sealed class WorkbenchCoordinator
         knownWorkbenches[updatedWorkbench.WorkbenchId] = updatedWorkbench;
         knownWorktrees[worktree.WorktreeId] = worktree;
         return worktree;
+    }
+
+    public async Task DeleteWorktreeAsync(
+        WorkbenchMetadata workbench,
+        string worktreeId,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        var persisted = catalog.Load(workbench.RootPath);
+        if (!string.Equals(persisted.WorkbenchId, workbench.WorkbenchId, StringComparison.Ordinal))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKBENCH_RELATIONSHIP_MISMATCH",
+                "Workbench metadata does not match the persisted catalog entry.");
+        }
+
+        var registration = persisted.Worktrees.SingleOrDefault(candidate =>
+            string.Equals(candidate.WorktreeId, worktreeId, StringComparison.Ordinal));
+        if (registration is null)
+        {
+            throw new WorkbenchCatalogException(
+                "WORKTREE_NOT_FOUND",
+                $"Workbench '{persisted.WorkbenchId}' does not contain worktree '{worktreeId}'.");
+        }
+
+        if (string.Equals(registration.Branch, "master", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorkbenchLifecycleException(
+                "MASTER_WORKTREE_PROTECTED",
+                "The master worktree is the workbench baseline and cannot be removed.");
+        }
+
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(persisted.RootPath, registration.RelativePath);
+        progress?.Report($"Removing linked worktree '{registration.Name}'...");
+        try
+        {
+            await versionControl.CallAsync<object>(
+                "vc_remove_worktree",
+                new { repositoryPath = persisted.RepositoryPath, worktreePath = worktreeRoot },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (ToolCallException exception) when (
+            !Directory.Exists(worktreeRoot)
+            || IsMissingWorktreeRegistration(exception))
+        {
+            // A checkout that is already gone, or whose Git registration is stale,
+            // cannot be removed by git; the catalog cleanup below finishes the removal.
+        }
+
+        var updated = catalog.RemoveWorktree(persisted, worktreeId);
+        knownWorkbenches[updated.WorkbenchId] = updated;
+        knownWorktrees.TryRemove(worktreeId, out _);
     }
 
     /// <summary>

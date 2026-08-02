@@ -53,7 +53,6 @@ import {
   type DeviceSelectionState,
 } from '@/studio/deviceSnapshot'
 import * as api from '@/api/client'
-import { runOpenProjectInTia } from '@/studio/deviceActions'
 import ChatWorkspace from '@/studio/chat/ChatWorkspace'
 import SessionDock from '@/studio/chat/SessionDock'
 import NodeEdgesView from '@/studio/NodeEdgesView'
@@ -94,6 +93,11 @@ type CompilePrompt = {
     worktreeId: string
     deviceId: string
   }
+}
+type DeviceContextRef = {
+  workbenchId: string
+  worktreeId: string
+  deviceId: string
 }
 
 const worktreeKey = (workbenchId: string, worktreeId: string) => `${workbenchId}:${worktreeId}`
@@ -200,6 +204,54 @@ function DeleteWorkbenchDialog({
           <button className="primary-button bg-red-600 hover:bg-red-500" onClick={onDelete} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Delete permanently
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DeleteWorktreeDialog({
+  workbench,
+  worktree,
+  busy,
+  onClose,
+  onDelete,
+}: {
+  workbench: api.Workbench
+  worktree: api.WorkbenchRegistration
+  busy: boolean
+  onClose: () => void
+  onDelete: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-5 backdrop-blur-[2px]">
+      <div className="w-full max-w-[520px] overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+          <div className="grid h-9 w-9 place-items-center rounded-lg bg-red-500/10">
+            <Trash2 className="h-4 w-4 text-red-500" />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-sm font-semibold">Remove “{worktree.name}”?</h2>
+            <p className="text-[10px] text-muted-foreground">This deletes the linked checkout and its local device context.</p>
+          </div>
+          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
+        </div>
+        <div className="space-y-3 p-5">
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            The shared Git repository and other worktrees stay intact. Any uncommitted files in this worktree will be discarded.
+          </p>
+          <div className="rounded-lg border bg-muted/25 p-3 text-[10px]" style={{ borderColor: 'var(--border)' }}>
+            <span className="font-medium">{workbench.name}</span>
+            <span className="mx-1 text-muted-foreground">/</span>
+            <span className="font-mono text-muted-foreground">{worktree.branch}</span>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary-button bg-red-600 hover:bg-red-500" onClick={onDelete} disabled={busy}>
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Remove worktree
           </button>
         </div>
       </div>
@@ -380,6 +432,10 @@ export default function MainStudio() {
   const [sandboxDenial, setSandboxDenial] = useState<{ message: string; roots: string[] } | null>(null)
   const [createWorktreeFor, setCreateWorktreeFor] = useState<api.Workbench | null>(null)
   const [deleteWorkbenchFor, setDeleteWorkbenchFor] = useState<api.Workbench | null>(null)
+  const [deleteWorktreeFor, setDeleteWorktreeFor] = useState<{
+    workbench: api.Workbench
+    worktree: api.WorkbenchRegistration
+  } | null>(null)
   const [preview, setPreview] = useState<api.ReconciliationPreview | null>(null)
   const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null)
@@ -687,6 +743,17 @@ export default function MainStudio() {
     }
   }
 
+  const runNavigatorDeviceAction = async (
+    workbench: api.Workbench,
+    worktree: api.WorkbenchRegistration,
+    deviceId: string,
+    action: (context: DeviceContextRef) => Promise<void>,
+  ) => {
+    const context = { workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId }
+    await selectDevice(workbench, worktree, deviceId)
+    await action(context)
+  }
+
   const createWorkbench = async (values: {
     name: string
     rootPath?: string
@@ -946,9 +1013,11 @@ export default function MainStudio() {
     }
   }
 
-  const stageRefresh = async (allowCompile = false) => {
-    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
-    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+  const stageRefresh = async (allowCompile = false, contextOverride?: DeviceContextRef) => {
+    const context = contextOverride ?? (selection.workbenchId && selection.worktreeId && selection.deviceId
+      ? { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+      : null)
+    if (!context) return
     setCompilePrompt(null)
     setOperation('stage-refresh')
     const op = beginOperation(
@@ -980,25 +1049,31 @@ export default function MainStudio() {
     }
   }
 
-  const openProjectInTia = async () => {
-    if (!activeWorkbench || !activeWorktree || !selection.deviceId) return
-    const context = {
-      workbenchId: activeWorkbench.workbenchId,
-      worktreeId: activeWorktree.worktreeId,
-      deviceId: selection.deviceId,
-    }
+  const openProjectInTia = async (contextOverride?: DeviceContextRef, withUI = true) => {
+    const context = contextOverride ?? (activeWorkbench && activeWorktree && selection.deviceId
+      ? {
+        workbenchId: activeWorkbench.workbenchId,
+        worktreeId: activeWorktree.worktreeId,
+        deviceId: selection.deviceId,
+      }
+      : null)
+    if (!context) return
     setOperation('open-tia-project')
     const op = beginOperation('open-tia-project', 'Opening registered project in TIA Portal...')
     try {
-      await runOpenProjectInTia(api.openDeviceProject, { ...context, operationId: op.id })
-      toast.success('Registered project opened in TIA Portal')
+      await api.openDeviceProject(context.workbenchId, context.worktreeId, context.deviceId, op.id, withUI)
+      toast.success(withUI ? 'Registered project opened in TIA Portal' : 'Registered project opened headless')
     } catch (error) {
       // A live session query is only warranted now: if the project is already
       // open in a running TIA instance, surface the re-attach option instead of
       // leaving the user with a bare "another user has it open" error.
       const live = await api.getSessions().catch(() => null)
       if (live) setSessions(live)
-      const source = deviceInfo?.sourceProjectPath
+      const source = context.workbenchId === selection.workbenchId
+        && context.worktreeId === selection.worktreeId
+        && context.deviceId === selection.deviceId
+        ? deviceInfo?.sourceProjectPath
+        : null
       const match = source
         ? live?.find(session => session.projectPath
             && normalizeProjectPath(session.projectPath) === normalizeProjectPath(source))
@@ -1062,9 +1137,11 @@ export default function MainStudio() {
     }
   }
 
-  const updateKnowledge = async (rebuild = false) => {
-    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
-    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+  const updateKnowledge = async (rebuild = false, contextOverride?: DeviceContextRef) => {
+    const context = contextOverride ?? (selection.workbenchId && selection.worktreeId && selection.deviceId
+      ? { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+      : null)
+    if (!context) return
     setOperation(rebuild ? 'rebuild-knowledge' : 'update-knowledge')
     const op = beginOperation(
       rebuild ? 'rebuild-knowledge' : 'update-knowledge',
@@ -1119,15 +1196,20 @@ export default function MainStudio() {
     }
   }
 
-  const mergeIntoMaster = async () => {
-    if (!activeWorkbench || !activeWorktree || activeWorktree.branch === 'master') return
-    const target = activeWorkbench.worktrees.find(worktree => worktree.branch === 'master')
+  const mergeIntoMaster = async (targetContext?: {
+    workbench: api.Workbench
+    worktree: api.WorkbenchRegistration
+  }) => {
+    const workbench = targetContext?.workbench ?? activeWorkbench
+    const worktree = targetContext?.worktree ?? activeWorktree
+    if (!workbench || !worktree || worktree.branch === 'master') return
+    const target = workbench.worktrees.find(candidate => candidate.branch === 'master')
     if (!target) return
     setOperation('merge-worktree')
     const op = beginOperation('merge-worktree', 'Merging worktree...')
     try {
-      await api.mergeWorktree(activeWorkbench.workbenchId, activeWorktree.worktreeId, target.worktreeId, op.id)
-      toast.success(`${activeWorktree.branch} merged into master`)
+      await api.mergeWorktree(workbench.workbenchId, worktree.worktreeId, target.worktreeId, op.id)
+      toast.success(`${worktree.branch} merged into master`)
       await reloadWorkbenches()
     } catch (error) {
       showErrorToast(displayError(error))
@@ -1165,6 +1247,28 @@ export default function MainStudio() {
     }
   }
 
+  const deleteWorktree = async () => {
+    if (!deleteWorktreeFor) return
+    const { workbench, worktree } = deleteWorktreeFor
+    setOperation('delete-worktree')
+    const op = beginOperation('delete-worktree', 'Removing linked worktree...')
+    try {
+      await api.deleteWorktree(workbench.workbenchId, worktree.worktreeId, op.id)
+      setDeleteWorktreeFor(null)
+      if (selection.workbenchId === workbench.workbenchId && selection.worktreeId === worktree.worktreeId) {
+        setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
+        setDeviceSelection(null)
+        setChatTabs(emptyChatTabs())
+      }
+      await reloadWorkbenches()
+      toast.success(`Worktree “${worktree.name}” removed`)
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
   const bootstrapDevice = async () => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
@@ -1184,9 +1288,11 @@ export default function MainStudio() {
 
   const [rebuildArmed, setRebuildArmed] = useState(false)
 
-  const rebuildProject = async (allowCompile = false) => {
-    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
-    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+  const rebuildProject = async (allowCompile = false, contextOverride?: DeviceContextRef) => {
+    const context = contextOverride ?? (selection.workbenchId && selection.worktreeId && selection.deviceId
+      ? { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
+      : null)
+    if (!context) return
     setCompilePrompt(null)
     setOperation('bootstrap-device')
     const op = beginOperation(
@@ -1277,6 +1383,37 @@ export default function MainStudio() {
             onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
             onSelectDevice={(workbench, worktree, deviceId) => void selectDevice(workbench, worktree, deviceId)}
             onDeleteWorkbench={workbench => setDeleteWorkbenchFor(workbench)}
+            onDeleteWorktree={(workbench, worktree) => setDeleteWorktreeFor({ workbench, worktree })}
+            onMergeWorktree={(workbench, worktree) => void mergeIntoMaster({ workbench, worktree })}
+            onOpenDevice={(workbench, worktree, deviceId, withUI) => void runNavigatorDeviceAction(
+              workbench,
+              worktree,
+              deviceId,
+              context => openProjectInTia(context, withUI),
+            )}
+            onCompareDevice={(workbench, worktree, deviceId) => void runNavigatorDeviceAction(
+              workbench,
+              worktree,
+              deviceId,
+              context => stageRefresh(false, context),
+            )}
+            onRebuildDevice={(workbench, worktree, deviceId) => {
+              if (window.confirm('Rebuild this PLC project from TIA? This updates the baseline and knowledge database.')) {
+                void runNavigatorDeviceAction(workbench, worktree, deviceId, context => rebuildProject(false, context))
+              }
+            }}
+            onUpdateKnowledge={(workbench, worktree, deviceId) => void runNavigatorDeviceAction(
+              workbench,
+              worktree,
+              deviceId,
+              context => updateKnowledge(false, context),
+            )}
+            onRebuildKnowledge={(workbench, worktree, deviceId) => void runNavigatorDeviceAction(
+              workbench,
+              worktree,
+              deviceId,
+              context => updateKnowledge(true, context),
+            )}
           />
         </div>
         <div
@@ -1777,6 +1914,15 @@ export default function MainStudio() {
           busy={operation === 'delete-workbench'}
           onClose={() => setDeleteWorkbenchFor(null)}
           onDelete={() => void deleteWorkbench()}
+        />
+      )}
+      {deleteWorktreeFor && (
+        <DeleteWorktreeDialog
+          workbench={deleteWorktreeFor.workbench}
+          worktree={deleteWorktreeFor.worktree}
+          busy={operation === 'delete-worktree'}
+          onClose={() => setDeleteWorktreeFor(null)}
+          onDelete={() => void deleteWorktree()}
         />
       )}
       {preview && (

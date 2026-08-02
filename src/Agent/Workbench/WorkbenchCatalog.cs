@@ -180,6 +180,49 @@ public sealed class WorkbenchCatalog
         return updated;
     }
 
+    public WorkbenchMetadata RemoveWorktree(WorkbenchMetadata workbench, string worktreeId)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+
+        var root = WorkbenchPaths.ResolveWorkbench("workbench", workbench.RootPath);
+        var persisted = Load(root);
+        if (!string.Equals(persisted.WorkbenchId, workbench.WorkbenchId, StringComparison.Ordinal))
+        {
+            throw new WorkbenchCatalogException(
+                "WORKBENCH_RELATIONSHIP_MISMATCH",
+                "Workbench metadata does not match the persisted catalog entry.");
+        }
+
+        var registration = persisted.Worktrees.SingleOrDefault(candidate =>
+            string.Equals(candidate.WorktreeId, worktreeId, StringComparison.Ordinal));
+        if (registration is null)
+        {
+            throw new WorkbenchCatalogException(
+                "WORKTREE_NOT_FOUND",
+                $"Workbench '{persisted.WorkbenchId}' does not contain worktree '{worktreeId}'.");
+        }
+
+        if (string.Equals(registration.Branch, "master", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorkbenchCatalogException(
+                "MASTER_WORKTREE_PROTECTED",
+                "The master worktree is the workbench baseline and cannot be removed.");
+        }
+
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(persisted.RootPath, registration.RelativePath);
+        ClearReadOnlyAttributes(worktreeRoot);
+        DeleteDirectoryIfPresent(worktreeRoot);
+
+        var updated = persisted with
+        {
+            Worktrees = persisted.Worktrees
+                .Where(candidate => !string.Equals(candidate.WorktreeId, worktreeId, StringComparison.Ordinal))
+                .ToArray(),
+        };
+        _store.Write(MetadataPath(persisted.RootPath), updated);
+        return updated;
+    }
+
     public DeviceContext ResolveDevice(
         WorkbenchMetadata workbench,
         WorktreeMetadata worktree,

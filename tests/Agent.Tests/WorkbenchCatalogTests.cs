@@ -162,6 +162,23 @@ public sealed class WorkbenchCatalogTests : IDisposable
         Assert.True(File.Exists(Path.Combine(root, "workbench.json")));
     }
 
+    [Fact]
+    public void RemoveWorktreeRejectsTheMasterWorktree()
+    {
+        var root = Path.Combine(_testRoot, "Line1");
+        var catalog = CreateCatalog();
+        var created = catalog.Create("Line 1", root);
+        var registered = catalog.RegisterWorktree(
+            created,
+            new WorkbenchWorktreeRegistration("master-id", "master", "master", "master"));
+
+        var error = Assert.Throws<WorkbenchCatalogException>(() =>
+            catalog.RemoveWorktree(registered, "master-id"));
+
+        Assert.Equal("MASTER_WORKTREE_PROTECTED", error.Code);
+        Assert.True(File.Exists(Path.Combine(root, "workbench.json")));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_testRoot))

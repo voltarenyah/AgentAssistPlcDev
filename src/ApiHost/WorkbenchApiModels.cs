@@ -10,6 +10,7 @@ public sealed record CreateWorkbenchApiRequest(
     int? EngineeringSessionId,
     string? EngineeringProjectPath);
 public sealed record AttachTiaInstanceApiRequest(int SessionId);
+public sealed record OpenTiaProjectApiRequest(bool WithUI = true);
 public sealed record OpenWorkbenchApiRequest(string RootPath);
 public sealed record CreateWorktreeApiRequest(string Name, string Branch, string? StartPoint);
 public sealed record RefreshApplyApiRequest(
@@ -264,6 +265,31 @@ public static class WorkbenchEndpoints
             s.Refresh(id);
             return result;
         });
+        app.MapDelete("/api/workbenches/{id}/worktrees/{wt}", async (
+            string id,
+            string wt,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+        {
+            var result = await RunOperationAsync(
+                http,
+                operations,
+                "delete-worktree",
+                "Removing linked worktree...",
+                async progress =>
+                {
+                    await c.DeleteWorktreeAsync(s.Workbench(id), wt, ct, progress).ConfigureAwait(false);
+                    return new { deleted = true };
+                },
+                "Worktree removed.").ConfigureAwait(false);
+            s.Refresh(id);
+            if (s.Selection?.WorktreeId == wt)
+                s.Select(id);
+            return result;
+        });
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s) => { s.Worktree(id, wt); s.Select(id, wt); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.ListDevices(id, wt));
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
@@ -316,6 +342,7 @@ public static class WorkbenchEndpoints
             string workbenchId,
             string worktreeId,
             string device,
+            OpenTiaProjectApiRequest? request,
             WorkbenchApiState s,
             WorkbenchCoordinator c,
             OperationStatusRegistry operations,
@@ -331,7 +358,8 @@ public static class WorkbenchEndpoints
                     await c.OpenProjectInTiaAsync(
                             s.Device(workbenchId, worktreeId, device).Context,
                             ct,
-                            progress)
+                            progress,
+                            request?.WithUI ?? true)
                         .ConfigureAwait(false);
                     return new { opened = true };
                 },
