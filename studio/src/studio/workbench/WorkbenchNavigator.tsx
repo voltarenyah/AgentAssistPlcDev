@@ -58,10 +58,7 @@ export default function WorkbenchNavigator({
     <aside data-dock-content="left" className="flex h-full min-h-0 w-full shrink-0 flex-col border-r bg-sidebar" style={{ borderColor: 'var(--border)' }}>
       <div className="flex h-12 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>
         <Boxes className="h-4 w-4 text-chart-2" />
-        <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-semibold tracking-wide">AUTOMATION WORKBENCH</div>
-          <div className="text-[9px] text-muted-foreground">Shared history · isolated device context</div>
-        </div>
+        <div className="min-w-0 flex-1 text-[11px] font-semibold tracking-wide">Projects</div>
         <button className="icon-button" title="Refresh workbenches" onClick={onRefresh}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
         </button>

@@ -1232,16 +1232,6 @@ export default function MainStudio() {
         >
           {shellLayout.leftOpen ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelLeftOpen className="h-3.5 w-3.5" />}
         </button>
-        <div className="flex items-center gap-2">
-          <div className="grid h-7 w-7 place-items-center rounded-md bg-chart-2 text-white">
-            <CloudCog className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-[11px] font-semibold tracking-wide">PLC ENGINEERING STUDIO</div>
-            <div className="text-[8px] uppercase tracking-[0.16em] text-muted-foreground">Workbench lifecycle console</div>
-          </div>
-        </div>
-        <div className="mx-5 h-5 w-px bg-border" />
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[9px] text-muted-foreground">
           <span className="truncate">{activeWorkbench?.name ?? 'No workbench'}</span>
           <span>/</span>
