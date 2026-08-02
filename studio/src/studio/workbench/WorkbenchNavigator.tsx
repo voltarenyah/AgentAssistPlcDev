@@ -55,7 +55,7 @@ export default function WorkbenchNavigator({
   onDeleteWorkbench,
 }: Props) {
   return (
-    <aside className="flex min-h-0 w-[310px] shrink-0 flex-col border-r bg-sidebar" style={{ borderColor: 'var(--border)' }}>
+    <aside data-dock-content="left" className="flex h-full min-h-0 w-full shrink-0 flex-col border-r bg-sidebar" style={{ borderColor: 'var(--border)' }}>
       <div className="flex h-12 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>
         <Boxes className="h-4 w-4 text-chart-2" />
         <div className="min-w-0 flex-1">

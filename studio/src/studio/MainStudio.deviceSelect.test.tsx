@@ -75,6 +75,34 @@ beforeEach(() => {
 })
 
 describe('MainStudio device selection resilience', () => {
+  it('collapses and reopens the left and right docks independently', async () => {
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    clickText(host, 'DemoWB')
+    await act(async () => {})
+    clickText(host, 'master')
+    await act(async () => {})
+
+    const leftToggle = host.querySelector<HTMLButtonElement>('[data-dock-toggle="left"]')
+    const rightToggle = host.querySelector<HTMLButtonElement>('[data-dock-toggle="right"]')
+    expect(leftToggle).not.toBeNull()
+    expect(rightToggle).not.toBeNull()
+    expect(host.querySelector('[data-dock="left"]')).not.toBeNull()
+    expect(host.querySelector('[data-dock="right"]')).not.toBeNull()
+
+    act(() => leftToggle?.click())
+    expect(host.querySelector('[data-dock="left"]')).toBeNull()
+    expect(host.querySelector('[data-dock="right"]')).not.toBeNull()
+
+    act(() => rightToggle?.click())
+    expect(host.querySelector('[data-dock="right"]')).toBeNull()
+    expect(host.querySelector('[data-status-bar]')).not.toBeNull()
+
+    act(() => leftToggle?.click())
+    expect(host.querySelector('[data-dock="left"]')).not.toBeNull()
+  })
+
   it('applies device selection instantly without waiting for the snapshot or engineering server', async () => {
     // Every backend call that is not pure identity hangs forever: selection must
     // still apply immediately (per-block snapshot work is background-only).

@@ -92,7 +92,7 @@ export default function KnowledgePropertiesDock({ context, node, edge, hidden }:
   return (
     <aside
       hidden={hidden}
-      className="flex w-[320px] shrink-0 flex-col border-l bg-card"
+      className="flex h-full w-full shrink-0 flex-col border-l bg-card"
       style={{ borderColor: 'var(--border)' }}
     >
       <div className="flex h-10 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>

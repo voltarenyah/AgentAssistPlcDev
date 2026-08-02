@@ -266,6 +266,19 @@
   .field-input {
     @apply h-9 w-full rounded-md border bg-background px-3 text-[11px] font-normal text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/30;
   }
+
+  .dock-resize-handle {
+    @apply relative z-10 w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-chart-2/35;
+  }
+
+  .studio-status-bar {
+    @apply flex h-7 shrink-0 items-center gap-3 border-t bg-card px-3 text-[9px] text-muted-foreground;
+    border-color: var(--border);
+  }
+
+  .studio-status-indicator {
+    @apply text-emerald-500;
+  }
 }
 
 #root {

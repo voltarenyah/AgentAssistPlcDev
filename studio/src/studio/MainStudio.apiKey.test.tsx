@@ -35,6 +35,7 @@ afterEach(() => {
 beforeEach(() => {
   vi.clearAllMocks()
   keyState.configured = false
+  window.localStorage.clear()
 })
 
 describe('MainStudio API key entrance', () => {
@@ -81,5 +82,20 @@ describe('MainStudio API key entrance', () => {
     expect(api.saveApiKey).toHaveBeenCalledWith('sk-test-key')
     expect(host.querySelector('input[type="password"]')).toBeNull()
     expect(host.querySelector<HTMLButtonElement>('[data-api-status]')?.textContent).toContain('API online')
+  })
+
+  it('keeps the status bar and settings entry point available with both docks collapsed', async () => {
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    act(() => host.querySelector<HTMLButtonElement>('[data-dock-toggle="left"]')?.click())
+    act(() => host.querySelector<HTMLButtonElement>('[data-dock-toggle="right"]')?.click())
+
+    expect(host.querySelector('[data-dock="left"]')).toBeNull()
+    expect(host.querySelector('[data-dock="right"]')).toBeNull()
+    expect(host.querySelector('[data-status-bar]')).not.toBeNull()
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click())
+    expect(host.querySelector('input[type="password"]')).not.toBeNull()
   })
 })

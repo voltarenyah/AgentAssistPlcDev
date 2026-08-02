@@ -17,6 +17,8 @@ import {
   KeyRound,
   Loader2,
   MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -24,6 +26,7 @@ import {
   RotateCw,
   Search,
   Server,
+  Settings2,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -56,6 +59,13 @@ import SessionDock from '@/studio/chat/SessionDock'
 import NodeEdgesView from '@/studio/NodeEdgesView'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
 import DevicePropertiesDock from '@/studio/DevicePropertiesDock'
+import {
+  clampDockWidth,
+  readShellLayout,
+  writeShellLayout,
+  type DockSide,
+  type ShellLayout,
+} from '@/studio/shellLayout'
 import {
   appendAssistantDelta,
   appendLocalUserMessage,
@@ -342,7 +352,18 @@ export default function MainStudio() {
   const chatAbortRef = useRef<AbortController | null>(null)
   const [activeTab, setActiveTab] = useState<StudioTab>('overview')
   const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
-  const [sessionDockVisible, setSessionDockVisible] = useState(true)
+  const [shellLayout, setShellLayout] = useState<ShellLayout>(() => {
+    try {
+      return readShellLayout(window.localStorage)
+    } catch {
+      return readShellLayout(null)
+    }
+  })
+  const dockResizeRef = useRef<{
+    side: DockSide
+    startX: number
+    startWidth: number
+  } | null>(null)
   const [knowledgeSelection, setKnowledgeSelection] = useState<{
     node: api.GraphNode | null
     edge: api.GraphEdge | null
@@ -367,6 +388,42 @@ export default function MainStudio() {
   const [lastImport, setLastImport] = useState<api.ImportModifiedResult | null>(null)
   const [blockIndexExpanded, setBlockIndexExpanded] = useState(false)
   const [blockFilter, setBlockFilter] = useState('')
+
+  useEffect(() => {
+    try { writeShellLayout(window.localStorage, shellLayout) } catch { /* storage is optional */ }
+  }, [shellLayout])
+
+  const toggleDock = useCallback((side: DockSide) => {
+    setShellLayout(previous => side === 'left'
+      ? { ...previous, leftOpen: !previous.leftOpen }
+      : { ...previous, rightOpen: !previous.rightOpen })
+  }, [])
+
+  const startDockResize = useCallback((side: DockSide, startX: number) => {
+    const startWidth = side === 'left' ? shellLayout.leftWidth : shellLayout.rightWidth
+    dockResizeRef.current = { side, startX, startWidth }
+  }, [shellLayout.leftWidth, shellLayout.rightWidth])
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const resize = dockResizeRef.current
+      if (!resize) return
+      const delta = event.clientX - resize.startX
+      const nextWidth = resize.side === 'left'
+        ? resize.startWidth + delta
+        : resize.startWidth - delta
+      setShellLayout(previous => resize.side === 'left'
+        ? { ...previous, leftWidth: clampDockWidth('left', nextWidth) }
+        : { ...previous, rightWidth: clampDockWidth('right', nextWidth) })
+    }
+    const handlePointerUp = () => { dockResizeRef.current = null }
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [])
 
   const activeWorkbench = useMemo(
     () => workbenches.find(workbench => workbench.workbenchId === selection.workbenchId) ?? null,
@@ -1166,6 +1223,15 @@ export default function MainStudio() {
   return (
     <div className="flex h-screen min-h-[620px] flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-12 shrink-0 items-center border-b bg-card px-3" style={{ borderColor: 'var(--border)' }}>
+        <button
+          data-dock-toggle="left"
+          className="icon-button mr-1"
+          aria-label={shellLayout.leftOpen ? 'Hide workbench project tree' : 'Show workbench project tree'}
+          title={shellLayout.leftOpen ? 'Hide workbench project tree' : 'Show workbench project tree'}
+          onClick={() => toggleDock('left')}
+        >
+          {shellLayout.leftOpen ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelLeftOpen className="h-3.5 w-3.5" />}
+        </button>
         <div className="flex items-center gap-2">
           <div className="grid h-7 w-7 place-items-center rounded-md bg-chart-2 text-white">
             <CloudCog className="h-4 w-4" />
@@ -1207,34 +1273,47 @@ export default function MainStudio() {
             <Server className="h-3 w-3 text-chart-3" />
             {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
           </div>
-          {selection.deviceId && (
-            <button
-              className="icon-button"
-              aria-label={sessionDockVisible ? 'Hide side panel' : 'Show side panel'}
-              onClick={() => setSessionDockVisible(value => !value)}
-            >
-              {sessionDockVisible ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
-            </button>
-          )}
+          <button
+            data-dock-toggle="right"
+            className="icon-button"
+            aria-label={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
+            title={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
+            onClick={() => toggleDock('right')}
+          >
+            {shellLayout.rightOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
+          </button>
           <ThemeToggle />
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <WorkbenchNavigator
-          workbenches={workbenches}
-          devicesByWorktree={devicesByWorktree}
-          selection={selection}
-          knowledgeState={navigatorKnowledgeState}
-          loading={loading}
-          onCreateWorkbench={openCreateWorkbench}
-          onCreateWorktree={setCreateWorktreeFor}
-          onRefresh={() => void loadStartup()}
-          onSelectWorkbench={workbench => void selectWorkbench(workbench)}
-          onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
-          onSelectDevice={(workbench, worktree, deviceId) => void selectDevice(workbench, worktree, deviceId)}
-          onDeleteWorkbench={workbench => setDeleteWorkbenchFor(workbench)}
-        />
+        {shellLayout.leftOpen && (
+          <>
+            <div data-dock="left" className="min-h-0 shrink-0" style={{ width: shellLayout.leftWidth }}>
+              <WorkbenchNavigator
+                workbenches={workbenches}
+                devicesByWorktree={devicesByWorktree}
+                selection={selection}
+                knowledgeState={navigatorKnowledgeState}
+                loading={loading}
+                onCreateWorkbench={openCreateWorkbench}
+                onCreateWorktree={setCreateWorktreeFor}
+                onRefresh={() => void loadStartup()}
+                onSelectWorkbench={workbench => void selectWorkbench(workbench)}
+                onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
+                onSelectDevice={(workbench, worktree, deviceId) => void selectDevice(workbench, worktree, deviceId)}
+                onDeleteWorkbench={workbench => setDeleteWorkbenchFor(workbench)}
+              />
+            </div>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize workbench project tree"
+              className="dock-resize-handle"
+              onPointerDown={event => startDockResize('left', event.clientX)}
+            />
+          </>
+        )}
 
         <main className="flex min-w-0 flex-1 flex-col">
           {fatalError ? (
@@ -1610,35 +1689,62 @@ export default function MainStudio() {
             </>
           )}
         </main>
-        {selection.deviceId && activeTab === 'overview' && (
-          <DevicePropertiesDock
-            meta={deviceMeta}
-            info={deviceInfo}
-            hidden={!sessionDockVisible}
-          />
-        )}
-        {selection.deviceId && activeTab === 'knowledge' && knowledgeContext && (
-          <KnowledgePropertiesDock
-            context={knowledgeContext}
-            node={knowledgeSelection.node}
-            edge={knowledgeSelection.edge}
-            hidden={!sessionDockVisible}
-          />
-        )}
-        {selection.deviceId && activeTab !== 'overview' && activeTab !== 'knowledge' && (
-          <SessionDock
-            sessions={deviceSessions}
-            activeSessionId={chatTabs.activeId}
-            busy={chatBusy}
-            hidden={!sessionDockVisible}
-            onCreate={() => void createChatSession()}
-            onActivate={sessionId => void activateChatSession(sessionId)}
-            onRename={(sessionId, title) => void renameChatSession(sessionId, title)}
-            onRemove={sessionId => void removeChatSession(sessionId)}
-            onExport={sessionId => void exportChatSession(sessionId)}
-          />
+        {shellLayout.rightOpen && selection.deviceId && (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize context dock"
+              className="dock-resize-handle"
+              onPointerDown={event => startDockResize('right', event.clientX)}
+            />
+            <div data-dock="right" className="min-h-0 shrink-0" style={{ width: shellLayout.rightWidth }}>
+              {activeTab === 'overview' && (
+                <DevicePropertiesDock
+                  meta={deviceMeta}
+                  info={deviceInfo}
+                  hidden={false}
+                />
+              )}
+              {activeTab === 'knowledge' && knowledgeContext && (
+                <KnowledgePropertiesDock
+                  context={knowledgeContext}
+                  node={knowledgeSelection.node}
+                  edge={knowledgeSelection.edge}
+                  hidden={false}
+                />
+              )}
+              {activeTab !== 'overview' && activeTab !== 'knowledge' && (
+                <SessionDock
+                  sessions={deviceSessions}
+                  activeSessionId={chatTabs.activeId}
+                  busy={chatBusy}
+                  hidden={false}
+                  onCreate={() => void createChatSession()}
+                  onActivate={sessionId => void activateChatSession(sessionId)}
+                  onRename={(sessionId, title) => void renameChatSession(sessionId, title)}
+                  onRemove={sessionId => void removeChatSession(sessionId)}
+                  onExport={sessionId => void exportChatSession(sessionId)}
+                />
+              )}
+            </div>
+          </>
         )}
       </div>
+
+      <footer data-status-bar className="studio-status-bar">
+        <span className="studio-status-indicator">● Ready</span>
+        <span>{deviceInfo?.plcName ?? 'No device'}</span>
+        <span className="font-mono">{activeWorktree?.branch ?? 'no worktree'}</span>
+        <span className="flex-1" />
+        <span>{sessions.length} TIA session{sessions.length === 1 ? '' : 's'}</span>
+        <button className="icon-button" aria-label="Refresh status" title="Refresh status" onClick={() => void loadStartup()}>
+          <RefreshCw className="h-3 w-3" />
+        </button>
+        <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setApiKeyDialogOpen(true)}>
+          <Settings2 className="h-3.5 w-3.5" />
+        </button>
+      </footer>
 
       {createWorkbenchOpen && (
         <CreateWorkbenchDialog
