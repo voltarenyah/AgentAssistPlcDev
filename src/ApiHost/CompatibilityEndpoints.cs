@@ -216,7 +216,11 @@ public static class CompatibilityEndpoints
             void Queue(object payload) =>
                 events.Writer.TryWrite("data: " + JsonSerializer.Serialize(payload) + "\n\n");
 
-            var producer = Task.Run(async () =>
+            // The producer must be scheduled independently of request cancellation. If the user
+            // presses Stop before the task gets a thread-pool slot, passing ct to Task.Run would
+            // cancel the delegate before it enters RunStreamingAsync, skipping its persistence
+            // finally block entirely.
+            var producer = ApiChatService.StartProducerAsync(async () =>
             {
                 try
                 {
@@ -257,15 +261,29 @@ public static class CompatibilityEndpoints
                 }
             }, ct);
 
-            await foreach (var item in events.Reader.ReadAllAsync(ct))
+            try
             {
-                await http.Response.WriteAsync(item, ct);
-                await http.Response.Body.FlushAsync(ct);
+                // Do not let request cancellation abandon the producer. It needs to observe the
+                // token, persist the partial turn, and finish before this endpoint returns.
+                await foreach (var item in events.Reader.ReadAllAsync(CancellationToken.None))
+                {
+                    if (ct.IsCancellationRequested)
+                        break;
+
+                    await http.Response.WriteAsync(item, ct);
+                    await http.Response.Body.FlushAsync(ct);
+                }
+            }
+            finally
+            {
+                await producer.ConfigureAwait(false);
             }
 
-            await http.Response.WriteAsync("data: [DONE]\n\n", ct);
-            await http.Response.Body.FlushAsync(ct);
-            await producer;
+            if (!ct.IsCancellationRequested)
+            {
+                await http.Response.WriteAsync("data: [DONE]\n\n", ct);
+                await http.Response.Body.FlushAsync(ct);
+            }
         });
         app.MapGet("/api/config/key/status", (CompatibilityRuntimeState state, IConfiguration configuration) => Results.Ok(new
         {
@@ -476,6 +494,15 @@ internal sealed class ApiChatService(
     private readonly ConcurrentDictionary<string, ActiveChat> chats = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ChatSessionData> pendingSessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> sessionRequired = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Starts the streaming producer even when the HTTP request has already been canceled.
+    /// The request token is still passed to the producer body so model generation stops, but it
+    /// must not cancel scheduling: the body's finally block is responsible for saving the partial
+    /// session history.
+    /// </summary>
+    internal static Task StartProducerAsync(Func<Task> producer, CancellationToken _requestCancellation) =>
+        Task.Run(producer, CancellationToken.None);
 
     public void Reset()
     {

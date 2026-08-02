@@ -16,6 +16,20 @@ public sealed class SystemPromptTests
     }
 
     [Fact]
+    public void PromptRequiresSchemaCheckBeforeTheFirstKnowledgeQueryInEachChat()
+    {
+        var prompt = SystemPrompt.Build();
+
+        Assert.Contains("get_schema", prompt);
+        Assert.Contains("Before the first `query` call in each chat", prompt);
+        Assert.Contains("ddl", prompt);
+        Assert.Contains("nodeKinds", prompt);
+        Assert.Contains("edgeTypes", prompt);
+        Assert.Contains("exampleQueries", prompt);
+        Assert.DoesNotContain("call get_schema only if needed", prompt);
+    }
+
+    [Fact]
     public void PromptConstrainsCommonFbInterfaceWorkflow()
     {
         var prompt = SystemPrompt.Build();

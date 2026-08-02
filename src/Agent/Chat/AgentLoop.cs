@@ -551,6 +551,27 @@ public sealed class AgentLoop
 
     private async Task<ChatMessage> ExecuteToolCallAsync(ChatToolCall call, CancellationToken cancellationToken)
     {
+        if (string.Equals(call.Name, "query", StringComparison.Ordinal)
+            && catalog.Tools.Any(tool => string.Equals(tool.Name, "get_schema", StringComparison.Ordinal))
+            && !HasKnowledgeSchemaFact())
+        {
+            const string remediation =
+                "Call get_schema first, inspect its ddl/nodeKinds/edgeTypes/exampleQueries, then retry the query using those exact table and column names.";
+            Progress?.Invoke("  ! query blocked until get_schema is read in this chat");
+            return ChatMessage.Tool(
+                call.Id,
+                JsonSerializer.Serialize(new
+                {
+                    error = new
+                    {
+                        code = "SCHEMA_REQUIRED_BEFORE_QUERY",
+                        message = "The knowledge database schema has not been read in this chat.",
+                        retryable = true,
+                        remediation,
+                    },
+                }));
+        }
+
         var fingerprint = ToolCallFingerprint(call);
         if (failedToolCalls.Contains(fingerprint))
         {
@@ -645,6 +666,22 @@ public sealed class AgentLoop
         }
 
         return ChatMessage.Tool(call.Id, content);
+    }
+
+    private bool HasKnowledgeSchemaFact()
+    {
+        var schemaCallIds = messages
+            .Where(message => message.Role == "assistant" && message.ToolCalls is { Count: > 0 })
+            .SelectMany(message => message.ToolCalls!)
+            .Where(call => string.Equals(call.Name, "get_schema", StringComparison.Ordinal))
+            .Select(call => call.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return schemaCallIds.Count > 0
+            && messages.Any(message =>
+                message.Role == "tool"
+                && message.ToolCallId is { } toolCallId
+                && schemaCallIds.Contains(toolCallId));
     }
 
     /// <summary>

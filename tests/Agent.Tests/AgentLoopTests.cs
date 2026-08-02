@@ -99,6 +99,39 @@ public sealed class AgentLoopTests
     }
 
     [Fact]
+    public async Task QueryCannotRunUntilSchemaHasBeenReadInTheCurrentChat()
+    {
+        var endpoint = new FakeHttpEndpoint();
+        var caller = new FakeToolCaller();
+        var emptySchema = JsonDocument.Parse("""{"type":"object","properties":{}}""");
+        var querySchema = JsonDocument.Parse("{\"type\":\"object\",\"required\":[\"dbPath\",\"sql\"],\"properties\":{\"dbPath\":{\"type\":\"string\"},\"sql\":{\"type\":\"string\"}}}");
+        var catalog = new McpToolCatalog(new[]
+        {
+            new AgentToolSpec("get_schema", "read schema", emptySchema.RootElement, caller, "knowledge"),
+            new AgentToolSpec("query", "run SQL", querySchema.RootElement, caller, "knowledge"),
+        });
+        var client = new DeepSeekClient("sk-test", "https://api.deepseek.com", new HttpClient(endpoint));
+        var loop = new AgentLoop(client, catalog, () => ContextMarker);
+
+        endpoint
+            .RespondJson(SseToolCall("call_query_1", "query", "{\"dbPath\":\"C:\\\\knowledge.db\",\"sql\":\"SELECT 1\"}"))
+            .RespondJson(SseToolCall("call_schema", "get_schema", "{}"))
+            .RespondJson(SseToolCall("call_query_2", "query", "{\"dbPath\":\"C:\\\\knowledge.db\",\"sql\":\"SELECT 1\"}"))
+            .RespondJson(SseText("The query is verified against the schema."));
+        caller
+            .Respond("get_schema", JsonDocument.Parse("{\"ddl\":\"CREATE TABLE graph_nodes (...)\"}").RootElement)
+            .Respond("query", JsonDocument.Parse("{\"columns\":[\"value\"],\"rows\":[[1]]}").RootElement);
+
+        var answer = await loop.RunAsync("query the database");
+
+        Assert.Equal("The query is verified against the schema.", answer);
+        Assert.Equal(new[] { "get_schema", "query" }, caller.Calls);
+        var firstQueryResult = loop.History.Single(message =>
+            message.Role == "tool" && message.ToolCallId == "call_query_1");
+        Assert.Contains("SCHEMA_REQUIRED_BEFORE_QUERY", firstQueryResult.Content);
+    }
+
+    [Fact]
     public async Task UnexpectedToolExceptionBecomesToolErrorAndTurnContinues()
     {
         var (loop, endpoint, caller, _, _) = Create();

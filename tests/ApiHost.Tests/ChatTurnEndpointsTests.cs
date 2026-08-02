@@ -11,6 +11,24 @@ using Xunit;
 public sealed class ChatTurnEndpointsTests
 {
     [Fact]
+    public async Task ChatProducerRunsEvenWhenRequestCancellationHasAlreadyBeenSignaled()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var producer = ApiChatService.StartProducerAsync(() =>
+        {
+            started.SetResult(true);
+            return Task.CompletedTask;
+        }, cancellation.Token);
+
+        await producer;
+
+        Assert.True(started.Task.IsCompletedSuccessfully);
+    }
+
+    [Fact]
     public async Task ChatSettingsExposeDefaultContextWindow()
     {
         await using var factory = new WebApplicationFactory<Program>()

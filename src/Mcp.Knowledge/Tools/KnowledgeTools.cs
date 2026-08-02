@@ -35,7 +35,7 @@ public sealed class KnowledgeTools
     }
 
     [McpServerTool(Name = "get_schema")]
-    [Description("SQLite property-graph schema of the PLC knowledge base: table DDL, node kinds, edge types and example read-only queries (read-only, static content). The response carries a version hash; pass it as knownVersion on repeat calls to get back only {version, unchanged:true} instead of the full payload.")]
+    [Description("SQLite property-graph schema of the PLC knowledge base: table DDL, node kinds, edge types and example read-only queries. Call this before the first query call in each chat and use its ddl/nodeKinds/edgeTypes/exampleQueries as the source of truth (read-only, static content). The response carries a version hash; pass it as knownVersion on repeat calls to get back only {version, unchanged:true} instead of the full payload.")]
     public CallToolResult GetSchema(
         [Description("Version hash returned by an earlier get_schema call; when it still matches, the full payload is skipped.")] string? knownVersion = null)
         => Invoke(() => SchemaPayload(knownVersion));
@@ -66,7 +66,7 @@ public sealed class KnowledgeTools
             relativePaths));
 
     [McpServerTool(Name = "query")]
-    [Description("Run a single read-only SQL statement (SELECT / WITH / EXPLAIN) against a PLC knowledge base (read-only).")]
+    [Description("Run a single read-only SQL statement (SELECT / WITH / EXPLAIN) against a PLC knowledge base (read-only). Before the first query call in each chat, call get_schema and verify the table and column names from its ddl.")]
     public CallToolResult Query(
         [Description("Path to the plc-knowledge.db file.")] string dbPath,
         [Description("One read-only SQL statement; must start with SELECT, WITH or EXPLAIN.")] string sql,
