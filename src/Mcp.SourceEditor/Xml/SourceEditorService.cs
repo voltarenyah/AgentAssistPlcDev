@@ -32,10 +32,6 @@ public sealed class SourceEditorService
             source.Path);
     }
 
-    public EditBatchResult Preview(string xmlFilePath, IReadOnlyList<SourceEdit> edits,
-        string? outputFilePath, bool overwriteOutput) =>
-        WriteEdited(xmlFilePath, edits, outputFilePath ?? DefaultOutput(xmlFilePath, ".preview"), overwriteOutput, false);
-
     public EditBatchResult Apply(string xmlFilePath, IReadOnlyList<SourceEdit> edits,
         string? outputFilePath, bool overwriteOutput, bool inPlace, bool confirmInPlace)
     {

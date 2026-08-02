@@ -107,17 +107,6 @@ public sealed class DeviceSourceResolverTests : IDisposable
             paths);
     }
 
-    [Fact]
-    public void EnumerateModifiedSkipsDisposablePreviewFiles()
-    {
-        var context = CreateContext();
-        Write(Path.Combine(context.ModifiedSourceRoot, "Blocks", "Main.xml"), "overlay");
-        Write(Path.Combine(context.ModifiedSourceRoot, "Blocks", "Main.preview.xml"), "preview");
-        var resolver = new DeviceSourceResolver(_ => { });
-
-        Assert.Equal(new[] { "Blocks/Main.xml" }, resolver.EnumerateModified(context));
-    }
-
     [Theory]
     [InlineData("../escape.xml")]
     [InlineData("Blocks/../../escape.xml")]

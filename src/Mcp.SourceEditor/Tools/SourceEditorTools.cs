@@ -24,16 +24,6 @@ public sealed class SourceEditorTools
     public CallToolResult ParseBlock([Description("Path to a TIA block XML file inside an allowed sandbox root.")] string xmlFilePath) =>
         Invoke(() => service.Parse(xmlFilePath));
 
-    [McpServerTool(Name = "src_preview_edits")]
-    [Description("Apply typed title/comment/safe-property edits to a new XML file under modified-source. Does not import into TIA and never changes protected PLC logic.")]
-    public CallToolResult PreviewEdits(string xmlFilePath, SourceEdit[] edits,
-        string? outputFilePath = null, bool overwriteOutput = false) =>
-        Invoke(() => service.Preview(
-            xmlFilePath,
-            edits,
-            ValidateWriteTarget(outputFilePath),
-            overwriteOutput));
-
     [McpServerTool(Name = "src_apply_edits")]
     [Description("Apply typed edits to an XML file under modified-source, or atomically replace an effective overlay only when both inPlace and confirmInPlace are true. Does not import into TIA.")]
     public CallToolResult ApplyEdits(string xmlFilePath, SourceEdit[] edits,

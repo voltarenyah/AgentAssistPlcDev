@@ -76,7 +76,6 @@ public sealed class SandboxPolicy
             ["src_diff"] = SandboxTier.Read,
             ["src_validate"] = SandboxTier.Read,
             // Source editor — creates or replaces local XML under jailed roots.
-            ["src_preview_edits"] = SandboxTier.Write,
             ["src_apply_edits"] = SandboxTier.Write,
             // Version control — read-only queries (status, log, diff, branches).
             ["vc_status"] = SandboxTier.Read,

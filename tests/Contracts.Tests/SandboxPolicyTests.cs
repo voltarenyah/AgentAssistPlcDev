@@ -44,7 +44,6 @@ public sealed class SandboxPolicyTests
     [InlineData("vc_init_shared")]
     [InlineData("vc_add_worktree")]
     [InlineData("vc_merge")]
-    [InlineData("src_preview_edits")]
     [InlineData("src_apply_edits")]
     [InlineData("update_components")]
     public void StateChangingToolsClassifyAsWrite(string tool)
@@ -82,7 +81,7 @@ public sealed class SandboxPolicyTests
             "vc_init", "vc_status", "vc_add", "vc_commit", "vc_log",
             "vc_diff", "vc_snapshot", "vc_restore", "vc_branches", "vc_config",
             "vc_init_shared", "vc_add_worktree", "vc_worktrees", "vc_merge",
-            "src_parse_block", "src_preview_edits", "src_apply_edits", "src_diff", "src_validate",
+            "src_parse_block", "src_apply_edits", "src_diff", "src_validate",
         };
         var policy = new SandboxPolicy();
         foreach (var tool in currentTools)

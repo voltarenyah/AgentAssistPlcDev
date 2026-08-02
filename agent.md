@@ -106,7 +106,7 @@ AgentAssistPlcDev.sln
 | ------ | ----- | --------- |
 | Engineering | 1 (done) | `check_environment`, `list_sessions`, `connect`, `disconnect`, `save_project`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `export_tag_tables`, `export_udts`, `sync_export` (incremental, hash/fingerprint-based), `get_context_status` (read-only consistency check), `compare_context` (read-only per-file diff), `import_block` (destructive), `compile_block`, `compile_plc` |
 | Knowledge | 2, step 1 + depth | `ingest_source`, `query` (read-only SQL), `get_schema`, `get_block`, `get_single_network`, `get_all_networks`, `get_variable_usage`, `search` |
-| Source Editor | 2, step 4 (chat-driven edit→import→compile enabled; real-TIA acceptance open) | `src_parse_block`, `src_preview_edits`, `src_apply_edits`, `src_diff`, `src_validate` |
+| Source Editor | 2, step 4 (chat-driven edit→import→compile enabled; real-TIA acceptance open) | `src_parse_block`, `src_apply_edits`, `src_diff`, `src_validate` |
 | Version Control | 2, step 5 | `vc_init`, `vc_status`, `vc_add`, `vc_commit`, `vc_log`, `vc_diff`, `vc_snapshot`, `vc_restore` (destructive), `vc_branches`, `vc_config` |
 | Simulation | 5 | instance lifecycle, tag I/O, cycle control |
 

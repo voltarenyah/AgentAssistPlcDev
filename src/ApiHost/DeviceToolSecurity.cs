@@ -16,15 +16,6 @@ public static class DeviceContextIdentity
 
 public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
 {
-    private static string PreviewPath(string overlayPath)
-    {
-        var directory = Path.GetDirectoryName(overlayPath)
-            ?? throw new ArgumentException($"Overlay path has no parent directory: {overlayPath}");
-        return Path.Combine(
-            directory,
-            $"{Path.GetFileNameWithoutExtension(overlayPath)}{DeviceSourceResolver.PreviewFileSuffix}");
-    }
-
     public Dictionary<string, object?> Bind(string tool, IDictionary<string, object?> supplied, DeviceContext device)
     {
         if (tool is "export_block" or "export_all_blocks" or "export_tag_tables" or "export_udts")
@@ -49,7 +40,7 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
             Force(args, "dbPath", device.KnowledgeDbPath);
         }
         if (tool.StartsWith("vc_", StringComparison.Ordinal)) Force(args, "repoPath", device.WorktreeRoot);
-        if (tool is "src_preview_edits" or "src_apply_edits")
+        if (tool == "src_apply_edits")
         {
             var relative = StringValue(args, "relativePath")
                 ?? RelativeFromTrustedInput(args, "xmlFilePath", device)
@@ -61,13 +52,7 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
             args.Remove("xmlFilePath");
             args.Remove("relativePath");
             Force(args, "xmlFilePath", effective);
-            if (tool == "src_preview_edits")
-            {
-                // Disposable sibling preview: every re-draft overwrites it, never the overlay.
-                Force(args, "outputFilePath", PreviewPath(overlay));
-                ForceFlag(args, "overwriteOutput");
-            }
-            else if (PathsEqual(effective, overlay))
+            if (PathsEqual(effective, overlay))
             {
                 // Re-editing an existing overlay: atomic in-place replace.
                 Force(args, "outputFilePath", overlay);
@@ -100,8 +85,6 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
                 ?? RelativeUnder(device.ModifiedSourceRoot, StringValue(args, "xmlFilePath"))
                 ?? throw new ArgumentException("An existing modified-source path is required.");
             var modified = WorkbenchPaths.ResolveRelative(device.ModifiedSourceRoot, relative);
-            if (DeviceSourceResolver.IsPreviewFile(modified))
-                throw new ArgumentException("Preview files are disposable; import the applied overlay instead.");
             if (!File.Exists(modified)) throw new FileNotFoundException("Modified source was not found.", modified);
             args.Remove("xmlFilePath");
             args.Remove("relativePath");

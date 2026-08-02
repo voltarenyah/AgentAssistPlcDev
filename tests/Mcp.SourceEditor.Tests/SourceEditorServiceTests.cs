@@ -33,17 +33,17 @@ public sealed class SourceEditorServiceTests : IDisposable
     }
 
     [Fact]
-    public void Preview_UpdatesOnlyRequestedNetworkComment()
+    public void Apply_UpdatesOnlyRequestedNetworkComment()
     {
         var source = CopyFixture("Main [OB1].xml");
         var parsed = service.Parse(source);
         var before = XDocument.Load(source).Descendants().First(x => x.Name.LocalName == "FlgNet").ToString();
 
-        var result = service.Preview(source, new[]
+        var result = service.Apply(source, new[]
         {
             new SourceEdit(SourceEditOperation.SetNetworkComment,
                 new EditTarget(parsed.Networks[0].XmlId, 1), "zh-CN", "精确注释")
-        }, null, false);
+        }, null, false, false, false);
 
         Assert.True(File.Exists(result.OutputFilePath));
         Assert.True(result.Validation.IsValid);
@@ -54,17 +54,17 @@ public sealed class SourceEditorServiceTests : IDisposable
     }
 
     [Fact]
-    public void Preview_TargetMismatchLeavesNoOutput()
+    public void Apply_TargetMismatchLeavesNoOutput()
     {
         var source = CopyFixture("Main [OB1].xml");
         var parsed = service.Parse(source);
         var output = Path.Combine(root, "mismatch.xml");
 
-        var error = Assert.Throws<SourceEditorException>(() => service.Preview(source, new[]
+        var error = Assert.Throws<SourceEditorException>(() => service.Apply(source, new[]
         {
             new SourceEdit(SourceEditOperation.SetNetworkTitle,
                 new EditTarget(parsed.Networks[0].XmlId, 2), "en-US", "wrong")
-        }, output, false));
+        }, output, false, false, false));
 
         Assert.Equal("SOURCE_TARGET_MISMATCH", error.Code);
         Assert.False(File.Exists(output));
@@ -142,19 +142,19 @@ public sealed class SourceEditorServiceTests : IDisposable
     public void SafeProperty_IsDiffedAndCannotBeWrittenTwice()
     {
         var source = CopyFixture("Main [OB1].xml");
-        var result = service.Preview(source, new[]
+        var result = service.Apply(source, new[]
         {
             new SourceEdit(SourceEditOperation.SetSafeProperty, null, null, "Ansel", "blockHeaderAuthor")
-        }, null, false);
+        }, null, false, false, false);
 
         var diff = service.Diff(source, result.OutputFilePath);
         Assert.Contains(diff.Changes, x => x.Field == "blockHeaderAuthor" && x.NewValue == "Ansel");
 
-        var error = Assert.Throws<SourceEditorException>(() => service.Preview(source, new[]
+        var error = Assert.Throws<SourceEditorException>(() => service.Apply(source, new[]
         {
             new SourceEdit(SourceEditOperation.SetSafeProperty, null, null, "A", "blockHeaderAuthor"),
             new SourceEdit(SourceEditOperation.SetSafeProperty, null, null, "B", "blockHeaderAuthor"),
-        }, Path.Combine(root, "duplicate.xml"), false));
+        }, Path.Combine(root, "duplicate.xml"), false, false, false));
         Assert.Equal("SOURCE_OPERATION_UNSUPPORTED", error.Code);
     }
 
@@ -176,7 +176,7 @@ public sealed class SourceEditorServiceTests : IDisposable
     }
 
     [Fact]
-    public void Preview_PreservesUtf16Encoding()
+    public void Apply_PreservesUtf16Encoding()
     {
         var source = Path.Combine(root, "utf16.xml");
         var fixture = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Main [OB1].xml"));
@@ -184,11 +184,11 @@ public sealed class SourceEditorServiceTests : IDisposable
         File.WriteAllText(source, fixture, Encoding.Unicode);
         var parsed = service.Parse(source);
 
-        var result = service.Preview(source, new[]
+        var result = service.Apply(source, new[]
         {
             new SourceEdit(SourceEditOperation.SetNetworkComment,
                 new EditTarget(parsed.Networks[0].XmlId), "en-US", "UTF16")
-        }, null, false);
+        }, null, false, false, false);
 
         var bytes = File.ReadAllBytes(result.OutputFilePath);
         Assert.Equal(0xFF, bytes[0]);
@@ -196,7 +196,7 @@ public sealed class SourceEditorServiceTests : IDisposable
     }
 
     [Fact]
-    public void Preview_CreatesMissingCommentCompositionFromMatchingTemplate()
+    public void Apply_CreatesMissingCommentCompositionFromMatchingTemplate()
     {
         var source = CopyFixture("Main [OB1].xml");
         var document = XDocument.Load(source, LoadOptions.PreserveWhitespace);
@@ -207,11 +207,11 @@ public sealed class SourceEditorServiceTests : IDisposable
         document.Save(source, SaveOptions.DisableFormatting);
         var parsed = service.Parse(source);
 
-        var result = service.Preview(source, new[]
+        var result = service.Apply(source, new[]
         {
             new SourceEdit(SourceEditOperation.SetNetworkComment,
                 new EditTarget(parsed.Networks[0].XmlId), "en-US", "Created")
-        }, null, false);
+        }, null, false, false, false);
 
         Assert.Contains("Created", File.ReadAllText(result.OutputFilePath));
         Assert.True(result.ProtectedContentMatches);
@@ -246,13 +246,13 @@ public sealed class SourceEditorServiceTests : IDisposable
                 && (string?)x.Attribute("CompositionName") == "Comment").Remove();
         document.Save(source, SaveOptions.DisableFormatting);
         var parsed = service.Parse(source);
-        var preview = service.Preview(source, new[]
+        var edited = service.Apply(source, new[]
         {
             new SourceEdit(SourceEditOperation.SetNetworkComment,
                 new EditTarget(parsed.Networks[0].XmlId), "en-US", "Created")
-        }, null, false);
+        }, null, false, false, false);
         var changed = Path.Combine(root, "extra-node.xml");
-        var candidate = XDocument.Load(preview.OutputFilePath, LoadOptions.PreserveWhitespace);
+        var candidate = XDocument.Load(edited.OutputFilePath, LoadOptions.PreserveWhitespace);
         var newComposition = candidate.Descendants().First(x => x.Name.LocalName == "SW.Blocks.CompileUnit")
             .Descendants().First(x => x.Name.LocalName == "MultilingualText"
                 && (string?)x.Attribute("CompositionName") == "Comment");

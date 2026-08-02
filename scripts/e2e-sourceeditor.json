@@ -2,13 +2,14 @@
   {
     "tool": "src_parse_block",
     "args": {
-      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml"
+      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\modified-source\\Main.xml"
     }
   },
   {
-    "tool": "src_preview_edits",
+    "tool": "src_apply_edits",
     "args": {
-      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml",
+      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\modified-source\\Main.xml",
+      "outputFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\modified-source\\Main.edited.xml",
       "overwriteOutput": true,
       "edits": [
         {
@@ -23,22 +24,23 @@
   {
     "tool": "src_diff",
     "args": {
-      "originalFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml",
-      "modifiedFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.preview.xml"
+      "originalFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\modified-source\\Main.xml",
+      "modifiedFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\modified-source\\Main.edited.xml"
     }
   },
   {
     "tool": "src_validate",
     "args": {
-      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.preview.xml",
-      "baselineFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml"
+      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\modified-source\\Main.edited.xml",
+      "baselineFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\modified-source\\Main.xml"
     }
   },
   {
     "tool": "src_apply_edits",
     "args": {
-      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\Main.xml",
-      "overwriteOutput": true,
+      "xmlFilePath": "C:\\Users\\Ansel\\AppData\\Local\\PlcAiAssistant\\e2e-sourceeditor\\modified-source\\Main.edited.xml",
+      "inPlace": true,
+      "confirmInPlace": true,
       "edits": [
         {
           "operation": "setNetworkTitle",

@@ -1229,30 +1229,6 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public void PreviewEditsTargetDisposableSiblingAndKeepOverlayUntouched()
-    {
-        var context = Context();
-        var baseline = Path.Combine(context.ExportedSourceRoot, "Blocks", "A.xml");
-        Directory.CreateDirectory(Path.GetDirectoryName(baseline)!);
-        File.WriteAllText(baseline, "<a/>");
-        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
-
-        var bound = binder.Bind(
-            "src_preview_edits",
-            new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
-            context);
-
-        var overlay = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.xml");
-        Assert.Equal(baseline, bound["xmlFilePath"]);
-        Assert.Equal(
-            Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.preview.xml"),
-            bound["outputFilePath"]);
-        Assert.Equal(true, bound["overwriteOutput"]);
-        Assert.True(File.Exists(overlay));
-        Assert.Equal("<a/>", File.ReadAllText(overlay));
-    }
-
-    [Fact]
     public void ApplyEditsOverwritesFreshCopyAndReplacesExistingOverlayInPlace()
     {
         var context = Context();
@@ -1279,21 +1255,6 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(overlay, second["outputFilePath"]);
         Assert.Equal(true, second["inPlace"]);
         Assert.Equal(true, second["confirmInPlace"]);
-    }
-
-    [Fact]
-    public void ImportBlockRejectsDisposablePreviewFiles()
-    {
-        var context = Context();
-        var preview = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.preview.xml");
-        Directory.CreateDirectory(Path.GetDirectoryName(preview)!);
-        File.WriteAllText(preview, "<a/>");
-        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
-
-        Assert.Throws<ArgumentException>(() => binder.Bind(
-            "import_block",
-            new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.preview.xml" },
-            context));
     }
 
     [Fact]
@@ -1340,15 +1301,13 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             context);
         Assert.Equal(overlay, parsedOverlay["xmlFilePath"]);
 
-        // src_preview_edits with the relative sourceFile behaves like relativePath.
-        var preview = binder.Bind(
-            "src_preview_edits",
+        // src_apply_edits with the relative sourceFile behaves like relativePath.
+        var apply = binder.Bind(
+            "src_apply_edits",
             new Dictionary<string, object?> { ["xmlFilePath"] = "Blocks/A.xml" },
             context);
-        Assert.Equal(overlay, preview["xmlFilePath"]);
-        Assert.Equal(
-            Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.preview.xml"),
-            preview["outputFilePath"]);
+        Assert.Equal(overlay, apply["xmlFilePath"]);
+        Assert.Equal(overlay, apply["outputFilePath"]);
 
         // import_block with the relative sourceFile resolves into modified-source.
         var import = binder.Bind(

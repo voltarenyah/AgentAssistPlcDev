@@ -35,10 +35,10 @@ public sealed class SourceEditorToolsTests : IDisposable
     }
 
     [Fact]
-    public void Preview_ReturnsStructuredDomainError()
+    public void Apply_ReturnsStructuredDomainError()
     {
         var path = CopyFixture();
-        var result = tools.PreviewEdits(path, new[]
+        var result = tools.ApplyEdits(path, new[]
         {
             new SourceEdit(SourceEditOperation.SetNetworkComment, new EditTarget("missing"), "en-US", "text")
         }, Path.Combine(modifiedRoot, "Main.xml"));
@@ -108,11 +108,11 @@ public sealed class SourceEditorToolsTests : IDisposable
     }
 
     [Fact]
-    public void Preview_RequiresExplicitModifiedSourceOutput()
+    public void Apply_RequiresExplicitModifiedSourceOutput()
     {
         var baselinePath = CopyFixture();
 
-        var result = tools.PreviewEdits(
+        var result = tools.ApplyEdits(
             baselinePath,
             new[]
             {
@@ -120,13 +120,13 @@ public sealed class SourceEditorToolsTests : IDisposable
                     SourceEditOperation.SetBlockTitle,
                     null,
                     "en-US",
-                    "preview"),
+                    "overlay"),
             });
 
         Assert.True(result.IsError);
         var error = JsonDocument.Parse(Text(result)).RootElement.GetProperty("error");
         Assert.Equal("SOURCE_PATH_DENIED", error.GetProperty("code").GetString());
-        Assert.False(File.Exists(Path.Combine(root, "Main.preview.xml")));
+        Assert.False(File.Exists(Path.Combine(root, "Main.edited.xml")));
     }
 
     private string CopyFixture()
