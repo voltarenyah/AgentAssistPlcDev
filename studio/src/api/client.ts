@@ -26,7 +26,8 @@ export type ToolInfo = {
   name: string
   description: string | null
   serverName: string
-  schema: object
+  schema: Record<string, unknown>
+  tier: 'read' | 'write' | 'destructive' | 'denied' | 'unknown'
 }
 
 export type BlockInfo = {

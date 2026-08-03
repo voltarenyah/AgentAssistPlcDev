@@ -148,12 +148,24 @@ public static class CompatibilityEndpoints
                 },
                 "Project opened in TIA Portal.");
         });
-        app.MapGet("/api/tools", async (IServiceProvider services, CancellationToken ct) =>
+        app.MapGet("/api/tools", async (IServiceProvider services, SandboxPolicy policy, CancellationToken ct) =>
         {
             var runtime = services.GetService<McpRuntime>();
             if (runtime is null) return Results.Ok(Array.Empty<object>());
             var catalog = await McpToolCatalog.BuildAsync(runtime.Host, ct);
-            return Results.Ok(catalog.Tools.Select(tool => new { tool.Name, tool.Description, tool.ServerName }));
+            return Results.Ok(catalog.Tools
+                .OrderBy(tool => tool.ServerName, StringComparer.Ordinal)
+                .ThenBy(tool => tool.Name, StringComparer.Ordinal)
+                .Select(tool => new
+                {
+                    tool.Name,
+                    tool.Description,
+                    tool.ServerName,
+                    schema = tool.InputSchema,
+                    tier = policy.Classify(tool.Name) is { } value
+                        ? SandboxTierNames.Name(value)
+                        : "unknown",
+                }));
         });
         app.MapGet("/api/sessions", async (ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("list_sessions").CallAsync<JsonElement>("list_sessions", new { }, ct));

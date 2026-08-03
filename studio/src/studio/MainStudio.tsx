@@ -31,6 +31,7 @@ import {
   Sparkles,
   Trash2,
   UploadCloud,
+  Wrench,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -58,6 +59,7 @@ import SessionDock from '@/studio/chat/SessionDock'
 import NodeEdgesView from '@/studio/NodeEdgesView'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
 import DevicePropertiesDock from '@/studio/DevicePropertiesDock'
+import McpToolsHelper from '@/studio/McpToolsHelper'
 import {
   clampDockWidth,
   readShellLayout,
@@ -403,6 +405,7 @@ export default function MainStudio() {
   const selectionRequestId = useRef(0)
   const chatAbortRef = useRef<AbortController | null>(null)
   const [activeTab, setActiveTab] = useState<StudioTab>('overview')
+  const [activePage, setActivePage] = useState<'studio' | 'tools'>('studio')
   const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
   const [shellLayout, setShellLayout] = useState<ShellLayout>(() => {
     try {
@@ -1371,6 +1374,15 @@ export default function MainStudio() {
             </div>
           )}
           <button
+            className={`icon-button ${activePage === 'tools' ? 'bg-accent text-foreground' : ''}`}
+            aria-label="Open MCP tools helper"
+            title="Open MCP tools helper"
+            aria-pressed={activePage === 'tools'}
+            onClick={() => setActivePage(previous => previous === 'tools' ? 'studio' : 'tools')}
+          >
+            <Wrench className="h-3.5 w-3.5" />
+          </button>
+          <button
             data-dock-toggle="right"
             className="icon-button"
             aria-label={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
@@ -1383,7 +1395,9 @@ export default function MainStudio() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      {activePage === 'tools' ? (
+        <McpToolsHelper onClose={() => setActivePage('studio')} />
+      ) : <div className="flex min-h-0 flex-1">
         <div
           data-dock="left"
           data-dock-state={shellLayout.leftOpen ? 'open' : 'closed'}
@@ -1868,7 +1882,7 @@ export default function MainStudio() {
             </div>
           </>
         )}
-      </div>
+      </div>}
 
       <footer data-status-bar className="studio-status-bar">
         <span className="studio-status-indicator">● Ready</span>
