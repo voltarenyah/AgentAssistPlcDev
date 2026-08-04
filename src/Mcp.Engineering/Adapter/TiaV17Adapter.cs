@@ -390,7 +390,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     throw new AdapterException("BLOCK_INCONSISTENT",
                         $"Block '{blockName}' is inconsistent. Compile it first before export.");
                 }
-                var result = ExportCore(block, outputDir);
+                var result = ExportCore(block, outputDir, groupPath);
                 ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, result), device);
                 return result;
             }
@@ -466,7 +466,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             try
             {
                 Report(progress, $"Exporting block {block.Name}...");
-                result = ExportCore(block, dir);
+                result = ExportCore(block, dir, groupPath);
             }
             catch (Exception ex) when (FailSafeBlocks.IsExportNotPermitted(ex))
             {
@@ -985,17 +985,17 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             case "Tags":
                 var (table, tablePath) = tablesById[live.Id];
                 Report(progress, $"Exporting tag table {table.Name}...");
-                exportResult = ExportTagTableCore(table, dir);
+                exportResult = ExportTagTableCore(table, dir, tablePath);
                 return CreateTagTableRecord(table, tablePath, dir, exportResult);
             case "UDT":
                 var (type, typePath) = typesById[live.Id];
                 Report(progress, $"Exporting UDT {type.Name}...");
-                exportResult = ExportUdtCore(type, dir);
+                exportResult = ExportUdtCore(type, dir, typePath);
                 return CreateUdtRecord(type, typePath, dir, exportResult);
             default:
                 var (block, blockPath) = blocksById[live.Id];
                 Report(progress, $"Exporting block {block.Name}...");
-                exportResult = ExportCore(block, dir);
+                exportResult = ExportCore(block, dir, blockPath);
                 return ExportManifest.CreateRecord(block, blockPath, dir, exportResult);
         }
     }
@@ -1193,7 +1193,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     }
 
     /// <summary>Exports into &lt;exportRoot&gt;/Blocks/ or &lt;exportRoot&gt;/DB/ (created as needed), depending on the block category.</summary>
-    private static ExportResult ExportCore(PlcBlock block, string exportRoot)
+    private static ExportResult ExportCore(PlcBlock block, string exportRoot, string? groupPath = null)
     {
         if (!block.IsConsistent)
         {
@@ -1206,9 +1206,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             };
         }
 
-        var dir = Path.Combine(exportRoot, ExportManifest.FolderFor(ExportManifest.CategoryOf(block)));
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, $"{Sanitize(block.Name)} [{TypeCode(block)}{block.Number}].xml");
+        var category = ExportManifest.CategoryOf(block);
+        var relativePath = SourceExportPath.Build(
+            ExportManifest.FolderFor(category),
+            groupPath,
+            $"{Sanitize(block.Name)} [{TypeCode(block)}{block.Number}].xml");
+        var path = Path.Combine(exportRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         // V17 PlcBlock.Export refuses to overwrite an existing file (verified 2026-07-18) —
         // replace our own previous export.
         if (File.Exists(path))
@@ -1286,7 +1290,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         string? plcName,
         string label,
         Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
-        Func<TObject, string, ExportResult> exportCore,
+        Func<TObject, string, string?, ExportResult> exportCore,
         Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord,
         IProgress<EngineeringProgress>? progress = null)
     {
@@ -1311,7 +1315,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         string dir,
         string label,
         Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
-        Func<TObject, string, ExportResult> exportCore,
+        Func<TObject, string, string?, ExportResult> exportCore,
         Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord,
         IProgress<EngineeringProgress>? progress = null)
     {
@@ -1325,7 +1329,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         {
             index++;
             Report(progress, $"Exporting {ExportKind(label)} {ExportName(item)}...");
-            var result = exportCore(item, dir);
+            var result = exportCore(item, dir, groupPath);
             if (!result.Success)
             {
                 _logger.LogWarning("{Label}: FAILED {Name} — {Error}", label, result.BlockName, result.Error);
@@ -1341,11 +1345,11 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         return results.ToArray();
     }
 
-    private static ExportResult ExportTagTableCore(PlcTagTable table, string exportRoot)
+    private static ExportResult ExportTagTableCore(PlcTagTable table, string exportRoot, string? groupPath = null)
     {
-        var dir = Path.Combine(exportRoot, ExportManifest.FolderFor("Tags"));
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, $"{Sanitize(table.Name)}.xml");
+        var relativePath = SourceExportPath.Build("Tags", groupPath, $"{Sanitize(table.Name)}.xml");
+        var path = Path.Combine(exportRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         try
         {
             // V17 Export refuses to overwrite an existing file (verified for blocks 2026-07-18) —
@@ -1368,16 +1372,16 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         };
     }
 
-    private static ExportResult ExportUdtCore(PlcType type, string exportRoot)
+    private static ExportResult ExportUdtCore(PlcType type, string exportRoot, string? groupPath = null)
     {
         if (!type.IsConsistent)
         {
             return Failure(type.Name, "UDT",
                 $"UDT '{type.Name}' is inconsistent. Compile it first before export.");
         }
-        var dir = Path.Combine(exportRoot, ExportManifest.FolderFor("UDT"));
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, $"{Sanitize(type.Name)}.xml");
+        var relativePath = SourceExportPath.Build("UDT", groupPath, $"{Sanitize(type.Name)}.xml");
+        var path = Path.Combine(exportRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         try
         {
             if (File.Exists(path))
