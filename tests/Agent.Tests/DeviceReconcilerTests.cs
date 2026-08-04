@@ -92,6 +92,41 @@ public sealed class DeviceReconcilerTests : IDisposable
     }
 
     [Fact]
+    public void ApplyPromotesHardwareArtifactsReferencedByHardwareManifest()
+    {
+        var fixture = CreateFixture();
+        fixture.WriteStaging("Hardware/project.aml", "<aml project />");
+        fixture.WriteStaging("Hardware/project-export.log", "project export");
+        fixture.WriteStaging("Hardware/manifest.json", JsonSerializer.Serialize(new
+        {
+            schemaVersion = "1.0",
+            projectAmlFile = "project.aml",
+            projectLogFile = "project-export.log",
+            projectSuccess = true,
+            devices = Array.Empty<object>(),
+        }));
+        fixture.WriteStagingManifest();
+
+        var reconciler = new DeviceReconciler();
+        var preview = reconciler.Preview(fixture.Context);
+
+        Assert.Collection(
+            preview.Entries,
+            entry => Assert.Equal("Hardware/manifest.json", entry.RelativePath),
+            entry => Assert.Equal("Hardware/project-export.log", entry.RelativePath),
+            entry => Assert.Equal("Hardware/project.aml", entry.RelativePath));
+
+        reconciler.Apply(
+            fixture.Context,
+            preview,
+            preview.Entries.Select(entry => entry.RelativePath).ToHashSet(StringComparer.Ordinal));
+
+        Assert.Equal("<aml project />", File.ReadAllText(fixture.BaselinePath("Hardware/project.aml")));
+        Assert.Equal("project export", File.ReadAllText(fixture.BaselinePath("Hardware/project-export.log")));
+        Assert.True(File.Exists(fixture.BaselinePath("Hardware/manifest.json")));
+    }
+
+    [Fact]
     public void PreviewTreeHashesAreDeterministicAcrossManifestOrderAndSeparators()
     {
         var first = CreateFixture("first");

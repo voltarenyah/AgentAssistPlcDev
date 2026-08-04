@@ -6,6 +6,7 @@ using Mcp.Engineering.Openness;
 using Mcp.Engineering.Sessions;
 using Microsoft.Extensions.Logging;
 using Siemens.Engineering;
+using Siemens.Engineering.Cax;
 using Siemens.Engineering.Compiler;
 using Siemens.Engineering.HW;
 using Siemens.Engineering.SW;
@@ -699,6 +700,20 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         lock (_gate)
         {
             var project = RequireProject();
+            // The Studio lifecycle stages one PLC at a time and passes plcName. Export
+            // hardware into that same staging root so the artifacts are promoted with the
+            // source tree; a project-wide rebuild still produces the same canonical root.
+            var hardwareResults = ExportHardwareConfigurationCore(outputDir, includeDeviceExports: true, progress);
+            var hardwareFailures = hardwareResults.Where(result => !result.Success).ToArray();
+            if (hardwareFailures.Length > 0)
+            {
+                throw new AdapterException(
+                    "HARDWARE_EXPORT_FAILED",
+                    "Full rebuild could not export the complete hardware configuration: "
+                    + string.Join("; ", hardwareFailures.Select(result =>
+                        $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")),
+                    "Resolve the CAx export errors and retry the full rebuild.");
+            }
             var plcs = plcName is null
                 ? PlcSoftwareResolver.FindAll(project)
                 : new[] { PlcSoftwareResolver.Resolve(project, plcName) };
@@ -759,6 +774,235 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
             return results.ToArray();
         }
+    }
+
+    /// <summary>Exports the canonical project AML and optional device-level AML artifacts.
+    /// CAx export is read-only with respect to TIA and writes only under the caller's output root.</summary>
+    public HardwareExportResult[] ExportHardwareConfiguration(
+        string outputDir,
+        bool includeDeviceExports = true,
+        IProgress<EngineeringProgress>? progress = null)
+    {
+        lock (_gate)
+        {
+            RequireProject();
+            return ExportHardwareConfigurationCore(outputDir, includeDeviceExports, progress);
+        }
+    }
+
+    private HardwareExportResult[] ExportHardwareConfigurationCore(
+        string outputDir,
+        bool includeDeviceExports,
+        IProgress<EngineeringProgress>? progress)
+    {
+        if (string.IsNullOrWhiteSpace(outputDir))
+            throw new AdapterException("EXPORT_DIRECTORY_REQUIRED", "An export output directory is required.");
+
+        var project = RequireProject();
+        // The caller already supplies the canonical worktree hardware root.
+        // Keep the AML manifest directly under it so the layout is
+        // <worktree>\\hardware\\manifest.json, not hardware\\Hardware.
+        var hardwareRoot = outputDir;
+        var deviceRoot = Path.Combine(hardwareRoot, "Devices");
+        Directory.CreateDirectory(hardwareRoot);
+        if (includeDeviceExports)
+            Directory.CreateDirectory(deviceRoot);
+
+        var results = new List<HardwareExportResult>();
+        var projectAml = Path.Combine(hardwareRoot, "project.aml");
+        var projectLog = Path.Combine(hardwareRoot, "project-export.log");
+        progress?.Report(new EngineeringProgress("Exporting hardware configuration (project)..."));
+        var projectResult = ExportCax(
+            "project",
+            null,
+            null,
+            projectAml,
+            projectLog,
+            export: cax => cax.Export(project, new FileInfo(projectAml), new FileInfo(projectLog)));
+        results.Add(projectResult);
+
+        var manifest = new HardwareExportManifest
+        {
+            ExportedAt = DateTimeOffset.UtcNow,
+            ProjectAmlFile = ToManifestPath(hardwareRoot, projectAml),
+            ProjectLogFile = ToManifestPath(hardwareRoot, projectLog),
+            ProjectSuccess = projectResult.Success,
+            ProjectError = projectResult.Error,
+            ProjectContentHash = projectResult.ContentHash,
+        };
+
+        if (includeDeviceExports)
+        {
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var device in EnumerateDevices(project))
+            {
+                var deviceName = device.Name;
+                var folderName = UniqueSanitizedName(deviceName, usedNames);
+                var folder = Path.Combine(deviceRoot, folderName);
+                Directory.CreateDirectory(folder);
+                var amlPath = Path.Combine(folder, "device.aml");
+                var logPath = Path.Combine(folder, "export.log");
+                var typeIdentifier = ReadDeviceTypeIdentifier(device);
+                progress?.Report(new EngineeringProgress($"Exporting hardware configuration (device {deviceName})..."));
+
+                var result = ExportCax(
+                    "device",
+                    deviceName,
+                    typeIdentifier,
+                    amlPath,
+                    logPath,
+                    export: cax => cax.Export(device, new FileInfo(amlPath), new FileInfo(logPath)));
+                results.Add(result);
+                manifest.Devices.Add(new HardwareExportManifestDevice
+                {
+                    DeviceName = deviceName,
+                    TypeIdentifier = typeIdentifier,
+                    AmlFile = ToManifestPath(hardwareRoot, amlPath),
+                    LogFile = ToManifestPath(hardwareRoot, logPath),
+                    Success = result.Success,
+                    Error = result.Error,
+                    ContentHash = result.ContentHash,
+                    ExportedAt = new DateTimeOffset(result.ExportedAt),
+                });
+            }
+        }
+
+        var manifestPath = Path.Combine(hardwareRoot, "manifest.json");
+        File.WriteAllText(manifestPath, HardwareExportManifestJsonSerializer.Serialize(manifest));
+        return results.ToArray();
+    }
+
+    private HardwareExportResult ExportCax(
+        string scope,
+        string? deviceName,
+        string? typeIdentifier,
+        string amlPath,
+        string logPath,
+        Func<CaxProvider, bool> export)
+    {
+        var result = new HardwareExportResult
+        {
+            Scope = scope,
+            DeviceName = deviceName,
+            TypeIdentifier = typeIdentifier,
+            AmlFilePath = amlPath,
+            LogFilePath = logPath,
+            ExportedAt = DateTime.UtcNow,
+        };
+
+        try
+        {
+            var logDirectory = Path.GetDirectoryName(logPath);
+            if (!string.IsNullOrWhiteSpace(logDirectory))
+                Directory.CreateDirectory(logDirectory);
+            var cax = RequireProject().GetService<CaxProvider>();
+            if (cax is null)
+                throw new AdapterException(
+                    "HARDWARE_EXPORT_UNAVAILABLE",
+                    "TIA Openness did not expose the CaxProvider service for the connected project.",
+                    "Use a TIA Portal V17 project with the CAx export service available.");
+
+            result.Success = export(cax);
+            if (!result.Success)
+            {
+                result.Error = "TIA Openness reported that the CAx export failed. See the export log.";
+            }
+            else
+            {
+                result.ContentHash = ContentHasher.TryCompute(amlPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Error = ex.Message;
+        }
+
+        return result;
+    }
+
+    private static IEnumerable<Device> EnumerateDevices(Project project)
+    {
+        foreach (Device device in project.Devices)
+            yield return device;
+        foreach (DeviceUserGroup group in project.DeviceGroups)
+        {
+            foreach (var device in EnumerateDevices(group))
+                yield return device;
+        }
+    }
+
+    private static IEnumerable<Device> EnumerateDevices(DeviceUserGroup group)
+    {
+        foreach (Device device in group.Devices)
+            yield return device;
+        foreach (DeviceUserGroup child in group.Groups)
+        {
+            foreach (var device in EnumerateDevices(child))
+                yield return device;
+        }
+    }
+
+    private static string? ReadDeviceTypeIdentifier(Device device)
+    {
+        try
+        {
+            foreach (DeviceItem item in device.DeviceItems)
+            {
+                var identifier = ReadFirstTypeIdentifier(item);
+                if (identifier is not null)
+                    return identifier;
+            }
+        }
+        catch
+        {
+            // Device identity is metadata only; it must not prevent the AML export.
+        }
+
+        return null;
+    }
+
+    private static string? ReadFirstTypeIdentifier(DeviceItem item)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(item.TypeIdentifier))
+                return item.TypeIdentifier;
+            foreach (DeviceItem child in item.DeviceItems)
+            {
+                var identifier = ReadFirstTypeIdentifier(child);
+                if (identifier is not null)
+                    return identifier;
+            }
+        }
+        catch
+        {
+            // Some device items do not expose an order number; continue with the next item.
+        }
+
+        return null;
+    }
+
+    private static string UniqueSanitizedName(string name, ISet<string> usedNames)
+    {
+        var baseName = Sanitize(name);
+        if (string.IsNullOrWhiteSpace(baseName))
+            baseName = "device";
+        var candidate = baseName;
+        var suffix = 2;
+        while (!usedNames.Add(candidate))
+            candidate = $"{baseName}-{suffix++}";
+        return candidate;
+    }
+
+    private static string ToManifestPath(string root, string path)
+    {
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullPath = Path.GetFullPath(path);
+        var relative = fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            ? fullPath.Substring(fullRoot.Length + 1)
+            : fullPath;
+        return relative.Replace(Path.DirectorySeparatorChar, '/');
     }
 
     /// <summary>Live enumeration shared by sync and compare: blocks + tag tables + UDTs flattened
@@ -1508,6 +1752,190 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             };
         }
     }
+
+    public HardwareImportResult ImportHardwareConfiguration(
+        string amlFilePath,
+        string? logFilePath = null,
+        HardwareImportConflictPolicy conflictPolicy = HardwareImportConflictPolicy.MoveToParkingLot)
+    {
+        lock (_gate)
+        {
+            RequireProject();
+            if (!File.Exists(amlFilePath))
+                throw new AdapterException("AML_NOT_FOUND", $"AML file not found: {amlFilePath}");
+            if (!string.Equals(Path.GetExtension(amlFilePath), ".aml", StringComparison.OrdinalIgnoreCase))
+                throw new AdapterException(
+                    "INVALID_HARDWARE_IMPORT_FILE",
+                    $"Hardware configuration import requires an AML file: {amlFilePath}",
+                    "Export the hardware configuration as CAx/AML and retry.");
+
+            var actualLogPath = logFilePath ?? Path.Combine(
+                Path.GetTempPath(), $"mcp-eng-cax-{Guid.NewGuid():N}.log");
+            var logDirectory = Path.GetDirectoryName(actualLogPath);
+            if (!string.IsNullOrWhiteSpace(logDirectory))
+                Directory.CreateDirectory(logDirectory);
+            var cax = RequireProject().GetService<CaxProvider>();
+            if (cax is null)
+                throw new AdapterException(
+                    "HARDWARE_IMPORT_UNAVAILABLE",
+                    "TIA Openness did not expose the CaxProvider service for the connected project.",
+                    "Use a TIA Portal V17 project with the CAx import service available.");
+
+            // CAx import is intentionally not wrapped in ExclusiveAccess: Siemens documents
+            // that the CaxProvider rejects calls made from inside exclusive access.
+            var imported = cax.Import(
+                new FileInfo(amlFilePath),
+                new FileInfo(actualLogPath),
+                ToCaxImportOptions(conflictPolicy));
+
+            return new HardwareImportResult
+            {
+                Success = imported,
+                AmlFilePath = amlFilePath,
+                LogFilePath = actualLogPath,
+                ConflictPolicy = conflictPolicy,
+                Error = imported ? null : "TIA Openness reported that the CAx import failed. See the import log.",
+                ImportedAt = DateTime.Now,
+            };
+        }
+    }
+
+    public BlockInfo CreateBlock(
+        string blockName,
+        string blockType,
+        int number = 0,
+        string? programmingLanguage = null,
+        string? instanceOfName = null,
+        string? plcName = null)
+    {
+        lock (_gate)
+        {
+            if (string.IsNullOrWhiteSpace(blockName))
+                throw new AdapterException("BLOCK_NAME_REQUIRED", "Block name is required.");
+            if (string.IsNullOrWhiteSpace(blockType))
+                throw new AdapterException("BLOCK_TYPE_REQUIRED", "Block type is required.");
+
+            var plc = PlcSoftwareResolver.Resolve(RequireProject(), plcName);
+            if (BlockEnumerator.Enumerate(plc.BlockGroup).Any(x =>
+                    string.Equals(x.Block.Name, blockName, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new AdapterException("BLOCK_ALREADY_EXISTS",
+                    $"A block named '{blockName}' already exists.",
+                    "Choose a new name or delete the existing block first.");
+            }
+
+            PlcBlock created;
+            try
+            {
+                using var exclusiveAccess = _portal!.ExclusiveAccess("Create block " + blockName);
+                using var transaction = exclusiveAccess.Transaction(RequireProject(), "Create block " + blockName);
+                created = blockType.Trim().ToLowerInvariant() switch
+                {
+                    "fb" => plc.BlockGroup.Blocks.CreateFB(
+                        blockName,
+                        number <= 0,
+                        Math.Max(number, 0),
+                        ParseProgrammingLanguage(programmingLanguage)),
+                    "instancedb" or "instance_db" or "instance db" =>
+                        CreateInstanceDb(plc, blockName, number, instanceOfName),
+                    _ => throw new AdapterException(
+                        "BLOCK_TYPE_UNSUPPORTED",
+                        $"Native block creation does not support '{blockType}' in TIA Openness V17.",
+                        "Use blockType FB or InstanceDB, or import an XML block with import_block."),
+                };
+                transaction.CommitOnDispose();
+            }
+            catch (AdapterException) { throw; }
+            catch (Exception ex)
+            {
+                throw new AdapterException("BLOCK_CREATE_FAILED",
+                    $"Failed to create block '{blockName}': {ex.Message}");
+            }
+
+            return ToBlockInfo(created);
+        }
+    }
+
+    public BlockMutationResult DeleteBlock(string blockName, string? plcName = null)
+    {
+        lock (_gate)
+        {
+            var plc = PlcSoftwareResolver.Resolve(RequireProject(), plcName);
+            var block = BlockEnumerator.Find(plc.BlockGroup, blockName);
+            var result = new BlockMutationResult
+            {
+                BlockName = block.Name,
+                BlockType = block.GetType().Name,
+                BlockNumber = block.Number,
+                ChangedAt = DateTime.Now,
+            };
+
+            try
+            {
+                using var exclusiveAccess = _portal!.ExclusiveAccess("Delete block " + blockName);
+                using var transaction = exclusiveAccess.Transaction(RequireProject(), "Delete block " + blockName);
+                block.Delete();
+                transaction.CommitOnDispose();
+                result.Success = true;
+                return result;
+            }
+            catch (Exception ex) when (IsEditorConflict(ex))
+            {
+                throw new AdapterException(
+                    "BLOCK_OPEN_IN_EDITOR",
+                    $"Delete of '{blockName}' was rejected — the block appears to be open in a TIA editor: {ex.Message}",
+                    "Close the block editor in TIA Portal and retry.");
+            }
+            catch (Exception ex)
+            {
+                throw new AdapterException("BLOCK_DELETE_FAILED",
+                    $"Failed to delete block '{blockName}': {ex.Message}");
+            }
+        }
+    }
+
+    private static InstanceDB CreateInstanceDb(PlcSoftware plc, string blockName, int number, string? instanceOfName)
+    {
+        if (string.IsNullOrWhiteSpace(instanceOfName))
+            throw new AdapterException(
+                "INSTANCE_BLOCK_REQUIRED",
+                "instanceOfName is required when creating an InstanceDB.",
+                "Set instanceOfName to the existing FB name.");
+        return plc.BlockGroup.Blocks.CreateInstanceDB(
+            blockName,
+            number <= 0,
+            Math.Max(number, 0),
+            instanceOfName);
+    }
+
+    private static ProgrammingLanguage ParseProgrammingLanguage(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return ProgrammingLanguage.LAD;
+        if (Enum.TryParse<ProgrammingLanguage>(value, ignoreCase: true, out var language)
+            && Enum.IsDefined(typeof(ProgrammingLanguage), language))
+            return language;
+        throw new AdapterException(
+            "INVALID_PROGRAMMING_LANGUAGE",
+            $"Unknown programming language '{value}'.",
+            "Use a TIA Openness V17 language such as LAD, FBD, or SCL.");
+    }
+
+    private static CaxImportOptions ToCaxImportOptions(HardwareImportConflictPolicy policy) => policy switch
+    {
+        HardwareImportConflictPolicy.MoveToParkingLot => CaxImportOptions.MoveToParkingLot,
+        HardwareImportConflictPolicy.RetainTiaDevice => CaxImportOptions.RetainTiaDevice,
+        HardwareImportConflictPolicy.OverwriteTiaDevice => CaxImportOptions.OverwriteTiaDevice,
+        _ => throw new AdapterException("INVALID_HARDWARE_IMPORT_POLICY", $"Unknown hardware import policy: {policy}"),
+    };
+
+    private static BlockInfo ToBlockInfo(PlcBlock block) => new()
+    {
+        Name = block.Name,
+        Number = block.Number,
+        BlockType = block.GetType().Name,
+        ProgrammingLanguage = block.ProgrammingLanguage.ToString(),
+    };
 
     /// <summary>Import beside the existing block (its group), or at the root group for new blocks.</summary>
     private static PlcBlockGroup ResolveImportGroup(PlcSoftware plc, string blockName)

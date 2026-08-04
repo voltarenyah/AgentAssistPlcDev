@@ -22,6 +22,7 @@ public sealed record SourcePathApiRequest(string RelativePath);
 /// <summary>Optional bootstrap/rebuild body: lets the full-rebuild button label its baseline
 /// commit differently from the initial "generate PLC context" commit.</summary>
 public sealed record BootstrapApiRequest(string? CommitMessage);
+public sealed record HardwareOverwriteApiRequest(bool ConfirmOverwrite);
 
 /// <summary>Device list entry: opaque object id plus the human-readable PLC name from device.json.</summary>
 public sealed record DeviceSummary(string DeviceId, string PlcName);
@@ -105,6 +106,13 @@ public sealed class WorkbenchApiState
         var wb = Workbench(workbenchId);
         var registration = wb.Worktrees.SingleOrDefault(x => x.WorktreeId == worktreeId) ?? throw new KeyNotFoundException("WORKTREE_NOT_FOUND");
         return store.Read<WorktreeMetadata>(Path.Combine(WorkbenchPaths.ResolveWorktree(wb.RootPath, registration.RelativePath), "worktree.json"));
+    }
+    public string WorktreeRoot(string workbenchId, string worktreeId)
+    {
+        var wb = Workbench(workbenchId);
+        var wt = Worktree(workbenchId, worktreeId);
+        var registration = wb.Worktrees.Single(x => x.WorktreeId == wt.WorktreeId);
+        return WorkbenchPaths.ResolveWorktree(wb.RootPath, registration.RelativePath);
     }
     public (DeviceContext Context, DeviceMetadata Metadata) Device(string deviceId)
     {
@@ -292,6 +300,11 @@ public static class WorkbenchEndpoints
         });
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s) => { s.Worktree(id, wt); s.Select(id, wt); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.ListDevices(id, wt));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware", (
+            string workbenchId,
+            string worktreeId,
+            WorkbenchApiState s) =>
+            Results.Ok(HardwareConfigurationReader.Read(s.WorktreeRoot(workbenchId, worktreeId))));
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
 
         // Device-scoped knowledge-graph browsing. Unlike the compatibility /api/knowledge/* endpoints,
@@ -387,6 +400,74 @@ public static class WorkbenchEndpoints
                     return new { attached = true };
                 },
                 "TIA instance attached.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware/reload", async (
+            string workbenchId,
+            string worktreeId,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+        {
+            var device = s.ListDevices(workbenchId, worktreeId).FirstOrDefault()
+                ?? throw new KeyNotFoundException("DEVICE_NOT_FOUND");
+            return await RunOperationAsync(
+                http,
+                operations,
+                "reload-hardware",
+                "Reloading hardware configuration...",
+                progress => c.ReloadHardwareAsync(
+                    s.Device(workbenchId, worktreeId, device.DeviceId).Context,
+                    ct,
+                    progress),
+                "Hardware configuration reloaded.").ConfigureAwait(false);
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware/compare", async (
+            string workbenchId,
+            string worktreeId,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+        {
+            var device = s.ListDevices(workbenchId, worktreeId).FirstOrDefault()
+                ?? throw new KeyNotFoundException("DEVICE_NOT_FOUND");
+            return await RunOperationAsync(
+                http,
+                operations,
+                "compare-hardware",
+                "Comparing hardware configuration...",
+                progress => c.CompareHardwareAsync(
+                    s.Device(workbenchId, worktreeId, device.DeviceId).Context,
+                    ct,
+                    progress),
+                "Hardware comparison complete.").ConfigureAwait(false);
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware/overwrite", async (
+            string workbenchId,
+            string worktreeId,
+            HardwareOverwriteApiRequest request,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+        {
+            var device = s.ListDevices(workbenchId, worktreeId).FirstOrDefault()
+                ?? throw new KeyNotFoundException("DEVICE_NOT_FOUND");
+            return await RunOperationAsync(
+                http,
+                operations,
+                "overwrite-hardware",
+                "Applying staged hardware configuration...",
+                progress => c.OverwriteHardwareFromStagingAsync(
+                    s.Device(workbenchId, worktreeId, device.DeviceId).Context,
+                    request.ConfirmOverwrite,
+                    ct,
+                    progress),
+                "Saved hardware configuration updated.").ConfigureAwait(false);
+        });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}", (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
         {

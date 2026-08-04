@@ -4,6 +4,9 @@ using Contracts.Knowledge;
 using Contracts.Sandbox;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace Agent.Workbench;
 
@@ -471,8 +474,456 @@ public sealed class WorkbenchCoordinator
         return result;
     }
 
+    public async Task<HardwareConfigurationReloadResult> ReloadHardwareAsync(
+        DeviceContext device,
+        CancellationToken token,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            return await operationLock.RunAsync(
+                device,
+                async cancellationToken =>
+                {
+                    await EnsureActiveProjectMatchesWorktreeAsync(device, cancellationToken, progress)
+                        .ConfigureAwait(false);
+                    var root = WorkbenchPaths.ResolveHardwareRoot(device.WorktreeRoot);
+                    Directory.CreateDirectory(root);
+                    progress?.Report("Exporting hardware configuration from TIA...");
+                    var results = await engineering.CallAsync<HardwareExportResult[]>(
+                        "export_hardware_configuration",
+                        new { outputDir = root, includeDeviceExports = true },
+                        cancellationToken).ConfigureAwait(false);
+                    var warnings = EnsureHardwareExportSucceeded(results, root);
+                    RemoveLegacyHardwareLayout(root);
+
+                    var paths = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                        .Where(path => !IsUnderHardwareStaging(root, path))
+                        .Select(path => Path.GetRelativePath(device.WorktreeRoot, path).Replace('\\', '/'))
+                        .OrderBy(path => path, StringComparer.Ordinal)
+                        .ToArray();
+                    progress?.Report("Committing hardware configuration...");
+                    await versionControl.CallAsync<object>(
+                        "vc_add",
+                        new { repoPath = device.WorktreeRoot, paths },
+                        cancellationToken).ConfigureAwait(false);
+                    var commit = await versionControl.CallAsync<CoordinatorGitCommitResult>(
+                        "vc_commit",
+                        new { repoPath = device.WorktreeRoot, message = "hardware: reload configuration" },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return new HardwareConfigurationReloadResult(
+                        root,
+                        results.Count(result => result.Success),
+                        results.Count(result => result.Success && result.Scope == "device"),
+                        commit.Sha,
+                        warnings);
+                },
+                token).ConfigureAwait(false);
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+    }
+
+    public async Task<HardwareConfigurationCompareResult> CompareHardwareAsync(
+        DeviceContext device,
+        CancellationToken token,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            return await operationLock.RunAsync(
+                device,
+                async cancellationToken =>
+                {
+                    await EnsureActiveProjectMatchesWorktreeAsync(device, cancellationToken, progress)
+                        .ConfigureAwait(false);
+                    var root = WorkbenchPaths.ResolveHardwareRoot(device.WorktreeRoot);
+                    var stagingRoot = WorkbenchPaths.ResolveHardwareStagingRoot(device.WorktreeRoot);
+                    TryDeleteDirectory(stagingRoot);
+                    Directory.CreateDirectory(stagingRoot);
+                    progress?.Report("Comparing hardware configuration with TIA...");
+                    var liveResults = await engineering.CallAsync<HardwareExportResult[]>(
+                        "export_hardware_configuration",
+                        new { outputDir = stagingRoot, includeDeviceExports = true },
+                        cancellationToken).ConfigureAwait(false);
+                    var warnings = EnsureHardwareExportSucceeded(liveResults, stagingRoot);
+
+                    var local = ReadHardwareSnapshot(root);
+                    var live = HardwareSnapshot.FromResults(liveResults, stagingRoot);
+                    var artifacts = HardwareSnapshot.Compare(local, live);
+                    var state = artifacts.All(artifact => artifact.State == "same")
+                        ? "in-sync"
+                        : local is null
+                            ? "missing"
+                            : "changed";
+                    var changed = artifacts.Count(artifact => artifact.State != "same");
+                    var message = state switch
+                    {
+                        "in-sync" => $"Hardware configuration matches TIA ({artifacts.Count} artifact(s)).",
+                        "missing" => "No saved project-level hardware configuration exists yet. Review the staged TIA export before overwriting the baseline.",
+                        _ => $"Hardware configuration differs from TIA ({changed} artifact(s) changed or missing). Review the staged TIA export before overwriting the baseline.",
+                    };
+                    if (warnings.Count > 0)
+                    {
+                        message += $" CAx export warnings: {string.Join("; ", warnings)}";
+                    }
+                    return new HardwareConfigurationCompareResult(
+                        state,
+                        root,
+                        artifacts,
+                        message,
+                        warnings,
+                        stagingRoot);
+                },
+                token).ConfigureAwait(false);
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+    }
+
+    public Task<HardwareConfigurationOverwriteResult> OverwriteHardwareFromStagingAsync(
+        DeviceContext device,
+        bool confirmOverwrite,
+        CancellationToken token,
+        IOperationProgress? progress = null) =>
+        operationLock.RunAsync(
+            device,
+            async cancellationToken =>
+            {
+                if (!confirmOverwrite)
+                {
+                    throw new WorkbenchLifecycleException(
+                        "HARDWARE_OVERWRITE_CONFIRMATION_REQUIRED",
+                        "Overwriting the saved hardware configuration requires explicit confirmation.");
+                }
+
+                var root = WorkbenchPaths.ResolveHardwareRoot(device.WorktreeRoot);
+                var stagingRoot = WorkbenchPaths.ResolveHardwareStagingRoot(device.WorktreeRoot);
+                var stagedProjectAml = Path.Combine(stagingRoot, "project.aml");
+                if (!IsUsableProjectAml(stagedProjectAml))
+                {
+                    throw new WorkbenchLifecycleException(
+                        "HARDWARE_STAGING_MISSING",
+                        "No usable staged hardware export exists. Compare hardware with TIA before confirming overwrite.");
+                }
+
+                var stagedFiles = Directory.EnumerateFiles(stagingRoot, "*", SearchOption.AllDirectories)
+                    .Select(path => (Path: path, Relative: Path.GetRelativePath(stagingRoot, path)))
+                    .ToArray();
+                progress?.Report("Replacing saved hardware configuration from staging...");
+                foreach (var staged in stagedFiles)
+                {
+                    var destination = WorkbenchPaths.ResolveRelative(root, staged.Relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    File.Copy(staged.Path, destination, overwrite: true);
+                }
+
+                RemoveLegacyHardwareLayout(root);
+                var paths = stagedFiles
+                    .Select(file => Path.Combine("hardware", file.Relative).Replace('\\', '/'))
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .ToArray();
+                await versionControl.CallAsync<object>(
+                    "vc_add",
+                    new { repoPath = device.WorktreeRoot, paths },
+                    cancellationToken).ConfigureAwait(false);
+                var commit = await versionControl.CallAsync<CoordinatorGitCommitResult>(
+                    "vc_commit",
+                    new { repoPath = device.WorktreeRoot, message = "hardware: accept TIA configuration" },
+                    cancellationToken).ConfigureAwait(false);
+
+                return new HardwareConfigurationOverwriteResult(root, stagedFiles.Length, commit.Sha);
+            },
+            token);
+
     public ReconciliationPreview PreviewRefresh(DeviceContext device) =>
         reconciler.Preview(device);
+
+    private async Task EnsureActiveProjectMatchesWorktreeAsync(
+        DeviceContext device,
+        CancellationToken cancellationToken,
+        IOperationProgress? progress)
+    {
+        var worktree = store.Read<WorktreeMetadata>(
+            Path.Combine(device.WorktreeRoot, "worktree.json"));
+        if (string.IsNullOrWhiteSpace(worktree.SourceProjectPath))
+        {
+            throw new WorkbenchLifecycleException(
+                "ENGINEERING_PROJECT_PATH_MISSING",
+                $"No TIA project path is registered for worktree '{device.WorktreeId}'.");
+        }
+
+        var activeProject = await ReadActiveProjectAsync(cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(activeProject.Path)
+            || !ProjectPathsEqual(worktree.SourceProjectPath, activeProject.Path))
+        {
+            progress?.Report("Opening the selected TIA project before continuing...");
+            await engineering.CallAsync<object>(
+                "disconnect",
+                new { },
+                cancellationToken).ConfigureAwait(false);
+            var sessions = await engineering.CallAsync<SessionInfo[]>(
+                "list_sessions",
+                new { },
+                cancellationToken).ConfigureAwait(false);
+            var matchingSession = sessions.FirstOrDefault(session =>
+                !string.IsNullOrWhiteSpace(session.ProjectPath)
+                && ProjectPathsEqual(worktree.SourceProjectPath, session.ProjectPath));
+            var connectTarget = matchingSession is not null
+                ? (object)new { sessionId = matchingSession.Id }
+                : new { projectPath = worktree.SourceProjectPath, withUI = true };
+            await engineering.CallAsync<object>(
+                "connect",
+                connectTarget,
+                cancellationToken).ConfigureAwait(false);
+            activeProject = await ReadActiveProjectAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (string.IsNullOrWhiteSpace(activeProject.Path))
+        {
+            throw new WorkbenchLifecycleException(
+                "ENGINEERING_PROJECT_NOT_ACTIVE",
+                "TIA did not report an active project after opening the selected project.");
+        }
+
+        if (!ProjectPathsEqual(worktree.SourceProjectPath, activeProject.Path))
+        {
+            throw new WorkbenchLifecycleException(
+                "ENGINEERING_PROJECT_MISMATCH",
+                $"TIA did not switch to the selected project '{worktree.SourceProjectPath}'. "
+                + $"The active project is still '{activeProject.Path}'.");
+        }
+    }
+
+    private Task<ProjectInfo> ReadActiveProjectAsync(CancellationToken cancellationToken) =>
+        engineering.CallAsync<ProjectInfo>("get_project_info", new { }, cancellationToken);
+
+    private static bool ProjectPathsEqual(string left, string right)
+    {
+        var normalizedLeft = Path.GetFullPath(left.Trim())
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedRight = Path.GetFullPath(right.Trim())
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<string> EnsureHardwareExportSucceeded(
+        HardwareExportResult[] results,
+        string outputRoot)
+    {
+        var failures = results.Where(result => !result.Success).ToArray();
+        var projectAmlPath = ResolveHardwareArtifactPath(outputRoot, "project.aml");
+        var projectAmlUsable = IsUsableProjectAml(projectAmlPath);
+        if (!projectAmlUsable)
+        {
+            throw new WorkbenchLifecycleException(
+                "HARDWARE_EXPORT_INCOMPLETE",
+                "Hardware configuration export failed: "
+                + string.Join("; ", failures.Select(result =>
+                    $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")));
+        }
+
+        if (!results.Any(result => result.Scope == "project"))
+        {
+            throw new WorkbenchLifecycleException(
+                "HARDWARE_EXPORT_INCOMPLETE",
+                "Hardware configuration export did not produce a project-level AML artifact.");
+        }
+
+        return failures.Select(result =>
+            $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")
+            .ToArray();
+    }
+
+    private static bool IsUsableProjectAml(string path)
+    {
+        if (!File.Exists(path) || new FileInfo(path).Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            XDocument.Load(path, LoadOptions.PreserveWhitespace);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is XmlException
+            or IOException
+            or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static string ResolveHardwareArtifactPath(string hardwareRoot, string fileName)
+    {
+        var canonicalPath = Path.Combine(hardwareRoot, fileName);
+        if (File.Exists(canonicalPath))
+        {
+            return canonicalPath;
+        }
+
+        var legacyPath = Path.Combine(hardwareRoot, "Hardware", fileName);
+        return File.Exists(legacyPath) ? legacyPath : canonicalPath;
+    }
+
+    private static bool IsUnderHardwareStaging(string hardwareRoot, string path)
+    {
+        var relative = Path.GetRelativePath(hardwareRoot, path);
+        return relative.Equals("staging", StringComparison.OrdinalIgnoreCase)
+            || relative.StartsWith(
+                "staging" + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase)
+            || relative.StartsWith(
+                "staging" + Path.AltDirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void RemoveLegacyHardwareLayout(string hardwareRoot)
+    {
+        var legacyRoot = Path.Combine(hardwareRoot, "Hardware");
+        if (Directory.Exists(legacyRoot))
+        {
+            Directory.Delete(legacyRoot, recursive: true);
+        }
+    }
+
+    private static HardwareSnapshot? ReadHardwareSnapshot(string root)
+    {
+        var manifestPath = ResolveHardwareArtifactPath(root, "manifest.json");
+        if (!File.Exists(manifestPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            var json = document.RootElement;
+            var artifacts = new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                ["project"] = OptionalString(json, "projectContentHash"),
+            };
+            if (json.TryGetProperty("devices", out var devices)
+                && devices.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var device in devices.EnumerateArray())
+                {
+                    var name = OptionalString(device, "deviceName");
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        artifacts[HardwareSnapshot.DeviceKey(name)] =
+                            OptionalString(device, "contentHash");
+                    }
+                }
+            }
+
+            return new HardwareSnapshot(artifacts);
+        }
+        catch (Exception exception) when (
+            exception is JsonException
+            or IOException
+            or UnauthorizedAccessException)
+        {
+            throw new WorkbenchLifecycleException(
+                "HARDWARE_MANIFEST_INVALID",
+                $"The saved hardware manifest could not be read: {exception.Message}");
+        }
+    }
+
+    private static string? OptionalString(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+            // A failed comparison must not mask the primary result.
+        }
+    }
+
+    private sealed record HardwareSnapshot(
+        IReadOnlyDictionary<string, string?> Artifacts)
+    {
+        public static HardwareSnapshot FromResults(
+            IEnumerable<HardwareExportResult> results,
+            string? exportRoot = null)
+        {
+            var exported = results.ToArray();
+            var artifacts = exported
+                .Where(result => result.Success)
+                .ToDictionary(
+                    result => result.Scope == "project"
+                        ? "project"
+                        : DeviceKey(result.DeviceName ?? "(unnamed device)"),
+                    result => result.ContentHash,
+                    StringComparer.Ordinal);
+            if (exportRoot is not null
+                && exported.Any(result => result.Scope == "project")
+                && !artifacts.ContainsKey("project"))
+            {
+                var projectAmlPath = ResolveHardwareArtifactPath(exportRoot, "project.aml");
+                if (IsUsableProjectAml(projectAmlPath))
+                {
+                    artifacts["project"] = HashFile(projectAmlPath);
+                }
+            }
+
+            return new HardwareSnapshot(artifacts);
+        }
+
+        public static IReadOnlyList<HardwareConfigurationCompareArtifact> Compare(
+            HardwareSnapshot? local,
+            HardwareSnapshot live)
+        {
+            var localArtifacts = local?.Artifacts
+                ?? new Dictionary<string, string?>(StringComparer.Ordinal);
+            var keys = localArtifacts.Keys
+                .Concat(live.Artifacts.Keys)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(key => key, StringComparer.Ordinal)
+                .ToArray();
+            return keys.Select(key =>
+            {
+                var localExists = localArtifacts.ContainsKey(key);
+                var liveExists = live.Artifacts.ContainsKey(key);
+                var state = !localExists
+                    ? "new"
+                    : !liveExists
+                        ? "missing"
+                        : localArtifacts[key] is null || live.Artifacts[key] is null
+                            ? "unknown"
+                            : string.Equals(localArtifacts[key], live.Artifacts[key], StringComparison.Ordinal)
+                                ? "same"
+                                : "changed";
+                var isDevice = key.StartsWith("device:", StringComparison.Ordinal);
+                return new HardwareConfigurationCompareArtifact(
+                    isDevice ? "device" : "project",
+                    isDevice ? key["device:".Length..] : null,
+                    state);
+            }).ToArray();
+        }
+
+        public static string DeviceKey(string name) => "device:" + name;
+    }
 
     public Task<RefreshApplyResult> ApplyRefreshAsync(
         DeviceContext device,

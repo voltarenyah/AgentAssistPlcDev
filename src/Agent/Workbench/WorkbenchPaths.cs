@@ -96,6 +96,12 @@ public static class WorkbenchPaths
             ResolveRelative(deviceRoot, "plc-knowledge.db"));
     }
 
+    public static string ResolveHardwareRoot(string worktreeRoot) =>
+        ResolveRelative(worktreeRoot, "hardware");
+
+    public static string ResolveHardwareStagingRoot(string worktreeRoot) =>
+        ResolveRelative(ResolveHardwareRoot(worktreeRoot), "staging");
+
     public static string ResolveRelative(string parentRoot, string relativePath)
     {
         if (string.IsNullOrWhiteSpace(parentRoot))

@@ -72,3 +72,28 @@ public sealed record DeviceContext(
     string ModifiedSourceRoot,
     string StagingRoot,
     string KnowledgeDbPath);
+
+public sealed record HardwareConfigurationReloadResult(
+    string RootPath,
+    int ArtifactCount,
+    int DeviceCount,
+    string CommitSha,
+    IReadOnlyList<string>? Warnings = null);
+
+public sealed record HardwareConfigurationCompareArtifact(
+    string Scope,
+    string? DeviceName,
+    string State);
+
+public sealed record HardwareConfigurationCompareResult(
+    string State,
+    string RootPath,
+    IReadOnlyList<HardwareConfigurationCompareArtifact> Artifacts,
+    string Message,
+    IReadOnlyList<string>? Warnings = null,
+    string? StagingPath = null);
+
+public sealed record HardwareConfigurationOverwriteResult(
+    string RootPath,
+    int ArtifactCount,
+    string CommitSha);

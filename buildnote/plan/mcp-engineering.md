@@ -15,7 +15,7 @@ The server exposes MCP tools that map 1:1 to primary TIA Openness workflows:
 Locked with the user after the feasibility review of this document:
 
 1. **`save_project` tool added** — explicit save is the ONLY way the server persists a TIA project. The server never saves implicitly (not on disconnect, not on process exit). If the project has unsaved changes, disconnect/shutdown reports that state; it does not save.
-2. **Phase 1 tool surface = 12 tools:** `check_environment`, `list_sessions`, `connect`, `disconnect`, `save_project`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `import_block`, `compile_block`, `compile_plc`. Deferred to later phases: `export_selection`, `import_all`, `compile_hardware`, `get_compile_state`.
+2. **Phase 1 tool surface = 12 tools:** `check_environment`, `list_sessions`, `connect`, `disconnect`, `save_project`, `get_project_info`, `list_blocks`, `export_block`, `export_all_blocks`, `import_block`, `compile_block`, `compile_plc`. The Openness extensions are `import_hardware_configuration`, `export_hardware_configuration`, `create_block`, and `delete_block`; deferred hardware work remains `compile_hardware` and `get_compile_state`.
 3. **`compile_block` semantics:** compile the PLC software, then filter result messages to the named block (Openness V17 believed to offer only software-level synchronous compile — verified in the API pass, step §15).
 4. **Test project:** `C:\Users\Ansel\Documents\Automation\V17\AgentAssistProgramming\TestPLCExportDemo`
 
@@ -106,6 +106,41 @@ Each tool is registered with `readOnlyHint` or `destructiveHint`, emits structur
 | `import_block` | destructive | `{ blockName: string, xmlFilePath: string, plcName?: string }` | `ImportResult` | Import modified XML into the selected PLC; `plcName` is required for multi-PLC projects. See §6.1 for safety guarantees |
 
 `export_selection` and `import_all` are deferred past Phase 1 (see §1.1).
+
+### 3.2.1 Openness extensions
+
+The adapter also exposes the following explicit Openness extensions:
+
+| Tool | Hint | Input | Output | V17 implementation |
+|---|---|---|---|---|
+| `import_hardware_configuration` | destructive | `{ amlFilePath, logFilePath?, conflictPolicy? }` | `HardwareImportResult` | `Project.GetService<CaxProvider>().Import(...)`; CAx import is not wrapped in `ExclusiveAccess` because V17 rejects that combination |
+| `export_hardware_configuration` | read | `{ outputDir, includeDeviceExports? }` | `HardwareExportResult[]` | Writes `Hardware/project.aml` as the canonical project export, optional `Hardware/Devices/<device>/device.aml` files, and `Hardware/manifest.json`; calls `CaxProvider.Export(...)` and does not save the project |
+| `create_block` | write | `{ blockName, blockType, number?, programmingLanguage?, instanceOfName?, plcName? }` | `BlockInfo` | `PlcBlockComposition.CreateFB` or `CreateInstanceDB` inside an exclusive transaction |
+| `delete_block` | destructive | `{ blockName, plcName? }` | `BlockMutationResult` | `PlcBlock.Delete()` inside an exclusive transaction |
+
+Native creation supports `FB` and `InstanceDB`. FC/OB/DB creation with custom interfaces remains XML-driven through `import_block`; this avoids inventing a block schema when V17 exposes no corresponding native `CreateFC`/`CreateOB`/`CreateDB` methods.
+
+CAx conflict policies map to `CaxImportOptions.MoveToParkingLot`, `RetainTiaDevice`, and `OverwriteTiaDevice`. The default is `MoveToParkingLot` so a name collision does not silently overwrite an existing station.
+
+CAx export uses the following project-root structure:
+
+```text
+<outputDir>/
+├── Hardware/
+│   ├── project.aml
+│   ├── project-export.log
+│   ├── manifest.json
+│   └── Devices/
+│       ├── <device-1>/
+│       │   ├── device.aml
+│       │   └── export.log
+│       └── <device-n>/
+│           ├── device.aml
+│           └── export.log
+└── ... PLC software export roots ...
+```
+
+`project.aml` is the authoritative restore artifact and is suitable for whole-project CAx import. Device AMLs are derived selective-export artifacts for inspection or device-scoped workflows; the manifest records device identity, relative paths, success, timestamps, and a content hash. The AML files are Siemens CAx AutomationML XML documents; the adapter writes no TIA project changes during export.
 
 ### 3.3 Compilation
 
