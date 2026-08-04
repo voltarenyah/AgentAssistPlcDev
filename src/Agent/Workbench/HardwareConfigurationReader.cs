@@ -43,43 +43,21 @@ public static class HardwareConfigurationReader
     public static HardwareConfigurationView Read(string worktreeRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreeRoot);
-        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(worktreeRoot);
-        var legacyHardwareRoot = WorkbenchPaths.ResolveRelative(hardwareRoot, "Hardware");
-        var manifestRoot = File.Exists(Path.Combine(hardwareRoot, "manifest.json"))
-            || File.Exists(Path.Combine(hardwareRoot, "project.aml"))
-            || !File.Exists(Path.Combine(legacyHardwareRoot, "manifest.json"))
-                ? hardwareRoot
-                : legacyHardwareRoot;
-        var manifestPath = Path.Combine(manifestRoot, "manifest.json");
-        if (!File.Exists(manifestPath))
+        var source = HardwareAml.Resolve(worktreeRoot);
+        if (source.State != "available" || source.Document is null)
         {
             return new HardwareConfigurationView(
-                "missing",
-                null,
-                null,
+                source.State,
+                source.ProjectAmlPath,
+                source.ExportedAt,
                 Array.Empty<HardwareConfigurationNode>(),
                 Array.Empty<HardwareConfigurationTag>(),
-                "No saved project-level hardware configuration is available. Reload it from TIA.");
+                source.Message);
         }
 
         try
         {
-            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
-            var json = manifest.RootElement;
-            var projectAmlRelative = OptionalString(json, "projectAmlFile") ?? "project.aml";
-            var projectAmlPath = WorkbenchPaths.ResolveRelative(manifestRoot, projectAmlRelative);
-            if (!File.Exists(projectAmlPath))
-            {
-                return new HardwareConfigurationView(
-                    "invalid",
-                    projectAmlPath,
-                    OptionalString(json, "exportedAt"),
-                    Array.Empty<HardwareConfigurationNode>(),
-                    Array.Empty<HardwareConfigurationTag>(),
-                    $"The saved hardware manifest references a missing AML file: {projectAmlRelative}.");
-            }
-
-            var document = XDocument.Load(projectAmlPath, LoadOptions.PreserveWhitespace);
+            var document = source.Document;
             var deviceElements = document
                 .Descendants()
                 .Where(element => Is(element, "InternalElement")
@@ -99,8 +77,8 @@ public static class HardwareConfigurationReader
                 .ToArray();
             return new HardwareConfigurationView(
                 "available",
-                projectAmlPath,
-                OptionalString(json, "exportedAt"),
+                source.ProjectAmlPath,
+                source.ExportedAt,
                 devices,
                 tags,
                 devices.Length == 0
@@ -279,12 +257,6 @@ public static class HardwareConfigurationReader
             string.IsNullOrWhiteSpace(ownerPath) ? null : ownerPath);
     }
 
-    private static string? OptionalString(JsonElement element, string name) =>
-        element.TryGetProperty(name, out var value)
-        && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
     private static string? AttributeValue(XElement element, string name) =>
         element.Attributes().FirstOrDefault(attribute =>
             string.Equals(attribute.Name.LocalName, name, StringComparison.OrdinalIgnoreCase))?.Value;
@@ -310,4 +282,82 @@ public static class HardwareConfigurationReader
     private static bool Is(XElement element, string localName) =>
         string.Equals(element.Name.LocalName, localName, StringComparison.OrdinalIgnoreCase);
 
+}
+
+/// <summary>
+/// Locates and loads the exported hardware AML (<c>hardware/project.aml</c> referenced by
+/// <c>manifest.json</c>) for a worktree. Shared by the hardware readers so they all agree on
+/// the on-disk layout and the missing/invalid states.
+/// </summary>
+internal sealed record HardwareAmlSource(
+    string State,
+    string? ProjectAmlPath,
+    string? ExportedAt,
+    XDocument? Document,
+    string? Message);
+
+internal static class HardwareAml
+{
+    public static HardwareAmlSource Resolve(string worktreeRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreeRoot);
+        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(worktreeRoot);
+        var legacyHardwareRoot = WorkbenchPaths.ResolveRelative(hardwareRoot, "Hardware");
+        var manifestRoot = File.Exists(Path.Combine(hardwareRoot, "manifest.json"))
+            || File.Exists(Path.Combine(hardwareRoot, "project.aml"))
+            || !File.Exists(Path.Combine(legacyHardwareRoot, "manifest.json"))
+                ? hardwareRoot
+                : legacyHardwareRoot;
+        var manifestPath = Path.Combine(manifestRoot, "manifest.json");
+        if (!File.Exists(manifestPath))
+        {
+            return new HardwareAmlSource(
+                "missing",
+                null,
+                null,
+                null,
+                "No saved project-level hardware configuration is available. Reload it from TIA.");
+        }
+
+        try
+        {
+            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            var json = manifest.RootElement;
+            var projectAmlRelative = OptionalString(json, "projectAmlFile") ?? "project.aml";
+            var projectAmlPath = WorkbenchPaths.ResolveRelative(manifestRoot, projectAmlRelative);
+            var exportedAt = OptionalString(json, "exportedAt");
+            if (!File.Exists(projectAmlPath))
+            {
+                return new HardwareAmlSource(
+                    "invalid",
+                    projectAmlPath,
+                    exportedAt,
+                    null,
+                    $"The saved hardware manifest references a missing AML file: {projectAmlRelative}.");
+            }
+
+            var document = XDocument.Load(projectAmlPath, LoadOptions.PreserveWhitespace);
+            return new HardwareAmlSource("available", projectAmlPath, exportedAt, document, null);
+        }
+        catch (Exception exception) when (
+            exception is JsonException
+            or InvalidDataException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Xml.XmlException)
+        {
+            return new HardwareAmlSource(
+                "invalid",
+                null,
+                null,
+                null,
+                $"The saved project AML could not be read: {exception.Message}");
+        }
+    }
+
+    private static string? OptionalString(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 }

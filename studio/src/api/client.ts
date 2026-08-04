@@ -271,6 +271,43 @@ export type HardwareConfigurationView = {
   message: string | null
 }
 
+export type HardwareBomItem = {
+  id: string
+  name: string
+  path: string
+  position: string
+  positionNumber: number | null
+  typeName: string | null
+  typeIdentifier: string
+  orderNumber: string | null
+  firmwareVersion: string | null
+}
+
+export type HardwareBomView = {
+  state: 'available' | 'missing' | 'invalid'
+  exportedAt: string | null
+  items: HardwareBomItem[]
+  message: string | null
+}
+
+export type HardwareNetworkNode = {
+  id: string
+  address: string
+  subnetMask: string | null
+  profinetDeviceName: string | null
+  deviceName: string
+  devicePath: string
+  interfaceLabel: string | null
+  subnetName: string | null
+}
+
+export type HardwareNetworkView = {
+  state: 'available' | 'missing' | 'invalid'
+  exportedAt: string | null
+  nodes: HardwareNetworkNode[]
+  message: string | null
+}
+
 export type ReconciliationEntry = {
   relativePath: string
   kind: 'Added' | 'Changed' | 'Removed' | 'Unchanged' | 0 | 1 | 2 | 3
@@ -457,6 +494,10 @@ export const listDevices = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<DeviceSummary[]>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices`)
 export const getHardwareConfiguration = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<HardwareConfigurationView>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/hardware`)
+export const getHardwareBom = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<HardwareBomView>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/hardware/bom`)
+export const getHardwareNetwork = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<HardwareNetworkView>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/hardware/network`)
 export const selectDevice = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/select`, jsonRequest('POST'))
 const devicePath = (workbenchId: string, worktreeId: string, deviceId: string) =>

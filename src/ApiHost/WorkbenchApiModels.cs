@@ -305,6 +305,16 @@ public static class WorkbenchEndpoints
             string worktreeId,
             WorkbenchApiState s) =>
             Results.Ok(HardwareConfigurationReader.Read(s.WorktreeRoot(workbenchId, worktreeId))));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware/bom", (
+            string workbenchId,
+            string worktreeId,
+            WorkbenchApiState s) =>
+            Results.Ok(HardwareListReader.ReadBom(s.WorktreeRoot(workbenchId, worktreeId))));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware/network", (
+            string workbenchId,
+            string worktreeId,
+            WorkbenchApiState s) =>
+            Results.Ok(HardwareListReader.ReadNetwork(s.WorktreeRoot(workbenchId, worktreeId))));
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
 
         // Device-scoped knowledge-graph browsing. Unlike the compatibility /api/knowledge/* endpoints,

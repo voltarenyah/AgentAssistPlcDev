@@ -7,6 +7,8 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDot,
+  CircuitBoard,
+  ClipboardList,
   CloudCog,
   Code2,
   Cpu,
@@ -17,6 +19,7 @@ import {
   KeyRound,
   Loader2,
   MessageSquare,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -60,6 +63,8 @@ import NodeEdgesView from '@/studio/NodeEdgesView'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
 import DevicePropertiesDock from '@/studio/DevicePropertiesDock'
 import HardwareConfigurationView from '@/studio/HardwareConfigurationView'
+import HardwareBomView from '@/studio/HardwareBomView'
+import HardwareNetworkView from '@/studio/HardwareNetworkView'
 import HardwarePropertiesDock from '@/studio/HardwarePropertiesDock'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import {
@@ -419,8 +424,13 @@ export default function MainStudio() {
   const [hardwareView, setHardwareView] = useState<api.HardwareConfigurationView | null>(null)
   const [hardwareSelectedNodeId, setHardwareSelectedNodeId] = useState<string | null>(null)
   const [hardwareInspectedNodeId, setHardwareInspectedNodeId] = useState<string | null>(null)
+  const [hardwarePage, setHardwarePage] = useState<'tree' | 'bom' | 'network'>('tree')
+  const [hardwareBomView, setHardwareBomView] = useState<api.HardwareBomView | null>(null)
+  const [hardwareNetworkView, setHardwareNetworkView] = useState<api.HardwareNetworkView | null>(null)
   const selectionRequestId = useRef(0)
   const hardwareRequestId = useRef(0)
+  const hardwareBomRequestId = useRef(0)
+  const hardwareNetworkRequestId = useRef(0)
   const chatAbortRef = useRef<AbortController | null>(null)
   const [activeTab, setActiveTab] = useState<StudioTab>('overview')
   const [activePage, setActivePage] = useState<'studio' | 'tools'>('studio')
@@ -668,6 +678,46 @@ export default function MainStudio() {
   }, [selection.deviceId, selection.workbenchId, selection.worktreeId])
 
   useEffect(() => {
+    const requestId = ++hardwareBomRequestId.current
+    if (!selection.workbenchId || !selection.worktreeId || selection.deviceId || hardwarePage !== 'bom') {
+      setHardwareBomView(null)
+      return
+    }
+
+    setHardwareBomView(null)
+    void api.getHardwareBom(selection.workbenchId, selection.worktreeId)
+      .then(view => {
+        if (hardwareBomRequestId.current !== requestId) return
+        setHardwareBomView(view)
+      })
+      .catch(error => {
+        if (hardwareBomRequestId.current !== requestId) return
+        showErrorToast(`Hardware BOM list could not be loaded: ${displayError(error)}`)
+        setHardwareBomView({ state: 'invalid', exportedAt: null, items: [], message: displayError(error) })
+      })
+  }, [hardwarePage, selection.deviceId, selection.workbenchId, selection.worktreeId])
+
+  useEffect(() => {
+    const requestId = ++hardwareNetworkRequestId.current
+    if (!selection.workbenchId || !selection.worktreeId || selection.deviceId || hardwarePage !== 'network') {
+      setHardwareNetworkView(null)
+      return
+    }
+
+    setHardwareNetworkView(null)
+    void api.getHardwareNetwork(selection.workbenchId, selection.worktreeId)
+      .then(view => {
+        if (hardwareNetworkRequestId.current !== requestId) return
+        setHardwareNetworkView(view)
+      })
+      .catch(error => {
+        if (hardwareNetworkRequestId.current !== requestId) return
+        showErrorToast(`Hardware network list could not be loaded: ${displayError(error)}`)
+        setHardwareNetworkView({ state: 'invalid', exportedAt: null, nodes: [], message: displayError(error) })
+      })
+  }, [hardwarePage, selection.deviceId, selection.workbenchId, selection.worktreeId])
+
+  useEffect(() => {
     if (!activeOperationId) return undefined
     let cancelled = false
     let successTimer: number | undefined
@@ -776,6 +826,7 @@ export default function MainStudio() {
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
       setDeviceSelection(null)
       setChatTabs(emptyChatTabs())
+      setHardwarePage('tree')
       if (devices.length === 1) {
         await selectDevice(workbench, worktree, devices[0].deviceId)
       }
@@ -834,12 +885,20 @@ export default function MainStudio() {
     await action(context)
   }
 
-  const selectHardware = (workbench: api.Workbench, worktree: api.WorkbenchRegistration) => {
+  const selectHardwarePage = (
+    workbench: api.Workbench,
+    worktree: api.WorkbenchRegistration,
+    page: 'tree' | 'bom' | 'network',
+  ) => {
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
+    setHardwarePage(page)
     setDeviceSelection(null)
     setChatTabs(emptyChatTabs())
     setActiveTab('overview')
   }
+
+  const selectHardware = (workbench: api.Workbench, worktree: api.WorkbenchRegistration) =>
+    selectHardwarePage(workbench, worktree, 'tree')
 
   const reloadHardware = async (
     workbench: api.Workbench,
@@ -1485,6 +1544,12 @@ export default function MainStudio() {
     { id: 'git', label: 'Git worktree', icon: GitBranch },
   ]
 
+  const hardwareTabs: Array<{ id: 'tree' | 'bom' | 'network'; label: string; icon: typeof Boxes }> = [
+    { id: 'tree', label: 'Hardware configuration', icon: CircuitBoard },
+    { id: 'bom', label: 'BOM list', icon: ClipboardList },
+    { id: 'network', label: 'Network list', icon: Network },
+  ]
+
   return (
     <div className="flex h-screen min-h-[620px] flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-12 shrink-0 items-center border-b bg-card px-3" style={{ borderColor: 'var(--border)' }}>
@@ -1611,16 +1676,41 @@ export default function MainStudio() {
               </div>
             </div>
           ) : !selection.deviceId && selection.worktreeId ? (
-            <HardwareConfigurationView
-              view={hardwareView}
-              selectedNodeId={hardwareSelectedNodeId}
-              inspectedNodeId={hardwareInspectedNodeId}
-              onSelectNode={node => {
-                setHardwareSelectedNodeId(node.id)
-                setHardwareInspectedNodeId(node.id)
-              }}
-              onInspectNode={node => setHardwareInspectedNodeId(node.id)}
-            />
+            <>
+              <div className="flex h-10 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
+                {hardwareTabs.map(tab => {
+                  const Icon = tab.icon
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setHardwarePage(tab.id)}
+                      className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[9px] transition-colors ${hardwarePage === tab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+                    >
+                      <Icon className="h-3 w-3" /> {tab.label}
+                    </button>
+                  )
+                })}
+                <div className="flex-1" />
+              </div>
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {hardwarePage === 'bom' ? (
+                  <HardwareBomView view={hardwareBomView} />
+                ) : hardwarePage === 'network' ? (
+                  <HardwareNetworkView view={hardwareNetworkView} />
+                ) : (
+                  <HardwareConfigurationView
+                    view={hardwareView}
+                    selectedNodeId={hardwareSelectedNodeId}
+                    inspectedNodeId={hardwareInspectedNodeId}
+                    onSelectNode={node => {
+                      setHardwareSelectedNodeId(node.id)
+                      setHardwareInspectedNodeId(node.id)
+                    }}
+                    onInspectNode={node => setHardwareInspectedNodeId(node.id)}
+                  />
+                )}
+              </div>
+            </>
           ) : !selection.deviceId ? (
             <div className="relative grid h-full place-items-center overflow-hidden p-8">
               <div className="pointer-events-none absolute inset-0 opacity-[0.035]" style={{
@@ -2000,7 +2090,7 @@ export default function MainStudio() {
               className="dock-shell dock-shell-right min-h-0 shrink-0"
               style={{ width: shellLayout.rightOpen ? shellLayout.rightWidth : 0 }}
             >
-              {!selection.deviceId && (
+              {!selection.deviceId && hardwarePage === 'tree' && (
                 <HardwarePropertiesDock
                   node={hardwareSelectedNode}
                   tags={hardwareView?.tags ?? []}
