@@ -490,3 +490,4 @@ config.json
 *.db
 exported/
 .worktrees/
+hardware/staging/

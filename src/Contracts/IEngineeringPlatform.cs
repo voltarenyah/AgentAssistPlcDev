@@ -38,6 +38,12 @@ public interface IEngineeringPlatform : IDisposable
     /// the export structure needs a clean rebuild.</summary>
     SyncResult[] RebuildExport(string outputDir, string? plcName = null, IProgress<EngineeringProgress>? progress = null);
 
+    /// <summary>Export the canonical project-level CAx AML and, optionally, one derived AML per TIA device.</summary>
+    HardwareExportResult[] ExportHardwareConfiguration(
+        string outputDir,
+        bool includeDeviceExports = true,
+        IProgress<EngineeringProgress>? progress = null);
+
     /// <summary>Close a TIA Portal session by process ID. Sends a close signal to the portal
     /// window (same as clicking the X button). The user can save or discard any project changes.</summary>
     void CloseSession(int sessionId);
@@ -52,6 +58,24 @@ public interface IEngineeringPlatform : IDisposable
     /// <summary>Import a block into the selected PLC. The PLC name may be omitted only when the
     /// project contains a single PLC.</summary>
     ImportResult ImportBlock(string blockName, string xmlFilePath, string? plcName = null);
+
+    /// <summary>Import a CAx/AML hardware configuration through the TIA Openness CaxProvider.</summary>
+    HardwareImportResult ImportHardwareConfiguration(
+        string amlFilePath,
+        string? logFilePath = null,
+        HardwareImportConflictPolicy conflictPolicy = HardwareImportConflictPolicy.MoveToParkingLot);
+
+    /// <summary>Create a native V17 block. Supported types are FB and InstanceDB.</summary>
+    BlockInfo CreateBlock(
+        string blockName,
+        string blockType,
+        int number = 0,
+        string? programmingLanguage = null,
+        string? instanceOfName = null,
+        string? plcName = null);
+
+    /// <summary>Delete a block from the selected PLC.</summary>
+    BlockMutationResult DeleteBlock(string blockName, string? plcName = null);
 
     CompileResult CompileBlock(string blockName, string? plcName = null);
     CompileResult CompilePlc(string? plcName = null);

@@ -123,6 +123,17 @@ public sealed class EngineeringTools
         IProgress<ProgressNotificationValue>? progress = null)
         => Invoke("rebuild_export", () => _adapter.RebuildExport(outputDir, plcName, ToEngineeringProgress(progress)), ("outputDir", outputDir));
 
+    [McpServerTool(Name = "export_hardware_configuration")]
+    [Description("Export the TIA V17 CAx hardware configuration as a canonical project AML and, optionally, one AML per device under Devices. Read-only with respect to the project.")]
+    public CallToolResult ExportHardwareConfiguration(
+        [Description("Export root directory. The project AML is written directly under outputDir/project.aml.")] string outputDir,
+        [Description("Also export one AML per TIA device under outputDir/Devices. Default true.")] bool includeDeviceExports = true,
+        IProgress<ProgressNotificationValue>? progress = null)
+        => Invoke(
+            "export_hardware_configuration",
+            () => _adapter.ExportHardwareConfiguration(outputDir, includeDeviceExports, ToEngineeringProgress(progress)),
+            ("outputDir", outputDir));
+
     [McpServerTool(Name = "get_context_status")]
     [Description("Check whether an export root matches the current project state without changing anything: per PLC, the stored manifest checksum vs the live software checksum (states: no-baseline / in-sync / changed / unknown). No exports, no writes — safe to run anytime.")]
     public CallToolResult GetContextStatus(
@@ -144,6 +155,36 @@ public sealed class EngineeringTools
         [Description("Path to the modified XML file.")] string xmlFilePath,
         [Description("PLC device name; optional for single-PLC projects and required when the project contains multiple PLCs.")] string? plcName = null)
         => Invoke("import_block", () => _adapter.ImportBlock(blockName, xmlFilePath, plcName), ("xmlFilePath", xmlFilePath));
+
+    [McpServerTool(Name = "import_hardware_configuration")]
+    [Description("Import a TIA Openness CAx hardware configuration from an AML file (DESTRUCTIVE). CAx import is performed through the project CaxProvider and uses the selected conflict policy.")]
+    public CallToolResult ImportHardwareConfiguration(
+        [Description("Path to the CAx AML file.")] string amlFilePath,
+        [Description("Optional path for the TIA CAx import log. A temporary path is used when omitted.")] string? logFilePath = null,
+        [Description("Conflict policy: move_to_parking_lot, retain_tia_device, or overwrite_tia_device.")] string conflictPolicy = "move_to_parking_lot")
+        => Invoke(
+            "import_hardware_configuration",
+            () => _adapter.ImportHardwareConfiguration(amlFilePath, logFilePath, ParseHardwareImportPolicy(conflictPolicy)),
+            ("amlFilePath", amlFilePath),
+            ("logFilePath", logFilePath));
+
+    [McpServerTool(Name = "create_block")]
+    [Description("Create a native TIA V17 PLC block. Supported block types are FB and InstanceDB; use import_block for XML-defined FC, OB, or DB blocks.")]
+    public CallToolResult CreateBlock(
+        [Description("Name of the new block.")] string blockName,
+        [Description("Native block type: FB or InstanceDB.")] string blockType,
+        [Description("Block number. Use 0 for automatic numbering.")] int number = 0,
+        [Description("Programming language for FB, for example LAD, FBD, or SCL.")] string? programmingLanguage = null,
+        [Description("Existing FB name when creating an InstanceDB.")] string? instanceOfName = null,
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
+        => Invoke("create_block", () => _adapter.CreateBlock(blockName, blockType, number, programmingLanguage, instanceOfName, plcName));
+
+    [McpServerTool(Name = "delete_block")]
+    [Description("Delete a PLC block from the selected TIA project (DESTRUCTIVE). The block must be closed in the TIA editor.")]
+    public CallToolResult DeleteBlock(
+        [Description("Name of the block to delete.")] string blockName,
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
+        => Invoke("delete_block", () => _adapter.DeleteBlock(blockName, plcName));
 
     [McpServerTool(Name = "compile_block")]
     [Description("Compile the PLC software and report messages for the named block (write: mutates project compile state). V17 has no per-block compile — this is compile_plc + per-block filtering.")]
@@ -200,6 +241,18 @@ public sealed class EngineeringTools
             ? null
             : string.Join("; ", paths.Select(argument => $"{argument.Name}={argument.Value}"));
     }
+
+    private static HardwareImportConflictPolicy ParseHardwareImportPolicy(string value) =>
+        value.Trim().ToLowerInvariant() switch
+        {
+            "move_to_parking_lot" or "movetoparkinglot" => HardwareImportConflictPolicy.MoveToParkingLot,
+            "retain_tia_device" or "retaintia" or "retaintia device" => HardwareImportConflictPolicy.RetainTiaDevice,
+            "overwrite_tia_device" or "overwritetia" or "overwrite" => HardwareImportConflictPolicy.OverwriteTiaDevice,
+            _ => throw new AdapterException(
+                "INVALID_HARDWARE_IMPORT_POLICY",
+                $"Unknown hardware import conflict policy '{value}'.",
+                "Use move_to_parking_lot, retain_tia_device, or overwrite_tia_device."),
+        };
 
     private static IProgress<EngineeringProgress>? ToEngineeringProgress(
         IProgress<ProgressNotificationValue>? progress) =>

@@ -1,5 +1,6 @@
 import {
   Boxes,
+  CircuitBoard,
   ChevronDown,
   ChevronRight,
   Cpu,
@@ -41,6 +42,9 @@ type Props = {
   onSelectWorkbench: (workbench: Workbench) => void
   onSelectWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onSelectDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
+  onSelectHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
+  onReloadHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
+  onCompareHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onDeleteWorkbench: (workbench: Workbench) => void
   onDeleteWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onMergeWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
@@ -65,6 +69,9 @@ export default function WorkbenchNavigator({
   onSelectWorkbench,
   onSelectWorktree,
   onSelectDevice,
+  onSelectHardware,
+  onReloadHardware,
+  onCompareHardware,
   onDeleteWorkbench,
   onDeleteWorktree,
   onMergeWorktree,
@@ -197,6 +204,37 @@ export default function WorkbenchNavigator({
                         </ContextMenu>
                         {worktreeSelected && (
                           <div className="ml-4 border-l pl-2" style={{ borderColor: 'var(--border)' }}>
+                            <ContextMenu>
+                              <ContextMenuTrigger asChild>
+                                <button
+                                  onClick={() => onSelectHardware(workbench, worktree)}
+                                  className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left ${
+                                    selection.deviceId === null ? 'bg-chart-2/10 ring-1 ring-chart-2/30' : 'hover:bg-accent/40'
+                                  }`}
+                                >
+                                  <CircuitBoard className={`h-3.5 w-3.5 ${
+                                    selection.deviceId === null ? 'text-chart-2' : 'text-muted-foreground'
+                                  }`} />
+                                  <span className="min-w-0 flex-1 truncate text-[10px]">Hardware configuration</span>
+                                </button>
+                              </ContextMenuTrigger>
+                              <ContextMenuContent>
+                                <ContextMenuLabel>Hardware configuration</ContextMenuLabel>
+                                <ContextMenuItem onSelect={() => onSelectHardware(workbench, worktree)}>
+                                  <CircuitBoard className="h-3.5 w-3.5" />
+                                  Select hardware configuration
+                                </ContextMenuItem>
+                                <ContextMenuSeparator />
+                                <ContextMenuItem onSelect={() => onReloadHardware(workbench, worktree)}>
+                                  <RotateCw className="h-3.5 w-3.5" />
+                                  Reload hardware configuration
+                                </ContextMenuItem>
+                                <ContextMenuItem onSelect={() => onCompareHardware(workbench, worktree)}>
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                  Compare hardware with TIA
+                                </ContextMenuItem>
+                              </ContextMenuContent>
+                            </ContextMenu>
                             {devices.length === 0 ? (
                               <div className="px-2 py-2 text-[9px] text-muted-foreground">No registered PLC devices</div>
                             ) : devices.map(device => {

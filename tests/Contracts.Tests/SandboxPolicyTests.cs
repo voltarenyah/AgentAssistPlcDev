@@ -10,6 +10,7 @@ public sealed class SandboxPolicyTests
     [InlineData("check_environment")]
     [InlineData("list_blocks")]
     [InlineData("export_all_blocks")]
+    [InlineData("export_hardware_configuration")]
     [InlineData("query")]
     [InlineData("query_node_kinds")]
     [InlineData("query_nodes")]
@@ -36,6 +37,7 @@ public sealed class SandboxPolicyTests
     [InlineData("connect")]
     [InlineData("disconnect")]
     [InlineData("compile_plc")]
+    [InlineData("create_block")]
     [InlineData("vc_init")]
     [InlineData("vc_add")]
     [InlineData("vc_commit")]
@@ -54,6 +56,8 @@ public sealed class SandboxPolicyTests
     [Theory]
     [InlineData("save_project")]
     [InlineData("import_block")]
+    [InlineData("import_hardware_configuration")]
+    [InlineData("delete_block")]
     [InlineData("vc_restore")]
     public void DestructiveToolsClassifyAsDestructive(string tool)
     {
@@ -72,8 +76,9 @@ public sealed class SandboxPolicyTests
         string[] currentTools =
         {
             "check_environment", "list_sessions", "connect", "disconnect", "save_project", "get_project_info",
-            "list_blocks", "export_block", "export_all_blocks", "export_tag_tables", "export_udts",
+            "list_blocks", "export_block", "export_all_blocks", "export_hardware_configuration", "export_tag_tables", "export_udts",
             "import_block", "compile_block", "compile_plc",
+            "import_hardware_configuration", "create_block", "delete_block",
             "ingest_source", "update_components", "query", "get_schema", "get_block", "get_network",
             "get_single_network", "get_all_networks", "get_variable_usage", "search",
             "query_node_kinds", "query_nodes", "query_edge_types", "query_edges",

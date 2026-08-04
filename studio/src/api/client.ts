@@ -229,6 +229,48 @@ export type DeviceSnapshot = DeviceInfo & {
   diagnostics: string[]
 }
 
+export type HardwareConfigurationProperty = {
+  name: string
+  value: string
+}
+
+export type HardwareConfigurationIoRange = {
+  ioType: string
+  startAddress: number
+  lengthBits: number
+  endAddress: number
+  addressRange: string
+}
+
+export type HardwareConfigurationTag = {
+  id: string
+  name: string
+  dataType: string
+  ioType: string
+  logicalAddress: string
+  ownerPath: string | null
+}
+
+export type HardwareConfigurationNode = {
+  id: string
+  name: string
+  path: string
+  kind: string
+  typeIdentifier: string | null
+  properties: HardwareConfigurationProperty[]
+  ioRanges: HardwareConfigurationIoRange[]
+  children: HardwareConfigurationNode[]
+}
+
+export type HardwareConfigurationView = {
+  state: 'available' | 'missing' | 'invalid'
+  projectAmlPath: string | null
+  exportedAt: string | null
+  devices: HardwareConfigurationNode[]
+  tags: HardwareConfigurationTag[]
+  message: string | null
+}
+
 export type ReconciliationEntry = {
   relativePath: string
   kind: 'Added' | 'Changed' | 'Removed' | 'Unchanged' | 0 | 1 | 2 | 3
@@ -254,6 +296,34 @@ export type RefreshApplyResult = {
   changedPaths: string[]
   commitSha: string | null
   error: string | null
+}
+
+export type HardwareConfigurationReloadResult = {
+  rootPath: string
+  artifactCount: number
+  deviceCount: number
+  commitSha: string
+  warnings?: string[] | null
+}
+
+export type HardwareConfigurationCompareArtifact = {
+  scope: 'project' | 'device'
+  deviceName: string | null
+  state: 'same' | 'changed' | 'missing' | 'new' | 'unknown'
+}
+
+export type HardwareConfigurationCompareResult = {
+  state: 'in-sync' | 'changed' | 'missing'
+  rootPath: string
+  artifacts: HardwareConfigurationCompareArtifact[]
+  message: string
+  stagingPath?: string | null
+}
+
+export type HardwareConfigurationOverwriteResult = {
+  rootPath: string
+  artifactCount: number
+  commitSha: string
 }
 
 export type KnowledgeUpdateResult = {
@@ -385,6 +455,8 @@ export type DeviceSummary = {
 }
 export const listDevices = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<DeviceSummary[]>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices`)
+export const getHardwareConfiguration = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<HardwareConfigurationView>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/hardware`)
 export const selectDevice = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/select`, jsonRequest('POST'))
 const devicePath = (workbenchId: string, worktreeId: string, deviceId: string) =>
@@ -423,6 +495,26 @@ export const stageDeviceRefresh = (
   workbenchRequest<unknown>(
     `${devicePath(workbenchId, worktreeId, deviceId)}/refresh/stage${allowCompile ? '?allowCompile=true' : ''}`,
     withOperation(jsonRequest('POST'), operationId),
+  )
+export const reloadHardwareConfiguration = (workbenchId: string, worktreeId: string, operationId?: string) =>
+  workbenchRequest<HardwareConfigurationReloadResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/hardware/reload`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
+export const compareHardwareConfiguration = (workbenchId: string, worktreeId: string, operationId?: string) =>
+  workbenchRequest<HardwareConfigurationCompareResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/hardware/compare`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
+export const overwriteHardwareConfiguration = (
+  workbenchId: string,
+  worktreeId: string,
+  confirmOverwrite: boolean,
+  operationId?: string,
+) =>
+  workbenchRequest<HardwareConfigurationOverwriteResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/hardware/overwrite`,
+    withOperation(jsonRequest('POST', { confirmOverwrite }), operationId),
   )
 export const previewDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<ReconciliationPreview>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/preview`)

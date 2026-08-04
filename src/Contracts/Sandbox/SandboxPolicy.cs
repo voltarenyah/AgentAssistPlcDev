@@ -42,6 +42,7 @@ public sealed class SandboxPolicy
             ["export_udts"] = SandboxTier.Read,
             ["sync_export"] = SandboxTier.Read,
             ["rebuild_export"] = SandboxTier.Read,
+            ["export_hardware_configuration"] = SandboxTier.Read,
             ["get_context_status"] = SandboxTier.Read,
             ["compare_context"] = SandboxTier.Read,
             // Engineering — mutate project/portal state but do not persist or overwrite user code.
@@ -54,6 +55,9 @@ public sealed class SandboxPolicy
             // Engineering — persist/overwrite user work.
             ["save_project"] = SandboxTier.Destructive,
             ["import_block"] = SandboxTier.Destructive,
+            ["import_hardware_configuration"] = SandboxTier.Destructive,
+            ["create_block"] = SandboxTier.Write,
+            ["delete_block"] = SandboxTier.Destructive,
             // Knowledge — local SQLite graph only; no TIA side effects.
             ["ingest_source"] = SandboxTier.Read,
             ["update_components"] = SandboxTier.Write,

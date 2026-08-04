@@ -59,6 +59,8 @@ import SessionDock from '@/studio/chat/SessionDock'
 import NodeEdgesView from '@/studio/NodeEdgesView'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
 import DevicePropertiesDock from '@/studio/DevicePropertiesDock'
+import HardwareConfigurationView from '@/studio/HardwareConfigurationView'
+import HardwarePropertiesDock from '@/studio/HardwarePropertiesDock'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import {
   clampDockWidth,
@@ -116,6 +118,18 @@ const newOperationId = () =>
 
 const normalizeProjectPath = (path: string) =>
   path.trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
+
+const findHardwareNode = (
+  nodes: api.HardwareConfigurationNode[],
+  id: string,
+): api.HardwareConfigurationNode | null => {
+  for (const node of nodes) {
+    if (node.id === id) return node
+    const nested = findHardwareNode(node.children, id)
+    if (nested) return nested
+  }
+  return null
+}
 
 function NewWorktreeDialog({
   workbench,
@@ -402,7 +416,11 @@ export default function MainStudio() {
     deviceId: null,
   })
   const [deviceSelection, setDeviceSelection] = useState<DeviceSelectionState | null>(null)
+  const [hardwareView, setHardwareView] = useState<api.HardwareConfigurationView | null>(null)
+  const [hardwareSelectedNodeId, setHardwareSelectedNodeId] = useState<string | null>(null)
+  const [hardwareInspectedNodeId, setHardwareInspectedNodeId] = useState<string | null>(null)
   const selectionRequestId = useRef(0)
+  const hardwareRequestId = useRef(0)
   const chatAbortRef = useRef<AbortController | null>(null)
   const [activeTab, setActiveTab] = useState<StudioTab>('overview')
   const [activePage, setActivePage] = useState<'studio' | 'tools'>('studio')
@@ -504,6 +522,12 @@ export default function MainStudio() {
   const deviceSessions = deviceSelection?.sessions ?? []
   const deviceInfo = deviceView?.snapshot ?? null
   const deviceMeta = deviceInfo?.device ?? null
+  const hardwareSelectedNode = useMemo(
+    () => hardwareView && (hardwareInspectedNodeId ?? hardwareSelectedNodeId)
+      ? findHardwareNode(hardwareView.devices, hardwareInspectedNodeId ?? hardwareSelectedNodeId!)
+      : null,
+    [hardwareInspectedNodeId, hardwareSelectedNodeId, hardwareView],
+  )
   const blocks = useMemo(() => deviceView?.blocks ?? [], [deviceView])
   const touchedCount = deviceView?.overlayCount ?? 0
   const modifiedBlocks = useMemo(() => blocks.filter(block => block.modified), [blocks])
@@ -609,6 +633,39 @@ export default function MainStudio() {
   useEffect(() => {
     setKnowledgeSelection({ node: null, edge: null })
   }, [selection.deviceId])
+
+  useEffect(() => {
+    const requestId = ++hardwareRequestId.current
+    if (!selection.workbenchId || !selection.worktreeId || selection.deviceId) {
+      setHardwareView(null)
+      setHardwareSelectedNodeId(null)
+      setHardwareInspectedNodeId(null)
+      return
+    }
+
+    setHardwareView(null)
+    setHardwareSelectedNodeId(null)
+    setHardwareInspectedNodeId(null)
+    void api.getHardwareConfiguration(selection.workbenchId, selection.worktreeId)
+      .then(view => {
+        if (hardwareRequestId.current !== requestId) return
+        setHardwareView(view)
+        setHardwareSelectedNodeId(view.devices[0]?.id ?? null)
+        setHardwareInspectedNodeId(view.devices[0]?.id ?? null)
+      })
+      .catch(error => {
+        if (hardwareRequestId.current !== requestId) return
+        showErrorToast(`Hardware configuration could not be loaded: ${displayError(error)}`)
+        setHardwareView({
+          state: 'invalid',
+          projectAmlPath: null,
+          exportedAt: null,
+          devices: [],
+          tags: [],
+          message: displayError(error),
+        })
+      })
+  }, [selection.deviceId, selection.workbenchId, selection.worktreeId])
 
   useEffect(() => {
     if (!activeOperationId) return undefined
@@ -775,6 +832,84 @@ export default function MainStudio() {
     const context = { workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId }
     await selectDevice(workbench, worktree, deviceId)
     await action(context)
+  }
+
+  const selectHardware = (workbench: api.Workbench, worktree: api.WorkbenchRegistration) => {
+    setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
+    setDeviceSelection(null)
+    setChatTabs(emptyChatTabs())
+    setActiveTab('overview')
+  }
+
+  const reloadHardware = async (
+    workbench: api.Workbench,
+    worktree: api.WorkbenchRegistration,
+  ) => {
+    setOperation('reload-hardware')
+    const op = beginOperation('reload-hardware', 'Reloading hardware configuration from TIA...')
+    try {
+      const result = await api.reloadHardwareConfiguration(workbench.workbenchId, worktree.worktreeId, op.id)
+      if (result.warnings?.length) {
+        toast.warning(
+          `Hardware configuration reloaded with ${result.warnings.length} warning(s) (${result.deviceCount} device(s) exported).`,
+        )
+      } else {
+        toast.success(`Hardware configuration reloaded (${result.deviceCount} device(s)).`)
+      }
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const compareHardware = async (
+    workbench: api.Workbench,
+    worktree: api.WorkbenchRegistration,
+  ) => {
+    setOperation('compare-hardware')
+    const op = beginOperation('compare-hardware', 'Comparing hardware configuration with TIA...')
+    try {
+      const result = await api.compareHardwareConfiguration(workbench.workbenchId, worktree.worktreeId, op.id)
+      if (result.state === 'in-sync') {
+        toast.success(result.message)
+      } else {
+        toast.warning(result.message)
+        if (window.confirm(
+          'Replace the saved hardware AML files with the staged TIA export? This updates the hardware baseline and creates a Git commit.',
+        )) {
+          setOperation('overwrite-hardware')
+          const overwriteOp = beginOperation(
+            'overwrite-hardware',
+            'Applying staged hardware configuration...',
+          )
+          const applied = await api.overwriteHardwareConfiguration(
+            workbench.workbenchId,
+            worktree.worktreeId,
+            true,
+            overwriteOp.id,
+          )
+          if (
+            selection.workbenchId === workbench.workbenchId
+            && selection.worktreeId === worktree.worktreeId
+            && selection.deviceId === null
+          ) {
+            const refreshed = await api.getHardwareConfiguration(
+              workbench.workbenchId,
+              worktree.worktreeId,
+            )
+            setHardwareView(refreshed)
+            setHardwareSelectedNodeId(refreshed.devices[0]?.id ?? null)
+            setHardwareInspectedNodeId(refreshed.devices[0]?.id ?? null)
+          }
+          toast.success(`Saved hardware configuration updated (${applied.artifactCount} artifact(s)).`)
+        }
+      }
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setOperation(null)
+    }
   }
 
   const createWorkbench = async (values: {
@@ -1417,6 +1552,9 @@ export default function MainStudio() {
             onSelectWorkbench={workbench => void selectWorkbench(workbench)}
             onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
             onSelectDevice={(workbench, worktree, deviceId) => void selectDevice(workbench, worktree, deviceId)}
+            onSelectHardware={selectHardware}
+            onReloadHardware={(workbench, worktree) => void reloadHardware(workbench, worktree)}
+            onCompareHardware={(workbench, worktree) => void compareHardware(workbench, worktree)}
             onDeleteWorkbench={workbench => setDeleteWorkbenchFor(workbench)}
             onDeleteWorktree={(workbench, worktree) => setDeleteWorktreeFor({ workbench, worktree })}
             onMergeWorktree={(workbench, worktree) => void mergeIntoMaster({ workbench, worktree })}
@@ -1460,7 +1598,7 @@ export default function MainStudio() {
           onPointerDown={event => startDockResize('left', event.clientX)}
         />
 
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           {fatalError ? (
             <div className="grid h-full place-items-center p-8">
               <div className="max-w-lg rounded-xl border bg-card p-6 text-center" style={{ borderColor: 'var(--border)' }}>
@@ -1472,6 +1610,17 @@ export default function MainStudio() {
                 </button>
               </div>
             </div>
+          ) : !selection.deviceId && selection.worktreeId ? (
+            <HardwareConfigurationView
+              view={hardwareView}
+              selectedNodeId={hardwareSelectedNodeId}
+              inspectedNodeId={hardwareInspectedNodeId}
+              onSelectNode={node => {
+                setHardwareSelectedNodeId(node.id)
+                setHardwareInspectedNodeId(node.id)
+              }}
+              onInspectNode={node => setHardwareInspectedNodeId(node.id)}
+            />
           ) : !selection.deviceId ? (
             <div className="relative grid h-full place-items-center overflow-hidden p-8">
               <div className="pointer-events-none absolute inset-0 opacity-[0.035]" style={{
@@ -1834,7 +1983,7 @@ export default function MainStudio() {
             </>
           )}
         </main>
-        {selection.deviceId && (
+        {selection.worktreeId && (
           <>
             <div
               role="separator"
@@ -1851,14 +2000,21 @@ export default function MainStudio() {
               className="dock-shell dock-shell-right min-h-0 shrink-0"
               style={{ width: shellLayout.rightOpen ? shellLayout.rightWidth : 0 }}
             >
-              {activeTab === 'overview' && (
+              {!selection.deviceId && (
+                <HardwarePropertiesDock
+                  node={hardwareSelectedNode}
+                  tags={hardwareView?.tags ?? []}
+                  hidden={false}
+                />
+              )}
+              {selection.deviceId && activeTab === 'overview' && (
                 <DevicePropertiesDock
                   meta={deviceMeta}
                   info={deviceInfo}
                   hidden={false}
                 />
               )}
-              {activeTab === 'knowledge' && knowledgeContext && (
+              {selection.deviceId && activeTab === 'knowledge' && knowledgeContext && (
                 <KnowledgePropertiesDock
                   context={knowledgeContext}
                   node={knowledgeSelection.node}
@@ -1866,7 +2022,7 @@ export default function MainStudio() {
                   hidden={false}
                 />
               )}
-              {activeTab !== 'overview' && activeTab !== 'knowledge' && (
+              {selection.deviceId && activeTab !== 'overview' && activeTab !== 'knowledge' && (
                 <SessionDock
                   sessions={deviceSessions}
                   activeSessionId={chatTabs.activeId}
@@ -1891,7 +2047,7 @@ export default function MainStudio() {
           <span>/</span>
           <span className="font-mono">{activeWorktree?.branch ?? 'no worktree'}</span>
           <span>/</span>
-          <span className="font-mono text-foreground">{deviceInfo?.plcName ?? selection.deviceId ?? 'no device'}</span>
+          <span className="font-mono text-foreground">{deviceInfo?.plcName ?? (selection.worktreeId && !selection.deviceId ? 'hardware' : selection.deviceId ?? 'no device')}</span>
         </span>
         <button
           className="studio-status-item studio-status-api"

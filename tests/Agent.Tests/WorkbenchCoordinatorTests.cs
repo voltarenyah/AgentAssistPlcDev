@@ -46,6 +46,212 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task ReloadHardwareRejectsWhenAttachedTiaProjectDoesNotMatchSelectedWorktree()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\ProjectB.ap17");
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "ProjectA",
+                Path = @"C:\Projects\ProjectA.ap17",
+            })
+            .Respond("disconnect", new object())
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "ProjectA",
+                Path = @"C:\Projects\ProjectA.ap17",
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.ReloadHardwareAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("ENGINEERING_PROJECT_MISMATCH", error.Code);
+        Assert.Contains("ProjectB.ap17", error.Message);
+        Assert.Contains("ProjectA.ap17", error.Message);
+        Assert.Equal(["get_project_info", "disconnect", "list_sessions", "connect", "get_project_info"], engineering.Calls);
+        Assert.False(Directory.Exists(WorkbenchPaths.ResolveHardwareRoot(fixture.Context.WorktreeRoot)));
+    }
+
+    [Fact]
+    public async Task ReloadHardwareOpensRegisteredProjectBeforeExportWhenAttachedProjectDiffers()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\ProjectB.ap17");
+        var hardwareRoot = Path.Combine(
+            WorkbenchPaths.ResolveHardwareRoot(fixture.Context.WorktreeRoot), "Hardware");
+        Directory.CreateDirectory(hardwareRoot);
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), "<CAEXFile />");
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "ProjectA",
+                Path = @"C:\Projects\ProjectA.ap17",
+            })
+            .Respond("disconnect", new object())
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "ProjectB",
+                Path = @"C:\Projects\ProjectB.ap17",
+            })
+            .Respond("export_hardware_configuration", new[]
+            {
+                new HardwareExportResult
+                {
+                    Scope = "project",
+                    Success = true,
+                    ContentHash = "project-hash",
+                },
+            });
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_add", new object())
+            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "commit-1" });
+        var coordinator = Create(fixture, engineering: engineering, versionControl: versionControl);
+
+        var result = await coordinator.ReloadHardwareAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal("commit-1", result.CommitSha);
+        Assert.Equal(
+            ["get_project_info", "disconnect", "list_sessions", "connect", "get_project_info", "export_hardware_configuration"],
+            engineering.Calls);
+        Assert.Equal(@"C:\Projects\ProjectB.ap17", Property<string>(
+            engineering.CallArgs["connect"].Single(), "projectPath"));
+        Assert.True(Property<bool>(engineering.CallArgs["connect"].Single(), "withUI"));
+    }
+
+    [Fact]
+    public async Task CompareHardwareRejectsWhenAttachedTiaProjectDoesNotMatchSelectedWorktree()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\ProjectB.ap17");
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "ProjectA",
+                Path = @"C:\Projects\ProjectA.ap17",
+            })
+            .Respond("disconnect", new object())
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "ProjectA",
+                Path = @"C:\Projects\ProjectA.ap17",
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.CompareHardwareAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("ENGINEERING_PROJECT_MISMATCH", error.Code);
+        Assert.Equal(["get_project_info", "disconnect", "list_sessions", "connect", "get_project_info"], engineering.Calls);
+        Assert.DoesNotContain(
+            Directory.EnumerateFileSystemEntries(fixture.Context.WorktreeRoot),
+            path => Path.GetFileName(path).StartsWith(".hardware-compare-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CompareHardwareKeepsLiveExportInHardwareStagingForApproval()
+    {
+        var fixture = Fixture.Create(root);
+        var engineering = new HardwareExportCaller();
+        var coordinator = Create(fixture, engineering: engineering);
+
+        await coordinator.CompareHardwareAsync(fixture.Context, CancellationToken.None);
+
+        var stagingRoot = Path.Combine(
+            WorkbenchPaths.ResolveHardwareRoot(fixture.Context.WorktreeRoot),
+            "staging");
+        Assert.Equal(stagingRoot, Property<string>(
+            engineering.CallArgs["export_hardware_configuration"].Single(), "outputDir"));
+        Assert.True(File.Exists(Path.Combine(stagingRoot, "project.aml")));
+        Assert.True(Directory.Exists(stagingRoot));
+    }
+
+    [Fact]
+    public async Task HardwareOverwriteRequiresExplicitConfirmation()
+    {
+        var fixture = Fixture.Create(root);
+        var coordinator = Create(fixture);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.OverwriteHardwareFromStagingAsync(
+                fixture.Context,
+                confirmOverwrite: false,
+                CancellationToken.None));
+
+        Assert.Equal("HARDWARE_OVERWRITE_CONFIRMATION_REQUIRED", error.Code);
+    }
+
+    [Fact]
+    public async Task HardwareOverwriteReplacesBaselineFromStagingAndCommitsIt()
+    {
+        var fixture = Fixture.Create(root);
+        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(fixture.Context.WorktreeRoot);
+        var stagingRoot = WorkbenchPaths.ResolveHardwareStagingRoot(fixture.Context.WorktreeRoot);
+        Directory.CreateDirectory(hardwareRoot);
+        Directory.CreateDirectory(stagingRoot);
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), "<old />");
+        File.WriteAllText(Path.Combine(stagingRoot, "project.aml"), "<new />");
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_add", new object())
+            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "hardware-commit" });
+        var coordinator = Create(fixture, versionControl: versionControl);
+
+        var result = await coordinator.OverwriteHardwareFromStagingAsync(
+            fixture.Context,
+            confirmOverwrite: true,
+            CancellationToken.None);
+
+        Assert.Equal("hardware-commit", result.CommitSha);
+        Assert.Equal("<new />", File.ReadAllText(Path.Combine(hardwareRoot, "project.aml")));
+        Assert.Equal(["vc_add", "vc_commit"], versionControl.Calls);
+        Assert.Contains(
+            "hardware/project.aml",
+            Property<string[]>(versionControl.CallArgs["vc_add"].Single(), "paths"));
+    }
+
+    [Fact]
+    public async Task ReloadHardwareKeepsUsableProjectAmlWhenOptionalDeviceExportFails()
+    {
+        var fixture = Fixture.Create(root);
+        var hardwareRoot = Path.Combine(
+            WorkbenchPaths.ResolveHardwareRoot(fixture.Context.WorktreeRoot), "Hardware");
+        Directory.CreateDirectory(hardwareRoot);
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), "<CAEXFile />");
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo { Path = @"C:\Projects\Line.ap17" })
+            .Respond("export_hardware_configuration", new[]
+            {
+                new HardwareExportResult
+                {
+                    Scope = "project",
+                    Success = false,
+                    AmlFilePath = Path.Combine(hardwareRoot, "project.aml"),
+                    Error = "project export reported warnings",
+                },
+                new HardwareExportResult
+                {
+                    Scope = "device",
+                    DeviceName = "HMI_1",
+                    Success = false,
+                    Error = "TypeIdentifier is invalid or missing",
+                },
+            });
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_add", new object())
+            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "partial-commit" });
+        var coordinator = Create(fixture, engineering: engineering, versionControl: versionControl);
+
+        var result = await coordinator.ReloadHardwareAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal("partial-commit", result.CommitSha);
+        Assert.Contains(result.Warnings!, warning => warning.Contains("HMI_1"));
+    }
+
+    [Fact]
     public async Task OpenProjectInTiaWaitsForActiveStagedExportEngineeringSequence()
     {
         var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
@@ -1122,6 +1328,51 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     private sealed class AddResult { }
+
+    private sealed class HardwareExportCaller : FakeToolCaller
+    {
+        public override Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (!CallArgs.TryGetValue(tool, out var list))
+            {
+                list = new List<object>();
+                CallArgs[tool] = list;
+            }
+
+            list.Add(args);
+            if (tool == "get_project_info")
+            {
+                return Task.FromResult((T)(object)new ProjectInfo
+                {
+                    Name = "Line",
+                    Path = @"C:\Projects\Line.ap17",
+                });
+            }
+
+            if (tool == "export_hardware_configuration")
+            {
+                var output = Property<string>(args, "outputDir");
+                Directory.CreateDirectory(output);
+                var projectAml = Path.Combine(output, "project.aml");
+                File.WriteAllText(projectAml, "<CAEXFile />");
+                return Task.FromResult((T)(object)new[]
+                {
+                    new HardwareExportResult
+                    {
+                        Scope = "project",
+                        Success = true,
+                        AmlFilePath = projectAml,
+                    },
+                });
+            }
+
+            throw new InvalidOperationException(tool);
+        }
+    }
 
     private sealed class RecordingProgress : IOperationProgress
     {
