@@ -96,6 +96,7 @@ public sealed class WorkbenchCoordinator
     private readonly DeviceOperationLock operationLock;
     private readonly SafeDeviceExportStager stager;
     private readonly WorkbenchConsistencyService consistency;
+    private readonly WorkbenchWritePolicy writePolicy;
     private readonly PathJail? pathJail;
     private readonly SemaphoreSlim engineeringSession = new(1, 1);
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> knownWorkbenches =
@@ -125,6 +126,7 @@ public sealed class WorkbenchCoordinator
         this.pathJail = pathJail;
         stager = new SafeDeviceExportStager(engineering, this.operationLock);
         consistency = new WorkbenchConsistencyService(engineering, versionControl, catalog, store);
+        writePolicy = new WorkbenchWritePolicy(store);
     }
 
     public async Task OpenProjectInTiaAsync(
@@ -962,6 +964,140 @@ public sealed class WorkbenchCoordinator
         return consistency.GetComparison(workbench, comparisonId);
     }
 
+    public Task<TiaSynchronizationResult> ApplyTiaSynchronizationAsync(
+        string workbenchId,
+        string comparisonId,
+        IReadOnlyList<string> paths,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
+                string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
+            ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
+        var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
+        var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
+        var comparison = consistency.GetComparison(workbench, comparisonId);
+        var selected = NormalizeSourcePaths(paths);
+        var contexts = LoadMasterContexts(workbench, master)
+            .ToDictionary(item => item.Metadata.DeviceId, item => item.Context, StringComparer.Ordinal);
+        var pending = writePolicy.ReadPending(masterRoot, master.WorktreeId).Sources.ToList();
+
+        foreach (var path in selected)
+        {
+            var difference = comparison.Differences.SingleOrDefault(item => item.RelativePath == path)
+                ?? throw new WorkbenchLifecycleException(
+                    "SOURCE_NOT_IN_COMPARISON",
+                    $"Source '{path}' is not an authorized difference in comparison '{comparisonId}'.");
+            if (difference.Kind == SourceDifferenceKind.Deleted)
+            {
+                throw new WorkbenchLifecycleException(
+                    "SOURCE_DELETE_UNSUPPORTED",
+                    $"Deleting source '{path}' from TIA is not supported by the current import flow.");
+            }
+            if (difference.Kind is not (SourceDifferenceKind.Changed or SourceDifferenceKind.Added))
+                throw new WorkbenchLifecycleException("SOURCE_NOT_IMPORTABLE", $"Source '{path}' is not importable.");
+            if (!contexts.TryGetValue(difference.DeviceId, out var context))
+                throw new WorkbenchCatalogException("DEVICE_NOT_FOUND", $"Device '{difference.DeviceId}' was not found in master.");
+
+            var sourceRelativePath = ExtractSourceRelativePath(path);
+            var staged = WorkbenchPaths.ResolveRelative(context.StagingRoot, sourceRelativePath);
+            var destination = WorkbenchPaths.ResolveRelative(masterRoot, path);
+            if (!File.Exists(staged))
+                throw new WorkbenchLifecycleException("TIA_SOURCE_MISSING", $"The staged source '{sourceRelativePath}' is missing.");
+
+            CopyFileAtomically(staged, destination);
+            var copiedFingerprint = HashFile(destination);
+            pending.RemoveAll(item => string.Equals(item.RelativePath, path, StringComparison.Ordinal));
+            pending.Add(new PendingMasterSource(
+                path,
+                comparisonId,
+                comparison.MasterSha,
+                difference.TiaFingerprint ?? copiedFingerprint,
+                copiedFingerprint));
+            var metadata = store.Read<DeviceMetadata>(Path.Combine(context.DeviceRoot, "device.json"));
+            store.Write(Path.Combine(context.DeviceRoot, "device.json"), metadata with
+            {
+                Knowledge = metadata.Knowledge with { Stale = true, BaselineStale = true },
+            });
+            progress?.Report($"Accepted TIA source {path} into master.");
+        }
+
+        var normalizedPending = pending
+            .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
+            .ToArray();
+        writePolicy.WritePending(masterRoot, new PendingMasterSynchronization(
+            WorkbenchWritePolicy.PendingSchemaVersion,
+            master.WorktreeId,
+            normalizedPending));
+        return Task.FromResult(new TiaSynchronizationResult(
+            comparisonId,
+            normalizedPending.Select(item => item.RelativePath).ToArray()));
+    }
+
+    public async Task<object> CommitSourceAsync(
+        string workbenchId,
+        string worktreeId,
+        IReadOnlyList<string> paths,
+        string message,
+        CancellationToken token = default,
+        string? author = null)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            throw new ArgumentException("A commit message is required.", nameof(message));
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var registration = workbench.Worktrees.SingleOrDefault(item => item.WorktreeId == worktreeId)
+            ?? throw new WorkbenchCatalogException("WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+        var worktree = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
+        var selected = NormalizeSourcePaths(paths);
+
+        if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase))
+        {
+            var pending = writePolicy.ReadPending(worktreeRoot, worktree.WorktreeId);
+            var authorized = pending.Sources.Where(item => selected.Contains(item.RelativePath, StringComparer.Ordinal)).ToArray();
+            if (authorized.Length != selected.Length)
+                throw new WorkbenchLifecycleException(
+                    "MASTER_CHANGE_NOT_AUTHORIZED",
+                    "Every selected master source file must first be accepted from a TIA comparison.");
+
+            foreach (var item in authorized)
+            {
+                var source = WorkbenchPaths.ResolveRelative(worktreeRoot, item.RelativePath);
+                if (!File.Exists(source) || !string.Equals(HashFile(source), item.CopiedFileFingerprint, StringComparison.Ordinal))
+                    throw new WorkbenchLifecycleException(
+                        "MASTER_CHANGE_NOT_AUTHORIZED",
+                        $"Master source '{item.RelativePath}' changed after TIA authorization.");
+            }
+
+            var head = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
+            if (authorized.Any(item => !string.Equals(item.MasterHeadSha, head, StringComparison.OrdinalIgnoreCase)))
+                throw new WorkbenchLifecycleException(
+                    "MASTER_HEAD_CHANGED",
+                    "Master advanced after TIA authorization; compare TIA with master again before committing.");
+        }
+
+        var result = await versionControl.CallAsync<object>(
+                "vc_commit_selected",
+                new { repoPath = worktreeRoot, paths = selected, message, author },
+                token)
+            .ConfigureAwait(false);
+
+        if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase))
+        {
+            var remaining = writePolicy.ReadPending(worktreeRoot, worktree.WorktreeId).Sources
+                .Where(item => !selected.Contains(item.RelativePath, StringComparer.Ordinal))
+                .ToArray();
+            var newHead = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
+            writePolicy.WritePending(worktreeRoot, new PendingMasterSynchronization(
+                WorkbenchWritePolicy.PendingSchemaVersion,
+                worktree.WorktreeId,
+                remaining.Select(item => item with { MasterHeadSha = newHead }).ToArray()));
+        }
+
+        return result;
+    }
+
     public async Task<UnauthorizedMasterRecoveryResult> MoveUnauthorizedMasterChangesAsync(
         string workbenchId,
         IReadOnlyList<string> paths,
@@ -1062,6 +1198,57 @@ public sealed class WorkbenchCoordinator
         var workbench = catalog.Load(known.RootPath);
         RegisterWorkbench(workbench);
         return workbench;
+    }
+
+    private IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> LoadMasterContexts(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata master)
+    {
+        var masterRoot = WorkbenchPaths.ResolveWorktree(
+            workbench.RootPath,
+            workbench.Worktrees.Single(item => item.WorktreeId == master.WorktreeId).RelativePath);
+        return LoadInheritedDevices(masterRoot, master)
+            .Select(device => (device, catalog.ResolveDevice(workbench, master, device)))
+            .ToArray();
+    }
+
+    private async Task<string> ReadMasterHeadAsync(string worktreeRoot, CancellationToken token)
+    {
+        var log = await versionControl.CallAsync<ConsistencyLogResult>(
+                "vc_log",
+                new { repoPath = worktreeRoot, maxCount = 1 },
+                token)
+            .ConfigureAwait(false);
+        return log.Commits.FirstOrDefault()?.Sha
+            ?? throw new WorkbenchLifecycleException("MASTER_HEAD_UNAVAILABLE", "The master worktree has no Git HEAD.");
+    }
+
+    private static string ExtractSourceRelativePath(string repositoryPath)
+    {
+        var normalized = repositoryPath.Replace('\\', '/');
+        var marker = "/source/";
+        var start = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+            throw new WorkbenchPathException($"'{repositoryPath}' is not a managed PLC source path.");
+        return normalized[(start + marker.Length)..];
+    }
+
+    private static void CopyFileAtomically(string source, string destination)
+    {
+        var parent = Path.GetDirectoryName(destination)
+            ?? throw new IOException($"The destination has no parent directory: {destination}");
+        Directory.CreateDirectory(parent);
+        var temporary = Path.Combine(parent, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.Copy(source, temporary, overwrite: false);
+            File.Move(temporary, destination, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+        }
     }
 
     private static string[] NormalizeSourcePaths(IEnumerable<string> paths)

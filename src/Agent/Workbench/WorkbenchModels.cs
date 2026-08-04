@@ -61,6 +61,10 @@ public sealed record DeviceImportRecord(
     IReadOnlyList<string> Warnings,
     string? Error);
 
+public sealed record TiaSynchronizationResult(
+    string ComparisonId,
+    IReadOnlyList<string> PendingPaths);
+
 public sealed record DeviceContext(
     string WorkbenchId,
     string WorktreeId,
