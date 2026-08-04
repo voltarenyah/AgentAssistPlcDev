@@ -36,19 +36,12 @@ internal static class RepositoryService
         packages/
         """;
 
-    private const string SharedGitIgnore = """
-        **/staging/
-        **/plc-knowledge.db
-        **/plc-knowledge.db-*
-        .automation/
-        sessionexport/
-        """;
-
-    private static readonly string[] SharedGitIgnoreRules =
+    private static readonly string[] SharedExcludeRules =
     {
-        "**/staging/",
-        "**/plc-knowledge.db",
-        "**/plc-knowledge.db-*",
+        "worktree.json",
+        "devices/*/device.json",
+        "devices/*/staging/",
+        "devices/*/plc-knowledge.db*",
         ".automation/",
         "sessionexport/",
     };
@@ -146,7 +139,7 @@ internal static class RepositoryService
                 "worktree", "add", "--orphan", "-b", "master", masterPath);
         }
 
-        WriteSharedGitIgnore(masterPath);
+        WriteSharedExclude(repositoryPath);
         return new VcSharedInitResult
         {
             WorkbenchRoot = root,
@@ -333,6 +326,7 @@ internal static class RepositoryService
         {
             IncludeUntracked = true,
             RecurseUntrackedDirs = true,
+            IncludeIgnored = false,
         });
 
         var branch = repo.Head?.FriendlyName ?? "HEAD";
@@ -340,9 +334,16 @@ internal static class RepositoryService
 
         foreach (var entry in status)
         {
+            var filePath = entry.FilePath.Replace('\\', '/');
+            if (entry.State.HasFlag(FileStatus.Ignored) ||
+                !SourcePathPolicy.IsAllowed(filePath))
+            {
+                continue;
+            }
+
             entries.Add(new VcStatusEntry
             {
-                FilePath = entry.FilePath.Replace('\\', '/'),
+                FilePath = filePath,
                 State = MapFileStatus(entry.State),
                 Staged = IsStaged(entry.State),
             });
@@ -356,26 +357,36 @@ internal static class RepositoryService
         };
     }
 
-    /// <summary>Stage files. When paths is null or empty, stages all changes.</summary>
+    /// <summary>Stage allowed PLC source XML. Null or empty paths stage every allowed change.</summary>
     public static VcAddResult Add(string repoPath, string[]? paths = null)
     {
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
 
+        string[] pathsToStage;
         if (paths is { Length: > 0 })
         {
-            foreach (var p in paths)
-            {
-                repo.Index.Add(p.Replace('/', '\\'));
-            }
+            // Validate the complete request before touching the index so a mixed
+            // allowed/forbidden request cannot partially stage files.
+            pathsToStage = paths
+                .Select(SourcePathPolicy.Require)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
         else
         {
-            Commands.Stage(repo, "*");
+            pathsToStage = EnumerateAllowedChangedPaths(repo);
         }
 
-        repo.Index.Write();
-        return new VcAddResult { Staged = repo.RetrieveStatus().Staged.Count() };
+        if (pathsToStage.Length > 0)
+        {
+            Commands.Stage(repo, pathsToStage);
+        }
+
+        return new VcAddResult
+        {
+            Staged = EnumerateStagedPaths(repo).Count(SourcePathPolicy.IsAllowed),
+        };
     }
 
     /// <summary>Commit staged changes. Returns the commit SHA.</summary>
@@ -386,6 +397,7 @@ internal static class RepositoryService
 
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
+        EnsureOnlyAllowedPathsAreStaged(repo);
         var signature = ResolveAuthor(repo, author);
         var commit = repo.Commit(message, signature, signature);
         return new VcCommitResult { Sha = commit.Sha, Message = message };
@@ -436,7 +448,7 @@ internal static class RepositoryService
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
 
-        var normalizedPath = filePath.Replace('/', '\\');
+        var normalizedPath = filePath.Replace('\\', '/');
 
         // Determine old and new trees
         Tree? oldTree = null;
@@ -471,7 +483,7 @@ internal static class RepositoryService
         // Generate the patch and parse it into structured hunks
         var patch = repo.Diff.Compare<Patch>(oldTree, newTree);
         var entry = patch.FirstOrDefault(e =>
-            e.Path.Equals(normalizedPath, StringComparison.OrdinalIgnoreCase));
+            e.Path.Replace('\\', '/').Equals(normalizedPath, StringComparison.OrdinalIgnoreCase));
 
         if (entry == null)
         {
@@ -497,21 +509,18 @@ internal static class RepositoryService
         };
     }
 
-    /// <summary>Stage all changes and commit with an auto-generated or given message.</summary>
+    /// <summary>Stage all allowed PLC source XML changes and commit them.</summary>
     public static VcCommitResult Snapshot(string repoPath, string? message = null)
     {
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
 
-        // Stage all changes (modified, deleted, renamed)
-        Commands.Stage(repo, "*");
-        // Also explicitly add untracked files (Commands.Stage glob may not match on all platforms)
-        var status = repo.RetrieveStatus();
-        foreach (var entry in status.Untracked)
+        var pathsToStage = EnumerateAllowedChangedPaths(repo);
+        if (pathsToStage.Length > 0)
         {
-            repo.Index.Add(entry.FilePath);
+            Commands.Stage(repo, pathsToStage);
         }
-        repo.Index.Write();
+        EnsureOnlyAllowedPathsAreStaged(repo);
 
         var msg = message ?? $"checkpoint before operation — {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC";
         var signature = ResolveAuthor(repo, null);
@@ -672,21 +681,22 @@ internal static class RepositoryService
         }
     }
 
-    private static void WriteSharedGitIgnore(string worktreePath)
+    private static void WriteSharedExclude(string repositoryPath)
     {
-        var gitIgnorePath = Path.Combine(worktreePath, ".gitignore");
+        var infoDirectory = Path.Combine(repositoryPath, "info");
+        Directory.CreateDirectory(infoDirectory);
+        var excludePath = Path.Combine(infoDirectory, "exclude");
         var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-        if (!File.Exists(gitIgnorePath))
+        if (!File.Exists(excludePath))
         {
-            File.WriteAllText(gitIgnorePath, SharedGitIgnore, encoding);
-            return;
+            File.WriteAllText(excludePath, string.Empty, encoding);
         }
 
-        var content = File.ReadAllText(gitIgnorePath);
+        var content = File.ReadAllText(excludePath);
         var existingRules = content
             .Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
             .ToHashSet(StringComparer.Ordinal);
-        var missingRules = SharedGitIgnoreRules
+        var missingRules = SharedExcludeRules
             .Where(rule => !existingRules.Contains(rule))
             .ToArray();
         if (missingRules.Length == 0)
@@ -707,8 +717,49 @@ internal static class RepositoryService
             append.Append(Environment.NewLine);
         }
 
-        File.AppendAllText(gitIgnorePath, append.ToString(), encoding);
+        File.AppendAllText(excludePath, append.ToString(), encoding);
     }
+
+    private static string[] EnumerateAllowedChangedPaths(Repository repo) =>
+        RetrieveCompleteStatus(repo)
+            .Where(entry => !entry.State.HasFlag(FileStatus.Ignored))
+            .Select(entry => entry.FilePath.Replace('\\', '/'))
+            .Where(SourcePathPolicy.IsAllowed)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static string[] EnumerateStagedPaths(Repository repo) =>
+        RetrieveCompleteStatus(repo)
+            .Where(entry => IsStaged(entry.State))
+            .Select(entry => entry.FilePath.Replace('\\', '/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static void EnsureOnlyAllowedPathsAreStaged(Repository repo)
+    {
+        var forbiddenPaths = EnumerateStagedPaths(repo)
+            .Where(path => !SourcePathPolicy.IsAllowed(path))
+            .ToArray();
+        if (forbiddenPaths.Length == 0)
+        {
+            return;
+        }
+
+        throw new VcInternalException(
+            "SOURCE_PATH_REQUIRED",
+            $"The Git index contains path(s) outside tracked PLC source XML: {string.Join(", ", forbiddenPaths)}.",
+            "Unstage non-source files before committing.");
+    }
+
+    private static RepositoryStatus RetrieveCompleteStatus(Repository repo) =>
+        repo.RetrieveStatus(new StatusOptions
+        {
+            IncludeUntracked = true,
+            RecurseUntrackedDirs = true,
+            IncludeIgnored = false,
+        });
 
     private static string RequireFullPath(string? path, string parameterName)
     {
