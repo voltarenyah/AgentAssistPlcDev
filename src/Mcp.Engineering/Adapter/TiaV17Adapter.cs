@@ -435,7 +435,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         PlcSoftware plc,
         string dir,
         bool writeProjectMetadata = true,
-        IProgress<EngineeringProgress>? progress = null)
+        IProgress<EngineeringProgress>? progress = null,
+        List<UnsupportedSourceObject>? unsupported = null)
     {
         Directory.CreateDirectory(dir);
         var exportStartedUtc = DateTimeOffset.UtcNow;
@@ -451,6 +452,12 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     "export_all_blocks: SKIPPED fail-safe block {Block} (ProgrammingLanguage: {Language}) — TIA Openness does not permit exporting F-blocks",
                     item.Block.Name, item.Block.ProgrammingLanguage);
                 Report(progress, $"Skipping fail-safe block {item.Block.Name} (TIA Openness cannot export F-blocks)...");
+                unsupported?.Add(new UnsupportedSourceObject
+                {
+                    Name = item.Block.Name,
+                    Category = "FailSafeBlock",
+                    Reason = "TIA_EXPORT_UNSUPPORTED",
+                });
                 continue;
             }
 
@@ -476,6 +483,12 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     "export_all_blocks: SKIPPED {Block} — Openness: export not permitted (ProgrammingLanguage: {Language})",
                     block.Name, block.ProgrammingLanguage);
                 Report(progress, $"Skipping block {block.Name} (TIA Openness: export not permitted)...");
+                unsupported?.Add(new UnsupportedSourceObject
+                {
+                    Name = block.Name,
+                    Category = block.GetType().Name,
+                    Reason = "TIA_EXPORT_UNSUPPORTED",
+                });
                 continue;
             }
             catch (Exception ex)
@@ -742,11 +755,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
                 // Full export: blocks rewrite the manifest; tags/UDTs upsert into it.
                 var full = new List<ExportResult>();
+                var unsupported = new List<UnsupportedSourceObject>();
                 full.AddRange(ExportAllBlocksForPlc(
                     plc,
                     dir,
                     writeProjectMetadata: plcName is null,
-                    progress: progress));
+                    progress: progress,
+                    unsupported: unsupported));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables",
                     p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord, progress));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_udts",
@@ -761,6 +776,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     BaselineExisted = false,
                     Added = full.Where(r => r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = "full-rebuild" }).ToArray(),
                     Failed = full.Where(r => !r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = r.Error }).ToArray(),
+                    Unsupported = unsupported.ToArray(),
                 });
 
                 _logger.LogInformation(

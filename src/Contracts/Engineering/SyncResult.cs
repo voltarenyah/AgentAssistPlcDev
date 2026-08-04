@@ -33,6 +33,16 @@ public sealed class SyncResult
 
     /// <summary>Export attempted and failed (record keeps Failed status in the manifest).</summary>
     public SyncChange[] Failed { get; set; } = Array.Empty<SyncChange>();
+
+    /// <summary>Objects TIA could not export at all, such as fail-safe blocks unsupported by Openness.</summary>
+    public UnsupportedSourceObject[] Unsupported { get; set; } = Array.Empty<UnsupportedSourceObject>();
+}
+
+public sealed class UnsupportedSourceObject
+{
+    public string Name { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
 }
 
 public sealed class SyncChange
