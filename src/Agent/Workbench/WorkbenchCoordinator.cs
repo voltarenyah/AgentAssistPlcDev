@@ -964,6 +964,22 @@ public sealed class WorkbenchCoordinator
         return consistency.GetComparison(workbench, comparisonId);
     }
 
+    public async Task<TiaSyncEvidence> ValidateSynchronizedMasterAsync(
+        string workbenchId,
+        string confirmedBy,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
+                string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
+            ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
+        var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
+        var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
+        return await consistency.ValidateSynchronizedMasterAsync(workbench, master, confirmedBy, token, progress)
+            .ConfigureAwait(false);
+    }
+
     public Task<TiaSynchronizationResult> ApplyTiaSynchronizationAsync(
         string workbenchId,
         string comparisonId,

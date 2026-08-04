@@ -36,6 +36,35 @@ public sealed class ConsistencyStatusEntry
     public string FilePath { get; set; } = string.Empty;
 }
 
+public sealed class TiaSyncEvidence
+{
+    public string SchemaVersion { get; set; } = "1.0";
+    public string EvidenceKind { get; set; } = "tia-sync";
+    public string CommitSha { get; set; } = string.Empty;
+    public string WorkbenchId { get; set; } = string.Empty;
+    public string? SourceWorktreeId { get; set; }
+    public string ConfirmedAt { get; set; } = string.Empty;
+    public string ConfirmedBy { get; set; } = string.Empty;
+    public bool MachineValidated { get; set; }
+    public IReadOnlyList<TiaSyncEvidenceDevice> Devices { get; set; } = Array.Empty<TiaSyncEvidenceDevice>();
+}
+
+public sealed class TiaSyncEvidenceDevice
+{
+    public string DeviceId { get; set; } = string.Empty;
+    public string PlcName { get; set; } = string.Empty;
+    public string ProjectIdentity { get; set; } = string.Empty;
+    public string ProjectChecksum { get; set; } = string.Empty;
+    public IReadOnlyList<TiaSyncEvidenceObject> Objects { get; set; } = Array.Empty<TiaSyncEvidenceObject>();
+}
+
+public sealed class TiaSyncEvidenceObject
+{
+    public string Identity { get; set; } = string.Empty;
+    public string RelativePath { get; set; } = string.Empty;
+    public string Sha256 { get; set; } = string.Empty;
+}
+
 /// <summary>Compares the registered master source tree with the live TIA project.</summary>
 public sealed class WorkbenchConsistencyService
 {
@@ -163,6 +192,101 @@ public sealed class WorkbenchConsistencyService
             state,
             liveChecksums,
             differences));
+    }
+
+    public async Task<TiaSyncEvidence> ValidateSynchronizedMasterAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata master,
+        string confirmedBy,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null)
+    {
+        if (string.IsNullOrWhiteSpace(confirmedBy))
+            throw new ArgumentException("A confirming Git identity is required.", nameof(confirmedBy));
+
+        var masterRoot = ResolveMasterRoot(workbench, master);
+        var pendingPath = Path.Combine(masterRoot, ".automation", WorkbenchWritePolicy.PendingFileName);
+        var pending = store.TryRead<PendingMasterSynchronization>(pendingPath);
+        if (pending is not null && pending.Sources.Count > 0)
+            throw new WorkbenchLifecycleException(
+                "MASTER_PENDING_SYNCHRONIZATION",
+                "Commit or clear pending TIA synchronizations before creating exact validation evidence.");
+
+        var status = await versionControl.CallAsync<ConsistencyStatusResult>(
+                "vc_status",
+                new { repoPath = masterRoot },
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (status.Entries.Any(entry => IsManagedSourceXml(entry.FilePath)))
+            throw new WorkbenchLifecycleException(
+                "MASTER_SOURCE_DIRTY",
+                "The master source tree has local XML changes; commit them before creating TIA validation evidence.");
+
+        var head = await ReadHeadAsync(masterRoot, cancellationToken).ConfigureAwait(false);
+        var devices = LoadDevices(workbench, master);
+        var evidenceDevices = new List<TiaSyncEvidenceDevice>(devices.Count);
+        foreach (var device in devices)
+        {
+            progress?.Report($"Validating exact TIA source for {device.Metadata.PlcName}...");
+            var scan = await scanner.ScanAsync(
+                    device.Context,
+                    cancellationToken,
+                    progress,
+                    device.Metadata.PlcName)
+                .ConfigureAwait(false);
+            if (scan.UnsupportedObjects.Count > 0)
+                throw new WorkbenchLifecycleException(
+                    "SOURCE_COVERAGE_INCOMPLETE",
+                    $"TIA source coverage is incomplete for '{device.Metadata.PlcName}'.");
+
+            var masterObjects = new SourceTreeReader().Read(device.Context.SourceRoot);
+            var differences = CompareDevice(device.Metadata, device.Context, masterObjects, scan.Objects);
+            if (differences.Count > 0)
+                throw new WorkbenchLifecycleException(
+                    "TIA_MASTER_NOT_EXACT",
+                    $"TIA and master differ for '{device.Metadata.PlcName}' ({differences.Count} source object(s)).");
+
+            evidenceDevices.Add(new TiaSyncEvidenceDevice
+            {
+                DeviceId = device.Metadata.DeviceId,
+                PlcName = device.Metadata.PlcName,
+                ProjectIdentity = scan.ProjectIdentity,
+                ProjectChecksum = scan.ProjectChecksum,
+                Objects = scan.Objects
+                    .Select(item => new TiaSyncEvidenceObject
+                    {
+                        Identity = item.Identity,
+                        RelativePath = $"{Path.GetRelativePath(device.Context.WorktreeRoot, device.Context.SourceRoot).Replace('\\', '/')}/{item.RelativePath}",
+                        Sha256 = item.Sha256,
+                    })
+                    .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
+                    .ToArray(),
+            });
+        }
+
+        var currentHead = await ReadHeadAsync(masterRoot, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(head.Sha, currentHead.Sha, StringComparison.OrdinalIgnoreCase))
+            throw new WorkbenchLifecycleException(
+                "MASTER_HEAD_CHANGED",
+                "Master changed during exact validation; run validation again.");
+
+        var evidence = new TiaSyncEvidence
+        {
+            SchemaVersion = "1.0",
+            EvidenceKind = "tia-sync",
+            CommitSha = head.Sha,
+            WorkbenchId = workbench.WorkbenchId,
+            SourceWorktreeId = master.WorktreeId,
+            ConfirmedAt = DateTimeOffset.UtcNow.ToString("O"),
+            ConfirmedBy = confirmedBy,
+            MachineValidated = false,
+            Devices = evidenceDevices.OrderBy(device => device.DeviceId, StringComparer.Ordinal).ToArray(),
+        };
+        return await versionControl.CallAsync<TiaSyncEvidence>(
+                "vc_validation_create",
+                new { repoPath = masterRoot, evidence },
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public WorkbenchConsistencyResult GetComparison(WorkbenchMetadata workbench, string comparisonId)

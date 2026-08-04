@@ -52,6 +52,25 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         Assert.Equal(2, engineering.Calls.Count(call => call == "rebuild_export"));
     }
 
+    [Fact]
+    public async Task ValidateSyncCreatesPermanentTiaEvidenceOnlyAfterExactScan()
+    {
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var evidence = await service.ValidateSynchronizedMasterAsync(
+            fixture.Workbench,
+            fixture.Master,
+            "Test User <test@example.local>",
+            CancellationToken.None);
+
+        Assert.Equal("tia-sync", evidence.EvidenceKind);
+        Assert.False(evidence.MachineValidated);
+        Assert.Equal(2, evidence.Devices.Count);
+        Assert.Contains("vc_validation_create", versionControl.Calls);
+    }
+
     public void Dispose() => fixture.Dispose();
 
     private sealed class ConsistencyVersionControlCaller : IMcpToolCaller
@@ -66,9 +85,11 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         }
 
         public bool DirtySource { get; set; }
+        public List<string> Calls { get; } = new();
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
+            Calls.Add(tool);
             object result = tool switch
             {
                 "vc_log" => new ConsistencyLogResult { Commits = new[] { new ConsistencyCommit { Sha = head } } },
@@ -78,6 +99,16 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                     Entries = DirtySource
                         ? new[] { new ConsistencyStatusEntry { FilePath = "devices/PLC_1/source/Blocks/Main.xml" } }
                         : Array.Empty<ConsistencyStatusEntry>(),
+                },
+                "vc_validation_create" => new TiaSyncEvidence
+                {
+                    EvidenceKind = "tia-sync",
+                    MachineValidated = false,
+                    Devices = new[]
+                    {
+                        new TiaSyncEvidenceDevice { DeviceId = "device-1" },
+                        new TiaSyncEvidenceDevice { DeviceId = "device-2" },
+                    },
                 },
                 _ => throw new InvalidOperationException(tool),
             };

@@ -19,6 +19,8 @@ public sealed record RefreshApplyApiRequest(
     string[]? ApprovedRemovalPaths = null);
 public sealed record SourcePathApiRequest(string RelativePath);
 public sealed record CommitSourceApiRequest(string[] Paths, string Message);
+public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths);
+public sealed record TiaValidationApiRequest(string ConfirmedBy);
 public sealed record UnauthorizedMasterPathsRequest(string[] Paths, string? FeatureName = null, bool Confirm = false);
 
 /// <summary>Optional bootstrap body retained for request compatibility; CommitMessage is ignored because bootstrap never commits automatically.</summary>
@@ -323,14 +325,85 @@ public static class WorkbenchEndpoints
                 "vc_diff", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), filePath, oldSha, newSha }, ct));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/commit", async (
             string workbenchId, string worktreeId, CommitSourceApiRequest body,
-            WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("vc_commit_selected").CallAsync<System.Text.Json.JsonElement>(
-                "vc_commit_selected", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), paths = body.Paths, message = body.Message }, ct));
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, ApiMcpGateway gateway, CancellationToken ct) =>
+        {
+            var worktree = s.Worktree(workbenchId, worktreeId);
+            var root = s.WorktreeRoot(workbenchId, worktreeId);
+            var hasExistingSource = body.Paths.Any(path =>
+            {
+                try
+                {
+                    return File.Exists(WorkbenchPaths.ResolveRelative(root, path));
+                }
+                catch (WorkbenchPathException)
+                {
+                    return false;
+                }
+            });
+            if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase) && hasExistingSource)
+            {
+                return await coordinator.CommitSourceAsync(workbenchId, worktreeId, body.Paths, body.Message, ct);
+            }
+
+            // Compatibility for an empty/legacy worktree: the version-control server still
+            // validates the selected source paths. Real master XML files use the protected path above.
+            return await gateway.For("vc_commit_selected").CallAsync<System.Text.Json.JsonElement>(
+                "vc_commit_selected", new { repoPath = root, paths = body.Paths, message = body.Message }, ct);
+        });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/validation/{sha}", async (
             string workbenchId, string worktreeId, string sha,
             WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_validation_get").CallAsync<System.Text.Json.JsonElement>(
                 "vc_validation_get", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), commitSha = sha }, ct));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/compare-tia", async (
+            string workbenchId,
+            WorkbenchApiState state,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "compare-tia",
+                "Comparing master with TIA Portal...",
+                progress => coordinator.CompareMasterWithTiaAsync(workbenchId, ct, progress),
+                "TIA comparison completed.").ConfigureAwait(false));
+        app.MapGet("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}", (
+            string workbenchId,
+            string comparisonId,
+            WorkbenchApiState state,
+            WorkbenchCoordinator coordinator) =>
+            coordinator.GetComparison(workbenchId, comparisonId));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}/accept", async (
+            string workbenchId,
+            string comparisonId,
+            TiaSynchronizationAcceptApiRequest body,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "accept-tia-synchronization",
+                "Applying selected TIA source to master...",
+                progress => coordinator.ApplyTiaSynchronizationAsync(workbenchId, comparisonId, body.Paths, ct, progress),
+                "Selected TIA source accepted.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/validate-sync", async (
+            string workbenchId,
+            TiaValidationApiRequest body,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "validate-tia-sync",
+                "Creating exact TIA synchronization evidence...",
+                progress => coordinator.ValidateSynchronizedMasterAsync(workbenchId, body.ConfirmedBy, ct, progress),
+                "TIA synchronization evidence created.").ConfigureAwait(false));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/unauthorized/move", async (
             string workbenchId, string worktreeId, UnauthorizedMasterPathsRequest body,
             WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>

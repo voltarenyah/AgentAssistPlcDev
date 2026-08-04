@@ -179,6 +179,49 @@ export type Worktree = {
   lastReconciliationCommit: string | null
 }
 
+export type SourceDifference = {
+  deviceId: string
+  plcName: string
+  relativePath: string
+  identity: string
+  kind: 'Unchanged' | 'Changed' | 'Added' | 'Deleted' | number
+  masterFingerprint: string | null
+  tiaFingerprint: string | null
+  supported: boolean
+}
+
+export type WorkbenchConsistencyResult = {
+  comparisonId: string
+  masterSha: string
+  fastGatePassed: boolean
+  state: 'Consistent' | 'Different' | 'ScanRequired' | 'Unavailable' | number
+  liveChecksums: Record<string, string | null>
+  differences: SourceDifference[]
+}
+
+export type PendingSynchronizationResult = {
+  comparisonId: string
+  pendingPaths: string[]
+}
+
+export type TiaSyncEvidence = {
+  schemaVersion: string
+  evidenceKind: string
+  commitSha: string
+  workbenchId: string
+  sourceWorktreeId: string | null
+  confirmedAt: string
+  confirmedBy: string
+  machineValidated: boolean
+  devices: {
+    deviceId: string
+    plcName: string
+    projectIdentity: string
+    projectChecksum: string
+    objects: { identity: string; relativePath: string; sha256: string }[]
+  }[]
+}
+
 export type DeviceInfo = {
   workbenchId: string
   worktreeId: string
@@ -371,6 +414,25 @@ export const createWorktree = (workbenchId: string, name: string, branch: string
     branch,
     startPoint: startPoint?.trim() || null,
   }), operationId))
+export const compareMasterWithTia = (workbenchId: string, operationId?: string) =>
+  workbenchRequest<WorkbenchConsistencyResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/compare-tia`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
+export const getWorkbenchComparison = (workbenchId: string, comparisonId: string) =>
+  workbenchRequest<WorkbenchConsistencyResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}`,
+  )
+export const acceptTiaSynchronization = (workbenchId: string, comparisonId: string, paths: string[], operationId?: string) =>
+  workbenchRequest<PendingSynchronizationResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}/accept`,
+    withOperation(jsonRequest('POST', { paths }), operationId),
+  )
+export const validateTiaSynchronization = (workbenchId: string, confirmedBy: string, operationId?: string) =>
+  workbenchRequest<VcValidationEvidence>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/validate-sync`,
+    withOperation(jsonRequest('POST', { confirmedBy }), operationId),
+  )
 export const deleteWorktree = (workbenchId: string, worktreeId: string, operationId?: string) =>
   workbenchRequest<{ deleted: boolean }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}`,
