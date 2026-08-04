@@ -1,5 +1,8 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
+using System.Xml.Linq;
+using Contracts.Engineering;
 using LibGit2Sharp;
 
 namespace Mcp.VersionControl.Git;
@@ -45,11 +48,6 @@ internal static class RepositoryService
         ".automation/",
         "sessionexport/",
     };
-
-    /// <summary>Regex to parse unified-diff hunk headers: @@ -oldStart,oldCount +newStart,newCount @@</summary>
-    private static readonly Regex HunkHeaderRegex = new(
-        @"^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@",
-        RegexOptions.Compiled);
 
     /// <summary>Init a git repo at repoPath. Idempotent: no-op if .git already exists.</summary>
     public static VcInitResult Init(string repoPath)
@@ -398,9 +396,62 @@ internal static class RepositoryService
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
         EnsureOnlyAllowedPathsAreStaged(repo);
+        var files = EnumerateStagedPaths(repo)
+            .Where(SourcePathPolicy.IsAllowed)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
         var signature = ResolveAuthor(repo, author);
         var commit = repo.Commit(message, signature, signature);
-        return new VcCommitResult { Sha = commit.Sha, Message = message };
+        return new VcCommitResult { Sha = commit.Sha, Message = message, Files = files };
+    }
+
+    /// <summary>Commit exactly the requested changed PLC source XML paths.</summary>
+    public static VcCommitResult CommitSelected(
+        string repoPath,
+        string[] paths,
+        string message,
+        string? author = null)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            throw new VcInternalException("MESSAGE_REQUIRED", "Commit message must not be empty.");
+        if (paths == null || paths.Length == 0)
+            throw new VcInternalException("SOURCE_PATHS_REQUIRED", "At least one PLC source XML path is required.");
+
+        var selected = paths
+            .Select(SourcePathPolicy.Require)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        EnsureRepo(repoPath);
+        using var repo = new Repository(repoPath);
+        var unchanged = selected
+            .Where(path => ByteContentEquals(
+                ReadTreeFile(repo.Head?.Tip?.Tree, path),
+                ReadWorkingFile(repo, path)))
+            .ToArray();
+        if (unchanged.Length > 0)
+        {
+            throw new VcInternalException(
+                "SOURCE_PATH_UNCHANGED",
+                $"Selected PLC source path(s) have no HEAD-to-working-tree change: {string.Join(", ", unchanged)}.");
+        }
+
+        var indexSnapshot = CaptureIndex(repo);
+        try
+        {
+            ResetIndexToHead(repo);
+            Commands.Stage(repo, selected);
+            var signature = ResolveAuthor(repo, author);
+            var commit = repo.Commit(message, signature, signature);
+            var files = GetCommitFiles(repo, commit);
+            return new VcCommitResult { Sha = commit.Sha, Message = message, Files = files };
+        }
+        catch
+        {
+            RestoreIndex(indexSnapshot);
+            throw;
+        }
     }
 
     /// <summary>Show commit history. Capped at maxCount (default 20, max 100). Optionally filter to one file.</summary>
@@ -413,11 +464,12 @@ internal static class RepositoryService
         IEnumerable<Commit> commits;
         if (!string.IsNullOrWhiteSpace(filePath))
         {
+            var normalizedFilePath = SourcePathPolicy.Require(filePath);
             var filter = new CommitFilter { SortBy = CommitSortStrategies.Topological | CommitSortStrategies.Time };
             // Git tree paths are repository-relative and always use '/'. Keeping the
             // caller's path in that form is required by LibGit2Sharp's QueryBy on
             // Windows linked worktrees; converting to '\\' silently returns no commits.
-            commits = repo.Commits.QueryBy(filePath.Replace('\\', '/'), filter).Take(cap).Select(c => c.Commit);
+            commits = repo.Commits.QueryBy(normalizedFilePath, filter).Take(cap).Select(c => c.Commit);
         }
         else
         {
@@ -430,7 +482,7 @@ internal static class RepositoryService
             Author = c.Author?.Name ?? "unknown",
             Message = c.MessageShort ?? c.Message ?? "",
             Timestamp = c.Author?.When.UtcDateTime.ToString("O") ?? "",
-            Files = c.Tree?.Select(e => e.Name).ToArray() ?? Array.Empty<string>(),
+            Files = GetCommitFiles(repo, c),
         }).ToArray();
 
         return new VcLogResult { RepoPath = repoPath, Commits = entries };
@@ -442,70 +494,40 @@ internal static class RepositoryService
     /// </summary>
     public static VcDiffResult Diff(string repoPath, string filePath, string? oldSha = null, string? newSha = null)
     {
-        if (string.IsNullOrWhiteSpace(filePath))
-            throw new VcInternalException("FILE_REQUIRED", "filePath must not be empty.");
-
+        var normalizedPath = SourcePathPolicy.Require(filePath);
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
 
-        var normalizedPath = filePath.Replace('\\', '/');
+        var head = repo.Head?.Tip;
+        var oldCommit = !string.IsNullOrWhiteSpace(oldSha) ? RequireCommit(repo, oldSha) : head;
+        var newCommit = !string.IsNullOrWhiteSpace(newSha) ? RequireCommit(repo, newSha) : null;
+        var compareToWorkingTree = string.IsNullOrWhiteSpace(newSha);
 
-        // Determine old and new trees
-        Tree? oldTree = null;
-        Tree? newTree = null;
-        string? resolvedOldSha = oldSha;
-        string? resolvedNewSha = newSha;
-
-        if (!string.IsNullOrWhiteSpace(oldSha))
-        {
-            var oldCommit = repo.Lookup<Commit>(oldSha);
-            if (oldCommit != null) oldTree = oldCommit.Tree;
-        }
-
-        if (!string.IsNullOrWhiteSpace(newSha))
-        {
-            var newCommit = repo.Lookup<Commit>(newSha);
-            if (newCommit != null) newTree = newCommit.Tree;
-        }
-        else if (oldTree != null)
-        {
-            // oldSha provided but no newSha → compare against HEAD
-            newTree = repo.Head?.Tip?.Tree;
-            resolvedNewSha = repo.Head?.Tip?.Sha;
-        }
-        else
-        {
-            // No refs → working tree vs HEAD
-            oldTree = repo.Head?.Tip?.Tree;
-            resolvedOldSha = repo.Head?.Tip?.Sha;
-        }
-
-        // Generate the patch and parse it into structured hunks
-        var patch = repo.Diff.Compare<Patch>(oldTree, newTree);
-        var entry = patch.FirstOrDefault(e =>
-            e.Path.Replace('\\', '/').Equals(normalizedPath, StringComparison.OrdinalIgnoreCase));
-
-        if (entry == null)
-        {
-            return new VcDiffResult
-            {
-                RepoPath = repoPath,
-                FilePath = filePath,
-                OldSha = resolvedOldSha,
-                NewSha = resolvedNewSha,
-                Binary = false,
-                Hunks = Array.Empty<VcDiffHunk>(),
-            };
-        }
+        var oldBytes = ReadTreeFile(oldCommit?.Tree, normalizedPath);
+        var newBytes = compareToWorkingTree
+            ? ReadWorkingFile(repo, normalizedPath)
+            : ReadTreeFile(newCommit!.Tree, normalizedPath);
+        var oldTextAvailable = TryDecodeText(oldBytes, out var oldXml);
+        var newTextAvailable = TryDecodeText(newBytes, out var newXml);
+        var binary = !oldTextAvailable || !newTextAvailable;
+        var summary = !binary && oldXml != null && newXml != null
+            ? PlcXmlChangeSummary.Compare(oldXml, newXml)
+            : PlcXmlChangeSummary.Compare(string.Empty, string.Empty);
+        var hunks = binary
+            ? Array.Empty<VcDiffHunk>()
+            : BuildDiffHunks(
+                oldXml == null ? null : NormalizeXmlForDiff(oldXml),
+                newXml == null ? null : NormalizeXmlForDiff(newXml));
 
         return new VcDiffResult
         {
             RepoPath = repoPath,
-            FilePath = filePath,
-            OldSha = resolvedOldSha,
-            NewSha = resolvedNewSha,
-            Binary = entry.IsBinaryComparison,
-            Hunks = ParseUnifiedDiff(entry.Patch).ToArray(),
+            FilePath = normalizedPath,
+            OldSha = oldCommit?.Sha,
+            NewSha = compareToWorkingTree ? null : newCommit?.Sha,
+            Binary = binary,
+            Hunks = hunks,
+            Summary = summary,
         };
     }
 
@@ -525,7 +547,7 @@ internal static class RepositoryService
         var msg = message ?? $"checkpoint before operation — {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC";
         var signature = ResolveAuthor(repo, null);
         var commit = repo.Commit(msg, signature, signature);
-        return new VcCommitResult { Sha = commit.Sha, Message = msg };
+        return new VcCommitResult { Sha = commit.Sha, Message = msg, Files = GetCommitFiles(repo, commit) };
     }
 
     /// <summary>
@@ -537,19 +559,18 @@ internal static class RepositoryService
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
 
-        string refSha;
+        Commit sourceCommit;
         if (!string.IsNullOrWhiteSpace(sourceSha))
         {
-            var commit = repo.Lookup<Commit>(sourceSha);
-            if (commit == null)
+            sourceCommit = repo.Lookup<Commit>(sourceSha);
+            if (sourceCommit == null)
                 throw new VcInternalException("COMMIT_NOT_FOUND", $"Commit '{sourceSha}' was not found.");
-            refSha = commit.Sha;
         }
         else
         {
             if (repo.Head?.Tip == null)
                 throw new VcInternalException("NO_COMMITS", "Repository has no commits yet.");
-            refSha = repo.Head.Tip.Sha;
+            sourceCommit = repo.Head.Tip;
         }
 
         var restored = new List<string>();
@@ -557,18 +578,20 @@ internal static class RepositoryService
 
         if (!string.IsNullOrWhiteSpace(filePath))
         {
-            var normalized = filePath.Replace('/', '\\');
-            repo.CheckoutPaths(refSha, new[] { normalized }, opts);
-            restored.Add(filePath);
+            var normalized = SourcePathPolicy.Require(filePath);
+            repo.CheckoutPaths(sourceCommit.Sha, new[] { normalized }, opts);
+            restored.Add(normalized);
         }
         else
         {
-            var tip = repo.Head?.Tip;
-            if (tip?.Tree != null)
+            var paths = EnumerateTreeFilePaths(sourceCommit.Tree)
+                .Where(SourcePathPolicy.IsAllowed)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            if (paths.Length > 0)
             {
-                var paths = tip.Tree.Select(e => e.Path).ToArray();
-                repo.CheckoutPaths(refSha, paths, opts);
-                restored.AddRange(paths.Select(p => p.Replace('\\', '/')));
+                repo.CheckoutPaths(sourceCommit.Sha, paths, opts);
+                restored.AddRange(paths);
             }
         }
 
@@ -956,67 +979,349 @@ internal static class RepositoryService
             || status.HasFlag(FileStatus.TypeChangeInIndex);
     }
 
-    /// <summary>Parse unified-diff text into structured hunks.</summary>
-    private static List<VcDiffHunk> ParseUnifiedDiff(string diffText)
+    private static void ResetIndexToHead(Repository repo)
     {
-        if (string.IsNullOrEmpty(diffText))
-            return new List<VcDiffHunk>();
-
-        var hunks = new List<VcDiffHunk>();
-        var lines = diffText.Split('\n');
-        List<VcDiffLine>? currentLines = null;
-        int oldStart = 0, newStart = 0;
-
-        foreach (var rawLine in lines)
+        if (repo.Head?.Tip is { } tip)
         {
-            var line = rawLine.TrimEnd('\r');
+            repo.Index.Replace(tip.Tree);
+        }
+        else
+        {
+            repo.Index.Clear();
+        }
 
-            var match = HunkHeaderRegex.Match(line);
-            if (match.Success)
+        repo.Index.Write();
+    }
+
+    private static IndexSnapshot CaptureIndex(Repository repo)
+    {
+        var indexPath = Path.Combine(repo.Info.Path, "index");
+        return new IndexSnapshot(
+            indexPath,
+            File.Exists(indexPath) ? File.ReadAllBytes(indexPath) : null);
+    }
+
+    private static void RestoreIndex(IndexSnapshot snapshot)
+    {
+        if (snapshot.Content == null)
+        {
+            if (File.Exists(snapshot.Path))
+                File.Delete(snapshot.Path);
+            return;
+        }
+
+        File.WriteAllBytes(snapshot.Path, snapshot.Content);
+    }
+
+    private static bool ByteContentEquals(byte[]? left, byte[]? right) =>
+        left == null ? right == null : right != null && left.AsSpan().SequenceEqual(right);
+
+    private static string[] GetCommitFiles(Repository repo, Commit commit)
+    {
+        var parentTree = commit.Parents.FirstOrDefault()?.Tree;
+        using var changes = repo.Diff.Compare<TreeChanges>(parentTree, commit.Tree);
+        return changes
+            .SelectMany(change => new[] { change.Path, change.OldPath })
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Replace('\\', '/'))
+            .Where(SourcePathPolicy.IsAllowed)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static Commit RequireCommit(Repository repo, string reference)
+    {
+        var commit = repo.Lookup<Commit>(reference);
+        if (commit == null)
+        {
+            throw new VcInternalException(
+                "REF_NOT_FOUND",
+                $"Git ref '{reference}' was not found.",
+                "Use vc_log or vc_branches to select an existing commit or branch.");
+        }
+
+        return commit;
+    }
+
+    private static byte[]? ReadTreeFile(Tree? tree, string path)
+    {
+        var entry = tree?[path];
+        if (entry?.Target is not Blob blob)
+        {
+            return null;
+        }
+
+        using var input = blob.GetContentStream();
+        using var output = new MemoryStream();
+        input.CopyTo(output);
+        return output.ToArray();
+    }
+
+    private static byte[]? ReadWorkingFile(Repository repo, string path)
+    {
+        var worktreeRoot = repo.Info.WorkingDirectory;
+        if (string.IsNullOrWhiteSpace(worktreeRoot))
+        {
+            throw new VcInternalException(
+                "WORKTREE_REQUIRED",
+                "A working-tree diff cannot be produced from a bare repository.");
+        }
+
+        var fullPath = Path.Combine(worktreeRoot, path.Replace('/', Path.DirectorySeparatorChar));
+        return File.Exists(fullPath) ? File.ReadAllBytes(fullPath) : null;
+    }
+
+    private static IEnumerable<string> EnumerateTreeFilePaths(Tree tree, string prefix = "")
+    {
+        foreach (var entry in tree)
+        {
+            var path = string.IsNullOrEmpty(prefix)
+                ? entry.Name
+                : $"{prefix}/{entry.Name}";
+            if (entry.Target is Tree child)
             {
-                // Save previous hunk
-                if (currentLines != null)
+                foreach (var childPath in EnumerateTreeFilePaths(child, path))
+                    yield return childPath;
+            }
+            else if (entry.Target is Blob)
+            {
+                yield return path;
+            }
+        }
+    }
+
+    private static bool TryDecodeText(byte[]? bytes, out string? text)
+    {
+        text = null;
+        if (bytes == null)
+        {
+            return true;
+        }
+
+        try
+        {
+            if (bytes.Length >= 2 && bytes[0] == 0xff && bytes[1] == 0xfe)
+            {
+                text = new UnicodeEncoding(false, true, true).GetString(bytes, 2, bytes.Length - 2);
+                return true;
+            }
+
+            if (bytes.Length >= 2 && bytes[0] == 0xfe && bytes[1] == 0xff)
+            {
+                text = new UnicodeEncoding(true, true, true).GetString(bytes, 2, bytes.Length - 2);
+                return true;
+            }
+
+            if (bytes.Contains((byte)0))
+            {
+                return false;
+            }
+
+            var offset = bytes.Length >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf
+                ? 3
+                : 0;
+            text = new UTF8Encoding(false, true).GetString(bytes, offset, bytes.Length - offset);
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+            text = null;
+            return false;
+        }
+    }
+
+    private static string NormalizeXmlForDiff(string xml)
+    {
+        var normalized = xml.Replace("\r\n", "\n").Replace('\r', '\n');
+        try
+        {
+            var document = XDocument.Parse(normalized, LoadOptions.PreserveWhitespace);
+            if (document.Root?.Name.LocalName == "Document")
+            {
+                foreach (var created in document.Root.Elements()
+                             .Where(element => element.Name.LocalName == "DocumentInfo")
+                             .SelectMany(info => info.Elements()
+                                 .Where(element => element.Name.LocalName == "Created"))
+                             .ToArray())
                 {
-                    hunks.Add(new VcDiffHunk { OldStart = oldStart, NewStart = newStart, Lines = currentLines.ToArray() });
+                    created.Remove();
+                }
+            }
+
+            return document.ToString()
+                .Replace("\r\n", "\n")
+                .Replace('\r', '\n');
+        }
+        catch (XmlException)
+        {
+            return normalized;
+        }
+    }
+
+    private static VcDiffHunk[] BuildDiffHunks(string? oldText, string? newText)
+    {
+        var oldLines = oldText?.Split('\n') ?? Array.Empty<string>();
+        var newLines = newText?.Split('\n') ?? Array.Empty<string>();
+        var edits = MyersDiff(oldLines, newLines);
+        if (edits.All(edit => edit.Kind == LineEditKind.Context))
+        {
+            return Array.Empty<VcDiffHunk>();
+        }
+
+        const int contextSize = 3;
+        var hunks = new List<VcDiffHunk>();
+        var scan = 0;
+        while (scan < edits.Count)
+        {
+            var firstChange = edits.FindIndex(scan, edit => edit.Kind != LineEditKind.Context);
+            if (firstChange < 0)
+                break;
+
+            var start = Math.Max(0, firstChange - contextSize);
+            var lastChange = firstChange;
+            var search = firstChange + 1;
+            while (search < edits.Count)
+            {
+                var nextChange = edits.FindIndex(search, edit => edit.Kind != LineEditKind.Context);
+                if (nextChange < 0 || nextChange - lastChange > contextSize * 2 + 1)
+                    break;
+                lastChange = nextChange;
+                search = nextChange + 1;
+            }
+
+            var end = Math.Min(edits.Count, lastChange + contextSize + 1);
+            var first = edits[start];
+            hunks.Add(new VcDiffHunk
+            {
+                OldStart = first.OldLine,
+                NewStart = first.NewLine,
+                Lines = edits.Skip(start).Take(end - start).Select(edit => new VcDiffLine
+                {
+                    Type = edit.Kind switch
+                    {
+                        LineEditKind.Addition => "addition",
+                        LineEditKind.Deletion => "deletion",
+                        _ => "context",
+                    },
+                    Content = edit.Content,
+                }).ToArray(),
+            });
+            scan = end;
+        }
+
+        return hunks.ToArray();
+    }
+
+    private static List<LineEdit> MyersDiff(string[] oldLines, string[] newLines)
+    {
+        var oldCount = oldLines.Length;
+        var newCount = newLines.Length;
+        var max = oldCount + newCount;
+        var offset = max + 1;
+        var frontier = Enumerable.Repeat(-1, max * 2 + 3).ToArray();
+        frontier[offset + 1] = 0;
+        var trace = new List<int[]>();
+
+        for (var distance = 0; distance <= max; distance++)
+        {
+            for (var diagonal = -distance; diagonal <= distance; diagonal += 2)
+            {
+                var index = offset + diagonal;
+                var x = diagonal == -distance ||
+                        (diagonal != distance && frontier[index - 1] < frontier[index + 1])
+                    ? frontier[index + 1]
+                    : frontier[index - 1] + 1;
+                var y = x - diagonal;
+                while (x < oldCount && y < newCount &&
+                       string.Equals(oldLines[x], newLines[y], StringComparison.Ordinal))
+                {
+                    x++;
+                    y++;
                 }
 
-                oldStart = int.Parse(match.Groups[1].Value);
-                newStart = int.Parse(match.Groups[3].Value);
-                currentLines = new List<VcDiffLine>();
-                continue;
+                frontier[index] = x;
+                if (x >= oldCount && y >= newCount)
+                {
+                    trace.Add((int[])frontier.Clone());
+                    return BacktrackMyers(trace, oldLines, newLines, offset);
+                }
             }
 
-            if (currentLines == null) continue;
+            trace.Add((int[])frontier.Clone());
+        }
 
-            if (line.StartsWith("+"))
+        throw new InvalidOperationException("Unable to calculate line diff.");
+    }
+
+    private static List<LineEdit> BacktrackMyers(
+        IReadOnlyList<int[]> trace,
+        string[] oldLines,
+        string[] newLines,
+        int offset)
+    {
+        var reversed = new List<(LineEditKind Kind, string Content)>();
+        var x = oldLines.Length;
+        var y = newLines.Length;
+
+        for (var distance = trace.Count - 1; distance > 0; distance--)
+        {
+            var previous = trace[distance - 1];
+            var diagonal = x - y;
+            var previousDiagonal = diagonal == -distance ||
+                                   (diagonal != distance &&
+                                    previous[offset + diagonal - 1] < previous[offset + diagonal + 1])
+                ? diagonal + 1
+                : diagonal - 1;
+            var previousX = previous[offset + previousDiagonal];
+            var previousY = previousX - previousDiagonal;
+
+            while (x > previousX && y > previousY)
             {
-                currentLines.Add(new VcDiffLine { Type = "addition", Content = line.Substring(1) });
+                reversed.Add((LineEditKind.Context, oldLines[x - 1]));
+                x--;
+                y--;
             }
-            else if (line.StartsWith("-"))
+
+            if (x == previousX)
             {
-                currentLines.Add(new VcDiffLine { Type = "deletion", Content = line.Substring(1) });
-            }
-            else if (line.StartsWith("\\")) // No newline at end of file
-            {
-                // Skip — cosmetic diff metadata
-                continue;
+                reversed.Add((LineEditKind.Addition, newLines[y - 1]));
+                y--;
             }
             else
             {
-                // Context line (starts with space)
-                var content = line.Length > 0 && line[0] == ' ' ? line.Substring(1) : line;
-                currentLines.Add(new VcDiffLine { Type = "context", Content = content });
+                reversed.Add((LineEditKind.Deletion, oldLines[x - 1]));
+                x--;
             }
         }
 
-        // Last hunk
-        if (currentLines != null)
+        while (x > 0 && y > 0)
         {
-            hunks.Add(new VcDiffHunk { OldStart = oldStart, NewStart = newStart, Lines = currentLines.ToArray() });
+            reversed.Add((LineEditKind.Context, oldLines[x - 1]));
+            x--;
+            y--;
         }
+        while (x > 0)
+            reversed.Add((LineEditKind.Deletion, oldLines[--x]));
+        while (y > 0)
+            reversed.Add((LineEditKind.Addition, newLines[--y]));
 
-        return hunks;
+        reversed.Reverse();
+        var oldLine = 1;
+        var newLine = 1;
+        return reversed.Select(edit =>
+        {
+            var result = new LineEdit(edit.Kind, edit.Content, oldLine, newLine);
+            if (edit.Kind != LineEditKind.Addition) oldLine++;
+            if (edit.Kind != LineEditKind.Deletion) newLine++;
+            return result;
+        }).ToList();
     }
+
+    private sealed record IndexSnapshot(string Path, byte[]? Content);
+    private sealed record LineEdit(LineEditKind Kind, string Content, int OldLine, int NewLine);
+    private enum LineEditKind { Context, Addition, Deletion }
+
 }
 
 /// <summary>Internal exception for the git service layer (mapped to VcException by tools).</summary>

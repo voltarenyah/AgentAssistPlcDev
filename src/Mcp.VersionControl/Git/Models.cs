@@ -1,3 +1,5 @@
+using Contracts.Engineering;
+
 namespace Mcp.VersionControl.Git;
 
 /// <summary>Result of vc_status.</summary>
@@ -34,6 +36,7 @@ public sealed class VcDiffResult
     public string? NewSha { get; set; }
     public bool Binary { get; set; }
     public VcDiffHunk[] Hunks { get; set; } = Array.Empty<VcDiffHunk>();
+    public PlcXmlChangeSummary Summary { get; set; } = PlcXmlChangeSummary.Compare(string.Empty, string.Empty);
 }
 
 public sealed class VcDiffHunk
@@ -138,6 +141,7 @@ public sealed class VcCommitResult
 {
     public string Sha { get; set; } = string.Empty;
     public string Message { get; set; } = string.Empty;
+    public string[] Files { get; set; } = Array.Empty<string>();
 }
 
 /// <summary>Result of vc_restore.</summary>

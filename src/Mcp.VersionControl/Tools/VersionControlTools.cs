@@ -65,19 +65,28 @@ public sealed class VersionControlTools
         => Invoke(() => RepositoryService.Status(repoPath));
 
     [McpServerTool(Name = "vc_add")]
-    [Description("Stage one or more files. When paths is omitted or empty, stages all changes (equivalent to 'git add -A').")]
+    [Description("Compatibility tool that stages PLC source XML only. When paths is omitted or empty, stages every changed devices/<device>/source/**/*.xml file; other files are never staged.")]
     public CallToolResult VcAdd(
         [Description("Path to the git repository.")] string repoPath,
         [Description("File path(s) relative to repo root to stage. Omit or pass empty to stage all.")] string[]? paths = null)
         => Invoke(() => RepositoryService.Add(repoPath, paths));
 
     [McpServerTool(Name = "vc_commit")]
-    [Description("Commit staged changes with a message. Returns the commit SHA. Requires at least one staged change.")]
+    [Description("Compatibility tool that commits already-staged PLC source XML only. Prefer vc_commit_selected for normal workbench commits.")]
     public CallToolResult VcCommit(
         [Description("Path to the git repository.")] string repoPath,
         [Description("Commit message.")] string message,
         [Description("Optional author string in 'Name <email>' format. Falls back to git config or 'PLC Assistant <assistant@plc-assistant.local>'.")] string? author = null)
         => Invoke(() => RepositoryService.Commit(repoPath, message, author));
+
+    [McpServerTool(Name = "vc_commit_selected")]
+    [Description("Atomically commit exactly the selected changed PLC source XML paths. Existing staging is cleared without changing working files; unselected changes remain uncommitted.")]
+    public CallToolResult VcCommitSelected(
+        [Description("Path to the git repository or linked worktree.")] string repoPath,
+        [Description("One or more changed devices/<device>/source/**/*.xml paths relative to the worktree root.")] string[] paths,
+        [Description("Required commit message.")] string message,
+        [Description("Optional author string in 'Name <email>' format.")] string? author = null)
+        => Invoke(() => RepositoryService.CommitSelected(repoPath, paths, message, author));
 
     [McpServerTool(Name = "vc_log")]
     [Description("Show commit history. Default last 20 commits; max 100. Optionally filter to commits touching a single file.")]
@@ -88,16 +97,16 @@ public sealed class VersionControlTools
         => Invoke(() => RepositoryService.Log(repoPath, maxCount, filePath));
 
     [McpServerTool(Name = "vc_diff")]
-    [Description("Show diff of a working-tree file vs HEAD, or between two arbitrary commits. Returns structured hunks with line-level changes.")]
+    [Description("Show an XML source diff and semantic summary. No refs compares HEAD to working tree; oldSha only compares that ref to working tree; both refs compare them; newSha only compares HEAD to that ref.")]
     public CallToolResult VcDiff(
         [Description("Path to the git repository.")] string repoPath,
         [Description("File path relative to repo root.")] string filePath,
-        [Description("Old commit SHA; defaults to HEAD when newSha is given, else working tree.")] string? oldSha = null,
-        [Description("New commit SHA; defaults to working tree (or HEAD when oldSha is given).")] string? newSha = null)
+        [Description("Optional old commit or ref. With no newSha, compares this ref to the working tree.")] string? oldSha = null,
+        [Description("Optional new commit or ref. With no oldSha, compares HEAD to this ref.")] string? newSha = null)
         => Invoke(() => RepositoryService.Diff(repoPath, filePath, oldSha, newSha));
 
     [McpServerTool(Name = "vc_snapshot")]
-    [Description("Stage all changes and commit with an auto-generated message. Intended as a pre-destructive-operation checkpoint. Returns the commit SHA.")]
+    [Description("Compatibility checkpoint that stages and commits all changed PLC source XML only. Runtime, metadata, and other non-source files remain untouched.")]
     public CallToolResult VcSnapshot(
         [Description("Path to the git repository.")] string repoPath,
         [Description("Optional commit message. Auto-generated: 'checkpoint before <operation>' if omitted.")] string? message = null)
