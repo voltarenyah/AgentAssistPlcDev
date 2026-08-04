@@ -77,6 +77,12 @@ public sealed class EngineeringTools
         [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
         => Invoke("list_blocks", () => _adapter.ListBlocks(plcName));
 
+    [McpServerTool(Name = "get_plc_checksums")]
+    [Description("Read the current compiled software checksum for one or all PLC devices. No exports or writes.")]
+    public CallToolResult GetPlcChecksums(
+        [Description("PLC device name; omit to read every PLC device.")] string? plcName = null)
+        => Invoke("get_plc_checksums", () => _adapter.GetPlcChecksums(plcName));
+
     [McpServerTool(Name = "export_block")]
     [Description("Export a single block to XML under outputDir/Blocks|DB and upsert its record in outputDir/metadata.json (read-only w.r.t. the project).")]
     public CallToolResult ExportBlock(

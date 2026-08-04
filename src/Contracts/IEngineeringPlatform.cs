@@ -19,6 +19,7 @@ public interface IEngineeringPlatform : IDisposable
 
     ProjectInfo GetProjectInfo();
     BlockInfo[] ListBlocks(string? plcName);
+    PlcChecksumInfo[] GetPlcChecksums(string? plcName = null);
 
     ExportResult ExportBlock(string blockName, string outputDir);
     ExportResult[] ExportAllBlocks(string outputDir, IProgress<EngineeringProgress>? progress = null);

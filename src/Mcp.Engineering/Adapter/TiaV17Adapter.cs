@@ -348,6 +348,28 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
+    public PlcChecksumInfo[] GetPlcChecksums(string? plcName = null)
+    {
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var plcs = plcName is null
+                ? PlcSoftwareResolver.FindAll(project)
+                : new[] { PlcSoftwareResolver.Resolve(project, plcName) };
+            var projectIdentity = project.Path?.FullName ?? project.Name;
+
+            return plcs
+                .Select(plc => new PlcChecksumInfo
+                {
+                    PlcName = plc.Name,
+                    ProjectIdentity = projectIdentity,
+                    SoftwareChecksum = TryReadSoftwareChecksum(plc),
+                })
+                .OrderBy(info => info.PlcName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
+
     public ExportResult ExportBlock(string blockName, string outputDir)
     {
         lock (_gate)

@@ -39,6 +39,21 @@ public sealed class McpToolCatalogTests
     }
 
     [Fact]
+    public void GetPlcChecksumsIsExposedAsAnEngineeringReadTool()
+    {
+        var engineeringCaller = new FakeToolCaller();
+        var catalog = new McpToolCatalog(new[]
+        {
+            Spec("get_plc_checksums", engineeringCaller),
+        });
+
+        var tool = catalog.Resolve("get_plc_checksums");
+
+        Assert.Equal("get_plc_checksums", tool.Name);
+        Assert.Same(engineeringCaller, tool.Caller);
+    }
+
+    [Fact]
     public void ResolveRoutesToTheRightCaller()
     {
         var engineering = new FakeToolCaller();

@@ -36,6 +36,7 @@ public sealed class SandboxPolicy
             ["list_sessions"] = SandboxTier.Read,
             ["get_project_info"] = SandboxTier.Read,
             ["list_blocks"] = SandboxTier.Read,
+            ["get_plc_checksums"] = SandboxTier.Read,
             ["export_block"] = SandboxTier.Read,
             ["export_all_blocks"] = SandboxTier.Read,
             ["export_tag_tables"] = SandboxTier.Read,
