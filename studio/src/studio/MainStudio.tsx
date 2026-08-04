@@ -1621,6 +1621,7 @@ export default function MainStudio() {
             workbenches={workbenches}
             devicesByWorktree={devicesByWorktree}
             selection={selection}
+            viewKind={mainView.kind}
             knowledgeState={navigatorKnowledgeState}
             loading={loading}
             onCreateWorkbench={openCreateWorkbench}

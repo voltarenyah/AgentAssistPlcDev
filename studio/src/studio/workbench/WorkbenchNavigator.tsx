@@ -34,6 +34,8 @@ type Props = {
   workbenches: Workbench[]
   devicesByWorktree: Record<string, DeviceSummary[]>
   selection: WorkbenchSelection
+  /** Which page <main> is currently showing; drives the active-row highlight. */
+  viewKind: 'project' | 'worktree' | 'hardware' | 'device'
   knowledgeState: Record<string, 'current' | 'stale' | 'missing' | 'failed'>
   loading: boolean
   onCreateWorkbench: () => void
@@ -61,6 +63,7 @@ export default function WorkbenchNavigator({
   workbenches,
   devicesByWorktree,
   selection,
+  viewKind,
   knowledgeState,
   loading,
   onCreateWorkbench,
@@ -163,7 +166,13 @@ export default function WorkbenchNavigator({
                         <ContextMenu>
                           <ContextMenuTrigger asChild>
                             <div
-                              className={`flex cursor-pointer items-center gap-1.5 rounded px-2 py-1.5 ${worktreeSelected ? 'bg-accent/80' : 'hover:bg-accent/40'}`}
+                              className={`flex cursor-pointer items-center gap-1.5 rounded px-2 py-1.5 ${
+                                worktreeSelected && viewKind === 'worktree'
+                                  ? 'bg-chart-2/10 ring-1 ring-chart-2/30'
+                                  : worktreeSelected
+                                    ? 'bg-accent/80'
+                                    : 'hover:bg-accent/40'
+                              }`}
                               onClick={() => onSelectWorktree(workbench, worktree)}
                             >
                               {worktreeSelected ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
@@ -209,11 +218,11 @@ export default function WorkbenchNavigator({
                                 <button
                                   onClick={() => onSelectHardware(workbench, worktree)}
                                   className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left ${
-                                    selection.deviceId === null ? 'bg-chart-2/10 ring-1 ring-chart-2/30' : 'hover:bg-accent/40'
+                                    viewKind === 'hardware' ? 'bg-chart-2/10 ring-1 ring-chart-2/30' : 'hover:bg-accent/40'
                                   }`}
                                 >
                                   <CircuitBoard className={`h-3.5 w-3.5 ${
-                                    selection.deviceId === null ? 'text-chart-2' : 'text-muted-foreground'
+                                    viewKind === 'hardware' ? 'text-chart-2' : 'text-muted-foreground'
                                   }`} />
                                   <span className="min-w-0 flex-1 truncate text-[10px]">Hardware configuration</span>
                                 </button>
