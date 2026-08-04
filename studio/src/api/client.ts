@@ -201,10 +201,17 @@ export type FeatureImportPlan = {
 export type FeatureImportOutcome = {
   deviceId: string
   relativePath: string
-  state: 'Pending' | 'Imported' | 'Failed' | 'KeptAfterCompileFailure' | 'RolledBack' | number
+  state: FeatureImportState | number
   error: string | null
   warnings: string[]
 }
+
+export type FeatureImportState =
+  | 'Pending'
+  | 'Imported'
+  | 'Failed'
+  | 'KeptAfterCompileFailure'
+  | 'RolledBack'
 
 export type FeatureImportSession = {
   sessionId: string
@@ -217,9 +224,25 @@ export type FeatureImportSession = {
 
 export type ValidatedMergeResult = {
   validationId: string
-  state: 'Ready' | 'CompileFailed' | 'SourceDifferent' | 'BranchMoved' | number
+  state: ValidatedMergeState | number
   error: string | null
-  devices: Array<{ deviceId: string; plcName: string; projectIdentity: string; projectChecksum: string; objects: Array<{ identity: string; relativePath: string; sha256: string }> }>
+  devices: ValidatedMergeDevice[]
+}
+
+export type ValidatedMergeState = 'Ready' | 'CompileFailed' | 'SourceDifferent' | 'BranchMoved'
+
+export type ValidatedMergeObject = {
+  identity: string
+  relativePath: string
+  sha256: string
+}
+
+export type ValidatedMergeDevice = {
+  deviceId: string
+  plcName: string
+  projectIdentity: string
+  projectChecksum: string
+  objects: ValidatedMergeObject[]
 }
 
 export type SourceDifference = {
@@ -227,17 +250,21 @@ export type SourceDifference = {
   plcName: string
   relativePath: string
   identity: string
-  kind: 'Unchanged' | 'Changed' | 'Added' | 'Deleted' | number
+  kind: SourceDifferenceKind | number
   masterFingerprint: string | null
   tiaFingerprint: string | null
   supported: boolean
 }
 
+export type SourceDifferenceKind = 'Unchanged' | 'Changed' | 'Added' | 'Deleted'
+
+export type ConsistencyState = 'Consistent' | 'Different' | 'ScanRequired' | 'Unavailable'
+
 export type WorkbenchConsistencyResult = {
   comparisonId: string
   masterSha: string
   fastGatePassed: boolean
-  state: 'Consistent' | 'Different' | 'ScanRequired' | 'Unavailable' | number
+  state: ConsistencyState | number
   liveChecksums: Record<string, string | null>
   differences: SourceDifference[]
 }
@@ -245,6 +272,13 @@ export type WorkbenchConsistencyResult = {
 export type PendingSynchronizationResult = {
   comparisonId: string
   pendingPaths: string[]
+}
+
+export type RollbackFeatureResult = {
+  worktreeId: string
+  branch: string
+  historicalSha: string
+  paths: string[]
 }
 
 export type TiaSyncEvidence = {
@@ -490,12 +524,12 @@ export const validateFeatureMerge = (
     withOperation(jsonRequest('POST', { importSessionId, machineValidated, confirmedBy }), operationId),
   )
 export const mergeValidatedFeature = (workbenchId: string, validationId: string, operationId?: string) =>
-  workbenchRequest<unknown>(
+  workbenchRequest<FeatureMergePublicationResult>(
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/validated-merges/${encodeURIComponent(validationId)}/merge`,
     withOperation(jsonRequest('POST'), operationId),
   )
 export const createRollbackFeature = (workbenchId: string, historicalSha: string, paths: string[], featureName: string, operationId?: string) =>
-  workbenchRequest<unknown>(
+  workbenchRequest<RollbackFeatureResult>(
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/rollback-features`,
     withOperation(jsonRequest('POST', { historicalSha, paths, featureName }), operationId),
   )
@@ -518,6 +552,29 @@ export const validateTiaSynchronization = (workbenchId: string, confirmedBy: str
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/validate-sync`,
     withOperation(jsonRequest('POST', { confirmedBy }), operationId),
   )
+export const getVersionControlWorktreeStatus = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<VcStatusResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/status`)
+export const getVersionControlWorktreeLog = (workbenchId: string, worktreeId: string, maxCount = 30) =>
+  workbenchRequest<VcLogResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/log?maxCount=${maxCount}`)
+export const getVersionControlWorktreeDiff = (workbenchId: string, worktreeId: string, filePath: string, oldSha?: string, newSha?: string) => {
+  const params = new URLSearchParams({ filePath })
+  if (oldSha) params.set('oldSha', oldSha)
+  if (newSha) params.set('newSha', newSha)
+  return workbenchRequest<VcDiffResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/diff?${params}`)
+}
+export const commitVersionControlPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string) =>
+  workbenchRequest<{ sha: string; message: string; files: string[] }>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/commit`,
+    jsonRequest('POST', { paths, message }),
+  )
+export const validateFeatureVersionControl = (
+  workbenchId: string,
+  featureWorktreeId: string,
+  importSessionId: string,
+  machineValidated: boolean,
+  confirmedBy: string,
+  operationId?: string,
+) => validateFeatureMerge(workbenchId, featureWorktreeId, importSessionId, machineValidated, confirmedBy, operationId)
 export const deleteWorktree = (workbenchId: string, worktreeId: string, operationId?: string) =>
   workbenchRequest<{ deleted: boolean }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}`,
@@ -604,8 +661,31 @@ export const dismissOperationStatus = (operationId: string) =>
 
 export type VcStatusEntry = {
   filePath: string
-  state: 'Untracked' | 'Modified' | 'Added' | 'Deleted' | 'Staged' | 'RenamedInWorkdir' | 'Conflicted'
+  state: VcFileStatusState
   staged: boolean
+}
+
+export type VcFileStatusState =
+  | 'Untracked'
+  | 'Modified'
+  | 'Added'
+  | 'Deleted'
+  | 'Staged'
+  | 'RenamedInWorkdir'
+  | 'Conflicted'
+
+export type VcValidationState = 'Validated' | 'Unlabeled' | 'Invalid'
+
+export type SourceChangeState = 'Modified' | 'Added' | 'Deleted' | 'Unauthorized'
+
+export type VcSourceEntry = {
+  filePath: string
+  deviceId: string
+  plcName: string
+  category: string
+  objectName: string
+  state: SourceChangeState
+  authorizedOnMaster: boolean
 }
 
 export type VcStatusResult = {
@@ -620,7 +700,7 @@ export type VcCommitEntry = {
   message: string
   timestamp: string
   files: string[]
-  validationState: 'Validated' | 'Unlabeled' | 'Invalid'
+  validationState: VcValidationState
   evidenceKind: string | null
 }
 
@@ -646,8 +726,24 @@ export type VcValidationEvidence = {
   }>
 }
 
-export type VcDiffLine = { type: string; content: string }
+export type VcDiffLine = { type: 'context' | 'addition' | 'deletion'; content: string }
 export type VcDiffHunk = { oldStart: number; newStart: number; lines: VcDiffLine[] }
+export type VcXmlHeaderChange = { field: string; oldValue: string | null; newValue: string | null }
+export type VcXmlMultilingualTextChange = {
+  ownerKind: string
+  ownerId: string
+  networkNumber: number | null
+  field: string
+  culture: string
+  oldValue: string | null
+  newValue: string | null
+}
+export type VcXmlChangeSummary = {
+  summaryAvailable: boolean
+  logicOrStructureChanged: boolean
+  headerChanges: VcXmlHeaderChange[]
+  multilingualTextChanges: VcXmlMultilingualTextChange[]
+}
 export type VcDiffResult = {
   repoPath: string
   filePath: string
@@ -655,7 +751,22 @@ export type VcDiffResult = {
   newSha: string | null
   binary: boolean
   hunks: VcDiffHunk[]
+  summary: VcXmlChangeSummary
 }
+
+export type FeatureMergePublicationResult = {
+  merged: boolean
+  sha: string
+  evidence: VcValidationEvidence
+  validationTag: string
+}
+
+export type VersionControlSelection =
+  | { kind: 'source'; entry: VcSourceEntry }
+  | { kind: 'difference'; difference: SourceDifference }
+  | { kind: 'commit'; commit: VcCommitEntry }
+  | { kind: 'validation'; evidence: VcValidationEvidence }
+  | null
 
 /* ── Context compare / status types ──────────────────── */
 
