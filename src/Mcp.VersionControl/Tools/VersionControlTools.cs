@@ -102,6 +102,20 @@ public sealed class VersionControlTools
         [Description("Optional: filter log to commits touching this file path.")] string? filePath = null)
         => Invoke(() => RepositoryService.Log(repoPath, maxCount, filePath));
 
+    [McpServerTool(Name = "vc_validation_get")]
+    [Description("Read immutable TIA validation evidence for an exact commit. Returns null when the commit is unlabeled or has invalid evidence.")]
+    public CallToolResult VcValidationGet(
+        [Description("Path to the git repository.")] string repoPath,
+        [Description("Full or resolvable commit SHA to inspect.")] string commitSha)
+        => Invoke(() => RepositoryService.GetValidation(repoPath, commitSha)!);
+
+    [McpServerTool(Name = "vc_validation_create")]
+    [Description("Create immutable annotated TIA validation evidence for the current HEAD. App-internal use only.")]
+    public CallToolResult VcValidationCreate(
+        [Description("Path to the git repository.")] string repoPath,
+        [Description("Validation evidence. Its commitSha must equal the current HEAD.")] VcValidationEvidence? evidence)
+        => Invoke(() => RepositoryService.CreateValidation(repoPath, evidence));
+
     [McpServerTool(Name = "vc_diff")]
     [Description("Show an XML source diff and semantic summary. No refs compares HEAD to working tree; oldSha only compares that ref to working tree; both refs compare them; newSha only compares HEAD to that ref.")]
     public CallToolResult VcDiff(

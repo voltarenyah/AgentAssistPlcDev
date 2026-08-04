@@ -521,6 +521,32 @@ internal static class RepositoryService
         }
     }
 
+    /// <summary>Create immutable validation evidence for the current repository HEAD.</summary>
+    public static VcValidationEvidence CreateValidation(string repoPath, VcValidationEvidence? evidence)
+    {
+        EnsureRepo(repoPath);
+        using var repo = new Repository(repoPath);
+        var head = repo.Head?.Tip
+            ?? throw new VcInternalException("HEAD_REQUIRED", "Validation requires a repository with a current HEAD.");
+        if (!string.Equals(evidence?.CommitSha, head.Sha, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new VcInternalException(
+                "VALIDATION_HEAD_REQUIRED",
+                $"Validation commit '{evidence?.CommitSha}' must be the current HEAD '{head.Sha}'.",
+                "Refresh the history and validate the current commit only.");
+        }
+
+        return ValidationTagStore.Create(repo, evidence);
+    }
+
+    /// <summary>Read valid validation evidence for a commit; absent or invalid evidence returns null.</summary>
+    public static VcValidationEvidence? GetValidation(string repoPath, string commitSha)
+    {
+        EnsureRepo(repoPath);
+        using var repo = new Repository(repoPath);
+        return ValidationTagStore.Read(repo, commitSha).Evidence;
+    }
+
     /// <summary>Show commit history. Capped at maxCount (default 20, max 100). Optionally filter to one file.</summary>
     public static VcLogResult Log(string repoPath, int? maxCount = null, string? filePath = null)
     {
@@ -543,13 +569,19 @@ internal static class RepositoryService
             commits = repo.Commits.Take(cap);
         }
 
-        var entries = commits.Select(c => new VcCommitEntry
+        var entries = commits.Select(c =>
         {
-            Sha = c.Sha,
-            Author = c.Author?.Name ?? "unknown",
-            Message = c.MessageShort ?? c.Message ?? "",
-            Timestamp = c.Author?.When.UtcDateTime.ToString("O") ?? "",
-            Files = GetCommitFiles(repo, c),
+            var validation = ValidationTagStore.Read(repo, c.Sha);
+            return new VcCommitEntry
+            {
+                Sha = c.Sha,
+                Author = c.Author?.Name ?? "unknown",
+                Message = c.MessageShort ?? c.Message ?? "",
+                Timestamp = c.Author?.When.UtcDateTime.ToString("O") ?? "",
+                Files = GetCommitFiles(repo, c),
+                ValidationState = validation.State,
+                EvidenceKind = validation.EvidenceKind,
+            };
         }).ToArray();
 
         return new VcLogResult { RepoPath = repoPath, Commits = entries };

@@ -25,7 +25,39 @@ public sealed class VcCommitEntry
     public string Message { get; set; } = string.Empty;
     public string Timestamp { get; set; } = string.Empty;
     public string[] Files { get; set; } = Array.Empty<string>();
+    public string ValidationState { get; set; } = VcValidationState.Unlabeled;
+    public string? EvidenceKind { get; set; }
 }
+
+public static class VcValidationState
+{
+    public const string Validated = "Validated";
+    public const string Unlabeled = "Unlabeled";
+    public const string Invalid = "Invalid";
+}
+
+public sealed record VcObjectFingerprint(
+    string Identity,
+    string RelativePath,
+    string Sha256);
+
+public sealed record VcDeviceValidation(
+    string DeviceId,
+    string PlcName,
+    string ProjectIdentity,
+    string ProjectChecksum,
+    IReadOnlyList<VcObjectFingerprint> Objects);
+
+public sealed record VcValidationEvidence(
+    string SchemaVersion,
+    string EvidenceKind,
+    string CommitSha,
+    string WorkbenchId,
+    string? SourceWorktreeId,
+    string ConfirmedAt,
+    string ConfirmedBy,
+    bool MachineValidated,
+    IReadOnlyList<VcDeviceValidation> Devices);
 
 /// <summary>Result of vc_diff — structured hunks for one file.</summary>
 public sealed class VcDiffResult
