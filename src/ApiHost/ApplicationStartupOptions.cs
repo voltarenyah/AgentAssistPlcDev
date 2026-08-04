@@ -1,4 +1,8 @@
-public sealed record ApplicationStartupOptions(string Host, int Port, bool OpenBrowserOnStart)
+public sealed record ApplicationStartupOptions(
+    string Host,
+    int Port,
+    bool OpenBrowserOnStart,
+    string? ShutdownToken = null)
 {
     public string Url => $"http://{Host}:{Port}";
 
@@ -18,7 +22,8 @@ public sealed record ApplicationStartupOptions(string Host, int Port, bool OpenB
         return new(
             host,
             port,
-            !isTesting && configuration.GetValue("Application:OpenBrowserOnStart", true));
+            !isTesting && configuration.GetValue("Application:OpenBrowserOnStart", true),
+            configuration["Application:ShutdownToken"]);
     }
 
     public static string PortInUseMessage(ApplicationStartupOptions options) => string.Join(

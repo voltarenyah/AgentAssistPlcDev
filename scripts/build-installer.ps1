@@ -47,6 +47,7 @@ function Find-InnoSetup {
 
 Require-File $issPath
 Require-File (Join-Path $releaseRoot 'ApiHost.exe')
+Require-File (Join-Path $releaseRoot 'AutomationWorkbench.exe')
 Require-File (Join-Path $releaseRoot 'mcp\engineering\Mcp.Engineering.exe')
 Require-File (Join-Path $releaseRoot 'tools\AutomationWorkbench.OpennessWhitelist.exe')
 
