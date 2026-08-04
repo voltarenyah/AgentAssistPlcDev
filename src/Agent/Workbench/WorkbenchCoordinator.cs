@@ -97,6 +97,7 @@ public sealed class WorkbenchCoordinator
     private readonly SafeDeviceExportStager stager;
     private readonly WorkbenchConsistencyService consistency;
     private readonly FeatureImportService featureImport;
+    private readonly ValidatedMergeCoordinator validatedMerge;
     private readonly WorkbenchWritePolicy writePolicy;
     private readonly PathJail? pathJail;
     private readonly SemaphoreSlim engineeringSession = new(1, 1);
@@ -128,6 +129,7 @@ public sealed class WorkbenchCoordinator
         stager = new SafeDeviceExportStager(engineering, this.operationLock);
         consistency = new WorkbenchConsistencyService(engineering, versionControl, catalog, store);
         featureImport = new FeatureImportService(engineering, versionControl, consistency, store);
+        validatedMerge = new ValidatedMergeCoordinator(engineering, versionControl, store);
         writePolicy = new WorkbenchWritePolicy(store);
     }
 
@@ -1004,6 +1006,62 @@ public sealed class WorkbenchCoordinator
     public FeatureImportSession GetFeatureImportSession(string workbenchId, string sessionId) =>
         featureImport.ReadSession(LoadRegisteredWorkbench(workbenchId), sessionId);
 
+    public async Task<ValidatedMergeResult> ValidateFeatureMergeAsync(
+        ValidateFeatureMergeRequest request,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var workbench = LoadRegisteredWorkbench(request.WorkbenchId);
+        var feature = LoadRegisteredWorktree(workbench, request.FeatureWorktreeId);
+        var session = featureImport.ReadSession(workbench, request.ImportSessionId);
+        return await validatedMerge.ValidateAsync(workbench, feature, session, request, token, progress).ConfigureAwait(false);
+    }
+
+    public ValidatedMergeDraft GetValidatedMerge(string workbenchId, string validationId) =>
+        validatedMerge.ReadDraft(LoadRegisteredWorkbench(workbenchId), validationId);
+
+    public async Task<FeatureMergePublicationResult> MergeValidatedAsync(
+        string workbenchId,
+        string validationId,
+        CancellationToken token = default)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var draft = validatedMerge.ReadDraft(workbench, validationId);
+        var targetRoot = ResolveWorktreeRoot(workbench, workbench.Worktrees.Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
+        var evidence = new FeatureMergeEvidenceDto
+        {
+            SchemaVersion = "1.0",
+            EvidenceKind = "feature-merge",
+            CommitSha = draft.TargetSha,
+            WorkbenchId = draft.WorkbenchId,
+            SourceWorktreeId = draft.FeatureWorktreeId,
+            ConfirmedAt = draft.ConfirmedAt,
+            ConfirmedBy = draft.ConfirmedBy,
+            MachineValidated = true,
+            Devices = draft.Devices.Select(device => new FeatureMergeEvidenceDeviceDto
+            {
+                DeviceId = device.DeviceId,
+                PlcName = device.PlcName,
+                ProjectIdentity = device.ProjectIdentity,
+                ProjectChecksum = device.ProjectChecksum,
+                Objects = device.Objects.Select(item => new FeatureMergeEvidenceObjectDto { Identity = item.Identity, RelativePath = item.RelativePath, Sha256 = item.Sha256 }).ToArray(),
+            }).ToArray(),
+        };
+        var request = new
+        {
+            targetWorktreePath = targetRoot,
+            sourceBranch = draft.SourceBranch,
+            expectedTargetSha = draft.TargetSha,
+            expectedSourceSha = draft.SourceSha,
+            candidateTreeSha = draft.CandidateTreeSha,
+            evidence,
+        };
+        var result = await versionControl.CallAsync<FeatureMergePublicationResult>("vc_merge_validated", request, token).ConfigureAwait(false);
+        var path = Path.Combine(workbench.RootPath, ".automation", "validated-merges", validationId + ".json");
+        if (File.Exists(path)) File.Delete(path);
+        return result;
+    }
+
     public async Task<TiaSyncEvidence> ValidateSynchronizedMasterAsync(
         string workbenchId,
         string confirmedBy,
@@ -1264,6 +1322,9 @@ public sealed class WorkbenchCoordinator
             WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath),
             "worktree.json"));
     }
+
+    private static string ResolveWorktreeRoot(WorkbenchMetadata workbench, string worktreeId) =>
+        WorkbenchPaths.ResolveWorktree(workbench.RootPath, workbench.Worktrees.Single(item => item.WorktreeId == worktreeId).RelativePath);
 
     private IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> LoadMasterContexts(
         WorkbenchMetadata workbench,
