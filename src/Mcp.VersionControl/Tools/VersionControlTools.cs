@@ -64,6 +64,11 @@ public sealed class VersionControlTools
         [Description("Source branch to merge.")] string sourceBranch)
         => Invoke(() => RepositoryService.Merge(targetWorktreePath, sourceBranch));
 
+    [McpServerTool(Name = "vc_merge_validated")]
+    [Description("Create a guarded no-fast-forward feature merge and immutable feature-merge evidence after the all-device validation gate.")]
+    public CallToolResult VcMergeValidated(VcValidatedMergeRequest request) =>
+        Invoke(() => RepositoryService.MergeValidated(request));
+
     [McpServerTool(Name = "vc_merge_preview")]
     [Description("Build a prospective merge tree for a source branch without changing branches, worktrees, or refs. Reports conflicts and fingerprints tracked PLC source XML in a conflict-free candidate tree.")]
     public CallToolResult VcMergePreview(

@@ -180,6 +180,20 @@ public sealed record VcMergePreviewResult(
     IReadOnlyList<string> FeaturePaths,
     IReadOnlyList<VcTreeObject> Objects);
 
+public sealed record VcValidatedMergeRequest(
+    string TargetWorktreePath,
+    string SourceBranch,
+    string ExpectedTargetSha,
+    string ExpectedSourceSha,
+    string CandidateTreeSha,
+    VcValidationEvidence Evidence);
+
+public sealed record VcValidatedMergeResult(
+    bool Merged,
+    string Sha,
+    VcValidationEvidence Evidence,
+    string ValidationTag);
+
 /// <summary>Result of vc_add.</summary>
 public sealed class VcAddResult
 {

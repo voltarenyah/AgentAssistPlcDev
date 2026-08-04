@@ -389,6 +389,56 @@ internal static class RepositoryService
         return MergePreviewService.Preview(repoPath, sourceBranch);
     }
 
+    /// <summary>Guarded no-fast-forward merge that publishes immutable feature-merge evidence.</summary>
+    public static VcValidatedMergeResult MergeValidated(VcValidatedMergeRequest request)
+    {
+        if (request is null) throw new ArgumentNullException(nameof(request));
+        var target = RequireFullPath(request.TargetWorktreePath, nameof(request.TargetWorktreePath));
+        EnsureRepo(target);
+        using var repository = new Repository(target);
+        var currentTarget = repository.Head?.Tip?.Sha
+            ?? throw new VcInternalException("HEAD_REQUIRED", "Validated merge requires a target HEAD.");
+        var source = repository.Branches[request.SourceBranch]?.Tip
+            ?? throw new VcInternalException("BRANCH_NOT_FOUND", $"Branch '{request.SourceBranch}' was not found.");
+        if (!string.Equals(currentTarget, request.ExpectedTargetSha, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(source.Sha, request.ExpectedSourceSha, StringComparison.OrdinalIgnoreCase))
+            throw new VcInternalException("BRANCH_MOVED", "The target or source branch moved after validation.");
+        if (repository.RetrieveStatus(new StatusOptions { IncludeUntracked = true, RecurseUntrackedDirs = true }).Any(entry => !entry.State.HasFlag(FileStatus.Ignored)))
+            throw new VcInternalException("DIRTY_WORKTREE", "The target worktree must be clean before a validated merge.");
+
+        var preview = MergePreviewService.Preview(target, request.SourceBranch);
+        if (preview.HasConflicts || !string.Equals(preview.CandidateTreeSha, request.CandidateTreeSha, StringComparison.OrdinalIgnoreCase))
+            throw new VcInternalException("CANDIDATE_TREE_CHANGED", "The prospective merge tree changed after validation.");
+
+        string mergedSha = string.Empty;
+        try
+        {
+            RunGit("VALIDATED_MERGE_FAILED", "The validated merge could not be created.", "-C", target, "merge", "--no-ff", "--no-edit", request.SourceBranch);
+            using var merged = new Repository(target);
+            var commit = merged.Head?.Tip ?? throw new VcInternalException("MERGE_FAILED", "Validated merge produced no commit.");
+            if (commit.Parents.Count() != 2 || !string.Equals(commit.Tree.Sha, request.CandidateTreeSha, StringComparison.OrdinalIgnoreCase))
+                throw new VcInternalException("MERGE_TREE_MISMATCH", "The created merge commit does not match the validated prospective tree.");
+            mergedSha = commit.Sha;
+            var evidence = request.Evidence with { CommitSha = mergedSha, EvidenceKind = "feature-merge" };
+            var normalized = ValidationTagStore.Create(merged, evidence);
+            return new VcValidatedMergeResult(true, mergedSha, normalized, ValidationTagStore.TagName(mergedSha));
+        }
+        catch (Exception exception) when (exception is VcInternalException or LibGit2SharpException)
+        {
+            try
+            {
+                using var current = new Repository(target);
+                if (!string.IsNullOrWhiteSpace(mergedSha) && string.Equals(current.Head?.Tip?.Sha, mergedSha, StringComparison.OrdinalIgnoreCase))
+                    RunGit("VALIDATED_MERGE_RECOVERY_REQUIRED", "Failed to restore master after validated merge failure.", "-C", target, "reset", "--hard", request.ExpectedTargetSha);
+            }
+            catch (Exception recovery)
+            {
+                throw new VcInternalException("VALIDATED_MERGE_RECOVERY_REQUIRED", $"Validated merge failed and recovery failed: {recovery.Message}", exception.Message);
+            }
+            throw;
+        }
+    }
+
     /// <summary>Show working-tree status.</summary>
     public static VcStatusResult Status(string repoPath)
     {
