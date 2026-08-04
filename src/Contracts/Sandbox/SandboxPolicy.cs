@@ -55,6 +55,7 @@ public sealed class SandboxPolicy
             // Engineering — persist/overwrite user work.
             ["save_project"] = SandboxTier.Destructive,
             ["import_block"] = SandboxTier.Destructive,
+            ["import_source_object"] = SandboxTier.Destructive,
             // Knowledge — local SQLite graph only; no TIA side effects.
             ["ingest_source"] = SandboxTier.Read,
             ["update_components"] = SandboxTier.Write,

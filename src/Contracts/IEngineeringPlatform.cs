@@ -54,6 +54,9 @@ public interface IEngineeringPlatform : IDisposable
     /// project contains a single PLC.</summary>
     ImportResult ImportBlock(string blockName, string xmlFilePath, string? plcName = null);
 
+    /// <summary>Overwrite one existing block, tag table, or UDT from its managed XML source path.</summary>
+    SourceObjectImportResult ImportSourceObject(string relativePath, string xmlFilePath, string? plcName = null);
+
     CompileResult CompileBlock(string blockName, string? plcName = null);
     CompileResult CompilePlc(string? plcName = null);
 
