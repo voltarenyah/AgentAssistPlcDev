@@ -86,6 +86,18 @@ public sealed class DeviceToolArgumentBinder(
             args.Remove("relativePath");
             Force(args, "xmlFilePath", modified);
         }
+        if (tool == "import_source_object")
+        {
+            var relative = StringValue(args, "relativePath")
+                ?? RelativeUnder(device.SourceRoot, StringValue(args, "xmlFilePath"))
+                ?? throw new ArgumentException("An existing source path is required.");
+            var modified = WorkbenchPaths.ResolveRelative(device.SourceRoot, relative);
+            if (!File.Exists(modified)) throw new FileNotFoundException("Source was not found.", modified);
+            args.Remove("xmlFilePath");
+            args.Remove("relativePath");
+            Force(args, "relativePath", relative.Replace('\\', '/'));
+            Force(args, "xmlFilePath", modified);
+        }
         return args;
     }
     private static void BindReadable(
