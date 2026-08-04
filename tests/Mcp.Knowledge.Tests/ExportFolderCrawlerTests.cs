@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Linq;
 using Mcp.Knowledge.Graph;
@@ -8,6 +9,41 @@ namespace Mcp.Knowledge.Tests;
 
 public sealed class ExportFolderCrawlerTests
 {
+    [Fact]
+    public void RejectsDirectoryReparsePointWithoutFollowingOutsideSourceRoot()
+    {
+        using var tree = new TempExportTree();
+        var outside = Path.Combine(
+            Path.GetTempPath(),
+            "Mcp.Knowledge.Tests",
+            Guid.NewGuid().ToString("N"));
+        var link = Path.Combine(tree.Root, "linked-outside");
+        Directory.CreateDirectory(outside);
+        File.Copy(
+            FixtureFiles.MainObPath,
+            Path.Combine(outside, "Outside [OB1].xml"));
+
+        try
+        {
+            CreateDirectoryLink(link, outside);
+
+            var error = Assert.Throws<ManifestInvalidException>(() =>
+                ExportFolderCrawler.Import(tree.Root));
+
+            Assert.Contains("reparse point", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("linked-outside", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(link))
+            {
+                Directory.Delete(link);
+            }
+
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     [Fact]
     public void SkipsDuplicateBlocksInNestedFolders()
     {
@@ -125,5 +161,30 @@ public sealed class ExportFolderCrawlerTests
         // Networks and DB members are contained by their blocks, not directly by the project.
         Assert.DoesNotContain(result.Graph.Edges, edge =>
             edge.FromNodeId == project.Id && edge.ToNodeId.StartsWith("network:"));
+    }
+
+    private static void CreateDirectoryLink(string link, string target)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Directory.CreateSymbolicLink(link, target);
+            return;
+        }
+
+        using var process = System.Diagnostics.Process.Start(
+            new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/d /c mklink /J \"{link}\" \"{target}\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+
+        process.WaitForExit();
+        Assert.True(
+            process.ExitCode == 0,
+            $"Could not create test junction: {process.StandardError.ReadToEnd()}");
     }
 }

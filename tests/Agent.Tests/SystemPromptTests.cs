@@ -49,10 +49,33 @@ public sealed class SystemPromptTests
         Assert.Contains("search", prompt);
         Assert.Contains("kind='FB'", prompt);
         Assert.Contains("sourceFile", prompt);
-        Assert.Contains("device roots", prompt);
+        Assert.Contains("PLC source", prompt);
         Assert.Contains("repoPath", prompt);
         Assert.Contains("host-bound", prompt);
         Assert.DoesNotContain("runtime context lists the device's exported source files", prompt);
+    }
+
+    [Fact]
+    public void PromptDescribesOneCheckedOutSourceAndSeparatesItFromTiaState()
+    {
+        var prompt = SystemPrompt.Build();
+
+        Assert.Contains("checked-out feature XML directly", prompt);
+        Assert.Contains("TIA Portal is unchanged until", prompt);
+        Assert.DoesNotContain("exported baseline", prompt);
+        Assert.DoesNotContain("modified-source overlay", prompt);
+        Assert.DoesNotContain("source roots", prompt);
+    }
+
+    [Fact]
+    public void PromptDoesNotAskTheAgentToCompareAnInPlaceEditWithItself()
+    {
+        var prompt = SystemPrompt.Build();
+
+        Assert.Contains("Do not diff the source file against itself", prompt);
+        Assert.Contains("validate the edited XML without baselineFilePath", prompt);
+        Assert.DoesNotContain("src_diff of baseline vs overlay", prompt);
+        Assert.DoesNotContain("src_validate against the baseline", prompt);
     }
 
     [Fact]

@@ -116,7 +116,7 @@ public sealed class DeviceReconcilerTests : IDisposable
     }
 
     [Fact]
-    public void ApplyAtomicallyUpdatesApprovedContentWithoutTouchingIdenticalOrModifiedSource()
+    public void ApplyAtomicallyUpdatesApprovedContentWithoutTouchingIdenticalSource()
     {
         var fixture = CreateFixture();
         fixture.WriteBaseline("Blocks/Unchanged.xml", "same");
@@ -139,10 +139,6 @@ public sealed class DeviceReconcilerTests : IDisposable
         var unchangedPath = fixture.BaselinePath("Blocks/Unchanged.xml");
         var oldTimestamp = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
         File.SetLastWriteTimeUtc(unchangedPath, oldTimestamp);
-        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Context.ModifiedSourceRoot)!);
-        File.WriteAllText(fixture.Context.ModifiedSourceRoot, "must-not-be-opened");
-        var modifiedTimestamp = File.GetLastWriteTimeUtc(fixture.Context.ModifiedSourceRoot);
-
         var reconciler = new DeviceReconciler();
         var preview = reconciler.Preview(fixture.Context);
         var outcome = reconciler.Apply(
@@ -161,21 +157,19 @@ public sealed class DeviceReconcilerTests : IDisposable
         Assert.Equal("added", File.ReadAllText(fixture.BaselinePath("Blocks/Added.xml")));
         Assert.False(File.Exists(fixture.BaselinePath("Blocks/ApprovedRemoval.xml")));
         Assert.True(File.Exists(fixture.BaselinePath("Blocks/RetainedRemoval.xml")));
-        Assert.Equal("must-not-be-opened", File.ReadAllText(fixture.Context.ModifiedSourceRoot));
-        Assert.Equal(modifiedTimestamp, File.GetLastWriteTimeUtc(fixture.Context.ModifiedSourceRoot));
         Assert.Equal(preview.PreviewId, outcome.PreviewId);
         Assert.Contains(
             outcome.ChangedPaths,
-            path => path.EndsWith("exported-source/Blocks/Changed.xml", StringComparison.Ordinal));
+            path => path.EndsWith("source/Blocks/Changed.xml", StringComparison.Ordinal));
         Assert.Contains(
             outcome.ChangedPaths,
-            path => path.EndsWith("exported-source/metadata.json", StringComparison.Ordinal));
+            path => path.EndsWith("source/metadata.json", StringComparison.Ordinal));
         Assert.DoesNotContain(
             outcome.ChangedPaths,
-            path => path.EndsWith("exported-source/Blocks/Unchanged.xml", StringComparison.Ordinal));
+            path => path.EndsWith("source/Blocks/Unchanged.xml", StringComparison.Ordinal));
         Assert.DoesNotContain(
             outcome.ChangedPaths,
-            path => path.EndsWith("exported-source/Blocks/RetainedRemoval.xml", StringComparison.Ordinal));
+            path => path.EndsWith("source/Blocks/RetainedRemoval.xml", StringComparison.Ordinal));
 
         using (var manifest = JsonDocument.Parse(
                    File.ReadAllText(fixture.BaselinePath("metadata.json"))))
@@ -229,11 +223,11 @@ public sealed class DeviceReconcilerTests : IDisposable
             .ToArray();
         Assert.Equal(["changed", "removed"], ids.OrderBy(value => value).ToArray());
         Assert.Contains(outcome.ChangedPaths, path =>
-            path.EndsWith("exported-source/Blocks/Changed.xml", StringComparison.Ordinal));
+            path.EndsWith("source/Blocks/Changed.xml", StringComparison.Ordinal));
         Assert.DoesNotContain(outcome.ChangedPaths, path =>
-            path.EndsWith("exported-source/Blocks/Added.xml", StringComparison.Ordinal));
+            path.EndsWith("source/Blocks/Added.xml", StringComparison.Ordinal));
         Assert.DoesNotContain(outcome.ChangedPaths, path =>
-            path.EndsWith("exported-source/Blocks/Removed.xml", StringComparison.Ordinal));
+            path.EndsWith("source/Blocks/Removed.xml", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -308,7 +302,7 @@ public sealed class DeviceReconcilerTests : IDisposable
         Assert.Equal(before, fixture.SnapshotBaseline());
         Assert.DoesNotContain(
             Directory.EnumerateFiles(
-                fixture.Context.ExportedSourceRoot,
+                fixture.Context.SourceRoot,
                 "*",
                 SearchOption.AllDirectories),
             path => path.EndsWith(".tmp", StringComparison.Ordinal)
@@ -457,8 +451,7 @@ public sealed class DeviceReconcilerTests : IDisposable
             fixtureRoot,
             worktreeRoot,
             deviceRoot,
-            Path.Combine(deviceRoot, "exported-source"),
-            Path.Combine(deviceRoot, "modified-source"),
+            Path.Combine(deviceRoot, "source"),
             Path.Combine(deviceRoot, "staging"),
             Path.Combine(deviceRoot, "plc-knowledge.db"));
         return new Fixture(context);
@@ -521,14 +514,14 @@ public sealed class DeviceReconcilerTests : IDisposable
             Write(StagingPath(relativePath), content);
 
         public void WriteBaselineManifest(params object[] components) =>
-            WriteManifest(Context.ExportedSourceRoot, components);
+            WriteManifest(Context.SourceRoot, components);
 
         public void WriteStagingManifest(params object[] components) =>
             WriteManifest(Context.StagingRoot, components);
 
         public string BaselinePath(string relativePath) =>
             Path.Combine(
-                Context.ExportedSourceRoot,
+                Context.SourceRoot,
                 relativePath.Replace('/', Path.DirectorySeparatorChar));
 
         public string StagingPath(string relativePath) =>
@@ -538,19 +531,19 @@ public sealed class DeviceReconcilerTests : IDisposable
 
         public string SnapshotBaseline()
         {
-            if (!Directory.Exists(Context.ExportedSourceRoot))
+            if (!Directory.Exists(Context.SourceRoot))
             {
                 return string.Empty;
             }
 
             var builder = new StringBuilder();
             foreach (var file in Directory.EnumerateFiles(
-                         Context.ExportedSourceRoot,
+                         Context.SourceRoot,
                          "*",
                          SearchOption.AllDirectories)
                      .OrderBy(path => path, StringComparer.Ordinal))
             {
-                builder.Append(Path.GetRelativePath(Context.ExportedSourceRoot, file))
+                builder.Append(Path.GetRelativePath(Context.SourceRoot, file))
                     .Append('\0')
                     .Append(Convert.ToHexString(File.ReadAllBytes(file)))
                     .Append('\n');

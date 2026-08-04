@@ -26,7 +26,7 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
         if (tool is "sync_export" or "rebuild_export")
             Force(args, "outputDir", device.StagingRoot);
         if (tool is "get_context_status" or "compare_context")
-            Force(args, "outputDir", device.ExportedSourceRoot);
+            Force(args, "outputDir", device.SourceRoot);
         if (tool is "ingest_source" or "update_components" or "get_schema" or "query"
             or "get_block" or "get_network" or "get_single_network" or "get_all_networks"
             or "get_variable_usage" or "search"
@@ -34,37 +34,30 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
         {
             if (tool is "ingest_source" or "update_components")
             {
-                Force(args, "exportedSourceRoot", device.ExportedSourceRoot);
-                Force(args, "modifiedSourceRoot", device.ModifiedSourceRoot);
+                args.Remove("exportedSourceRoot");
+                args.Remove("modifiedSourceRoot");
+                Force(args, "sourceRoot", device.SourceRoot);
             }
             Force(args, "dbPath", device.KnowledgeDbPath);
         }
         if (tool.StartsWith("vc_", StringComparison.Ordinal)) Force(args, "repoPath", device.WorktreeRoot);
         if (tool == "src_apply_edits")
         {
+            Force(args, "sourceRoot", device.SourceRoot);
+            ForceFlag(args, "inPlace");
+            ForceFlag(args, "confirmInPlace");
+            args.Remove("overwriteOutput");
             var relative = StringValue(args, "relativePath")
                 ?? RelativeFromTrustedInput(args, "xmlFilePath", device)
                 ?? throw new ArgumentException("relativePath or a trusted xmlFilePath is required.");
             var effective = resolver.ResolveEffective(device, relative);
-            var overlay = resolver.PrepareEditable(device, relative);
+            var editable = resolver.PrepareEditable(device, relative);
             // The relative form fully determines both paths; drop the caller's originals
             // so Force never conflicts with a pre-resolution value.
             args.Remove("xmlFilePath");
             args.Remove("relativePath");
             Force(args, "xmlFilePath", effective);
-            if (PathsEqual(effective, overlay))
-            {
-                // Re-editing an existing overlay: atomic in-place replace.
-                Force(args, "outputFilePath", overlay);
-                ForceFlag(args, "inPlace");
-                ForceFlag(args, "confirmInPlace");
-            }
-            else
-            {
-                // First apply: overwrite the copy-on-write duplicate PrepareEditable just made.
-                Force(args, "outputFilePath", overlay);
-                ForceFlag(args, "overwriteOutput");
-            }
+            Force(args, "outputFilePath", editable);
         }
         if (tool == "src_parse_block")
             BindReadable(args, "xmlFilePath", device);
@@ -82,10 +75,10 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
         if (tool == "import_block")
         {
             var relative = StringValue(args, "relativePath")
-                ?? RelativeUnder(device.ModifiedSourceRoot, StringValue(args, "xmlFilePath"))
-                ?? throw new ArgumentException("An existing modified-source path is required.");
-            var modified = WorkbenchPaths.ResolveRelative(device.ModifiedSourceRoot, relative);
-            if (!File.Exists(modified)) throw new FileNotFoundException("Modified source was not found.", modified);
+                ?? RelativeUnder(device.SourceRoot, StringValue(args, "xmlFilePath"))
+                ?? throw new ArgumentException("An existing source path is required.");
+            var modified = WorkbenchPaths.ResolveRelative(device.SourceRoot, relative);
+            if (!File.Exists(modified)) throw new FileNotFoundException("Source was not found.", modified);
             args.Remove("xmlFilePath");
             args.Remove("relativePath");
             Force(args, "xmlFilePath", modified);
@@ -102,9 +95,9 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
         if (!Path.IsPathRooted(path))
         {
             // Bare relative sourceFile returned by the knowledge DB: resolve it against the
-            // device roots directly (never against the host process working directory).
+            // device root directly (never against the host process working directory).
             string? fallback = null;
-            foreach (var root in new[] { device.ModifiedSourceRoot, device.ExportedSourceRoot })
+            foreach (var root in new[] { device.SourceRoot })
             {
                 var candidate = WorkbenchPaths.ResolveRelative(root, path);
                 fallback ??= candidate;
@@ -117,7 +110,7 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
             args[key] = fallback!;
             return;
         }
-        foreach (var root in new[] { device.ModifiedSourceRoot, device.ExportedSourceRoot })
+        foreach (var root in new[] { device.SourceRoot })
         {
             try
             {
@@ -156,10 +149,10 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
             // Bare relative sourceFile returned by the knowledge DB: validate the form
             // (rejects traversal) and keep it relative for ResolveEffective/PrepareEditable.
             var normalized = value.Replace('\\', '/');
-            _ = WorkbenchPaths.ResolveRelative(device.ExportedSourceRoot, normalized);
+            _ = WorkbenchPaths.ResolveRelative(device.SourceRoot, normalized);
             return normalized;
         }
-        foreach (var root in new[] { device.ModifiedSourceRoot, device.ExportedSourceRoot })
+        foreach (var root in new[] { device.SourceRoot })
         {
             try
             {

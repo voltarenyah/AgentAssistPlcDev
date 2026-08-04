@@ -22,8 +22,7 @@ const snapshot: api.DeviceSnapshot = {
   deviceId: 'dev1',
   plcName: 'PLC_Demo',
   engineeringIdentity: 'PLC_Demo',
-  exportedSourceRoot: 'C:/wb/exported',
-  modifiedSourceRoot: 'C:/wb/modified',
+  sourceRoot: 'C:/wb/source',
   knowledgeDbPath: 'C:/wb/plc-knowledge.db',
   sourceProjectPath: 'D:/proj.ap17',
   device: null,
@@ -31,7 +30,7 @@ const snapshot: api.DeviceSnapshot = {
   blocks: [
     { id: 'b1', name: 'Main', number: 1, blockType: 'OB', programmingLanguage: 'LAD', groupPath: 'Area', relativePath: 'Blocks/Main [OB1].xml', modified: false },
   ],
-  overlayCount: 0,
+  sourceObjectCount: 1,
   diagnostics: [],
 }
 

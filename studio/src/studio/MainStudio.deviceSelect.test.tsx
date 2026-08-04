@@ -22,8 +22,7 @@ const snapshot: api.DeviceSnapshot = {
   deviceId: 'dev1',
   plcName: 'PLC_Demo',
   engineeringIdentity: 'PLC_Demo',
-  exportedSourceRoot: 'C:/wb/exported',
-  modifiedSourceRoot: 'C:/wb/modified',
+  sourceRoot: 'C:/wb/source',
   knowledgeDbPath: 'C:/wb/plc-knowledge.db',
   sourceProjectPath: 'D:/proj.ap17',
   device: null,
@@ -31,7 +30,7 @@ const snapshot: api.DeviceSnapshot = {
   blocks: [
     { id: 'b1', name: 'Main', number: 1, blockType: 'OB', programmingLanguage: 'LAD', groupPath: 'Area', relativePath: 'Blocks/Main [OB1].xml', modified: false },
   ],
-  overlayCount: 0,
+  sourceObjectCount: 7,
   diagnostics: [],
 }
 
@@ -142,8 +141,34 @@ describe('MainStudio device selection resilience', () => {
 
     expect(host.querySelector('footer')?.textContent).toContain('PLC_Demo')
     expect(host.querySelector('footer')?.textContent).not.toContain('no device')
+    const sourceObjectsMetric = Array.from(host.querySelectorAll('div'))
+      .find(element => element.textContent === 'Source objects')
+    expect(sourceObjectsMetric?.previousElementSibling?.textContent).toBe('7')
+    expect(host.textContent).not.toContain('Touched overlays')
     // Established device (snapshot has blocks): no bootstrap panel.
     expect(host.textContent).not.toContain('Generate PLC context')
+  })
+
+  it('describes source editing without a modified overlay model', async () => {
+    vi.mocked(api.getSessions).mockResolvedValue([])
+    vi.mocked(api.getDeviceInfo).mockResolvedValue(snapshot)
+    vi.mocked(api.listDeviceSessions).mockResolvedValue([])
+
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+    clickText(host, 'DemoWB')
+    await act(async () => {})
+    clickText(host, 'master')
+    await act(async () => {})
+    await act(async () => {})
+
+    const sourceTab = Array.from(host.querySelectorAll<HTMLButtonElement>('button'))
+      .find(element => element.textContent?.trim() === 'PLC source')
+    expect(sourceTab).toBeDefined()
+    act(() => sourceTab!.click())
+
+    expect(host.textContent?.toLowerCase()).not.toContain('overlay')
+    expect(host.textContent).not.toContain('Modified sources')
   })
 
   it('starts up even when TIA session enumeration never responds', async () => {

@@ -796,7 +796,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task SelectedDeviceSnapshotReportsMissingManifestWithoutEngineering()
+    public async Task SelectedDeviceSnapshotAllowsEmptySourceWithoutEngineering()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
             Path.Combine(root, Guid.NewGuid().ToString("N")),
@@ -805,9 +805,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var snapshot = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/project/info");
 
         Assert.Empty(snapshot.GetProperty("blocks").EnumerateArray());
-        Assert.Contains(
-            snapshot.GetProperty("diagnostics").EnumerateArray(),
-            diagnostic => diagnostic.GetString()!.Contains("Export manifest is missing", StringComparison.Ordinal));
+        Assert.Empty(snapshot.GetProperty("diagnostics").EnumerateArray());
         Assert.Empty(fixture.Engineering.Calls);
     }
 
@@ -1209,13 +1207,21 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public void KnowledgeAndSourceReadsAreBoundToSelectedDevice()
     {
         var context = Context();
-        Directory.CreateDirectory(context.ExportedSourceRoot);
-        var source = Path.Combine(context.ExportedSourceRoot, "A.xml");
+        Directory.CreateDirectory(context.SourceRoot);
+        var source = Path.Combine(context.SourceRoot, "A.xml");
         File.WriteAllText(source, "<a/>");
         var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
 
         var knowledge = binder.Bind("get_schema", new Dictionary<string, object?>(), context);
         Assert.Equal(context.KnowledgeDbPath, knowledge["dbPath"]);
+        var ingest = binder.Bind("ingest_source", new Dictionary<string, object?>(), context);
+        Assert.Equal(context.SourceRoot, ingest["sourceRoot"]);
+        Assert.False(ingest.ContainsKey("exportedSourceRoot"));
+        Assert.False(ingest.ContainsKey("modifiedSourceRoot"));
+        var update = binder.Bind("update_components", new Dictionary<string, object?>(), context);
+        Assert.Equal(context.SourceRoot, update["sourceRoot"]);
+        Assert.False(update.ContainsKey("exportedSourceRoot"));
+        Assert.False(update.ContainsKey("modifiedSourceRoot"));
         Assert.Throws<ArgumentException>(() => binder.Bind(
             "search", new Dictionary<string, object?> { ["dbPath"] = Path.Combine(root, "other.db") }, context));
         var parsed = binder.Bind("src_parse_block", new Dictionary<string, object?> { ["xmlFilePath"] = source }, context);
@@ -1228,7 +1234,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public void ImportBlockBindsToExistingModifiedSourceOnly()
     {
         var context = Context();
-        var modified = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.xml");
+        var modified = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
         Directory.CreateDirectory(Path.GetDirectoryName(modified)!);
         File.WriteAllText(modified, "<a/>");
         var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
@@ -1246,32 +1252,65 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public void ApplyEditsOverwritesFreshCopyAndReplacesExistingOverlayInPlace()
+    public void ApplyEditsBindsTrackedSourceAsConfirmedInPlace()
     {
         var context = Context();
-        var baseline = Path.Combine(context.ExportedSourceRoot, "Blocks", "A.xml");
+        var baseline = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
         Directory.CreateDirectory(Path.GetDirectoryName(baseline)!);
         File.WriteAllText(baseline, "<a/>");
         var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
-        var overlay = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.xml");
-
-        var first = binder.Bind(
+        var bound = binder.Bind(
             "src_apply_edits",
             new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
             context);
-        Assert.Equal(baseline, first["xmlFilePath"]);
-        Assert.Equal(overlay, first["outputFilePath"]);
-        Assert.Equal(true, first["overwriteOutput"]);
-        Assert.False(first.ContainsKey("inPlace"));
+        Assert.Equal(baseline, bound["xmlFilePath"]);
+        Assert.Equal(baseline, bound["outputFilePath"]);
+        Assert.Equal(context.SourceRoot, bound["sourceRoot"]);
+        Assert.Equal(true, bound["inPlace"]);
+        Assert.Equal(true, bound["confirmInPlace"]);
+        Assert.False(bound.ContainsKey("overwriteOutput"));
+    }
 
-        var second = binder.Bind(
+    [Fact]
+    public void ApplyEditsRejectsCallerSuppliedSourceRootFromAnotherDevice()
+    {
+        var context = Context();
+        var source = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "<a/>");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        Assert.Throws<ArgumentException>(() => binder.Bind(
             "src_apply_edits",
-            new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
+            new Dictionary<string, object?>
+            {
+                ["relativePath"] = "Blocks/A.xml",
+                ["sourceRoot"] = Path.Combine(root, "other", "devices", "PLC", "source"),
+            },
+            context));
+    }
+
+    [Fact]
+    public void ApplyEditsDiscardsCopyOutputFlagAndForcesInPlaceFlags()
+    {
+        var context = Context();
+        var source = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "<a/>");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var bound = binder.Bind(
+            "src_apply_edits",
+            new Dictionary<string, object?>
+            {
+                ["relativePath"] = "Blocks/A.xml",
+                ["overwriteOutput"] = true,
+            },
             context);
-        Assert.Equal(overlay, second["xmlFilePath"]);
-        Assert.Equal(overlay, second["outputFilePath"]);
-        Assert.Equal(true, second["inPlace"]);
-        Assert.Equal(true, second["confirmInPlace"]);
+
+        Assert.False(bound.ContainsKey("overwriteOutput"));
+        Assert.Equal(true, bound["inPlace"]);
+        Assert.Equal(true, bound["confirmInPlace"]);
     }
 
     [Fact]
@@ -1296,7 +1335,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public void SourceToolsAcceptListedRelativeXmlFilePath()
     {
         var context = Context();
-        var baseline = Path.Combine(context.ExportedSourceRoot, "Blocks", "A.xml");
+        var baseline = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
         Directory.CreateDirectory(Path.GetDirectoryName(baseline)!);
         File.WriteAllText(baseline, "<a/>");
         var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
@@ -1309,7 +1348,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(baseline, parsed["xmlFilePath"]);
 
         // An existing overlay wins over the baseline for reads.
-        var overlay = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.xml");
+        var overlay = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
         Directory.CreateDirectory(Path.GetDirectoryName(overlay)!);
         File.WriteAllText(overlay, "<b/>");
         var parsedOverlay = binder.Bind(
@@ -1737,8 +1776,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     private DeviceContext Context() => new(
         "wb", "wt", "device", root, Path.Combine(root, "worktree"),
         Path.Combine(root, "worktree", "devices", "PLC"),
-        Path.Combine(root, "worktree", "devices", "PLC", "exported-source"),
-        Path.Combine(root, "worktree", "devices", "PLC", "modified-source"),
+        Path.Combine(root, "worktree", "devices", "PLC", "source"),
         Path.Combine(root, "worktree", "devices", "PLC", "staging"),
         Path.Combine(root, "worktree", "devices", "PLC", "plc-knowledge.db"));
 
@@ -1857,12 +1895,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 workbench.RootPath,
                 worktreeRoot,
                 deviceRoot,
-                Path.Combine(deviceRoot, "exported-source"),
-                Path.Combine(deviceRoot, "modified-source"),
+                Path.Combine(deviceRoot, "source"),
                 Path.Combine(deviceRoot, "staging"),
                 Path.Combine(deviceRoot, "plc-knowledge.db"));
-            Directory.CreateDirectory(context.ExportedSourceRoot);
-            Directory.CreateDirectory(context.ModifiedSourceRoot);
+            Directory.CreateDirectory(context.SourceRoot);
             Directory.CreateDirectory(context.StagingRoot);
             store.Write(
                 Path.Combine(worktreeRoot, "worktree.json"),
@@ -1919,25 +1955,25 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         public void WriteComparisonBaseline(string? fingerprints)
         {
-            Directory.CreateDirectory(Path.Combine(context.ExportedSourceRoot, "Blocks"));
-            File.WriteAllText(Path.Combine(context.ExportedSourceRoot, "Blocks", "Main.xml"), "<stored/>");
-            WriteComparisonManifest(context.ExportedSourceRoot, fingerprints);
+            Directory.CreateDirectory(Path.Combine(context.SourceRoot, "Blocks"));
+            File.WriteAllText(Path.Combine(context.SourceRoot, "Blocks", "Main.xml"), "<stored/>");
+            WriteComparisonManifest(context.SourceRoot, fingerprints);
         }
 
         public string ReadBaseline(string relativePath) =>
             File.ReadAllText(Path.Combine(
-                context.ExportedSourceRoot,
+                context.SourceRoot,
                 relativePath.Replace('/', Path.DirectorySeparatorChar)));
 
         public bool BaselineExists(string relativePath) =>
             File.Exists(Path.Combine(
-                context.ExportedSourceRoot,
+                context.SourceRoot,
                 relativePath.Replace('/', Path.DirectorySeparatorChar)));
 
         public string?[] BaselineComponentIds()
         {
             using var manifest = JsonDocument.Parse(
-                File.ReadAllText(Path.Combine(context.ExportedSourceRoot, "metadata.json")));
+                File.ReadAllText(Path.Combine(context.SourceRoot, "metadata.json")));
             return manifest.RootElement.GetProperty("components")
                 .EnumerateArray()
                 .Select(component => component.GetProperty("id").GetString())
@@ -1946,8 +1982,23 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         public void WriteManifest()
         {
+            var blockPath = Path.Combine(context.SourceRoot, "Blocks", "Main [OB1].xml");
+            Directory.CreateDirectory(Path.GetDirectoryName(blockPath)!);
             File.WriteAllText(
-                Path.Combine(context.ExportedSourceRoot, "metadata.json"),
+                blockPath,
+                """
+                <Document>
+                  <SW.Blocks.OB>
+                    <AttributeList>
+                      <Name>Main</Name>
+                      <Number>1</Number>
+                      <ProgrammingLanguage>LAD</ProgrammingLanguage>
+                    </AttributeList>
+                  </SW.Blocks.OB>
+                </Document>
+                """);
+            File.WriteAllText(
+                Path.Combine(context.SourceRoot, "metadata.json"),
                 """
                 {
                   "schemaVersion": "1.0",

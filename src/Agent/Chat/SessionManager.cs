@@ -278,8 +278,7 @@ public static class SessionManager
             $"Workbench: {workbenchName} ({device.WorkbenchId})",
             $"Worktree: {worktreeName} [{branch}]",
             $"Device: {plcName} ({device.DeviceId})",
-            $"Exported source: {device.ExportedSourceRoot}",
-            $"Modified source: {device.ModifiedSourceRoot}",
+            $"PLC source: {device.SourceRoot}",
             $"Knowledge DB: {device.KnowledgeDbPath}",
             $"Knowledge state: {knowledgeState}");
     }

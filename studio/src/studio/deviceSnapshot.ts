@@ -10,7 +10,7 @@ export type DeviceViewState = {
   knowledgeState: KnowledgeVisualState
   knowledgeUpdatedAt: string | null
   blocks: OfflineBlockInfo[]
-  overlayCount: number
+  sourceObjectCount: number
   diagnostics: string[]
 }
 
@@ -31,7 +31,7 @@ export const applyDeviceSnapshot = (
   knowledgeState: snapshot.knowledge.state,
   knowledgeUpdatedAt: snapshot.knowledge.updatedAt,
   blocks: snapshot.blocks,
-  overlayCount: snapshot.overlayCount,
+  sourceObjectCount: snapshot.sourceObjectCount,
   diagnostics: snapshot.diagnostics,
 })
 

@@ -68,7 +68,6 @@ public sealed record DeviceContext(
     string WorkbenchRoot,
     string WorktreeRoot,
     string DeviceRoot,
-    string ExportedSourceRoot,
-    string ModifiedSourceRoot,
+    string SourceRoot,
     string StagingRoot,
     string KnowledgeDbPath);

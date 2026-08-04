@@ -33,10 +33,10 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         Assert.Equal("current", snapshot.Knowledge.State);
         Assert.Equal(fixture.Device.Context.DeviceId, snapshot.DeviceId);
         Assert.Equal(fixture.Device.Context.WorktreeId, snapshot.WorktreeId);
-        Assert.Equal(fixture.Device.Context.ExportedSourceRoot, snapshot.ExportedSourceRoot);
+        Assert.Equal(fixture.Device.Context.SourceRoot, snapshot.SourceRoot);
         Assert.Equal(fixture.OtherDevice.Context.DeviceId, otherSnapshot.DeviceId);
         Assert.Equal(fixture.OtherDevice.Context.WorktreeId, otherSnapshot.WorktreeId);
-        Assert.NotEqual(snapshot.ExportedSourceRoot, otherSnapshot.ExportedSourceRoot);
+        Assert.NotEqual(snapshot.SourceRoot, otherSnapshot.SourceRoot);
         Assert.NotEqual(snapshot.KnowledgeDbPath, otherSnapshot.KnowledgeDbPath);
         Assert.Equal(
             databaseHash,
@@ -87,7 +87,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var rejected = await coordinator.ApplyRefreshAsync(
             plc1, ApprovedReconciliation.Rejected(rejectedPreview), CancellationToken.None);
         Assert.Equal(RefreshApplyState.Rejected, rejected.State);
-        Assert.False(File.Exists(Path.Combine(plc1.ExportedSourceRoot, "Blocks", "Main.xml")));
+        Assert.False(File.Exists(Path.Combine(plc1.SourceRoot, "Blocks", "Main.xml")));
         Assert.Empty(RepositoryService.Log(plc1.WorktreeRoot, 10).Commits);
 
         engineering.SetExport("PLC_1", "stale-preview");
@@ -129,7 +129,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var plc2DbHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(plc2.KnowledgeDbPath)));
 
-        var baselineFile = Path.Combine(plc1.ExportedSourceRoot, "Blocks", "Main.xml");
+        var baselineFile = Path.Combine(plc1.SourceRoot, "Blocks", "Main.xml");
         var baselineHash = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(baselineFile)));
         var baselineTimestamp = File.GetLastWriteTimeUtc(baselineFile);
@@ -263,8 +263,8 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         {
             var root = Path.Combine(worktreeRoot, "devices", device);
             Assert.True(File.Exists(Path.Combine(root, "device.json")));
-            Assert.True(File.Exists(Path.Combine(root, "exported-source", "Blocks", "Main.xml")));
-            Assert.True(File.Exists(Path.Combine(root, "exported-source", "metadata.json")));
+            Assert.True(File.Exists(Path.Combine(root, "source", "Blocks", "Main.xml")));
+            Assert.True(File.Exists(Path.Combine(root, "source", "metadata.json")));
         }
     }
 
@@ -504,9 +504,8 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             CallToolResult result = tool switch
             {
                 "ingest_source" => tools.IngestSource(
-                    Property<string>(args, "exportedSourceRoot"),
-                    Property<string>(args, "dbPath"),
-                    Property<string>(args, "modifiedSourceRoot")),
+                    dbPath: Property<string>(args, "dbPath"),
+                    sourceRoot: Property<string>(args, "sourceRoot")),
                 "update_components" => Update(tools, args),
                 _ => throw new InvalidOperationException(tool),
             };
@@ -520,10 +519,9 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         {
             PartialCalls++;
             return tools.UpdateComponents(
-                Property<string>(args, "exportedSourceRoot"),
-                Property<string>(args, "modifiedSourceRoot"),
-                Property<string>(args, "dbPath"),
-                Property<string[]>(args, "relativePaths"));
+                dbPath: Property<string>(args, "dbPath"),
+                relativePaths: Property<string[]>(args, "relativePaths"),
+                sourceRoot: Property<string>(args, "sourceRoot"));
         }
 
         private static string ParseText(CallToolResult result) =>

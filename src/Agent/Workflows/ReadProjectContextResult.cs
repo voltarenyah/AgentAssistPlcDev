@@ -11,8 +11,7 @@ public sealed class ReadProjectContextResult
     public required string WorktreeId { get; init; }
     public required string DeviceId { get; init; }
     public required string PlcName { get; init; }
-    public required string ExportRoot { get; init; }
-    public required string ModifiedSourceRoot { get; init; }
+    public required string SourceRoot { get; init; }
     public required string StagingRoot { get; init; }
     public required string DbPath { get; init; }
 

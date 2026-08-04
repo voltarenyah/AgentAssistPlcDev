@@ -3,6 +3,7 @@ using Agent.Workbench;
 using Contracts.Engineering;
 using Contracts.Knowledge;
 using Contracts.Sandbox;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Xunit;
 
@@ -584,9 +585,9 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var expected = new[]
         {
             Relative(fixture.Context, "device.json"),
-            Relative(fixture.Context, "exported-source/Blocks/A.xml"),
-            Relative(fixture.Context, "exported-source/Blocks/B.xml"),
-            Relative(fixture.Context, "exported-source/metadata.json"),
+            Relative(fixture.Context, "source/Blocks/A.xml"),
+            Relative(fixture.Context, "source/Blocks/B.xml"),
+            Relative(fixture.Context, "source/metadata.json"),
         };
         Assert.Equal(expected.Order(), result.ChangedPaths.Order());
         Assert.Equal(expected.Order(), Property<string[]>(versionControl.CallArgs["vc_add"].Single(), "paths").Order());
@@ -610,7 +611,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Equal(RefreshApplyState.Rejected, result.State);
         Assert.Empty(calls);
-        Assert.False(File.Exists(Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+        Assert.False(File.Exists(Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")));
     }
 
     [Fact]
@@ -622,7 +623,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         fixture.WriteManifests("Blocks/A.xml");
         // Make the two manifests byte-identical so reconciliation is a true no-op.
         File.Copy(
-            Path.Combine(fixture.Context.ExportedSourceRoot, "metadata.json"),
+            Path.Combine(fixture.Context.SourceRoot, "metadata.json"),
             Path.Combine(fixture.Context.StagingRoot, "metadata.json"),
             overwrite: true);
         var before = File.ReadAllBytes(Path.Combine(fixture.Context.DeviceRoot, "device.json"));
@@ -669,7 +670,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Equal(RefreshApplyState.FilesUpdatedCommitFailed, result.State);
         Assert.Equal("<new />", File.ReadAllText(
-            Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+            Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")));
         Assert.Equal(new[] { "version:vc_add", "version:vc_commit" }, calls);
         Assert.Null(ReadDevice(fixture).LastReconciliationCommit);
         Assert.True(ReadDevice(fixture).Knowledge.Stale);
@@ -696,13 +697,42 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Equal(new[] { "knowledge:update_components" }, calls);
         var args = knowledge.CallArgs["update_components"].Single();
-        Assert.Equal(fixture.Context.ExportedSourceRoot, Property<string>(args, "exportedSourceRoot"));
-        Assert.Equal(fixture.Context.ModifiedSourceRoot, Property<string>(args, "modifiedSourceRoot"));
+        Assert.Equal(fixture.Context.SourceRoot, Property<string>(args, "sourceRoot"));
+        Assert.Null(args.GetType().GetProperty("exportedSourceRoot"));
+        Assert.Null(args.GetType().GetProperty("modifiedSourceRoot"));
         Assert.Equal(fixture.Context.KnowledgeDbPath, Property<string>(args, "dbPath"));
         Assert.Equal(new[] { "Blocks/A.xml" }, Property<string[]>(args, "relativePaths"));
-        Assert.Equal("hash-a", ReadDevice(fixture).Knowledge.AppliedOverlayHashes["Blocks/A.xml"]);
+        var expectedHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(
+            Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")))).ToLowerInvariant();
+        Assert.Equal(
+            expectedHash,
+            ReadDevice(fixture).Knowledge.AppliedOverlayHashes["Blocks/A.xml"]);
         Assert.False(ReadDevice(fixture).Knowledge.Stale);
         Assert.Equal(fixture.Context.KnowledgeDbPath, result.DbPath);
+    }
+
+    [Fact]
+    public async Task SuccessfulIncrementalUpdateSkipsSecondUnchangedUpdate()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: true);
+        File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
+        fixture.WriteModified("Blocks/A.xml", "<modified />");
+        var update = new KnowledgeUpdateResult(
+            fixture.Context.KnowledgeDbPath,
+            new[] { "block:A" },
+            new Dictionary<string, string> { ["block:A"] = "component-hash" },
+            Array.Empty<string>());
+        var knowledge = new FakeToolCaller()
+            .Respond("update_components", update)
+            .Respond("update_components", update);
+        var coordinator = Create(fixture, knowledge: knowledge);
+
+        await coordinator.UpdateKnowledgeAsync(fixture.Context, CancellationToken.None);
+        await coordinator.UpdateKnowledgeAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal(new[] { "update_components" }, knowledge.Calls);
+        var hashes = ReadDevice(fixture).Knowledge.AppliedOverlayHashes;
+        Assert.Equal(new[] { "Blocks/A.xml" }, hashes.Keys);
     }
 
     [Fact]
@@ -719,6 +749,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         await coordinator.UpdateKnowledgeAsync(fixture.Context, CancellationToken.None);
 
         Assert.Equal(new[] { "knowledge:ingest_source" }, calls);
+        var args = knowledge.CallArgs["ingest_source"].Single();
+        Assert.Equal(fixture.Context.SourceRoot, Property<string>(args, "sourceRoot"));
+        Assert.Null(args.GetType().GetProperty("exportedSourceRoot"));
+        Assert.Null(args.GetType().GetProperty("modifiedSourceRoot"));
         Assert.False(ReadDevice(fixture).Knowledge.Stale);
     }
 
@@ -734,6 +768,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         await coordinator.RebuildKnowledgeAsync(fixture.Context, CancellationToken.None);
 
         Assert.Equal(new[] { "ingest_source" }, knowledge.Calls);
+        var args = knowledge.CallArgs["ingest_source"].Single();
+        Assert.Equal(fixture.Context.SourceRoot, Property<string>(args, "sourceRoot"));
+        Assert.Null(args.GetType().GetProperty("exportedSourceRoot"));
+        Assert.Null(args.GetType().GetProperty("modifiedSourceRoot"));
         Assert.False(ReadDevice(fixture).Knowledge.Stale);
         Assert.False(ReadDevice(fixture).Knowledge.BaselineStale);
     }
@@ -807,7 +845,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             CancellationToken.None);
 
         Assert.Equal(new[] { "engineering:import_block", "engineering:compile_block" }, calls);
-        var overlay = Path.Combine(fixture.Context.ModifiedSourceRoot, "Blocks", "A.xml");
+        var overlay = Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml");
         Assert.Equal(overlay, Property<string>(
             engineering.CallArgs["import_block"].Single(), "xmlFilePath"));
         Assert.True(File.Exists(overlay));
@@ -838,7 +876,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal("base001", result.Baseline.CommitSha);
         Assert.Equal(new[] { "engineering:rebuild_export", "version:vc_add", "version:vc_commit", "knowledge:ingest_source" }, calls);
         Assert.Equal("<a />", File.ReadAllText(
-            Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+            Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")));
         Assert.Equal(
             "initial baseline: full export",
             Property<string>(versionControl.CallArgs["vc_commit"].Single(), "message"));
@@ -914,7 +952,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Empty(versionControl.Calls);
         Assert.Empty(knowledge.Calls);
         Assert.DoesNotContain("compile_plc", engineering.Calls);
-        Assert.False(File.Exists(Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+        Assert.False(File.Exists(Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")));
     }
 
     [Fact]
@@ -1495,8 +1533,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             var context = WorkbenchPaths.ResolveDevice(
                 "wb-1", Path.Combine(parent, Guid.NewGuid().ToString("N")),
                 "wt-1", "master", "dev-1", "PLC_1");
-            Directory.CreateDirectory(context.ExportedSourceRoot);
-            Directory.CreateDirectory(context.ModifiedSourceRoot);
+            Directory.CreateDirectory(context.SourceRoot);
             Directory.CreateDirectory(context.StagingRoot);
             new AtomicJsonStore().Write(
                 Path.Combine(context.DeviceRoot, "device.json"),
@@ -1515,22 +1552,22 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         }
 
         public void WriteBaseline(string relative, string content) =>
-            Write(Context.ExportedSourceRoot, relative, content);
+            Write(Context.SourceRoot, relative, content);
         public void WriteStaging(string relative, string content) =>
             Write(Context.StagingRoot, relative, content);
         public void WriteModified(string relative, string content) =>
-            Write(Context.ModifiedSourceRoot, relative, content);
+            Write(Context.SourceRoot, relative, content);
 
         public void WriteManifests(params string[] staging)
         {
             WriteManifest(Context.StagingRoot, staging);
             var baseline = Directory.EnumerateFiles(
-                    Context.ExportedSourceRoot, "*.xml", SearchOption.AllDirectories)
-                .Select(path => Path.GetRelativePath(Context.ExportedSourceRoot, path).Replace('\\', '/'))
+                    Context.SourceRoot, "*.xml", SearchOption.AllDirectories)
+                .Select(path => Path.GetRelativePath(Context.SourceRoot, path).Replace('\\', '/'))
                 .ToArray();
             if (baseline.Length > 0)
             {
-                WriteManifest(Context.ExportedSourceRoot, baseline);
+                WriteManifest(Context.SourceRoot, baseline);
             }
         }
 

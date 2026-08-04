@@ -185,8 +185,7 @@ export type DeviceInfo = {
   deviceId: string
   plcName: string
   engineeringIdentity: string
-  exportedSourceRoot: string
-  modifiedSourceRoot: string
+  sourceRoot: string
   knowledgeDbPath: string
   sourceProjectPath: string | null
 }
@@ -225,7 +224,7 @@ export type DeviceSnapshot = DeviceInfo & {
     updatedAt: string | null
   }
   blocks: OfflineBlockInfo[]
-  overlayCount: number
+  sourceObjectCount: number
   diagnostics: string[]
 }
 

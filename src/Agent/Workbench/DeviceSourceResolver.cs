@@ -12,101 +12,17 @@ public sealed class DeviceSourceResolver
 
     public string ResolveEffective(DeviceContext context, string relativePath)
     {
-        var roots = ValidateRoots(context);
-        var modifiedPath = WorkbenchPaths.ResolveRelative(
-            roots.ModifiedSourceRoot,
-            relativePath);
-
-        return File.Exists(modifiedPath)
-            ? modifiedPath
-            : WorkbenchPaths.ResolveRelative(
-                roots.ExportedSourceRoot,
-                relativePath);
+        var sourcePath = ResolveSourcePath(context, relativePath);
+        RequireExistingFile(sourcePath);
+        return sourcePath;
     }
 
     public string PrepareEditable(DeviceContext context, string relativePath)
     {
-        var roots = ValidateRoots(context);
-        var baselinePath = WorkbenchPaths.ResolveRelative(
-            roots.ExportedSourceRoot,
-            relativePath);
-        var modifiedPath = WorkbenchPaths.ResolveRelative(
-            roots.ModifiedSourceRoot,
-            relativePath);
-
-        if (File.Exists(modifiedPath))
-        {
-            markKnowledgeStale(context);
-            return modifiedPath;
-        }
-
-        if (Directory.Exists(modifiedPath))
-        {
-            throw new IOException(
-                $"The modified-source path is a directory: {modifiedPath}");
-        }
-
-        if (!File.Exists(baselinePath))
-        {
-            throw new FileNotFoundException(
-                $"The exported source file does not exist: {baselinePath}",
-                baselinePath);
-        }
-
-        var outputDirectory = Path.GetDirectoryName(modifiedPath)
-            ?? throw new IOException(
-                $"The modified-source path has no parent directory: {modifiedPath}");
-        Directory.CreateDirectory(outputDirectory);
-
-        // Validate again after creating the directory hierarchy so an existing
-        // reparse point can never become part of the copy destination.
-        modifiedPath = WorkbenchPaths.ResolveRelative(
-            roots.ModifiedSourceRoot,
-            relativePath);
-
-        var temporaryPath = Path.Combine(
-            outputDirectory,
-            $".{Path.GetFileName(modifiedPath)}.{Guid.NewGuid():N}.tmp");
-
-        try
-        {
-            using (var input = new FileStream(
-                       baselinePath,
-                       FileMode.Open,
-                       FileAccess.Read,
-                       FileShare.Read))
-            using (var output = new FileStream(
-                       temporaryPath,
-                       FileMode.CreateNew,
-                       FileAccess.Write,
-                       FileShare.None,
-                       81920,
-                       FileOptions.WriteThrough))
-            {
-                input.CopyTo(output);
-                output.Flush(flushToDisk: true);
-            }
-
-            try
-            {
-                File.Move(temporaryPath, modifiedPath);
-            }
-            catch (IOException) when (File.Exists(modifiedPath))
-            {
-                // Another editor won the copy-on-write race. Preserve its
-                // overlay and treat the path as prepared.
-            }
-        }
-        finally
-        {
-            if (File.Exists(temporaryPath))
-            {
-                File.Delete(temporaryPath);
-            }
-        }
-
+        var sourcePath = ResolveSourcePath(context, relativePath);
+        RequireExistingFile(sourcePath);
         markKnowledgeStale(context);
-        return modifiedPath;
+        return sourcePath;
     }
 
     public string CreateNew(
@@ -114,30 +30,24 @@ public sealed class DeviceSourceResolver
         string relativePath,
         ReadOnlySpan<byte> initialContent)
     {
-        var modifiedSourceRoot = ValidateRoots(context).ModifiedSourceRoot;
-        var modifiedPath = WorkbenchPaths.ResolveRelative(
-            modifiedSourceRoot,
-            relativePath);
+        var sourceRoot = ValidateSourceRoot(context);
+        var sourcePath = WorkbenchPaths.ResolveRelative(sourceRoot, relativePath);
 
-        if (File.Exists(modifiedPath) || Directory.Exists(modifiedPath))
+        if (File.Exists(sourcePath) || Directory.Exists(sourcePath))
         {
-            throw new IOException(
-                $"The modified-source path already exists: {modifiedPath}");
+            throw new IOException($"The source path already exists: {sourcePath}");
         }
 
-        var outputDirectory = Path.GetDirectoryName(modifiedPath)
-            ?? throw new IOException(
-                $"The modified-source path has no parent directory: {modifiedPath}");
+        var outputDirectory = Path.GetDirectoryName(sourcePath)
+            ?? throw new IOException($"The source path has no parent directory: {sourcePath}");
         Directory.CreateDirectory(outputDirectory);
 
         // Validate the newly created hierarchy before placing any content in it.
-        modifiedPath = WorkbenchPaths.ResolveRelative(
-            modifiedSourceRoot,
-            relativePath);
+        sourcePath = WorkbenchPaths.ResolveRelative(sourceRoot, relativePath);
 
         var temporaryPath = Path.Combine(
             outputDirectory,
-            $".{Path.GetFileName(modifiedPath)}.{Guid.NewGuid():N}.tmp");
+            $".{Path.GetFileName(sourcePath)}.{Guid.NewGuid():N}.tmp");
 
         try
         {
@@ -153,7 +63,7 @@ public sealed class DeviceSourceResolver
                 output.Flush(flushToDisk: true);
             }
 
-            File.Move(temporaryPath, modifiedPath);
+            File.Move(temporaryPath, sourcePath);
         }
         finally
         {
@@ -164,20 +74,20 @@ public sealed class DeviceSourceResolver
         }
 
         markKnowledgeStale(context);
-        return modifiedPath;
+        return sourcePath;
     }
 
-    public IReadOnlyList<string> EnumerateModified(DeviceContext context)
+    public IReadOnlyList<string> EnumerateSource(DeviceContext context)
     {
-        var modifiedSourceRoot = ValidateRoots(context).ModifiedSourceRoot;
-        if (!Directory.Exists(modifiedSourceRoot))
+        var sourceRoot = ValidateSourceRoot(context);
+        if (!Directory.Exists(sourceRoot))
         {
             return Array.Empty<string>();
         }
 
         var paths = new List<string>();
         var pending = new Stack<string>();
-        pending.Push(modifiedSourceRoot);
+        pending.Push(sourceRoot);
 
         while (pending.TryPop(out var directory))
         {
@@ -196,21 +106,15 @@ public sealed class DeviceSourceResolver
                     continue;
                 }
 
-                if (!File.Exists(entry))
+                if (!File.Exists(entry)
+                    || !string.Equals(Path.GetExtension(entry), ".xml", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                var relativePath = Path.GetRelativePath(
-                    modifiedSourceRoot,
-                    entry);
-                _ = WorkbenchPaths.ResolveRelative(
-                    modifiedSourceRoot,
-                    relativePath);
-                paths.Add(
-                    relativePath.Replace(
-                        Path.DirectorySeparatorChar,
-                        '/'));
+                var relativePath = Path.GetRelativePath(sourceRoot, entry);
+                _ = WorkbenchPaths.ResolveRelative(sourceRoot, relativePath);
+                paths.Add(relativePath.Replace(Path.DirectorySeparatorChar, '/'));
             }
         }
 
@@ -218,51 +122,32 @@ public sealed class DeviceSourceResolver
         return paths;
     }
 
-    private static SourceRoots ValidateRoots(DeviceContext context)
+    private static string ResolveSourcePath(DeviceContext context, string relativePath) =>
+        WorkbenchPaths.ResolveRelative(ValidateSourceRoot(context), relativePath);
+
+    private static string ValidateSourceRoot(DeviceContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var exportedSourceRoot = ValidateDeclaredRoot(
-            context.DeviceRoot,
-            context.ExportedSourceRoot,
-            "exported-source");
-        var modifiedSourceRoot = ValidateDeclaredRoot(
-            context.DeviceRoot,
-            context.ModifiedSourceRoot,
-            "modified-source");
-
-        if (string.Equals(
-                exportedSourceRoot,
-                modifiedSourceRoot,
-                PathComparison))
+        var expectedRoot = WorkbenchPaths.ResolveRelative(context.DeviceRoot, "source");
+        var declaredRoot = Path.GetFullPath(context.SourceRoot);
+        if (!string.Equals(expectedRoot, declaredRoot, PathComparison))
         {
             throw new WorkbenchPathException(
-                "Exported and modified source roots must be distinct.");
-        }
-
-        return new SourceRoots(exportedSourceRoot, modifiedSourceRoot);
-    }
-
-    private static string ValidateDeclaredRoot(
-        string deviceRoot,
-        string declaredRoot,
-        string expectedDirectoryName)
-    {
-        var expectedRoot = WorkbenchPaths.ResolveRelative(
-            deviceRoot,
-            expectedDirectoryName);
-        var canonicalDeclaredRoot = Path.GetFullPath(declaredRoot);
-
-        if (!string.Equals(
-                expectedRoot,
-                canonicalDeclaredRoot,
-                PathComparison))
-        {
-            throw new WorkbenchPathException(
-                $"The declared {expectedDirectoryName} root is outside the device context.");
+                "The declared source root is outside the device context.");
         }
 
         return expectedRoot;
+    }
+
+    private static void RequireExistingFile(string sourcePath)
+    {
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException(
+                $"The source file does not exist: {sourcePath}",
+                sourcePath);
+        }
     }
 
     private static void RejectReparsePoint(string path)
@@ -270,7 +155,7 @@ public sealed class DeviceSourceResolver
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
         {
             throw new WorkbenchPathException(
-                $"The modified-source tree traverses reparse point '{path}'.");
+                $"The source tree traverses reparse point '{path}'.");
         }
     }
 
@@ -278,8 +163,4 @@ public sealed class DeviceSourceResolver
         OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-
-    private sealed record SourceRoots(
-        string ExportedSourceRoot,
-        string ModifiedSourceRoot);
 }

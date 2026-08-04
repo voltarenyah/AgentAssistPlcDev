@@ -278,8 +278,7 @@ public sealed class WorkbenchCoordinator
             foreach (var device in devices)
             {
                 var context = catalog.ResolveDevice(workbench, worktree, device);
-                Directory.CreateDirectory(context.ExportedSourceRoot);
-                Directory.CreateDirectory(context.ModifiedSourceRoot);
+                Directory.CreateDirectory(context.SourceRoot);
                 Directory.CreateDirectory(context.StagingRoot);
                 WriteDevice(context, device);
             }
@@ -577,10 +576,11 @@ public sealed class WorkbenchCoordinator
             device,
             async cancellationToken =>
             {
-                progress?.Report("Checking modified source overlays...");
-                var relativePaths = sourceResolver.EnumerateModified(device).ToArray();
+                progress?.Report("Checking PLC source changes...");
+                var relativePaths = sourceResolver.EnumerateSource(device).ToArray();
                 var before = ReadDevice(device);
                 KnowledgeUpdateResult result;
+                IReadOnlyDictionary<string, string> hashesToPersist;
                 if (!File.Exists(device.KnowledgeDbPath) || before.Knowledge.BaselineStale)
                 {
                     progress?.Report("Ingesting device source into knowledge...");
@@ -588,8 +588,7 @@ public sealed class WorkbenchCoordinator
                         "ingest_source",
                         new
                         {
-                            exportedSourceRoot = device.ExportedSourceRoot,
-                            modifiedSourceRoot = device.ModifiedSourceRoot,
+                            sourceRoot = device.SourceRoot,
                             dbPath = device.KnowledgeDbPath,
                         },
                         cancellationToken).ConfigureAwait(false);
@@ -598,13 +597,14 @@ public sealed class WorkbenchCoordinator
                         relativePaths,
                         HashOverlays(device, relativePaths),
                         Array.Empty<string>());
+                    hashesToPersist = result.AppliedHashes;
                 }
                 else
                 {
                     var stalePaths = relativePaths.Where(path =>
                     {
                         var hash = HashFile(WorkbenchPaths.ResolveRelative(
-                            device.ModifiedSourceRoot,
+                            device.SourceRoot,
                             path));
                         return !before.Knowledge.AppliedOverlayHashes.TryGetValue(path, out var applied)
                             || !string.Equals(hash, applied, StringComparison.Ordinal);
@@ -617,6 +617,7 @@ public sealed class WorkbenchCoordinator
                             Array.Empty<string>(),
                             before.Knowledge.AppliedOverlayHashes,
                             Array.Empty<string>());
+                        hashesToPersist = new Dictionary<string, string>(StringComparer.Ordinal);
                     }
                     else
                     {
@@ -625,18 +626,18 @@ public sealed class WorkbenchCoordinator
                             "update_components",
                             new
                             {
-                                exportedSourceRoot = device.ExportedSourceRoot,
-                                modifiedSourceRoot = device.ModifiedSourceRoot,
+                                sourceRoot = device.SourceRoot,
                                 dbPath = device.KnowledgeDbPath,
                                 relativePaths = stalePaths,
                             },
                             cancellationToken).ConfigureAwait(false);
+                        hashesToPersist = HashOverlays(device, stalePaths);
                     }
                 }
                 var appliedHashes = new Dictionary<string, string>(
                     before.Knowledge.AppliedOverlayHashes,
                     StringComparer.Ordinal);
-                foreach (var applied in result.AppliedHashes)
+                foreach (var applied in hashesToPersist)
                 {
                     appliedHashes[applied.Key] = applied.Value;
                 }
@@ -661,13 +662,12 @@ public sealed class WorkbenchCoordinator
         operationLock.RunAsync(device, async cancellationToken =>
         {
             progress?.Report("Rebuilding full device knowledge...");
-            var relativePaths = sourceResolver.EnumerateModified(device).ToArray();
+            var relativePaths = sourceResolver.EnumerateSource(device).ToArray();
             var ingest = await knowledge.CallAsync<IngestResult>(
                 "ingest_source",
                 new
                 {
-                    exportedSourceRoot = device.ExportedSourceRoot,
-                    modifiedSourceRoot = device.ModifiedSourceRoot,
+                    sourceRoot = device.SourceRoot,
                     dbPath = device.KnowledgeDbPath,
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -794,16 +794,16 @@ public sealed class WorkbenchCoordinator
             device,
             async cancellationToken =>
             {
-                progress?.Report("Preparing modified source import...");
+                progress?.Report("Preparing PLC source import...");
                 var metadata = ReadDevice(device);
                 var normalized = relativePath.Replace('\\', '/');
                 var modifiedPath = WorkbenchPaths.ResolveRelative(
-                    device.ModifiedSourceRoot,
+                    device.SourceRoot,
                     normalized);
                 if (!File.Exists(modifiedPath))
                 {
                     throw new FileNotFoundException(
-                        "Only a modified-source overlay can be imported.",
+                        "Only an existing PLC source XML file can be imported.",
                         modifiedPath);
                 }
 
@@ -929,7 +929,7 @@ public sealed class WorkbenchCoordinator
         IEnumerable<string> relativePaths) =>
         relativePaths.ToDictionary(
             path => path,
-            path => HashFile(WorkbenchPaths.ResolveRelative(device.ModifiedSourceRoot, path)),
+            path => HashFile(WorkbenchPaths.ResolveRelative(device.SourceRoot, path)),
             StringComparer.Ordinal);
 
     private static string HashFile(string path) =>

@@ -11,62 +11,26 @@ public sealed class DeviceSourceResolverTests : IDisposable
         Guid.NewGuid().ToString("N"));
 
     [Fact]
-    public void PrepareEditableCopiesBaselineAndMakesOverlayEffective()
+    public void PrepareEditableReturnsExistingSourceWithoutCreatingAnOverlay()
     {
         var context = CreateContext();
-        var baselinePath = Write(
-            Path.Combine(context.ExportedSourceRoot, "Blocks", "Main.xml"),
-            "baseline");
-        var modifiedPath = Path.Combine(
-            context.ModifiedSourceRoot,
-            "Blocks",
-            "Main.xml");
-        var staleNotifications = new List<DeviceContext>();
-        var resolver = new DeviceSourceResolver(staleNotifications.Add);
+        var source = Write(
+            Path.Combine(context.SourceRoot, "Blocks", "Main.xml"),
+            "<Document />");
+        var stale = 0;
+        var resolver = new DeviceSourceResolver(_ => stale++);
 
-        Assert.Equal(
-            baselinePath,
-            resolver.ResolveEffective(context, "Blocks/Main.xml"));
-
-        var editable = resolver.PrepareEditable(context, "Blocks/Main.xml");
-
-        Assert.Equal(modifiedPath, editable);
-        Assert.Equal(
-            File.ReadAllBytes(baselinePath),
-            File.ReadAllBytes(modifiedPath));
-        Assert.Equal(
-            modifiedPath,
-            resolver.ResolveEffective(context, "Blocks/Main.xml"));
-        Assert.Equal(context, Assert.Single(staleNotifications));
-    }
-
-    [Fact]
-    public void PrepareEditablePreservesExistingOverlayAndStillMarksEditIntentStale()
-    {
-        var context = CreateContext();
-        Write(
-            Path.Combine(context.ExportedSourceRoot, "Blocks", "Main.xml"),
-            "new baseline");
-        var modifiedPath = Write(
-            Path.Combine(context.ModifiedSourceRoot, "Blocks", "Main.xml"),
-            "existing edit");
-        var staleNotifications = 0;
-        var resolver = new DeviceSourceResolver(_ => staleNotifications++);
-
-        var editable = resolver.PrepareEditable(context, "Blocks/Main.xml");
-
-        Assert.Equal(modifiedPath, editable);
-        Assert.Equal("existing edit", File.ReadAllText(modifiedPath));
-        Assert.Equal(1, staleNotifications);
+        Assert.Equal(source, resolver.ResolveEffective(context, "Blocks/Main.xml"));
+        Assert.Equal(source, resolver.PrepareEditable(context, "Blocks/Main.xml"));
+        Assert.Equal(1, stale);
+        Assert.False(Directory.Exists(Path.Combine(context.DeviceRoot, "modified-source")));
     }
 
     [Fact]
     public void MetadataCallbackCanPersistKnowledgeAsStale()
     {
         var context = CreateContext();
-        Write(
-            Path.Combine(context.ExportedSourceRoot, "Blocks", "Main.xml"),
-            "baseline");
+        Write(Path.Combine(context.SourceRoot, "Blocks", "Main.xml"), "source");
         var metadata = new DeviceMetadata(
             WorkbenchSchema.CurrentVersion,
             context.DeviceId,
@@ -93,14 +57,15 @@ public sealed class DeviceSourceResolverTests : IDisposable
     }
 
     [Fact]
-    public void EnumerateModifiedReturnsOnlyNormalizedSparseOverlayPaths()
+    public void EnumerateSourceReturnsOnlyNormalizedXmlPathsInOrdinalOrder()
     {
         var context = CreateContext();
-        Write(Path.Combine(context.ModifiedSourceRoot, "Blocks", "B.xml"), "b");
-        Write(Path.Combine(context.ModifiedSourceRoot, "Blocks", "Nested", "A.xml"), "a");
+        Write(Path.Combine(context.SourceRoot, "Blocks", "B.xml"), "b");
+        Write(Path.Combine(context.SourceRoot, "Blocks", "Nested", "A.xml"), "a");
+        Write(Path.Combine(context.SourceRoot, "metadata.json"), "{}");
         var resolver = new DeviceSourceResolver(_ => { });
 
-        var paths = resolver.EnumerateModified(context);
+        var paths = resolver.EnumerateSource(context);
 
         Assert.Equal(
             new[] { "Blocks/B.xml", "Blocks/Nested/A.xml" },
@@ -131,53 +96,50 @@ public sealed class DeviceSourceResolverTests : IDisposable
     }
 
     [Fact]
-    public void MissingBaselineCannotCreateAnOverlay()
+    public void MissingSourceCannotBePreparedForEditing()
     {
         var context = CreateContext();
         var resolver = new DeviceSourceResolver(_ => { });
-        var newPath = Path.Combine(
-            context.ModifiedSourceRoot,
-            "Blocks",
-            "New.xml");
+        var sourcePath = Path.Combine(context.SourceRoot, "Blocks", "New.xml");
 
         Assert.Throws<FileNotFoundException>(() =>
             resolver.PrepareEditable(context, "Blocks/New.xml"));
-        Assert.False(File.Exists(newPath));
-        Assert.False(File.Exists(
-            Path.Combine(context.ExportedSourceRoot, "Blocks", "New.xml")));
+        Assert.False(File.Exists(sourcePath));
     }
 
     [Fact]
-    public void CreateNewCreatesOnlyAnOverlayAndMarksKnowledgeStale()
+    public void MissingSourceCannotBeResolved()
+    {
+        var context = CreateContext();
+        var resolver = new DeviceSourceResolver(_ => { });
+
+        Assert.Throws<FileNotFoundException>(() =>
+            resolver.ResolveEffective(context, "Blocks/New.xml"));
+    }
+
+    [Fact]
+    public void CreateNewWritesDirectlyToSourceAndMarksKnowledgeStale()
     {
         var context = CreateContext();
         var initialContent = new byte[] { 0, 1, 2, 127, 255 };
         var staleNotifications = 0;
         var resolver = new DeviceSourceResolver(_ => staleNotifications++);
-        var modifiedPath = Path.Combine(
-            context.ModifiedSourceRoot,
-            "Blocks",
-            "Authored.xml");
-        var baselinePath = Path.Combine(
-            context.ExportedSourceRoot,
-            "Blocks",
-            "Authored.xml");
+        var sourcePath = Path.Combine(context.SourceRoot, "Blocks", "Authored.xml");
 
         var created = resolver.CreateNew(
             context,
             "Blocks/Authored.xml",
             initialContent);
 
-        Assert.Equal(modifiedPath, created);
-        Assert.Equal(initialContent, File.ReadAllBytes(modifiedPath));
-        Assert.False(File.Exists(baselinePath));
-        Assert.Equal(modifiedPath, resolver.ResolveEffective(
+        Assert.Equal(sourcePath, created);
+        Assert.Equal(initialContent, File.ReadAllBytes(sourcePath));
+        Assert.Equal(sourcePath, resolver.ResolveEffective(
             context,
             "Blocks/Authored.xml"));
         Assert.Equal(1, staleNotifications);
         Assert.DoesNotContain(
             Directory.EnumerateFiles(
-                Path.GetDirectoryName(modifiedPath)!,
+                Path.GetDirectoryName(sourcePath)!,
                 "*",
                 SearchOption.TopDirectoryOnly),
             path => path.EndsWith(".tmp", StringComparison.Ordinal));
@@ -187,11 +149,8 @@ public sealed class DeviceSourceResolverTests : IDisposable
     public void CreateNewRefusesToOverwriteAndDoesNotMarkKnowledgeStale()
     {
         var context = CreateContext();
-        var modifiedPath = Write(
-            Path.Combine(
-                context.ModifiedSourceRoot,
-                "Blocks",
-                "Authored.xml"),
+        var sourcePath = Write(
+            Path.Combine(context.SourceRoot, "Blocks", "Authored.xml"),
             "keep");
         var staleNotifications = 0;
         var resolver = new DeviceSourceResolver(_ => staleNotifications++);
@@ -202,7 +161,7 @@ public sealed class DeviceSourceResolverTests : IDisposable
                 "Blocks/Authored.xml",
                 new byte[] { 1, 2, 3 }));
 
-        Assert.Equal("keep", File.ReadAllText(modifiedPath));
+        Assert.Equal("keep", File.ReadAllText(sourcePath));
         Assert.Equal(0, staleNotifications);
     }
 
@@ -245,10 +204,10 @@ public sealed class DeviceSourceResolverTests : IDisposable
     public void CreateNewRejectsReparsePointEscapeWhenSupported()
     {
         var context = CreateContext();
-        Directory.CreateDirectory(context.ModifiedSourceRoot);
+        Directory.CreateDirectory(context.SourceRoot);
         var outside = Path.Combine(root, "outside-new");
         Directory.CreateDirectory(outside);
-        var link = Path.Combine(context.ModifiedSourceRoot, "Blocks");
+        var link = Path.Combine(context.SourceRoot, "Blocks");
 
         try
         {
@@ -278,12 +237,11 @@ public sealed class DeviceSourceResolverTests : IDisposable
     public void ReparsePointEscapeIsRejectedWhenSupported()
     {
         var context = CreateContext();
-        Directory.CreateDirectory(context.ExportedSourceRoot);
-        Directory.CreateDirectory(context.ModifiedSourceRoot);
+        Directory.CreateDirectory(context.SourceRoot);
         var outside = Path.Combine(root, "outside");
         Directory.CreateDirectory(outside);
         Write(Path.Combine(outside, "Main.xml"), "outside");
-        var link = Path.Combine(context.ExportedSourceRoot, "Blocks");
+        var link = Path.Combine(context.SourceRoot, "Blocks");
 
         try
         {
@@ -301,8 +259,6 @@ public sealed class DeviceSourceResolverTests : IDisposable
 
         Assert.Throws<WorkbenchPathException>(() =>
             resolver.PrepareEditable(context, "Blocks/Main.xml"));
-        Assert.False(File.Exists(
-            Path.Combine(context.ModifiedSourceRoot, "Blocks", "Main.xml")));
     }
 
     public void Dispose()
@@ -324,8 +280,7 @@ public sealed class DeviceSourceResolverTests : IDisposable
             root,
             worktreeRoot,
             deviceRoot,
-            Path.Combine(deviceRoot, "exported-source"),
-            Path.Combine(deviceRoot, "modified-source"),
+            Path.Combine(deviceRoot, "source"),
             Path.Combine(deviceRoot, "staging"),
             Path.Combine(deviceRoot, "plc-knowledge.db"));
     }

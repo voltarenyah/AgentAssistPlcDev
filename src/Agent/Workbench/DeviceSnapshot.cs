@@ -38,13 +38,12 @@ public sealed record DeviceSnapshot(
     string DeviceId,
     string PlcName,
     string EngineeringIdentity,
-    string ExportedSourceRoot,
-    string ModifiedSourceRoot,
+    string SourceRoot,
     string KnowledgeDbPath,
     string? SourceProjectPath,
     DeviceKnowledgeSnapshot Knowledge,
     IReadOnlyList<OfflineBlockInfo> Blocks,
-    int OverlayCount,
+    int SourceObjectCount,
     IReadOnlyList<string> Diagnostics,
     DeviceExportMetadata? Device);
 
@@ -53,7 +52,7 @@ public sealed class DeviceSnapshotReader
     public DeviceSnapshot Read(DeviceContext context, DeviceMetadata metadata)
     {
         var diagnostics = new List<string>();
-        var blocks = ReadBlocks(context, diagnostics, out var overlayCount);
+        var blocks = ReadBlocks(context, diagnostics);
         var state = !File.Exists(context.KnowledgeDbPath)
             ? "missing"
             : metadata.Knowledge.Stale || metadata.Knowledge.BaselineStale
@@ -66,23 +65,22 @@ public sealed class DeviceSnapshotReader
             context.DeviceId,
             metadata.PlcName,
             metadata.EngineeringIdentity,
-            context.ExportedSourceRoot,
-            context.ModifiedSourceRoot,
+            context.SourceRoot,
             context.KnowledgeDbPath,
             ReadSourceProjectPath(context),
             new DeviceKnowledgeSnapshot(state, metadata.Knowledge.UpdatedAt),
             blocks,
-            overlayCount,
+            blocks.Count,
             diagnostics,
             ReadDeviceExportMetadata(context));
     }
 
     /// <summary>Manifest "device" section — tolerant read: missing/legacy manifest, missing
-    /// property, or unparseable JSON all degrade to null (ReadBlocks reports manifest problems
-    /// as diagnostics already, so this stays silent).</summary>
+    /// property, or unparseable JSON all degrade to null. Source discovery never depends on
+    /// this optional export metadata.</summary>
     private static DeviceExportMetadata? ReadDeviceExportMetadata(DeviceContext context)
     {
-        var manifestPath = Path.Combine(context.ExportedSourceRoot, "metadata.json");
+        var manifestPath = Path.Combine(context.SourceRoot, "metadata.json");
         if (!File.Exists(manifestPath))
         {
             return null;
@@ -143,159 +141,105 @@ public sealed class DeviceSnapshotReader
 
     private static IReadOnlyList<OfflineBlockInfo> ReadBlocks(
         DeviceContext context,
-        List<string> diagnostics,
-        out int overlayCount)
+        List<string> diagnostics)
     {
-        overlayCount = Directory.Exists(context.ModifiedSourceRoot)
-            ? Directory.EnumerateFiles(context.ModifiedSourceRoot, "*.xml", SearchOption.AllDirectories).Count()
-            : 0;
-
-        // Validate the roots once: per-component ResolveRelative would re-walk the full
-        // reparse-point chain for every manifest entry (quadratic on deep workbench paths).
-        var exportedRoot = WorkbenchPaths.ValidateResolvedRoot(context.ExportedSourceRoot);
-        var modifiedRoot = WorkbenchPaths.ValidateResolvedRoot(context.ModifiedSourceRoot);
-
-        var manifestPath = Path.Combine(context.ExportedSourceRoot, "metadata.json");
-        if (!File.Exists(manifestPath))
-        {
-            diagnostics.Add($"Export manifest is missing: {manifestPath}");
-            return [];
-        }
-
-        JsonDocument manifest;
+        string sourceRoot;
         try
         {
-            manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            sourceRoot = WorkbenchPaths.ValidateResolvedRoot(context.SourceRoot);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (
+            ex is WorkbenchPathException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
         {
-            diagnostics.Add($"Export manifest is invalid JSON: {manifestPath}: {ex.Message}");
+            diagnostics.Add($"PLC source root '{context.SourceRoot}' was rejected: {ex.Message}");
             return [];
         }
 
-        using (manifest)
+        if (!Directory.Exists(sourceRoot))
+            return [];
+
+        var blocks = new List<OfflineBlockInfo>();
+        var pending = new Queue<string>();
+        pending.Enqueue(sourceRoot);
+        while (pending.Count > 0)
         {
-            if (manifest.RootElement.ValueKind != JsonValueKind.Object)
+            var directory = pending.Dequeue();
+            string[] entries;
+            try
             {
-                diagnostics.Add($"Export manifest root must be a JSON object: {manifestPath}");
-                return [];
+                entries = Directory.GetFileSystemEntries(directory);
+            }
+            catch (Exception ex) when (
+                ex is IOException
+                or UnauthorizedAccessException
+                or System.Security.SecurityException)
+            {
+                var relativeDirectory = Path.GetRelativePath(sourceRoot, directory).Replace('\\', '/');
+                diagnostics.Add($"PLC source path '{relativeDirectory}' could not be read: {ex.Message}");
+                continue;
             }
 
-            if (!manifest.RootElement.TryGetProperty("components", out var components)
-                || components.ValueKind != JsonValueKind.Array)
+            foreach (var entry in entries.OrderBy(path => path, StringComparer.Ordinal))
             {
-                diagnostics.Add($"Export manifest has no components array: {manifestPath}");
-                return [];
-            }
-
-            var blocks = new List<OfflineBlockInfo>();
-            var representedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var componentIndex = -1;
-            foreach (var component in components.EnumerateArray())
-            {
-                componentIndex++;
-                if (component.ValueKind != JsonValueKind.Object)
+                var relativePath = Path.GetRelativePath(sourceRoot, entry).Replace('\\', '/');
+                FileAttributes attributes;
+                try
                 {
-                    diagnostics.Add(
-                        $"Export manifest component at index {componentIndex} must be a JSON object.");
+                    attributes = File.GetAttributes(entry);
+                }
+                catch (Exception ex) when (
+                    ex is IOException
+                    or UnauthorizedAccessException
+                    or System.Security.SecurityException)
+                {
+                    diagnostics.Add($"PLC source path '{relativePath}' could not be validated: {ex.Message}");
                     continue;
                 }
 
-                var exportedFile = ReadString(component, "exportedFile");
-                if (string.IsNullOrWhiteSpace(exportedFile))
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    diagnostics.Add($"PLC source path '{relativePath}' was rejected because it is a reparse point.");
+                    continue;
+                }
+
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    pending.Enqueue(entry);
+                    continue;
+                }
+
+                if (!string.Equals(Path.GetExtension(entry), ".xml", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                string normalizedPath;
                 try
                 {
-                    var fullPath = WorkbenchPaths.ResolveRelativeBelowValidatedRoot(exportedRoot, exportedFile);
-                    normalizedPath = Path.GetRelativePath(exportedRoot, fullPath).Replace('\\', '/');
+                    _ = WorkbenchPaths.ResolveRelativeBelowValidatedRoot(sourceRoot, relativePath);
                 }
                 catch (Exception ex) when (ex is ArgumentException or WorkbenchPathException)
                 {
-                    diagnostics.Add($"Manifest component has invalid exportedFile '{exportedFile}': {ex.Message}");
+                    diagnostics.Add($"PLC source path '{relativePath}' was rejected: {ex.Message}");
                     continue;
                 }
 
-                representedPaths.Add(normalizedPath);
-                var category = ReadString(component, "category");
-                var status = ReadString(component, "status");
-                if (!IsBlockCategory(category)
-                    || !string.Equals(status, "Exported", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var sourcePath = ReadString(component, "sourcePath");
-                var baselineBlock = new OfflineBlockInfo(
-                    ReadString(component, "id") ?? $"{category}:{sourcePath ?? normalizedPath}",
-                    ReadString(component, "name") ?? Path.GetFileNameWithoutExtension(normalizedPath),
-                    ReadInt32(component, "number"),
-                    category!,
-                    ReadString(component, "programmingLanguage"),
-                    GroupPathOf(sourcePath),
-                    normalizedPath,
-                    false);
-                var modifiedPath = WorkbenchPaths.ResolveRelativeBelowValidatedRoot(
-                    modifiedRoot,
-                    normalizedPath);
-                var modified = File.Exists(modifiedPath);
-                if (modified)
-                {
-                    if (TryReadOverlayBlock(
-                        modifiedPath,
-                        normalizedPath,
-                        out var effectiveBlock,
-                        out var overlayError))
-                    {
-                        blocks.Add(effectiveBlock! with
-                        {
-                            Id = ReadString(component, "id")
-                                ?? effectiveBlock!.Id,
-                        });
-                    }
-                    else
-                    {
-                        diagnostics.Add(
-                            $"Overlay '{normalizedPath}' is not a supported Siemens PLC block: {overlayError}");
-                        blocks.Add(baselineBlock);
-                    }
-
-                    continue;
-                }
-
-                blocks.Add(baselineBlock);
+                if (TryReadSourceBlock(entry, relativePath, out var block, out var error))
+                    blocks.Add(block!);
+                else
+                    diagnostics.Add($"PLC source XML '{relativePath}' is malformed or unsupported: {error}");
             }
-
-            if (Directory.Exists(context.ModifiedSourceRoot))
-            {
-                foreach (var overlayPath in Directory.EnumerateFiles(
-                    context.ModifiedSourceRoot,
-                    "*.xml",
-                    SearchOption.AllDirectories))
-                {
-                    var relativePath = Path.GetRelativePath(context.ModifiedSourceRoot, overlayPath)
-                        .Replace('\\', '/');
-                    if (representedPaths.Contains(relativePath))
-                        continue;
-
-                    if (TryReadOverlayBlock(overlayPath, relativePath, out var block, out var error))
-                        blocks.Add(block!);
-                    else
-                        diagnostics.Add($"Overlay '{relativePath}' is not a supported Siemens PLC block: {error}");
-                }
-            }
-
-            return blocks
-                .OrderBy(block => block.BlockType, StringComparer.Ordinal)
-                .ThenBy(block => block.Number ?? int.MaxValue)
-                .ThenBy(block => block.Name, StringComparer.Ordinal)
-                .ThenBy(block => block.RelativePath, StringComparer.Ordinal)
-                .ToArray();
         }
+
+        return blocks
+            .OrderBy(block => block.BlockType, StringComparer.Ordinal)
+            .ThenBy(block => block.Number ?? int.MaxValue)
+            .ThenBy(block => block.Name, StringComparer.Ordinal)
+            .ThenBy(block => block.RelativePath, StringComparer.Ordinal)
+            .ToArray();
     }
 
-    private static bool TryReadOverlayBlock(
+    private static bool TryReadSourceBlock(
         string path,
         string relativePath,
         out OfflineBlockInfo? result,
@@ -326,29 +270,31 @@ public sealed class DeviceSnapshotReader
             var blockType = BlockTypeOf(element.Name.LocalName)!;
             var attributes = element.Elements()
                 .FirstOrDefault(candidate => candidate.Name.LocalName == "AttributeList");
+            var (filenameName, filenameNumber) = FilenameIdentity(relativePath, blockType);
             var name = AttributeValue(attributes, "Name");
             if (string.IsNullOrWhiteSpace(name))
-            {
-                error = "the block AttributeList has no Name";
-                return false;
-            }
+                name = filenameName;
 
             var number = int.TryParse(AttributeValue(attributes, "Number"), out var parsedNumber)
                 ? parsedNumber
-                : (int?)null;
+                : filenameNumber;
             result = new OfflineBlockInfo(
-                $"overlay:{relativePath}",
+                $"source:{relativePath}",
                 name,
                 number,
                 blockType,
                 AttributeValue(attributes, "ProgrammingLanguage"),
-                OverlayGroupPath(relativePath),
+                SourceGroupPath(relativePath),
                 relativePath,
-                true);
+                false);
             error = string.Empty;
             return true;
         }
-        catch (Exception ex) when (ex is XmlException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (
+            ex is XmlException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
         {
             error = ex.Message;
             return false;
@@ -360,26 +306,29 @@ public sealed class DeviceSnapshotReader
             ? value.GetString()
             : null;
 
-    private static int? ReadInt32(JsonElement owner, string property) =>
-        owner.TryGetProperty(property, out var value)
-        && value.ValueKind == JsonValueKind.Number
-        && value.TryGetInt32(out var number)
-            ? number
-            : null;
-
-    private static bool IsBlockCategory(string? category) =>
-        category is "OB" or "FB" or "FC" or "DB";
-
-    private static string? GroupPathOf(string? sourcePath)
-    {
-        var separator = sourcePath?.LastIndexOf('/') ?? -1;
-        return separator <= 0 ? null : sourcePath![..separator];
-    }
-
-    private static string? OverlayGroupPath(string relativePath)
+    private static string? SourceGroupPath(string relativePath)
     {
         var segments = relativePath.Split('/');
         return segments.Length <= 2 ? null : string.Join('/', segments[1..^1]);
+    }
+
+    private static (string Name, int? Number) FilenameIdentity(
+        string relativePath,
+        string blockType)
+    {
+        var filename = Path.GetFileNameWithoutExtension(relativePath);
+        var suffixStart = filename.LastIndexOf(" [", StringComparison.Ordinal);
+        if (suffixStart < 0 || !filename.EndsWith(']'))
+            return (filename, null);
+
+        var suffix = filename[(suffixStart + 2)..^1];
+        if (!suffix.StartsWith(blockType, StringComparison.OrdinalIgnoreCase)
+            || !int.TryParse(suffix[blockType.Length..], out var number))
+        {
+            return (filename, null);
+        }
+
+        return (filename[..suffixStart], number);
     }
 
     private static string? BlockTypeOf(string elementName) => elementName switch

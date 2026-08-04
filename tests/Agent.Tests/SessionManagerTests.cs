@@ -352,8 +352,7 @@ public sealed class SessionManagerTests : IDisposable
                 $"Workbench: Packaging Line ({device.WorkbenchId})",
                 $"Worktree: Valve tuning [feature/valves]",
                 $"Device: PLC_1 ({device.DeviceId})",
-                $"Exported source: {device.ExportedSourceRoot}",
-                $"Modified source: {device.ModifiedSourceRoot}",
+                $"PLC source: {device.SourceRoot}",
                 $"Knowledge DB: {device.KnowledgeDbPath}",
                 "Knowledge state: stale; run update_components before reuse"),
             runtimeContext);
@@ -363,7 +362,7 @@ public sealed class SessionManagerTests : IDisposable
     public void BuildRuntimeContext_does_not_enumerate_source_file_names()
     {
         var device = CreateDeviceContext();
-        var source = Path.Combine(device.ExportedSourceRoot, "Blocks", "CoolingCoupelleSWT2 [FB92].xml");
+        var source = Path.Combine(device.SourceRoot, "Blocks", "CoolingCoupelleSWT2 [FB92].xml");
         Directory.CreateDirectory(Path.GetDirectoryName(source)!);
         File.WriteAllText(source, "<block />");
 
@@ -375,8 +374,9 @@ public sealed class SessionManagerTests : IDisposable
             "PLC_1",
             knowledgeStale: false);
 
-        Assert.Contains($"Exported source: {device.ExportedSourceRoot}", runtimeContext);
-        Assert.Contains($"Modified source: {device.ModifiedSourceRoot}", runtimeContext);
+        Assert.Contains($"PLC source: {device.SourceRoot}", runtimeContext);
+        Assert.DoesNotContain("Exported source:", runtimeContext);
+        Assert.DoesNotContain("Modified source:", runtimeContext);
         Assert.Contains($"Knowledge DB: {device.KnowledgeDbPath}", runtimeContext);
         Assert.DoesNotContain("Source files", runtimeContext);
         Assert.DoesNotContain("CoolingCoupelleSWT2 [FB92].xml", runtimeContext);
@@ -407,8 +407,7 @@ public sealed class SessionManagerTests : IDisposable
             workbenchRoot,
             worktreeRoot,
             deviceRoot,
-            Path.Combine(deviceRoot, "exported-source"),
-            Path.Combine(deviceRoot, "modified-source"),
+            Path.Combine(deviceRoot, "source"),
             Path.Combine(deviceRoot, "staging"),
             Path.Combine(deviceRoot, "plc-knowledge.db"));
     }

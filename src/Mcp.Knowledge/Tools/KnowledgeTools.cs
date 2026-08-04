@@ -41,29 +41,36 @@ public sealed class KnowledgeTools
         => Invoke(() => SchemaPayload(knownVersion));
 
     [McpServerTool(Name = "ingest_source")]
-    [Description("Build one device SQLite knowledge database from exported-source plus an optional sparse modified-source overlay (write: full rebuild of dbPath). The legacy exportRoot argument remains accepted.")]
+    [Description("Build one device SQLite knowledge database from one authoritative sourceRoot (metadata.json optional), or from the legacy exported/modified source pair (write: full rebuild of dbPath).")]
     public CallToolResult IngestSource(
-        [Description("Authoritative exported-source folder.")] string? exportedSourceRoot = null,
-        [Description("Device SQLite output path. Default: <exportedSourceRoot>/plc-knowledge.db.")] string? dbPath = null,
-        [Description("Optional sparse modified-source overlay folder.")] string? modifiedSourceRoot = null,
-        [Description("Deprecated alias for exportedSourceRoot retained for existing callers.")] string? exportRoot = null)
+        [Description("Legacy authoritative exported-source folder used with an optional modifiedSourceRoot overlay.")] string? exportedSourceRoot = null,
+        [Description("Device SQLite output path. Default: <sourceRoot>/plc-knowledge.db (or <exportedSourceRoot>/plc-knowledge.db for the legacy API).")] string? dbPath = null,
+        [Description("Legacy sparse modified-source overlay folder used with exportedSourceRoot.")] string? modifiedSourceRoot = null,
+        [Description("Deprecated alias for exportedSourceRoot retained for existing callers.")] string? exportRoot = null,
+        [Description("Authoritative source tree. Use this for the manifest-free single-source workflow; metadata.json is optional.")] string? sourceRoot = null)
         => Invoke(() => Ingest(
-            ResolveExportedSourceRoot(exportedSourceRoot, exportRoot),
+            ResolveSourceRoot(
+                sourceRoot,
+                exportedSourceRoot,
+                modifiedSourceRoot,
+                exportRoot),
             dbPath,
             modifiedSourceRoot));
 
     [McpServerTool(Name = "update_components")]
-    [Description("Transactionally replace selected components in one device SQLite knowledge database from modified-source overlays (write).")]
+    [Description("Transactionally replace selected components in one device SQLite knowledge database from sourceRoot, or from the legacy exported/modified source pair (write).")]
     public CallToolResult UpdateComponents(
-        [Description("Authoritative exported-source folder containing metadata.json.")] string exportedSourceRoot,
-        [Description("Sparse modified-source overlay folder.")] string modifiedSourceRoot,
-        [Description("Existing device SQLite knowledge database path.")] string dbPath,
-        [Description("One or more component paths relative to the source roots.")] string[] relativePaths)
+        [Description("Legacy authoritative exported-source folder containing metadata.json.")] string? exportedSourceRoot = null,
+        [Description("Legacy sparse modified-source overlay folder used with exportedSourceRoot.")] string? modifiedSourceRoot = null,
+        [Description("Existing device SQLite knowledge database path.")] string? dbPath = null,
+        [Description("One or more component paths relative to sourceRoot, or to modifiedSourceRoot for the legacy API.")] string[]? relativePaths = null,
+        [Description("Authoritative source tree. Use this for manifest-free single-source updates; metadata.json is optional.")] string? sourceRoot = null)
         => Invoke(() => Update(
             exportedSourceRoot,
             modifiedSourceRoot,
-            dbPath,
-            relativePaths));
+            dbPath ?? string.Empty,
+            relativePaths ?? [],
+            sourceRoot));
 
     [McpServerTool(Name = "query")]
     [Description("Run a single read-only SQL statement (SELECT / WITH / EXPLAIN) against a PLC knowledge base (read-only). Before the first query call in each chat, call get_schema and verify the table and column names from its ddl.")]
@@ -232,21 +239,42 @@ public sealed class KnowledgeTools
     }
 
     private static object Update(
-        string exportedSourceRoot,
-        string modifiedSourceRoot,
+        string? exportedSourceRoot,
+        string? modifiedSourceRoot,
         string dbPath,
-        string[] relativePaths)
+        string[] relativePaths,
+        string? sourceRoot)
     {
         if (relativePaths == null || relativePaths.Length == 0)
         {
             throw new KnowledgeToolException(
                 "COMPONENT_PATHS_REQUIRED",
                 "At least one component path is required.",
-                "Pass the modified-source relative paths that should be applied.");
+                "Pass paths relative to sourceRoot, or relative to modifiedSourceRoot for the legacy API.");
         }
 
-        if (string.IsNullOrWhiteSpace(exportedSourceRoot) ||
-            !Directory.Exists(exportedSourceRoot))
+        var usesSingleSourceRoot = !string.IsNullOrWhiteSpace(sourceRoot);
+        if (usesSingleSourceRoot &&
+            (!string.IsNullOrWhiteSpace(exportedSourceRoot) ||
+             !string.IsNullOrWhiteSpace(modifiedSourceRoot)))
+        {
+            throw new KnowledgeToolException(
+                "SOURCE_ROOT_CONFLICT",
+                "sourceRoot cannot be combined with exportedSourceRoot or modifiedSourceRoot.",
+                "Pass only sourceRoot for a single-root source tree, or use the existing exported/modified pair.");
+        }
+
+        if (usesSingleSourceRoot && !Directory.Exists(sourceRoot))
+        {
+            throw new KnowledgeToolException(
+                "SOURCE_ROOT_NOT_FOUND",
+                $"Source root '{sourceRoot}' was not found.",
+                "Pass the authoritative device source tree; metadata.json is optional.");
+        }
+
+        if (!usesSingleSourceRoot &&
+            (string.IsNullOrWhiteSpace(exportedSourceRoot) ||
+             !Directory.Exists(exportedSourceRoot)))
         {
             throw new KnowledgeToolException(
                 "EXPORT_ROOT_NOT_FOUND",
@@ -254,8 +282,9 @@ public sealed class KnowledgeTools
                 "Pass the device exported-source folder containing metadata.json.");
         }
 
-        if (string.IsNullOrWhiteSpace(modifiedSourceRoot) ||
-            !Directory.Exists(modifiedSourceRoot))
+        if (!usesSingleSourceRoot &&
+            (string.IsNullOrWhiteSpace(modifiedSourceRoot) ||
+             !Directory.Exists(modifiedSourceRoot)))
         {
             throw new KnowledgeToolException(
                 "MODIFIED_ROOT_NOT_FOUND",
@@ -285,7 +314,9 @@ public sealed class KnowledgeTools
                 throw new KnowledgeToolException(
                     "COMPONENT_PATH_INVALID",
                     ex.Message,
-                    "Pass paths relative to modifiedSourceRoot without '.' or '..' segments.");
+                    usesSingleSourceRoot
+                        ? "Pass paths relative to sourceRoot without '.' or '..' segments."
+                        : "Pass paths relative to modifiedSourceRoot without '.' or '..' segments.");
             }
 
             if (seenPaths.Add(normalizedPath))
@@ -297,21 +328,32 @@ public sealed class KnowledgeTools
         var replacements = new List<(SemanticPlcGraph Graph, ComponentImport Component)>();
         foreach (var relativePath in normalizedPaths)
         {
-            var overlayPath = EffectiveSourceImporter.ResolvePath(
-                modifiedSourceRoot,
+            var componentRoot = usesSingleSourceRoot
+                ? sourceRoot!
+                : modifiedSourceRoot!;
+            var componentPath = EffectiveSourceImporter.ResolvePath(
+                componentRoot,
                 relativePath);
-            if (!File.Exists(overlayPath))
+            if (!File.Exists(componentPath))
             {
                 throw new KnowledgeToolException(
-                    "OVERLAY_COMPONENT_NOT_FOUND",
-                    $"Overlay component '{relativePath}' was not found under '{modifiedSourceRoot}'.",
-                    "Create the component under modified-source, or remove it from relativePaths.");
+                    usesSingleSourceRoot
+                        ? "SOURCE_COMPONENT_NOT_FOUND"
+                        : "OVERLAY_COMPONENT_NOT_FOUND",
+                    usesSingleSourceRoot
+                        ? $"Source component '{relativePath}' was not found under '{sourceRoot}'."
+                        : $"Overlay component '{relativePath}' was not found under '{modifiedSourceRoot}'.",
+                    usesSingleSourceRoot
+                        ? "Create the component under sourceRoot, or remove it from relativePaths."
+                        : "Create the component under modified-source, or remove it from relativePaths.");
             }
 
-            var imported = EffectiveSourceImporter.ImportComponent(
-                exportedSourceRoot,
-                modifiedSourceRoot,
-                relativePath);
+            var imported = usesSingleSourceRoot
+                ? ExportFolderCrawler.ImportComponent(sourceRoot!, relativePath)
+                : EffectiveSourceImporter.ImportComponent(
+                    exportedSourceRoot!,
+                    modifiedSourceRoot!,
+                    relativePath);
             replacements.Add((imported.Graph, imported.Components.Single()));
         }
 
@@ -338,7 +380,9 @@ public sealed class KnowledgeTools
                 throw new KnowledgeToolException(
                     "COMPONENT_NOT_IN_DATABASE",
                     $"Component '{replacement.Component.ComponentKey}' at '{replacement.Component.RelativePath}' is not present in the device database.",
-                    "Run ingest_source with exportedSourceRoot, modifiedSourceRoot, and dbPath to rebuild before applying partial updates.");
+                    usesSingleSourceRoot
+                        ? "Run ingest_source with sourceRoot and dbPath to rebuild before applying partial updates."
+                        : "Run ingest_source with exportedSourceRoot, modifiedSourceRoot, and dbPath to rebuild before applying partial updates.");
             }
 
             if (exactIdentity.Length != 1 ||
@@ -352,7 +396,7 @@ public sealed class KnowledgeTools
                     StringComparison.Ordinal))
             {
                 throw new ComponentIdentityMismatchException(
-                    $"Overlay component '{replacement.Component.ComponentKey}' at '{replacement.Component.RelativePath}' " +
+                    $"{(usesSingleSourceRoot ? "Source" : "Overlay")} component '{replacement.Component.ComponentKey}' at '{replacement.Component.RelativePath}' " +
                     "does not match the component identity stored in the device database.");
             }
         }
@@ -403,6 +447,30 @@ public sealed class KnowledgeTools
         return !string.IsNullOrWhiteSpace(exportedSourceRoot)
             ? exportedSourceRoot
             : legacyExportRoot ?? string.Empty;
+    }
+
+    private static string ResolveSourceRoot(
+        string? sourceRoot,
+        string? exportedSourceRoot,
+        string? modifiedSourceRoot,
+        string? legacyExportRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(sourceRoot))
+        {
+            if (!string.IsNullOrWhiteSpace(exportedSourceRoot) ||
+                !string.IsNullOrWhiteSpace(modifiedSourceRoot) ||
+                !string.IsNullOrWhiteSpace(legacyExportRoot))
+            {
+                throw new KnowledgeToolException(
+                    "SOURCE_ROOT_CONFLICT",
+                    "sourceRoot cannot be combined with exportedSourceRoot, modifiedSourceRoot, or exportRoot.",
+                    "Pass only sourceRoot for a single-root source tree.");
+            }
+
+            return sourceRoot;
+        }
+
+        return ResolveExportedSourceRoot(exportedSourceRoot, legacyExportRoot);
     }
 
     private static ExportFolderImportResult ToExportFolderResult(
@@ -1485,14 +1553,14 @@ public sealed class KnowledgeTools
             return ToolJson.Fail(
                 "MANIFEST_INVALID",
                 ex.Message,
-                "Fix the manifest, or delete metadata.json to use the root-element folder crawl instead.");
+                "Fix the source XML or metadata.json; manifest-free source trees are imported by root-element crawl.");
         }
         catch (ComponentIdentityMismatchException ex)
         {
             return ToolJson.Fail(
                 ex.Code,
                 ex.Message,
-                "Keep the overlay XML name/type at the baseline path, or run a full ingest for a new component.");
+                "Keep the source XML at its existing relative path and preserve its component identity, or run a full ingest for a new component.");
         }
         catch (ComponentProvenanceUnavailableException ex)
         {
