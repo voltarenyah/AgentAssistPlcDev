@@ -182,7 +182,7 @@ export default function WorkbenchNavigator({
                               onSelect={() => onMergeWorktree(workbench, worktree)}
                             >
                               <GitMerge className="h-3.5 w-3.5" />
-                              Merge into master
+                              Validate and merge to master
                             </ContextMenuItem>
                             <ContextMenuSeparator />
                             <ContextMenuItem

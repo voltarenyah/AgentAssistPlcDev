@@ -40,5 +40,27 @@ stored under ignored `.automation/recovery`, or explicitly discard selected
 paths back to `HEAD`. Neither recovery action creates a master commit. Discard
 requires an explicit confirmation.
 
-TIA consistency and validated feature import/merge rules are implemented in
-Plans 2 and 3.
+## Version control workspace
+
+The Version control tab is worktree-scoped and covers every registered PLC.
+Changes shows only source XML objects, grouped by PLC and category. Select
+individual objects and enter a commit message; there is no staging concept in
+the UI. Direct master edits are shown as unauthorized and cannot be committed
+from this screen.
+
+Compare with TIA first checks the saved checksum evidence. A checksum match is
+shown immediately. A mismatch runs a full source scan and presents individual
+block, DB, UDT, and tag-table differences. Selected supported TIA changes can
+be accepted into master, but remain uncommitted until the user records the
+change.
+
+For a feature worktree, Prepare feature import creates a three-way import plan.
+Objects changed in both TIA and the feature are disabled individually; unrelated
+objects remain selectable. Importing is followed by compiling every device and
+confirming that the complete PLC software was tested on the machine. Only the
+server-issued validation ID can publish the no-fast-forward merge and its
+permanent evidence.
+
+History displays changed PLC objects, validation state, checksums, and evidence.
+Historical recovery creates a new rollback feature containing selected XML; it
+never resets or directly restores master.

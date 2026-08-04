@@ -37,7 +37,8 @@ import {
 import { toast } from 'sonner'
 import { ThemeToggle } from '@/catalog/ThemeToggle'
 import { showErrorToast } from '@/components/ui/toast'
-import GitPanel from '@/studio/panels/GitPanel'
+import VersionControlPanel from '@/studio/version-control/VersionControlPanel'
+import VersionControlDetailsDock from '@/studio/version-control/VersionControlDetailsDock'
 import WorkbenchNavigator, {
   type WorkbenchSelection,
 } from '@/studio/workbench/WorkbenchNavigator'
@@ -449,6 +450,9 @@ export default function MainStudio() {
   const [lastImport, setLastImport] = useState<api.ImportModifiedResult | null>(null)
   const [blockIndexExpanded, setBlockIndexExpanded] = useState(false)
   const [blockFilter, setBlockFilter] = useState('')
+  const [versionControlSelection, setVersionControlSelection] = useState<unknown>(null)
+
+  useEffect(() => { setVersionControlSelection(null) }, [selection.worktreeId])
 
   useEffect(() => {
     try { writeShellLayout(window.localStorage, shellLayout) } catch { /* storage is optional */ }
@@ -1225,19 +1229,8 @@ export default function MainStudio() {
     const workbench = targetContext?.workbench ?? activeWorkbench
     const worktree = targetContext?.worktree ?? activeWorktree
     if (!workbench || !worktree || worktree.branch === 'master') return
-    const target = workbench.worktrees.find(candidate => candidate.branch === 'master')
-    if (!target) return
-    setOperation('merge-worktree')
-    const op = beginOperation('merge-worktree', 'Merging worktree...')
-    try {
-      await api.mergeWorktree(workbench.workbenchId, worktree.worktreeId, target.worktreeId, op.id)
-      toast.success(`${worktree.branch} merged into master`)
-      await reloadWorkbenches()
-    } catch (error) {
-      showErrorToast(displayError(error))
-    } finally {
-      setOperation(null)
-    }
+    setActiveTab('git')
+    toast.info(`Validate and merge ${worktree.branch} from the Version control workspace.`)
   }
 
   const saveApiKey = async (apiKey: string) => {
@@ -1346,7 +1339,7 @@ export default function MainStudio() {
     { id: 'chat', label: 'AI chat', icon: MessageSquare },
     { id: 'source', label: 'PLC source', icon: Code2 },
     { id: 'knowledge', label: 'Knowledge', icon: Database },
-    { id: 'git', label: 'Git worktree', icon: GitBranch },
+    { id: 'git', label: 'Version control', icon: GitBranch },
   ]
 
   return (
@@ -1795,10 +1788,10 @@ export default function MainStudio() {
 
                 {activeTab === 'git' && (
                   <div className="h-full min-h-[520px]">
-                    <GitPanel
+                    <VersionControlPanel
                       workbenchId={selection.workbenchId!}
                       worktreeId={selection.worktreeId!}
-                      deviceId={selection.deviceId}
+                      onSelectionChange={setVersionControlSelection}
                     />
                   </div>
                 )}
@@ -1806,7 +1799,7 @@ export default function MainStudio() {
             </>
           )}
         </main>
-        {selection.deviceId && (
+        {(selection.deviceId || activeTab === 'git') && (
           <>
             <div
               role="separator"
@@ -1838,7 +1831,13 @@ export default function MainStudio() {
                   hidden={false}
                 />
               )}
-              {activeTab !== 'overview' && activeTab !== 'knowledge' && (
+              {activeTab === 'git' ? (
+                <VersionControlDetailsDock
+                  context={{ workbenchId: selection.workbenchId!, worktreeId: selection.worktreeId! }}
+                  selection={versionControlSelection}
+                  hidden={false}
+                />
+              ) : activeTab !== 'overview' && activeTab !== 'knowledge' && (
                 <SessionDock
                   sessions={deviceSessions}
                   activeSessionId={chatTabs.activeId}
