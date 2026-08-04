@@ -1794,6 +1794,37 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [Fact]
+    public async Task WorktreeVersionControlEndpointsForwardRootAndSelectedDiffRefs()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")), databaseExists: true);
+        var prefix = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/vc";
+
+        (await fixture.Client.GetAsync($"{prefix}/status")).EnsureSuccessStatusCode();
+        (await fixture.Client.GetAsync($"{prefix}/log?maxCount=12&filePath=devices/PLC_1/source/A.xml")).EnsureSuccessStatusCode();
+        (await fixture.Client.GetAsync($"{prefix}/diff?filePath=devices/PLC_1/source/A.xml&oldSha=old-1&newSha=new-2")).EnsureSuccessStatusCode();
+        (await fixture.Client.PostAsJsonAsync($"{prefix}/commit", new
+        {
+            paths = new[] { "devices/PLC_1/source/A.xml" },
+            message = "selected source",
+        })).EnsureSuccessStatusCode();
+        (await fixture.Client.GetAsync($"{prefix}/validation/head-1")).EnsureSuccessStatusCode();
+
+        Assert.Equal(
+            ["vc_status", "vc_log", "vc_diff", "vc_commit_selected", "vc_validation_get"],
+            fixture.VersionControl.Calls);
+        Assert.Equal(fixture.Context.WorktreeRoot, fixture.VersionControl.Arguments[0].GetProperty("repoPath").GetString());
+        Assert.Equal("old-1", fixture.VersionControl.Arguments[2].GetProperty("oldSha").GetString());
+        Assert.Equal("new-2", fixture.VersionControl.Arguments[2].GetProperty("newSha").GetString());
+        Assert.Equal(
+            "selected source",
+            fixture.VersionControl.Arguments[3].GetProperty("message").GetString());
+        Assert.Equal(
+            "devices/PLC_1/source/A.xml",
+            fixture.VersionControl.Arguments[3].GetProperty("paths")[0].GetString());
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root)) Directory.Delete(root, true);

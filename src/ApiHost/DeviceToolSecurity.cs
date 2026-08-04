@@ -14,7 +14,9 @@ public static class DeviceContextIdentity
         $"{device.WorkbenchId}\n{device.WorktreeId}\n{device.DeviceId}";
 }
 
-public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
+public sealed class DeviceToolArgumentBinder(
+    DeviceSourceResolver resolver,
+    WorkbenchWritePolicy? writePolicy = null)
 {
     public Dictionary<string, object?> Bind(string tool, IDictionary<string, object?> supplied, DeviceContext device)
     {
@@ -43,6 +45,7 @@ public sealed class DeviceToolArgumentBinder(DeviceSourceResolver resolver)
         if (tool.StartsWith("vc_", StringComparison.Ordinal)) Force(args, "repoPath", device.WorktreeRoot);
         if (tool == "src_apply_edits")
         {
+            writePolicy?.RequireFeatureEdit(device);
             Force(args, "sourceRoot", device.SourceRoot);
             ForceFlag(args, "inPlace");
             ForceFlag(args, "confirmInPlace");

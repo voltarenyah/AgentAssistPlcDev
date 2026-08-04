@@ -140,6 +140,36 @@ public sealed class WorkbenchLifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task UnauthorizedMasterMoveCopiesSelectedXmlToFeatureAndRestoresMaster()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(), new KnowledgeBoundary(), new GitBoundary(), catalog, store,
+            new DeviceReconciler(), new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Recovery line", Path.Combine(root, "recovery"), 42, null));
+        var masterRoot = WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master");
+        const string sourcePath = "devices/PLC_1/source/Blocks/A.xml";
+        var masterSource = WorkbenchPaths.ResolveRelative(masterRoot, sourcePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(masterSource)!);
+        File.WriteAllText(masterSource, "<base/>");
+        RepositoryService.Add(masterRoot, [sourcePath]);
+        RepositoryService.Commit(masterRoot, "base source", null);
+        File.WriteAllText(masterSource, "<unauthorized/>");
+
+        var recovery = await coordinator.MoveUnauthorizedMasterChangesAsync(
+            created.Workbench.WorkbenchId, [sourcePath], "recovered", CancellationToken.None);
+
+        Assert.Equal("<base/>", File.ReadAllText(masterSource));
+        var featureRoot = WorkbenchPaths.ResolveWorktree(
+            created.Workbench.RootPath,
+            catalog.Load(created.Workbench.RootPath).Worktrees.Single(item => item.WorktreeId == recovery.WorktreeId).RelativePath);
+        Assert.Equal("<unauthorized/>", File.ReadAllText(WorkbenchPaths.ResolveRelative(featureRoot, sourcePath)));
+        Assert.True(File.Exists(Path.Combine(recovery.RecoveryRoot, "recovery.json")));
+    }
+
+    [Fact]
     public async Task CoordinatorDrivesApprovedLifecycleAcrossDevicesAndLinkedWorktrees()
     {
         var defaultParent = Path.Combine(root, "AutomationWorkbench", "Project");
@@ -493,6 +523,10 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                 "vc_remove_worktree" => RemoveWorktree(args),
                 "vc_add" => Add(args),
                 "vc_commit" => Commit(args),
+                "vc_restore" => RepositoryService.Restore(
+                    Property<string>(args, "repoPath"),
+                    args.GetType().GetProperty("filePath")?.GetValue(args) as string,
+                    args.GetType().GetProperty("sourceSha")?.GetValue(args) as string),
                 "vc_merge" => RepositoryService.Merge(
                     Property<string>(args, "targetWorktreePath"), Property<string>(args, "sourceBranch")),
                 _ => throw new InvalidOperationException(tool),

@@ -18,6 +18,8 @@ public sealed record RefreshApplyApiRequest(
     string[]? ApprovedPaths,
     string[]? ApprovedRemovalPaths = null);
 public sealed record SourcePathApiRequest(string RelativePath);
+public sealed record CommitSourceApiRequest(string[] Paths, string Message);
+public sealed record UnauthorizedMasterPathsRequest(string[] Paths, string? FeatureName = null, bool Confirm = false);
 
 /// <summary>Optional bootstrap body retained for request compatibility; CommitMessage is ignored because bootstrap never commits automatically.</summary>
 public sealed record BootstrapApiRequest(string? CommitMessage);
@@ -104,6 +106,13 @@ public sealed class WorkbenchApiState
         var wb = Workbench(workbenchId);
         var registration = wb.Worktrees.SingleOrDefault(x => x.WorktreeId == worktreeId) ?? throw new KeyNotFoundException("WORKTREE_NOT_FOUND");
         return store.Read<WorktreeMetadata>(Path.Combine(WorkbenchPaths.ResolveWorktree(wb.RootPath, registration.RelativePath), "worktree.json"));
+    }
+    public string WorktreeRoot(string workbenchId, string worktreeId)
+    {
+        var wb = Workbench(workbenchId);
+        var registration = wb.Worktrees.SingleOrDefault(x => x.WorktreeId == worktreeId)
+            ?? throw new KeyNotFoundException("WORKTREE_NOT_FOUND");
+        return WorkbenchPaths.ResolveWorktree(wb.RootPath, registration.RelativePath);
     }
     public (DeviceContext Context, DeviceMetadata Metadata) Device(string deviceId)
     {
@@ -202,7 +211,12 @@ public static class WorkbenchEndpoints
         app.MapGet("/api/workbenches", (WorkbenchApiState s) => s.List());
         app.MapGet("/api/sandbox/roots", (SandboxConfig sandbox) =>
             new { roots = sandbox.PathJail.Roots });
-        app.MapPost("/api/workbenches/open", (OpenWorkbenchApiRequest r, WorkbenchApiState s) => s.Open(r.RootPath));
+        app.MapPost("/api/workbenches/open", (OpenWorkbenchApiRequest r, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
+        {
+            var workbench = s.Open(r.RootPath);
+            coordinator.RegisterWorkbench(workbench);
+            return workbench;
+        });
         app.MapPost("/api/workbenches", async (
             CreateWorkbenchApiRequest r,
             WorkbenchCoordinator c,
@@ -292,6 +306,53 @@ public static class WorkbenchEndpoints
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s) => { s.Worktree(id, wt); s.Select(id, wt); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.ListDevices(id, wt));
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
+
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/status", async (
+            string workbenchId, string worktreeId, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_status").CallAsync<System.Text.Json.JsonElement>(
+                "vc_status", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId) }, ct));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/log", async (
+            string workbenchId, string worktreeId, int? maxCount, string? filePath,
+            WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_log").CallAsync<System.Text.Json.JsonElement>(
+                "vc_log", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), maxCount, filePath }, ct));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/diff", async (
+            string workbenchId, string worktreeId, string filePath, string? oldSha, string? newSha,
+            WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_diff").CallAsync<System.Text.Json.JsonElement>(
+                "vc_diff", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), filePath, oldSha, newSha }, ct));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/commit", async (
+            string workbenchId, string worktreeId, CommitSourceApiRequest body,
+            WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_commit_selected").CallAsync<System.Text.Json.JsonElement>(
+                "vc_commit_selected", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), paths = body.Paths, message = body.Message }, ct));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/validation/{sha}", async (
+            string workbenchId, string worktreeId, string sha,
+            WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("vc_validation_get").CallAsync<System.Text.Json.JsonElement>(
+                "vc_validation_get", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), commitSha = sha }, ct));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/unauthorized/move", async (
+            string workbenchId, string worktreeId, UnauthorizedMasterPathsRequest body,
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            var master = s.Worktree(workbenchId, worktreeId);
+            if (!string.Equals(master.Branch, "master", StringComparison.OrdinalIgnoreCase))
+                throw new WorkbenchLifecycleException("MASTER_WORKTREE_REQUIRED", "Unauthorized-change recovery must target master.");
+            return await coordinator.MoveUnauthorizedMasterChangesAsync(
+                workbenchId, body.Paths, body.FeatureName ?? "recovered-feature", ct);
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/unauthorized/discard", async (
+            string workbenchId, string worktreeId, UnauthorizedMasterPathsRequest body,
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            var master = s.Worktree(workbenchId, worktreeId);
+            if (!string.Equals(master.Branch, "master", StringComparison.OrdinalIgnoreCase))
+                throw new WorkbenchLifecycleException("MASTER_WORKTREE_REQUIRED", "Unauthorized-change recovery must target master.");
+            if (!body.Confirm)
+                throw new WorkbenchLifecycleException("CONFIRMATION_REQUIRED", "Discarding unauthorized master changes requires confirmation.");
+            await coordinator.DiscardUnauthorizedMasterChangesAsync(workbenchId, body.Paths, ct);
+            return new { discarded = body.Paths };
+        });
 
         // Device-scoped knowledge-graph browsing. Unlike the compatibility /api/knowledge/* endpoints,
         // these resolve the device from explicit path identity, so they work without a prior /select POST.
@@ -460,8 +521,12 @@ public static class WorkbenchEndpoints
                 "Knowledge rebuilt.").ConfigureAwait(false));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/prepare-edit", (
             string workbenchId, string worktreeId, string device, SourcePathApiRequest r,
-            WorkbenchApiState s, DeviceSourceResolver resolver) =>
-            resolver.PrepareEditable(s.Device(workbenchId, worktreeId, device).Context, r.RelativePath));
+            WorkbenchApiState s, DeviceSourceResolver resolver, WorkbenchWritePolicy writePolicy) =>
+        {
+            var context = s.Device(workbenchId, worktreeId, device).Context;
+            writePolicy.RequireFeatureEdit(context);
+            return resolver.PrepareEditable(context, r.RelativePath);
+        });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/import", async (
             string workbenchId, string worktreeId, string device, SourcePathApiRequest r,
             WorkbenchApiState s, WorkbenchCoordinator c, OperationStatusRegistry operations,
@@ -603,7 +668,12 @@ public static class WorkbenchEndpoints
                 "Rebuilding device knowledge...",
                 progress => c.RebuildKnowledgeAsync(s.Device(device).Context, ct, progress),
                 "Knowledge rebuilt.").ConfigureAwait(false));
-        app.MapPost("/api/devices/{device}/source/prepare-edit", (string device, SourcePathApiRequest r, WorkbenchApiState s, DeviceSourceResolver resolver) => resolver.PrepareEditable(s.Device(device).Context, r.RelativePath));
+        app.MapPost("/api/devices/{device}/source/prepare-edit", (string device, SourcePathApiRequest r, WorkbenchApiState s, DeviceSourceResolver resolver, WorkbenchWritePolicy writePolicy) =>
+        {
+            var context = s.Device(device).Context;
+            writePolicy.RequireFeatureEdit(context);
+            return resolver.PrepareEditable(context, r.RelativePath);
+        });
         app.MapPost("/api/devices/{device}/source/import", async (
             string device,
             SourcePathApiRequest r,

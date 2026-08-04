@@ -74,6 +74,12 @@ public sealed record ImportModifiedResult(
     IReadOnlyList<string> Warnings,
     string? Error);
 
+public sealed record UnauthorizedMasterRecoveryResult(
+    string WorktreeId,
+    string Branch,
+    IReadOnlyList<string> Paths,
+    string RecoveryRoot);
+
 /// <summary>
 /// Coordinates device-scoped mutations across MCP boundaries. No caller may bypass the
 /// staging/approval boundary when refreshing a tracked baseline.
@@ -932,6 +938,119 @@ public sealed class WorkbenchCoordinator
             "vc_merge",
             new { targetWorktreePath = targetRoot, sourceBranch = source.Branch },
             token).ConfigureAwait(false);
+    }
+
+    public async Task<UnauthorizedMasterRecoveryResult> MoveUnauthorizedMasterChangesAsync(
+        string workbenchId,
+        IReadOnlyList<string> paths,
+        string featureName,
+        CancellationToken token = default)
+    {
+        if (string.IsNullOrWhiteSpace(featureName))
+            throw new ArgumentException("A feature name is required.", nameof(featureName));
+        var workbench = catalog.Load(knownWorkbenches.TryGetValue(workbenchId, out var known)
+            ? known.RootPath : throw new WorkbenchCatalogException("WORKBENCH_NOT_FOUND", "The workbench is not registered."));
+        RegisterWorkbench(workbench);
+        var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
+            string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
+            ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
+        var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
+        var selected = NormalizeSourcePaths(paths);
+        var recoveryRoot = Path.Combine(masterRoot, ".automation", "recovery", $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfffZ}-{SafeDirectoryName(featureName)}");
+        Directory.CreateDirectory(recoveryRoot);
+        var evidence = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var path in selected)
+        {
+            var source = WorkbenchPaths.ResolveRelative(masterRoot, path);
+            if (!File.Exists(source))
+                throw new FileNotFoundException("The selected master source file was not found.", source);
+            var recoveryPath = Path.Combine(recoveryRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(recoveryPath)!);
+            File.Copy(source, recoveryPath, overwrite: true);
+            evidence[path] = HashFile(source);
+        }
+        store.Write(Path.Combine(recoveryRoot, "recovery.json"), evidence);
+
+        var branch = $"recovery/{SafeDirectoryName(featureName)}";
+        var feature = await CreateWorktreeAsync(
+            new CreateWorktreeRequest(workbench, featureName, branch, null), token).ConfigureAwait(false);
+        var featureRegistration = catalog.Load(workbench.RootPath).Worktrees.Single(item => item.WorktreeId == feature.WorktreeId);
+        var featureRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, featureRegistration.RelativePath);
+        foreach (var path in selected)
+        {
+            var destination = WorkbenchPaths.ResolveRelative(featureRoot, path);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(WorkbenchPaths.ResolveRelative(recoveryRoot, path), destination, overwrite: true);
+            if (!string.Equals(HashFile(destination), evidence[path], StringComparison.Ordinal))
+                throw new WorkbenchLifecycleException("RECOVERY_VERIFY_FAILED", $"Recovered source '{path}' failed verification.");
+        }
+
+        try
+        {
+            foreach (var path in selected)
+            {
+                await versionControl.CallAsync<object>(
+                    "vc_restore",
+                    new { repoPath = masterRoot, filePath = path, sourceSha = (string?)null },
+                    token).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // Keep master exactly as it was before recovery if one selected restore fails.
+            foreach (var path in selected)
+            {
+                var original = WorkbenchPaths.ResolveRelative(recoveryRoot, path);
+                var destination = WorkbenchPaths.ResolveRelative(masterRoot, path);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(original, destination, overwrite: true);
+            }
+            throw;
+        }
+
+        return new UnauthorizedMasterRecoveryResult(feature.WorktreeId, feature.Branch, selected, recoveryRoot);
+    }
+
+    public async Task DiscardUnauthorizedMasterChangesAsync(
+        string workbenchId,
+        IReadOnlyList<string> paths,
+        CancellationToken token = default)
+    {
+        var workbench = catalog.Load(knownWorkbenches.TryGetValue(workbenchId, out var known)
+            ? known.RootPath : throw new WorkbenchCatalogException("WORKBENCH_NOT_FOUND", "The workbench is not registered."));
+        RegisterWorkbench(workbench);
+        var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
+            string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
+            ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
+        var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
+        foreach (var path in NormalizeSourcePaths(paths))
+        {
+            await versionControl.CallAsync<object>(
+                "vc_restore",
+                new { repoPath = masterRoot, filePath = path, sourceSha = (string?)null },
+                token).ConfigureAwait(false);
+        }
+    }
+
+    private static string[] NormalizeSourcePaths(IEnumerable<string> paths)
+    {
+        var normalized = paths
+            .Select(path => path.Replace('\\', '/'))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        if (normalized.Length == 0)
+            throw new ArgumentException("At least one PLC source XML path is required.", nameof(paths));
+        foreach (var path in normalized)
+        {
+            var parts = path.Split('/');
+            if (parts.Length < 4 || !parts[0].Equals("devices", StringComparison.OrdinalIgnoreCase)
+                || !parts[2].Equals("source", StringComparison.OrdinalIgnoreCase)
+                || !parts[^1].EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                throw new WorkbenchPathException($"'{path}' is not a PLC source XML path.");
+            _ = WorkbenchPaths.ResolveRelative(Path.GetTempPath(), path);
+        }
+        return normalized;
     }
 
     private DeviceMetadata ReadDevice(DeviceContext device) =>

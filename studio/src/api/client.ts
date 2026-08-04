@@ -473,11 +473,30 @@ export type VcCommitEntry = {
   message: string
   timestamp: string
   files: string[]
+  validationState: 'Validated' | 'Unlabeled' | 'Invalid'
+  evidenceKind: string | null
 }
 
 export type VcLogResult = {
   repoPath: string
   commits: VcCommitEntry[]
+}
+export type VcValidationEvidence = {
+  schemaVersion: string
+  evidenceKind: 'tia-sync' | 'feature-merge'
+  commitSha: string
+  workbenchId: string
+  sourceWorktreeId: string | null
+  confirmedAt: string
+  confirmedBy: string
+  machineValidated: boolean
+  devices: Array<{
+    deviceId: string
+    plcName: string
+    projectIdentity: string
+    projectChecksum: string
+    objects: Array<{ identity: string; relativePath: string; sha256: string }>
+  }>
 }
 
 export type VcDiffLine = { type: string; content: string }
@@ -969,6 +988,29 @@ export async function callTool(
 export async function getVcStatus(workbenchId: string, worktreeId: string, deviceId: string): Promise<VcStatusResult> {
   return workbenchRequest<VcStatusResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/vc/status`)
 }
+
+export const getWorktreeVcStatus = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<VcStatusResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/status`)
+export const getWorktreeVcLog = (workbenchId: string, worktreeId: string, maxCount?: number, filePath?: string) => {
+  const params = new URLSearchParams()
+  if (maxCount) params.set('maxCount', String(maxCount))
+  if (filePath) params.set('filePath', filePath)
+  const query = params.toString()
+  return workbenchRequest<VcLogResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/log${query ? `?${query}` : ''}`)
+}
+export const getWorktreeVcDiff = (workbenchId: string, worktreeId: string, filePath: string, oldSha?: string, newSha?: string) => {
+  const params = new URLSearchParams({ filePath })
+  if (oldSha) params.set('oldSha', oldSha)
+  if (newSha) params.set('newSha', newSha)
+  return workbenchRequest<VcDiffResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/diff?${params}`)
+}
+export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string) =>
+  workbenchRequest<{ sha: string; message: string; files: string[] }>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/commit`,
+    jsonRequest('POST', { paths, message }),
+  )
+export const getVcValidation = (workbenchId: string, worktreeId: string, sha: string) =>
+  workbenchRequest<VcValidationEvidence | null>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/validation/${encodeURIComponent(sha)}`)
 
 export async function getVcLog(workbenchId: string, worktreeId: string, deviceId: string, maxCount?: number, filePath?: string): Promise<VcLogResult> {
   const params = new URLSearchParams()

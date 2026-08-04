@@ -37,6 +37,7 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
   const [, setSelectedFile] = useState<string | null>(null)
   const [diff, setDiff] = useState<api.VcDiffResult | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
 
   // Commit
   const [commitMsg, setCommitMsg] = useState('')
@@ -50,8 +51,8 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
     setError(null)
     try {
       const [s, l] = await Promise.all([
-        api.getVcStatus(workbenchId, worktreeId, deviceId),
-        api.getVcLog(workbenchId, worktreeId, deviceId, 20).catch(() => ({ repoPath: '', commits: [] })),
+        api.getWorktreeVcStatus(workbenchId, worktreeId),
+        api.getWorktreeVcLog(workbenchId, worktreeId, 20).catch(() => ({ repoPath: '', commits: [] })),
       ])
       setStatus(s)
       setLog(l.commits)
@@ -64,14 +65,14 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
 
   useEffect(() => {
     fetchAll()
-  }, [workbenchId, worktreeId, deviceId])
+  }, [workbenchId, worktreeId])
 
   // ── Actions ───────────────────────────────────────────
 
   const handleStageAll = async () => {
     setOperating(true)
     try {
-      await api.postVcAdd(workbenchId, worktreeId, deviceId)
+      setSelectedPaths(new Set(status?.entries.map(e => e.filePath) ?? []))
       await fetchAll()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Stage failed')
@@ -83,7 +84,12 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
   const handleStageFile = async (filePath: string) => {
     setOperating(true)
     try {
-      await api.postVcAdd(workbenchId, worktreeId, deviceId, [filePath])
+      setSelectedPaths(previous => {
+        const next = new Set(previous)
+        if (next.has(filePath)) next.delete(filePath)
+        else next.add(filePath)
+        return next
+      })
       await fetchAll()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Stage failed')
@@ -93,13 +99,14 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
   }
 
   const handleCommit = async () => {
-    if (!commitMsg.trim()) return
+    if (!commitMsg.trim() || selectedPaths.size === 0) return
     setOperating(true)
     try {
-      await api.postVcCommit(workbenchId, worktreeId, deviceId, commitMsg.trim())
+      await api.commitVcPaths(workbenchId, worktreeId, [...selectedPaths], commitMsg.trim())
       setCommitMsg('')
       setDiff(null)
       setSelectedFile(null)
+      setSelectedPaths(new Set())
       await fetchAll()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Commit failed')
@@ -133,7 +140,7 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
     setTab(2)
     setDiffLoading(true)
     try {
-      const d = await api.getVcDiff(workbenchId, worktreeId, deviceId, filePath)
+      const d = await api.getWorktreeVcDiff(workbenchId, worktreeId, filePath)
       setDiff(d)
     } catch {
       setDiff(null)
@@ -177,9 +184,10 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
   /* ── Changes tab ──────────────────────────────────── */
 
   const renderChanges = () => {
-    const hasStaged = status?.entries.some(e => e.staged)
-    const stagedCount = status?.entries.filter(e => e.staged).length ?? 0
-    const unstaged = status?.entries.filter(e => !e.staged) ?? []
+    const hasStaged = selectedPaths.size > 0
+    const stagedCount = selectedPaths.size
+    const staged = status?.entries.filter(e => selectedPaths.has(e.filePath)) ?? []
+    const unstaged = status?.entries.filter(e => !selectedPaths.has(e.filePath)) ?? []
 
     if (!status?.entries.length) {
       return (
@@ -196,18 +204,18 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
           <>
             <div className="text-[9px] font-medium px-1 mb-0.5 mt-1 flex items-center gap-1">
               <Check className="h-2.5 w-2.5" style={{ color: '#3b82f6' }} />
-              <span style={{ color: 'var(--muted-foreground)' }}>Staged — {stagedCount}</span>
+              <span style={{ color: 'var(--muted-foreground)' }}>Selected — {stagedCount}</span>
             </div>
-            {status!.entries.filter(e => e.staged).map(entry => (
+            {staged.map(entry => (
               <div key={entry.filePath}
                 className="flex items-center rounded px-2 py-1" style={{ background: 'rgba(59,130,246,0.05)' }}>
                 <span className="text-[10px] mr-1.5">{stateIcon[entry.state] ?? '📄'}</span>
                 <span className="text-[9px] font-mono truncate flex-1" style={{ color: stateColor[entry.state] ?? 'var(--foreground)' }}>
                   {entry.filePath}
                 </span>
-                <button onClick={(e) => { e.stopPropagation(); handleRestoreFile(entry.filePath) }}
+                <button onClick={(e) => { e.stopPropagation(); setSelectedPaths(previous => { const next = new Set(previous); next.delete(entry.filePath); return next }) }}
                   disabled={operating}
-                  className="flex h-5 w-5 items-center justify-center rounded hover:bg-accent shrink-0" title="Unstage">
+                  className="flex h-5 w-5 items-center justify-center rounded hover:bg-accent shrink-0" title="Unselect">
                   <Undo2 className="h-3 w-3" style={{ color: 'var(--muted-foreground)' }} />
                 </button>
               </div>
@@ -231,7 +239,7 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
                 </span>
                 <button onClick={(e) => { e.stopPropagation(); handleStageFile(entry.filePath) }}
                   disabled={operating}
-                  className="flex h-5 w-5 items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-accent shrink-0" title="Stage">
+                  className="flex h-5 w-5 items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-accent shrink-0" title="Select">
                   <Plus className="h-3 w-3" style={{ color: 'var(--muted-foreground)' }} />
                 </button>
                 <button onClick={(e) => { e.stopPropagation(); handleRestoreFile(entry.filePath) }}
@@ -255,17 +263,17 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
 
     return (
       <div className="shrink-0 border-t px-2.5 py-2 space-y-1.5" style={{ borderColor: 'var(--border)' }}>
-        {/* Stage All button */}
+        {/* Select All button */}
         {anyChanges && (
           <button onClick={handleStageAll} disabled={operating}
             className="flex w-full items-center justify-center gap-1 rounded py-1 text-[9px]" style={{ background: 'var(--accent)', color: 'var(--accent-foreground)' }}>
             {operating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-            {' '}Stage All
+            {' '}Select All
           </button>
         )}
 
         {/* Commit input + button */}
-        {stagedCount > 0 && (
+        {selectedPaths.size > 0 && (
           <div className="flex gap-1.5 pt-1 border-t" style={{ borderColor: 'var(--border)' }}>
             <input
               value={commitMsg}
@@ -287,7 +295,7 @@ export default function GitPanel({ workbenchId, worktreeId, deviceId }: GitPanel
         {/* Summary */}
         {status && status.entries.length > 0 && (
           <div className="text-[8px] text-center" style={{ color: 'var(--muted-foreground)' }}>
-            {stagedCount} staged · {status.entries.filter(e => !e.staged && e.state !== 'Untracked').length} unstaged · {status.entries.filter(e => e.state === 'Untracked').length} untracked
+            {stagedCount} selected · {status.entries.filter(e => !selectedPaths.has(e.filePath) && e.state !== 'Untracked').length} changed · {status.entries.filter(e => !selectedPaths.has(e.filePath) && e.state === 'Untracked').length} untracked
           </div>
         )}
       </div>
