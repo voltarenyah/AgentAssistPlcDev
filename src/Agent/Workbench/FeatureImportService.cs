@@ -79,6 +79,7 @@ public sealed class FeatureImportService
                     .Select(x => x.Metadata.PlcName)
                     .FirstOrDefault() ?? deviceId;
                 var lifecycle = preview.FeaturePaths.Any(x => Normalize(x) == path)
+                    && File.Exists(WorkbenchPaths.ResolveRelative(masterRoot, path))
                     ? null
                     : "SOURCE_LIFECYCLE_UNSUPPORTED";
                 var reason = lifecycle ?? (tiaPaths.Contains(path) ? "TIA_FEATURE_OVERLAP" : null);
@@ -91,7 +92,13 @@ public sealed class FeatureImportService
                     reason);
             })
             .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
-            .ToArray();
+            .ToList();
+        foreach (var path in preview.FeaturePaths.Select(Normalize).Where(IsManagedSource))
+        {
+            if (objects.Any(item => item.RelativePath == path)) continue;
+            var deviceId = DeviceIdFromPath(path);
+            objects.Add(new FeatureImportObject(deviceId, deviceId, path, string.Empty, false, "SOURCE_LIFECYCLE_UNSUPPORTED"));
+        }
 
         var plan = new FeatureImportPlan(
             Guid.NewGuid().ToString("N"),
@@ -100,7 +107,7 @@ public sealed class FeatureImportService
             featureSha,
             masterSha,
             masterComparison.ComparisonId,
-            objects);
+            objects.OrderBy(item => item.RelativePath, StringComparer.Ordinal).ToArray());
         store.Write(PlanPath(workbench, plan.PlanId), plan);
         return plan;
     }

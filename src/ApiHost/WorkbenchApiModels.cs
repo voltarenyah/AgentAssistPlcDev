@@ -22,6 +22,9 @@ public sealed record CommitSourceApiRequest(string[] Paths, string Message);
 public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths);
 public sealed record TiaValidationApiRequest(string ConfirmedBy);
 public sealed record UnauthorizedMasterPathsRequest(string[] Paths, string? FeatureName = null, bool Confirm = false);
+public sealed record FeaturePathsApiRequest(string[] Paths);
+public sealed record ValidateFeatureMergeApiRequest(string ImportSessionId, bool MachineValidated, string ConfirmedBy);
+public sealed record RollbackFeatureApiRequest(string HistoricalSha, string[] Paths, string FeatureName);
 
 /// <summary>Optional bootstrap body retained for request compatibility; CommitMessage is ignored because bootstrap never commits automatically.</summary>
 public sealed record BootstrapApiRequest(string? CommitMessage);
@@ -404,6 +407,75 @@ public static class WorkbenchEndpoints
                 "Creating exact TIA synchronization evidence...",
                 progress => coordinator.ValidateSynchronizedMasterAsync(workbenchId, body.ConfirmedBy, ct, progress),
                 "TIA synchronization evidence created.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{featureWorktreeId}/vc/import-plan", async (
+            string workbenchId,
+            string featureWorktreeId,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "feature-import-plan", "Planning feature import...",
+                _ => coordinator.PlanFeatureImportAsync(workbenchId, featureWorktreeId, ct),
+                "Feature import plan created.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/import-plans/{planId}/import", async (
+            string workbenchId,
+            string planId,
+            FeaturePathsApiRequest body,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "feature-import", "Importing selected feature objects...",
+                _ => coordinator.ImportFeatureAsync(workbenchId, planId, body.Paths, ct),
+                "Feature objects imported.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/import-sessions/{sessionId}/rollback", async (
+            string workbenchId,
+            string sessionId,
+            FeaturePathsApiRequest body,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "feature-import-rollback", "Rolling back selected feature objects...",
+                _ => coordinator.RollbackFeatureImportAsync(workbenchId, sessionId, body.Paths, ct),
+                "Selected feature objects rolled back.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/import-sessions/{sessionId}/keep", (
+            string workbenchId,
+            string sessionId,
+            FeaturePathsApiRequest body,
+            WorkbenchCoordinator coordinator) =>
+            coordinator.KeepFeatureImportAfterCompileFailure(workbenchId, sessionId, body.Paths));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{featureWorktreeId}/vc/validate-merge", async (
+            string workbenchId,
+            string featureWorktreeId,
+            ValidateFeatureMergeApiRequest body,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "validate-feature-merge", "Compiling and verifying every PLC device...",
+                progress => coordinator.ValidateFeatureMergeAsync(new(workbenchId, featureWorktreeId, body.ImportSessionId, body.MachineValidated, body.ConfirmedBy), ct, progress),
+                "Feature merge validation completed.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/validated-merges/{validationId}/merge", async (
+            string workbenchId,
+            string validationId,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "merge-validated-feature", "Publishing validated feature merge...",
+                _ => coordinator.MergeValidatedAsync(workbenchId, validationId, ct),
+                "Validated feature merge published.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/rollback-features", async (
+            string workbenchId,
+            RollbackFeatureApiRequest body,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "create-rollback-feature", "Creating historical rollback feature...",
+                _ => coordinator.CreateRollbackFeatureAsync(workbenchId, body.HistoricalSha, body.Paths, body.FeatureName, ct),
+                "Rollback feature created.").ConfigureAwait(false));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/unauthorized/move", async (
             string workbenchId, string worktreeId, UnauthorizedMasterPathsRequest body,
             WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>

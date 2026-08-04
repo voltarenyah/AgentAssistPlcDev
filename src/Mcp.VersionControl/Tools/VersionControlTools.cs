@@ -69,6 +69,11 @@ public sealed class VersionControlTools
     public CallToolResult VcMergeValidated(VcValidatedMergeRequest request) =>
         Invoke(() => RepositoryService.MergeValidated(request));
 
+    [McpServerTool(Name = "vc_apply_historical_paths")]
+    [Description("Write selected historical PLC source XML blobs into the current worktree without staging or committing.")]
+    public CallToolResult VcApplyHistoricalPaths(string repoPath, string sourceSha, string[] paths) =>
+        Invoke(() => RepositoryService.ApplyHistoricalPaths(repoPath, sourceSha, paths));
+
     [McpServerTool(Name = "vc_merge_preview")]
     [Description("Build a prospective merge tree for a source branch without changing branches, worktrees, or refs. Reports conflicts and fingerprints tracked PLC source XML in a conflict-free candidate tree.")]
     public CallToolResult VcMergePreview(

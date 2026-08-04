@@ -98,6 +98,7 @@ public sealed class WorkbenchCoordinator
     private readonly WorkbenchConsistencyService consistency;
     private readonly FeatureImportService featureImport;
     private readonly ValidatedMergeCoordinator validatedMerge;
+    private readonly RollbackFeatureService rollbackFeature;
     private readonly WorkbenchWritePolicy writePolicy;
     private readonly PathJail? pathJail;
     private readonly SemaphoreSlim engineeringSession = new(1, 1);
@@ -130,6 +131,7 @@ public sealed class WorkbenchCoordinator
         consistency = new WorkbenchConsistencyService(engineering, versionControl, catalog, store);
         featureImport = new FeatureImportService(engineering, versionControl, consistency, store);
         validatedMerge = new ValidatedMergeCoordinator(engineering, versionControl, store);
+        rollbackFeature = new RollbackFeatureService(versionControl);
         writePolicy = new WorkbenchWritePolicy(store);
     }
 
@@ -1019,6 +1021,30 @@ public sealed class WorkbenchCoordinator
 
     public ValidatedMergeDraft GetValidatedMerge(string workbenchId, string validationId) =>
         validatedMerge.ReadDraft(LoadRegisteredWorkbench(workbenchId), validationId);
+
+    public async Task<RollbackFeatureResult> CreateRollbackFeatureAsync(
+        string workbenchId,
+        string historicalSha,
+        IReadOnlyList<string> paths,
+        string featureName,
+        CancellationToken token = default)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var master = LoadRegisteredWorktree(workbench, workbench.Worktrees.Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
+        var branch = $"rollback/{SafeDirectoryName(featureName)}-{Guid.NewGuid():N}";
+        var feature = await CreateWorktreeAsync(new CreateWorktreeRequest(workbench, featureName, branch, master.BaseCommit), token).ConfigureAwait(false);
+        var featureRoot = ResolveWorktreeRoot(workbench, feature.WorktreeId);
+        try
+        {
+            var applied = await rollbackFeature.ApplyAsync(featureRoot, historicalSha, paths, token).ConfigureAwait(false);
+            return applied with { WorktreeId = feature.WorktreeId, Branch = branch };
+        }
+        catch
+        {
+            await DeleteWorktreeAsync(workbench, feature.WorktreeId, token).ConfigureAwait(false);
+            throw;
+        }
+    }
 
     public async Task<FeatureMergePublicationResult> MergeValidatedAsync(
         string workbenchId,

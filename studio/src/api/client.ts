@@ -179,6 +179,49 @@ export type Worktree = {
   lastReconciliationCommit: string | null
 }
 
+export type FeatureImportObject = {
+  deviceId: string
+  plcName: string
+  relativePath: string
+  featureFingerprint: string
+  importable: boolean
+  reason: string | null
+}
+
+export type FeatureImportPlan = {
+  planId: string
+  workbenchId: string
+  featureWorktreeId: string
+  featureSha: string
+  masterSha: string
+  comparisonId: string
+  objects: FeatureImportObject[]
+}
+
+export type FeatureImportOutcome = {
+  deviceId: string
+  relativePath: string
+  state: 'Pending' | 'Imported' | 'Failed' | 'KeptAfterCompileFailure' | 'RolledBack' | number
+  error: string | null
+  warnings: string[]
+}
+
+export type FeatureImportSession = {
+  sessionId: string
+  planId: string
+  featureSha: string
+  masterSha: string
+  startedAt: string
+  objects: FeatureImportOutcome[]
+}
+
+export type ValidatedMergeResult = {
+  validationId: string
+  state: 'Ready' | 'CompileFailed' | 'SourceDifferent' | 'BranchMoved' | number
+  error: string | null
+  devices: Array<{ deviceId: string; plcName: string; projectIdentity: string; projectChecksum: string; objects: Array<{ identity: string; relativePath: string; sha256: string }> }>
+}
+
 export type SourceDifference = {
   deviceId: string
   plcName: string
@@ -414,6 +457,48 @@ export const createWorktree = (workbenchId: string, name: string, branch: string
     branch,
     startPoint: startPoint?.trim() || null,
   }), operationId))
+export const planFeatureImport = (workbenchId: string, featureWorktreeId: string, operationId?: string) =>
+  workbenchRequest<FeatureImportPlan>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(featureWorktreeId)}/vc/import-plan`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
+export const importFeaturePaths = (workbenchId: string, planId: string, paths: string[], operationId?: string) =>
+  workbenchRequest<FeatureImportSession>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/import-plans/${encodeURIComponent(planId)}/import`,
+    withOperation(jsonRequest('POST', { paths }), operationId),
+  )
+export const rollbackFeaturePaths = (workbenchId: string, sessionId: string, paths: string[], operationId?: string) =>
+  workbenchRequest<FeatureImportSession>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/import-sessions/${encodeURIComponent(sessionId)}/rollback`,
+    withOperation(jsonRequest('POST', { paths }), operationId),
+  )
+export const keepFeaturePathsAfterCompileFailure = (workbenchId: string, sessionId: string, paths: string[]) =>
+  workbenchRequest<FeatureImportSession>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/import-sessions/${encodeURIComponent(sessionId)}/keep`,
+    jsonRequest('POST', { paths }),
+  )
+export const validateFeatureMerge = (
+  workbenchId: string,
+  featureWorktreeId: string,
+  importSessionId: string,
+  machineValidated: boolean,
+  confirmedBy: string,
+  operationId?: string,
+) =>
+  workbenchRequest<ValidatedMergeResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(featureWorktreeId)}/vc/validate-merge`,
+    withOperation(jsonRequest('POST', { importSessionId, machineValidated, confirmedBy }), operationId),
+  )
+export const mergeValidatedFeature = (workbenchId: string, validationId: string, operationId?: string) =>
+  workbenchRequest<unknown>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/validated-merges/${encodeURIComponent(validationId)}/merge`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
+export const createRollbackFeature = (workbenchId: string, historicalSha: string, paths: string[], featureName: string, operationId?: string) =>
+  workbenchRequest<unknown>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/rollback-features`,
+    withOperation(jsonRequest('POST', { historicalSha, paths, featureName }), operationId),
+  )
 export const compareMasterWithTia = (workbenchId: string, operationId?: string) =>
   workbenchRequest<WorkbenchConsistencyResult>(
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/compare-tia`,

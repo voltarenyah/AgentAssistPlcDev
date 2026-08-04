@@ -194,6 +194,11 @@ public sealed record VcValidatedMergeResult(
     VcValidationEvidence Evidence,
     string ValidationTag);
 
+public sealed record VcHistoricalPathsResult(
+    string RepoPath,
+    string SourceSha,
+    IReadOnlyList<string> Applied);
+
 /// <summary>Result of vc_add.</summary>
 public sealed class VcAddResult
 {

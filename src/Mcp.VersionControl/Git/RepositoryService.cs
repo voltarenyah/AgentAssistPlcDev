@@ -439,6 +439,29 @@ internal static class RepositoryService
         }
     }
 
+    /// <summary>Write selected historical PLC XML blobs into a worktree without staging or committing.</summary>
+    public static VcHistoricalPathsResult ApplyHistoricalPaths(string repoPath, string sourceSha, string[] paths)
+    {
+        EnsureRepo(repoPath);
+        if (string.IsNullOrWhiteSpace(sourceSha)) throw new VcInternalException("COMMIT_REQUIRED", "sourceSha must not be empty.");
+        if (paths is null || paths.Length == 0) throw new VcInternalException("SOURCE_PATHS_REQUIRED", "At least one source path is required.");
+        using var repo = new Repository(repoPath);
+        var commit = repo.Lookup<Commit>(sourceSha) ?? throw new VcInternalException("REF_NOT_FOUND", $"Commit '{sourceSha}' was not found.");
+        var selected = paths.Select(SourcePathPolicy.Require).Distinct(StringComparer.Ordinal).OrderBy(path => path, StringComparer.Ordinal).ToArray();
+        foreach (var path in selected)
+        {
+            var blob = commit[path]?.Target as Blob;
+            if (blob is null)
+                throw new VcInternalException("SOURCE_DELETE_UNSUPPORTED", $"Historical source '{path}' does not exist at '{commit.Sha}'.");
+            var destination = Path.Combine(repo.Info.WorkingDirectory, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            using var input = blob.GetContentStream();
+            using var output = File.Create(destination);
+            input.CopyTo(output);
+        }
+        return new VcHistoricalPathsResult(repoPath, commit.Sha, selected);
+    }
+
     /// <summary>Show working-tree status.</summary>
     public static VcStatusResult Status(string repoPath)
     {
