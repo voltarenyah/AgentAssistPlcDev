@@ -1,8 +1,15 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace Agent.Workbench;
 
 public static class WorkbenchSchema
 {
-    public const string CurrentVersion = "1.0";
+    public const string CurrentVersion = "1.1";
+
+    /// <summary>Versions readers accept; 1.0 files predate the landing-page fields and
+    /// deserialize with defaults (null purpose/owner, ongoing status).</summary>
+    public static readonly IReadOnlyList<string> SupportedVersions = ["1.0", CurrentVersion];
 }
 
 public sealed record WorkbenchMetadata(
@@ -14,7 +21,9 @@ public sealed record WorkbenchMetadata(
     string RepositoryPath,
     string? EngineeringProjectId,
     string? SourceProjectPath,
-    IReadOnlyList<WorkbenchWorktreeRegistration> Worktrees);
+    IReadOnlyList<WorkbenchWorktreeRegistration> Worktrees,
+    string? Purpose = null,
+    string? Owner = null);
 
 public sealed record WorkbenchWorktreeRegistration(
     string WorktreeId,
@@ -33,7 +42,49 @@ public sealed record WorktreeMetadata(
     string? EngineeringProjectId,
     string? SourceProjectPath,
     IReadOnlyList<string> DeviceIds,
-    string? LastReconciliationCommit);
+    string? LastReconciliationCommit,
+    string? Purpose = null,
+    string? Owner = null,
+    WorktreeStatus Status = WorktreeStatus.Ongoing,
+    DateTimeOffset? FinishedUtc = null);
+
+[JsonConverter(typeof(WorktreeStatusJsonConverter))]
+public enum WorktreeStatus
+{
+    Ongoing,
+    Finished,
+}
+
+[JsonConverter(typeof(WorktreeTaskStatusJsonConverter))]
+public enum WorktreeTaskStatus
+{
+    Todo,
+    InProgress,
+    Done,
+}
+
+/// <summary>camelCase string enum wire format ("ongoing"/"finished") shared by
+/// AtomicJsonStore persistence and ASP.NET responses.</summary>
+public sealed class WorktreeStatusJsonConverter()
+    : JsonStringEnumConverter<WorktreeStatus>(JsonNamingPolicy.CamelCase);
+
+public sealed class WorktreeTaskStatusJsonConverter()
+    : JsonStringEnumConverter<WorktreeTaskStatus>(JsonNamingPolicy.CamelCase);
+
+/// <summary>A worktree-scoped task: which PLC element needs modification, its status,
+/// and the modification plan. ElementRefs are display/jump hints, not foreign keys.</summary>
+public sealed record WorktreeTask(
+    string TaskId,
+    string Title,
+    string? Details,
+    WorktreeTaskStatus Status,
+    string[] ElementRefs,
+    DateTimeOffset CreatedUtc,
+    DateTimeOffset? DoneUtc);
+
+/// <summary>Persisted as worktrees/&lt;name&gt;/tasks.json; kept separate from worktree.json
+/// because tasks churn on every edit while the metadata file stays small and stable.</summary>
+public sealed record WorktreeTaskList(int Version, List<WorktreeTask> Tasks);
 
 public sealed record DeviceMetadata(
     string SchemaVersion,

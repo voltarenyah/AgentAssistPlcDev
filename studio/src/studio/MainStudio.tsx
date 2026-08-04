@@ -66,6 +66,8 @@ import HardwareConfigurationView from '@/studio/HardwareConfigurationView'
 import HardwareBomView from '@/studio/HardwareBomView'
 import HardwareNetworkView from '@/studio/HardwareNetworkView'
 import HardwarePropertiesDock from '@/studio/HardwarePropertiesDock'
+import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
+import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import {
   clampDockWidth,
@@ -88,6 +90,13 @@ import {
 } from '@/studio/chat/chatTabState'
 
 type StudioTab = 'overview' | 'chat' | 'source' | 'knowledge' | 'git'
+// What <main> renders for the current selection. Replaces the old hardwarePage
+// ternary: project and worktree selections now have their own landing pages.
+export type MainView =
+  | { kind: 'project' }
+  | { kind: 'worktree'; tab: 'overview' | 'tasks' }
+  | { kind: 'hardware'; page: 'tree' | 'bom' | 'network' }
+  | { kind: 'device' }
 type ActiveOperation = {
   id: string
   kind: string
@@ -424,7 +433,7 @@ export default function MainStudio() {
   const [hardwareView, setHardwareView] = useState<api.HardwareConfigurationView | null>(null)
   const [hardwareSelectedNodeId, setHardwareSelectedNodeId] = useState<string | null>(null)
   const [hardwareInspectedNodeId, setHardwareInspectedNodeId] = useState<string | null>(null)
-  const [hardwarePage, setHardwarePage] = useState<'tree' | 'bom' | 'network'>('tree')
+  const [mainView, setMainView] = useState<MainView>({ kind: 'project' })
   const [hardwareBomView, setHardwareBomView] = useState<api.HardwareBomView | null>(null)
   const [hardwareNetworkView, setHardwareNetworkView] = useState<api.HardwareNetworkView | null>(null)
   const selectionRequestId = useRef(0)
@@ -522,6 +531,8 @@ export default function MainStudio() {
     () => activeWorkbench?.worktrees.find(worktree => worktree.worktreeId === selection.worktreeId) ?? null,
     [activeWorkbench, selection.worktreeId],
   )
+  // Derived hardware sub-page; null when the main view is not a hardware page.
+  const hardwarePage = mainView.kind === 'hardware' ? mainView.page : null
   const knowledgeContext = useMemo<api.KnowledgeGraphContext | null>(
     () => selection.workbenchId && selection.worktreeId && selection.deviceId
       ? { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
@@ -646,7 +657,7 @@ export default function MainStudio() {
 
   useEffect(() => {
     const requestId = ++hardwareRequestId.current
-    if (!selection.workbenchId || !selection.worktreeId || selection.deviceId) {
+    if (!selection.workbenchId || !selection.worktreeId || selection.deviceId || hardwarePage !== 'tree') {
       setHardwareView(null)
       setHardwareSelectedNodeId(null)
       setHardwareInspectedNodeId(null)
@@ -675,7 +686,7 @@ export default function MainStudio() {
           message: displayError(error),
         })
       })
-  }, [selection.deviceId, selection.workbenchId, selection.worktreeId])
+  }, [hardwarePage, selection.deviceId, selection.workbenchId, selection.worktreeId])
 
   useEffect(() => {
     const requestId = ++hardwareBomRequestId.current
@@ -808,6 +819,7 @@ export default function MainStudio() {
   const selectWorkbench = async (workbench: api.Workbench) => {
     try {
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
+      setMainView({ kind: 'project' })
       setDeviceSelection(null)
       setChatTabs(emptyChatTabs())
     } catch (error) {
@@ -824,12 +836,9 @@ export default function MainStudio() {
         [worktreeKey(workbench.workbenchId, worktree.worktreeId)]: devices,
       }))
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
+      setMainView({ kind: 'worktree', tab: 'overview' })
       setDeviceSelection(null)
       setChatTabs(emptyChatTabs())
-      setHardwarePage('tree')
-      if (devices.length === 1) {
-        await selectDevice(workbench, worktree, devices[0].deviceId)
-      }
     } catch (error) {
       showErrorToast(displayError(error))
     } finally {
@@ -846,6 +855,7 @@ export default function MainStudio() {
     // Selection is a pure metadata operation: apply it instantly. The snapshot
     // (per-block manifest work) loads in the background and fills the view.
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
+    setMainView({ kind: 'device' })
     setDeviceSelection(previous => beginDeviceSelection(previous, deviceId, requestId))
     setChatTabs(emptyChatTabs())
     setOperation('select-device')
@@ -891,7 +901,7 @@ export default function MainStudio() {
     page: 'tree' | 'bom' | 'network',
   ) => {
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
-    setHardwarePage(page)
+    setMainView({ kind: 'hardware', page })
     setDeviceSelection(null)
     setChatTabs(emptyChatTabs())
     setActiveTab('overview')
@@ -1453,6 +1463,7 @@ export default function MainStudio() {
       setDeleteWorkbenchFor(null)
       if (selection.workbenchId === workbench.workbenchId) {
         setSelection({ workbenchId: null, worktreeId: null, deviceId: null })
+        setMainView({ kind: 'project' })
         setDeviceSelection(null)
         setChatTabs(emptyChatTabs())
       }
@@ -1475,6 +1486,7 @@ export default function MainStudio() {
       setDeleteWorktreeFor(null)
       if (selection.workbenchId === workbench.workbenchId && selection.worktreeId === worktree.worktreeId) {
         setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
+        setMainView({ kind: 'project' })
         setDeviceSelection(null)
         setChatTabs(emptyChatTabs())
       }
@@ -1676,6 +1688,7 @@ export default function MainStudio() {
               </div>
             </div>
           ) : !selection.deviceId && selection.worktreeId ? (
+            mainView.kind === 'hardware' ? (
             <>
               <div className="flex h-10 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
                 {hardwareTabs.map(tab => {
@@ -1683,7 +1696,7 @@ export default function MainStudio() {
                   return (
                     <button
                       key={tab.id}
-                      onClick={() => setHardwarePage(tab.id)}
+                      onClick={() => setMainView({ kind: 'hardware', page: tab.id })}
                       className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[9px] transition-colors ${hardwarePage === tab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
                     >
                       <Icon className="h-3 w-3" /> {tab.label}
@@ -1711,6 +1724,25 @@ export default function MainStudio() {
                 )}
               </div>
             </>
+            ) : (
+              <WorktreeLandingPage
+                workbenchId={selection.workbenchId!}
+                worktreeId={selection.worktreeId}
+                tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}
+                onTabChange={tab => setMainView({ kind: 'worktree', tab })}
+                onSelectDevice={deviceId => {
+                  if (activeWorkbench && activeWorktree) void selectDevice(activeWorkbench, activeWorktree, deviceId)
+                }}
+              />
+            )
+          ) : !selection.deviceId && selection.workbenchId ? (
+            <ProjectLandingPage
+              workbenchId={selection.workbenchId}
+              onSelectWorktree={worktreeId => {
+                const worktree = activeWorkbench?.worktrees.find(candidate => candidate.worktreeId === worktreeId)
+                if (activeWorkbench && worktree) void selectWorktree(activeWorkbench, worktree)
+              }}
+            />
           ) : !selection.deviceId ? (
             <div className="relative grid h-full place-items-center overflow-hidden p-8">
               <div className="pointer-events-none absolute inset-0 opacity-[0.035]" style={{
@@ -2073,7 +2105,7 @@ export default function MainStudio() {
             </>
           )}
         </main>
-        {selection.worktreeId && (
+        {selection.worktreeId && (selection.deviceId !== null || mainView.kind === 'hardware') && (
           <>
             <div
               role="separator"
@@ -2137,7 +2169,7 @@ export default function MainStudio() {
           <span>/</span>
           <span className="font-mono">{activeWorktree?.branch ?? 'no worktree'}</span>
           <span>/</span>
-          <span className="font-mono text-foreground">{deviceInfo?.plcName ?? (selection.worktreeId && !selection.deviceId ? 'hardware' : selection.deviceId ?? 'no device')}</span>
+          <span className="font-mono text-foreground">{deviceInfo?.plcName ?? (selection.worktreeId && !selection.deviceId ? (mainView.kind === 'hardware' ? 'hardware' : 'worktree') : selection.deviceId ?? 'no device')}</span>
         </span>
         <button
           className="studio-status-item studio-status-api"

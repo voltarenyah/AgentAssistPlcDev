@@ -223,6 +223,47 @@ public sealed class WorkbenchCatalog
         return updated;
     }
 
+    /// <summary>Persists the landing-page info fields (purpose/owner) of a workbench.</summary>
+    public WorkbenchMetadata UpdateWorkbenchInfo(
+        WorkbenchMetadata workbench,
+        string? purpose,
+        string? owner)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+
+        var updated = workbench with { Purpose = purpose, Owner = owner };
+        _store.Write(MetadataPath(workbench.RootPath), updated);
+        return updated;
+    }
+
+    /// <summary>Persists a worktree.json update (landing-page info fields, status). The
+    /// caller supplies the fully-updated metadata; identity is checked against the catalog.</summary>
+    public WorktreeMetadata UpdateWorktreeInfo(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        ArgumentNullException.ThrowIfNull(worktree);
+
+        var registration = workbench.Worktrees.SingleOrDefault(candidate =>
+            string.Equals(
+                candidate.WorktreeId,
+                worktree.WorktreeId,
+                StringComparison.Ordinal));
+        if (registration is null)
+        {
+            throw new WorkbenchCatalogException(
+                "WORKTREE_NOT_FOUND",
+                $"Workbench '{workbench.WorkbenchId}' does not contain worktree '{worktree.WorktreeId}'.");
+        }
+
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(
+            workbench.RootPath,
+            registration.RelativePath);
+        _store.Write(Path.Combine(worktreeRoot, "worktree.json"), worktree);
+        return worktree;
+    }
+
     public DeviceContext ResolveDevice(
         WorkbenchMetadata workbench,
         WorktreeMetadata worktree,

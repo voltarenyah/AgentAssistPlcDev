@@ -84,6 +84,8 @@ describe('MainStudio device selection resilience', () => {
     await act(async () => {})
     clickText(host, 'master')
     await act(async () => {})
+    clickText(host, 'PLC_Demo')
+    await act(async () => {})
 
     const leftToggle = host.querySelector<HTMLButtonElement>('[data-dock-toggle="left"]')
     const rightToggle = host.querySelector<HTMLButtonElement>('[data-dock-toggle="right"]')
@@ -118,6 +120,8 @@ describe('MainStudio device selection resilience', () => {
     await act(async () => {})
     clickText(host, 'master')
     await act(async () => {})
+    clickText(host, 'PLC_Demo')
+    await act(async () => {})
 
     expect(host.querySelector('footer')?.textContent).toContain('dev1')
     expect(host.querySelector('footer')?.textContent).not.toContain('no device')
@@ -137,6 +141,8 @@ describe('MainStudio device selection resilience', () => {
     clickText(host, 'DemoWB')
     await act(async () => {})
     clickText(host, 'master')
+    await act(async () => {})
+    clickText(host, 'PLC_Demo')
     await act(async () => {})
     await act(async () => {})
 

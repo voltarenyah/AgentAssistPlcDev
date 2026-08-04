@@ -111,10 +111,7 @@ public sealed class AtomicJsonStore
             actualVersion = schema.GetString();
         }
 
-        if (!string.Equals(
-                actualVersion,
-                WorkbenchSchema.CurrentVersion,
-                StringComparison.Ordinal))
+        if (!WorkbenchSchema.SupportedVersions.Contains(actualVersion, StringComparer.Ordinal))
         {
             throw new MetadataSchemaException(actualVersion);
         }

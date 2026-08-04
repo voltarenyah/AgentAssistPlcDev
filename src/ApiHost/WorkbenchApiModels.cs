@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Agent.Chat;
 using Agent.Workbench;
 using Contracts.Sandbox;
@@ -23,6 +24,55 @@ public sealed record SourcePathApiRequest(string RelativePath);
 /// commit differently from the initial "generate PLC context" commit.</summary>
 public sealed record BootstrapApiRequest(string? CommitMessage);
 public sealed record HardwareOverwriteApiRequest(bool ConfirmOverwrite);
+
+/// <summary>Project landing page payload: workbench metadata plus a per-worktree summary
+/// with task counts, aggregated server-side in one call.</summary>
+public sealed record WorkbenchOverviewResponse(
+    string WorkbenchId,
+    string Name,
+    string CreatedAt,
+    string RootPath,
+    string RepositoryPath,
+    string? EngineeringProjectId,
+    string? SourceProjectPath,
+    string? Purpose,
+    string? Owner,
+    WorktreeOverviewEntry[] Worktrees);
+
+public sealed record WorktreeOverviewEntry(
+    string WorktreeId,
+    string Name,
+    string Branch,
+    string RelativePath,
+    string? CreatedAt,
+    string? Purpose,
+    string? Owner,
+    WorktreeStatus Status,
+    DateTimeOffset? FinishedUtc,
+    int OpenTasks,
+    int TotalTasks);
+
+/// <summary>Worktree landing page header payload: the full worktree.json metadata.</summary>
+public sealed record WorktreeDetailResponse(
+    string WorktreeId,
+    string WorkbenchId,
+    string Name,
+    string Branch,
+    string CreatedAt,
+    string? BaseCommit,
+    string? EngineeringProjectId,
+    string? SourceProjectPath,
+    IReadOnlyList<string> DeviceIds,
+    string? LastReconciliationCommit,
+    string? Purpose,
+    string? Owner,
+    WorktreeStatus Status,
+    DateTimeOffset? FinishedUtc);
+
+public sealed record CreateWorktreeTaskApiRequest(
+    string Title,
+    string? Details,
+    string[]? ElementRefs);
 
 /// <summary>Device list entry: opaque object id plus the human-readable PLC name from device.json.</summary>
 public sealed record DeviceSummary(string DeviceId, string PlcName);
@@ -254,6 +304,164 @@ public static class WorkbenchEndpoints
         });
         app.MapPost("/api/workbenches/{id}/select", (string id, WorkbenchApiState s) => { s.Workbench(id); s.Select(id); return Results.NoContent(); });
         app.MapGet("/api/workbenches/{id}/worktrees", (string id, WorkbenchApiState s) => s.Workbench(id).Worktrees);
+        app.MapGet("/api/workbenches/{id}/overview", (
+            string id,
+            WorkbenchApiState s,
+            AtomicJsonStore store,
+            WorktreeTaskStore tasks) =>
+        {
+            var workbench = s.Workbench(id);
+            var entries = workbench.Worktrees.Select(registration =>
+            {
+                var worktreeRoot = WorkbenchPaths.ResolveWorktree(
+                    workbench.RootPath,
+                    registration.RelativePath);
+                WorktreeMetadata? metadata = null;
+                try
+                {
+                    metadata = store.Read<WorktreeMetadata>(
+                        Path.Combine(worktreeRoot, "worktree.json"));
+                }
+                catch (Exception exception) when (exception is IOException
+                    or UnauthorizedAccessException
+                    or JsonException
+                    or MetadataSchemaException)
+                {
+                    // A missing/corrupt worktree.json must not sink the whole project
+                    // overview; the entry still appears with registration data and defaults.
+                }
+
+                var taskList = tasks.Load(worktreeRoot);
+                return new WorktreeOverviewEntry(
+                    registration.WorktreeId,
+                    metadata?.Name ?? registration.Name,
+                    metadata?.Branch ?? registration.Branch,
+                    registration.RelativePath,
+                    metadata?.CreatedAt,
+                    metadata?.Purpose,
+                    metadata?.Owner,
+                    metadata?.Status ?? WorktreeStatus.Ongoing,
+                    metadata?.FinishedUtc,
+                    taskList.Tasks.Count(task => task.Status != WorktreeTaskStatus.Done),
+                    taskList.Tasks.Count);
+            }).ToArray();
+
+            return new WorkbenchOverviewResponse(
+                workbench.WorkbenchId,
+                workbench.Name,
+                workbench.CreatedAt,
+                workbench.RootPath,
+                workbench.RepositoryPath,
+                workbench.EngineeringProjectId,
+                workbench.SourceProjectPath,
+                workbench.Purpose,
+                workbench.Owner,
+                entries);
+        });
+        app.MapPatch("/api/workbenches/{id}", (
+            string id,
+            JsonElement body,
+            WorkbenchApiState s,
+            WorkbenchCatalog catalog) =>
+        {
+            var workbench = s.Workbench(id);
+            catalog.UpdateWorkbenchInfo(
+                workbench,
+                TryGetOptionalString(body, "purpose", out var purpose) ? purpose : workbench.Purpose,
+                TryGetOptionalString(body, "owner", out var owner) ? owner : workbench.Owner);
+            return s.Refresh(id);
+        });
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}", (string id, string wt, WorkbenchApiState s) =>
+            ToDetail(s.Worktree(id, wt)));
+        app.MapPatch("/api/workbenches/{id}/worktrees/{wt}", (
+            string id,
+            string wt,
+            JsonElement body,
+            WorkbenchApiState s,
+            WorkbenchCatalog catalog) =>
+        {
+            var workbench = s.Workbench(id);
+            var worktree = s.Worktree(id, wt);
+            var status = TryGetOptionalEnum<WorktreeStatus>(body, "status", out var parsed)
+                ? parsed
+                : worktree.Status;
+            var updated = worktree with
+            {
+                Purpose = TryGetOptionalString(body, "purpose", out var purpose) ? purpose : worktree.Purpose,
+                Owner = TryGetOptionalString(body, "owner", out var owner) ? owner : worktree.Owner,
+                Status = status,
+            };
+            // The server owns FinishedUtc: set on the transition to finished, cleared on
+            // the transition back to ongoing; untouched when the status does not change.
+            if (status == WorktreeStatus.Finished && worktree.Status != WorktreeStatus.Finished)
+            {
+                updated = updated with { FinishedUtc = DateTimeOffset.UtcNow };
+            }
+            else if (status == WorktreeStatus.Ongoing && worktree.Status == WorktreeStatus.Finished)
+            {
+                updated = updated with { FinishedUtc = null };
+            }
+
+            catalog.UpdateWorktreeInfo(workbench, updated);
+            return Results.Ok(ToDetail(updated));
+        });
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/tasks", (
+            string id,
+            string wt,
+            WorkbenchApiState s,
+            WorktreeTaskStore tasks) =>
+            tasks.Load(s.WorktreeRoot(id, wt)));
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tasks", (
+            string id,
+            string wt,
+            CreateWorktreeTaskApiRequest r,
+            WorkbenchApiState s,
+            WorktreeTaskStore tasks) =>
+        {
+            var task = tasks.Add(s.WorktreeRoot(id, wt), r.Title, r.Details, r.ElementRefs);
+            return Results.Created(
+                $"/api/workbenches/{id}/worktrees/{wt}/tasks/{task.TaskId}",
+                task);
+        });
+        app.MapPatch("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}", (
+            string id,
+            string wt,
+            string taskId,
+            JsonElement body,
+            WorkbenchApiState s,
+            WorktreeTaskStore tasks) =>
+        {
+            var updated = tasks.Update(s.WorktreeRoot(id, wt), taskId, task =>
+            {
+                var title = TryGetOptionalString(body, "title", out var changedTitle)
+                    ? changedTitle
+                    : task.Title;
+                ArgumentException.ThrowIfNullOrWhiteSpace(title);
+                return task with
+                {
+                    Title = title,
+                    Details = TryGetOptionalString(body, "details", out var details) ? details : task.Details,
+                    Status = TryGetOptionalEnum<WorktreeTaskStatus>(body, "status", out var status)
+                        ? status
+                        : task.Status,
+                    ElementRefs = TryGetOptionalStringArray(body, "elementRefs", out var elementRefs)
+                        ? elementRefs
+                        : task.ElementRefs,
+                };
+            });
+            return updated is null
+                ? throw new KeyNotFoundException("TASK_NOT_FOUND")
+                : Results.Ok(updated);
+        });
+        app.MapDelete("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}", (
+            string id,
+            string wt,
+            string taskId,
+            WorkbenchApiState s,
+            WorktreeTaskStore tasks) =>
+            tasks.Delete(s.WorktreeRoot(id, wt), taskId)
+                ? Results.NoContent()
+                : throw new KeyNotFoundException("TASK_NOT_FOUND"));
         app.MapPost("/api/workbenches/{id}/worktrees", async (
             string id,
             CreateWorktreeApiRequest r,
@@ -754,6 +962,96 @@ public static class WorkbenchEndpoints
         app.MapGet("/api/devices/{device}/sessions/{session}", (string device, string session, WorkbenchApiState s) => SessionManager.LoadSession(s.Device(device).Context, session) is { } value ? Results.Ok(value) : Results.NotFound());
         app.MapPut("/api/devices/{device}/sessions/{session}", (string device, string session, SessionSaveApiRequest r, WorkbenchApiState s) => { if (r.Session.Header.SessionId != session) return Results.BadRequest(); SessionManager.SaveSession(s.Device(device).Context, r.Session); return Results.NoContent(); });
         return app;
+    }
+
+    private static WorktreeDetailResponse ToDetail(WorktreeMetadata worktree) => new(
+        worktree.WorktreeId,
+        worktree.WorkbenchId,
+        worktree.Name,
+        worktree.Branch,
+        worktree.CreatedAt,
+        worktree.BaseCommit,
+        worktree.EngineeringProjectId,
+        worktree.SourceProjectPath,
+        worktree.DeviceIds,
+        worktree.LastReconciliationCommit,
+        worktree.Purpose,
+        worktree.Owner,
+        worktree.Status,
+        worktree.FinishedUtc);
+
+    /// <summary>PATCH semantics: false when the field is omitted (leave unchanged); true when
+    /// present — a JSON null clears the value, any string (including empty) sets it.</summary>
+    private static bool TryGetOptionalString(JsonElement body, string name, out string? value)
+    {
+        value = null;
+        if (body.ValueKind != JsonValueKind.Object
+            || !body.TryGetProperty(name, out var property))
+        {
+            return false;
+        }
+
+        if (property.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            throw new ArgumentException($"Field '{name}' must be a string or null.");
+        }
+
+        value = property.GetString();
+        return true;
+    }
+
+    private static bool TryGetOptionalStringArray(JsonElement body, string name, out string[] value)
+    {
+        value = [];
+        if (body.ValueKind != JsonValueKind.Object
+            || !body.TryGetProperty(name, out var property))
+        {
+            return false;
+        }
+
+        if (property.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (property.ValueKind != JsonValueKind.Array)
+        {
+            throw new ArgumentException($"Field '{name}' must be an array of strings or null.");
+        }
+
+        value = property.EnumerateArray()
+            .Select(item => item.ValueKind == JsonValueKind.String
+                ? item.GetString()!
+                : throw new ArgumentException($"Field '{name}' must be an array of strings or null."))
+            .ToArray();
+        return true;
+    }
+
+    private static bool TryGetOptionalEnum<TEnum>(JsonElement body, string name, out TEnum value)
+        where TEnum : struct, Enum
+    {
+        value = default;
+        if (body.ValueKind != JsonValueKind.Object
+            || !body.TryGetProperty(name, out var property)
+            || property.ValueKind == JsonValueKind.Null)
+        {
+            return false;
+        }
+
+        if (property.ValueKind != JsonValueKind.String
+            || !Enum.TryParse(property.GetString(), ignoreCase: true, out value)
+            || !Enum.IsDefined(value))
+        {
+            throw new ArgumentException(
+                $"Field '{name}' must be one of: {string.Join(", ", Enum.GetNames<TEnum>())}.");
+        }
+
+        return true;
     }
 
     private static async Task<T> RunOperationAsync<T>(

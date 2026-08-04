@@ -179,6 +179,69 @@ export type Worktree = {
   lastReconciliationCommit: string | null
 }
 
+export type WorktreeStatus = 'ongoing' | 'finished'
+
+export type WorktreeTaskStatus = 'todo' | 'inProgress' | 'done'
+
+export type WorktreeOverview = {
+  worktreeId: string
+  name: string
+  branch: string
+  relativePath: string
+  createdAt: string | null
+  purpose: string | null
+  owner: string | null
+  status: WorktreeStatus
+  finishedUtc: string | null
+  openTasks: number
+  totalTasks: number
+}
+
+export type WorkbenchOverview = {
+  workbenchId: string
+  name: string
+  createdAt: string
+  rootPath: string
+  repositoryPath: string
+  engineeringProjectId: string | null
+  sourceProjectPath: string | null
+  purpose: string | null
+  owner: string | null
+  worktrees: WorktreeOverview[]
+}
+
+export type WorktreeDetail = {
+  worktreeId: string
+  workbenchId: string
+  name: string
+  branch: string
+  createdAt: string
+  baseCommit: string | null
+  engineeringProjectId: string | null
+  sourceProjectPath: string | null
+  deviceIds: string[]
+  lastReconciliationCommit: string | null
+  purpose: string | null
+  owner: string | null
+  status: WorktreeStatus
+  finishedUtc: string | null
+}
+
+export type WorktreeTask = {
+  taskId: string
+  title: string
+  details: string | null
+  status: WorktreeTaskStatus
+  elementRefs: string[]
+  createdUtc: string
+  doneUtc: string | null
+}
+
+export type WorktreeTaskList = {
+  version: number
+  tasks: WorktreeTask[]
+}
+
 export type DeviceInfo = {
   workbenchId: string
   worktreeId: string
@@ -586,6 +649,43 @@ export const getOperationStatus = (operationId: string) =>
   workbenchRequest<OperationStatus>(`/operations/${encodeURIComponent(operationId)}`)
 export const dismissOperationStatus = (operationId: string) =>
   workbenchRequest<void>(`/operations/${encodeURIComponent(operationId)}`, { method: 'DELETE' })
+
+/* ── Project / worktree landing page API ─────────────── */
+
+const worktreePath = (workbenchId: string, worktreeId: string) =>
+  `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}`
+
+export const getWorkbenchOverview = (workbenchId: string) =>
+  workbenchRequest<WorkbenchOverview>(`/workbenches/${encodeURIComponent(workbenchId)}/overview`)
+export const updateWorkbench = (workbenchId: string, patch: { purpose?: string | null; owner?: string | null }) =>
+  // Returns the reloaded workbench metadata (not the overview aggregate); callers
+  // that need the overview re-fetch it via getWorkbenchOverview.
+  workbenchRequest<Workbench>(`/workbenches/${encodeURIComponent(workbenchId)}`, jsonRequest('PATCH', patch))
+export const getWorktreeDetail = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<WorktreeDetail>(worktreePath(workbenchId, worktreeId))
+export const updateWorktree = (
+  workbenchId: string,
+  worktreeId: string,
+  patch: { purpose?: string | null; owner?: string | null; status?: WorktreeStatus },
+) =>
+  workbenchRequest<WorktreeDetail>(worktreePath(workbenchId, worktreeId), jsonRequest('PATCH', patch))
+export const listWorktreeTasks = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<WorktreeTaskList>(`${worktreePath(workbenchId, worktreeId)}/tasks`)
+export const createWorktreeTask = (
+  workbenchId: string,
+  worktreeId: string,
+  task: { title: string; details?: string | null; elementRefs?: string[] },
+) =>
+  workbenchRequest<WorktreeTask>(`${worktreePath(workbenchId, worktreeId)}/tasks`, jsonRequest('POST', task))
+export const updateWorktreeTask = (
+  workbenchId: string,
+  worktreeId: string,
+  taskId: string,
+  patch: { title?: string; details?: string | null; status?: WorktreeTaskStatus; elementRefs?: string[] },
+) =>
+  workbenchRequest<WorktreeTask>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`, jsonRequest('PATCH', patch))
+export const deleteWorktreeTask = (workbenchId: string, worktreeId: string, taskId: string) =>
+  workbenchRequest<void>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' })
 
 /* ── Version control types ──────────────────────────── */
 

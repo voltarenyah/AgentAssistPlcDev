@@ -24,7 +24,8 @@ public sealed class TrustedWorkbenchRoot
 public sealed class TrustedWorkbenchRootRegistry
 {
     public const string EnvironmentVariableName = "AUTOMATION_WORKBENCH_TRUSTED_ROOTS_FILE";
-    private const string SupportedWorkbenchSchema = "1.0";
+    // 1.1 added optional landing-page fields (purpose/owner/status); grants stay valid across it.
+    private static readonly string[] SupportedWorkbenchSchemas = ["1.0", "1.1"];
     private readonly string path;
     private readonly string mutexName;
 
@@ -165,7 +166,8 @@ public sealed class TrustedWorkbenchRootRegistry
             var metadata = document.RootElement;
             var declaredRoot = StringProperty(metadata, "rootPath");
             return metadata.ValueKind == JsonValueKind.Object
-                && StringProperty(metadata, "schemaVersion") == SupportedWorkbenchSchema
+                && StringProperty(metadata, "schemaVersion") is { } declaredSchema
+                && SupportedWorkbenchSchemas.Contains(declaredSchema, StringComparer.Ordinal)
                 && !string.IsNullOrWhiteSpace(declaredRoot)
                 && string.Equals(
                     StringProperty(metadata, "workbenchId"),

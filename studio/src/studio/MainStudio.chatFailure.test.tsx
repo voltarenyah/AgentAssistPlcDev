@@ -129,6 +129,8 @@ describe('MainStudio chat failure resilience', () => {
     await act(async () => {})
     clickText(host, 'master')
     await act(async () => {})
+    clickText(host, 'PLC_Demo')
+    await act(async () => {})
     await act(async () => {})
 
     clickText(host, 'AI chat')
