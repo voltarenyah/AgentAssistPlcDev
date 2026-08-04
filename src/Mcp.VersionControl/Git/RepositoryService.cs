@@ -382,6 +382,13 @@ internal static class RepositoryService
         };
     }
 
+    /// <summary>Preview a branch merge without changing the worktree or any Git ref.</summary>
+    public static VcMergePreviewResult PreviewMerge(string repoPath, string sourceBranch)
+    {
+        EnsureRepo(repoPath);
+        return MergePreviewService.Preview(repoPath, sourceBranch);
+    }
+
     /// <summary>Show working-tree status.</summary>
     public static VcStatusResult Status(string repoPath)
     {

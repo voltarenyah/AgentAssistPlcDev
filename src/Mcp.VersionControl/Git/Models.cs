@@ -163,6 +163,23 @@ public sealed class VcMergeResult
     public bool Merged { get; set; }
 }
 
+public sealed record VcTreeObject(
+    string FilePath,
+    string Sha256,
+    long Length);
+
+public sealed record VcMergePreviewResult(
+    string TargetBranch,
+    string SourceBranch,
+    string MergeBaseSha,
+    string TargetSha,
+    string SourceSha,
+    string? CandidateTreeSha,
+    bool HasConflicts,
+    IReadOnlyList<string> ConflictPaths,
+    IReadOnlyList<string> FeaturePaths,
+    IReadOnlyList<VcTreeObject> Objects);
+
 /// <summary>Result of vc_add.</summary>
 public sealed class VcAddResult
 {

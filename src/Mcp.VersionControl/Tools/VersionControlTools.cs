@@ -64,6 +64,13 @@ public sealed class VersionControlTools
         [Description("Source branch to merge.")] string sourceBranch)
         => Invoke(() => RepositoryService.Merge(targetWorktreePath, sourceBranch));
 
+    [McpServerTool(Name = "vc_merge_preview")]
+    [Description("Build a prospective merge tree for a source branch without changing branches, worktrees, or refs. Reports conflicts and fingerprints tracked PLC source XML in a conflict-free candidate tree.")]
+    public CallToolResult VcMergePreview(
+        [Description("Path to the current target repository or linked worktree.")] string repoPath,
+        [Description("Source branch to preview merging into the current branch.")] string sourceBranch)
+        => Invoke(() => RepositoryService.PreviewMerge(repoPath, sourceBranch));
+
     [McpServerTool(Name = "vc_status")]
     [Description("Show working-tree status: staged, unstaged, modified, added, deleted, and untracked files relative to HEAD.")]
     public CallToolResult VcStatus(
