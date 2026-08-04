@@ -44,6 +44,7 @@ internal static class RepositoryService
         "worktree.json",
         "devices/*/device.json",
         "devices/*/staging/",
+        "devices/*/source/metadata.json",
         "devices/*/plc-knowledge.db*",
         ".automation/",
         "sessionexport/",
@@ -213,8 +214,16 @@ internal static class RepositoryService
         };
     }
 
-    /// <summary>Remove a linked worktree from a shared bare repository (git worktree remove --force).</summary>
-    public static VcWorktreeRemoveResult RemoveWorktree(string repositoryPath, string worktreePath)
+    /// <summary>
+    /// Remove a linked worktree from a shared bare repository. When deleteBranch is true,
+    /// the branch is deleted only when it is the branch registered to worktreePath; a missing
+    /// or unrelated branch is never deleted.
+    /// </summary>
+    public static VcWorktreeRemoveResult RemoveWorktree(
+        string repositoryPath,
+        string worktreePath,
+        string? branchName = null,
+        bool deleteBranch = false)
     {
         var repository = RequireFullPath(repositoryPath, nameof(repositoryPath));
         EnsureNoReparsePoints(repository);
@@ -226,17 +235,72 @@ internal static class RepositoryService
         var checkout = RequireFullPath(worktreePath, nameof(worktreePath));
         EnsureContained(workbenchRoot, checkout);
 
+        if (deleteBranch && string.IsNullOrWhiteSpace(branchName))
+        {
+            throw new VcInternalException(
+                "BRANCH_REQUIRED",
+                "branchName is required when deleteBranch is true.");
+        }
+
+        var registered = Worktrees(repository).Worktrees.SingleOrDefault(item =>
+            string.Equals(
+                RequireFullPath(item.WorktreePath, nameof(item.WorktreePath)),
+                checkout,
+                StringComparison.OrdinalIgnoreCase));
+        if (deleteBranch
+            && (string.Equals(branchName, "master", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(registered?.Branch, "master", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new VcInternalException(
+                "MASTER_WORKTREE_PROTECTED",
+                "The master worktree and branch cannot be removed during rollback.");
+        }
+        var deleteRegisteredBranch = deleteBranch
+            && registered is not null
+            && string.Equals(registered.Branch, branchName, StringComparison.Ordinal)
+            && !string.Equals(registered.Branch, "master", StringComparison.OrdinalIgnoreCase);
+
+        // A rollback may run after vc_add_worktree failed before Git registered the checkout.
+        // Do not infer ownership of a branch from its name alone.
+        if (deleteBranch && registered is null)
+        {
+            return new VcWorktreeRemoveResult
+            {
+                RepositoryPath = repository,
+                WorktreePath = checkout,
+                Removed = false,
+                BranchDeleted = false,
+            };
+        }
+
         RunGit(
             "WORKTREE_REMOVE_FAILED",
             $"Failed to remove linked worktree '{checkout}'.",
             "--git-dir", repository,
             "worktree", "remove", "--force", checkout);
 
+        if (deleteRegisteredBranch)
+        {
+            try
+            {
+                using var linkedRepository = new Repository(repository);
+                linkedRepository.Branches.Remove(branchName!);
+            }
+            catch (Exception exception) when (exception is LibGit2SharpException or ArgumentException)
+            {
+                throw new VcInternalException(
+                    "BRANCH_DELETE_FAILED",
+                    $"Failed to delete newly created branch '{branchName}'.",
+                    exception.Message);
+            }
+        }
+
         return new VcWorktreeRemoveResult
         {
             RepositoryPath = repository,
             WorktreePath = checkout,
             Removed = true,
+            BranchDeleted = deleteRegisteredBranch,
         };
     }
 
@@ -271,15 +335,18 @@ internal static class RepositoryService
         EnsureRepo(target);
         using (var targetRepository = new Repository(target))
         {
-            if (targetRepository.RetrieveStatus(new StatusOptions
+            var targetStatus = targetRepository.RetrieveStatus(new StatusOptions
                 {
                     IncludeUntracked = true,
                     RecurseUntrackedDirs = true,
-                }).Any(entry => !entry.State.HasFlag(FileStatus.Ignored)))
+                })
+                .Where(entry => !entry.State.HasFlag(FileStatus.Ignored))
+                .ToArray();
+            if (targetStatus.Length > 0)
             {
                 throw new VcInternalException(
                     "DIRTY_WORKTREE",
-                    $"Target worktree '{target}' has uncommitted changes.",
+                    $"Target worktree '{target}' has uncommitted changes: {string.Join(", ", targetStatus.Select(entry => $"{entry.FilePath}:{entry.State}"))}.",
                     "Commit or restore target changes before merging.");
             }
 

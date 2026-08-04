@@ -45,6 +45,101 @@ public sealed class WorkbenchLifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task NewlyCreatedWorkbenchHasCleanSourceStatusWithRuntimeArtifacts()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Clean status line", Path.Combine(root, "clean-status"), 42, null));
+
+        foreach (var metadata in created.Devices)
+        {
+            var device = catalog.ResolveDevice(created.Workbench, created.Worktree, metadata);
+            File.WriteAllText(device.KnowledgeDbPath, "runtime database");
+            Assert.True(File.Exists(Path.Combine(device.WorktreeRoot, "worktree.json")));
+            Assert.True(File.Exists(Path.Combine(device.DeviceRoot, "device.json")));
+            Assert.True(Directory.Exists(device.SourceRoot));
+            Assert.True(Directory.Exists(device.StagingRoot));
+            Assert.Empty(RepositoryService.Status(device.WorktreeRoot).Entries);
+        }
+    }
+
+    [Fact]
+    public async Task FeatureMetadataFailureRemovesCheckoutAndNewBranchFromRealRepository()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var git = new GitBoundary();
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            git,
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Metadata failure line", Path.Combine(root, "metadata-failure"), 42, null));
+        var masterDevicePath = Path.Combine(
+            WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master"),
+            "devices", "PLC_1", "device.json");
+        store.Write(
+            masterDevicePath,
+            store.Read<DeviceMetadata>(masterDevicePath) with { PlcName = string.Empty });
+
+        await Assert.ThrowsAsync<WorkbenchPathException>(() =>
+            coordinator.CreateWorktreeAsync(new(
+                catalog.Load(created.Workbench.RootPath), "feature-a", "feature-a")));
+
+        Assert.DoesNotContain(
+            RepositoryService.Worktrees(created.Workbench.RepositoryPath).Worktrees,
+            item => item.Branch == "feature-a");
+        Assert.DoesNotContain(
+            RepositoryService.Branches(
+                WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master")).Branches,
+            branch => branch.Name == "feature-a");
+    }
+
+    [Fact]
+    public async Task PartialGitCreationRemovesCheckoutAndNewBranchFromRealRepository()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var git = new GitBoundary(failAfterAddWorktree: true);
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            git,
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Partial creation line", Path.Combine(root, "partial-creation"), 42, null));
+
+        await Assert.ThrowsAsync<ToolCallException>(() =>
+            coordinator.CreateWorktreeAsync(new(
+                catalog.Load(created.Workbench.RootPath), "feature-a", "feature-a")));
+
+        Assert.DoesNotContain(
+            RepositoryService.Worktrees(created.Workbench.RepositoryPath).Worktrees,
+            item => item.Branch == "feature-a");
+        Assert.DoesNotContain(
+            RepositoryService.Branches(
+                WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master")).Branches,
+            branch => branch.Name == "feature-a");
+    }
+
+    [Fact]
     public async Task CoordinatorDrivesApprovedLifecycleAcrossDevicesAndLinkedWorktrees()
     {
         var defaultParent = Path.Combine(root, "AutomationWorkbench", "Project");
@@ -103,11 +198,10 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var plc1Preview = coordinator.PreviewRefresh(plc1);
         var plc1Apply = await coordinator.ApplyRefreshAsync(
             plc1, ApproveAllChanges(plc1Preview), CancellationToken.None);
-        Assert.Equal(RefreshApplyState.Committed, plc1Apply.State);
-        Assert.NotNull(plc1Apply.CommitSha);
-        Assert.Equal(
-            plc1Apply.ChangedPaths.Order(),
-            git.AddedPathBatches.Single().Order());
+        Assert.Equal(RefreshApplyState.FilesUpdated, plc1Apply.State);
+        Assert.Null(plc1Apply.CommitSha);
+        Assert.Null(plc1Apply.Error);
+        Assert.Empty(git.AddedPathBatches);
         Assert.True(ReadDevice(store, plc1).Knowledge.BaselineStale);
         Assert.False(ReadDevice(store, plc2).Knowledge.BaselineStale);
 
@@ -116,7 +210,9 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var plc2Apply = await coordinator.ApplyRefreshAsync(
             plc2, ApproveAllChanges(plc2Preview),
             CancellationToken.None);
-        Assert.Equal(RefreshApplyState.Committed, plc2Apply.State);
+        Assert.Equal(RefreshApplyState.FilesUpdated, plc2Apply.State);
+        Assert.Null(plc2Apply.CommitSha);
+        Assert.Null(plc2Apply.Error);
         var baselineCommitCount = RepositoryService.Log(plc1.WorktreeRoot, 20).Commits.Length;
 
         await coordinator.UpdateKnowledgeAsync(plc1, CancellationToken.None);
@@ -138,6 +234,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var noOp = await coordinator.ApplyRefreshAsync(
             plc1, new(coordinator.PreviewRefresh(plc1), new HashSet<string>()),
             CancellationToken.None);
+        Assert.Equal(RefreshApplyState.NoChanges, noOp.State);
         Assert.Empty(noOp.ChangedPaths);
         Assert.Equal(baselineCommitCount, RepositoryService.Log(plc1.WorktreeRoot, 20).Commits.Length);
         Assert.Equal(baselineTimestamp, File.GetLastWriteTimeUtc(baselineFile));
@@ -169,8 +266,9 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var postEditRefresh = await coordinator.ApplyRefreshAsync(
             plc1, ApproveAllChanges(postEditPreview),
             CancellationToken.None);
-        Assert.Equal(RefreshApplyState.Committed, postEditRefresh.State);
-        Assert.NotNull(postEditRefresh.CommitSha);
+        Assert.Equal(RefreshApplyState.FilesUpdated, postEditRefresh.State);
+        Assert.Null(postEditRefresh.CommitSha);
+        Assert.Null(postEditRefresh.Error);
         Assert.True(File.Exists(overlay));
         Assert.True(ReadDevice(store, plc1).Knowledge.BaselineStale);
 
@@ -179,19 +277,15 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         SessionManager.SaveSession(plc1, session);
         Assert.Equal("hello", SessionManager.LoadSession(plc1, session.Header.SessionId)!.Messages.Single().Content);
         Assert.Contains(".automation/sessions", SessionManager.ResolveSessionPath(plc1, session.Header.SessionId)!.Replace('\\', '/'));
-        var sessionStatus = RepositoryService.Status(plc1.WorktreeRoot).Entries.Single(
+        Assert.DoesNotContain(
+            RepositoryService.Status(plc1.WorktreeRoot).Entries,
             entry => entry.FilePath.Contains(".automation", StringComparison.Ordinal));
-        Assert.Equal("Ignored", sessionStatus.State);
-        Assert.False(sessionStatus.Staged);
 
         RepositoryService.Add(plc1.WorktreeRoot, [
-            ".gitignore",
-            Path.GetRelativePath(plc1.WorktreeRoot, overlay).Replace('\\', '/'),
-            Path.GetRelativePath(
-                plc1.WorktreeRoot, Path.Combine(plc1.DeviceRoot, "device.json")).Replace('\\', '/'),
-            Path.GetRelativePath(
-                plc1.WorktreeRoot, Path.Combine(plc2.DeviceRoot, "device.json")).Replace('\\', '/'),
-            "worktree.json",
+            Path.GetRelativePath(plc1.WorktreeRoot, Path.Combine(plc1.SourceRoot, "Blocks", "Main.xml"))
+                .Replace('\\', '/'),
+            Path.GetRelativePath(plc1.WorktreeRoot, Path.Combine(plc2.SourceRoot, "Blocks", "Main.xml"))
+                .Replace('\\', '/'),
         ]);
         var retainedOverlayCommit = RepositoryService.Commit(
             plc1.WorktreeRoot, "retain PLC_1 worktree overlay", null);
@@ -264,7 +358,6 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             var root = Path.Combine(worktreeRoot, "devices", device);
             Assert.True(File.Exists(Path.Combine(root, "device.json")));
             Assert.True(File.Exists(Path.Combine(root, "source", "Blocks", "Main.xml")));
-            Assert.True(File.Exists(Path.Combine(root, "source", "metadata.json")));
         }
     }
 
@@ -383,6 +476,11 @@ public sealed class WorkbenchLifecycleTests : IDisposable
 
     private sealed class GitBoundary : IMcpToolCaller
     {
+        private readonly bool failAfterAddWorktree;
+
+        public GitBoundary(bool failAfterAddWorktree = false) =>
+            this.failAfterAddWorktree = failAfterAddWorktree;
+
         public List<string[]> AddedPathBatches { get; } = [];
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
@@ -391,9 +489,8 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             {
                 "vc_init_shared" => RepositoryService.InitShared(
                     Property<string>(args, "workbenchRoot"), Property<string>(args, "masterWorktreePath")),
-                "vc_add_worktree" => RepositoryService.AddWorktree(
-                    Property<string>(args, "repositoryPath"), Property<string>(args, "worktreePath"),
-                    Property<string>(args, "branchName"), Property<string?>(args, "startPoint")),
+                "vc_add_worktree" => AddWorktree(args),
+                "vc_remove_worktree" => RemoveWorktree(args),
                 "vc_add" => Add(args),
                 "vc_commit" => Commit(args),
                 "vc_merge" => RepositoryService.Merge(
@@ -410,11 +507,39 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             return RepositoryService.Add(Property<string>(args, "repoPath"), paths);
         }
 
+        private object AddWorktree(object args)
+        {
+            var result = RepositoryService.AddWorktree(
+                Property<string>(args, "repositoryPath"),
+                Property<string>(args, "worktreePath"),
+                Property<string>(args, "branchName"),
+                Property<string?>(args, "startPoint"));
+            if (failAfterAddWorktree)
+            {
+                throw new ToolCallException(
+                    "GIT_PARTIAL",
+                    "simulated transport failure after Git created the worktree",
+                    null);
+            }
+
+            return result;
+        }
+
+        private static object RemoveWorktree(object args)
+        {
+            var deleteValue = args.GetType().GetProperty("deleteBranch")?.GetValue(args);
+            return RepositoryService.RemoveWorktree(
+                Property<string>(args, "repositoryPath"),
+                Property<string>(args, "worktreePath"),
+                args.GetType().GetProperty("branchName")?.GetValue(args) as string,
+                deleteValue is bool deleteBranch && deleteBranch);
+        }
+
         private static object Commit(object args)
         {
             var commit = RepositoryService.Commit(
                 Property<string>(args, "repoPath"), Property<string>(args, "message"), null);
-            return new CoordinatorGitCommitResult { Sha = commit.Sha };
+            return new { Sha = commit.Sha };
         }
     }
 

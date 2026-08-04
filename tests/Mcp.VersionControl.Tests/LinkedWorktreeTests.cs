@@ -117,6 +117,68 @@ public sealed class LinkedWorktreeTests : IDisposable
     }
 
     [Fact]
+    public void RollbackRemovalDeletesOnlyTheBranchRegisteredToTheCheckout()
+    {
+        var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
+        var featurePath = Path.Combine(root, "workbench", "worktrees", "feature-a");
+        RepositoryService.AddWorktree(repositoryPath, featurePath, "feature-a", firstSha);
+
+        var removed = RepositoryService.RemoveWorktree(
+            repositoryPath,
+            featurePath,
+            branchName: "feature-a",
+            deleteBranch: true);
+
+        Assert.True(removed.Removed);
+        Assert.True(removed.BranchDeleted);
+        Assert.DoesNotContain(
+            RepositoryService.Branches(masterPath).Branches,
+            branch => branch.Name == "feature-a");
+        Assert.Contains(
+            RepositoryService.Branches(masterPath).Branches,
+            branch => branch.Name == "master");
+    }
+
+    [Fact]
+    public void RollbackRemovalDoesNotDeleteAnUnrelatedPreExistingBranch()
+    {
+        var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
+        var featurePath = Path.Combine(root, "workbench", "worktrees", "feature-a");
+        RepositoryService.AddWorktree(repositoryPath, featurePath, "feature-a", firstSha);
+        RepositoryService.RemoveWorktree(repositoryPath, featurePath);
+
+        var removed = RepositoryService.RemoveWorktree(
+            repositoryPath,
+            featurePath,
+            branchName: "feature-a",
+            deleteBranch: true);
+
+        Assert.False(removed.Removed);
+        Assert.False(removed.BranchDeleted);
+        Assert.Contains(
+            RepositoryService.Branches(masterPath).Branches,
+            branch => branch.Name == "feature-a");
+    }
+
+    [Fact]
+    public void RollbackRemovalProtectsMasterBranch()
+    {
+        var (repositoryPath, masterPath, _) = CreateSharedRepositoryWithInitialCommit();
+
+        var error = Assert.Throws<VcInternalException>(() =>
+            RepositoryService.RemoveWorktree(
+                repositoryPath,
+                masterPath,
+                branchName: "master",
+                deleteBranch: true));
+
+        Assert.Equal("MASTER_WORKTREE_PROTECTED", error.Code);
+        Assert.Contains(
+            RepositoryService.Worktrees(repositoryPath).Worktrees,
+            worktree => worktree.Branch == "master");
+    }
+
+    [Fact]
     public void RemoveWorktreeRejectsPathOutsideWorkbench()
     {
         var (repositoryPath, _, _) = CreateSharedRepositoryWithInitialCommit();

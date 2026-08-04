@@ -100,6 +100,7 @@ public sealed class VcWorktreeRemoveResult
     public string RepositoryPath { get; set; } = string.Empty;
     public string WorktreePath { get; set; } = string.Empty;
     public bool Removed { get; set; }
+    public bool BranchDeleted { get; set; }
 }
 
 /// <summary>One linked worktree in vc_worktrees.</summary>

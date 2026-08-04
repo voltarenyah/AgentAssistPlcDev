@@ -562,10 +562,18 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             });
 
         response.EnsureSuccessStatusCode();
+        var apply = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            "FilesUpdated",
+            Enum.GetName(
+                typeof(RefreshApplyState),
+                apply.GetProperty("state").GetInt32()));
+        Assert.Equal(JsonValueKind.Null, apply.GetProperty("commitSha").ValueKind);
+        Assert.Equal(JsonValueKind.Null, apply.GetProperty("error").ValueKind);
         Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
         Assert.False(fixture.BaselineExists("Blocks/New.xml"));
         Assert.DoesNotContain(fixture.BaselineComponentIds(), id => id == "fb-new");
-        Assert.Equal(["vc_add", "vc_commit"], fixture.VersionControl.Calls);
+        Assert.Empty(fixture.VersionControl.Calls);
     }
 
     [Fact]
@@ -1041,6 +1049,19 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(["connect", "get_project_info"], engineering.Calls);
         Assert.Equal(projectPath, engineering.Arguments[0].GetProperty("projectPath").GetString());
         Assert.True(engineering.Arguments[0].GetProperty("withUI").GetBoolean());
+        var workbenchRoot = Path.Combine(root, "wb-from-path");
+        var store = new AtomicJsonStore();
+        var workbench = store.Read<WorkbenchMetadata>(Path.Combine(workbenchRoot, "workbench.json"));
+        var registration = Assert.Single(workbench.Worktrees);
+        var worktreeRoot = Path.Combine(workbenchRoot, "worktrees", registration.RelativePath);
+        var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+
+        Assert.True(File.Exists(Path.Combine(worktreeRoot, "worktree.json")));
+        Assert.True(File.Exists(Path.Combine(deviceRoot, "device.json")));
+        Assert.True(Directory.Exists(Path.Combine(deviceRoot, "source")));
+        Assert.True(Directory.Exists(Path.Combine(deviceRoot, "staging")));
+        Assert.False(Directory.Exists(Path.Combine(deviceRoot, "exported-source")));
+        Assert.False(Directory.Exists(Path.Combine(deviceRoot, "modified-source")));
         Assert.Equal(["vc_init_shared"], versionControl.Calls);
     }
 
@@ -1612,7 +1633,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task BootstrapEndpointStagesCommitsInitialBaselineAndCompletesOperation()
+    public async Task BootstrapEndpointLeavesInitialSourcePendingManualCommitAndCompletesOperation()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
             root,
@@ -1632,14 +1653,19 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(
-            (int)RefreshApplyState.Committed,
-            body.GetProperty("baseline").GetProperty("state").GetInt32());
+            "FilesUpdated",
+            Enum.GetName(
+                typeof(RefreshApplyState),
+                body.GetProperty("baseline").GetProperty("state").GetInt32()));
+        Assert.Equal(
+            JsonValueKind.Null,
+            body.GetProperty("baseline").GetProperty("commitSha").ValueKind);
+        Assert.Equal(
+            JsonValueKind.Null,
+            body.GetProperty("baseline").GetProperty("error").ValueKind);
         Assert.True(body.TryGetProperty("knowledge", out _));
         Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
-        Assert.Equal(["vc_add", "vc_commit"], fixture.VersionControl.Calls);
-        Assert.Equal(
-            "initial baseline: full export",
-            fixture.VersionControl.Arguments[^1].GetProperty("message").GetString());
+        Assert.Empty(fixture.VersionControl.Calls);
         var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/bootstrap-1");
         Assert.Equal("bootstrap-device", operation.GetProperty("operationType").GetString());
         Assert.Equal("succeeded", operation.GetProperty("state").GetString());
