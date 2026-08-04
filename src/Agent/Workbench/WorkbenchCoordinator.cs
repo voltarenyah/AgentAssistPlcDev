@@ -95,6 +95,7 @@ public sealed class WorkbenchCoordinator
     private readonly DeviceSourceResolver sourceResolver;
     private readonly DeviceOperationLock operationLock;
     private readonly SafeDeviceExportStager stager;
+    private readonly WorkbenchConsistencyService consistency;
     private readonly PathJail? pathJail;
     private readonly SemaphoreSlim engineeringSession = new(1, 1);
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> knownWorkbenches =
@@ -123,6 +124,7 @@ public sealed class WorkbenchCoordinator
         this.operationLock = operationLock ?? new DeviceOperationLock();
         this.pathJail = pathJail;
         stager = new SafeDeviceExportStager(engineering, this.operationLock);
+        consistency = new WorkbenchConsistencyService(engineering, versionControl, catalog, store);
     }
 
     public async Task OpenProjectInTiaAsync(
@@ -940,6 +942,26 @@ public sealed class WorkbenchCoordinator
             token).ConfigureAwait(false);
     }
 
+    public async Task<WorkbenchConsistencyResult> CompareMasterWithTiaAsync(
+        string workbenchId,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
+                string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
+            ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
+        var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
+        var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
+        return await consistency.CompareAsync(workbench, master, token, progress).ConfigureAwait(false);
+    }
+
+    public WorkbenchConsistencyResult GetComparison(string workbenchId, string comparisonId)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        return consistency.GetComparison(workbench, comparisonId);
+    }
+
     public async Task<UnauthorizedMasterRecoveryResult> MoveUnauthorizedMasterChangesAsync(
         string workbenchId,
         IReadOnlyList<string> paths,
@@ -1030,6 +1052,16 @@ public sealed class WorkbenchCoordinator
                 new { repoPath = masterRoot, filePath = path, sourceSha = (string?)null },
                 token).ConfigureAwait(false);
         }
+    }
+
+    private WorkbenchMetadata LoadRegisteredWorkbench(string workbenchId)
+    {
+        if (!knownWorkbenches.TryGetValue(workbenchId, out var known))
+            throw new WorkbenchCatalogException("WORKBENCH_NOT_FOUND", "The workbench is not registered.");
+
+        var workbench = catalog.Load(known.RootPath);
+        RegisterWorkbench(workbench);
+        return workbench;
     }
 
     private static string[] NormalizeSourcePaths(IEnumerable<string> paths)

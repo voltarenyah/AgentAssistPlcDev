@@ -14,3 +14,37 @@ public sealed record DeviceSourceSnapshot(
     string ProjectIdentity,
     string ProjectChecksum,
     IReadOnlyList<SourceObjectSnapshot> Objects);
+
+public enum ConsistencyState
+{
+    Consistent,
+    Different,
+    ScanRequired,
+    Unavailable,
+}
+
+public enum SourceDifferenceKind
+{
+    Unchanged,
+    Changed,
+    Added,
+    Deleted,
+}
+
+public sealed record SourceDifference(
+    string DeviceId,
+    string PlcName,
+    string RelativePath,
+    string Identity,
+    SourceDifferenceKind Kind,
+    string? MasterFingerprint,
+    string? TiaFingerprint,
+    bool Supported);
+
+public sealed record WorkbenchConsistencyResult(
+    string ComparisonId,
+    string MasterSha,
+    bool FastGatePassed,
+    ConsistencyState State,
+    IReadOnlyDictionary<string, string?> LiveChecksums,
+    IReadOnlyList<SourceDifference> Differences);
