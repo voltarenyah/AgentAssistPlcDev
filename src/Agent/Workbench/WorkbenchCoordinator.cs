@@ -96,6 +96,7 @@ public sealed class WorkbenchCoordinator
     private readonly DeviceOperationLock operationLock;
     private readonly SafeDeviceExportStager stager;
     private readonly WorkbenchConsistencyService consistency;
+    private readonly FeatureImportService featureImport;
     private readonly WorkbenchWritePolicy writePolicy;
     private readonly PathJail? pathJail;
     private readonly SemaphoreSlim engineeringSession = new(1, 1);
@@ -126,6 +127,7 @@ public sealed class WorkbenchCoordinator
         this.pathJail = pathJail;
         stager = new SafeDeviceExportStager(engineering, this.operationLock);
         consistency = new WorkbenchConsistencyService(engineering, versionControl, catalog, store);
+        featureImport = new FeatureImportService(engineering, versionControl, consistency, store);
         writePolicy = new WorkbenchWritePolicy(store);
     }
 
@@ -964,6 +966,44 @@ public sealed class WorkbenchCoordinator
         return consistency.GetComparison(workbench, comparisonId);
     }
 
+    public async Task<FeatureImportPlan> PlanFeatureImportAsync(
+        string workbenchId,
+        string featureWorktreeId,
+        CancellationToken token = default)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var feature = LoadRegisteredWorktree(workbench, featureWorktreeId);
+        if (string.Equals(feature.Branch, "master", StringComparison.OrdinalIgnoreCase))
+            throw new WorkbenchLifecycleException("FEATURE_WORKTREE_REQUIRED", "Import plans require a feature worktree.");
+        return await featureImport.PlanAsync(workbench, feature, token).ConfigureAwait(false);
+    }
+
+    public Task<FeatureImportSession> ImportFeatureAsync(
+        string workbenchId,
+        string planId,
+        IReadOnlyList<string> paths,
+        CancellationToken token = default) =>
+        featureImport.ImportAsync(LoadRegisteredWorkbench(workbenchId), planId, paths, token);
+
+    public Task<FeatureImportSession> RollbackFeatureImportAsync(
+        string workbenchId,
+        string sessionId,
+        IReadOnlyList<string> paths,
+        CancellationToken token = default) =>
+        featureImport.RollbackAsync(LoadRegisteredWorkbench(workbenchId), sessionId, paths, token);
+
+    public FeatureImportSession KeepFeatureImportAfterCompileFailure(
+        string workbenchId,
+        string sessionId,
+        IReadOnlyList<string> paths) =>
+        featureImport.KeepAfterCompileFailure(LoadRegisteredWorkbench(workbenchId), sessionId, paths);
+
+    public FeatureImportPlan GetFeatureImportPlan(string workbenchId, string planId) =>
+        featureImport.ReadPlan(LoadRegisteredWorkbench(workbenchId), planId);
+
+    public FeatureImportSession GetFeatureImportSession(string workbenchId, string sessionId) =>
+        featureImport.ReadSession(LoadRegisteredWorkbench(workbenchId), sessionId);
+
     public async Task<TiaSyncEvidence> ValidateSynchronizedMasterAsync(
         string workbenchId,
         string confirmedBy,
@@ -1214,6 +1254,15 @@ public sealed class WorkbenchCoordinator
         var workbench = catalog.Load(known.RootPath);
         RegisterWorkbench(workbench);
         return workbench;
+    }
+
+    private WorktreeMetadata LoadRegisteredWorktree(WorkbenchMetadata workbench, string worktreeId)
+    {
+        var registration = workbench.Worktrees.SingleOrDefault(item => item.WorktreeId == worktreeId)
+            ?? throw new WorkbenchCatalogException("WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
+        return store.Read<WorktreeMetadata>(Path.Combine(
+            WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath),
+            "worktree.json"));
     }
 
     private IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> LoadMasterContexts(
