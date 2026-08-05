@@ -49,13 +49,13 @@ public enum RefreshApplyState
     /// <summary>The approved comparison produced no filesystem changes and no manual commit is pending.</summary>
     NoChanges = 1,
 
-    /// <summary>Approved files were written and remain unstaged for a user-selected manual commit.</summary>
+    /// <summary>Approved files were written; master TIA approvals may also include an automatic commit.</summary>
     FilesUpdated = 2,
 }
 
 /// <summary>
-/// Result of applying an approved TIA comparison. CommitSha is retained for response compatibility
-/// and is always null because refresh and bootstrap never stage or commit automatically.
+/// Result of applying an approved TIA comparison. CommitSha is populated when a confirmed master
+/// comparison was automatically committed.
 /// </summary>
 public sealed record RefreshApplyResult(
     RefreshApplyState State,
@@ -66,6 +66,9 @@ public sealed record RefreshApplyResult(
 public sealed record DeviceBootstrapResult(
     RefreshApplyResult Baseline,
     KnowledgeUpdateResult Knowledge);
+
+public sealed record WorktreeBootstrapResult(
+    IReadOnlyList<DeviceBootstrapResult> Devices);
 
 public sealed record ImportModifiedResult(
     string RelativePath,
@@ -574,20 +577,21 @@ public sealed class WorkbenchCoordinator
         DeviceContext device,
         ApprovedReconciliation approval,
         CancellationToken token,
-        IOperationProgress? progress = null) =>
+        IOperationProgress? progress = null,
+        string? commitMessage = null) =>
         operationLock.RunAsync(
             device,
-            _ =>
+            async cancellationToken =>
             {
                 ArgumentNullException.ThrowIfNull(approval);
                 if (!approval.Approved)
                 {
                     progress?.Report("Refresh rejected by user.");
-                    return Task.FromResult(new RefreshApplyResult(
+                    return new RefreshApplyResult(
                         RefreshApplyState.Rejected,
                         Array.Empty<string>(),
                         null,
-                        null));
+                        null);
                 }
 
                 progress?.Report("Applying approved refresh...");
@@ -598,11 +602,11 @@ public sealed class WorkbenchCoordinator
                 if (outcome.ChangedPaths.Count == 0)
                 {
                     progress?.Report("PLC source is already current.");
-                    return Task.FromResult(new RefreshApplyResult(
+                    return new RefreshApplyResult(
                         RefreshApplyState.NoChanges,
                         Array.Empty<string>(),
                         null,
-                        null));
+                        null);
                 }
 
                 var deviceMetadata = ReadDevice(device);
@@ -621,12 +625,34 @@ public sealed class WorkbenchCoordinator
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(path => path, StringComparer.Ordinal)
                     .ToArray();
-                progress?.Report("PLC source updated; select files to commit in version control.");
-                return Task.FromResult(new RefreshApplyResult(
+                var sourcePaths = changedPaths
+                    .Where(IsManagedSourceXml)
+                    .ToArray();
+                string? commitSha = null;
+                var worktree = store.Read<WorktreeMetadata>(Path.Combine(device.WorktreeRoot, "worktree.json"));
+                if (sourcePaths.Length > 0
+                    && string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(commitMessage))
+                {
+                    progress?.Report("Committing the confirmed TIA source changes...");
+                    var commit = await CommitSelectedSourceAsync(
+                            device.WorktreeRoot,
+                            sourcePaths,
+                            commitMessage.Trim(),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    commitSha = commit.Sha;
+                }
+                else
+                {
+                    progress?.Report("PLC source updated; select files to commit in version control.");
+                }
+
+                return new RefreshApplyResult(
                     RefreshApplyState.FilesUpdated,
                     changedPaths,
-                    null,
-                    null));
+                    commitSha,
+                    null);
             },
             token);
 
@@ -746,8 +772,9 @@ public sealed class WorkbenchCoordinator
 
     /// <summary>
     /// Bootstraps a device without any user confirmation: full export staging, application of
-    /// every staged file to the source tree, then a full knowledge ingest. The resulting source
-    /// changes remain pending so the user can select and commit them manually.
+    /// every staged file to the source tree, then a full knowledge ingest. The first successful
+    /// rebuild creates the initial source baseline commit; later rebuilds remain pending so the
+    /// user can select and commit them manually.
     /// A PLC_COMPILE_REQUIRED stage failure is surfaced as-is; the bootstrap only compiles when
     /// the user explicitly acknowledged it (<paramref name="allowCompile"/>, same contract as
     /// the compare-with-TIA stage flow).
@@ -756,7 +783,8 @@ public sealed class WorkbenchCoordinator
         DeviceContext device,
         CancellationToken token,
         IOperationProgress? progress = null,
-        bool allowCompile = false)
+        bool allowCompile = false,
+        string? commitMessage = null)
     {
         ArgumentNullException.ThrowIfNull(device);
         await StageRefreshAsync(device, token, progress, allowCompile).ConfigureAwait(false);
@@ -772,8 +800,111 @@ public sealed class WorkbenchCoordinator
                 progress)
             .ConfigureAwait(false);
 
+        var initialSourcePaths = baseline.ChangedPaths
+            .Where(IsManagedSourceXml)
+            .ToArray();
+        if (initialSourcePaths.Length > 0
+            && !await HasVersionControlHistoryAsync(device.WorktreeRoot, token).ConfigureAwait(false))
+        {
+            progress?.Report("Creating the initial PLC source baseline commit...");
+            var commit = await CommitSelectedSourceAsync(
+                    device.WorktreeRoot,
+                    initialSourcePaths,
+                    string.IsNullOrWhiteSpace(commitMessage) ? "Initial PLC source baseline" : commitMessage.Trim(),
+                    token)
+                .ConfigureAwait(false);
+            baseline = baseline with { CommitSha = commit.Sha };
+        }
+
         var knowledge = await RebuildKnowledgeAsync(device, token, progress).ConfigureAwait(false);
         return new DeviceBootstrapResult(baseline, knowledge);
+    }
+
+    /// <summary>
+    /// Bootstraps every PLC registered in one worktree as one project-level operation. Staging
+    /// is completed for all devices before any source tree is changed, then the first successful
+    /// rebuild creates one baseline commit containing every device's managed XML source.
+    /// </summary>
+    public async Task<WorktreeBootstrapResult> BootstrapWorktreeAsync(
+        DeviceContext selectedDevice,
+        CancellationToken token,
+        IOperationProgress? progress = null,
+        bool allowCompile = false,
+        string? commitMessage = null)
+    {
+        ArgumentNullException.ThrowIfNull(selectedDevice);
+        var devices = LoadWorktreeContexts(selectedDevice);
+        if (devices.Count == 0)
+        {
+            throw new WorkbenchCatalogException(
+                "DEVICE_NOT_FOUND",
+                $"Worktree '{selectedDevice.WorktreeId}' has no registered PLC devices.");
+        }
+
+        progress?.Report($"Exporting {devices.Count} PLC device(s) from TIA...");
+        var staged = new List<(DeviceContext Context, ReconciliationPreview Preview)>(devices.Count);
+        foreach (var device in devices)
+        {
+            await StageRefreshAsync(device, token, progress, allowCompile).ConfigureAwait(false);
+            staged.Add((device, reconciler.Preview(device)));
+        }
+
+        var baselines = new List<DeviceBootstrapResult>(devices.Count);
+        foreach (var (device, preview) in staged)
+        {
+            var approved = preview.Entries
+                .Where(entry => entry.Kind is ReconciliationChangeKind.Added or ReconciliationChangeKind.Changed)
+                .Select(entry => entry.RelativePath)
+                .ToHashSet(StringComparer.Ordinal);
+            var baseline = await ApplyRefreshAsync(
+                    device,
+                    new ApprovedReconciliation(preview, approved),
+                    token,
+                    progress)
+                .ConfigureAwait(false);
+            baselines.Add(new DeviceBootstrapResult(
+                baseline,
+                new KnowledgeUpdateResult(
+                    device.KnowledgeDbPath,
+                    Array.Empty<string>(),
+                    new Dictionary<string, string>(StringComparer.Ordinal),
+                    Array.Empty<string>())));
+        }
+
+        var initialSourcePaths = baselines
+            .SelectMany(result => result.Baseline.ChangedPaths)
+            .Where(IsManagedSourceXml)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        string? commitSha = null;
+        if (initialSourcePaths.Length > 0
+            && !await HasVersionControlHistoryAsync(selectedDevice.WorktreeRoot, token).ConfigureAwait(false))
+        {
+            progress?.Report("Creating the initial PLC source baseline commit for all devices...");
+            var commit = await CommitSelectedSourceAsync(
+                    selectedDevice.WorktreeRoot,
+                    initialSourcePaths,
+                    string.IsNullOrWhiteSpace(commitMessage) ? "Initial PLC source baseline" : commitMessage.Trim(),
+                    token)
+                .ConfigureAwait(false);
+            commitSha = commit.Sha;
+            baselines = baselines
+                .Select(result => result with { Baseline = result.Baseline with { CommitSha = commitSha } })
+                .ToList();
+        }
+
+        for (var index = 0; index < baselines.Count; index++)
+        {
+            var knowledge = await RebuildKnowledgeAsync(
+                    devices[index],
+                    token,
+                    progress)
+                .ConfigureAwait(false);
+            baselines[index] = baselines[index] with { Knowledge = knowledge };
+        }
+
+        return new WorktreeBootstrapResult(baselines);
     }
 
     /// <summary>
@@ -1104,13 +1235,17 @@ public sealed class WorkbenchCoordinator
             .ConfigureAwait(false);
     }
 
-    public Task<TiaSynchronizationResult> ApplyTiaSynchronizationAsync(
+    public async Task<TiaSynchronizationResult> ApplyTiaSynchronizationAsync(
         string workbenchId,
         string comparisonId,
         IReadOnlyList<string> paths,
+        string message,
         CancellationToken token = default,
         IOperationProgress? progress = null)
     {
+        if (string.IsNullOrWhiteSpace(message))
+            throw new ArgumentException("A commit title is required.", nameof(message));
+
         var workbench = LoadRegisteredWorkbench(workbenchId);
         var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
                 string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
@@ -1170,12 +1305,21 @@ public sealed class WorkbenchCoordinator
             WorkbenchWritePolicy.PendingSchemaVersion,
             master.WorktreeId,
             normalizedPending));
-        return Task.FromResult(new TiaSynchronizationResult(
+        var commit = await CommitSourceAsync(
+                workbenchId,
+                master.WorktreeId,
+                selected,
+                message.Trim(),
+                token)
+            .ConfigureAwait(false);
+        var remaining = writePolicy.ReadPending(masterRoot, master.WorktreeId).Sources;
+        return new TiaSynchronizationResult(
             comparisonId,
-            normalizedPending.Select(item => item.RelativePath).ToArray()));
+            remaining.Select(item => item.RelativePath).ToArray(),
+            commit.Sha);
     }
 
-    public async Task<object> CommitSourceAsync(
+    public async Task<WorkbenchCommitResult> CommitSourceAsync(
         string workbenchId,
         string worktreeId,
         IReadOnlyList<string> paths,
@@ -1217,10 +1361,7 @@ public sealed class WorkbenchCoordinator
                     "Master advanced after TIA authorization; compare TIA with master again before committing.");
         }
 
-        var result = await versionControl.CallAsync<object>(
-                "vc_commit_selected",
-                new { repoPath = worktreeRoot, paths = selected, message, author },
-                token)
+        var result = await CommitSelectedSourceAsync(worktreeRoot, selected, message, token, author)
             .ConfigureAwait(false);
 
         if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase))
@@ -1236,6 +1377,30 @@ public sealed class WorkbenchCoordinator
         }
 
         return result;
+    }
+
+    private async Task<WorkbenchCommitResult> CommitSelectedSourceAsync(
+        string worktreeRoot,
+        IReadOnlyList<string> paths,
+        string message,
+        CancellationToken token,
+        string? author = null)
+    {
+        return await versionControl.CallAsync<WorkbenchCommitResult>(
+                "vc_commit_selected",
+                new { repoPath = worktreeRoot, paths, message, author },
+                token)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<bool> HasVersionControlHistoryAsync(string worktreeRoot, CancellationToken token)
+    {
+        var log = await versionControl.CallAsync<ConsistencyLogResult>(
+                "vc_log",
+                new { repoPath = worktreeRoot, maxCount = 1 },
+                token)
+            .ConfigureAwait(false);
+        return log.Commits.Length > 0;
     }
 
     public async Task<UnauthorizedMasterRecoveryResult> MoveUnauthorizedMasterChangesAsync(
@@ -1424,8 +1589,35 @@ public sealed class WorkbenchCoordinator
         return normalized;
     }
 
+    private static bool IsManagedSourceXml(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        var parts = normalized.Split('/');
+        return parts.Length >= 4
+            && parts[0].Equals("devices", StringComparison.OrdinalIgnoreCase)
+            && parts[2].Equals("source", StringComparison.OrdinalIgnoreCase)
+            && parts[^1].EndsWith(".xml", StringComparison.OrdinalIgnoreCase);
+    }
+
     private DeviceMetadata ReadDevice(DeviceContext device) =>
         store.Read<DeviceMetadata>(Path.Combine(device.DeviceRoot, "device.json"));
+
+    private IReadOnlyList<DeviceContext> LoadWorktreeContexts(DeviceContext selectedDevice)
+    {
+        var worktree = store.Read<WorktreeMetadata>(
+            Path.Combine(selectedDevice.WorktreeRoot, "worktree.json"));
+        var worktreeParent = Path.Combine(selectedDevice.WorkbenchRoot, "worktrees");
+        var relativePath = Path.GetRelativePath(worktreeParent, selectedDevice.WorktreeRoot);
+        return LoadInheritedDevices(selectedDevice.WorktreeRoot, worktree)
+            .Select(metadata => WorkbenchPaths.ResolveDevice(
+                selectedDevice.WorkbenchId,
+                selectedDevice.WorkbenchRoot,
+                worktree.WorktreeId,
+                relativePath,
+                metadata.DeviceId,
+                metadata.PlcName))
+            .ToArray();
+    }
 
     private void WriteDevice(DeviceContext device, DeviceMetadata metadata) =>
         store.Write(Path.Combine(device.DeviceRoot, "device.json"), metadata);

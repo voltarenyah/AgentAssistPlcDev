@@ -28,4 +28,30 @@ describe('version-control workflow API sequence', () => {
 
     expect(calls).toEqual(['status', 'compare-tia', 'import-plan', 'import', 'validate-merge', 'merge-validated', 'log'])
   })
+
+  it('sends the required commit title when accepting TIA synchronization', async () => {
+    let requestBody: { paths?: string[]; message?: string } | undefined
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/accept')) {
+        requestBody = JSON.parse(String(init?.body)) as { paths?: string[]; message?: string }
+      }
+      return new Response(JSON.stringify({
+        comparisonId: 'comparison-1',
+        pendingPaths: [],
+        commitSha: 'commit-2',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+
+    await api.acceptTiaSynchronization(
+      'wb-1',
+      'comparison-1',
+      ['devices/PLC_1/source/Blocks/Main.xml'],
+      'Accept Main from TIA',
+    )
+
+    expect(requestBody).toEqual({
+      paths: ['devices/PLC_1/source/Blocks/Main.xml'],
+      message: 'Accept Main from TIA',
+    })
+  })
 })

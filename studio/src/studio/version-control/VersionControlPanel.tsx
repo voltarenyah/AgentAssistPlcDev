@@ -83,7 +83,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onSelecti
       </nav>
       <div className="min-h-0 flex-1 overflow-hidden">
         {tab === 'changes' && <VersionControlChanges workbenchId={workbenchId} worktreeId={worktreeId} entries={entries} onSelectionChange={entry => onSelectionChange?.(entry ? { kind: 'source', entry } : null)} onCommitted={() => void refresh()} />}
-        {tab === 'compare' && <VersionControlCompare workbenchId={workbenchId} worktreeId={worktreeId} branch={status?.branch ?? ''} />}
+        {tab === 'compare' && <VersionControlCompare workbenchId={workbenchId} worktreeId={worktreeId} branch={status?.branch ?? ''} onCommitted={() => void refresh()} />}
         {tab === 'history' && <VersionControlHistory workbenchId={workbenchId} worktreeId={worktreeId} commits={history} onCommitSelect={commit => onSelectionChange?.({ kind: 'commit', commit })} onObjectSelect={(commit, path) => onSelectionChange?.({ kind: 'commit', commit, path })} />}
       </div>
     </section>

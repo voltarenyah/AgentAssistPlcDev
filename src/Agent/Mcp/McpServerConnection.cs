@@ -101,6 +101,16 @@ public sealed class McpServerConnection : IProgressMcpToolCaller, IAsyncDisposab
             throw ParseError(text);
         }
 
+        return DeserializeResult<T>(text, tool, serverName);
+    }
+
+    internal static T DeserializeResult<T>(string text, string tool, string serverName)
+    {
+        if (string.Equals(text.Trim(), "null", StringComparison.OrdinalIgnoreCase))
+        {
+            return default!;
+        }
+
         return JsonSerializer.Deserialize<T>(text, Json)
             ?? throw new InvalidOperationException($"Tool '{tool}' on server '{serverName}' returned an empty result.");
     }

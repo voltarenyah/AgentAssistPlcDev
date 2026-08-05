@@ -1633,7 +1633,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task BootstrapEndpointLeavesInitialSourcePendingManualCommitAndCompletesOperation()
+    public async Task BootstrapEndpointCreatesInitialBaselineCommitAndCompletesOperation()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
             root,
@@ -1658,14 +1658,14 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 typeof(RefreshApplyState),
                 body.GetProperty("baseline").GetProperty("state").GetInt32()));
         Assert.Equal(
-            JsonValueKind.Null,
-            body.GetProperty("baseline").GetProperty("commitSha").ValueKind);
+            "baseline-1",
+            body.GetProperty("baseline").GetProperty("commitSha").GetString());
         Assert.Equal(
             JsonValueKind.Null,
             body.GetProperty("baseline").GetProperty("error").ValueKind);
         Assert.True(body.TryGetProperty("knowledge", out _));
         Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
-        Assert.Empty(fixture.VersionControl.Calls);
+        Assert.Equal(["vc_log", "vc_commit_selected"], fixture.VersionControl.Calls);
         var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/bootstrap-1");
         Assert.Equal("bootstrap-device", operation.GetProperty("operationType").GetString());
         Assert.Equal("succeeded", operation.GetProperty("state").GetString());
@@ -1798,7 +1798,9 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public async Task WorktreeVersionControlEndpointsForwardRootAndSelectedDiffRefs()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
-            Path.Combine(root, Guid.NewGuid().ToString("N")), databaseExists: true);
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            versionControlJson: """{"Commits":[{"Sha":"head-1"}]}""");
         var prefix = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/vc";
 
         (await fixture.Client.GetAsync($"{prefix}/status")).EnsureSuccessStatusCode();
@@ -1823,6 +1825,39 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(
             "devices/PLC_1/source/A.xml",
             fixture.VersionControl.Arguments[3].GetProperty("paths")[0].GetString());
+    }
+
+    [Fact]
+    public async Task ValidationEndpointReturnsNullForAnUnlabeledCommit()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            versionControlJson: "null");
+        var prefix = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/vc";
+
+        var response = await fixture.Client.GetAsync($"{prefix}/validation/head-1");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("null", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task SelectingAWorkbenchRegistersItForCoordinatorOperations()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")), databaseExists: true);
+
+        var select = await fixture.Client.PostAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/select", null);
+        select.EnsureSuccessStatusCode();
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/vc/unauthorized/discard",
+            new { paths = new[] { "devices/PLC_1/source/Main.xml" }, confirm = true });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("vc_restore", fixture.VersionControl.Calls);
     }
 
     public void Dispose()
@@ -1888,6 +1923,9 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             Arguments.Add(JsonSerializer.SerializeToElement(args));
             if (typeof(T) == typeof(JsonElement))
             {
+                if (string.Equals(json.Trim(), "null", StringComparison.Ordinal))
+                    return Task.FromResult((T)(object)default(JsonElement));
+
                 return Task.FromResult(
                     (T)(object)JsonDocument.Parse(json).RootElement.Clone());
             }
@@ -1933,7 +1971,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             bool baselineStale = false,
             bool engineeringOffline = true,
             string? sourceProjectPath = null,
-            Action<string, string>? stageExport = null)
+            Action<string, string>? stageExport = null,
+            string? versionControlJson = null)
         {
             var store = new AtomicJsonStore();
             var catalog = new WorkbenchCatalog(store, fixtureRoot);
@@ -1972,7 +2011,9 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 await File.WriteAllBytesAsync(context.KnowledgeDbPath, [1]);
 
             var engineering = new ThrowingToolCaller(engineeringOffline, stageExport);
-            var versionControl = new RecordingToolCaller();
+            var versionControl = new RecordingToolCaller(versionControlJson ?? """
+                {"Sha":"baseline-1","Message":"Initial PLC source baseline","Files":["devices/PLC_1/source/Blocks/Main.xml"]}
+                """);
             var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
             {
                 host.UseEnvironment("Testing");

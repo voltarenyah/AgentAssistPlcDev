@@ -272,6 +272,7 @@ export type WorkbenchConsistencyResult = {
 export type PendingSynchronizationResult = {
   comparisonId: string
   pendingPaths: string[]
+  commitSha?: string | null
 }
 
 export type RollbackFeatureResult = {
@@ -542,10 +543,10 @@ export const getWorkbenchComparison = (workbenchId: string, comparisonId: string
   workbenchRequest<WorkbenchConsistencyResult>(
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}`,
   )
-export const acceptTiaSynchronization = (workbenchId: string, comparisonId: string, paths: string[], operationId?: string) =>
+export const acceptTiaSynchronization = (workbenchId: string, comparisonId: string, paths: string[], message: string, operationId?: string) =>
   workbenchRequest<PendingSynchronizationResult>(
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}/accept`,
-    withOperation(jsonRequest('POST', { paths }), operationId),
+    withOperation(jsonRequest('POST', { paths, message }), operationId),
   )
 export const validateTiaSynchronization = (workbenchId: string, confirmedBy: string, operationId?: string) =>
   workbenchRequest<VcValidationEvidence>(
@@ -629,10 +630,11 @@ export const stageDeviceRefresh = (
   )
 export const previewDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<ReconciliationPreview>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/preview`)
-export const applyDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string, previewId: string, approvedPaths: string[], operationId?: string) =>
+export const applyDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string, previewId: string, approvedPaths: string[], operationId?: string, commitMessage?: string) =>
   workbenchRequest<RefreshApplyResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/apply`, withOperation(jsonRequest('POST', {
     previewId,
     approvedPaths,
+    commitMessage: commitMessage?.trim() || null,
   }), operationId))
 export const updateDeviceKnowledge = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string) =>
   workbenchRequest<KnowledgeUpdateResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/knowledge/update`, withOperation(jsonRequest('POST'), operationId))
@@ -642,8 +644,13 @@ export type DeviceBootstrapResult = {
   baseline: RefreshApplyResult
   knowledge: KnowledgeUpdateResult
 }
+export type WorktreeBootstrapResult = {
+  devices: DeviceBootstrapResult[]
+}
 export const bootstrapDevice = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string, commitMessage?: string, allowCompile?: boolean) =>
   workbenchRequest<DeviceBootstrapResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/bootstrap${allowCompile ? '?allowCompile=true' : ''}`, withOperation(jsonRequest('POST', commitMessage ? { commitMessage } : {}), operationId))
+export const bootstrapWorktree = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string, commitMessage?: string, allowCompile?: boolean) =>
+  workbenchRequest<WorktreeBootstrapResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/bootstrap-worktree${allowCompile ? '?allowCompile=true' : ''}`, withOperation(jsonRequest('POST', commitMessage ? { commitMessage } : {}), operationId))
 export const prepareDeviceEdit = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string) =>
   workbenchRequest<string>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/prepare-edit`, jsonRequest('POST', { relativePath }))
 export const importDeviceSource = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string, operationId?: string) =>

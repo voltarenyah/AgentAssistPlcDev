@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Agent.Chat;
+using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Sandbox;
 
@@ -16,17 +17,18 @@ public sealed record CreateWorktreeApiRequest(string Name, string Branch, string
 public sealed record RefreshApplyApiRequest(
     string PreviewId,
     string[]? ApprovedPaths,
-    string[]? ApprovedRemovalPaths = null);
+    string[]? ApprovedRemovalPaths = null,
+    string? CommitMessage = null);
 public sealed record SourcePathApiRequest(string RelativePath);
 public sealed record CommitSourceApiRequest(string[] Paths, string Message);
-public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths);
+public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths, string Message);
 public sealed record TiaValidationApiRequest(string ConfirmedBy);
 public sealed record UnauthorizedMasterPathsRequest(string[] Paths, string? FeatureName = null, bool Confirm = false);
 public sealed record FeaturePathsApiRequest(string[] Paths);
 public sealed record ValidateFeatureMergeApiRequest(string ImportSessionId, bool MachineValidated, string ConfirmedBy);
 public sealed record RollbackFeatureApiRequest(string HistoricalSha, string[] Paths, string FeatureName);
 
-/// <summary>Optional bootstrap body retained for request compatibility; CommitMessage is ignored because bootstrap never commits automatically.</summary>
+/// <summary>Optional bootstrap body. CommitMessage customizes the first baseline commit title.</summary>
 public sealed record BootstrapApiRequest(string? CommitMessage);
 
 /// <summary>Device list entry: opaque object id plus the human-readable PLC name from device.json.</summary>
@@ -213,7 +215,13 @@ public static class WorkbenchEndpoints
             operations.Dismiss(id);
             return Results.NoContent();
         });
-        app.MapGet("/api/workbenches", (WorkbenchApiState s) => s.List());
+        app.MapGet("/api/workbenches", (WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
+        {
+            var workbenches = s.List();
+            foreach (var workbench in workbenches)
+                coordinator.RegisterWorkbench(workbench);
+            return workbenches;
+        });
         app.MapGet("/api/sandbox/roots", (SandboxConfig sandbox) =>
             new { roots = sandbox.PathJail.Roots });
         app.MapPost("/api/workbenches/open", (OpenWorkbenchApiRequest r, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
@@ -262,7 +270,13 @@ public static class WorkbenchEndpoints
             s.Remove(id);
             return result;
         });
-        app.MapPost("/api/workbenches/{id}/select", (string id, WorkbenchApiState s) => { s.Workbench(id); s.Select(id); return Results.NoContent(); });
+        app.MapPost("/api/workbenches/{id}/select", (string id, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
+        {
+            var workbench = s.Workbench(id);
+            coordinator.RegisterWorkbench(workbench);
+            s.Select(id);
+            return Results.NoContent();
+        });
         app.MapGet("/api/workbenches/{id}/worktrees", (string id, WorkbenchApiState s) => s.Workbench(id).Worktrees);
         app.MapPost("/api/workbenches/{id}/worktrees", async (
             string id,
@@ -308,9 +322,24 @@ public static class WorkbenchEndpoints
                 s.Select(id);
             return result;
         });
-        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s) => { s.Worktree(id, wt); s.Select(id, wt); return Results.NoContent(); });
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
+        {
+            var workbench = s.Workbench(id);
+            coordinator.RegisterWorkbench(workbench);
+            s.Worktree(id, wt);
+            s.Select(id, wt);
+            return Results.NoContent();
+        });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.ListDevices(id, wt));
-        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s) => { s.Select(id, wt); s.Device(device); s.Select(id, wt, device); return Results.NoContent(); });
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
+        {
+            var workbench = s.Workbench(id);
+            coordinator.RegisterWorkbench(workbench);
+            s.Select(id, wt);
+            s.Device(device);
+            s.Select(id, wt, device);
+            return Results.NoContent();
+        });
 
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/status", async (
             string workbenchId, string worktreeId, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
@@ -345,18 +374,18 @@ public static class WorkbenchEndpoints
             });
             if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase) && hasExistingSource)
             {
-                return await coordinator.CommitSourceAsync(workbenchId, worktreeId, body.Paths, body.Message, ct);
+                return Results.Ok(await coordinator.CommitSourceAsync(workbenchId, worktreeId, body.Paths, body.Message, ct));
             }
 
             // Compatibility for an empty/legacy worktree: the version-control server still
             // validates the selected source paths. Real master XML files use the protected path above.
-            return await gateway.For("vc_commit_selected").CallAsync<System.Text.Json.JsonElement>(
-                "vc_commit_selected", new { repoPath = root, paths = body.Paths, message = body.Message }, ct);
+            return Results.Ok(await gateway.For("vc_commit_selected").CallAsync<System.Text.Json.JsonElement>(
+                "vc_commit_selected", new { repoPath = root, paths = body.Paths, message = body.Message }, ct));
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/validation/{sha}", async (
             string workbenchId, string worktreeId, string sha,
             WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("vc_validation_get").CallAsync<System.Text.Json.JsonElement>(
+            await gateway.For("vc_validation_get").CallAsync<System.Text.Json.JsonElement?>(
                 "vc_validation_get", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), commitSha = sha }, ct));
         app.MapPost("/api/workbenches/{workbenchId}/vc/compare-tia", async (
             string workbenchId,
@@ -391,7 +420,7 @@ public static class WorkbenchEndpoints
                 operations,
                 "accept-tia-synchronization",
                 "Applying selected TIA source to master...",
-                progress => coordinator.ApplyTiaSynchronizationAsync(workbenchId, comparisonId, body.Paths, ct, progress),
+                progress => coordinator.ApplyTiaSynchronizationAsync(workbenchId, comparisonId, body.Paths, body.Message, ct, progress),
                 "Selected TIA source accepted.").ConfigureAwait(false));
         app.MapPost("/api/workbenches/{workbenchId}/vc/validate-sync", async (
             string workbenchId,
@@ -638,11 +667,11 @@ public static class WorkbenchEndpoints
                 StringComparer.Ordinal);
             approved.UnionWith(legacyRemovals);
             return await RunOperationAsync(http, operations, "apply-refresh", "Applying approved refresh...",
-                progress => c.ApplyRefreshAsync(selected.Context, new(preview, approved), ct, progress),
+                progress => c.ApplyRefreshAsync(selected.Context, new(preview, approved), ct, progress, r.CommitMessage),
                 "Refresh applied.").ConfigureAwait(false);
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/bootstrap", async (
-            string workbenchId, string worktreeId, string device, BootstrapApiRequest? _, WorkbenchApiState s,
+            string workbenchId, string worktreeId, string device, BootstrapApiRequest? body, WorkbenchApiState s,
             WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct,
             bool allowCompile = false) =>
             await RunOperationAsync(http, operations, "bootstrap-device", "Generating PLC context...",
@@ -650,8 +679,21 @@ public static class WorkbenchEndpoints
                     s.Device(workbenchId, worktreeId, device).Context,
                     ct,
                     progress,
-                    allowCompile),
+                    allowCompile,
+                    body?.CommitMessage),
                 "PLC context generated.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/bootstrap-worktree", async (
+            string workbenchId, string worktreeId, string device, BootstrapApiRequest? body, WorkbenchApiState s,
+            WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct,
+            bool allowCompile = false) =>
+            await RunOperationAsync(http, operations, "bootstrap-worktree", "Generating all PLC contexts...",
+                progress => c.BootstrapWorktreeAsync(
+                    s.Device(workbenchId, worktreeId, device).Context,
+                    ct,
+                    progress,
+                    allowCompile,
+                    body?.CommitMessage),
+                "All PLC contexts generated.").ConfigureAwait(false));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/update", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
             WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
@@ -935,6 +977,16 @@ public sealed class WorkbenchApiExceptionMiddleware(RequestDelegate next)
             await context.Response.WriteAsJsonAsync(new { error = exception.Message });
         }
         catch (SandboxException exception)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = exception.Code,
+                message = exception.Message,
+                remediation = exception.Remediation,
+            });
+        }
+        catch (ToolCallException exception)
         {
             context.Response.StatusCode = 400;
             await context.Response.WriteAsJsonAsync(new

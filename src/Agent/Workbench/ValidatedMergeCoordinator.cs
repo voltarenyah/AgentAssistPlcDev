@@ -160,8 +160,8 @@ public sealed class ValidatedMergeCoordinator
                 throw new WorkbenchLifecycleException("SOURCE_COVERAGE_INCOMPLETE", $"TIA source coverage is incomplete for '{device.Metadata.PlcName}'.");
 
             var expected = preview.Objects
-                .Where(item => IsDeviceSource(item.FilePath, device.Metadata.DeviceId))
-                .ToDictionary(item => SourceRelative(item.FilePath, device.Metadata.DeviceId), item => item.Sha256, StringComparer.Ordinal);
+                .Where(item => IsDeviceSource(item.FilePath, device.Context))
+                .ToDictionary(item => SourceRelative(item.FilePath), item => item.Sha256, StringComparer.Ordinal);
             var actual = scan.Objects.ToDictionary(item => Normalize(item.RelativePath), item => item.Sha256, StringComparer.Ordinal);
             if (!expected.OrderBy(item => item.Key).SequenceEqual(actual.OrderBy(item => item.Key)))
                 return new ValidatedMergeResult(string.Empty, ValidatedMergeState.SourceDifferent, $"TIA source differs from the prospective merge for '{device.Metadata.PlcName}'.", Array.Empty<ValidatedMergeDevice>());
@@ -171,7 +171,7 @@ public sealed class ValidatedMergeCoordinator
                 device.Metadata.PlcName,
                 scan.ProjectIdentity,
                 scan.ProjectChecksum,
-                scan.Objects.Select(item => new VcValidationObject(item.Identity, $"devices/{device.Metadata.DeviceId}/source/{Normalize(item.RelativePath)}", item.Sha256)).ToArray()));
+                scan.Objects.Select(item => new VcValidationObject(item.Identity, $"devices/{Path.GetFileName(device.Context.DeviceRoot)}/source/{Normalize(item.RelativePath)}", item.Sha256)).ToArray()));
         }
 
         var currentFeature = await HeadAsync(featureRoot, cancellationToken).ConfigureAwait(false);
@@ -205,12 +205,29 @@ public sealed class ValidatedMergeCoordinator
     private IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> LoadDevices(WorkbenchMetadata workbench, WorktreeMetadata master)
     {
         var root = ResolveRoot(workbench, master.WorktreeId);
+        var registration = workbench.Worktrees.Single(item => item.WorktreeId == master.WorktreeId);
+        var devicesRoot = WorkbenchPaths.ResolveRelative(root, "devices");
+        var metadataById = Directory.EnumerateDirectories(devicesRoot)
+            .Select(directory => Path.Combine(directory, "device.json"))
+            .Where(File.Exists)
+            .Select(store.TryRead<DeviceMetadata>)
+            .Where(metadata => metadata is not null)
+            .Cast<DeviceMetadata>()
+            .ToDictionary(metadata => metadata.DeviceId, StringComparer.Ordinal);
+
         return master.DeviceIds.Select(id =>
         {
-            var deviceRoot = WorkbenchPaths.ResolveRelative(root, $"devices/{id}");
-            var metadata = store.Read<DeviceMetadata>(Path.Combine(deviceRoot, "device.json"));
-            return (metadata, new DeviceContext(workbench.WorkbenchId, master.WorktreeId, id, workbench.RootPath, root, deviceRoot,
-                WorkbenchPaths.ResolveRelative(deviceRoot, "source"), WorkbenchPaths.ResolveRelative(deviceRoot, "staging"), WorkbenchPaths.ResolveRelative(deviceRoot, "plc-knowledge.db")));
+            if (!metadataById.TryGetValue(id, out var metadata))
+                throw new WorkbenchCatalogException("DEVICE_NOT_FOUND", $"Device '{id}' was not found in master.");
+
+            var context = WorkbenchPaths.ResolveDevice(
+                workbench.WorkbenchId,
+                workbench.RootPath,
+                master.WorktreeId,
+                registration.RelativePath,
+                id,
+                metadata.PlcName);
+            return (metadata, context);
         }).ToArray();
     }
 
@@ -218,6 +235,8 @@ public sealed class ValidatedMergeCoordinator
         WorkbenchPaths.ResolveWorktree(workbench.RootPath, workbench.Worktrees.Single(item => item.WorktreeId == worktreeId).RelativePath);
     private static string Normalize(string path) => path.Replace('\\', '/').TrimStart('/');
     private static bool IsManagedSource(string path) => Normalize(path).StartsWith("devices/", StringComparison.OrdinalIgnoreCase) && Normalize(path).Contains("/source/", StringComparison.OrdinalIgnoreCase) && Normalize(path).EndsWith(".xml", StringComparison.OrdinalIgnoreCase);
-    private static bool IsDeviceSource(string path, string deviceId) => Normalize(path).StartsWith($"devices/{deviceId}/source/", StringComparison.Ordinal);
-    private static string SourceRelative(string path, string deviceId) => Normalize(path).Split($"devices/{deviceId}/source/", 2, StringSplitOptions.None).Last();
+    private static bool IsDeviceSource(string path, DeviceContext context) =>
+        string.Equals(DeviceFolderFromPath(path), Path.GetFileName(context.DeviceRoot), StringComparison.OrdinalIgnoreCase);
+    private static string SourceRelative(string path) => Normalize(path).Split("/source/", 2, StringSplitOptions.None).Last();
+    private static string DeviceFolderFromPath(string path) => Normalize(path).Split('/').Skip(1).FirstOrDefault() ?? string.Empty;
 }

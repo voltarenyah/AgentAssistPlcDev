@@ -11,7 +11,7 @@ public sealed class MasterSynchronizationTests : IDisposable
     private readonly SyncFixture fixture = SyncFixture.Create();
 
     [Fact]
-    public async Task ApplyCopiesOnlySelectedChangedObjectsAndDoesNotCommit()
+    public async Task ApplyCopiesSelectedChangedObjectsAndAutoCommitsWithTheProvidedTitle()
     {
         var coordinator = fixture.CreateCoordinator();
 
@@ -19,12 +19,17 @@ public sealed class MasterSynchronizationTests : IDisposable
             fixture.Workbench.WorkbenchId,
             fixture.ComparisonId,
             [fixture.Path("Blocks/A.xml")],
+            "Accept Main block from TIA",
             CancellationToken.None);
 
-        Assert.Equal([fixture.Path("Blocks/A.xml")], result.PendingPaths);
+        Assert.Empty(result.PendingPaths);
+        Assert.Equal("head-2", result.CommitSha);
         Assert.Equal("new A", File.ReadAllText(fixture.MasterSource("Blocks/A.xml")));
         Assert.Equal("old B", File.ReadAllText(fixture.MasterSource("Blocks/B.xml")));
-        Assert.DoesNotContain("vc_commit_selected", fixture.VersionControl.Calls);
+        Assert.Contains("vc_commit_selected", fixture.VersionControl.Calls);
+        Assert.Equal(
+            "Accept Main block from TIA",
+            fixture.VersionControl.CommitMessage);
     }
 
     [Fact]
@@ -35,6 +40,7 @@ public sealed class MasterSynchronizationTests : IDisposable
             fixture.Workbench.WorkbenchId,
             fixture.ComparisonId,
             [fixture.Path("Blocks/A.xml")],
+            "Accept A",
             CancellationToken.None);
         File.WriteAllText(fixture.MasterSource("Blocks/A.xml"), "local edit");
 
@@ -151,6 +157,7 @@ public sealed class MasterSynchronizationTests : IDisposable
     {
         public List<string> Calls { get; } = new();
         public string Head { get; private set; } = "head-1";
+        public string? CommitMessage { get; private set; }
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
@@ -164,8 +171,12 @@ public sealed class MasterSynchronizationTests : IDisposable
             }
             if (tool == "vc_commit_selected")
             {
+                CommitMessage = args.GetType().GetProperty("message")?.GetValue(args) as string;
                 Head = "head-2";
-                return Task.FromResult((T)(object)new { committed = true });
+                return Task.FromResult((T)(object)new WorkbenchCommitResult(
+                    Head,
+                    CommitMessage ?? string.Empty,
+                    new[] { "devices/PLC_1/source/Blocks/A.xml" }));
             }
             throw new InvalidOperationException(tool);
         }

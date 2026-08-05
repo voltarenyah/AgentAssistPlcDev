@@ -33,6 +33,10 @@ describe('MainStudio offline snapshot contract', () => {
     expect(source).not.toContain('api.mergeWorktree(activeWorktree.worktreeId')
   })
 
+  it('clears the previous import result when the selected context changes', () => {
+    expect(source).toContain('setLastImport(null)')
+  })
+
   it.each([
     ['applyRefresh', 'updateKnowledge'],
     ['updateKnowledge', 'prepareEdit'],

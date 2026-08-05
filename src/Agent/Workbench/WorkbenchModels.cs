@@ -63,7 +63,13 @@ public sealed record DeviceImportRecord(
 
 public sealed record TiaSynchronizationResult(
     string ComparisonId,
-    IReadOnlyList<string> PendingPaths);
+    IReadOnlyList<string> PendingPaths,
+    string? CommitSha = null);
+
+public sealed record WorkbenchCommitResult(
+    string Sha,
+    string Message,
+    IReadOnlyList<string> Files);
 
 public sealed record DeviceContext(
     string WorkbenchId,

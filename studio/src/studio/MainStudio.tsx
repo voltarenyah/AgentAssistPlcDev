@@ -452,7 +452,10 @@ export default function MainStudio() {
   const [blockFilter, setBlockFilter] = useState('')
   const [versionControlSelection, setVersionControlSelection] = useState<unknown>(null)
 
-  useEffect(() => { setVersionControlSelection(null) }, [selection.worktreeId])
+  useEffect(() => {
+    setVersionControlSelection(null)
+    setLastImport(null)
+  }, [selection.workbenchId, selection.worktreeId, selection.deviceId])
 
   useEffect(() => {
     try { writeShellLayout(window.localStorage, shellLayout) } catch { /* storage is optional */ }
@@ -1134,13 +1137,13 @@ export default function MainStudio() {
     }
   }
 
-  const applyRefresh = async (approvedPaths: string[]) => {
+  const applyRefresh = async (approvedPaths: string[], commitTitle?: string) => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !preview) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
     setOperation('apply-refresh')
     const op = beginOperation('apply-refresh', 'Applying approved refresh...')
     try {
-      const result = await api.applyDeviceRefresh(context.workbenchId, context.worktreeId, context.deviceId, preview.previewId, approvedPaths, op.id)
+      const result = await api.applyDeviceRefresh(context.workbenchId, context.worktreeId, context.deviceId, preview.previewId, approvedPaths, op.id, commitTitle)
       setPreview(null)
       await reloadDeviceSnapshot(context)
       if (result.error) {
@@ -1288,10 +1291,10 @@ export default function MainStudio() {
   const bootstrapDevice = async () => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
-    setOperation('bootstrap-device')
-    const op = beginOperation('bootstrap-device', 'Generating PLC context: export, baseline commit, knowledge ingest...')
+    setOperation('bootstrap-worktree')
+    const op = beginOperation('bootstrap-worktree', 'Generating PLC contexts: export, baseline commit, knowledge ingest...')
     try {
-      await api.bootstrapDevice(context.workbenchId, context.worktreeId, context.deviceId, op.id)
+      await api.bootstrapWorktree(context.workbenchId, context.worktreeId, context.deviceId, op.id)
       await reloadDeviceSnapshot(context)
       setActiveTab('chat')
       toast.success('PLC context ready — start chatting to explore your project.')
@@ -1314,11 +1317,11 @@ export default function MainStudio() {
     const op = beginOperation(
       'bootstrap-device',
       allowCompile
-        ? 'Compiling selected PLC and retrying rebuild...'
+        ? 'Compiling PLC and retrying full project rebuild...'
         : 'Rebuilding project: full export, baseline commit, knowledge ingest...',
     )
     try {
-      await api.bootstrapDevice(context.workbenchId, context.worktreeId, context.deviceId, op.id, 'rebuild: full export', allowCompile)
+      await api.bootstrapWorktree(context.workbenchId, context.worktreeId, context.deviceId, op.id, 'rebuild: full export', allowCompile)
       await reloadDeviceSnapshot(context)
       toast.success('Project rebuilt from TIA — baseline and knowledge refreshed.')
     } catch (error) {
@@ -1952,6 +1955,7 @@ export default function MainStudio() {
         <RefreshDialog
           preview={preview}
           busy={operation === 'apply-refresh'}
+          autoCommit={activeWorktree?.branch.toLowerCase() === 'master'}
           onClose={() => setPreview(null)}
           onApply={applyRefresh}
         />

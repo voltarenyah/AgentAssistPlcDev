@@ -73,16 +73,22 @@ public sealed class FeatureImportService
             .Select(item =>
             {
                 var path = Normalize(item.FilePath);
-                var deviceId = DeviceIdFromPath(path);
-                var plcName = masterDevices
-                    .Where(x => string.Equals(x.Metadata.DeviceId, deviceId, StringComparison.Ordinal))
-                    .Select(x => x.Metadata.PlcName)
-                    .FirstOrDefault() ?? deviceId;
+                var deviceFolder = DeviceFolderFromPath(path);
+                var device = masterDevices.FirstOrDefault(x =>
+                    string.Equals(
+                        Path.GetFileName(x.Context.DeviceRoot),
+                        deviceFolder,
+                        StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(x.Metadata.PlcName, deviceFolder, StringComparison.OrdinalIgnoreCase));
+                var deviceId = device.Metadata is null ? deviceFolder : device.Metadata.DeviceId;
+                var plcName = device.Metadata is null ? deviceFolder : device.Metadata.PlcName;
                 var lifecycle = preview.FeaturePaths.Any(x => Normalize(x) == path)
                     && File.Exists(WorkbenchPaths.ResolveRelative(masterRoot, path))
                     ? null
                     : "SOURCE_LIFECYCLE_UNSUPPORTED";
-                var reason = lifecycle ?? (tiaPaths.Contains(path) ? "TIA_FEATURE_OVERLAP" : null);
+                var reason = device.Metadata is null
+                    ? "DEVICE_NOT_FOUND"
+                    : lifecycle ?? (tiaPaths.Contains(path) ? "TIA_FEATURE_OVERLAP" : null);
                 return new FeatureImportObject(
                     deviceId,
                     plcName,
@@ -96,8 +102,16 @@ public sealed class FeatureImportService
         foreach (var path in preview.FeaturePaths.Select(Normalize).Where(IsManagedSource))
         {
             if (objects.Any(item => item.RelativePath == path)) continue;
-            var deviceId = DeviceIdFromPath(path);
-            objects.Add(new FeatureImportObject(deviceId, deviceId, path, string.Empty, false, "SOURCE_LIFECYCLE_UNSUPPORTED"));
+            var deviceFolder = DeviceFolderFromPath(path);
+            var device = masterDevices.FirstOrDefault(x =>
+                string.Equals(
+                    Path.GetFileName(x.Context.DeviceRoot),
+                    deviceFolder,
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(x.Metadata.PlcName, deviceFolder, StringComparison.OrdinalIgnoreCase));
+            var deviceId = device.Metadata is null ? deviceFolder : device.Metadata.DeviceId;
+            var plcName = device.Metadata is null ? deviceFolder : device.Metadata.PlcName;
+            objects.Add(new FeatureImportObject(deviceId, plcName, path, string.Empty, false, "SOURCE_LIFECYCLE_UNSUPPORTED"));
         }
 
         var plan = new FeatureImportPlan(
@@ -237,13 +251,29 @@ public sealed class FeatureImportService
     private IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> LoadDevices(WorkbenchMetadata workbench, WorktreeMetadata worktree)
     {
         var root = ResolveWorktreeRoot(workbench, worktree.WorktreeId);
+        var devicesRoot = WorkbenchPaths.ResolveRelative(root, "devices");
+        var registration = workbench.Worktrees.Single(item => item.WorktreeId == worktree.WorktreeId);
+        var metadataById = Directory.EnumerateDirectories(devicesRoot)
+            .Select(directory => Path.Combine(directory, "device.json"))
+            .Where(File.Exists)
+            .Select(store.TryRead<DeviceMetadata>)
+            .Where(metadata => metadata is not null)
+            .Cast<DeviceMetadata>()
+            .ToDictionary(metadata => metadata.DeviceId, StringComparer.Ordinal);
+
         return worktree.DeviceIds.Select(id =>
         {
-            var deviceRoot = WorkbenchPaths.ResolveRelative(root, $"devices/{id}");
-            var metadata = store.Read<DeviceMetadata>(Path.Combine(deviceRoot, "device.json"));
-            return (metadata, new DeviceContext(workbench.WorkbenchId, worktree.WorktreeId, id, workbench.RootPath, root,
-                deviceRoot, WorkbenchPaths.ResolveRelative(deviceRoot, "source"), WorkbenchPaths.ResolveRelative(deviceRoot, "staging"),
-                WorkbenchPaths.ResolveRelative(deviceRoot, "plc-knowledge.db")));
+            if (!metadataById.TryGetValue(id, out var metadata))
+                throw new WorkbenchCatalogException("DEVICE_NOT_FOUND", $"Device '{id}' was not found in worktree '{worktree.WorktreeId}'.");
+
+            var context = WorkbenchPaths.ResolveDevice(
+                workbench.WorkbenchId,
+                workbench.RootPath,
+                worktree.WorktreeId,
+                registration.RelativePath,
+                id,
+                metadata.PlcName);
+            return (metadata, context);
         }).ToArray();
     }
 
@@ -263,6 +293,6 @@ public sealed class FeatureImportService
     }
     private static bool IsManagedSource(string path) => Normalize(path).StartsWith("devices/", StringComparison.OrdinalIgnoreCase) && Normalize(path).Contains("/source/", StringComparison.OrdinalIgnoreCase) && Normalize(path).EndsWith(".xml", StringComparison.OrdinalIgnoreCase);
     private static string Normalize(string path) => path.Replace('\\', '/').TrimStart('/');
-    private static string DeviceIdFromPath(string path) => Normalize(path).Split('/').Skip(1).FirstOrDefault() ?? string.Empty;
+    private static string DeviceFolderFromPath(string path) => Normalize(path).Split('/').Skip(1).FirstOrDefault() ?? string.Empty;
     private static string ExtractSourcePath(string path) => Normalize(path).Split("/source/", 2, StringSplitOptions.None).Last();
 }
