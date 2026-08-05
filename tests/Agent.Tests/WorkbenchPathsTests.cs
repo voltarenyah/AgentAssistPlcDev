@@ -46,16 +46,16 @@ public sealed class WorkbenchPathsTests
     }
 
     [Fact]
-    public void DeviceContextExposesOnlyDeviceScopedPaths()
+    public void ResolveDeviceUsesOneTrackedSourceDirectory()
     {
         var context = WorkbenchPaths.ResolveDevice(
-            @"D:\wb", "wt-1", "feature-a", "dev-1", "PLC:1");
+            "wb-1", @"D:\wb", "wt-1", "feature-a", "dev-1", "PLC:1");
 
         Assert.Equal(@"D:\wb\worktrees\feature-a\devices\PLC_1", context.DeviceRoot);
-        Assert.Equal(Path.Combine(context.DeviceRoot, "exported-source"), context.ExportedSourceRoot);
-        Assert.Equal(Path.Combine(context.DeviceRoot, "modified-source"), context.ModifiedSourceRoot);
+        Assert.Equal(Path.Combine(context.DeviceRoot, "source"), context.SourceRoot);
         Assert.Equal(Path.Combine(context.DeviceRoot, "staging"), context.StagingRoot);
         Assert.Equal(Path.Combine(context.DeviceRoot, "plc-knowledge.db"), context.KnowledgeDbPath);
+        Assert.Equal("wb-1", context.WorkbenchId);
         Assert.Equal("wt-1", context.WorktreeId);
         Assert.Equal("dev-1", context.DeviceId);
     }

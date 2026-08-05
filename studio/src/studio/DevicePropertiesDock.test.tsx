@@ -25,8 +25,7 @@ const info = {
   deviceId: 'dev1',
   plcName: 'PLC_1',
   engineeringIdentity: 'eng-1',
-  exportedSourceRoot: 'C:/wb/exported',
-  modifiedSourceRoot: 'C:/wb/modified',
+  sourceRoot: 'C:/wb/source',
   knowledgeDbPath: 'C:/wb/plc-knowledge.db',
   sourceProjectPath: 'C:/tia/TestPLCExportDemo.ap17',
 } as api.DeviceInfo
@@ -58,6 +57,17 @@ describe('DevicePropertiesDock', () => {
     expect(host.textContent).toContain('6ES7 516-3AN02-0AB0')
     expect(host.textContent).toContain('C:/tia/TestPLCExportDemo.ap17')
     expect(host.textContent).toContain('C:/wb/plc-knowledge.db')
+  })
+
+  it('shows one PLC source path without baseline or overlay properties', async () => {
+    const { host } = await render(<DevicePropertiesDock meta={meta} info={info} hidden={false} />)
+
+    const plcSourceLabels = Array.from(host.querySelectorAll('div'))
+      .filter(element => element.textContent === 'PLC source')
+    expect(plcSourceLabels).toHaveLength(1)
+    expect(host.textContent).toContain('C:/wb/source')
+    expect(host.textContent).not.toContain('Exported baseline')
+    expect(host.textContent).not.toContain('Modified overlay')
   })
 
   it('groups device-level metadata into its own section', async () => {

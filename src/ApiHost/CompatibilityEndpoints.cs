@@ -431,7 +431,14 @@ public static class CompatibilityEndpoints
         app.MapGet("/api/project/context-status", (WorkbenchApiState state) =>
         {
             var device = Device(state);
-            return Results.Ok(new { device.DeviceId, device.ExportedSourceRoot, device.ModifiedSourceRoot, device.StagingRoot, device.KnowledgeDbPath });
+            return Results.Ok(new
+            {
+                device.DeviceId,
+                ExportedSourceRoot = device.SourceRoot,
+                ModifiedSourceRoot = device.SourceRoot,
+                device.StagingRoot,
+                device.KnowledgeDbPath,
+            });
         });
         app.MapGet("/api/project/compare", (WorkbenchApiState state, WorkbenchCoordinator coordinator) =>
             coordinator.PreviewRefresh(Device(state)));
@@ -493,8 +500,9 @@ public static class CompatibilityEndpoints
         if (tool is "sync_export" or "rebuild_export") args["outputDir"] = device.StagingRoot;
         if (tool is "ingest_source" or "update_components")
         {
-            args["exportedSourceRoot"] = device.ExportedSourceRoot;
-            args["modifiedSourceRoot"] = device.ModifiedSourceRoot;
+            args.Remove("exportedSourceRoot");
+            args.Remove("modifiedSourceRoot");
+            args["sourceRoot"] = device.SourceRoot;
             args["dbPath"] = device.KnowledgeDbPath;
         }
         if (tool.StartsWith("vc_", StringComparison.Ordinal)) args["repoPath"] = device.WorktreeRoot;
@@ -743,8 +751,7 @@ internal sealed class ApiChatService(
                     $"Workbench: {device.WorkbenchId}",
                     $"Worktree: {device.WorktreeId}",
                     $"Device: {device.DeviceId}",
-                    $"Exported source: {device.ExportedSourceRoot}",
-                    $"Modified source: {device.ModifiedSourceRoot}",
+                    $"PLC source: {device.SourceRoot}",
                     $"Knowledge DB: {device.KnowledgeDbPath}"),
                 Settings(configuration, state),
                 sandbox);

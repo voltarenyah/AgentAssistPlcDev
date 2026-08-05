@@ -25,15 +25,17 @@ public sealed class SourceEditorTools
         Invoke(() => service.Parse(xmlFilePath));
 
     [McpServerTool(Name = "src_apply_edits")]
-    [Description("Apply typed edits to an XML file under modified-source, or atomically replace an effective overlay only when both inPlace and confirmInPlace are true. Does not import into TIA.")]
+    [Description("Apply typed edits to checked-out device source XML. Current app calls must pass the exact devices/<device>/source root; omitting sourceRoot is supported only for legacy modified-source output. Does not import into TIA.")]
     public CallToolResult ApplyEdits(string xmlFilePath, SourceEdit[] edits,
-        string? outputFilePath = null, bool overwriteOutput = false, bool inPlace = false, bool confirmInPlace = false) =>
+        string? outputFilePath = null, bool overwriteOutput = false, bool inPlace = false,
+        bool confirmInPlace = false, string? sourceRoot = null) =>
         Invoke(() =>
         {
             var writeTarget = ValidateWriteTarget(
                 inPlace
                     ? outputFilePath ?? xmlFilePath
-                    : outputFilePath);
+                    : outputFilePath,
+                sourceRoot);
 
             return service.Apply(
                 xmlFilePath,
@@ -54,16 +56,56 @@ public sealed class SourceEditorTools
     public CallToolResult Validate(string xmlFilePath, string? baselineFilePath = null) =>
         Invoke(() => service.Validate(xmlFilePath, baselineFilePath));
 
-    private string ValidateWriteTarget(string? outputFilePath)
+    private string ValidateWriteTarget(string? outputFilePath, string? sourceRoot)
     {
         if (string.IsNullOrWhiteSpace(outputFilePath))
         {
             throw new SandboxException(
                 "SANDBOX_PATH_DENIED",
-                "outputFilePath is required and must be inside modified-source.",
-                "Prepare a device overlay and pass its path as outputFilePath.");
+                "outputFilePath is required.",
+                "Pass the selected device source path as outputFilePath.");
         }
 
+        return sourceRoot is null
+            ? ValidateLegacyModifiedSourceWriteTarget(outputFilePath)
+            : ValidateCurrentSourceWriteTarget(outputFilePath, sourceRoot);
+    }
+
+    private string ValidateCurrentSourceWriteTarget(string outputFilePath, string sourceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(sourceRoot))
+        {
+            throw new SandboxException(
+                "SANDBOX_PATH_DENIED",
+                "sourceRoot must identify the selected device source root.");
+        }
+
+        var trustedRoot = writeJail.Validate(sourceRoot, nameof(sourceRoot))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        RejectExistingReparsePoints(trustedRoot, nameof(sourceRoot));
+        RequireDeviceSourceRootShape(trustedRoot);
+        if (!Directory.Exists(trustedRoot))
+        {
+            throw new SandboxException(
+                "SANDBOX_PATH_DENIED",
+                $"sourceRoot does not exist: {trustedRoot}");
+        }
+
+        var output = writeJail.Validate(outputFilePath, nameof(outputFilePath));
+        RejectExistingReparsePoints(output, nameof(outputFilePath));
+        if (!IsBelow(trustedRoot, output))
+        {
+            throw new SandboxException(
+                "SANDBOX_PATH_DENIED",
+                $"outputFilePath must be below the selected sourceRoot: {output}",
+                "Use the exact source path bound by the selected device context.");
+        }
+
+        return output;
+    }
+
+    private string ValidateLegacyModifiedSourceWriteTarget(string outputFilePath)
+    {
         var output = writeJail.Validate(outputFilePath, nameof(outputFilePath));
         var directory = Path.GetDirectoryName(output);
         var insideModifiedSource = false;
@@ -86,23 +128,49 @@ public sealed class SourceEditorTools
         {
             throw new SandboxException(
                 "SANDBOX_PATH_DENIED",
-                $"outputFilePath must be inside an allowed modified-source root: {output}",
-                "Use DeviceSourceResolver.PrepareEditable and pass the returned path.");
+                $"Legacy outputFilePath must be inside modified-source: {output}",
+                "Current app calls must pass sourceRoot and write in place.");
         }
 
-        RejectExistingReparsePoints(output);
+        RejectExistingReparsePoints(output, nameof(outputFilePath));
         return output;
     }
 
-    private static void RejectExistingReparsePoints(string path)
+    private static void RequireDeviceSourceRootShape(string sourceRoot)
+    {
+        var sourceDirectory = new DirectoryInfo(sourceRoot);
+        var deviceDirectory = sourceDirectory.Parent;
+        var devicesDirectory = deviceDirectory?.Parent;
+        if (!string.Equals(sourceDirectory.Name, "source", StringComparison.OrdinalIgnoreCase)
+            || deviceDirectory is null
+            || string.IsNullOrWhiteSpace(deviceDirectory.Name)
+            || !string.Equals(devicesDirectory?.Name, "devices", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new SandboxException(
+                "SANDBOX_PATH_DENIED",
+                $"sourceRoot must have the devices/<device>/source shape: {sourceRoot}");
+        }
+    }
+
+    private static bool IsBelow(string root, string path)
+    {
+        var relative = Path.GetRelativePath(root, path);
+        return !Path.IsPathRooted(relative)
+            && !string.Equals(relative, ".", StringComparison.Ordinal)
+            && !string.Equals(relative, "..", StringComparison.Ordinal)
+            && !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            && !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
+    }
+
+    private static void RejectExistingReparsePoints(string path, string parameterName)
     {
         var fullPath = Path.GetFullPath(path);
         var root = Path.GetPathRoot(fullPath);
         if (string.IsNullOrEmpty(root))
         {
-            throw new SandboxException(
-                "SANDBOX_PATH_DENIED",
-                $"outputFilePath has no filesystem root: {fullPath}");
+                throw new SandboxException(
+                    "SANDBOX_PATH_DENIED",
+                    $"{parameterName} has no filesystem root: {fullPath}");
         }
 
         var current = root;
@@ -125,8 +193,8 @@ public sealed class SourceEditorTools
             {
                 throw new SandboxException(
                     "SANDBOX_PATH_DENIED",
-                    $"outputFilePath traverses reparse point '{current}'.",
-                    "Choose a local path beneath the device modified-source root.");
+                    $"{parameterName} traverses reparse point '{current}'.",
+                    "Choose a local path beneath the permitted device source root.");
             }
         }
     }

@@ -1,4 +1,5 @@
 using Contracts.Sandbox;
+using Contracts.Engineering;
 
 namespace Mcp.Engineering.Sandbox;
 
@@ -63,6 +64,22 @@ public sealed class EngineeringGuard
         }
 
         return tier.Value;
+    }
+
+    /// <summary>Validate the generic source category before checking the destructive tool and XML path.</summary>
+    public SandboxTier CheckSourceObjectImport(string relativePath, string xmlFilePath)
+    {
+        try
+        {
+            _ = SourceObjectImport.Classify(relativePath);
+        }
+        catch (ArgumentException ex)
+        {
+            audit.Record("import_source_object", "destructive", "deny", ex.Message);
+            throw new SandboxException("SOURCE_PATH_INVALID", ex.Message, "Use a Blocks, DB, Tags, or UDT XML source path.");
+        }
+
+        return Check("import_source_object", ("xmlFilePath", xmlFilePath));
     }
 
     /// <summary>Audit a call that passed the gate and executed (tier + truncated argument detail).</summary>

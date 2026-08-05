@@ -25,13 +25,12 @@ const snapshot = (overrides: Partial<DeviceSnapshot> = {}): DeviceSnapshot => ({
   deviceId: 'plc-1',
   plcName: 'PLC_1',
   engineeringIdentity: 'project/plc-1',
-  exportedSourceRoot: 'C:/workbench/exported-source',
-  modifiedSourceRoot: 'C:/workbench/modified-source',
+  sourceRoot: 'C:/workbench/source',
   knowledgeDbPath: 'C:/workbench/plc-knowledge.db',
   device: null,
   knowledge: { state: 'missing', updatedAt: null },
   blocks: [],
-  overlayCount: 0,
+  sourceObjectCount: 0,
   diagnostics: [],
   ...overrides,
 })
@@ -41,15 +40,15 @@ describe('device snapshot state', () => {
     const next = applyDeviceSnapshot(null, snapshot({
       knowledge: { state: 'current', updatedAt: '2026-07-29T08:00:00Z' },
       blocks: [block('Main', 'OB', 1)],
-      overlayCount: 2,
-      diagnostics: ['overlay warning'],
+      sourceObjectCount: 2,
+      diagnostics: ['source warning'],
     }))
 
     expect(next.knowledgeState).toBe('current')
     expect(next.knowledgeUpdatedAt).toBe('2026-07-29T08:00:00Z')
     expect(next.blocks).toHaveLength(1)
-    expect(next.overlayCount).toBe(2)
-    expect(next.diagnostics).toEqual(['overlay warning'])
+    expect(next.sourceObjectCount).toBe(2)
+    expect(next.diagnostics).toEqual(['source warning'])
   })
 
   it('retains the last successful offline snapshot when refresh fails', () => {

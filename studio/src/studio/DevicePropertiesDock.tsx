@@ -43,8 +43,7 @@ export default function DevicePropertiesDock({ meta, info, hidden }: Props) {
     : []
   const pathRows: [string, string | null][] = [
     ['TIA project', info?.sourceProjectPath ?? null],
-    ['Exported baseline', info?.exportedSourceRoot ?? null],
-    ['Modified overlay', info?.modifiedSourceRoot ?? null],
+    ['PLC source', info?.sourceRoot ?? null],
     ['Knowledge DB', info?.knowledgeDbPath ?? null],
   ]
 

@@ -349,6 +349,28 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
+    public PlcChecksumInfo[] GetPlcChecksums(string? plcName = null)
+    {
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var plcs = plcName is null
+                ? PlcSoftwareResolver.FindAll(project)
+                : new[] { PlcSoftwareResolver.Resolve(project, plcName) };
+            var projectIdentity = project.Path?.FullName ?? project.Name;
+
+            return plcs
+                .Select(plc => new PlcChecksumInfo
+                {
+                    PlcName = plc.Name,
+                    ProjectIdentity = projectIdentity,
+                    SoftwareChecksum = TryReadSoftwareChecksum(plc),
+                })
+                .OrderBy(info => info.PlcName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
+
     public ExportResult ExportBlock(string blockName, string outputDir)
     {
         lock (_gate)
@@ -369,7 +391,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     throw new AdapterException("BLOCK_INCONSISTENT",
                         $"Block '{blockName}' is inconsistent. Compile it first before export.");
                 }
-                var result = ExportCore(block, outputDir);
+                var result = ExportCore(block, outputDir, groupPath);
                 ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, result), device);
                 return result;
             }
@@ -414,7 +436,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         PlcSoftware plc,
         string dir,
         bool writeProjectMetadata = true,
-        IProgress<EngineeringProgress>? progress = null)
+        IProgress<EngineeringProgress>? progress = null,
+        List<UnsupportedSourceObject>? unsupported = null)
     {
         Directory.CreateDirectory(dir);
         var exportStartedUtc = DateTimeOffset.UtcNow;
@@ -430,6 +453,12 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     "export_all_blocks: SKIPPED fail-safe block {Block} (ProgrammingLanguage: {Language}) — TIA Openness does not permit exporting F-blocks",
                     item.Block.Name, item.Block.ProgrammingLanguage);
                 Report(progress, $"Skipping fail-safe block {item.Block.Name} (TIA Openness cannot export F-blocks)...");
+                unsupported?.Add(new UnsupportedSourceObject
+                {
+                    Name = item.Block.Name,
+                    Category = "FailSafeBlock",
+                    Reason = "TIA_EXPORT_UNSUPPORTED",
+                });
                 continue;
             }
 
@@ -445,7 +474,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             try
             {
                 Report(progress, $"Exporting block {block.Name}...");
-                result = ExportCore(block, dir);
+                result = ExportCore(block, dir, groupPath);
             }
             catch (Exception ex) when (FailSafeBlocks.IsExportNotPermitted(ex))
             {
@@ -455,6 +484,12 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     "export_all_blocks: SKIPPED {Block} — Openness: export not permitted (ProgrammingLanguage: {Language})",
                     block.Name, block.ProgrammingLanguage);
                 Report(progress, $"Skipping block {block.Name} (TIA Openness: export not permitted)...");
+                unsupported?.Add(new UnsupportedSourceObject
+                {
+                    Name = block.Name,
+                    Category = block.GetType().Name,
+                    Reason = "TIA_EXPORT_UNSUPPORTED",
+                });
                 continue;
             }
             catch (Exception ex)
@@ -735,11 +770,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
                 // Full export: blocks rewrite the manifest; tags/UDTs upsert into it.
                 var full = new List<ExportResult>();
+                var unsupported = new List<UnsupportedSourceObject>();
                 full.AddRange(ExportAllBlocksForPlc(
                     plc,
                     dir,
                     writeProjectMetadata: plcName is null,
-                    progress: progress));
+                    progress: progress,
+                    unsupported: unsupported));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables",
                     p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord, progress));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_udts",
@@ -754,6 +791,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     BaselineExisted = false,
                     Added = full.Where(r => r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = "full-rebuild" }).ToArray(),
                     Failed = full.Where(r => !r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = r.Error }).ToArray(),
+                    Unsupported = unsupported.ToArray(),
                 });
 
                 _logger.LogInformation(
@@ -1207,17 +1245,17 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             case "Tags":
                 var (table, tablePath) = tablesById[live.Id];
                 Report(progress, $"Exporting tag table {table.Name}...");
-                exportResult = ExportTagTableCore(table, dir);
+                exportResult = ExportTagTableCore(table, dir, tablePath);
                 return CreateTagTableRecord(table, tablePath, dir, exportResult);
             case "UDT":
                 var (type, typePath) = typesById[live.Id];
                 Report(progress, $"Exporting UDT {type.Name}...");
-                exportResult = ExportUdtCore(type, dir);
+                exportResult = ExportUdtCore(type, dir, typePath);
                 return CreateUdtRecord(type, typePath, dir, exportResult);
             default:
                 var (block, blockPath) = blocksById[live.Id];
                 Report(progress, $"Exporting block {block.Name}...");
-                exportResult = ExportCore(block, dir);
+                exportResult = ExportCore(block, dir, blockPath);
                 return ExportManifest.CreateRecord(block, blockPath, dir, exportResult);
         }
     }
@@ -1415,7 +1453,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     }
 
     /// <summary>Exports into &lt;exportRoot&gt;/Blocks/ or &lt;exportRoot&gt;/DB/ (created as needed), depending on the block category.</summary>
-    private static ExportResult ExportCore(PlcBlock block, string exportRoot)
+    private static ExportResult ExportCore(PlcBlock block, string exportRoot, string? groupPath = null)
     {
         if (!block.IsConsistent)
         {
@@ -1428,9 +1466,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             };
         }
 
-        var dir = Path.Combine(exportRoot, ExportManifest.FolderFor(ExportManifest.CategoryOf(block)));
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, $"{Sanitize(block.Name)} [{TypeCode(block)}{block.Number}].xml");
+        var category = ExportManifest.CategoryOf(block);
+        var relativePath = SourceExportPath.Build(
+            ExportManifest.FolderFor(category),
+            groupPath,
+            $"{Sanitize(block.Name)} [{TypeCode(block)}{block.Number}].xml");
+        var path = Path.Combine(exportRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         // V17 PlcBlock.Export refuses to overwrite an existing file (verified 2026-07-18) —
         // replace our own previous export.
         if (File.Exists(path))
@@ -1508,7 +1550,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         string? plcName,
         string label,
         Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
-        Func<TObject, string, ExportResult> exportCore,
+        Func<TObject, string, string?, ExportResult> exportCore,
         Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord,
         IProgress<EngineeringProgress>? progress = null)
     {
@@ -1533,7 +1575,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         string dir,
         string label,
         Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
-        Func<TObject, string, ExportResult> exportCore,
+        Func<TObject, string, string?, ExportResult> exportCore,
         Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord,
         IProgress<EngineeringProgress>? progress = null)
     {
@@ -1547,7 +1589,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         {
             index++;
             Report(progress, $"Exporting {ExportKind(label)} {ExportName(item)}...");
-            var result = exportCore(item, dir);
+            var result = exportCore(item, dir, groupPath);
             if (!result.Success)
             {
                 _logger.LogWarning("{Label}: FAILED {Name} — {Error}", label, result.BlockName, result.Error);
@@ -1563,11 +1605,11 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         return results.ToArray();
     }
 
-    private static ExportResult ExportTagTableCore(PlcTagTable table, string exportRoot)
+    private static ExportResult ExportTagTableCore(PlcTagTable table, string exportRoot, string? groupPath = null)
     {
-        var dir = Path.Combine(exportRoot, ExportManifest.FolderFor("Tags"));
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, $"{Sanitize(table.Name)}.xml");
+        var relativePath = SourceExportPath.Build("Tags", groupPath, $"{Sanitize(table.Name)}.xml");
+        var path = Path.Combine(exportRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         try
         {
             // V17 Export refuses to overwrite an existing file (verified for blocks 2026-07-18) —
@@ -1590,16 +1632,16 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         };
     }
 
-    private static ExportResult ExportUdtCore(PlcType type, string exportRoot)
+    private static ExportResult ExportUdtCore(PlcType type, string exportRoot, string? groupPath = null)
     {
         if (!type.IsConsistent)
         {
             return Failure(type.Name, "UDT",
                 $"UDT '{type.Name}' is inconsistent. Compile it first before export.");
         }
-        var dir = Path.Combine(exportRoot, ExportManifest.FolderFor("UDT"));
-        Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, $"{Sanitize(type.Name)}.xml");
+        var relativePath = SourceExportPath.Build("UDT", groupPath, $"{Sanitize(type.Name)}.xml");
+        var path = Path.Combine(exportRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         try
         {
             if (File.Exists(path))
@@ -1681,6 +1723,182 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     {
         var invalid = Path.GetInvalidFileNameChars();
         return new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+    }
+
+    public SourceObjectImportResult ImportSourceObject(
+        string relativePath,
+        string xmlFilePath,
+        string? plcName = null)
+    {
+        lock (_gate)
+        {
+            if (!File.Exists(xmlFilePath))
+                throw new AdapterException("XML_NOT_FOUND", $"XML file not found: {xmlFilePath}");
+
+            var location = ParseSourceObjectPath(relativePath);
+            var plc = PlcSoftwareResolver.Resolve(RequireProject(), plcName);
+            var importedCount = 0;
+
+            try
+            {
+                // Exclusive access + transaction is mandatory for every TIA-side write.
+                using var exclusiveAccess = _portal!.ExclusiveAccess("Import source object " + location.ObjectName);
+                using var transaction = exclusiveAccess.Transaction(RequireProject(), "Import source object " + location.ObjectName);
+
+                switch (location.Kind)
+                {
+                    case SourceObjectKind.Block:
+                    {
+                        var group = ResolveBlockGroup(plc, location.GroupSegments);
+                        EnsureExistingBlock(group, location.ObjectName, relativePath);
+                        importedCount = group.Blocks.Import(new FileInfo(xmlFilePath), ImportOptions.Override).Count;
+                        break;
+                    }
+                    case SourceObjectKind.TagTable:
+                    {
+                        var group = ResolveTagTableGroup(plc, location.GroupSegments);
+                        EnsureExistingTagTable(group, location.ObjectName, relativePath);
+                        importedCount = group.TagTables.Import(new FileInfo(xmlFilePath), ImportOptions.Override).Count;
+                        break;
+                    }
+                    case SourceObjectKind.Udt:
+                    {
+                        var group = ResolveTypeGroup(plc, location.GroupSegments);
+                        EnsureExistingType(group, location.ObjectName, relativePath);
+                        importedCount = group.Types.Import(new FileInfo(xmlFilePath), ImportOptions.Override).Count;
+                        break;
+                    }
+                    default:
+                        throw new AdapterException("SOURCE_PATH_INVALID", $"Unsupported source object kind in '{relativePath}'.");
+                }
+
+                transaction.CommitOnDispose();
+            }
+            catch (Exception ex) when (IsEditorConflict(ex))
+            {
+                throw new AdapterException(
+                    "SOURCE_OBJECT_OPEN_IN_EDITOR",
+                    $"Import of '{relativePath}' was rejected — the object appears to be open in a TIA editor: {ex.Message}",
+                    "Close the object editor in TIA Portal and retry.");
+            }
+
+            return new SourceObjectImportResult
+            {
+                RelativePath = relativePath.Replace('\\', '/'),
+                ObjectName = location.ObjectName,
+                ObjectKind = location.Kind.ToString(),
+                Success = importedCount > 0,
+            };
+        }
+    }
+
+    private static SourceObjectLocation ParseSourceObjectPath(string relativePath)
+    {
+        SourceObjectKind kind;
+        try
+        {
+            kind = SourceObjectImport.Classify(relativePath);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new AdapterException("SOURCE_PATH_INVALID", ex.Message, "Use a Blocks, DB, Tags, or UDT XML source path.");
+        }
+
+        var normalized = relativePath.Replace('\\', '/');
+        var segments = normalized.Split('/');
+        if (segments.Length < 2 || !segments[^1].EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+            throw new AdapterException("SOURCE_PATH_INVALID", $"'{relativePath}' must identify an XML source object.");
+
+        var fileName = segments[^1];
+        var objectName = Path.GetFileNameWithoutExtension(fileName);
+        if (kind == SourceObjectKind.Block)
+        {
+            var suffixStart = objectName.LastIndexOf(" [", StringComparison.Ordinal);
+            if (suffixStart > 0 && objectName.EndsWith("]", StringComparison.Ordinal))
+                objectName = objectName.Substring(0, suffixStart);
+        }
+
+        if (string.IsNullOrWhiteSpace(objectName))
+            throw new AdapterException("SOURCE_PATH_INVALID", $"'{relativePath}' does not contain an object name.");
+
+        return new SourceObjectLocation(
+            kind,
+            segments.Skip(1).Take(segments.Length - 2).ToArray(),
+            objectName);
+    }
+
+    private static PlcBlockGroup ResolveBlockGroup(PlcSoftware plc, IReadOnlyList<string> groupSegments)
+    {
+        PlcBlockGroup group = plc.BlockGroup;
+        foreach (var segment in groupSegments)
+        {
+            group = group.Groups.FirstOrDefault(candidate => candidate.Name == segment)
+                ?? throw new AdapterException("SOURCE_GROUP_NOT_FOUND", $"Block group '{string.Join("/", groupSegments)}' was not found.");
+        }
+
+        return group;
+    }
+
+    private static PlcTagTableGroup ResolveTagTableGroup(PlcSoftware plc, IReadOnlyList<string> groupSegments)
+    {
+        PlcTagTableGroup group = plc.TagTableGroup;
+        foreach (var segment in groupSegments)
+        {
+            group = group.Groups.FirstOrDefault(candidate => candidate.Name == segment)
+                ?? throw new AdapterException("SOURCE_GROUP_NOT_FOUND", $"Tag-table group '{string.Join("/", groupSegments)}' was not found.");
+        }
+
+        return group;
+    }
+
+    private static PlcTypeGroup ResolveTypeGroup(PlcSoftware plc, IReadOnlyList<string> groupSegments)
+    {
+        PlcTypeGroup group = plc.TypeGroup;
+        foreach (var segment in groupSegments)
+        {
+            group = group.Groups.FirstOrDefault(candidate => candidate.Name == segment)
+                ?? throw new AdapterException("SOURCE_GROUP_NOT_FOUND", $"UDT group '{string.Join("/", groupSegments)}' was not found.");
+        }
+
+        return group;
+    }
+
+    private static void EnsureExistingBlock(PlcBlockGroup group, string objectName, string relativePath)
+    {
+        if (!group.Blocks.Cast<PlcBlock>().Any(block => block.Name == objectName))
+            throw NewSourceAddUnsupported(relativePath, objectName);
+    }
+
+    private static void EnsureExistingTagTable(PlcTagTableGroup group, string objectName, string relativePath)
+    {
+        if (!group.TagTables.Cast<PlcTagTable>().Any(table => table.Name == objectName))
+            throw NewSourceAddUnsupported(relativePath, objectName);
+    }
+
+    private static void EnsureExistingType(PlcTypeGroup group, string objectName, string relativePath)
+    {
+        if (!group.Types.Cast<PlcType>().Any(type => type.Name == objectName))
+            throw NewSourceAddUnsupported(relativePath, objectName);
+    }
+
+    private static AdapterException NewSourceAddUnsupported(string relativePath, string objectName) =>
+        new(
+            "SOURCE_ADD_UNSUPPORTED",
+            $"Source object '{objectName}' from '{relativePath}' does not exist in the target TIA group.",
+            "Only overwrites of existing blocks, tag tables, and UDTs are supported.");
+
+    private sealed class SourceObjectLocation
+    {
+        public SourceObjectLocation(SourceObjectKind kind, string[] groupSegments, string objectName)
+        {
+            Kind = kind;
+            GroupSegments = groupSegments;
+            ObjectName = objectName;
+        }
+
+        public SourceObjectKind Kind { get; }
+        public string[] GroupSegments { get; }
+        public string ObjectName { get; }
     }
 
     public ImportResult ImportBlock(string blockName, string xmlFilePath, string? plcName = null)

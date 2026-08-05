@@ -562,10 +562,18 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             });
 
         response.EnsureSuccessStatusCode();
+        var apply = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            "FilesUpdated",
+            Enum.GetName(
+                typeof(RefreshApplyState),
+                apply.GetProperty("state").GetInt32()));
+        Assert.Equal(JsonValueKind.Null, apply.GetProperty("commitSha").ValueKind);
+        Assert.Equal(JsonValueKind.Null, apply.GetProperty("error").ValueKind);
         Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
         Assert.False(fixture.BaselineExists("Blocks/New.xml"));
         Assert.DoesNotContain(fixture.BaselineComponentIds(), id => id == "fb-new");
-        Assert.Equal(["vc_add", "vc_commit"], fixture.VersionControl.Calls);
+        Assert.Empty(fixture.VersionControl.Calls);
     }
 
     [Fact]
@@ -796,7 +804,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task SelectedDeviceSnapshotReportsMissingManifestWithoutEngineering()
+    public async Task SelectedDeviceSnapshotAllowsEmptySourceWithoutEngineering()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
             Path.Combine(root, Guid.NewGuid().ToString("N")),
@@ -805,9 +813,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var snapshot = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/project/info");
 
         Assert.Empty(snapshot.GetProperty("blocks").EnumerateArray());
-        Assert.Contains(
-            snapshot.GetProperty("diagnostics").EnumerateArray(),
-            diagnostic => diagnostic.GetString()!.Contains("Export manifest is missing", StringComparison.Ordinal));
+        Assert.Empty(snapshot.GetProperty("diagnostics").EnumerateArray());
         Assert.Empty(fixture.Engineering.Calls);
     }
 
@@ -1043,6 +1049,19 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(["connect", "get_project_info"], engineering.Calls);
         Assert.Equal(projectPath, engineering.Arguments[0].GetProperty("projectPath").GetString());
         Assert.True(engineering.Arguments[0].GetProperty("withUI").GetBoolean());
+        var workbenchRoot = Path.Combine(root, "wb-from-path");
+        var store = new AtomicJsonStore();
+        var workbench = store.Read<WorkbenchMetadata>(Path.Combine(workbenchRoot, "workbench.json"));
+        var registration = Assert.Single(workbench.Worktrees);
+        var worktreeRoot = Path.Combine(workbenchRoot, "worktrees", registration.RelativePath);
+        var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+
+        Assert.True(File.Exists(Path.Combine(worktreeRoot, "worktree.json")));
+        Assert.True(File.Exists(Path.Combine(deviceRoot, "device.json")));
+        Assert.True(Directory.Exists(Path.Combine(deviceRoot, "source")));
+        Assert.True(Directory.Exists(Path.Combine(deviceRoot, "staging")));
+        Assert.False(Directory.Exists(Path.Combine(deviceRoot, "exported-source")));
+        Assert.False(Directory.Exists(Path.Combine(deviceRoot, "modified-source")));
         Assert.Equal(["vc_init_shared"], versionControl.Calls);
     }
 
@@ -1209,13 +1228,21 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public void KnowledgeAndSourceReadsAreBoundToSelectedDevice()
     {
         var context = Context();
-        Directory.CreateDirectory(context.ExportedSourceRoot);
-        var source = Path.Combine(context.ExportedSourceRoot, "A.xml");
+        Directory.CreateDirectory(context.SourceRoot);
+        var source = Path.Combine(context.SourceRoot, "A.xml");
         File.WriteAllText(source, "<a/>");
         var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
 
         var knowledge = binder.Bind("get_schema", new Dictionary<string, object?>(), context);
         Assert.Equal(context.KnowledgeDbPath, knowledge["dbPath"]);
+        var ingest = binder.Bind("ingest_source", new Dictionary<string, object?>(), context);
+        Assert.Equal(context.SourceRoot, ingest["sourceRoot"]);
+        Assert.False(ingest.ContainsKey("exportedSourceRoot"));
+        Assert.False(ingest.ContainsKey("modifiedSourceRoot"));
+        var update = binder.Bind("update_components", new Dictionary<string, object?>(), context);
+        Assert.Equal(context.SourceRoot, update["sourceRoot"]);
+        Assert.False(update.ContainsKey("exportedSourceRoot"));
+        Assert.False(update.ContainsKey("modifiedSourceRoot"));
         Assert.Throws<ArgumentException>(() => binder.Bind(
             "search", new Dictionary<string, object?> { ["dbPath"] = Path.Combine(root, "other.db") }, context));
         var parsed = binder.Bind("src_parse_block", new Dictionary<string, object?> { ["xmlFilePath"] = source }, context);
@@ -1228,7 +1255,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public void ImportBlockBindsToExistingModifiedSourceOnly()
     {
         var context = Context();
-        var modified = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.xml");
+        var modified = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
         Directory.CreateDirectory(Path.GetDirectoryName(modified)!);
         File.WriteAllText(modified, "<a/>");
         var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
@@ -1246,32 +1273,65 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public void ApplyEditsOverwritesFreshCopyAndReplacesExistingOverlayInPlace()
+    public void ApplyEditsBindsTrackedSourceAsConfirmedInPlace()
     {
         var context = Context();
-        var baseline = Path.Combine(context.ExportedSourceRoot, "Blocks", "A.xml");
+        var baseline = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
         Directory.CreateDirectory(Path.GetDirectoryName(baseline)!);
         File.WriteAllText(baseline, "<a/>");
         var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
-        var overlay = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.xml");
-
-        var first = binder.Bind(
+        var bound = binder.Bind(
             "src_apply_edits",
             new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
             context);
-        Assert.Equal(baseline, first["xmlFilePath"]);
-        Assert.Equal(overlay, first["outputFilePath"]);
-        Assert.Equal(true, first["overwriteOutput"]);
-        Assert.False(first.ContainsKey("inPlace"));
+        Assert.Equal(baseline, bound["xmlFilePath"]);
+        Assert.Equal(baseline, bound["outputFilePath"]);
+        Assert.Equal(context.SourceRoot, bound["sourceRoot"]);
+        Assert.Equal(true, bound["inPlace"]);
+        Assert.Equal(true, bound["confirmInPlace"]);
+        Assert.False(bound.ContainsKey("overwriteOutput"));
+    }
 
-        var second = binder.Bind(
+    [Fact]
+    public void ApplyEditsRejectsCallerSuppliedSourceRootFromAnotherDevice()
+    {
+        var context = Context();
+        var source = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "<a/>");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        Assert.Throws<ArgumentException>(() => binder.Bind(
             "src_apply_edits",
-            new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
+            new Dictionary<string, object?>
+            {
+                ["relativePath"] = "Blocks/A.xml",
+                ["sourceRoot"] = Path.Combine(root, "other", "devices", "PLC", "source"),
+            },
+            context));
+    }
+
+    [Fact]
+    public void ApplyEditsDiscardsCopyOutputFlagAndForcesInPlaceFlags()
+    {
+        var context = Context();
+        var source = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "<a/>");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var bound = binder.Bind(
+            "src_apply_edits",
+            new Dictionary<string, object?>
+            {
+                ["relativePath"] = "Blocks/A.xml",
+                ["overwriteOutput"] = true,
+            },
             context);
-        Assert.Equal(overlay, second["xmlFilePath"]);
-        Assert.Equal(overlay, second["outputFilePath"]);
-        Assert.Equal(true, second["inPlace"]);
-        Assert.Equal(true, second["confirmInPlace"]);
+
+        Assert.False(bound.ContainsKey("overwriteOutput"));
+        Assert.Equal(true, bound["inPlace"]);
+        Assert.Equal(true, bound["confirmInPlace"]);
     }
 
     [Fact]
@@ -1296,7 +1356,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public void SourceToolsAcceptListedRelativeXmlFilePath()
     {
         var context = Context();
-        var baseline = Path.Combine(context.ExportedSourceRoot, "Blocks", "A.xml");
+        var baseline = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
         Directory.CreateDirectory(Path.GetDirectoryName(baseline)!);
         File.WriteAllText(baseline, "<a/>");
         var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
@@ -1309,7 +1369,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(baseline, parsed["xmlFilePath"]);
 
         // An existing overlay wins over the baseline for reads.
-        var overlay = Path.Combine(context.ModifiedSourceRoot, "Blocks", "A.xml");
+        var overlay = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
         Directory.CreateDirectory(Path.GetDirectoryName(overlay)!);
         File.WriteAllText(overlay, "<b/>");
         var parsedOverlay = binder.Bind(
@@ -1573,7 +1633,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task BootstrapEndpointStagesCommitsInitialBaselineAndCompletesOperation()
+    public async Task BootstrapEndpointCreatesInitialBaselineCommitAndCompletesOperation()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(
             root,
@@ -1593,14 +1653,19 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(
-            (int)RefreshApplyState.Committed,
-            body.GetProperty("baseline").GetProperty("state").GetInt32());
+            "FilesUpdated",
+            Enum.GetName(
+                typeof(RefreshApplyState),
+                body.GetProperty("baseline").GetProperty("state").GetInt32()));
+        Assert.Equal(
+            "baseline-1",
+            body.GetProperty("baseline").GetProperty("commitSha").GetString());
+        Assert.Equal(
+            JsonValueKind.Null,
+            body.GetProperty("baseline").GetProperty("error").ValueKind);
         Assert.True(body.TryGetProperty("knowledge", out _));
         Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
-        Assert.Equal(["vc_add", "vc_commit"], fixture.VersionControl.Calls);
-        Assert.Equal(
-            "initial baseline: full export",
-            fixture.VersionControl.Arguments[^1].GetProperty("message").GetString());
+        Assert.Equal(["vc_log", "vc_commit_selected"], fixture.VersionControl.Calls);
         var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/bootstrap-1");
         Assert.Equal("bootstrap-device", operation.GetProperty("operationType").GetString());
         Assert.Equal("succeeded", operation.GetProperty("state").GetString());
@@ -1729,6 +1794,72 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [Fact]
+    public async Task WorktreeVersionControlEndpointsForwardRootAndSelectedDiffRefs()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            versionControlJson: """{"Commits":[{"Sha":"head-1"}]}""");
+        var prefix = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/vc";
+
+        (await fixture.Client.GetAsync($"{prefix}/status")).EnsureSuccessStatusCode();
+        (await fixture.Client.GetAsync($"{prefix}/log?maxCount=12&filePath=devices/PLC_1/source/A.xml")).EnsureSuccessStatusCode();
+        (await fixture.Client.GetAsync($"{prefix}/diff?filePath=devices/PLC_1/source/A.xml&oldSha=old-1&newSha=new-2")).EnsureSuccessStatusCode();
+        (await fixture.Client.PostAsJsonAsync($"{prefix}/commit", new
+        {
+            paths = new[] { "devices/PLC_1/source/A.xml" },
+            message = "selected source",
+        })).EnsureSuccessStatusCode();
+        (await fixture.Client.GetAsync($"{prefix}/validation/head-1")).EnsureSuccessStatusCode();
+
+        Assert.Equal(
+            ["vc_status", "vc_log", "vc_diff", "vc_commit_selected", "vc_validation_get"],
+            fixture.VersionControl.Calls);
+        Assert.Equal(fixture.Context.WorktreeRoot, fixture.VersionControl.Arguments[0].GetProperty("repoPath").GetString());
+        Assert.Equal("old-1", fixture.VersionControl.Arguments[2].GetProperty("oldSha").GetString());
+        Assert.Equal("new-2", fixture.VersionControl.Arguments[2].GetProperty("newSha").GetString());
+        Assert.Equal(
+            "selected source",
+            fixture.VersionControl.Arguments[3].GetProperty("message").GetString());
+        Assert.Equal(
+            "devices/PLC_1/source/A.xml",
+            fixture.VersionControl.Arguments[3].GetProperty("paths")[0].GetString());
+    }
+
+    [Fact]
+    public async Task ValidationEndpointReturnsNullForAnUnlabeledCommit()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            versionControlJson: "null");
+        var prefix = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/vc";
+
+        var response = await fixture.Client.GetAsync($"{prefix}/validation/head-1");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("null", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task SelectingAWorkbenchRegistersItForCoordinatorOperations()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")), databaseExists: true);
+
+        var select = await fixture.Client.PostAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/select", null);
+        select.EnsureSuccessStatusCode();
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/vc/unauthorized/discard",
+            new { paths = new[] { "devices/PLC_1/source/Main.xml" }, confirm = true });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("vc_restore", fixture.VersionControl.Calls);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root)) Directory.Delete(root, true);
@@ -1737,8 +1868,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     private DeviceContext Context() => new(
         "wb", "wt", "device", root, Path.Combine(root, "worktree"),
         Path.Combine(root, "worktree", "devices", "PLC"),
-        Path.Combine(root, "worktree", "devices", "PLC", "exported-source"),
-        Path.Combine(root, "worktree", "devices", "PLC", "modified-source"),
+        Path.Combine(root, "worktree", "devices", "PLC", "source"),
         Path.Combine(root, "worktree", "devices", "PLC", "staging"),
         Path.Combine(root, "worktree", "devices", "PLC", "plc-knowledge.db"));
 
@@ -1793,6 +1923,9 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             Arguments.Add(JsonSerializer.SerializeToElement(args));
             if (typeof(T) == typeof(JsonElement))
             {
+                if (string.Equals(json.Trim(), "null", StringComparison.Ordinal))
+                    return Task.FromResult((T)(object)default(JsonElement));
+
                 return Task.FromResult(
                     (T)(object)JsonDocument.Parse(json).RootElement.Clone());
             }
@@ -1838,7 +1971,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             bool baselineStale = false,
             bool engineeringOffline = true,
             string? sourceProjectPath = null,
-            Action<string, string>? stageExport = null)
+            Action<string, string>? stageExport = null,
+            string? versionControlJson = null)
         {
             var store = new AtomicJsonStore();
             var catalog = new WorkbenchCatalog(store, fixtureRoot);
@@ -1857,12 +1991,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 workbench.RootPath,
                 worktreeRoot,
                 deviceRoot,
-                Path.Combine(deviceRoot, "exported-source"),
-                Path.Combine(deviceRoot, "modified-source"),
+                Path.Combine(deviceRoot, "source"),
                 Path.Combine(deviceRoot, "staging"),
                 Path.Combine(deviceRoot, "plc-knowledge.db"));
-            Directory.CreateDirectory(context.ExportedSourceRoot);
-            Directory.CreateDirectory(context.ModifiedSourceRoot);
+            Directory.CreateDirectory(context.SourceRoot);
             Directory.CreateDirectory(context.StagingRoot);
             store.Write(
                 Path.Combine(worktreeRoot, "worktree.json"),
@@ -1879,7 +2011,9 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 await File.WriteAllBytesAsync(context.KnowledgeDbPath, [1]);
 
             var engineering = new ThrowingToolCaller(engineeringOffline, stageExport);
-            var versionControl = new RecordingToolCaller();
+            var versionControl = new RecordingToolCaller(versionControlJson ?? """
+                {"Sha":"baseline-1","Message":"Initial PLC source baseline","Files":["devices/PLC_1/source/Blocks/Main.xml"]}
+                """);
             var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
             {
                 host.UseEnvironment("Testing");
@@ -1919,25 +2053,25 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         public void WriteComparisonBaseline(string? fingerprints)
         {
-            Directory.CreateDirectory(Path.Combine(context.ExportedSourceRoot, "Blocks"));
-            File.WriteAllText(Path.Combine(context.ExportedSourceRoot, "Blocks", "Main.xml"), "<stored/>");
-            WriteComparisonManifest(context.ExportedSourceRoot, fingerprints);
+            Directory.CreateDirectory(Path.Combine(context.SourceRoot, "Blocks"));
+            File.WriteAllText(Path.Combine(context.SourceRoot, "Blocks", "Main.xml"), "<stored/>");
+            WriteComparisonManifest(context.SourceRoot, fingerprints);
         }
 
         public string ReadBaseline(string relativePath) =>
             File.ReadAllText(Path.Combine(
-                context.ExportedSourceRoot,
+                context.SourceRoot,
                 relativePath.Replace('/', Path.DirectorySeparatorChar)));
 
         public bool BaselineExists(string relativePath) =>
             File.Exists(Path.Combine(
-                context.ExportedSourceRoot,
+                context.SourceRoot,
                 relativePath.Replace('/', Path.DirectorySeparatorChar)));
 
         public string?[] BaselineComponentIds()
         {
             using var manifest = JsonDocument.Parse(
-                File.ReadAllText(Path.Combine(context.ExportedSourceRoot, "metadata.json")));
+                File.ReadAllText(Path.Combine(context.SourceRoot, "metadata.json")));
             return manifest.RootElement.GetProperty("components")
                 .EnumerateArray()
                 .Select(component => component.GetProperty("id").GetString())
@@ -1946,8 +2080,23 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         public void WriteManifest()
         {
+            var blockPath = Path.Combine(context.SourceRoot, "Blocks", "Main [OB1].xml");
+            Directory.CreateDirectory(Path.GetDirectoryName(blockPath)!);
             File.WriteAllText(
-                Path.Combine(context.ExportedSourceRoot, "metadata.json"),
+                blockPath,
+                """
+                <Document>
+                  <SW.Blocks.OB>
+                    <AttributeList>
+                      <Name>Main</Name>
+                      <Number>1</Number>
+                      <ProgrammingLanguage>LAD</ProgrammingLanguage>
+                    </AttributeList>
+                  </SW.Blocks.OB>
+                </Document>
+                """);
+            File.WriteAllText(
+                Path.Combine(context.SourceRoot, "metadata.json"),
                 """
                 {
                   "schemaVersion": "1.0",

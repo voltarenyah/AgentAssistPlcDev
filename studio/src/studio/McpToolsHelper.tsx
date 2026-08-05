@@ -65,23 +65,22 @@ const getGuide = (tool: api.ToolInfo): ToolGuide => {
   }
 
   if (tool.serverName === 'knowledge') {
-    prerequisites.push('The selected device context supplies the knowledge database and source roots in the app.')
+    prerequisites.push('The selected device context supplies the knowledge database and one PLC source root in the app.')
     if (tool.name === 'query') prerequisites.push('Call get_schema first in a chat and verify table and column names from its DDL.')
     if (['get_block', 'get_single_network', 'get_all_networks', 'get_variable_usage', 'search'].includes(tool.name)) {
       prerequisites.push('The knowledge database must exist and reflect the current source snapshot.')
     }
     if (tool.name === 'ingest_source') constraints.push('This rebuilds the SQLite database; it does not change TIA project state.')
-    if (tool.name === 'update_components') constraints.push('Only selected overlay component paths are replaced transactionally.')
+    if (tool.name === 'update_components') constraints.push('Only selected component paths in the PLC source root are replaced transactionally.')
     if (tool.name === 'query') constraints.push('SQL must be a single read-only SELECT, WITH, or EXPLAIN statement.')
   }
 
   if (tool.serverName === 'sourceeditor') {
-    prerequisites.push('Source paths must resolve inside the selected device exported-source or modified-source roots.')
-    if (tool.name === 'src_apply_edits') prerequisites.push('Use the relative sourceFile returned by get_block; the app prepares the editable overlay.')
-    if (tool.name === 'src_validate' && Object.keys(tool.schema.properties ?? {}).includes('baselineFilePath')) {
-      constraints.push('Pass baselineFilePath when protected PLC logic and structure must be proven unchanged.')
-    }
-    constraints.push('Edits are local XML overlay changes; they are not imported into TIA automatically.')
+    prerequisites.push('Source paths must resolve inside the selected device\'s one PLC source root.')
+    if (tool.name === 'src_apply_edits') prerequisites.push('Use the relative sourceFile returned by get_block.')
+    constraints.push('Source editor tools edit the checked-out XML files directly in the PLC source root.')
+    constraints.push('Commit XML changes to Git manually when they are ready.')
+    constraints.push('TIA Portal does not change until the XML is imported.')
   }
 
   if (tool.serverName === 'versioncontrol') {

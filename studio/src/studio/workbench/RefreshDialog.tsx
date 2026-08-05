@@ -11,8 +11,9 @@ import {
 type Props = {
   preview: ReconciliationPreview
   busy: boolean
+  autoCommit: boolean
   onClose: () => void
-  onApply: (approvedPaths: string[]) => Promise<void>
+  onApply: (approvedPaths: string[], commitTitle?: string) => Promise<void>
 }
 
 const nameOf = (kind: ReconciliationEntry['kind']) => {
@@ -29,8 +30,9 @@ const colorOf = (kind: ReconciliationEntry['kind']) => ({
   Unchanged: 'text-muted-foreground',
 }[nameOf(kind)])
 
-export default function RefreshDialog({ preview, busy, onClose, onApply }: Props) {
+export default function RefreshDialog({ preview, busy, autoCommit, onClose, onApply }: Props) {
   const [approvedPaths, setApprovedPaths] = useState<Set<string>>(() => new Set())
+  const [commitTitle, setCommitTitle] = useState('')
   const compared = comparedEntries(preview.entries)
   const actionable = actionableEntries(preview.entries)
   const counts = preview.entries.reduce<Record<string, number>>((result, entry) => {
@@ -48,7 +50,7 @@ export default function RefreshDialog({ preview, busy, onClose, onApply }: Props
           </div>
           <div className="flex-1">
             <h2 className="text-sm font-semibold">TIA comparison</h2>
-            <p className="text-[10px] text-muted-foreground">Live source was exported to temporary staging. This comparison is non-destructive; tracked source changes only after explicit approval.</p>
+            <p className="text-[10px] text-muted-foreground">Live source was exported to temporary staging. This comparison is non-destructive; tracked source changes only after explicit approval{autoCommit ? ', then committed with your title.' : '.'}</p>
           </div>
           <button className="icon-button" onClick={onClose}><X className="h-4 w-4" /></button>
         </div>
@@ -117,7 +119,7 @@ export default function RefreshDialog({ preview, busy, onClose, onApply }: Props
 
         <div className="flex items-center gap-3 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           {actionable.length > 0 ? (
-            <div className="flex flex-1 items-center gap-2 text-[9px] text-amber-500">
+            <div className="flex min-w-0 flex-1 items-center gap-2 text-[9px] text-amber-500">
               <AlertTriangle className="h-3.5 w-3.5" />
               Select every source change you want to apply ({approvedPaths.size}/{actionable.length} selected).
             </div>
@@ -140,14 +142,25 @@ export default function RefreshDialog({ preview, busy, onClose, onApply }: Props
               </button>
             </>
           )}
+          {autoCommit && actionable.length > 0 && approvedPaths.size > 0 && (
+            <input
+              aria-label="TIA commit title"
+              value={commitTitle}
+              onChange={event => setCommitTitle(event.currentTarget.value)}
+              onInput={event => setCommitTitle(event.currentTarget.value)}
+              placeholder="Commit title..."
+              disabled={busy}
+              className="w-44 rounded border bg-card px-2 py-1.5 text-[9px] outline-none"
+            />
+          )}
           <button className="secondary-button" onClick={onClose} disabled={busy}>Reject</button>
           <button
             className="primary-button"
-            disabled={busy || (actionable.length > 0 && approvedPaths.size === 0)}
-            onClick={() => onApply([...approvedPaths])}
+            disabled={busy || (actionable.length > 0 && (approvedPaths.size === 0 || (autoCommit && !commitTitle.trim())))}
+            onClick={() => onApply([...approvedPaths], autoCommit ? commitTitle.trim() : undefined)}
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {actionable.length === 0 ? 'Confirm no changes' : `Apply ${approvedPaths.size} selected`}
+            {actionable.length === 0 ? 'Confirm no changes' : autoCommit ? `Apply and commit ${approvedPaths.size}` : `Apply ${approvedPaths.size} selected`}
           </button>
         </div>
       </div>

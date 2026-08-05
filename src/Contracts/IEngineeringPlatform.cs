@@ -19,6 +19,7 @@ public interface IEngineeringPlatform : IDisposable
 
     ProjectInfo GetProjectInfo();
     BlockInfo[] ListBlocks(string? plcName);
+    PlcChecksumInfo[] GetPlcChecksums(string? plcName = null);
 
     ExportResult ExportBlock(string blockName, string outputDir);
     ExportResult[] ExportAllBlocks(string outputDir, IProgress<EngineeringProgress>? progress = null);
@@ -76,6 +77,9 @@ public interface IEngineeringPlatform : IDisposable
 
     /// <summary>Delete a block from the selected PLC.</summary>
     BlockMutationResult DeleteBlock(string blockName, string? plcName = null);
+
+    /// <summary>Overwrite one existing block, tag table, or UDT from its managed XML source path.</summary>
+    SourceObjectImportResult ImportSourceObject(string relativePath, string xmlFilePath, string? plcName = null);
 
     CompileResult CompileBlock(string blockName, string? plcName = null);
     CompileResult CompilePlc(string? plcName = null);

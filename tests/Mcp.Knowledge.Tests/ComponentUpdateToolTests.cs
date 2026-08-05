@@ -8,6 +8,7 @@ using Mcp.Knowledge.Graph;
 using Mcp.Knowledge.Import;
 using Mcp.Knowledge.Tools;
 using Microsoft.Data.Sqlite;
+using ModelContextProtocol.Protocol;
 using Xunit;
 
 namespace Mcp.Knowledge.Tests;
@@ -16,6 +17,122 @@ public sealed class ComponentUpdateToolTests
 {
     private const string MainPath = "Blocks/Main [OB1].xml";
     private const string CalleePath = "Blocks/FC_LAD_SimulateCylinder_Call [FC1].xml";
+
+    [Fact]
+    public void UpdateComponentsAcceptsSingleSourceRootForExistingManifestComponent()
+    {
+        using var source = new TempExportTree();
+        const string relativePath = "Blocks/A.xml";
+        source.AddText(relativePath, EmptyOb("A"));
+        ManifestFixtures.Write(
+            source,
+            ManifestFixtures.Component(
+                "A",
+                "OB",
+                relativePath,
+                "Program blocks/A"));
+        var dbPath = Path.Combine(source.Root, "knowledge.db");
+        var tools = new KnowledgeTools();
+        ToolResults.OkJson(tools.IngestSource(
+            sourceRoot: source.Root,
+            dbPath: dbPath));
+        var modifiedPath = source.AddText(
+            relativePath,
+            ObWithNetwork("A", "modified"));
+        var expectedKey = ComponentKey("OB", "Program blocks/A");
+
+        var result = ToolResults.OkJson(tools.UpdateComponents(
+            sourceRoot: source.Root,
+            dbPath: dbPath,
+            relativePaths: new[] { relativePath }));
+
+        Assert.Equal(
+            Sha256(modifiedPath),
+            result.GetProperty("appliedHashes").GetProperty(expectedKey).GetString());
+        Assert.Contains(
+            SqliteSemanticGraphStore.Load(dbPath).Nodes,
+            node => node.Id.StartsWith("network:A:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UpdateComponentsAcceptsSingleSourceRootForExistingManifestlessComponent()
+    {
+        using var source = new TempExportTree();
+        const string relativePath = "Blocks/A.xml";
+        const string unrelatedPath = "Blocks/B.xml";
+        source.AddText(relativePath, EmptyOb("A"));
+        source.AddText(unrelatedPath, EmptyOb("B"));
+        var dbPath = Path.Combine(source.Root, "knowledge.db");
+        var tools = new KnowledgeTools();
+        ToolResults.OkJson(tools.IngestSource(
+            sourceRoot: source.Root,
+            dbPath: dbPath));
+        var before = SqliteSemanticGraphStore.Load(dbPath);
+        var unrelatedHash = before.ComponentImports
+            .Single(component => component.RelativePath == unrelatedPath)
+            .ContentHash;
+        var modifiedPath = source.AddText(
+            relativePath,
+            ObWithNetwork("A", "modified"));
+        var expectedKey = ManifestlessComponentKey("SW.Blocks.OB", "A");
+
+        var updateResult = tools.UpdateComponents(
+            sourceRoot: source.Root,
+            dbPath: dbPath,
+            relativePaths: new[] { relativePath });
+        Assert.False(
+            updateResult.IsError == true,
+            Assert.IsType<TextContentBlock>(updateResult.Content.Single()).Text);
+        var result = ToolResults.OkJson(updateResult);
+
+        Assert.Equal(
+            new[] { expectedKey },
+            result.GetProperty("updatedComponents")
+                .EnumerateArray()
+                .Select(item => item.GetString())
+                .ToArray());
+        Assert.Equal(
+            Sha256(modifiedPath),
+            result.GetProperty("appliedHashes").GetProperty(expectedKey).GetString());
+        var updated = SqliteSemanticGraphStore.Load(dbPath);
+        Assert.Contains(
+            updated.Nodes,
+            node => node.Kind == SemanticNodeKind.Network && node.Name == "A Network 1");
+        Assert.Equal(
+            unrelatedHash,
+            updated.ComponentImports
+                .Single(component => component.RelativePath == unrelatedPath)
+                .ContentHash);
+    }
+
+    [Theory]
+    [InlineData("SW.Blocks.OB", "B")]
+    [InlineData("SW.Blocks.FC", "A")]
+    public void ManifestlessUpdateRejectsChangedSemanticIdentityAndPreservesDatabase(
+        string replacementRootElement,
+        string replacementName)
+    {
+        using var source = new TempExportTree();
+        const string relativePath = "Blocks/A.xml";
+        source.AddText(relativePath, EmptyOb("A"));
+        var dbPath = Path.Combine(source.Root, "knowledge.db");
+        var tools = new KnowledgeTools();
+        ToolResults.OkJson(tools.IngestSource(
+            sourceRoot: source.Root,
+            dbPath: dbPath));
+        var before = DatabaseSnapshot(dbPath);
+        source.AddText(
+            relativePath,
+            EmptyProgramBlock(replacementRootElement, replacementName));
+
+        var error = ToolResults.ErrorJson(tools.UpdateComponents(
+            sourceRoot: source.Root,
+            dbPath: dbPath,
+            relativePaths: new[] { relativePath }));
+
+        Assert.Equal("COMPONENT_IDENTITY_MISMATCH", error.GetProperty("code").GetString());
+        Assert.Equal(before, DatabaseSnapshot(dbPath));
+    }
 
     [Fact]
     public void UpdateComponentsNormalizesDeduplicatesAndReturnsKeysAndHashes()
@@ -521,17 +638,31 @@ public sealed class ComponentUpdateToolTests
             .Replace('/', '_');
     }
 
+    private static string ManifestlessComponentKey(string rootElement, string name)
+    {
+        return Convert.ToBase64String(
+                System.Text.Encoding.UTF8.GetBytes($"{rootElement}|{name}"))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
     private static string EmptyOb(string name)
+    {
+        return EmptyProgramBlock("SW.Blocks.OB", name);
+    }
+
+    private static string EmptyProgramBlock(string rootElement, string name)
     {
         return $$"""
             <Document>
-              <SW.Blocks.OB ID="0">
+              <{{rootElement}} ID="0">
                 <AttributeList>
                   <Name>{{name}}</Name>
                   <ProgrammingLanguage>LAD</ProgrammingLanguage>
                 </AttributeList>
                 <ObjectList />
-              </SW.Blocks.OB>
+              </{{rootElement}}>
             </Document>
             """;
     }

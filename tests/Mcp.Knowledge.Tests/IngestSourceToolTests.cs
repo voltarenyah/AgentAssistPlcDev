@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Linq;
 using Mcp.Knowledge.Graph;
@@ -9,6 +10,59 @@ namespace Mcp.Knowledge.Tests;
 
 public sealed class IngestSourceToolTests
 {
+    [Fact]
+    public void IngestSourceAcceptsSingleSourceRootAndExplicitDatabasePath()
+    {
+        using var tree = new TempExportTree();
+        const string relativePath = "Blocks/Main.xml";
+        tree.AddFixture(FixtureFiles.MainObPath, relativePath);
+        ManifestFixtures.Write(
+            tree,
+            ManifestFixtures.Component(
+                "Main",
+                "OB",
+                relativePath,
+                "Program blocks/Main"));
+        var dbPath = Path.Combine(tree.Root, "knowledge.db");
+
+        var result = ToolResults.OkJson(new KnowledgeTools().IngestSource(
+            sourceRoot: tree.Root,
+            dbPath: dbPath));
+
+        Assert.Equal(dbPath, result.GetProperty("dbPath").GetString());
+        Assert.True(File.Exists(dbPath));
+        Assert.Single(SqliteSemanticGraphStore.Load(dbPath).ComponentImports);
+    }
+
+    [Theory]
+    [InlineData("exportedSourceRoot")]
+    [InlineData("modifiedSourceRoot")]
+    [InlineData("exportRoot")]
+    public void IngestSourceRejectsSourceRootCombinedWithLegacyRootArgument(
+        string conflictingArgument)
+    {
+        using var tree = new TempExportTree();
+        tree.AddFixture(FixtureFiles.MainObPath, "Blocks/Main.xml");
+        var tools = new KnowledgeTools();
+
+        var result = conflictingArgument switch
+        {
+            "exportedSourceRoot" => tools.IngestSource(
+                sourceRoot: tree.Root,
+                exportedSourceRoot: tree.Root),
+            "modifiedSourceRoot" => tools.IngestSource(
+                sourceRoot: tree.Root,
+                modifiedSourceRoot: tree.Root),
+            "exportRoot" => tools.IngestSource(
+                sourceRoot: tree.Root,
+                exportRoot: tree.Root),
+            _ => throw new ArgumentOutOfRangeException(nameof(conflictingArgument)),
+        };
+
+        var error = ToolResults.ErrorJson(result);
+        Assert.Equal("SOURCE_ROOT_CONFLICT", error.GetProperty("code").GetString());
+    }
+
     [Fact]
     public void IngestsFixtureTreeEndToEndIntoTempDb()
     {

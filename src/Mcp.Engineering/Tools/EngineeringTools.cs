@@ -77,6 +77,12 @@ public sealed class EngineeringTools
         [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
         => Invoke("list_blocks", () => _adapter.ListBlocks(plcName));
 
+    [McpServerTool(Name = "get_plc_checksums")]
+    [Description("Read the current compiled software checksum for one or all PLC devices. No exports or writes.")]
+    public CallToolResult GetPlcChecksums(
+        [Description("PLC device name; omit to read every PLC device.")] string? plcName = null)
+        => Invoke("get_plc_checksums", () => _adapter.GetPlcChecksums(plcName));
+
     [McpServerTool(Name = "export_block")]
     [Description("Export a single block to XML under outputDir/Blocks|DB and upsert its record in outputDir/metadata.json (read-only w.r.t. the project).")]
     public CallToolResult ExportBlock(
@@ -185,6 +191,40 @@ public sealed class EngineeringTools
         [Description("Name of the block to delete.")] string blockName,
         [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
         => Invoke("delete_block", () => _adapter.DeleteBlock(blockName, plcName));
+
+    [McpServerTool(Name = "import_source_object")]
+    [Description("Import an existing block, tag table, or UDT XML source into its exact TIA group (DESTRUCTIVE: overwrites the existing object; add/delete/rename is unsupported). Caller must validate the XML and snapshot the working folder first.")]
+    public CallToolResult ImportSourceObject(
+        [Description("Managed PLC source path, for example Blocks/Area/Main [OB1].xml, Tags/LineA/Inputs.xml, or UDT/Models/Motor.xml.")] string relativePath,
+        [Description("Path to the modified XML file.")] string xmlFilePath,
+        [Description("PLC device name; optional for single-PLC projects and required when the project contains multiple PLCs.")] string? plcName = null)
+    {
+        SandboxTier tier;
+        try
+        {
+            tier = _guard.CheckSourceObjectImport(relativePath, xmlFilePath);
+        }
+        catch (SandboxException se)
+        {
+            return ToolJson.Fail(se.Code, se.Message, se.Remediation);
+        }
+
+        try
+        {
+            var result = ToolJson.Ok(_adapter.ImportSourceObject(relativePath, xmlFilePath, plcName));
+            _guard.AuditAllow("import_source_object", tier, $"relativePath={relativePath}; xmlFilePath={xmlFilePath}");
+            return result;
+        }
+        catch (AdapterException ae)
+        {
+            return ToolJson.Fail(ae.Code, ae.Message, ae.Remediation);
+        }
+        catch (Exception ex)
+        {
+            var mapped = OpennessErrorMapper.Map(ex);
+            return ToolJson.Fail(mapped.Code, ex.Message, mapped.Remediation);
+        }
+    }
 
     [McpServerTool(Name = "compile_block")]
     [Description("Compile the PLC software and report messages for the named block (write: mutates project compile state). V17 has no per-block compile — this is compile_plc + per-block filtering.")]

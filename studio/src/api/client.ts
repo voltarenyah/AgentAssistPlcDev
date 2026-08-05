@@ -242,14 +242,134 @@ export type WorktreeTaskList = {
   tasks: WorktreeTask[]
 }
 
+export type FeatureImportObject = {
+  deviceId: string
+  plcName: string
+  relativePath: string
+  featureFingerprint: string
+  importable: boolean
+  reason: string | null
+}
+
+export type FeatureImportPlan = {
+  planId: string
+  workbenchId: string
+  featureWorktreeId: string
+  featureSha: string
+  masterSha: string
+  comparisonId: string
+  objects: FeatureImportObject[]
+}
+
+export type FeatureImportOutcome = {
+  deviceId: string
+  relativePath: string
+  state: FeatureImportState | number
+  error: string | null
+  warnings: string[]
+}
+
+export type FeatureImportState =
+  | 'Pending'
+  | 'Imported'
+  | 'Failed'
+  | 'KeptAfterCompileFailure'
+  | 'RolledBack'
+
+export type FeatureImportSession = {
+  sessionId: string
+  planId: string
+  featureSha: string
+  masterSha: string
+  startedAt: string
+  objects: FeatureImportOutcome[]
+}
+
+export type ValidatedMergeResult = {
+  validationId: string
+  state: ValidatedMergeState | number
+  error: string | null
+  devices: ValidatedMergeDevice[]
+}
+
+export type ValidatedMergeState = 'Ready' | 'CompileFailed' | 'SourceDifferent' | 'BranchMoved'
+
+export type ValidatedMergeObject = {
+  identity: string
+  relativePath: string
+  sha256: string
+}
+
+export type ValidatedMergeDevice = {
+  deviceId: string
+  plcName: string
+  projectIdentity: string
+  projectChecksum: string
+  objects: ValidatedMergeObject[]
+}
+
+export type SourceDifference = {
+  deviceId: string
+  plcName: string
+  relativePath: string
+  identity: string
+  kind: SourceDifferenceKind | number
+  masterFingerprint: string | null
+  tiaFingerprint: string | null
+  supported: boolean
+}
+
+export type SourceDifferenceKind = 'Unchanged' | 'Changed' | 'Added' | 'Deleted'
+
+export type ConsistencyState = 'Consistent' | 'Different' | 'ScanRequired' | 'Unavailable'
+
+export type WorkbenchConsistencyResult = {
+  comparisonId: string
+  masterSha: string
+  fastGatePassed: boolean
+  state: ConsistencyState | number
+  liveChecksums: Record<string, string | null>
+  differences: SourceDifference[]
+}
+
+export type PendingSynchronizationResult = {
+  comparisonId: string
+  pendingPaths: string[]
+  commitSha?: string | null
+}
+
+export type RollbackFeatureResult = {
+  worktreeId: string
+  branch: string
+  historicalSha: string
+  paths: string[]
+}
+
+export type TiaSyncEvidence = {
+  schemaVersion: string
+  evidenceKind: string
+  commitSha: string
+  workbenchId: string
+  sourceWorktreeId: string | null
+  confirmedAt: string
+  confirmedBy: string
+  machineValidated: boolean
+  devices: {
+    deviceId: string
+    plcName: string
+    projectIdentity: string
+    projectChecksum: string
+    objects: { identity: string; relativePath: string; sha256: string }[]
+  }[]
+}
+
 export type DeviceInfo = {
   workbenchId: string
   worktreeId: string
   deviceId: string
   plcName: string
   engineeringIdentity: string
-  exportedSourceRoot: string
-  modifiedSourceRoot: string
+  sourceRoot: string
   knowledgeDbPath: string
   sourceProjectPath: string | null
 }
@@ -288,7 +408,7 @@ export type DeviceSnapshot = DeviceInfo & {
     updatedAt: string | null
   }
   blocks: OfflineBlockInfo[]
-  overlayCount: number
+  sourceObjectCount: number
   diagnostics: string[]
 }
 
@@ -542,6 +662,90 @@ export const createWorktree = (workbenchId: string, name: string, branch: string
     branch,
     startPoint: startPoint?.trim() || null,
   }), operationId))
+export const planFeatureImport = (workbenchId: string, featureWorktreeId: string, operationId?: string) =>
+  workbenchRequest<FeatureImportPlan>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(featureWorktreeId)}/vc/import-plan`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
+export const importFeaturePaths = (workbenchId: string, planId: string, paths: string[], operationId?: string) =>
+  workbenchRequest<FeatureImportSession>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/import-plans/${encodeURIComponent(planId)}/import`,
+    withOperation(jsonRequest('POST', { paths }), operationId),
+  )
+export const rollbackFeaturePaths = (workbenchId: string, sessionId: string, paths: string[], operationId?: string) =>
+  workbenchRequest<FeatureImportSession>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/import-sessions/${encodeURIComponent(sessionId)}/rollback`,
+    withOperation(jsonRequest('POST', { paths }), operationId),
+  )
+export const keepFeaturePathsAfterCompileFailure = (workbenchId: string, sessionId: string, paths: string[]) =>
+  workbenchRequest<FeatureImportSession>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/import-sessions/${encodeURIComponent(sessionId)}/keep`,
+    jsonRequest('POST', { paths }),
+  )
+export const validateFeatureMerge = (
+  workbenchId: string,
+  featureWorktreeId: string,
+  importSessionId: string,
+  machineValidated: boolean,
+  confirmedBy: string,
+  operationId?: string,
+) =>
+  workbenchRequest<ValidatedMergeResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(featureWorktreeId)}/vc/validate-merge`,
+    withOperation(jsonRequest('POST', { importSessionId, machineValidated, confirmedBy }), operationId),
+  )
+export const mergeValidatedFeature = (workbenchId: string, validationId: string, operationId?: string) =>
+  workbenchRequest<FeatureMergePublicationResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/validated-merges/${encodeURIComponent(validationId)}/merge`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
+export const createRollbackFeature = (workbenchId: string, historicalSha: string, paths: string[], featureName: string, operationId?: string) =>
+  workbenchRequest<RollbackFeatureResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/rollback-features`,
+    withOperation(jsonRequest('POST', { historicalSha, paths, featureName }), operationId),
+  )
+export const compareMasterWithTia = (workbenchId: string, operationId?: string) =>
+  workbenchRequest<WorkbenchConsistencyResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/compare-tia`,
+    withOperation(jsonRequest('POST'), operationId),
+  )
+export const getWorkbenchComparison = (workbenchId: string, comparisonId: string) =>
+  workbenchRequest<WorkbenchConsistencyResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}`,
+  )
+export const acceptTiaSynchronization = (workbenchId: string, comparisonId: string, paths: string[], message: string, operationId?: string) =>
+  workbenchRequest<PendingSynchronizationResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}/accept`,
+    withOperation(jsonRequest('POST', { paths, message }), operationId),
+  )
+export const validateTiaSynchronization = (workbenchId: string, confirmedBy: string, operationId?: string) =>
+  workbenchRequest<VcValidationEvidence>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/validate-sync`,
+    withOperation(jsonRequest('POST', { confirmedBy }), operationId),
+  )
+export const getVersionControlWorktreeStatus = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<VcStatusResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/status`)
+export const getVersionControlWorktreeLog = (workbenchId: string, worktreeId: string, maxCount = 30) =>
+  workbenchRequest<VcLogResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/log?maxCount=${maxCount}`)
+export const getVersionControlWorktreeDiff = (workbenchId: string, worktreeId: string, filePath: string, oldSha?: string, newSha?: string) => {
+  const params = new URLSearchParams({ filePath })
+  if (oldSha) params.set('oldSha', oldSha)
+  if (newSha) params.set('newSha', newSha)
+  return workbenchRequest<VcDiffResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/diff?${params}`)
+}
+export const commitVersionControlPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string) =>
+  workbenchRequest<{ sha: string; message: string; files: string[] }>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/commit`,
+    jsonRequest('POST', { paths, message }),
+  )
+export const validateFeatureVersionControl = (
+  workbenchId: string,
+  featureWorktreeId: string,
+  importSessionId: string,
+  machineValidated: boolean,
+  confirmedBy: string,
+  operationId?: string,
+) => validateFeatureMerge(workbenchId, featureWorktreeId, importSessionId, machineValidated, confirmedBy, operationId)
 export const deleteWorktree = (workbenchId: string, worktreeId: string, operationId?: string) =>
   workbenchRequest<{ deleted: boolean }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}`,
@@ -622,10 +826,11 @@ export const overwriteHardwareConfiguration = (
   )
 export const previewDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<ReconciliationPreview>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/preview`)
-export const applyDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string, previewId: string, approvedPaths: string[], operationId?: string) =>
+export const applyDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string, previewId: string, approvedPaths: string[], operationId?: string, commitMessage?: string) =>
   workbenchRequest<RefreshApplyResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/apply`, withOperation(jsonRequest('POST', {
     previewId,
     approvedPaths,
+    commitMessage: commitMessage?.trim() || null,
   }), operationId))
 export const updateDeviceKnowledge = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string) =>
   workbenchRequest<KnowledgeUpdateResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/knowledge/update`, withOperation(jsonRequest('POST'), operationId))
@@ -635,8 +840,13 @@ export type DeviceBootstrapResult = {
   baseline: RefreshApplyResult
   knowledge: KnowledgeUpdateResult
 }
+export type WorktreeBootstrapResult = {
+  devices: DeviceBootstrapResult[]
+}
 export const bootstrapDevice = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string, commitMessage?: string, allowCompile?: boolean) =>
   workbenchRequest<DeviceBootstrapResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/bootstrap${allowCompile ? '?allowCompile=true' : ''}`, withOperation(jsonRequest('POST', commitMessage ? { commitMessage } : {}), operationId))
+export const bootstrapWorktree = (workbenchId: string, worktreeId: string, deviceId: string, operationId?: string, commitMessage?: string, allowCompile?: boolean) =>
+  workbenchRequest<WorktreeBootstrapResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/bootstrap-worktree${allowCompile ? '?allowCompile=true' : ''}`, withOperation(jsonRequest('POST', commitMessage ? { commitMessage } : {}), operationId))
 export const prepareDeviceEdit = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string) =>
   workbenchRequest<string>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/prepare-edit`, jsonRequest('POST', { relativePath }))
 export const importDeviceSource = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string, operationId?: string) =>
@@ -691,8 +901,31 @@ export const deleteWorktreeTask = (workbenchId: string, worktreeId: string, task
 
 export type VcStatusEntry = {
   filePath: string
-  state: 'Untracked' | 'Modified' | 'Added' | 'Deleted' | 'Staged' | 'RenamedInWorkdir' | 'Conflicted'
+  state: VcFileStatusState
   staged: boolean
+}
+
+export type VcFileStatusState =
+  | 'Untracked'
+  | 'Modified'
+  | 'Added'
+  | 'Deleted'
+  | 'Staged'
+  | 'RenamedInWorkdir'
+  | 'Conflicted'
+
+export type VcValidationState = 'Validated' | 'Unlabeled' | 'Invalid'
+
+export type SourceChangeState = 'Modified' | 'Added' | 'Deleted' | 'Unauthorized'
+
+export type VcSourceEntry = {
+  filePath: string
+  deviceId: string
+  plcName: string
+  category: string
+  objectName: string
+  state: SourceChangeState
+  authorizedOnMaster: boolean
 }
 
 export type VcStatusResult = {
@@ -707,15 +940,50 @@ export type VcCommitEntry = {
   message: string
   timestamp: string
   files: string[]
+  validationState: VcValidationState
+  evidenceKind: string | null
 }
 
 export type VcLogResult = {
   repoPath: string
   commits: VcCommitEntry[]
 }
+export type VcValidationEvidence = {
+  schemaVersion: string
+  evidenceKind: 'tia-sync' | 'feature-merge'
+  commitSha: string
+  workbenchId: string
+  sourceWorktreeId: string | null
+  confirmedAt: string
+  confirmedBy: string
+  machineValidated: boolean
+  devices: Array<{
+    deviceId: string
+    plcName: string
+    projectIdentity: string
+    projectChecksum: string
+    objects: Array<{ identity: string; relativePath: string; sha256: string }>
+  }>
+}
 
-export type VcDiffLine = { type: string; content: string }
+export type VcDiffLine = { type: 'context' | 'addition' | 'deletion'; content: string }
 export type VcDiffHunk = { oldStart: number; newStart: number; lines: VcDiffLine[] }
+export type VcXmlHeaderChange = { field: string; oldValue: string | null; newValue: string | null }
+export type VcXmlMultilingualTextChange = {
+  ownerKind: string
+  ownerId: string
+  networkNumber: number | null
+  field: string
+  culture: string
+  oldValue: string | null
+  newValue: string | null
+}
+export type VcXmlChangeSummary = {
+  summaryAvailable: boolean
+  logicOrStructureChanged: boolean
+  headerChanges: VcXmlHeaderChange[]
+  multilingualTextChanges: VcXmlMultilingualTextChange[]
+}
 export type VcDiffResult = {
   repoPath: string
   filePath: string
@@ -723,7 +991,22 @@ export type VcDiffResult = {
   newSha: string | null
   binary: boolean
   hunks: VcDiffHunk[]
+  summary: VcXmlChangeSummary
 }
+
+export type FeatureMergePublicationResult = {
+  merged: boolean
+  sha: string
+  evidence: VcValidationEvidence
+  validationTag: string
+}
+
+export type VersionControlSelection =
+  | { kind: 'source'; entry: VcSourceEntry }
+  | { kind: 'difference'; difference: SourceDifference }
+  | { kind: 'commit'; commit: VcCommitEntry }
+  | { kind: 'validation'; evidence: VcValidationEvidence }
+  | null
 
 /* ── Context compare / status types ──────────────────── */
 
@@ -1203,6 +1486,29 @@ export async function callTool(
 export async function getVcStatus(workbenchId: string, worktreeId: string, deviceId: string): Promise<VcStatusResult> {
   return workbenchRequest<VcStatusResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/vc/status`)
 }
+
+export const getWorktreeVcStatus = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<VcStatusResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/status`)
+export const getWorktreeVcLog = (workbenchId: string, worktreeId: string, maxCount?: number, filePath?: string) => {
+  const params = new URLSearchParams()
+  if (maxCount) params.set('maxCount', String(maxCount))
+  if (filePath) params.set('filePath', filePath)
+  const query = params.toString()
+  return workbenchRequest<VcLogResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/log${query ? `?${query}` : ''}`)
+}
+export const getWorktreeVcDiff = (workbenchId: string, worktreeId: string, filePath: string, oldSha?: string, newSha?: string) => {
+  const params = new URLSearchParams({ filePath })
+  if (oldSha) params.set('oldSha', oldSha)
+  if (newSha) params.set('newSha', newSha)
+  return workbenchRequest<VcDiffResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/diff?${params}`)
+}
+export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string) =>
+  workbenchRequest<{ sha: string; message: string; files: string[] }>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/commit`,
+    jsonRequest('POST', { paths, message }),
+  )
+export const getVcValidation = (workbenchId: string, worktreeId: string, sha: string) =>
+  workbenchRequest<VcValidationEvidence | null>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/validation/${encodeURIComponent(sha)}`)
 
 export async function getVcLog(workbenchId: string, worktreeId: string, deviceId: string, maxCount?: number, filePath?: string): Promise<VcLogResult> {
   const params = new URLSearchParams()

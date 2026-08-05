@@ -25,6 +25,8 @@ public sealed class LinkedWorktreeTests : IDisposable
     [Fact]
     public void SharedRepositorySupportsLinkedWorktreeCommitAndMergeLifecycle()
     {
+        const string seedPath = "devices/PLC_1/source/Seed.xml";
+        const string featureSourcePath = "devices/PLC_1/source/Feature.xml";
         var workbenchRoot = Path.Combine(root, "workbench");
         var masterPath = Path.Combine(workbenchRoot, "worktrees", "master");
         var featurePath = Path.Combine(workbenchRoot, "worktrees", "feature-a");
@@ -36,7 +38,7 @@ public sealed class LinkedWorktreeTests : IDisposable
         Assert.True(Directory.Exists(init.RepositoryPath));
         Assert.True(File.Exists(Path.Combine(masterPath, ".git")));
 
-        File.WriteAllText(Path.Combine(masterPath, "seed.txt"), "seed");
+        WriteFile(masterPath, seedPath, "<Document Name=\"Seed\" />");
         RepositoryService.Add(masterPath);
         var first = RepositoryService.Commit(masterPath, "initial", null);
 
@@ -49,7 +51,9 @@ public sealed class LinkedWorktreeTests : IDisposable
         Assert.Equal("feature-a", feature.Branch);
         Assert.Equal(featurePath, feature.WorktreePath);
         Assert.Equal(first.Sha, feature.Sha);
-        Assert.Equal("seed", File.ReadAllText(Path.Combine(featurePath, "seed.txt")));
+        Assert.Equal(
+            "<Document Name=\"Seed\" />",
+            File.ReadAllText(Path.Combine(featurePath, seedPath)));
 
         var listed = RepositoryService.Worktrees(init.RepositoryPath);
         Assert.Contains(listed.Worktrees, item =>
@@ -57,7 +61,7 @@ public sealed class LinkedWorktreeTests : IDisposable
         Assert.Contains(listed.Worktrees, item =>
             item.WorktreePath == featurePath && item.Branch == "feature-a");
 
-        File.WriteAllText(Path.Combine(featurePath, "change.txt"), "feature");
+        WriteFile(featurePath, featureSourcePath, "<Document Name=\"Feature\" />");
         RepositoryService.Add(featurePath);
         var featureCommit = RepositoryService.Commit(featurePath, "feature change", null);
 
@@ -67,26 +71,30 @@ public sealed class LinkedWorktreeTests : IDisposable
         Assert.Equal("feature-a", merge.SourceBranch);
         Assert.Equal(featureCommit.Sha, merge.SourceSha);
         Assert.False(string.IsNullOrWhiteSpace(merge.Sha));
-        Assert.Equal("feature", File.ReadAllText(Path.Combine(masterPath, "change.txt")));
+        Assert.Equal(
+            "<Document Name=\"Feature\" />",
+            File.ReadAllText(Path.Combine(masterPath, featureSourcePath)));
     }
 
     [Fact]
-    public void StatusAndLogSupportLinkedWorktreeAfterAnOverlayWasCommitted()
+    public void StatusAndLogSupportLinkedWorktreeAfterSourceXmlWasCommitted()
     {
         var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
         var featurePath = Path.Combine(root, "workbench", "worktrees", "feature-a");
         RepositoryService.AddWorktree(repositoryPath, featurePath, "feature-a", firstSha);
 
-        Directory.CreateDirectory(Path.Combine(featurePath, "Blocks"));
-        File.WriteAllText(Path.Combine(featurePath, "Blocks", "A.xml"), "<a>first</a>");
+        var sourceDirectory = Path.Combine(featurePath, "devices", "PLC_1", "source", "Blocks");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "A.xml"), "<a>first</a>");
         RepositoryService.Add(featurePath);
         RepositoryService.Commit(featurePath, "import A", null);
-        File.WriteAllText(Path.Combine(featurePath, "Blocks", "A.xml"), "<a>second</a>");
+        File.WriteAllText(Path.Combine(sourceDirectory, "A.xml"), "<a>second</a>");
 
         var status = RepositoryService.Status(featurePath);
-        var log = RepositoryService.Log(featurePath, filePath: "Blocks/A.xml");
+        var sourcePath = "devices/PLC_1/source/Blocks/A.xml";
+        var log = RepositoryService.Log(featurePath, filePath: sourcePath);
 
-        Assert.Contains(status.Entries, entry => entry.FilePath == "Blocks/A.xml" && entry.State == "Modified");
+        Assert.Contains(status.Entries, entry => entry.FilePath == sourcePath && entry.State == "Modified");
         Assert.Contains(log.Commits, commit => commit.Message == "import A");
     }
 
@@ -106,6 +114,68 @@ public sealed class LinkedWorktreeTests : IDisposable
         var listed = RepositoryService.Worktrees(repositoryPath);
         Assert.DoesNotContain(listed.Worktrees, item => item.WorktreePath == featurePath);
         Assert.Contains(listed.Worktrees, item => item.WorktreePath == masterPath);
+    }
+
+    [Fact]
+    public void RollbackRemovalDeletesOnlyTheBranchRegisteredToTheCheckout()
+    {
+        var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
+        var featurePath = Path.Combine(root, "workbench", "worktrees", "feature-a");
+        RepositoryService.AddWorktree(repositoryPath, featurePath, "feature-a", firstSha);
+
+        var removed = RepositoryService.RemoveWorktree(
+            repositoryPath,
+            featurePath,
+            branchName: "feature-a",
+            deleteBranch: true);
+
+        Assert.True(removed.Removed);
+        Assert.True(removed.BranchDeleted);
+        Assert.DoesNotContain(
+            RepositoryService.Branches(masterPath).Branches,
+            branch => branch.Name == "feature-a");
+        Assert.Contains(
+            RepositoryService.Branches(masterPath).Branches,
+            branch => branch.Name == "master");
+    }
+
+    [Fact]
+    public void RollbackRemovalDoesNotDeleteAnUnrelatedPreExistingBranch()
+    {
+        var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
+        var featurePath = Path.Combine(root, "workbench", "worktrees", "feature-a");
+        RepositoryService.AddWorktree(repositoryPath, featurePath, "feature-a", firstSha);
+        RepositoryService.RemoveWorktree(repositoryPath, featurePath);
+
+        var removed = RepositoryService.RemoveWorktree(
+            repositoryPath,
+            featurePath,
+            branchName: "feature-a",
+            deleteBranch: true);
+
+        Assert.False(removed.Removed);
+        Assert.False(removed.BranchDeleted);
+        Assert.Contains(
+            RepositoryService.Branches(masterPath).Branches,
+            branch => branch.Name == "feature-a");
+    }
+
+    [Fact]
+    public void RollbackRemovalProtectsMasterBranch()
+    {
+        var (repositoryPath, masterPath, _) = CreateSharedRepositoryWithInitialCommit();
+
+        var error = Assert.Throws<VcInternalException>(() =>
+            RepositoryService.RemoveWorktree(
+                repositoryPath,
+                masterPath,
+                branchName: "master",
+                deleteBranch: true));
+
+        Assert.Equal("MASTER_WORKTREE_PROTECTED", error.Code);
+        Assert.Contains(
+            RepositoryService.Worktrees(repositoryPath).Worktrees,
+            worktree => worktree.Branch == "master");
     }
 
     [Fact]
@@ -148,41 +218,72 @@ public sealed class LinkedWorktreeTests : IDisposable
     }
 
     [Fact]
-    public void InitSharedWritesWorkbenchIgnoreRules()
+    public void SharedInitUsesInternalExcludesAndDoesNotCreateGitIgnore()
     {
         var workbenchRoot = Path.Combine(root, "workbench");
         var masterPath = Path.Combine(workbenchRoot, "worktrees", "master");
 
-        RepositoryService.InitShared(workbenchRoot, masterPath);
+        var result = RepositoryService.InitShared(workbenchRoot, masterPath);
 
-        var ignore = File.ReadAllText(Path.Combine(masterPath, ".gitignore"));
-        Assert.Contains("**/staging/", ignore);
-        Assert.Contains("**/plc-knowledge.db", ignore);
-        Assert.Contains("**/plc-knowledge.db-*", ignore);
-        Assert.Contains(".automation/", ignore);
+        Assert.False(File.Exists(Path.Combine(masterPath, ".gitignore")));
+        var exclude = File.ReadAllText(Path.Combine(result.RepositoryPath, "info", "exclude"));
+        Assert.Contains("worktree.json", exclude);
+        Assert.Contains("devices/*/device.json", exclude);
+        Assert.Contains("devices/*/staging/", exclude);
+        Assert.Contains("devices/*/plc-knowledge.db*", exclude);
+        Assert.Contains(".automation/", exclude);
+        Assert.Contains("sessionexport/", exclude);
     }
 
     [Fact]
-    public void InitSharedPreservesExistingIgnoreContentAndAppendsOnlyMissingRules()
+    public void InitSharedPreservesExistingExcludeContentAndAppendsOnlyMissingRules()
     {
         var workbenchRoot = Path.Combine(root, "workbench");
         var masterPath = Path.Combine(workbenchRoot, "worktrees", "master");
-        RepositoryService.InitShared(workbenchRoot, masterPath);
-        var ignorePath = Path.Combine(masterPath, ".gitignore");
-        const string userContent = "# user rules\r\n*.custom\r\n**/staging/\r\n";
-        File.WriteAllText(ignorePath, userContent);
+        var result = RepositoryService.InitShared(workbenchRoot, masterPath);
+        var excludePath = Path.Combine(result.RepositoryPath, "info", "exclude");
+        const string userContent = "# user rules\r\n*.custom\r\ndevices/*/staging/\r\n";
+        File.WriteAllText(excludePath, userContent);
 
         RepositoryService.InitShared(workbenchRoot, masterPath);
-        var afterFirstRetry = File.ReadAllText(ignorePath);
+        var afterFirstRetry = File.ReadAllText(excludePath);
         RepositoryService.InitShared(workbenchRoot, masterPath);
-        var afterSecondRetry = File.ReadAllText(ignorePath);
+        var afterSecondRetry = File.ReadAllText(excludePath);
 
         Assert.StartsWith(userContent, afterFirstRetry);
-        Assert.Equal(1, CountLines(afterFirstRetry, "**/staging/"));
-        Assert.Equal(1, CountLines(afterFirstRetry, "**/plc-knowledge.db"));
-        Assert.Equal(1, CountLines(afterFirstRetry, "**/plc-knowledge.db-*"));
+        Assert.Equal(1, CountLines(afterFirstRetry, "worktree.json"));
+        Assert.Equal(1, CountLines(afterFirstRetry, "devices/*/device.json"));
+        Assert.Equal(1, CountLines(afterFirstRetry, "devices/*/staging/"));
+        Assert.Equal(1, CountLines(afterFirstRetry, "devices/*/plc-knowledge.db*"));
         Assert.Equal(1, CountLines(afterFirstRetry, ".automation/"));
+        Assert.Equal(1, CountLines(afterFirstRetry, "sessionexport/"));
         Assert.Equal(afterFirstRetry, afterSecondRetry);
+    }
+
+    [Fact]
+    public void StatusReturnsOnlyNonIgnoredPlcSourceXml()
+    {
+        var (repositoryPath, masterPath, _) = CreateSharedRepositoryWithInitialCommit();
+        var sourceDirectory = Path.Combine(masterPath, "devices", "PLC_1", "source", "Blocks");
+        Directory.CreateDirectory(sourceDirectory);
+        Directory.CreateDirectory(Path.Combine(masterPath, "devices", "PLC_1", "staging"));
+        File.WriteAllText(Path.Combine(masterPath, "worktree.json"), "{}");
+        File.WriteAllText(Path.Combine(masterPath, "devices", "PLC_1", "device.json"), "{}");
+        File.WriteAllText(Path.Combine(masterPath, "devices", "PLC_1", "staging", "Temp.xml"), "<Document />");
+        File.WriteAllText(Path.Combine(masterPath, "devices", "PLC_1", "plc-knowledge.db-wal"), "runtime");
+        File.WriteAllText(Path.Combine(sourceDirectory, "Main.xml"), "<Document />");
+        File.WriteAllText(Path.Combine(sourceDirectory, "Ignored.xml"), "<Document />");
+        File.WriteAllText(Path.Combine(sourceDirectory, "notes.txt"), "not PLC source");
+        File.WriteAllText(Path.Combine(masterPath, "notes.txt"), "not PLC source");
+        File.AppendAllText(
+            Path.Combine(repositoryPath, "info", "exclude"),
+            $"devices/PLC_1/source/Blocks/Ignored.xml{Environment.NewLine}");
+
+        var status = RepositoryService.Status(masterPath);
+
+        var entry = Assert.Single(status.Entries);
+        Assert.Equal("devices/PLC_1/source/Blocks/Main.xml", entry.FilePath);
+        Assert.Equal("Untracked", entry.State);
     }
 
     [Fact]
@@ -201,10 +302,11 @@ public sealed class LinkedWorktreeTests : IDisposable
     [Fact]
     public void MergeAllowsIgnoredWorkbenchRuntimeArtifacts()
     {
+        const string featureSourcePath = "devices/PLC_1/source/Feature.xml";
         var (repositoryPath, masterPath, firstSha) = CreateSharedRepositoryWithInitialCommit();
         var featurePath = Path.Combine(root, "workbench", "worktrees", "feature-a");
         RepositoryService.AddWorktree(repositoryPath, featurePath, "feature-a", firstSha);
-        File.WriteAllText(Path.Combine(featurePath, "feature.txt"), "feature");
+        WriteFile(featurePath, featureSourcePath, "<Document Name=\"Feature\" />");
         RepositoryService.Add(featurePath);
         RepositoryService.Commit(featurePath, "feature", null);
 
@@ -216,7 +318,7 @@ public sealed class LinkedWorktreeTests : IDisposable
         var result = RepositoryService.Merge(masterPath, "feature-a");
 
         Assert.True(result.Merged);
-        Assert.True(File.Exists(Path.Combine(masterPath, "feature.txt")));
+        Assert.True(File.Exists(Path.Combine(masterPath, featureSourcePath)));
     }
 
     [Fact]
@@ -387,6 +489,8 @@ public sealed class LinkedWorktreeTests : IDisposable
     [Fact]
     public void VersionControlToolsExposeSharedWorktreeOperations()
     {
+        const string seedPath = "devices/PLC_1/source/Seed.xml";
+        const string featureSourcePath = "devices/PLC_1/source/Feature.xml";
         var tools = new VersionControlTools();
         var workbenchRoot = Path.Combine(root, "workbench");
         var masterPath = Path.Combine(workbenchRoot, "worktrees", "master");
@@ -397,7 +501,7 @@ public sealed class LinkedWorktreeTests : IDisposable
         var init = Unwrap<VcSharedInitResult>(initCall);
         Assert.NotNull(init);
 
-        File.WriteAllText(Path.Combine(masterPath, "seed.txt"), "seed");
+        WriteFile(masterPath, seedPath, "<Document Name=\"Seed\" />");
         tools.VcAdd(masterPath);
         var commit = Unwrap<VcCommitResult>(tools.VcCommit(masterPath, "initial"));
         Assert.NotNull(commit);
@@ -414,7 +518,7 @@ public sealed class LinkedWorktreeTests : IDisposable
         Assert.False(listCall.IsError == true);
         Assert.Equal(2, Unwrap<VcWorktreeListResult>(listCall)!.Worktrees.Length);
 
-        File.WriteAllText(Path.Combine(featurePath, "change.txt"), "feature");
+        WriteFile(featurePath, featureSourcePath, "<Document Name=\"Feature\" />");
         tools.VcAdd(featurePath);
         tools.VcCommit(featurePath, "feature change");
 
@@ -430,7 +534,10 @@ public sealed class LinkedWorktreeTests : IDisposable
         var masterPath = Path.Combine(workbenchRoot, "worktrees", "master");
         var init = RepositoryService.InitShared(workbenchRoot, masterPath);
 
-        File.WriteAllText(Path.Combine(masterPath, "seed.txt"), "seed");
+        WriteFile(
+            masterPath,
+            "devices/PLC_1/source/Seed.xml",
+            "<Document Name=\"Seed\" />");
         RepositoryService.Add(masterPath);
         var first = RepositoryService.Commit(masterPath, "initial", null);
         return (init.RepositoryPath, masterPath, first.Sha);
@@ -446,10 +553,20 @@ public sealed class LinkedWorktreeTests : IDisposable
             featurePath,
             "feature-a",
             result.FirstSha);
-        File.WriteAllText(Path.Combine(featurePath, "change.txt"), "feature");
+        WriteFile(
+            featurePath,
+            "devices/PLC_1/source/Feature.xml",
+            "<Document Name=\"Feature\" />");
         RepositoryService.Add(featurePath);
         RepositoryService.Commit(featurePath, "feature change", null);
         return result;
+    }
+
+    private static void WriteFile(string worktreePath, string relativePath, string content)
+    {
+        var fullPath = Path.Combine(worktreePath, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        File.WriteAllText(fullPath, content);
     }
 
     private static T? Unwrap<T>(CallToolResult result)

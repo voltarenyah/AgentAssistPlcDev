@@ -54,9 +54,19 @@ public static class ExportFolderCrawler
             throw new DirectoryNotFoundException($"Export root '{exportRoot}' was not found.");
         }
 
+        var fullRoot = Path.GetFullPath(exportRoot);
+        RejectReparsePoint(new DirectoryInfo(fullRoot));
+
         // 1. Per-device subfolders: each subdirectory with its own metadata.json
-        var deviceFolders = Directory.EnumerateDirectories(exportRoot)
-            .Where(dir => File.Exists(Path.Combine(dir, ManifestImporter.MetadataFileName)))
+        var childFolders = new DirectoryInfo(fullRoot).EnumerateDirectories().ToArray();
+        foreach (var childFolder in childFolders)
+        {
+            RejectReparsePoint(childFolder);
+        }
+
+        var deviceFolders = childFolders
+            .Where(dir => File.Exists(Path.Combine(dir.FullName, ManifestImporter.MetadataFileName)))
+            .Select(dir => dir.FullName)
             .ToArray();
 
         if (deviceFolders.Length > 0)
@@ -66,7 +76,6 @@ public static class ExportFolderCrawler
             var allWarnings = new List<string>();
             var totalFilesFound = 0;
             var totalFilesImported = 0;
-            var fullRoot = Path.GetFullPath(exportRoot);
             var projectNode = CreateProjectNode(exportRoot, fullRoot);
             combinedGraph.UpsertNode(projectNode);
 
@@ -163,6 +172,61 @@ public static class ExportFolderCrawler
         return ImportByCrawl(exportRoot, progress);
     }
 
+    public static ExportFolderImportResult ImportComponent(
+        string sourceRoot,
+        string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourceRoot))
+        {
+            throw new ArgumentException("Source root is required.", nameof(sourceRoot));
+        }
+
+        if (!Directory.Exists(sourceRoot))
+        {
+            throw new DirectoryNotFoundException($"Source root '{sourceRoot}' was not found.");
+        }
+
+        var fullRoot = Path.GetFullPath(sourceRoot);
+        var rootMetadata = Path.Combine(fullRoot, ManifestImporter.MetadataFileName);
+        if (File.Exists(rootMetadata) && HasComponents(rootMetadata))
+        {
+            return ManifestImporter.ImportComponent(sourceRoot, relativePath);
+        }
+
+        var normalizedPath = EffectiveSourceImporter.NormalizeRelativePath(relativePath);
+        var fullPath = EffectiveSourceImporter.ResolvePath(fullRoot, normalizedPath);
+        if (!File.Exists(fullPath))
+        {
+            throw new FileNotFoundException(
+                $"Source component '{normalizedPath}' was not found under '{sourceRoot}'.",
+                fullPath);
+        }
+
+        var warnings = new List<string>();
+        var candidate = TryClassify(
+            fullRoot,
+            Path.GetRelativePath(fullRoot, fullPath),
+            warnings);
+        if (candidate == null)
+        {
+            throw new ManifestInvalidException(
+                $"Source component '{normalizedPath}' could not be imported: {string.Join("; ", warnings)}");
+        }
+
+        var graph = new SemanticPlcGraph();
+        var project = CreateProjectNode(sourceRoot, fullRoot);
+        graph.UpsertNode(project);
+        ImportCandidateIntoGraph(candidate, graph, project);
+        TiaXmlSemanticGraphImporter.LinkSymbolsToDbMembers(graph);
+
+        return new ExportFolderImportResult(
+            graph,
+            filesFound: 1,
+            filesImported: 1,
+            warnings,
+            "crawl");
+    }
+
     /// <summary>Cheap check: does the metadata.json at <paramref name="path"/> have a "components"
     /// array? True for legacy device manifests, false for project-level metadata.</summary>
     private static bool HasComponents(string path)
@@ -203,8 +267,7 @@ public static class ExportFolderCrawler
     private static ExportFolderImportResult ImportByCrawl(string exportRoot, Action<string>? progress)
     {
         var fullRoot = Path.GetFullPath(exportRoot);
-        var relativeFiles = Directory
-            .EnumerateFiles(fullRoot, "*.xml", SearchOption.AllDirectories)
+        var relativeFiles = EnumerateManifestlessXmlFiles(fullRoot)
             .Select(path => Path.GetRelativePath(fullRoot, path))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
@@ -244,50 +307,7 @@ public static class ExportFolderCrawler
         var imported = 0;
         foreach (var winner in winners.OrderBy(candidate => candidate.RelativeFile, StringComparer.Ordinal))
         {
-            var sourcePath = Path.GetDirectoryName(winner.RelativeFile) ?? string.Empty;
-            // Extract device name from the first segment of the relative path, if present
-            var firstSep = sourcePath.IndexOfAny(new[] { '/', '\\' });
-            var deviceName = firstSep > 0 ? sourcePath.Substring(0, firstSep) : "";
-            // Also handle the case where the file is directly at a device subfolder root
-            if (string.IsNullOrEmpty(deviceName) && sourcePath.Length > 0)
-                deviceName = sourcePath;
-
-            var touches = graph.CaptureTouches(() =>
-            {
-                switch (winner.Kind)
-                {
-                    case ImportKind.ProgramBlock:
-                        TiaXmlSemanticGraphImporter.ImportBlockXml(
-                            winner.Xml,
-                            new ProgramBlockComponent(winner.Name, winner.Category!, sourcePath, winner.RelativeFile),
-                            graph,
-                            deviceName);
-                        TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                            graph, project.Id, TiaXmlSemanticGraphImporter.BlockId(deviceName, winner.Name), SemanticRelationshipType.Contains);
-                        break;
-                    case ImportKind.DataBlock:
-                        TiaXmlSemanticGraphImporter.ImportDbXml(winner.Xml, winner.RelativeFile, sourcePath, graph, deviceName);
-                        TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                            graph, project.Id, TiaXmlSemanticGraphImporter.DbId(deviceName, winner.Name), SemanticRelationshipType.Contains);
-                        break;
-                    case ImportKind.Udt:
-                        TiaXmlSemanticGraphImporter.ImportUdtXml(winner.Xml, winner.RelativeFile, sourcePath, graph, deviceName);
-                        TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
-                            graph, project.Id, TiaXmlSemanticGraphImporter.UdtId(deviceName, winner.Name), SemanticRelationshipType.Contains);
-                        break;
-                    case ImportKind.TagTable:
-                        // Reference behaviour: tag tables get no project CONTAINS edge (tags float freely).
-                        TiaXmlSemanticGraphImporter.ImportTagTableXml(winner.Xml, winner.RelativeFile, sourcePath, graph);
-                        break;
-                }
-            });
-            var normalizedPath = winner.RelativeFile.Replace('\\', '/');
-            graph.RegisterComponentImport(new ComponentImport(
-                $"path:{normalizedPath}",
-                normalizedPath,
-                winner.ContentHash,
-                touches.NodeIds,
-                touches.EdgeIds));
+            ImportCandidateIntoGraph(winner, graph, project);
 
             imported++;
             if (progress != null && (imported % 100 == 0 || imported == winners.Count))
@@ -298,6 +318,134 @@ public static class ExportFolderCrawler
 
         TiaXmlSemanticGraphImporter.LinkSymbolsToDbMembers(graph);
         return new ExportFolderImportResult(graph, relativeFiles.Length, imported, warnings, "crawl");
+    }
+
+    private static IReadOnlyList<string> EnumerateManifestlessXmlFiles(string fullRoot)
+    {
+        var files = new List<string>();
+        var pending = new Stack<DirectoryInfo>();
+        pending.Push(new DirectoryInfo(fullRoot));
+        while (pending.Count > 0)
+        {
+            foreach (var entry in pending.Pop().EnumerateFileSystemInfos())
+            {
+                RejectReparsePoint(entry);
+                if (entry is DirectoryInfo directory)
+                {
+                    pending.Push(directory);
+                }
+                else if (entry is FileInfo file &&
+                         string.Equals(
+                             file.Extension,
+                             ".xml",
+                             OperatingSystem.IsWindows()
+                                 ? StringComparison.OrdinalIgnoreCase
+                                 : StringComparison.Ordinal))
+                {
+                    files.Add(file.FullName);
+                }
+            }
+        }
+
+        return files;
+    }
+
+    private static void RejectReparsePoint(FileSystemInfo entry)
+    {
+        if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint))
+        {
+            throw new ManifestInvalidException(
+                $"Source tree contains reparse point '{entry.FullName}'.");
+        }
+    }
+
+    private static void ImportCandidateIntoGraph(
+        ImportCandidate candidate,
+        SemanticPlcGraph graph,
+        SemanticGraphNode project)
+    {
+        var sourcePath = Path.GetDirectoryName(candidate.RelativeFile) ?? string.Empty;
+        var firstSeparator = sourcePath.IndexOfAny(new[] { '/', '\\' });
+        var deviceName = firstSeparator > 0
+            ? sourcePath[..firstSeparator]
+            : string.Empty;
+        if (string.IsNullOrEmpty(deviceName) && sourcePath.Length > 0)
+        {
+            deviceName = sourcePath;
+        }
+
+        var touches = graph.CaptureTouches(() =>
+        {
+            switch (candidate.Kind)
+            {
+                case ImportKind.ProgramBlock:
+                    TiaXmlSemanticGraphImporter.ImportBlockXml(
+                        candidate.Xml,
+                        new ProgramBlockComponent(
+                            candidate.Name,
+                            candidate.Category!,
+                            sourcePath,
+                            candidate.RelativeFile),
+                        graph,
+                        deviceName);
+                    TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                        graph,
+                        project.Id,
+                        TiaXmlSemanticGraphImporter.BlockId(deviceName, candidate.Name),
+                        SemanticRelationshipType.Contains);
+                    break;
+                case ImportKind.DataBlock:
+                    TiaXmlSemanticGraphImporter.ImportDbXml(
+                        candidate.Xml,
+                        candidate.RelativeFile,
+                        sourcePath,
+                        graph,
+                        deviceName);
+                    TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                        graph,
+                        project.Id,
+                        TiaXmlSemanticGraphImporter.DbId(deviceName, candidate.Name),
+                        SemanticRelationshipType.Contains);
+                    break;
+                case ImportKind.Udt:
+                    TiaXmlSemanticGraphImporter.ImportUdtXml(
+                        candidate.Xml,
+                        candidate.RelativeFile,
+                        sourcePath,
+                        graph,
+                        deviceName);
+                    TiaXmlSemanticGraphImporter.AddEdgeIfTargetExists(
+                        graph,
+                        project.Id,
+                        TiaXmlSemanticGraphImporter.UdtId(deviceName, candidate.Name),
+                        SemanticRelationshipType.Contains);
+                    break;
+                case ImportKind.TagTable:
+                    // Reference behaviour: tag tables get no project CONTAINS edge (tags float freely).
+                    TiaXmlSemanticGraphImporter.ImportTagTableXml(
+                        candidate.Xml,
+                        candidate.RelativeFile,
+                        sourcePath,
+                        graph);
+                    break;
+            }
+        });
+        var normalizedPath = candidate.RelativeFile.Replace('\\', '/');
+        graph.RegisterComponentImport(new ComponentImport(
+            SemanticComponentKey(candidate.RootElement, candidate.Name),
+            normalizedPath,
+            candidate.ContentHash,
+            touches.NodeIds,
+            touches.EdgeIds));
+    }
+
+    private static string SemanticComponentKey(string rootElement, string name)
+    {
+        return Convert.ToBase64String(
+                Encoding.UTF8.GetBytes($"{rootElement}|{name}"))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
     }
 
     private static ImportCandidate? TryClassify(string fullRoot, string relativeFile, IList<string> warnings)

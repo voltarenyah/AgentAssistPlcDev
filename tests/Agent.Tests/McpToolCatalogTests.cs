@@ -39,6 +39,35 @@ public sealed class McpToolCatalogTests
     }
 
     [Fact]
+    public void ImportSourceObjectIsExposed()
+    {
+        var importCaller = new FakeToolCaller();
+        var catalog = new McpToolCatalog(new[]
+        {
+            Spec("import_source_object", importCaller),
+            Spec("search", new FakeToolCaller()),
+        });
+
+        Assert.Contains(catalog.Tools, spec => spec.Name == "import_source_object");
+        Assert.Same(importCaller, catalog.Resolve("import_source_object").Caller);
+    }
+
+    [Fact]
+    public void GetPlcChecksumsIsExposedAsAnEngineeringReadTool()
+    {
+        var engineeringCaller = new FakeToolCaller();
+        var catalog = new McpToolCatalog(new[]
+        {
+            Spec("get_plc_checksums", engineeringCaller),
+        });
+
+        var tool = catalog.Resolve("get_plc_checksums");
+
+        Assert.Equal("get_plc_checksums", tool.Name);
+        Assert.Same(engineeringCaller, tool.Caller);
+    }
+
+    [Fact]
     public void ResolveRoutesToTheRightCaller()
     {
         var engineering = new FakeToolCaller();

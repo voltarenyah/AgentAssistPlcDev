@@ -3,6 +3,7 @@ using Agent.Workbench;
 using Contracts.Engineering;
 using Contracts.Knowledge;
 using Contracts.Sandbox;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Xunit;
 
@@ -424,6 +425,218 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateWorkbenchCreatesOnlySourceStagingAndRuntimeDeviceArtifacts()
+    {
+        var versionControl = new FakeToolCaller().Respond("vc_init_shared", new object());
+        var engineering = new FakeToolCaller()
+            .Respond("connect", new object())
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+                PlcDevices = ["PLC_1"],
+            });
+        var catalog = new WorkbenchCatalog(
+            new AtomicJsonStore(),
+            Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        var result = await coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest(
+                "Line",
+                Path.Combine(root, "single-source"),
+                42,
+                null));
+
+        var device = Assert.Single(result.Devices);
+        var context = catalog.ResolveDevice(result.Workbench, result.Worktree, device);
+        Assert.True(Directory.Exists(context.SourceRoot));
+        Assert.True(Directory.Exists(context.StagingRoot));
+        Assert.True(File.Exists(Path.Combine(context.DeviceRoot, "device.json")));
+        Assert.True(File.Exists(Path.Combine(context.WorktreeRoot, "worktree.json")));
+        Assert.False(Directory.Exists(Path.Combine(context.DeviceRoot, "exported-source")));
+        Assert.False(Directory.Exists(Path.Combine(context.DeviceRoot, "modified-source")));
+        Assert.Equal(
+            Path.Combine(context.DeviceRoot, "plc-knowledge.db"),
+            context.KnowledgeDbPath);
+    }
+
+    [Fact]
+    public async Task CreateFeatureCopiesIgnoredDeviceMetadataLoadedBeforeLinkedCheckout()
+    {
+        var workbenchRoot = Path.Combine(root, "feature-inheritance");
+        var masterDevicePath = Path.Combine(
+            workbenchRoot,
+            "worktrees",
+            "master",
+            "devices",
+            "PLC_1",
+            "device.json");
+        var versionControl = new MetadataRemovingWorktreeCaller(masterDevicePath);
+        var engineering = new FakeToolCaller()
+            .Respond("connect", new object())
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+                PlcDevices = ["PLC_1"],
+            });
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest("Line", workbenchRoot, 42, null));
+        var masterDevice = Assert.Single(created.Devices) with
+        {
+            LastExportChecksum = "master-checksum",
+            LastExportUtc = "2026-08-04T08:00:00Z",
+            Knowledge = new KnowledgeState(
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Blocks/Main.xml"] = "source-hash",
+                },
+                "2026-08-04T08:01:00Z"),
+        };
+        store.Write(masterDevicePath, masterDevice);
+
+        var feature = await coordinator.CreateWorktreeAsync(
+            new CreateWorktreeRequest(
+                created.Workbench,
+                "feature-a",
+                "feature-a",
+                "master"));
+
+        Assert.Equal(created.Worktree.DeviceIds, feature.DeviceIds);
+        var featureDevicePath = Path.Combine(
+            workbenchRoot,
+            "worktrees",
+            "feature-a",
+            "devices",
+            "PLC_1",
+            "device.json");
+        var inherited = store.Read<DeviceMetadata>(featureDevicePath);
+        Assert.Equal(masterDevice.DeviceId, inherited.DeviceId);
+        Assert.Equal(feature.WorktreeId, inherited.WorktreeId);
+        Assert.Equal(masterDevice.PlcName, inherited.PlcName);
+        Assert.Equal(masterDevice.EngineeringIdentity, inherited.EngineeringIdentity);
+        Assert.Equal(masterDevice.LastExportChecksum, inherited.LastExportChecksum);
+        Assert.Equal(masterDevice.LastExportUtc, inherited.LastExportUtc);
+        Assert.Equal(masterDevice.Knowledge.Stale, inherited.Knowledge.Stale);
+        Assert.Equal(masterDevice.Knowledge.UpdatedAt, inherited.Knowledge.UpdatedAt);
+        Assert.Equal(masterDevice.Knowledge.BaselineStale, inherited.Knowledge.BaselineStale);
+        Assert.Equal(
+            masterDevice.Knowledge.AppliedOverlayHashes.OrderBy(pair => pair.Key),
+            inherited.Knowledge.AppliedOverlayHashes.OrderBy(pair => pair.Key));
+        Assert.True(Directory.Exists(Path.Combine(
+            workbenchRoot, "worktrees", "feature-a", "devices", "PLC_1", "source")));
+        Assert.True(Directory.Exists(Path.Combine(
+            workbenchRoot, "worktrees", "feature-a", "devices", "PLC_1", "staging")));
+        Assert.Equal(["vc_init_shared", "vc_add_worktree"], versionControl.Calls);
+    }
+
+    [Fact]
+    public async Task CreateFeatureMetadataFailureRollsBackCheckoutAndNewBranch()
+    {
+        var workbenchRoot = Path.Combine(root, "feature-metadata-failure");
+        var store = new AtomicJsonStore();
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_init_shared", new object())
+            .Respond("vc_add_worktree", new object())
+            .Respond("vc_remove_worktree", new object());
+        var engineering = new FakeToolCaller()
+            .Respond("connect", new object())
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+                PlcDevices = ["PLC_1"],
+            });
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest("Line", workbenchRoot, 42, null));
+        var masterDevicePath = Path.Combine(
+            workbenchRoot, "worktrees", "master", "devices", "PLC_1", "device.json");
+        store.Write(
+            masterDevicePath,
+            Assert.Single(created.Devices) with { PlcName = string.Empty });
+
+        await Assert.ThrowsAsync<WorkbenchPathException>(() =>
+            coordinator.CreateWorktreeAsync(
+                new CreateWorktreeRequest(created.Workbench, "feature-a", "feature-a"),
+                CancellationToken.None));
+
+        Assert.Equal(
+            ["vc_init_shared", "vc_add_worktree", "vc_remove_worktree"],
+            versionControl.Calls);
+        var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
+        Assert.Equal("feature-a", Property<string>(rollback, "branchName"));
+        Assert.True(Property<bool>(rollback, "deleteBranch"));
+        Assert.DoesNotContain(
+            catalog.Load(workbenchRoot).Worktrees,
+            item => item.Branch == "feature-a");
+    }
+
+    [Fact]
+    public async Task CreateFeaturePartialGitCreationRequestsSafeBranchRollback()
+    {
+        var workbenchRoot = Path.Combine(root, "feature-partial-creation");
+        var store = new AtomicJsonStore();
+        var versionControl = new PartialWorktreeCreationCaller();
+        var engineering = new FakeToolCaller()
+            .Respond("connect", new object())
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+                PlcDevices = ["PLC_1"],
+            });
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest("Line", workbenchRoot, 42, null));
+
+        await Assert.ThrowsAsync<ToolCallException>(() =>
+            coordinator.CreateWorktreeAsync(
+                new CreateWorktreeRequest(created.Workbench, "feature-a", "feature-a"),
+                CancellationToken.None));
+
+        Assert.Equal(["vc_init_shared", "vc_add_worktree", "vc_remove_worktree"], versionControl.Calls);
+        var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
+        Assert.Equal("feature-a", Property<string>(rollback, "branchName"));
+        Assert.True(Property<bool>(rollback, "deleteBranch"));
+    }
+
+    [Fact]
     public async Task CreateRollsBackWorkbenchArtifactsWhenGitInitializationFails()
     {
         var workbenchRoot = Path.Combine(root, "FailedCreate");
@@ -761,7 +974,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task ApplyRefreshReconcilesThenStagesExactPathsAndCommits()
+    public async Task ApplyRefreshWritesSelectedFilesAndLeavesThemPendingManualCommit()
     {
         var fixture = Fixture.Create(root);
         fixture.WriteBaseline("Blocks/A.xml", "<old />");
@@ -769,9 +982,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         fixture.WriteStaging("Blocks/B.xml", "<added />");
         fixture.WriteManifests("Blocks/A.xml", "Blocks/B.xml");
         var calls = new List<string>();
-        var versionControl = Caller(calls)
-            .Respond("vc_add", new AddResult())
-            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "abc123" });
+        var versionControl = Caller(calls);
         var coordinator = Create(fixture, versionControl: versionControl);
         var preview = coordinator.PreviewRefresh(fixture.Context);
 
@@ -785,18 +996,55 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     .ToHashSet(StringComparer.Ordinal)),
             CancellationToken.None);
 
-        Assert.Equal(RefreshApplyState.Committed, result.State);
-        Assert.Equal(new[] { "version:vc_add", "version:vc_commit" }, calls);
+        Assert.Equal("FilesUpdated", result.State.ToString());
+        Assert.Empty(calls);
         var expected = new[]
         {
-            Relative(fixture.Context, "device.json"),
-            Relative(fixture.Context, "exported-source/Blocks/A.xml"),
-            Relative(fixture.Context, "exported-source/Blocks/B.xml"),
-            Relative(fixture.Context, "exported-source/metadata.json"),
+            Relative(fixture.Context, "source/Blocks/A.xml"),
+            Relative(fixture.Context, "source/Blocks/B.xml"),
+            Relative(fixture.Context, "source/metadata.json"),
         };
         Assert.Equal(expected.Order(), result.ChangedPaths.Order());
-        Assert.Equal(expected.Order(), Property<string[]>(versionControl.CallArgs["vc_add"].Single(), "paths").Order());
-        Assert.Equal("abc123", ReadDevice(fixture).LastReconciliationCommit);
+        Assert.Null(result.CommitSha);
+        Assert.Null(result.Error);
+        Assert.Null(ReadDevice(fixture).LastReconciliationCommit);
+    }
+
+    [Fact]
+    public async Task ApprovedMasterRefreshAutoCommitsSelectedSourceWithTheProvidedTitle()
+    {
+        var fixture = Fixture.Create(root);
+        fixture.WriteBaseline("Blocks/A.xml", "<old />");
+        fixture.WriteStaging("Blocks/A.xml", "<new />");
+        fixture.WriteManifests("Blocks/A.xml");
+        var calls = new List<string>();
+        var versionControl = Caller(calls)
+            .Respond("vc_commit_selected", new WorkbenchCommitResult(
+                "tia-commit-1",
+                "Accept A from TIA",
+                new[] { "devices/PLC_1/source/Blocks/A.xml" }));
+        var coordinator = Create(fixture, versionControl: versionControl);
+        var preview = coordinator.PreviewRefresh(fixture.Context);
+
+        var result = await coordinator.ApplyRefreshAsync(
+            fixture.Context,
+            new ApprovedReconciliation(
+                preview,
+                preview.Entries
+                    .Where(entry => entry.Kind != ReconciliationChangeKind.Unchanged)
+                    .Select(entry => entry.RelativePath)
+                    .ToHashSet(StringComparer.Ordinal)),
+            CancellationToken.None,
+            commitMessage: "Accept A from TIA");
+
+        Assert.Equal("tia-commit-1", result.CommitSha);
+        Assert.Equal(["vc_commit_selected"], versionControl.Calls);
+        Assert.Equal(
+            "Accept A from TIA",
+            Property<string>(versionControl.CallArgs["vc_commit_selected"].Single(), "message"));
+        Assert.Equal(
+            new[] { "devices/PLC_1/source/Blocks/A.xml" },
+            Property<IReadOnlyList<string>>(versionControl.CallArgs["vc_commit_selected"].Single(), "paths"));
     }
 
     [Fact]
@@ -816,7 +1064,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Equal(RefreshApplyState.Rejected, result.State);
         Assert.Empty(calls);
-        Assert.False(File.Exists(Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+        Assert.False(File.Exists(Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")));
     }
 
     [Fact]
@@ -828,7 +1076,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         fixture.WriteManifests("Blocks/A.xml");
         // Make the two manifests byte-identical so reconciliation is a true no-op.
         File.Copy(
-            Path.Combine(fixture.Context.ExportedSourceRoot, "metadata.json"),
+            Path.Combine(fixture.Context.SourceRoot, "metadata.json"),
             Path.Combine(fixture.Context.StagingRoot, "metadata.json"),
             overwrite: true);
         var before = File.ReadAllBytes(Path.Combine(fixture.Context.DeviceRoot, "device.json"));
@@ -842,7 +1090,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 new HashSet<string>()),
             CancellationToken.None);
 
+        Assert.Equal("NoChanges", result.State.ToString());
         Assert.Empty(result.ChangedPaths);
+        Assert.Null(result.CommitSha);
+        Assert.Null(result.Error);
         Assert.Empty(version.Calls);
         Assert.Equal(
             before,
@@ -850,16 +1101,14 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task CommitFailureReportsFilesUpdatedWithoutRollingThemBack()
+    public async Task ApplyRefreshDoesNotRequireAvailableVersionControl()
     {
         var fixture = Fixture.Create(root);
         fixture.WriteBaseline("Blocks/A.xml", "<old />");
         fixture.WriteStaging("Blocks/A.xml", "<new />");
         fixture.WriteManifests("Blocks/A.xml");
-        var calls = new List<string>();
-        var versionControl = Caller(calls)
-            .Respond("vc_add", new AddResult())
-            .Fail("vc_commit", "GIT_ERROR", "identity unavailable");
+        var versionControl = new FakeToolCaller()
+            .Fail("vc_add", "GIT_ERROR", "version control must not be called");
         var coordinator = Create(fixture, versionControl: versionControl);
         var preview = coordinator.PreviewRefresh(fixture.Context);
 
@@ -873,10 +1122,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     .ToHashSet(StringComparer.Ordinal)),
             CancellationToken.None);
 
-        Assert.Equal(RefreshApplyState.FilesUpdatedCommitFailed, result.State);
+        Assert.Equal("FilesUpdated", result.State.ToString());
         Assert.Equal("<new />", File.ReadAllText(
-            Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
-        Assert.Equal(new[] { "version:vc_add", "version:vc_commit" }, calls);
+            Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")));
+        Assert.Empty(versionControl.Calls);
+        Assert.Null(result.CommitSha);
+        Assert.Null(result.Error);
         Assert.Null(ReadDevice(fixture).LastReconciliationCommit);
         Assert.True(ReadDevice(fixture).Knowledge.Stale);
         Assert.True(ReadDevice(fixture).Knowledge.BaselineStale);
@@ -902,13 +1153,42 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Equal(new[] { "knowledge:update_components" }, calls);
         var args = knowledge.CallArgs["update_components"].Single();
-        Assert.Equal(fixture.Context.ExportedSourceRoot, Property<string>(args, "exportedSourceRoot"));
-        Assert.Equal(fixture.Context.ModifiedSourceRoot, Property<string>(args, "modifiedSourceRoot"));
+        Assert.Equal(fixture.Context.SourceRoot, Property<string>(args, "sourceRoot"));
+        Assert.Null(args.GetType().GetProperty("exportedSourceRoot"));
+        Assert.Null(args.GetType().GetProperty("modifiedSourceRoot"));
         Assert.Equal(fixture.Context.KnowledgeDbPath, Property<string>(args, "dbPath"));
         Assert.Equal(new[] { "Blocks/A.xml" }, Property<string[]>(args, "relativePaths"));
-        Assert.Equal("hash-a", ReadDevice(fixture).Knowledge.AppliedOverlayHashes["Blocks/A.xml"]);
+        var expectedHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(
+            Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")))).ToLowerInvariant();
+        Assert.Equal(
+            expectedHash,
+            ReadDevice(fixture).Knowledge.AppliedOverlayHashes["Blocks/A.xml"]);
         Assert.False(ReadDevice(fixture).Knowledge.Stale);
         Assert.Equal(fixture.Context.KnowledgeDbPath, result.DbPath);
+    }
+
+    [Fact]
+    public async Task SuccessfulIncrementalUpdateSkipsSecondUnchangedUpdate()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: true);
+        File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
+        fixture.WriteModified("Blocks/A.xml", "<modified />");
+        var update = new KnowledgeUpdateResult(
+            fixture.Context.KnowledgeDbPath,
+            new[] { "block:A" },
+            new Dictionary<string, string> { ["block:A"] = "component-hash" },
+            Array.Empty<string>());
+        var knowledge = new FakeToolCaller()
+            .Respond("update_components", update)
+            .Respond("update_components", update);
+        var coordinator = Create(fixture, knowledge: knowledge);
+
+        await coordinator.UpdateKnowledgeAsync(fixture.Context, CancellationToken.None);
+        await coordinator.UpdateKnowledgeAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal(new[] { "update_components" }, knowledge.Calls);
+        var hashes = ReadDevice(fixture).Knowledge.AppliedOverlayHashes;
+        Assert.Equal(new[] { "Blocks/A.xml" }, hashes.Keys);
     }
 
     [Fact]
@@ -925,6 +1205,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         await coordinator.UpdateKnowledgeAsync(fixture.Context, CancellationToken.None);
 
         Assert.Equal(new[] { "knowledge:ingest_source" }, calls);
+        var args = knowledge.CallArgs["ingest_source"].Single();
+        Assert.Equal(fixture.Context.SourceRoot, Property<string>(args, "sourceRoot"));
+        Assert.Null(args.GetType().GetProperty("exportedSourceRoot"));
+        Assert.Null(args.GetType().GetProperty("modifiedSourceRoot"));
         Assert.False(ReadDevice(fixture).Knowledge.Stale);
     }
 
@@ -940,6 +1224,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         await coordinator.RebuildKnowledgeAsync(fixture.Context, CancellationToken.None);
 
         Assert.Equal(new[] { "ingest_source" }, knowledge.Calls);
+        var args = knowledge.CallArgs["ingest_source"].Single();
+        Assert.Equal(fixture.Context.SourceRoot, Property<string>(args, "sourceRoot"));
+        Assert.Null(args.GetType().GetProperty("exportedSourceRoot"));
+        Assert.Null(args.GetType().GetProperty("modifiedSourceRoot"));
         Assert.False(ReadDevice(fixture).Knowledge.Stale);
         Assert.False(ReadDevice(fixture).Knowledge.BaselineStale);
     }
@@ -968,9 +1256,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
         fixture.WriteStaging("Blocks/A.xml", "<new />");
         fixture.WriteManifests("Blocks/A.xml");
-        var version = new FakeToolCaller()
-            .Respond("vc_add", new AddResult())
-            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "abc" });
+        var version = new FakeToolCaller();
         var knowledge = new FakeToolCaller()
             .Respond("ingest_source", new IngestResult { DbPath = fixture.Context.KnowledgeDbPath });
         var coordinator = Create(fixture, knowledge: knowledge, versionControl: version);
@@ -1013,7 +1299,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             CancellationToken.None);
 
         Assert.Equal(new[] { "engineering:import_block", "engineering:compile_block" }, calls);
-        var overlay = Path.Combine(fixture.Context.ModifiedSourceRoot, "Blocks", "A.xml");
+        var overlay = Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml");
         Assert.Equal(overlay, Property<string>(
             engineering.CallArgs["import_block"].Single(), "xmlFilePath"));
         Assert.True(File.Exists(overlay));
@@ -1022,14 +1308,17 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task BootstrapStagesExportCommitsInitialBaselineAndIngestsKnowledge()
+    public async Task BootstrapStagesExportAndCreatesInitialBaselineCommit()
     {
         var fixture = Fixture.Create(root, knowledgeStale: true);
         var calls = new List<string>();
         var engineering = new BootstrapExportCaller(calls);
         var versionControl = Caller(calls)
-            .Respond("vc_add", new AddResult())
-            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "base001" });
+            .Respond("vc_log", new ConsistencyLogResult())
+            .Respond("vc_commit_selected", new WorkbenchCommitResult(
+                "baseline-sha",
+                "Initial PLC source baseline",
+                new[] { "devices/PLC_1/source/Blocks/A.xml" }));
         var knowledge = Caller(calls)
             .Respond("ingest_source", new IngestResult { DbPath = fixture.Context.KnowledgeDbPath });
         var coordinator = Create(
@@ -1040,18 +1329,81 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         var result = await coordinator.BootstrapDeviceAsync(fixture.Context, CancellationToken.None);
 
-        Assert.Equal(RefreshApplyState.Committed, result.Baseline.State);
-        Assert.Equal("base001", result.Baseline.CommitSha);
-        Assert.Equal(new[] { "engineering:rebuild_export", "version:vc_add", "version:vc_commit", "knowledge:ingest_source" }, calls);
-        Assert.Equal("<a />", File.ReadAllText(
-            Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+        Assert.Equal("FilesUpdated", result.Baseline.State.ToString());
+        Assert.Equal("baseline-sha", result.Baseline.CommitSha);
+        Assert.Null(result.Baseline.Error);
         Assert.Equal(
-            "initial baseline: full export",
-            Property<string>(versionControl.CallArgs["vc_commit"].Single(), "message"));
+            new[]
+            {
+                "engineering:rebuild_export",
+                "version:vc_log",
+                "version:vc_commit_selected",
+                "knowledge:ingest_source",
+            },
+            calls);
+        Assert.Equal("<a />", File.ReadAllText(
+            Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")));
+        Assert.Equal(new[] { "vc_log", "vc_commit_selected" }, versionControl.Calls);
         var device = ReadDevice(fixture);
         Assert.False(device.Knowledge.Stale);
         Assert.False(device.Knowledge.BaselineStale);
-        Assert.Equal("base001", device.LastReconciliationCommit);
+        Assert.Null(device.LastReconciliationCommit);
+    }
+
+    [Fact]
+    public async Task BootstrapWorktreeStagesAndCommitsEveryRegisteredDevice()
+    {
+        var fixture = Fixture.Create(root, knowledgeStale: true);
+        var second = fixture.AddDevice("dev-2", "PLC_2");
+        var calls = new List<string>();
+        var engineering = new MultiDeviceBootstrapExportCaller(calls);
+        var versionControl = Caller(calls)
+            .Respond("vc_log", new ConsistencyLogResult())
+            .Respond("vc_commit_selected", new WorkbenchCommitResult(
+                "baseline-sha",
+                "Initial PLC source baseline",
+                new[]
+                {
+                    "devices/PLC_1/source/Blocks/A.xml",
+                    "devices/PLC_2/source/Blocks/A.xml",
+                }));
+        var knowledge = Caller(calls)
+            .Respond("ingest_source", new IngestResult { DbPath = fixture.Context.KnowledgeDbPath })
+            .Respond("ingest_source", new IngestResult { DbPath = second.KnowledgeDbPath });
+        var coordinator = Create(
+            fixture,
+            engineering: engineering,
+            knowledge: knowledge,
+            versionControl: versionControl);
+
+        var result = await coordinator.BootstrapWorktreeAsync(
+            fixture.Context,
+            CancellationToken.None);
+
+        Assert.Equal(2, result.Devices.Count);
+        Assert.All(result.Devices, device =>
+        {
+            Assert.Equal("FilesUpdated", device.Baseline.State.ToString());
+            Assert.Equal("baseline-sha", device.Baseline.CommitSha);
+        });
+        Assert.Equal(
+            new[] { "PLC_1", "PLC_2" },
+            engineering.CallArgs["rebuild_export"]
+                .Select(args => Property<string>(args, "plcName"))
+                .ToArray());
+        Assert.Equal(2, knowledge.Calls.Count(call => call == "ingest_source"));
+        Assert.Equal(["vc_log", "vc_commit_selected"], versionControl.Calls);
+        Assert.Equal(
+            new[]
+            {
+                "devices/PLC_1/source/Blocks/A.xml",
+                "devices/PLC_2/source/Blocks/A.xml",
+            },
+            Property<IReadOnlyList<string>>(
+                versionControl.CallArgs["vc_commit_selected"].Single(),
+                "paths"));
+        Assert.Equal("<PLC_1 />", File.ReadAllText(Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")));
+        Assert.Equal("<PLC_2 />", File.ReadAllText(Path.Combine(second.SourceRoot, "Blocks", "A.xml")));
     }
 
     [Fact]
@@ -1061,8 +1413,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var engineering = new CompileRetryBootstrapCaller();
         var calls = new List<string>();
         var versionControl = Caller(calls)
-            .Respond("vc_add", new AddResult())
-            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "base002" });
+            .Respond("vc_log", new ConsistencyLogResult())
+            .Respond("vc_commit_selected", new WorkbenchCommitResult(
+                "baseline-sha",
+                "Initial PLC source baseline",
+                new[] { "devices/PLC_1/source/Blocks/A.xml" }));
         var knowledge = Caller(calls)
             .Respond("ingest_source", new IngestResult { DbPath = fixture.Context.KnowledgeDbPath });
         var coordinator = Create(
@@ -1076,12 +1431,13 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             CancellationToken.None,
             allowCompile: true);
 
-        Assert.Equal(RefreshApplyState.Committed, result.Baseline.State);
+        Assert.Equal("FilesUpdated", result.Baseline.State.ToString());
         Assert.Equal(
             new[] { "rebuild_export", "compile_plc", "rebuild_export" },
             engineering.Calls);
         Assert.Equal("PLC_1", Property<string>(engineering.CallArgs["compile_plc"].Single(), "plcName"));
-        Assert.Equal("base002", result.Baseline.CommitSha);
+        Assert.Equal("baseline-sha", result.Baseline.CommitSha);
+        Assert.Equal(new[] { "vc_log", "vc_commit_selected" }, versionControl.Calls);
     }
 
     [Fact]
@@ -1120,28 +1476,29 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Empty(versionControl.Calls);
         Assert.Empty(knowledge.Calls);
         Assert.DoesNotContain("compile_plc", engineering.Calls);
-        Assert.False(File.Exists(Path.Combine(fixture.Context.ExportedSourceRoot, "Blocks", "A.xml")));
+        Assert.False(File.Exists(Path.Combine(fixture.Context.SourceRoot, "Blocks", "A.xml")));
     }
 
     [Fact]
-    public async Task BootstrapFailsWhenBaselineCommitFails()
+    public async Task BootstrapRequiresVersionControlForInitialBaselineCommit()
     {
         var fixture = Fixture.Create(root, knowledgeStale: true);
         var engineering = new BootstrapExportCaller();
         var versionControl = new FakeToolCaller()
-            .Respond("vc_add", new AddResult())
-            .Fail("vc_commit", "GIT_ERROR", "identity unavailable");
-        var knowledge = new FakeToolCaller();
+            .Fail("vc_log", "GIT_ERROR", "version control is unavailable");
+        var knowledge = new FakeToolCaller()
+            .Respond("ingest_source", new IngestResult { DbPath = fixture.Context.KnowledgeDbPath });
         var coordinator = Create(
             fixture,
             engineering: engineering,
             knowledge: knowledge,
             versionControl: versionControl);
 
-        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(
-            () => coordinator.BootstrapDeviceAsync(fixture.Context, CancellationToken.None));
+        await Assert.ThrowsAsync<ToolCallException>(() => coordinator.BootstrapDeviceAsync(
+            fixture.Context,
+            CancellationToken.None));
 
-        Assert.Equal("BOOTSTRAP_COMMIT_FAILED", error.Code);
+        Assert.Equal(["vc_log"], versionControl.Calls);
         Assert.Empty(knowledge.Calls);
     }
 
@@ -1327,7 +1684,58 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             : "engineering";
     }
 
-    private sealed class AddResult { }
+    private sealed class MetadataRemovingWorktreeCaller(string masterDevicePath) : FakeToolCaller
+    {
+        public override Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (!CallArgs.TryGetValue(tool, out var arguments))
+            {
+                arguments = [];
+                CallArgs[tool] = arguments;
+            }
+
+            arguments.Add(args);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (tool == "vc_add_worktree")
+            {
+                File.Delete(masterDevicePath);
+            }
+
+            return Task.FromResult((T)(object)new object());
+        }
+    }
+
+    private sealed class PartialWorktreeCreationCaller : FakeToolCaller
+    {
+        public override Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (!CallArgs.TryGetValue(tool, out var arguments))
+            {
+                arguments = [];
+                CallArgs[tool] = arguments;
+            }
+
+            arguments.Add(args);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (tool == "vc_add_worktree")
+            {
+                throw new ToolCallException(
+                    "GIT_PARTIAL",
+                    "linked checkout creation was interrupted",
+                    null);
+            }
+
+            return Task.FromResult((T)(object)new object());
+        }
+    }
 
     private sealed class HardwareExportCaller : FakeToolCaller
     {
@@ -1416,6 +1824,56 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             return Task.FromResult((T)(object)new[]
             {
                 new SyncResult { PlcName = "PLC_1", ExportRoot = output },
+            });
+        }
+    }
+
+    private sealed class MultiDeviceBootstrapExportCaller(List<string>? order = null) : FakeToolCaller
+    {
+        public override Task<T> CallAsync<T>(
+            string tool,
+            object args,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (!CallArgs.TryGetValue(tool, out var list))
+            {
+                list = new List<object>();
+                CallArgs[tool] = list;
+            }
+
+            list.Add(args);
+            order?.Add($"engineering:{tool}");
+            if (tool != "rebuild_export")
+                throw new InvalidOperationException(tool);
+
+            var output = Property<string>(args, "outputDir");
+            var plcName = Property<string>(args, "plcName");
+            Directory.CreateDirectory(Path.Combine(output, "Blocks"));
+            File.WriteAllText(Path.Combine(output, "Blocks", "A.xml"), $"<{plcName} />");
+            File.WriteAllText(
+                Path.Combine(output, "metadata.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    exportStartedUtc = "2026-07-30T00:00:00Z",
+                    exportFinishedUtc = "2026-07-30T00:00:01Z",
+                    exportRoot = output,
+                    components = new[]
+                    {
+                        new
+                        {
+                            name = "A",
+                            sourcePath = "Program blocks/A",
+                            category = "FC",
+                            status = "Exported",
+                            exportedFile = "Blocks/A.xml",
+                        },
+                    },
+                }));
+            return Task.FromResult((T)(object)new[]
+            {
+                new SyncResult { PlcName = plcName, ExportRoot = output },
             });
         }
     }
@@ -1746,8 +2204,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             var context = WorkbenchPaths.ResolveDevice(
                 "wb-1", Path.Combine(parent, Guid.NewGuid().ToString("N")),
                 "wt-1", "master", "dev-1", "PLC_1");
-            Directory.CreateDirectory(context.ExportedSourceRoot);
-            Directory.CreateDirectory(context.ModifiedSourceRoot);
+            Directory.CreateDirectory(context.SourceRoot);
             Directory.CreateDirectory(context.StagingRoot);
             new AtomicJsonStore().Write(
                 Path.Combine(context.DeviceRoot, "device.json"),
@@ -1766,22 +2223,55 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         }
 
         public void WriteBaseline(string relative, string content) =>
-            Write(Context.ExportedSourceRoot, relative, content);
+            Write(Context.SourceRoot, relative, content);
         public void WriteStaging(string relative, string content) =>
             Write(Context.StagingRoot, relative, content);
         public void WriteModified(string relative, string content) =>
-            Write(Context.ModifiedSourceRoot, relative, content);
+            Write(Context.SourceRoot, relative, content);
+
+        public DeviceContext AddDevice(string deviceId, string plcName)
+        {
+            var context = new DeviceContext(
+                Context.WorkbenchId,
+                Context.WorktreeId,
+                deviceId,
+                Context.WorkbenchRoot,
+                Context.WorktreeRoot,
+                Path.Combine(Context.WorktreeRoot, "devices", plcName),
+                Path.Combine(Context.WorktreeRoot, "devices", plcName, "source"),
+                Path.Combine(Context.WorktreeRoot, "devices", plcName, "staging"),
+                Path.Combine(Context.WorktreeRoot, "devices", plcName, "plc-knowledge.db"));
+            Directory.CreateDirectory(context.SourceRoot);
+            Directory.CreateDirectory(context.StagingRoot);
+            store.Write(
+                Path.Combine(context.DeviceRoot, "device.json"),
+                new DeviceMetadata(
+                    WorkbenchSchema.CurrentVersion,
+                    deviceId,
+                    Context.WorktreeId,
+                    plcName,
+                    plcName,
+                    null,
+                    null,
+                    null,
+                    new KnowledgeState(true, new Dictionary<string, string>(), null),
+                    Array.Empty<DeviceImportRecord>()));
+            var worktreePath = Path.Combine(Context.WorktreeRoot, "worktree.json");
+            var worktree = store.Read<WorktreeMetadata>(worktreePath);
+            store.Write(worktreePath, worktree with { DeviceIds = worktree.DeviceIds.Append(deviceId).ToArray() });
+            return context;
+        }
 
         public void WriteManifests(params string[] staging)
         {
             WriteManifest(Context.StagingRoot, staging);
             var baseline = Directory.EnumerateFiles(
-                    Context.ExportedSourceRoot, "*.xml", SearchOption.AllDirectories)
-                .Select(path => Path.GetRelativePath(Context.ExportedSourceRoot, path).Replace('\\', '/'))
+                    Context.SourceRoot, "*.xml", SearchOption.AllDirectories)
+                .Select(path => Path.GetRelativePath(Context.SourceRoot, path).Replace('\\', '/'))
                 .ToArray();
             if (baseline.Length > 0)
             {
-                WriteManifest(Context.ExportedSourceRoot, baseline);
+                WriteManifest(Context.SourceRoot, baseline);
             }
         }
 

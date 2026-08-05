@@ -77,6 +77,7 @@ builder.Services.AddSingleton(services => SandboxConfig.Load(
 builder.Services.AddSingleton<DeviceOperationLock>();
 builder.Services.AddSingleton<DeviceReconciler>();
 builder.Services.AddSingleton<DeviceSnapshotReader>();
+builder.Services.AddSingleton<WorkbenchWritePolicy>();
 builder.Services.AddSingleton<DeviceSourceResolver>(services =>
 {
     var store = services.GetRequiredService<AtomicJsonStore>();

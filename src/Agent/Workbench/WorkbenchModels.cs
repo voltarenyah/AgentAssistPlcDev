@@ -112,6 +112,21 @@ public sealed record DeviceImportRecord(
     IReadOnlyList<string> Warnings,
     string? Error);
 
+public sealed record TiaSynchronizationResult(
+    string ComparisonId,
+    IReadOnlyList<string> PendingPaths,
+    string? CommitSha = null);
+
+public sealed record WorkbenchCommitResult(
+    string Sha,
+    string Message,
+    IReadOnlyList<string> Files);
+
+public sealed class CoordinatorGitCommitResult
+{
+    public string Sha { get; set; } = string.Empty;
+}
+
 public sealed record DeviceContext(
     string WorkbenchId,
     string WorktreeId,
@@ -119,8 +134,7 @@ public sealed record DeviceContext(
     string WorkbenchRoot,
     string WorktreeRoot,
     string DeviceRoot,
-    string ExportedSourceRoot,
-    string ModifiedSourceRoot,
+    string SourceRoot,
     string StagingRoot,
     string KnowledgeDbPath);
 

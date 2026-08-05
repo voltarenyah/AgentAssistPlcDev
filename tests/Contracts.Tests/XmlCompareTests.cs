@@ -33,4 +33,12 @@ public class XmlCompareTests
         var b = "<Document>\n  <Text>bye</Text>\n</Document>";
         Assert.NotEqual(XmlCompare.Normalize(a), XmlCompare.Normalize(b));
     }
+
+    [Theory]
+    [InlineData("<Created>one</Created>", "<Created>two</Created>")]
+    [InlineData("  <Created>one</Created>\r\n<X />", "  <Created>two</Created>\n<X />")]
+    public void TimestampAndLineEndingDifferencesHaveTheSameFingerprint(string left, string right)
+    {
+        Assert.Equal(XmlContentHash.Compute(left), XmlContentHash.Compute(right));
+    }
 }

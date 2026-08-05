@@ -40,7 +40,8 @@ import {
 import { toast } from 'sonner'
 import { ThemeToggle } from '@/catalog/ThemeToggle'
 import { showErrorToast } from '@/components/ui/toast'
-import GitPanel from '@/studio/panels/GitPanel'
+import VersionControlPanel from '@/studio/version-control/VersionControlPanel'
+import VersionControlDetailsDock from '@/studio/version-control/VersionControlDetailsDock'
 import WorkbenchNavigator, {
   type WorkbenchSelection,
 } from '@/studio/workbench/WorkbenchNavigator'
@@ -223,7 +224,7 @@ function DeleteWorkbenchDialog({
         </div>
         <div className="space-y-3 p-5">
           <p className="text-[10px] leading-relaxed text-muted-foreground">
-            This permanently deletes the workbench directory — all linked worktrees, the shared Git repository with its full history, exported baselines, knowledge databases, and saved chat sessions.
+            This permanently deletes the workbench directory — all linked worktrees, PLC source and Git history, knowledge databases, and saved chat sessions.
           </p>
           <div className="break-all rounded-lg border bg-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
             {workbench.rootPath}
@@ -486,6 +487,12 @@ export default function MainStudio() {
   const [lastImport, setLastImport] = useState<api.ImportModifiedResult | null>(null)
   const [blockIndexExpanded, setBlockIndexExpanded] = useState(false)
   const [blockFilter, setBlockFilter] = useState('')
+  const [versionControlSelection, setVersionControlSelection] = useState<unknown>(null)
+
+  useEffect(() => {
+    setVersionControlSelection(null)
+    setLastImport(null)
+  }, [selection.workbenchId, selection.worktreeId, selection.deviceId])
 
   useEffect(() => {
     try { writeShellLayout(window.localStorage, shellLayout) } catch { /* storage is optional */ }
@@ -550,8 +557,7 @@ export default function MainStudio() {
     [hardwareInspectedNodeId, hardwareSelectedNodeId, hardwareView],
   )
   const blocks = useMemo(() => deviceView?.blocks ?? [], [deviceView])
-  const touchedCount = deviceView?.overlayCount ?? 0
-  const modifiedBlocks = useMemo(() => blocks.filter(block => block.modified), [blocks])
+  const sourceObjectCount = deviceView?.sourceObjectCount ?? 0
   const filteredBlocks = useMemo(() => {
     const query = blockFilter.trim().toLowerCase()
     if (!query) return blocks
@@ -1335,13 +1341,13 @@ export default function MainStudio() {
     }
   }
 
-  const applyRefresh = async (approvedPaths: string[]) => {
+  const applyRefresh = async (approvedPaths: string[], commitTitle?: string) => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !preview) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
     setOperation('apply-refresh')
     const op = beginOperation('apply-refresh', 'Applying approved refresh...')
     try {
-      const result = await api.applyDeviceRefresh(context.workbenchId, context.worktreeId, context.deviceId, preview.previewId, approvedPaths, op.id)
+      const result = await api.applyDeviceRefresh(context.workbenchId, context.worktreeId, context.deviceId, preview.previewId, approvedPaths, op.id, commitTitle)
       setPreview(null)
       await reloadDeviceSnapshot(context)
       if (result.error) {
@@ -1394,7 +1400,7 @@ export default function MainStudio() {
     try {
       await api.prepareDeviceEdit(context.workbenchId, context.worktreeId, context.deviceId, relativePath.trim())
       await reloadDeviceSnapshot(context)
-      toast.success('Sparse overlay prepared. Edit the modified-source copy.')
+      toast.success('PLC source prepared for editing in this worktree.')
     } catch (error) {
       showErrorToast(displayError(error))
     } finally {
@@ -1406,13 +1412,13 @@ export default function MainStudio() {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !relativePath.trim()) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
     setOperation('import-source')
-    const op = beginOperation('import-source', 'Importing modified source...')
+    const op = beginOperation('import-source', 'Importing PLC source...')
     try {
       const result = await api.importDeviceSource(context.workbenchId, context.worktreeId, context.deviceId, relativePath.trim(), op.id)
       setLastImport(result)
       await reloadDeviceSnapshot(context)
       if (result.importSucceeded && result.compileState.toLowerCase().includes('success')) {
-        toast.success('Overlay imported and compiled; modified file retained')
+        toast.success('PLC source imported and compiled; source file retained')
       } else {
         toast.warning(result.error || `Compile state: ${result.compileState}`)
       }
@@ -1430,19 +1436,8 @@ export default function MainStudio() {
     const workbench = targetContext?.workbench ?? activeWorkbench
     const worktree = targetContext?.worktree ?? activeWorktree
     if (!workbench || !worktree || worktree.branch === 'master') return
-    const target = workbench.worktrees.find(candidate => candidate.branch === 'master')
-    if (!target) return
-    setOperation('merge-worktree')
-    const op = beginOperation('merge-worktree', 'Merging worktree...')
-    try {
-      await api.mergeWorktree(workbench.workbenchId, worktree.worktreeId, target.worktreeId, op.id)
-      toast.success(`${worktree.branch} merged into master`)
-      await reloadWorkbenches()
-    } catch (error) {
-      showErrorToast(displayError(error))
-    } finally {
-      setOperation(null)
-    }
+    setActiveTab('git')
+    toast.info(`Validate and merge ${worktree.branch} from the Version control workspace.`)
   }
 
   const saveApiKey = async (apiKey: string) => {
@@ -1502,10 +1497,10 @@ export default function MainStudio() {
   const bootstrapDevice = async () => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
-    setOperation('bootstrap-device')
-    const op = beginOperation('bootstrap-device', 'Generating PLC context: export, baseline commit, knowledge ingest...')
+    setOperation('bootstrap-worktree')
+    const op = beginOperation('bootstrap-worktree', 'Generating PLC contexts: export, baseline commit, knowledge ingest...')
     try {
-      await api.bootstrapDevice(context.workbenchId, context.worktreeId, context.deviceId, op.id)
+      await api.bootstrapWorktree(context.workbenchId, context.worktreeId, context.deviceId, op.id)
       await reloadDeviceSnapshot(context)
       setActiveTab('chat')
       toast.success('PLC context ready — start chatting to explore your project.')
@@ -1528,11 +1523,11 @@ export default function MainStudio() {
     const op = beginOperation(
       'bootstrap-device',
       allowCompile
-        ? 'Compiling selected PLC and retrying rebuild...'
+        ? 'Compiling PLC and retrying full project rebuild...'
         : 'Rebuilding project: full export, baseline commit, knowledge ingest...',
     )
     try {
-      await api.bootstrapDevice(context.workbenchId, context.worktreeId, context.deviceId, op.id, 'rebuild: full export', allowCompile)
+      await api.bootstrapWorktree(context.workbenchId, context.worktreeId, context.deviceId, op.id, 'rebuild: full export', allowCompile)
       await reloadDeviceSnapshot(context)
       toast.success('Project rebuilt from TIA — baseline and knowledge refreshed.')
     } catch (error) {
@@ -1551,9 +1546,9 @@ export default function MainStudio() {
   const tabs: Array<{ id: StudioTab; label: string; icon: typeof Boxes }> = [
     { id: 'overview', label: 'Device overview', icon: Cpu },
     { id: 'chat', label: 'AI chat', icon: MessageSquare },
-    { id: 'source', label: 'Source overlays', icon: Code2 },
+    { id: 'source', label: 'PLC source', icon: Code2 },
     { id: 'knowledge', label: 'Knowledge', icon: Database },
-    { id: 'git', label: 'Git worktree', icon: GitBranch },
+    { id: 'git', label: 'Version control', icon: GitBranch },
   ]
 
   const hardwareTabs: Array<{ id: 'tree' | 'bom' | 'network'; label: string; icon: typeof Boxes }> = [
@@ -1880,7 +1875,7 @@ export default function MainStudio() {
 
                     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                       <Metric label="PLC blocks" value={blocks.length} />
-                      <Metric label="Touched overlays" value={touchedCount} tone={touchedCount ? 'warning' : 'neutral'} />
+                      <Metric label="Source objects" value={sourceObjectCount} />
                       <Metric label="Saved sessions" value={deviceSessions.length} />
                       <Metric label="Knowledge state" value={activeKnowledge} tone={activeKnowledge === 'current' ? 'good' : activeKnowledge === 'failed' ? 'danger' : 'warning'} />
                     </div>
@@ -1916,7 +1911,7 @@ export default function MainStudio() {
                       <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
                         <h2 className="text-sm font-semibold">Maintenance actions</h2>
                         <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                          Normal update batches all stale overlays. Rebuild ingests the full exported baseline plus sparse overlay.
+                          Normal update batches stale source objects. Rebuild ingests the full PLC source tree.
                         </p>
                         <div className="mt-5 space-y-2">
                           <button className="primary-button w-full" disabled={Boolean(operation)} onClick={() => void updateKnowledge(false)}>
@@ -1939,7 +1934,7 @@ export default function MainStudio() {
                           {lastImport.importSucceeded ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <AlertCircle className="h-4 w-4 text-red-500" />}
                           Latest import · {lastImport.relativePath}
                         </div>
-                        <div className="mt-1 text-[9px] text-muted-foreground">Compile: {lastImport.compileState}. Overlay retained in this worktree.</div>
+                        <div className="mt-1 text-[9px] text-muted-foreground">Compile: {lastImport.compileState}. Source retained in this worktree.</div>
                       </section>
                     )}
                   </div>
@@ -1967,9 +1962,9 @@ export default function MainStudio() {
                       <div className="flex items-start gap-3">
                         <FileCode2 className="mt-0.5 h-5 w-5 text-chart-3" />
                         <div className="flex-1">
-                          <h2 className="text-sm font-semibold">Sparse modified-source overlay</h2>
+                          <h2 className="text-sm font-semibold">PLC source object</h2>
                           <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                            Enter a device-relative XML path. Preparing copies the effective baseline only once. Import sends only the overlay back to TIA and retains it afterward.
+                            Enter a device-relative XML path. Preparing validates the source object for editing in this worktree. Import sends the selected source to TIA and retains it afterward.
                           </p>
                         </div>
                       </div>
@@ -1981,39 +1976,12 @@ export default function MainStudio() {
                           placeholder="Blocks/Main [OB1].xml"
                         />
                         <button className="secondary-button" disabled={!relativePath.trim() || Boolean(operation)} onClick={() => void prepareEdit()}>
-                          <Code2 className="h-3.5 w-3.5" /> Prepare overlay
+                          <Code2 className="h-3.5 w-3.5" /> Prepare source
                         </button>
                         <button className="primary-button" disabled={!relativePath.trim() || Boolean(operation)} onClick={() => void importSource()}>
                           <UploadCloud className="h-3.5 w-3.5" /> Import & compile
                         </button>
                       </div>
-                    </section>
-
-                    <section className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
-                      <div className="flex items-center border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
-                        <span className="text-[10px] font-semibold">Modified sources</span>
-                        <span className="ml-auto text-[9px] text-muted-foreground">{modifiedBlocks.length} modified</span>
-                      </div>
-                      {modifiedBlocks.length === 0 ? (
-                        <div className="p-8 text-center text-[10px] text-muted-foreground">
-                          No modified sources yet. Pick a block from the index below to prepare an overlay.
-                        </div>
-                      ) : (
-                        <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-                          {modifiedBlocks.map(block => (
-                            <button
-                              key={`${block.blockType}:${block.name}:${block.number}`}
-                              className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
-                              onClick={() => setRelativePath(block.relativePath)}
-                            >
-                              <FileCode2 className="h-3.5 w-3.5 text-chart-3" />
-                              <span className="min-w-0 flex-1 truncate text-[10px]">{block.name}</span>
-                              <span className="font-mono text-[9px] text-muted-foreground">{block.blockType}{block.number}</span>
-                              <span className="text-[9px] text-muted-foreground">{block.programmingLanguage}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
                     </section>
 
                     <section className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
@@ -2095,10 +2063,10 @@ export default function MainStudio() {
 
                 {activeTab === 'git' && (
                   <div className="h-full min-h-[520px]">
-                    <GitPanel
+                    <VersionControlPanel
                       workbenchId={selection.workbenchId!}
                       worktreeId={selection.worktreeId!}
-                      deviceId={selection.deviceId}
+                      onSelectionChange={setVersionControlSelection}
                     />
                   </div>
                 )}
@@ -2106,7 +2074,7 @@ export default function MainStudio() {
             </>
           )}
         </main>
-        {selection.worktreeId && (selection.deviceId !== null || mainView.kind === 'hardware') && (
+        {selection.worktreeId && (selection.deviceId !== null || mainView.kind === 'hardware' || activeTab === 'git') && (
           <>
             <div
               role="separator"
@@ -2145,7 +2113,13 @@ export default function MainStudio() {
                   hidden={false}
                 />
               )}
-              {selection.deviceId && activeTab !== 'overview' && activeTab !== 'knowledge' && (
+              {activeTab === 'git' ? (
+                <VersionControlDetailsDock
+                  context={{ workbenchId: selection.workbenchId!, worktreeId: selection.worktreeId! }}
+                  selection={versionControlSelection}
+                  hidden={false}
+                />
+              ) : selection.deviceId && activeTab !== 'overview' && activeTab !== 'knowledge' && (
                 <SessionDock
                   sessions={deviceSessions}
                   activeSessionId={chatTabs.activeId}
@@ -2260,6 +2234,7 @@ export default function MainStudio() {
         <RefreshDialog
           preview={preview}
           busy={operation === 'apply-refresh'}
+          autoCommit={activeWorktree?.branch.toLowerCase() === 'master'}
           onClose={() => setPreview(null)}
           onApply={applyRefresh}
         />

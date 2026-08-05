@@ -90,8 +90,7 @@ public static class WorkbenchPaths
             root,
             worktreeRoot,
             deviceRoot,
-            ResolveRelative(deviceRoot, "exported-source"),
-            ResolveRelative(deviceRoot, "modified-source"),
+            ResolveRelative(deviceRoot, "source"),
             ResolveRelative(deviceRoot, "staging"),
             ResolveRelative(deviceRoot, "plc-knowledge.db"));
     }

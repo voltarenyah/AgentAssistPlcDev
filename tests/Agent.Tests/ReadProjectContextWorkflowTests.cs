@@ -16,8 +16,8 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
     public async Task StagesSelectedDeviceWithoutTouchingTrackedBaseline()
     {
         var context = Context();
-        Directory.CreateDirectory(context.ExportedSourceRoot);
-        var sentinel = Path.Combine(context.ExportedSourceRoot, "sentinel.xml");
+        Directory.CreateDirectory(context.SourceRoot);
+        var sentinel = Path.Combine(context.SourceRoot, "sentinel.xml");
         File.WriteAllText(sentinel, "unchanged");
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line", PlcDevices = new[] { "PLC_1" } })
@@ -39,6 +39,11 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         Assert.True(File.Exists(Path.Combine(context.StagingRoot, "metadata.json")));
         Assert.Equal("unchanged", File.ReadAllText(sentinel));
         Assert.Equal(context.DeviceId, result.DeviceId);
+        Assert.Equal(
+            context.SourceRoot,
+            result.GetType().GetProperty("SourceRoot")?.GetValue(result));
+        Assert.Null(result.GetType().GetProperty("ExportRoot"));
+        Assert.Null(result.GetType().GetProperty("ModifiedSourceRoot"));
         Assert.Equal(context.KnowledgeDbPath, result.DbPath);
     }
 
@@ -46,8 +51,8 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
     public async Task MissingKnowledgeIsNotMutatedByStagingWorkflow()
     {
         var context = Context();
-        Directory.CreateDirectory(context.ExportedSourceRoot);
-        File.WriteAllText(Path.Combine(context.ExportedSourceRoot, "metadata.json"), "{}");
+        Directory.CreateDirectory(context.SourceRoot);
+        File.WriteAllText(Path.Combine(context.SourceRoot, "metadata.json"), "{}");
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
             .Respond("rebuild_export", new[] { new SyncResult { PlcName = "PLC_1" } });

@@ -63,7 +63,7 @@ public sealed class DeviceReconciler
             required: true,
             requireReferencedFiles: true);
         var baselineManifest = ReadManifest(
-            context.ExportedSourceRoot,
+            context.SourceRoot,
             required: false,
             requireReferencedFiles: false);
 
@@ -84,7 +84,7 @@ public sealed class DeviceReconciler
 
             var baselineHash = baselineComponent is null
                 ? null
-                : HashFileIfPresent(context.ExportedSourceRoot, relativePath);
+                : HashFileIfPresent(context.SourceRoot, relativePath);
             var stagingHash = stagingComponent is null
                 ? null
                 : HashRequiredFile(context.StagingRoot, relativePath);
@@ -164,7 +164,7 @@ public sealed class DeviceReconciler
         }
 
         var normalizedApprovals = NormalizeApprovedPaths(
-            context.ExportedSourceRoot,
+            context.SourceRoot,
             approvedPaths);
         var actionablePaths = current.Entries
             .Where(static entry => entry.Kind != ReconciliationChangeKind.Unchanged)
@@ -195,7 +195,7 @@ public sealed class DeviceReconciler
 
                 var sourcePath = ResolveControlledPath(context.StagingRoot, entry.RelativePath);
                 var destinationPath =
-                    ResolveControlledPath(context.ExportedSourceRoot, entry.RelativePath);
+                    ResolveControlledPath(context.SourceRoot, entry.RelativePath);
                 var destinationDirectory = Path.GetDirectoryName(destinationPath)!;
                 Directory.CreateDirectory(destinationDirectory);
                 var temporaryPath = Path.Combine(
@@ -215,7 +215,7 @@ public sealed class DeviceReconciler
                 }
 
                 var destinationPath =
-                    ResolveControlledPath(context.ExportedSourceRoot, entry.RelativePath);
+                    ResolveControlledPath(context.SourceRoot, entry.RelativePath);
                 if (_fileOperations.FileExists(destinationPath))
                 {
                     mutations.Add(PendingMutation.Delete(destinationPath));
@@ -301,10 +301,10 @@ public sealed class DeviceReconciler
 
         var sourcePath = ResolveControlledPath(context.StagingRoot, MetadataFileName);
         var destinationPath =
-            ResolveControlledPath(context.ExportedSourceRoot, MetadataFileName);
-        Directory.CreateDirectory(context.ExportedSourceRoot);
+            ResolveControlledPath(context.SourceRoot, MetadataFileName);
+        Directory.CreateDirectory(context.SourceRoot);
         var temporaryPath = Path.Combine(
-            context.ExportedSourceRoot,
+            context.SourceRoot,
             $".{MetadataFileName}.{Guid.NewGuid():N}.tmp");
         artifacts.Add(temporaryPath);
 
@@ -344,7 +344,7 @@ public sealed class DeviceReconciler
         var stagingManifestPath =
             ResolveControlledPath(context.StagingRoot, MetadataFileName);
         var baselineManifestPath =
-            ResolveControlledPath(context.ExportedSourceRoot, MetadataFileName);
+            ResolveControlledPath(context.SourceRoot, MetadataFileName);
         var stagingRoot = JsonNode.Parse(File.ReadAllText(stagingManifestPath))
             ?.AsObject()
             ?? throw new ReconciliationException(
@@ -373,7 +373,7 @@ public sealed class DeviceReconciler
 
         var baselineByPath = IndexManifestNodes(
             baselineRoot?["components"]?.AsArray(),
-            context.ExportedSourceRoot);
+            context.SourceRoot);
         var stagingByPath = IndexManifestNodes(
             stagingComponents,
             context.StagingRoot);
@@ -418,7 +418,7 @@ public sealed class DeviceReconciler
         ArgumentNullException.ThrowIfNull(approvedRemovalPaths);
 
         var normalized = NormalizeApprovedPaths(
-            context.ExportedSourceRoot,
+            context.SourceRoot,
             approvedRemovalPaths);
         var removable = preview.Entries
             .Where(static entry => entry.Kind == ReconciliationChangeKind.Removed)
