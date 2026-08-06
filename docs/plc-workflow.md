@@ -13,7 +13,9 @@
 4. Each discovered device is exported completely into its ignored `staging` folder,
    previewed against the source tree, and applied: the reconciler copies only
    added/changed files into `devices/<plc>/source` and leaves unchanged files
-   untouched.
+   untouched. Hardware CAx export runs best-effort alongside: CAx failures (e.g.
+   HMI devices) are reported as non-fatal hardware warnings and never abort the
+   import — the AML artifacts are auxiliary data, not PLC semantic source.
 5. TIA is disconnected (freeze). Recognized legacy app export caches (`export/`,
    `Exports/` with our manifest) that Save As copied from the origin folder are
    stripped — they are app state, not TIA project data; everything TIA-native

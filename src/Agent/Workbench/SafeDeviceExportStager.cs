@@ -106,6 +106,10 @@ public sealed class SafeDeviceExportStager
                     new { outputDir = incoming, plcName },
                     cancellationToken).ConfigureAwait(false);
             progress?.Report("Writing export metadata...");
+            foreach (var warning in result.SelectMany(item => item.HardwareWarnings).Distinct(StringComparer.Ordinal))
+            {
+                progress?.Report($"Hardware export warning (non-fatal): {warning}");
+            }
             var selected = result.Where(item =>
                 string.Equals(item.PlcName, plcName, StringComparison.Ordinal)).ToArray();
             if (selected.Length == 0 || selected.Any(item => item.Failed.Length > 0))

@@ -36,6 +36,11 @@ public sealed class SyncResult
 
     /// <summary>Objects TIA could not export at all, such as fail-safe blocks unsupported by Openness.</summary>
     public UnsupportedSourceObject[] Unsupported { get; set; } = Array.Empty<UnsupportedSourceObject>();
+
+    /// <summary>Non-fatal hardware CAx export failures observed during a rebuild (e.g.
+    /// "device 'HMI_1': ..."). Hardware AML is auxiliary data: a CAx failure must not abort
+    /// the PLC semantic export, so rebuild_export reports these instead of throwing.</summary>
+    public string[] HardwareWarnings { get; set; } = Array.Empty<string>();
 }
 
 public sealed class UnsupportedSourceObject

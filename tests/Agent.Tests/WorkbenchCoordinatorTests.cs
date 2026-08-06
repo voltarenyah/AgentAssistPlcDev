@@ -1101,6 +1101,29 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task StageRefreshReportsHardwareWarningsWithoutFailing()
+    {
+        var fixture = Fixture.Create(root);
+        var engineering = new MutatingExportCaller(new[]
+        {
+            new SyncResult
+            {
+                PlcName = "PLC_1",
+                HardwareWarnings = new[] { "device 'HMI_1': CAx export failed" },
+            },
+        });
+        var coordinator = Create(fixture, engineering: engineering);
+        var progress = new RecordingProgress();
+
+        await coordinator.StageRefreshAsync(fixture.Context, CancellationToken.None, progress);
+
+        Assert.Contains(
+            progress.Messages,
+            message => message.Contains("Hardware export warning (non-fatal)", StringComparison.Ordinal)
+                && message.Contains("HMI_1", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task FailedReplacementAndRestorePreservesBackupForRecovery()
     {
         var fixture = Fixture.Create(root);

@@ -755,19 +755,31 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             // hardware into that same staging root so the artifacts are promoted with the
             // source tree; a project-wide rebuild still produces the same canonical root.
             var hardwareResults = ExportHardwareConfigurationCore(outputDir, includeDeviceExports: true, progress);
-            var hardwareFailures = hardwareResults.Where(result => !result.Success).ToArray();
-            if (hardwareFailures.Length > 0)
+            var hardwareWarnings = hardwareResults
+                .Where(result => !result.Success)
+                .Select(result =>
+                    $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")
+                .ToArray();
+            if (hardwareWarnings.Length > 0)
             {
-                throw new AdapterException(
-                    "HARDWARE_EXPORT_FAILED",
-                    "Full rebuild could not export the complete hardware configuration: "
-                    + string.Join("; ", hardwareFailures.Select(result =>
-                        $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")),
-                    "Resolve the CAx export errors and retry the full rebuild.");
+                // Hardware AML is auxiliary data. A CAx failure (e.g. HMI devices whose CAx
+                // export TIA cannot produce) must not abort the PLC semantic export; report
+                // the failures as warnings attached to every device result instead.
+                _logger.LogWarning(
+                    "rebuild_export: hardware CAx export incomplete — {Warnings}",
+                    string.Join("; ", hardwareWarnings));
             }
             var plcs = plcName is null
                 ? PlcSoftwareResolver.FindAll(project)
                 : new[] { PlcSoftwareResolver.Resolve(project, plcName) };
+            if (plcs.Count == 0 && hardwareWarnings.Length > 0)
+            {
+                throw new AdapterException(
+                    "HARDWARE_EXPORT_FAILED",
+                    "Full rebuild could not export anything: no PLC devices found and the hardware configuration export failed: "
+                    + string.Join("; ", hardwareWarnings),
+                    "Resolve the CAx export errors and retry the full rebuild.");
+            }
             var results = new List<SyncResult>();
             var allDeviceNames = new List<string>();
             var allChecksums = new Dictionary<string, string>();
@@ -808,6 +820,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     Added = full.Where(r => r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = "full-rebuild" }).ToArray(),
                     Failed = full.Where(r => !r.Success).Select(r => new SyncChange { Name = r.BlockName, Reason = r.Error }).ToArray(),
                     Unsupported = unsupported.ToArray(),
+                    HardwareWarnings = hardwareWarnings,
                 });
 
                 _logger.LogInformation(

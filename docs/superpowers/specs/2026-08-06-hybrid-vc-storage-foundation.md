@@ -110,6 +110,9 @@ validate origin .ap17 (sandbox jail + exists)
  → optional compile ON MANAGED COPY: success → record checksum; failure → FAILED, continue
  → read F-signature if available (else null — extension point)
  → export PLC semantic files → devices/<plc>/source
+   (hardware CAx export is best-effort: failures are recorded as non-fatal
+   hardware warnings on the export result and never abort the import — AML
+   artifacts are auxiliary data, not PLC semantic source)
  → disconnect TIA (freeze, rule 8)
  → strip recognized legacy app export caches (export/, Exports/ with our
    metadata.json manifest — app state copied along by SaveAs, not TIA data;
