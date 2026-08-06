@@ -22,6 +22,7 @@ public sealed record RefreshApplyApiRequest(
     string? CommitMessage = null);
 public sealed record SourcePathApiRequest(string RelativePath);
 public sealed record CommitSourceApiRequest(string[] Paths, string Message);
+public sealed record RestoreTiaProjectApiRequest(string TargetDirectory, string? GitCommit = null);
 public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths, string Message);
 public sealed record TiaValidationApiRequest(string ConfirmedBy);
 public sealed record UnauthorizedMasterPathsRequest(string[] Paths, string? FeatureName = null, bool Confirm = false);
@@ -611,6 +612,33 @@ public static class WorkbenchEndpoints
             WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_validation_get").CallAsync<System.Text.Json.JsonElement?>(
                 "vc_validation_get", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), commitSha = sha }, ct));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/engineering-state", (
+            string workbenchId, string worktreeId, WorkbenchApiState s) =>
+        {
+            var worktree = s.Worktree(workbenchId, worktreeId);
+            var root = s.WorktreeRoot(workbenchId, worktreeId);
+            System.Text.Json.JsonElement? revision = null;
+            var revisionPath = WorkbenchPaths.ResolveRevisionState(root);
+            if (File.Exists(revisionPath))
+            {
+                revision = System.Text.Json.JsonDocument.Parse(File.ReadAllText(revisionPath)).RootElement.Clone();
+            }
+
+            return Results.Ok(new
+            {
+                revision,
+                svnUrl = worktree.SvnUrl,
+                baseSvnRevision = worktree.BaseSvnRevision,
+                managedTiaProjectPath = worktree.ManagedTiaProjectPath,
+                tiaStorePath = WorkbenchPaths.ResolveTiaStore(root),
+                pendingCommit = File.Exists(Path.Combine(root, ".automation", "pending-commit.json")),
+            });
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/restore-tia", async (
+            string workbenchId, string worktreeId, RestoreTiaProjectApiRequest body,
+            WorkbenchCoordinator coordinator, CancellationToken ct) =>
+            Results.Ok(await coordinator.RestoreTiaProjectAsync(
+                workbenchId, worktreeId, body.TargetDirectory, body.GitCommit, ct)));
         app.MapPost("/api/workbenches/{workbenchId}/vc/compare-tia", async (
             string workbenchId,
             WorkbenchApiState state,

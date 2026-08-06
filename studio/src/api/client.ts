@@ -1510,6 +1510,39 @@ export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: st
 export const getVcValidation = (workbenchId: string, worktreeId: string, sha: string) =>
   workbenchRequest<VcValidationEvidence | null>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/validation/${encodeURIComponent(sha)}`)
 
+export type EngineeringRevisionState = {
+  schemaVersion: number
+  svn: { url: string; revision: number } | null
+  tia: { projectChecksum: string | null } | null
+  safety: { fSignature: string | null } | null
+  validation: { compileStatus: string | null } | null
+}
+
+export type WorktreeEngineeringState = {
+  revision: EngineeringRevisionState | null
+  svnUrl: string | null
+  baseSvnRevision: number | null
+  managedTiaProjectPath: string | null
+  tiaStorePath: string
+  pendingCommit: boolean
+}
+
+export type RestoreTiaProjectResult = {
+  gitCommit: string
+  svnUrl: string
+  svnRevision: number
+  restoredDirectory: string
+  restoredProjectPath: string | null
+}
+
+export const getWorktreeEngineeringState = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<WorktreeEngineeringState>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/engineering-state`)
+export const restoreTiaProject = (workbenchId: string, worktreeId: string, targetDirectory: string, gitCommit?: string) =>
+  workbenchRequest<RestoreTiaProjectResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/restore-tia`,
+    jsonRequest('POST', { targetDirectory, gitCommit: gitCommit || null }),
+  )
+
 export async function getVcLog(workbenchId: string, worktreeId: string, deviceId: string, maxCount?: number, filePath?: string): Promise<VcLogResult> {
   const params = new URLSearchParams()
   if (maxCount) params.set('maxCount', String(maxCount))
