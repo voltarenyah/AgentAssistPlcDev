@@ -13,7 +13,7 @@ namespace Mcp.VersionControl.Git;
 /// </summary>
 internal static class RepositoryService
 {
-    private static readonly Signature DefaultAuthor = new("PLC Assistant", "assistant@plc-assistant.local", DateTimeOffset.UtcNow);
+    private static Signature DefaultAuthor => new("PLC Assistant", "assistant@plc-assistant.local", DateTimeOffset.UtcNow);
     private static readonly GitCommandRunner Git = new(TimeSpan.FromSeconds(30));
 
     /// <summary>Default .gitignore for PLC workbench export roots.</summary>

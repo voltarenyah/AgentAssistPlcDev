@@ -1644,13 +1644,9 @@ public sealed class WorkbenchCoordinator
                     && !string.IsNullOrWhiteSpace(commitMessage))
                 {
                     progress?.Report("Committing the confirmed TIA source changes...");
-                    var commit = await CommitSelectedSourceAsync(
-                            device.WorktreeRoot,
-                            sourcePaths,
-                            commitMessage.Trim(),
-                            cancellationToken)
+                    commitSha = await CommitApprovedMasterRefreshAsync(
+                            device, worktree, approval, sourcePaths, commitMessage.Trim(), cancellationToken)
                         .ConfigureAwait(false);
-                    commitSha = commit.Sha;
                 }
                 else
                 {
@@ -2598,6 +2594,65 @@ public sealed class WorkbenchCoordinator
                 new { repoPath = worktreeRoot, paths, message, author },
                 token)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Master refresh auto-commit. The dialog-approved paths are recorded as authorized pending
+    /// TIA changes and committed through <see cref="CommitSourceAsync"/> — the same guarded path
+    /// as the version-control accept flow — so the master write gate stays enforced and
+    /// SVN-managed workbenches run the combined SVN+Git transaction. Falls back to a plain git
+    /// commit only when no workbench metadata exists (legacy/direct device contexts).
+    /// </summary>
+    private async Task<string> CommitApprovedMasterRefreshAsync(
+        DeviceContext device,
+        WorktreeMetadata worktree,
+        ApprovedReconciliation approval,
+        IReadOnlyList<string> sourcePaths,
+        string message,
+        CancellationToken token)
+    {
+        WorkbenchMetadata? workbench = null;
+        try
+        {
+            workbench = catalog.Load(device.WorkbenchRoot);
+            RegisterWorkbench(workbench);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // No workbench catalog data for this device context — plain commit fallback.
+        }
+
+        if (workbench is null)
+        {
+            var legacy = await CommitSelectedSourceAsync(device.WorktreeRoot, sourcePaths, message, token)
+                .ConfigureAwait(false);
+            return legacy.Sha;
+        }
+
+        var head = await ReadMasterHeadAsync(device.WorktreeRoot, token).ConfigureAwait(false);
+        var pending = writePolicy.ReadPending(device.WorktreeRoot, worktree.WorktreeId).Sources.ToList();
+        foreach (var path in sourcePaths)
+        {
+            var copiedFingerprint = HashFile(WorkbenchPaths.ResolveRelative(device.WorktreeRoot, path));
+            var previewEntry = approval.Preview.Entries.FirstOrDefault(item =>
+                string.Equals(item.RelativePath, path, StringComparison.Ordinal));
+            pending.RemoveAll(item => string.Equals(item.RelativePath, path, StringComparison.Ordinal));
+            pending.Add(new PendingMasterSource(
+                path,
+                approval.Preview.PreviewId,
+                head,
+                previewEntry?.LiveFingerprints ?? copiedFingerprint,
+                copiedFingerprint));
+        }
+        writePolicy.WritePending(device.WorktreeRoot, new PendingMasterSynchronization(
+            WorkbenchWritePolicy.PendingSchemaVersion,
+            worktree.WorktreeId,
+            pending.OrderBy(item => item.RelativePath, StringComparer.Ordinal).ToArray()));
+
+        var commit = await CommitSourceAsync(
+                device.WorkbenchId, worktree.WorktreeId, sourcePaths, message, token)
+            .ConfigureAwait(false);
+        return commit.Sha;
     }
 
     private async Task<bool> HasVersionControlHistoryAsync(string worktreeRoot, CancellationToken token)

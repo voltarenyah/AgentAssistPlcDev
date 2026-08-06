@@ -157,6 +157,41 @@ public sealed class CombinedCommitTests : IDisposable
         Assert.DoesNotContain("vc_commit_selected", versionControl.Calls);
     }
 
+    [Fact]
+    public async Task MasterRefreshAutoCommitRunsTheCombinedTransaction()
+    {
+        var fixture = CombinedFixture.Create(root);
+        fixture.StageRefreshChange("changed A");
+        var order = new List<string>();
+        var engineering = fixture.ScriptEngineering(new OrderRecordingCaller(order, "engineering"));
+        var versionControl = fixture.ScriptVersionControl(
+            new OrderRecordingCaller(order, "version"), extraHeadReads: 1);
+        var coordinator = fixture.CreateCoordinator(engineering, versionControl);
+        var preview = coordinator.PreviewRefresh(fixture.Context);
+
+        var result = await coordinator.ApplyRefreshAsync(
+            fixture.Context,
+            new ApprovedReconciliation(
+                preview,
+                preview.Entries
+                    .Where(entry => entry.Kind != ReconciliationChangeKind.Unchanged)
+                    .Select(entry => entry.RelativePath)
+                    .ToHashSet(StringComparer.Ordinal)),
+            CancellationToken.None,
+            commitMessage: "refresh from TIA");
+
+        Assert.Equal("head-2", result.CommitSha);
+        Assert.Contains("svn_commit", versionControl.Calls);
+        var commitPaths = Property<string[]>(
+            versionControl.CallArgs["vc_commit_selected"].Single(), "paths");
+        Assert.Contains(EngineeringStateWriter.RelativePath, commitPaths);
+        Assert.Contains(CombinedFixture.SourcePath, commitPaths);
+        Assert.True(
+            order.IndexOf("engineering:disconnect") < order.IndexOf("version:svn_commit"));
+        Assert.Equal(2, fixture.ReadRevisionState().Svn.Revision);
+        Assert.Empty(fixture.ReadPendingSync());
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root))
@@ -188,14 +223,16 @@ public sealed class CombinedCommitTests : IDisposable
 
         private readonly AtomicJsonStore store = new();
 
-        private CombinedFixture(string root, string managedProjectPath)
+        private CombinedFixture(string root, string managedProjectPath, DeviceContext context)
         {
             Root = root;
             ManagedProjectPath = managedProjectPath;
+            Context = context;
         }
 
         public string Root { get; }
         public string ManagedProjectPath { get; }
+        public DeviceContext Context { get; }
         public string MasterRoot => Path.Combine(Root, "worktrees", "master");
 
         public static CombinedFixture Create(string parent, string checksum = "PLC_1:old-checksum")
@@ -246,7 +283,42 @@ public sealed class CombinedCommitTests : IDisposable
                 {
                     new PendingMasterSource(SourcePath, "comparison-1", "head-1", fingerprint, fingerprint),
                 }));
-            return new CombinedFixture(root, managedPath);
+            return new CombinedFixture(root, managedPath, context);
+        }
+
+        /// <summary>Stages a changed A.xml plus manifests on both sides so the reconciler
+        /// produces a refresh preview with one changed entry.</summary>
+        public void StageRefreshChange(string stagingContent)
+        {
+            var sourceFile = Path.Combine(Context.SourceRoot, "Blocks", "A.xml");
+            File.WriteAllText(sourceFile, "baseline A");
+            Directory.CreateDirectory(Path.Combine(Context.StagingRoot, "Blocks"));
+            File.WriteAllText(Path.Combine(Context.StagingRoot, "Blocks", "A.xml"), stagingContent);
+            WriteManifest(Context.StagingRoot, "Blocks/A.xml");
+            WriteManifest(Context.SourceRoot, "Blocks/A.xml");
+        }
+
+        private static void WriteManifest(string parent, params string[] paths)
+        {
+            var components = paths.Select(path => new
+            {
+                name = Path.GetFileNameWithoutExtension(path),
+                sourcePath = $"Program blocks/{Path.GetFileNameWithoutExtension(path)}",
+                category = "FC",
+                status = "Exported",
+                exportedFile = path.Replace('\\', '/'),
+            }).ToArray();
+            Directory.CreateDirectory(parent);
+            File.WriteAllText(
+                Path.Combine(parent, "metadata.json"),
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    exportStartedUtc = "2026-07-27T00:00:00Z",
+                    exportFinishedUtc = "2026-07-27T00:00:01Z",
+                    exportRoot = parent,
+                    components,
+                }));
         }
 
         public EngineeringRevisionState ReadRevisionState() =>
@@ -278,13 +350,24 @@ public sealed class CombinedCommitTests : IDisposable
         public FakeToolCaller ScriptVersionControl(
             FakeToolCaller caller,
             bool svnDirty = true,
-            bool failGitCommit = false)
+            bool failGitCommit = false,
+            int extraHeadReads = 0)
         {
             caller
                 .Respond("vc_log", new ConsistencyLogResult
                 {
                     Commits = new[] { new ConsistencyCommit { Sha = "head-1" } },
-                })
+                });
+            for (var i = 0; i < extraHeadReads; i++)
+            {
+                // Callers like the refresh auto-commit read HEAD before CommitSourceAsync
+                // re-reads it for the master gate.
+                caller.Respond("vc_log", new ConsistencyLogResult
+                {
+                    Commits = new[] { new ConsistencyCommit { Sha = "head-1" } },
+                });
+            }
+            caller
                 .Respond("svn_status", new CoordinatorSvnStatusResult { IsClean = !svnDirty })
                 .Respond("svn_commit", new CoordinatorSvnCommitResult { Committed = true, Revision = 2 });
             if (failGitCommit)

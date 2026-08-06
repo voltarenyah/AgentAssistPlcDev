@@ -584,7 +584,6 @@ public static class WorkbenchEndpoints
             string workbenchId, string worktreeId, CommitSourceApiRequest body,
             WorkbenchApiState s, WorkbenchCoordinator coordinator, ApiMcpGateway gateway, CancellationToken ct) =>
         {
-            var worktree = s.Worktree(workbenchId, worktreeId);
             var root = s.WorktreeRoot(workbenchId, worktreeId);
             var hasExistingSource = body.Paths.Any(path =>
             {
@@ -597,8 +596,13 @@ public static class WorkbenchEndpoints
                     return false;
                 }
             });
-            if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase) && hasExistingSource)
+            if (hasExistingSource)
             {
+                // All registered worktrees commit through the coordinator: master enforces the
+                // TIA-authorization gate, and SVN-managed workbenches (master or feature) run
+                // the combined SVN+Git transaction. The gateway fallback below only remains for
+                // empty/legacy worktrees without on-disk source files.
+                coordinator.RegisterWorkbench(s.Workbench(workbenchId));
                 return Results.Ok(await coordinator.CommitSourceAsync(workbenchId, worktreeId, body.Paths, body.Message, ct));
             }
 
