@@ -260,10 +260,10 @@ public sealed class WorkbenchCoordinator
                 "svn_init_shared",
                 new { workbenchRoot = workbench.RootPath },
                 cancellationToken).ConfigureAwait(false);
-            await versionControl.CallAsync<object>(
-                "svn_checkout",
-                new { url = svn.RepositoryUri.TrimEnd('/') + "/native/main", path = tiaStore },
-                cancellationToken).ConfigureAwait(false);
+            var svnMainUrl = svn.RepositoryUri.TrimEnd('/') + "/native/main";
+            // The tia/ store must be a plain EMPTY directory here: TIA refuses SaveAs into a
+            // non-empty directory, so the SVN checkout happens only after the freeze below.
+            Directory.CreateDirectory(tiaStore);
 
             string managedProjectPath;
             string? projectChecksum;
@@ -425,6 +425,15 @@ public sealed class WorkbenchCoordinator
             await engineering.CallAsync<object>(
                 "disconnect",
                 new { },
+                cancellationToken).ConfigureAwait(false);
+
+            // Bring the saved project under SVN control: native/main is guaranteed empty (the
+            // repo was just created), so an obstruction-allowing checkout into the non-empty
+            // tia/ dir is safe and only adds the .svn metadata.
+            progress?.Report("Bringing the managed project under SVN control...");
+            await versionControl.CallAsync<object>(
+                "svn_checkout",
+                new { url = svnMainUrl, path = tiaStore, allowObstructions = true },
                 cancellationToken).ConfigureAwait(false);
 
             progress?.Report("Committing the native TIA baseline to SVN...");

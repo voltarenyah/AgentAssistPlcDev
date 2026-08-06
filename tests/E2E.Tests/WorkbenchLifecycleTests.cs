@@ -355,10 +355,11 @@ public sealed class WorkbenchLifecycleTests : IDisposable
     {
         var store = new AtomicJsonStore();
         var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var order = new List<string>();
         var coordinator = new WorkbenchCoordinator(
-            new EngineeringBoundary(),
+            new EngineeringBoundary(order),
             new KnowledgeBoundary(),
-            new GitBoundary(),
+            new GitBoundary(order: order),
             catalog,
             store,
             new DeviceReconciler(),
@@ -366,6 +367,16 @@ public sealed class WorkbenchLifecycleTests : IDisposable
 
         var created = await coordinator.CreateWorkbenchAsync(new(
             "Native baseline line", Path.Combine(root, "native-baseline"), 42, null));
+
+        // TIA Save As must run into the EMPTY tia/ dir; the SVN checkout (allowObstructions)
+        // only adopts the saved project after the TIA session is closed.
+        Assert.True(order.IndexOf("engineering:save_project_as") >= 0);
+        Assert.True(
+            order.IndexOf("engineering:save_project_as") < order.IndexOf("version:svn_checkout"));
+        Assert.True(
+            order.IndexOf("engineering:disconnect") < order.IndexOf("version:svn_checkout"));
+        Assert.True(
+            order.IndexOf("version:svn_checkout") < order.IndexOf("version:svn_commit"));
 
         var workbenchRoot = created.Workbench.RootPath;
         var masterRoot = WorkbenchPaths.ResolveWorktree(workbenchRoot, "master");
@@ -406,6 +417,17 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             svnLog.Entries,
             entry => entry.Message.Contains("native: initial managed TIA project baseline", StringComparison.Ordinal));
         Assert.True(svn.Status(tiaStore).IsClean);
+
+        // The Save As result really is versioned: a fresh checkout of native/main contains
+        // the complete project tree the fake TIA wrote into the previously plain directory.
+        var roundTrip = Path.Combine(root, "baseline-roundtrip");
+        svn.Checkout(mainUrl, roundTrip);
+        Assert.Equal(
+            "managed TIA project placeholder",
+            File.ReadAllText(Path.Combine(roundTrip, "Line.ap17")));
+        Assert.Equal(
+            "project system data",
+            File.ReadAllText(Path.Combine(roundTrip, "IM", "project-data.bin")));
     }
 
     [Fact]
@@ -966,14 +988,19 @@ public sealed class WorkbenchLifecycleTests : IDisposable
     {
         private static readonly SvnRepositoryService Svn = new();
         private readonly bool failAfterAddWorktree;
+        private readonly List<string>? order;
 
-        public GitBoundary(bool failAfterAddWorktree = false) =>
+        public GitBoundary(bool failAfterAddWorktree = false, List<string>? order = null)
+        {
             this.failAfterAddWorktree = failAfterAddWorktree;
+            this.order = order;
+        }
 
         public List<string[]> AddedPathBatches { get; } = [];
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
+            order?.Add($"version:{tool}");
             object result = tool switch
             {
                 "vc_init_shared" => RepositoryService.InitShared(
@@ -992,7 +1019,9 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                     Property<string>(args, "targetWorktreePath"), Property<string>(args, "sourceBranch")),
                 "svn_init_shared" => SvnInitShared(args),
                 "svn_checkout" => Svn.Checkout(
-                    Property<string>(args, "url"), Property<string>(args, "path")),
+                    Property<string>(args, "url"),
+                    Property<string>(args, "path"),
+                    args.GetType().GetProperty("allowObstructions")?.GetValue(args) is true),
                 "svn_commit" => SvnCommit(args),
                 "svn_status" => SvnStatus(args),
                 "svn_copy_branch" => Svn.CopyBranch(
@@ -1108,11 +1137,14 @@ public sealed class WorkbenchLifecycleTests : IDisposable
     private sealed class EngineeringBoundary : IMcpToolCaller
     {
         private readonly Dictionary<string, string> versions = new(StringComparer.Ordinal);
+        private readonly List<string>? order;
         private bool disconnected;
         private string currentProjectPath = @"C:\Fixture\Line.ap17";
         private string compileState = "success";
         public List<string> ImportCalls { get; } = [];
         public List<string> Calls { get; } = [];
+
+        public EngineeringBoundary(List<string>? order = null) => this.order = order;
 
         public void SetExport(string plcName, string version) => versions[plcName] = version;
         public void Disconnect() => disconnected = true;
@@ -1126,6 +1158,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
             Calls.Add(tool);
+            order?.Add($"engineering:{tool}");
             if (disconnected)
                 throw new InvalidOperationException("Engineering is disconnected.");
             object result = tool switch
@@ -1169,9 +1202,13 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             if (FailSaveProjectAs)
                 throw new ToolCallException("TIA_SAVE_AS_FAILED", "simulated TIA Save As failure", null);
             var target = Property<string>(args, "targetDirectory");
+            // A real TIA Save As produces a non-empty project tree (project file + system
+            // folders); reproducing that here exercises the adopt-under-SVN-control path.
             Directory.CreateDirectory(target);
             currentProjectPath = Path.Combine(target, "Line.ap17");
             File.WriteAllText(currentProjectPath, "managed TIA project placeholder");
+            Directory.CreateDirectory(Path.Combine(target, "IM"));
+            File.WriteAllText(Path.Combine(target, "IM", "project-data.bin"), "project system data");
             return new CoordinatorSaveProjectAsResult { ManagedProjectPath = currentProjectPath };
         }
 

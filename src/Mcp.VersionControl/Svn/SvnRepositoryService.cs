@@ -62,8 +62,12 @@ internal sealed class SvnRepositoryService
         };
     }
 
-    /// <summary>Checkout a repository or branch URL into a local working copy.</summary>
-    public SvnCheckoutResult Checkout(string url, string localPath)
+    /// <summary>
+    /// Checkout a repository or branch URL into a local working copy. With
+    /// <paramref name="allowObstructions"/>, the target may be non-empty (used to bring a
+    /// freshly SaveAs'd TIA project under SVN control; only safe while the URL is empty).
+    /// </summary>
+    public SvnCheckoutResult Checkout(string url, string localPath, bool allowObstructions = false)
     {
         var uri = RequireUri(url, nameof(url));
         var path = RequirePath(localPath, nameof(localPath));
@@ -73,7 +77,11 @@ internal sealed class SvnRepositoryService
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             using var client = CreateClient();
-            client.CheckOut(new SvnUriTarget(uri), path, new SvnCheckOutArgs(), out update);
+            client.CheckOut(
+                new SvnUriTarget(uri),
+                path,
+                new SvnCheckOutArgs { AllowObstructions = allowObstructions },
+                out update);
         });
 
         return new SvnCheckoutResult

@@ -55,10 +55,12 @@ Creating a workbench from an existing `.ap17` imports it into managed storage:
 1. Validate the origin path (sandbox jail + must exist). The origin is
    bootstrap-only and is never needed again after step 4.
 2. Create the catalog entry, the bare Git repository, and the SVN native store;
-   check out `^/native/main` into `worktrees/master/tia/`.
+   create `worktrees/master/tia/` as a plain empty directory. TIA refuses Save As
+   into a non-empty directory, so no SVN checkout happens yet.
 3. Open the origin project headless (`withUI: false`); a session attach works too.
-4. TIA Save As into the `tia/` working copy; verify the managed copy independently
-   (the active project must match the path TIA reported). Failure aborts.
+4. TIA Save As into the empty `tia/` directory; verify the managed copy
+   independently (the active project must match the path TIA reported). Failure
+   aborts.
 5. Optional compile of every PLC on the managed copy. Success records the
    aggregated per-PLC software checksum; failure records `FAILED` and continues —
    a compile failure never fails the import.
@@ -66,8 +68,11 @@ Creating a workbench from an existing `.ap17` imports it into managed storage:
    apply, same reconciliation path as a refresh).
 7. Disconnect TIA, so no TIA process can still write the managed tree while it is
    committed (the freeze rule).
-8. Commit the native baseline to SVN, write `revision.json`, then create the Git
-   baseline commit containing the source XML and `revision.json`.
+8. Bring the saved project under SVN control: `native/main` is still empty, so an
+   obstruction-allowing checkout into the now non-empty `tia/` directory is safe
+   and only adds the `.svn` metadata. Then commit the native baseline, write
+   `revision.json`, and create the Git baseline commit containing the source XML
+   and `revision.json`.
 
 Any failure rolls the workbench back completely (Git repo, SVN store, worktrees).
 The origin path and import time are kept as provenance (`originProjectPath`,

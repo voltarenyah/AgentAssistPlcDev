@@ -80,6 +80,31 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void Checkout_AllowObstructions_AdaptsNonEmptyDirectory()
+    {
+        var shared = CreateShared();
+        var workingCopy = Path.Combine(_root, "tia");
+        Directory.CreateDirectory(workingCopy);
+        File.WriteAllText(Path.Combine(workingCopy, "Line.ap17"), "project");
+        Directory.CreateDirectory(Path.Combine(workingCopy, "IM"));
+        File.WriteAllText(Path.Combine(workingCopy, "IM", "data.bin"), "data");
+
+        var result = _svn.Checkout(MainUrl(shared), workingCopy, allowObstructions: true);
+
+        Assert.True(result.Revision >= 0);
+        // The pre-existing project files are unversioned until added; then the whole tree commits.
+        Assert.False(_svn.Status(workingCopy).IsClean);
+        _svn.AddRecursive(workingCopy);
+        var commit = _svn.Commit(workingCopy, "adopt project");
+        Assert.True(commit.Committed);
+        Assert.True(_svn.Status(workingCopy).IsClean);
+        var roundTrip = Path.Combine(_root, "roundtrip");
+        _svn.Checkout(MainUrl(shared), roundTrip);
+        Assert.Equal("project", File.ReadAllText(Path.Combine(roundTrip, "Line.ap17")));
+        Assert.Equal("data", File.ReadAllText(Path.Combine(roundTrip, "IM", "data.bin")));
+    }
+
+    [Fact]
     public void Commit_TextAndBinaryFiles_ReturnsIncrementingRevisions()
     {
         var shared = CreateShared();

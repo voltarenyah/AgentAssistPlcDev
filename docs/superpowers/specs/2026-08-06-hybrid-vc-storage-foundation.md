@@ -102,7 +102,8 @@ EngineeringRevisionStore, no revision IDs, no transaction table.
 validate origin .ap17 (sandbox jail + exists)
  → catalog.Create (schema 1.2, records repository.svn path)
  → vc_init_shared + svn_init_shared
- → svn checkout ^/native/main → worktrees/master/tia/
+ → create worktrees/master/tia/ as a plain EMPTY directory
+   (TIA refuses SaveAs into a non-empty dir — no SVN checkout yet)
  → connect origin headless (withUI: false; session attach also supported)
  → TIA SaveAs → worktrees/master/tia/        (failure → abort + full rollback)
  → verify managed project independently      (failure → abort; origin dependency ends)
@@ -110,6 +111,8 @@ validate origin .ap17 (sandbox jail + exists)
  → read F-signature if available (else null — extension point)
  → export PLC semantic files → devices/<plc>/source
  → disconnect TIA (freeze, rule 8)
+ → svn checkout ^/native/main (allowObstructions) into the now non-empty tia/
+   (safe: native/main is still empty; only adds the .svn metadata)
  → SVN commit native baseline
  → write revision.json
  → git commit baseline (semantic XML + revision.json)

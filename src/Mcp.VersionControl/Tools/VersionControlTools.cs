@@ -186,11 +186,12 @@ public sealed class VersionControlTools
         => Invoke(() => _svn.CreateShared(workbenchRoot));
 
     [McpServerTool(Name = "svn_checkout")]
-    [Description("Check out a repository or branch URL into a local SVN working copy.")]
+    [Description("Check out a repository or branch URL into a local SVN working copy. allowObstructions permits a non-empty target (only safe while the URL is empty, e.g. adopting a freshly saved TIA project).")]
     public CallToolResult SvnCheckout(
         [Description("Repository file:// URI or branch URL, e.g. file:///.../repository.svn/native/main.")] string url,
-        [Description("Local path for the working copy.")] string path)
-        => Invoke(() => _svn.Checkout(url, path));
+        [Description("Local path for the working copy.")] string path,
+        [Description("Allow checkout into a non-empty directory (default false).")] bool allowObstructions = false)
+        => Invoke(() => _svn.Checkout(url, path, allowObstructions));
 
     [McpServerTool(Name = "svn_commit")]
     [Description("Recursively add all unversioned items below a working copy and commit it. Returns the committed revision.")]

@@ -403,7 +403,6 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             {
                 "version:vc_init_shared",
                 "version:svn_init_shared",
-                "version:svn_checkout",
                 "engineering:connect",
                 "engineering:get_project_info",
                 "engineering:save_project_as",
@@ -414,6 +413,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "engineering:rebuild_export",
                 "engineering:rebuild_export",
                 "engineering:disconnect",
+                "version:svn_checkout",
                 "version:svn_commit",
                 "version:vc_commit_selected",
             },
@@ -848,7 +848,6 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             {
                 "version:vc_init_shared",
                 "version:svn_init_shared",
-                "version:svn_checkout",
                 "engineering:connect",
                 "engineering:get_project_info",
                 "engineering:save_project_as",
@@ -857,6 +856,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "engineering:get_plc_checksums",
                 "engineering:rebuild_export",
                 "engineering:disconnect",
+                "version:svn_checkout",
                 "version:svn_commit",
                 "version:vc_commit_selected",
             },
