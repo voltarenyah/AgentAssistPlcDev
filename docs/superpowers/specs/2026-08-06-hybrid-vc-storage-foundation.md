@@ -111,6 +111,9 @@ validate origin .ap17 (sandbox jail + exists)
  → read F-signature if available (else null — extension point)
  → export PLC semantic files → devices/<plc>/source
  → disconnect TIA (freeze, rule 8)
+ → strip recognized legacy app export caches (export/, Exports/ with our
+   metadata.json manifest — app state copied along by SaveAs, not TIA data;
+   unrecognized content is kept, removal failure never aborts)
  → svn checkout ^/native/main (allowObstructions) into the now non-empty tia/
    (safe: native/main is still empty; only adds the .svn metadata)
  → SVN commit native baseline
@@ -189,7 +192,9 @@ Trusted-root registry grants accept all three schemas.
 - **Detailed safety model**: one F-signature slot only; no collective/software/
   hardware/group modeling. The Openness probe for a readable signature is pending.
 - **Native file classification/optimization**: the complete TIA project is
-  committed to SVN as-is.
+  committed to SVN as-is (only the app's own legacy export caches — `export/`,
+  `Exports/` with our manifest — are stripped at import; they are app state, not
+  TIA project data).
 - **SVN delta benchmarks**: repo growth is inspected manually during development.
 - **Installer/packaging** verification of the SharpSvn native binaries.
 - **Remote Git/SVN** and **existing workbench migration**.

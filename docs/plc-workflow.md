@@ -14,13 +14,15 @@
    previewed against the source tree, and applied: the reconciler copies only
    added/changed files into `devices/<plc>/source` and leaves unchanged files
    untouched.
-5. TIA is disconnected (freeze). Only now is the saved project brought under SVN
-   control: `native/main` is still empty, so an obstruction-allowing checkout into
-   the non-empty `tia/` directory is safe, followed by the native baseline commit
-   to `repository.svn` (`^/native/main`). `engineering-state/revision.json` links
-   the Git commit to that SVN revision, and the Git baseline commit records the
-   source XML plus `revision.json`. Any import failure rolls back the whole
-   workbench.
+5. TIA is disconnected (freeze). Recognized legacy app export caches (`export/`,
+   `Exports/` with our manifest) that Save As copied from the origin folder are
+   stripped — they are app state, not TIA project data; everything TIA-native
+   stays. Only now is the saved project brought under SVN control: `native/main`
+   is still empty, so an obstruction-allowing checkout into the non-empty `tia/`
+   directory is safe, followed by the native baseline commit to `repository.svn`
+   (`^/native/main`). `engineering-state/revision.json` links the Git commit to
+   that SVN revision, and the Git baseline commit records the source XML plus
+   `revision.json`. Any import failure rolls back the whole workbench.
 6. Later edits happen in a feature worktree; committing on an SVN-managed workbench
    is one combined transaction (save → required compile → freeze → SVN commit →
    `revision.json` → Git commit), so the Git commit and the SVN revision always

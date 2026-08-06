@@ -428,6 +428,13 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         Assert.Equal(
             "project system data",
             File.ReadAllText(Path.Combine(roundTrip, "IM", "project-data.bin")));
+        Assert.Equal(
+            "tia native system data",
+            File.ReadAllText(Path.Combine(roundTrip, "System", "pe.cfg")));
+        // ...while the legacy app export cache copied along by Save As was stripped before
+        // the baseline — it is app state, not TIA project data.
+        Assert.False(Directory.Exists(Path.Combine(tiaStore, "Exports")));
+        Assert.False(Directory.Exists(Path.Combine(roundTrip, "Exports")));
     }
 
     [Fact]
@@ -1209,6 +1216,16 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             File.WriteAllText(currentProjectPath, "managed TIA project placeholder");
             Directory.CreateDirectory(Path.Combine(target, "IM"));
             File.WriteAllText(Path.Combine(target, "IM", "project-data.bin"), "project system data");
+            Directory.CreateDirectory(Path.Combine(target, "System"));
+            File.WriteAllText(Path.Combine(target, "System", "pe.cfg"), "tia native system data");
+            // Legacy app export cache from older app versions next to the origin project:
+            // TIA Save As copies it along; the bootstrap must strip it before the SVN baseline.
+            var legacy = Path.Combine(target, "Exports");
+            Directory.CreateDirectory(legacy);
+            File.WriteAllText(
+                Path.Combine(legacy, "metadata.json"),
+                """{"schemaVersion":"1.0","exportRoot":"legacy","components":[]}""");
+            File.WriteAllText(Path.Combine(legacy, "plc-knowledge.db"), "stale knowledge cache");
             return new CoordinatorSaveProjectAsResult { ManagedProjectPath = currentProjectPath };
         }
 

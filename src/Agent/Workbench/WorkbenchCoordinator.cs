@@ -427,6 +427,15 @@ public sealed class WorkbenchCoordinator
                 new { },
                 cancellationToken).ConfigureAwait(false);
 
+            // TIA Save As copies the whole origin project folder, including legacy app export
+            // caches (export/, Exports/) from older app versions. They are stale app artifacts,
+            // not TIA project data — strip the recognized ones before the native baseline.
+            var managedProjectRoot = Path.GetDirectoryName(managedProjectPath) ?? tiaStore;
+            foreach (var note in LegacyExportCleanup.RemoveLegacyExportCaches(managedProjectRoot))
+            {
+                progress?.Report(note);
+            }
+
             // Bring the saved project under SVN control: native/main is guaranteed empty (the
             // repo was just created), so an obstruction-allowing checkout into the non-empty
             // tia/ dir is safe and only adds the .svn metadata.
