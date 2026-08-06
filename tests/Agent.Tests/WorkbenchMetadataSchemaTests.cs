@@ -30,7 +30,7 @@ public sealed class WorkbenchMetadataSchemaTests : IDisposable
         var loaded = store.Read<WorkbenchMetadata>(path);
 
         Assert.Equal(metadata.WorkbenchId, loaded.WorkbenchId);
-        Assert.Equal("1.1", loaded.SchemaVersion);
+        Assert.Equal("1.2", loaded.SchemaVersion);
         Assert.Equal("Ramp-up line for plant B", loaded.Purpose);
         Assert.Equal("Ansel", loaded.Owner);
         var persisted = File.ReadAllText(path);
@@ -145,6 +145,70 @@ public sealed class WorkbenchMetadataSchemaTests : IDisposable
             () => store.Read<WorkbenchMetadata>(path));
 
         Assert.Equal("2.0", error.ActualVersion);
+    }
+
+    [Fact]
+    public void Schema11WorkbenchFileLoadsWithoutSvnFields()
+    {
+        var store = new AtomicJsonStore();
+        var path = Path.Combine(_testRoot, "workbench.json");
+        Directory.CreateDirectory(_testRoot);
+        File.WriteAllText(path, $$"""
+            {
+              "schemaVersion": "1.1",
+              "workbenchId": "wb-1",
+              "name": "Line 1",
+              "createdAt": "2026-08-01T00:00:00.0000000Z",
+              "rootPath": {{System.Text.Json.JsonSerializer.Serialize(_testRoot)}},
+              "repositoryPath": "repo.git",
+              "engineeringProjectId": null,
+              "sourceProjectPath": "C:\\Projects\\Line.ap17",
+              "worktrees": []
+            }
+            """);
+
+        var loaded = store.Read<WorkbenchMetadata>(path);
+
+        Assert.Equal("1.1", loaded.SchemaVersion);
+        Assert.Equal(@"C:\Projects\Line.ap17", loaded.SourceProjectPath);
+        Assert.Null(loaded.SvnRepositoryPath);
+        Assert.Null(loaded.OriginProjectPath);
+        Assert.Null(loaded.OriginImportedAt);
+        Assert.Null(loaded.ManagedTiaProjectPath);
+    }
+
+    [Fact]
+    public void Schema12WorkbenchFileRoundTripsSvnAndProvenanceFields()
+    {
+        var store = new AtomicJsonStore();
+        var path = Path.Combine(_testRoot, "workbench.json");
+        var metadata = new WorkbenchMetadata(
+            WorkbenchSchema.CurrentVersion,
+            "wb-1",
+            "Line 1",
+            "2026-08-06T00:00:00.0000000Z",
+            _testRoot,
+            Path.Combine(_testRoot, "repository.git"),
+            "proj-1",
+            Path.Combine(_testRoot, "worktrees", "master", "tia", "Line.ap17"),
+            Array.Empty<WorkbenchWorktreeRegistration>(),
+            SvnRepositoryPath: Path.Combine(_testRoot, "repository.svn"),
+            OriginProjectPath: @"C:\Projects\Line.ap17",
+            OriginImportedAt: "2026-08-06T00:00:01.0000000Z",
+            ManagedTiaProjectPath: Path.Combine(_testRoot, "worktrees", "master", "tia", "Line.ap17"));
+
+        store.Write(path, metadata);
+        var loaded = store.Read<WorkbenchMetadata>(path);
+
+        Assert.Equal("1.2", loaded.SchemaVersion);
+        Assert.Equal(metadata.SvnRepositoryPath, loaded.SvnRepositoryPath);
+        Assert.Equal(metadata.OriginProjectPath, loaded.OriginProjectPath);
+        Assert.Equal(metadata.OriginImportedAt, loaded.OriginImportedAt);
+        Assert.Equal(metadata.ManagedTiaProjectPath, loaded.ManagedTiaProjectPath);
+        var persisted = File.ReadAllText(path);
+        Assert.Contains("\"svnRepositoryPath\":", persisted);
+        Assert.Contains("\"originProjectPath\":", persisted);
+        Assert.Contains("\"managedTiaProjectPath\":", persisted);
     }
 
     public void Dispose()

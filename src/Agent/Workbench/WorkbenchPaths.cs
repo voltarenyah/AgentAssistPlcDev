@@ -15,6 +15,23 @@ public sealed class WorkbenchPathException : Exception
 
 public static class WorkbenchPaths
 {
+    /// <summary>SVN working copy of the native TIA project inside a worktree (never Git-tracked).</summary>
+    public const string TiaStoreDirName = "tia";
+
+    /// <summary>Git-tracked engineering revision metadata directory inside a worktree.</summary>
+    public const string EngineeringStateDirName = "engineering-state";
+
+    public const string RevisionStateFileName = "revision.json";
+
+    public static string ResolveTiaStore(string worktreeRoot) =>
+        ResolveRelative(worktreeRoot, TiaStoreDirName);
+
+    public static string ResolveEngineeringStateRoot(string worktreeRoot) =>
+        ResolveRelative(worktreeRoot, EngineeringStateDirName);
+
+    public static string ResolveRevisionState(string worktreeRoot) =>
+        ResolveRelative(ResolveEngineeringStateRoot(worktreeRoot), RevisionStateFileName);
+
     public static string DefaultRoot(string name)
     {
         var safeName = SanitizeDirectoryName(name);

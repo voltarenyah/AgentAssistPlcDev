@@ -28,7 +28,7 @@ public sealed class AtomicJsonStoreTests : IDisposable
         Assert.Equal(metadata.SourceProjectPath, loaded.SourceProjectPath);
         Assert.Equal(metadata.Worktrees, loaded.Worktrees);
         Assert.Contains(
-            Environment.NewLine + "  \"schemaVersion\": \"1.1\"",
+            Environment.NewLine + "  \"schemaVersion\": \"1.2\"",
             File.ReadAllText(path));
     }
 

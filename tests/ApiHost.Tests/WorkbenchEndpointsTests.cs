@@ -1006,15 +1006,11 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public async Task CreateWorkbenchWithProjectPathLaunchesNewTiaInstance()
     {
         var projectPath = Path.Combine(root, "Line.ap17");
-        var engineering = new RecordingToolCaller(JsonSerializer.Serialize(new
-        {
-            Name = "Line",
-            Path = projectPath,
-            PlcDevices = new[] { "PLC_1" },
-        }));
-        var versionControl = new RecordingToolCaller();
-        var sandboxFile = Path.Combine(root, "sandbox.json");
         Directory.CreateDirectory(root);
+        File.WriteAllText(projectPath, "origin project placeholder");
+        var engineering = new CreateFlowEngineeringCaller(projectPath);
+        var versionControl = new CreateFlowVersionControlCaller();
+        var sandboxFile = Path.Combine(root, "sandbox.json");
         File.WriteAllText(sandboxFile, JsonSerializer.Serialize(new { allowedRoots = new[] { root } }));
         await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
@@ -1046,9 +1042,21 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         });
 
         response.EnsureSuccessStatusCode();
-        Assert.Equal(["connect", "get_project_info"], engineering.Calls);
+        Assert.Equal(
+            new[]
+            {
+                "connect", "get_project_info", "save_project_as", "get_project_info",
+                "compile_plc", "get_plc_checksums", "rebuild_export", "disconnect",
+            },
+            engineering.Calls);
         Assert.Equal(projectPath, engineering.Arguments[0].GetProperty("projectPath").GetString());
-        Assert.True(engineering.Arguments[0].GetProperty("withUI").GetBoolean());
+        Assert.False(engineering.Arguments[0].GetProperty("withUI").GetBoolean());
+        Assert.Equal(
+            new[]
+            {
+                "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit", "vc_commit_selected",
+            },
+            versionControl.Calls);
         var workbenchRoot = Path.Combine(root, "wb-from-path");
         var store = new AtomicJsonStore();
         var workbench = store.Read<WorkbenchMetadata>(Path.Combine(workbenchRoot, "workbench.json"));
@@ -1056,13 +1064,18 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var worktreeRoot = Path.Combine(workbenchRoot, "worktrees", registration.RelativePath);
         var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
 
+        Assert.Equal("1.2", workbench.SchemaVersion);
+        Assert.Equal(Path.Combine(workbenchRoot, "repository.svn"), workbench.SvnRepositoryPath);
+        Assert.Equal(projectPath, workbench.OriginProjectPath);
+        Assert.NotNull(workbench.OriginImportedAt);
+        Assert.NotNull(workbench.ManagedTiaProjectPath);
         Assert.True(File.Exists(Path.Combine(worktreeRoot, "worktree.json")));
+        Assert.True(File.Exists(Path.Combine(worktreeRoot, "engineering-state", "revision.json")));
         Assert.True(File.Exists(Path.Combine(deviceRoot, "device.json")));
         Assert.True(Directory.Exists(Path.Combine(deviceRoot, "source")));
         Assert.True(Directory.Exists(Path.Combine(deviceRoot, "staging")));
         Assert.False(Directory.Exists(Path.Combine(deviceRoot, "exported-source")));
         Assert.False(Directory.Exists(Path.Combine(deviceRoot, "modified-source")));
-        Assert.Equal(["vc_init_shared"], versionControl.Calls);
     }
 
     [Fact]
@@ -1931,6 +1944,109 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             }
 
             return Task.FromResult(JsonSerializer.Deserialize<T>(json)!);
+        }
+    }
+
+    /// <summary>Fakes the engineering side of the 1.2 create flow: headless origin connect,
+    /// Save As into the tia/ store, managed verify, compile + checksums, export, disconnect.</summary>
+    private sealed class CreateFlowEngineeringCaller(string originPath) : IMcpToolCaller
+    {
+        private string? managedPath;
+        private int projectInfoCalls;
+
+        public List<string> Calls { get; } = [];
+        public List<JsonElement> Arguments { get; } = [];
+
+        public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            Arguments.Add(JsonSerializer.SerializeToElement(args));
+            object result = tool switch
+            {
+                "connect" => new object(),
+                "disconnect" => new object(),
+                "get_project_info" => NextProjectInfo(),
+                "save_project_as" => SaveProjectAs(args),
+                "compile_plc" => new CompileResult { State = "success" },
+                "get_plc_checksums" => new[]
+                {
+                    new PlcChecksumInfo { PlcName = "PLC_1", SoftwareChecksum = "checksum-PLC_1" },
+                },
+                "rebuild_export" => Export(args),
+                _ => throw new InvalidOperationException(tool),
+            };
+            return Task.FromResult((T)result);
+        }
+
+        private ProjectInfo NextProjectInfo()
+        {
+            projectInfoCalls++;
+            return new ProjectInfo
+            {
+                Name = "Line",
+                Path = projectInfoCalls == 1 ? originPath : managedPath,
+                PlcDevices = ["PLC_1"],
+            };
+        }
+
+        private CoordinatorSaveProjectAsResult SaveProjectAs(object args)
+        {
+            var target = args.GetType().GetProperty("targetDirectory")!.GetValue(args) as string;
+            Directory.CreateDirectory(target!);
+            managedPath = Path.Combine(target!, "Line.ap17");
+            File.WriteAllText(managedPath, "managed project placeholder");
+            return new CoordinatorSaveProjectAsResult { ManagedProjectPath = managedPath };
+        }
+
+        private static SyncResult[] Export(object args)
+        {
+            var output = args.GetType().GetProperty("outputDir")!.GetValue(args) as string;
+            Directory.CreateDirectory(Path.Combine(output!, "Blocks"));
+            File.WriteAllText(Path.Combine(output!, "Blocks", "Main.xml"), "<block />");
+            File.WriteAllText(
+                Path.Combine(output!, "metadata.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    components = new[]
+                    {
+                        new
+                        {
+                            name = "Main",
+                            sourcePath = "Program blocks/Main",
+                            category = "OB",
+                            status = "Exported",
+                            exportedFile = "Blocks/Main.xml",
+                        },
+                    },
+                }));
+            return [new SyncResult { PlcName = "PLC_1", ExportRoot = output! }];
+        }
+    }
+
+    /// <summary>Fakes the version-control side of the 1.2 create flow (git + svn init, baseline commits).</summary>
+    private sealed class CreateFlowVersionControlCaller : IMcpToolCaller
+    {
+        public List<string> Calls { get; } = [];
+
+        public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            object result = tool switch
+            {
+                "svn_init_shared" => new CoordinatorSvnInitResult
+                {
+                    RepositoryPath = "repository.svn",
+                    RepositoryUri = "file:///repository.svn/",
+                },
+                "svn_commit" => new CoordinatorSvnCommitResult { Committed = true, Revision = 1 },
+                "vc_commit_selected" => new WorkbenchCommitResult(
+                    "baseline-sha",
+                    "Initial PLC source baseline",
+                    new[] { "engineering-state/revision.json" }),
+                _ => new object(),
+            };
+            return Task.FromResult((T)result);
         }
     }
 

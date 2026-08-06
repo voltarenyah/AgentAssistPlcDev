@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using LibGit2Sharp;
 using Mcp.VersionControl.Git;
+using Mcp.VersionControl.Svn;
 using Mcp.VersionControl.Tools;
 using ModelContextProtocol.Protocol;
 using Xunit;
@@ -73,6 +74,7 @@ public sealed class VersionControlToolsTests : IDisposable
     [Theory]
     [InlineData("devices/PLC_1/source/Main.xml", "devices/PLC_1/source/Main.xml")]
     [InlineData("devices\\PLC_1\\source\\Blocks\\Main.XML", "devices/PLC_1/source/Blocks/Main.XML")]
+    [InlineData("engineering-state/revision.json", "engineering-state/revision.json")]
     public void SourcePathPolicy_AcceptsOnlyNormalizedSourceXml(string path, string expected)
     {
         Assert.Equal(expected, SourcePathPolicy.Require(path));
@@ -90,6 +92,10 @@ public sealed class VersionControlToolsTests : IDisposable
     [InlineData("devices/PLC_1/source/Main.txt")]
     [InlineData("devices/PLC_1/staging/Main.xml")]
     [InlineData("source/Main.xml")]
+    [InlineData("tia/Project/Project.ap17")]
+    [InlineData("tia/anything.xml")]
+    [InlineData("engineering-state/other.json")]
+    [InlineData("engineering-state/revision.json/extra.xml")]
     public void SourcePathPolicy_RejectsPathsOutsideTrackedXml(string path)
     {
         var error = Assert.Throws<VcInternalException>(() => SourcePathPolicy.Require(path));
@@ -816,6 +822,27 @@ public sealed class VersionControlToolsTests : IDisposable
         {
             if (Directory.Exists(emptyDir)) Directory.Delete(emptyDir);
         }
+    }
+
+    /* ── svn_update ─────────────────────────────────────── */
+
+    [Fact]
+    public void SvnUpdate_PinsWorkingCopyToRecordedRevision()
+    {
+        var init = Unwrap<SvnSharedInitResult>(_tools.SvnInitShared(
+            Path.Combine(_fixture.RootPath, "workbench")));
+        var workingCopy = Path.Combine(_fixture.RootPath, "wc");
+        _tools.SvnCheckout(init!.RepositoryUri.TrimEnd('/') + "/native/main", workingCopy);
+        File.WriteAllText(Path.Combine(workingCopy, "Line.ap17"), "v1");
+        var first = Unwrap<SvnCommitResult>(_tools.SvnCommit(workingCopy, "baseline"));
+        File.WriteAllText(Path.Combine(workingCopy, "Line.ap17"), "v2");
+        _tools.SvnCommit(workingCopy, "later change");
+
+        var updated = Unwrap<SvnUpdateResultInfo>(_tools.SvnUpdate(workingCopy, first!.Revision));
+
+        Assert.False(updated is null);
+        Assert.Equal(first.Revision, updated!.Revision);
+        Assert.Equal("v1", File.ReadAllText(Path.Combine(workingCopy, "Line.ap17")));
     }
 
     private static string? ErrorCode(CallToolResult result)

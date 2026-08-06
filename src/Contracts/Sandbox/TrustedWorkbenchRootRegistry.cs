@@ -24,8 +24,9 @@ public sealed class TrustedWorkbenchRoot
 public sealed class TrustedWorkbenchRootRegistry
 {
     public const string EnvironmentVariableName = "AUTOMATION_WORKBENCH_TRUSTED_ROOTS_FILE";
-    // 1.1 added optional landing-page fields (purpose/owner/status); grants stay valid across it.
-    private static readonly string[] SupportedWorkbenchSchemas = ["1.0", "1.1"];
+    // 1.1 added optional landing-page fields (purpose/owner/status); 1.2 added the SVN native
+    // store path and TIA project provenance fields; grants stay valid across both.
+    private static readonly string[] SupportedWorkbenchSchemas = ["1.0", "1.1", "1.2"];
     private readonly string path;
     private readonly string mutexName;
 

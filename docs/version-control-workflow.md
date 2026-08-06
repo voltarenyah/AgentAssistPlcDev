@@ -1,17 +1,145 @@
 # PLC source version-control workflow
 
-A workbench contains one shared Git repository and linked `master` and feature
-worktrees. Git tracks only PLC source XML under
-`devices/<device>/source/**/*.xml`. `worktree.json`, `device.json`, staging,
-SQLite knowledge databases, export manifests, sessions, and recovery evidence
-are runtime artifacts and are excluded from PLC history.
+A workbench keeps two stores side by side. Git is the readable history: exported
+PLC source XML plus one metadata file per worktree. A local SVN repository is the
+native store: the complete TIA project, byte-exact, one branch per worktree.
+`engineering-state/revision.json` is the link between them — every engineering
+savepoint is one Git commit naming the SVN revision that holds the same TIA state.
 
-## Master and feature worktrees
+```text
+Git commit → revision.json → SVN revision → TIA project
+```
+
+## Workbench layout
+
+```text
+<workbenchRoot>/
+  workbench.json                  # identity, registrations, SVN store path, provenance
+  repository.git/                 # bare Git — semantic store
+  repository.svn/                 # local SVN repo (file://) — native store
+  worktrees/
+    master/
+      engineering-state/
+        revision.json             # GIT-TRACKED: svn url+revision, checksums, compile status
+      devices/<plc>/source/**     # git-tracked exported PLC XML
+      tia/                        # SVN working copy of ^/native/main (never git-tracked)
+    feature-x/
+      engineering-state/revision.json
+      devices/<plc>/source/**
+      tia/                        # SVN working copy of ^/native/branches/feature-x
+```
+
+The SVN layout is `native/main` plus `native/branches/<feature>` only — no tags,
+no `svn merge`, no branch cleanup; branches simply remain. `worktree.json`,
+`device.json`, staging, knowledge databases, `.automation/`, `repository.svn/`,
+and `tia/` are runtime artifacts and are excluded from Git.
+
+`revision.json` (schemaVersion 1, deterministic property order, nulls explicit):
+
+```json
+{ "schemaVersion": 1,
+  "svn": { "url": "^/native/main", "revision": 25 },
+  "tia": { "projectChecksum": "PLC_1:...;PLC_2:..." },
+  "safety": { "fSignature": null },
+  "validation": { "compileStatus": "SUCCESS" } }
+```
+
+`compileStatus` is `SUCCESS`, `FAILED`, or `NOT_RUN`. The F-signature is recorded
+as null in V1: no stable safety signature is readable through the wrapped Openness
+surface yet (marked extension point in the bootstrap and commit code).
+
+## Bootstrap import
+
+Creating a workbench from an existing `.ap17` imports it into managed storage:
+
+1. Validate the origin path (sandbox jail + must exist). The origin is
+   bootstrap-only and is never needed again after step 4.
+2. Create the catalog entry, the bare Git repository, and the SVN native store;
+   check out `^/native/main` into `worktrees/master/tia/`.
+3. Open the origin project headless (`withUI: false`); a session attach works too.
+4. TIA Save As into the `tia/` working copy; verify the managed copy independently
+   (the active project must match the path TIA reported). Failure aborts.
+5. Optional compile of every PLC on the managed copy. Success records the
+   aggregated per-PLC software checksum; failure records `FAILED` and continues —
+   a compile failure never fails the import.
+6. Export the semantic PLC source into `devices/<plc>/source` (staging → preview →
+   apply, same reconciliation path as a refresh).
+7. Disconnect TIA, so no TIA process can still write the managed tree while it is
+   committed (the freeze rule).
+8. Commit the native baseline to SVN, write `revision.json`, then create the Git
+   baseline commit containing the source XML and `revision.json`.
+
+Any failure rolls the workbench back completely (Git repo, SVN store, worktrees).
+The origin path and import time are kept as provenance (`originProjectPath`,
+`originImportedAt`); the operational path is `managedTiaProjectPath` inside the
+worktree's `tia/` store.
+
+## Combined commit
+
+On a workbench with an SVN native store, committing is one transaction: TIA Save →
+compile (success is required; a compile failure aborts before anything is
+committed) → read the aggregated project checksum → read the F-signature (null in
+V1) → disconnect TIA (freeze) → SVN commit of the worktree's `tia/` copy → write
+`revision.json` → Git commit of the selected source paths plus `revision.json`.
+
+The SVN message carries the change classification, never a Git SHA:
+`"<message> [semantic, native]"`. Classification compares the fresh state against
+the base `revision.json`: `semanticChanged` (committed source paths),
+`safetyChanged` (F-signature difference), `nativeChanged` (dirty SVN working copy
+or changed project checksum). A commit with no semantic, safety, or native change
+is rejected. A safety-only change — unchanged XML, changed signature — still
+produces a Git commit containing only `revision.json`.
+
+The master's existing write gates are unchanged: only TIA-compared and accepted
+source paths may be committed there. The SVN side joins the transaction after
+those gates pass. The TIA session stays disconnected after a commit; the next TIA
+operation reopens the managed project on demand.
+
+### Pending commit recovery
+
+If the SVN commit succeeded but the Git commit fails, the worktree records
+`.automation/pending-commit.json` (Git-ignored) with `{ svnUrl, svnRevision,
+status: "PENDING_GIT_COMMIT" }`, and the caller sees a `GIT_COMMIT_PENDING` error
+naming the recorded SVN revision. The next commit on that worktree retries the Git
+side only — same SVN revision, then the pending file is deleted. No second SVN
+snapshot is ever taken for the same savepoint.
+
+## Feature worktrees
+
+A feature worktree gets its own SVN native branch in addition to its Git branch:
+`svn copy ^/native/main@<base> → ^/native/branches/<feature>`, checked out into
+`worktrees/<feature>/tia/`. The base revision comes from master's
+`engineering-state/revision.json`. The branch name is sanitized to a single SVN
+path segment; an existing branch is rejected with `SVN_BRANCH_EXISTS` before
+anything is created. Worktree metadata records the branch, the base Git commit,
+the SVN URL, and the base SVN revision; `managedTiaProjectPath` points at the
+feature's own project copy, so TIA operations and the combined commit run against
+the feature branch. Feature and master then evolve independently — commits on one
+never advance the other's SVN branch. Removing a worktree deletes its `tia/`
+working copy; the SVN branch remains in the repository. Rollback of a failed
+creation removes the Git worktree and any partial `tia/` copy; the SVN branch is
+never deleted.
+
+## Restore
+
+`RestoreTiaProjectAsync` reads `revision.json` at a Git commit (default HEAD),
+resolves the recorded SVN URL and revision, and checks out exactly that revision
+into a caller-chosen directory — never into the live `tia/` working copy. The
+restored path can be opened in TIA as an independent project.
+
+## Schema 1.1 and 1.2
+
+New workbenches are schema `1.2` with an SVN native store. Workbenches created
+before (`1.0`/`1.1`) still load without migration: `svnRepositoryPath` and the
+provenance/managed-path fields are null, the combined commit and restore report
+`SVN_HISTORY_UNAVAILABLE`, and their commits keep the previous Git-only behavior.
+
+## Master and feature write rules
 
 `master` is the clean project baseline. Ordinary source-editor writes are
 rejected there. Users edit source in a feature worktree, where the same source
-tree is writable. A newly created feature inherits the master device metadata
-and source snapshot without creating an exported/modified overlay pair.
+tree is writable. A newly created feature inherits the master device metadata and
+source snapshot.
 
 ## Refresh and commit
 

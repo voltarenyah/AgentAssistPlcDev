@@ -17,6 +17,8 @@
     <!-- 0.27.x stable branch; 0.30+ has a different (renamed) FileStatus/DiffLineKind API that we are not yet targeting. -->
     <PackageReference Include="LibGit2Sharp" Version="0.27.0" />
     <!-- 0.27 is netstandard2.0 and bundles native win-x64 binaries. -->
+    <!-- Pinned: SVN native project store (Subversion 1.14.5 bindings, netcoreapp target). -->
+    <PackageReference Include="SharpSvn" Version="1.14005.390" />
   </ItemGroup>
 
   <ItemGroup>

@@ -64,8 +64,17 @@ public sealed class EngineeringTools
         => Invoke("close_session", () => { _adapter.CloseSession(sessionId); return true; });
 
     [McpServerTool(Name = "save_project")]
-    [Description("Explicitly save the open TIA project — the only tool that persists it.")]
+    [Description("Explicitly save the open TIA project in place (save_project_as saves a copy to a new directory).")]
     public CallToolResult SaveProject() => Invoke("save_project", () => { _adapter.SaveProject(); return new { }; });
+
+    [McpServerTool(Name = "save_project_as")]
+    [Description("Save the open TIA project to a new directory (TIA Save As) and switch the session to the managed copy. Returns the actual managed project path reported by TIA — never a constructed path.")]
+    public CallToolResult SaveProjectAs(
+        [Description("Target directory for the managed project copy.")] string targetDirectory)
+        => Invoke(
+            "save_project_as",
+            () => new { managedProjectPath = _adapter.SaveProjectAs(new DirectoryInfo(targetDirectory)) },
+            ("targetDirectory", targetDirectory));
 
     [McpServerTool(Name = "get_project_info")]
     [Description("Project name, path, PLC devices, block count, last modified (read-only).")]

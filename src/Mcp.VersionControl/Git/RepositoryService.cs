@@ -48,6 +48,8 @@ internal static class RepositoryService
         "devices/*/plc-knowledge.db*",
         ".automation/",
         "sessionexport/",
+        "repository.svn/",
+        "tia/",
     };
 
     /// <summary>Init a git repo at repoPath. Idempotent: no-op if .git already exists.</summary>

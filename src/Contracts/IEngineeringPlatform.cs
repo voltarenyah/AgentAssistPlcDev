@@ -14,8 +14,15 @@ public interface IEngineeringPlatform : IDisposable
     ConnectionInfo Connect(ConnectOptions options);
     DisconnectResult Disconnect();
 
-    /// <summary>Explicit save — the ONLY operation that persists the project (locked decision §1.1).</summary>
+    /// <summary>Explicit save — together with <see cref="SaveProjectAs"/> the only operations that
+    /// persist the project (locked decision §1.1, amended by the vc-restructure plan to add SaveAs).</summary>
     void SaveProject();
+
+    /// <summary>Save the open project to a new directory (TIA Openness
+    /// <c>Project.SaveAs(DirectoryInfo)</c> contract) and switch the session to the managed copy.
+    /// Returns the ACTUAL managed project path reported by the adapter after SaveAs — callers must
+    /// never construct the .ap17 path by assumption.</summary>
+    string SaveProjectAs(DirectoryInfo targetDirectory);
 
     ProjectInfo GetProjectInfo();
     BlockInfo[] ListBlocks(string? plcName);

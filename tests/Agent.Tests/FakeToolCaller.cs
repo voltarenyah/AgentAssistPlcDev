@@ -9,7 +9,7 @@ namespace Agent.Tests;
 /// <summary>Scripted <see cref="IMcpToolCaller"/>: queued responses per tool, every call recorded.</summary>
 internal class FakeToolCaller : IMcpToolCaller
 {
-    private readonly Dictionary<string, Queue<Func<object>>> scripts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Queue<Func<object, object>>> scripts = new(StringComparer.Ordinal);
 
     public List<string> Calls { get; } = new();
 
@@ -17,19 +17,26 @@ internal class FakeToolCaller : IMcpToolCaller
 
     public FakeToolCaller Respond<T>(string tool, T response) where T : notnull
     {
-        Enqueue(tool, () => response);
+        Enqueue(tool, _ => response);
+        return this;
+    }
+
+    /// <summary>Script a response computed from the call arguments (e.g. an export writing files).</summary>
+    public FakeToolCaller Respond(string tool, Func<object, object> response)
+    {
+        Enqueue(tool, response);
         return this;
     }
 
     public FakeToolCaller Fail(string tool, string code, string message, string? remediation = null)
     {
-        Enqueue(tool, () => throw new ToolCallException(code, message, remediation));
+        Enqueue(tool, _ => throw new ToolCallException(code, message, remediation));
         return this;
     }
 
     public FakeToolCaller Throw(string tool, Exception exception)
     {
-        Enqueue(tool, () => throw exception);
+        Enqueue(tool, _ => throw exception);
         return this;
     }
 
@@ -49,14 +56,14 @@ internal class FakeToolCaller : IMcpToolCaller
             throw new InvalidOperationException($"FakeToolCaller: no scripted response for '{tool}'.");
         }
 
-        return Task.FromResult((T)queue.Dequeue()());
+        return Task.FromResult((T)queue.Dequeue()(args));
     }
 
-    private void Enqueue(string tool, Func<object> response)
+    private void Enqueue(string tool, Func<object, object> response)
     {
         if (!scripts.TryGetValue(tool, out var queue))
         {
-            queue = new Queue<Func<object>>();
+            queue = new Queue<Func<object, object>>();
             scripts[tool] = queue;
         }
 

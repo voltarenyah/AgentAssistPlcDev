@@ -1,8 +1,10 @@
 namespace Mcp.VersionControl.Git;
 
 /// <summary>
-/// Defines the repository-relative PLC source paths that version-control read and
-/// write surfaces may expose. Git paths are returned with forward slashes.
+/// Defines the repository-relative paths that version-control read and
+/// write surfaces may expose: PLC source XML under devices/&lt;device&gt;/source/**/*.xml
+/// and the single engineering-state/revision.json metadata file.
+/// Git paths are returned with forward slashes.
 /// </summary>
 internal static class SourcePathPolicy
 {
@@ -17,6 +19,13 @@ internal static class SourcePathPolicy
         }
 
         var normalized = path.Replace('\\', '/');
+
+        // Single git-tracked metadata file linking git commits to SVN native revisions.
+        if (normalized.Equals("engineering-state/revision.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalized;
+        }
+
         var segments = normalized.Split('/');
         if (segments.Length < 4 ||
             segments.Any(segment =>

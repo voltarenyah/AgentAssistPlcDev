@@ -29,6 +29,14 @@ public sealed record CreateWorkbenchResult(
     WorktreeMetadata Worktree,
     IReadOnlyList<DeviceMetadata> Devices);
 
+/// <summary>Result of restoring a native TIA project state recorded by revision.json.</summary>
+public sealed record RestoreTiaProjectResult(
+    string GitCommit,
+    string SvnUrl,
+    long SvnRevision,
+    string RestoredDirectory,
+    string? RestoredProjectPath);
+
 public sealed record CreateWorktreeRequest(
     WorkbenchMetadata Workbench,
     string Name,
@@ -150,7 +158,8 @@ public sealed class WorkbenchCoordinator
         ArgumentNullException.ThrowIfNull(device);
         var worktree = store.Read<WorktreeMetadata>(
             Path.Combine(device.WorktreeRoot, "worktree.json"));
-        if (string.IsNullOrWhiteSpace(worktree.SourceProjectPath))
+        var projectPath = OperationalProjectPath(worktree);
+        if (string.IsNullOrWhiteSpace(projectPath))
         {
             throw new WorkbenchCatalogException(
                 "ENGINEERING_PROJECT_PATH_MISSING",
@@ -163,7 +172,7 @@ public sealed class WorkbenchCoordinator
         {
             await engineering.CallAsync<object>(
                 "connect",
-                new { projectPath = worktree.SourceProjectPath, withUI },
+                new { projectPath, withUI },
                 cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -171,6 +180,15 @@ public sealed class WorkbenchCoordinator
             engineeringSession.Release();
         }
     }
+
+    /// <summary>
+    /// The operational TIA project for a worktree: the managed copy inside tia/ for 1.2
+    /// workbenches, the legacy SourceProjectPath for 1.1 workbenches.
+    /// </summary>
+    private static string? OperationalProjectPath(WorktreeMetadata worktree) =>
+        string.IsNullOrWhiteSpace(worktree.ManagedTiaProjectPath)
+            ? worktree.SourceProjectPath
+            : worktree.ManagedTiaProjectPath;
 
     /// <summary>
     /// Re-attaches a still-running TIA instance (by session id) that already holds the
@@ -212,13 +230,22 @@ public sealed class WorkbenchCoordinator
         }
 
         // Jail the engineering project path BEFORE any workbench artifact is created, so a
-        // project outside the sandbox fails here instead of later at tia/open time.
+        // project outside the sandbox fails here instead of later at tia/open time. The origin
+        // project is bootstrap-only (Rule 1) and must exist before we build storage around it.
         var validatedProjectPath = hasProjectPath && pathJail is not null
             ? pathJail.Validate(request.EngineeringProjectPath!, "engineeringProjectPath")
             : request.EngineeringProjectPath?.Trim();
+        if (validatedProjectPath is not null && !File.Exists(validatedProjectPath))
+        {
+            throw new WorkbenchLifecycleException(
+                "ENGINEERING_ORIGIN_NOT_FOUND",
+                $"The origin TIA project '{validatedProjectPath}' does not exist.");
+        }
+
         progress?.Report("Preparing workbench storage...");
         var workbench = catalog.Create(request.Name, request.RootPath);
         var masterPath = Path.Combine(workbench.RootPath, "worktrees", "master");
+        var tiaStore = WorkbenchPaths.ResolveTiaStore(masterPath);
 
         try
         {
@@ -227,45 +254,106 @@ public sealed class WorkbenchCoordinator
                 "vc_init_shared",
                 new { workbenchRoot = workbench.RootPath, masterWorktreePath = masterPath },
                 cancellationToken).ConfigureAwait(false);
-            ProjectInfo project;
+
+            progress?.Report("Initializing SVN native store...");
+            var svn = await versionControl.CallAsync<CoordinatorSvnInitResult>(
+                "svn_init_shared",
+                new { workbenchRoot = workbench.RootPath },
+                cancellationToken).ConfigureAwait(false);
+            await versionControl.CallAsync<object>(
+                "svn_checkout",
+                new { url = svn.RepositoryUri.TrimEnd('/') + "/native/main", path = tiaStore },
+                cancellationToken).ConfigureAwait(false);
+
+            string managedProjectPath;
+            string? projectChecksum;
+            string compileStatus;
+            ProjectInfo managedProject;
+            string? originProjectPath;
             await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                progress?.Report(hasSession ? "Attaching to TIA Portal..." : "Opening project in TIA Portal...");
+                progress?.Report(hasSession
+                    ? "Attaching to TIA Portal..."
+                    : "Opening the origin project headless in TIA Portal...");
                 await engineering.CallAsync<object>(
                     "connect",
                     hasSession
                         ? (object)new { sessionId = request.EngineeringSessionId!.Value }
-                        : new { projectPath = validatedProjectPath, withUI = true },
+                        : new { projectPath = validatedProjectPath, withUI = false },
                     cancellationToken).ConfigureAwait(false);
-                progress?.Report("Discovering PLC devices...");
-                project = await engineering.CallAsync<ProjectInfo>(
+                var originProject = await engineering.CallAsync<ProjectInfo>(
                     "get_project_info",
                     new { },
                     cancellationToken).ConfigureAwait(false);
+                originProjectPath = originProject.Path ?? validatedProjectPath;
+                if (originProjectPath is not null
+                    && pathJail is not null
+                    && !string.Equals(originProjectPath, validatedProjectPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    originProjectPath = pathJail.Validate(originProjectPath, "engineeringProjectPath");
+                }
+
+                progress?.Report("Saving the managed project copy into the workbench...");
+                var saved = await engineering.CallAsync<CoordinatorSaveProjectAsResult>(
+                    "save_project_as",
+                    new { targetDirectory = tiaStore },
+                    cancellationToken).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(saved.ManagedProjectPath))
+                {
+                    throw new WorkbenchLifecycleException(
+                        "TIA_SAVE_AS_FAILED",
+                        "TIA did not report the managed project path after Save As.");
+                }
+
+                managedProjectPath = saved.ManagedProjectPath;
+
+                // Independent verification of the managed copy; once it holds, the origin
+                // project is never needed again (origin dependency ends here).
+                progress?.Report("Verifying the managed project copy...");
+                managedProject = await engineering.CallAsync<ProjectInfo>(
+                    "get_project_info",
+                    new { },
+                    cancellationToken).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(managedProject.Path)
+                    || !ProjectPathsEqual(managedProject.Path, managedProjectPath))
+                {
+                    throw new WorkbenchLifecycleException(
+                        "TIA_MANAGED_PROJECT_MISMATCH",
+                        $"TIA did not switch to the managed project '{managedProjectPath}'. "
+                        + $"The active project is still '{managedProject.Path}'.");
+                }
+
+                (compileStatus, projectChecksum) = await CompileManagedBaselineAsync(
+                    managedProject.PlcDevices, progress, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
                 engineeringSession.Release();
             }
 
-            var sourceProjectPath = project.Path ?? validatedProjectPath;
-            if (sourceProjectPath is not null
-                && pathJail is not null
-                && !string.Equals(sourceProjectPath, validatedProjectPath, StringComparison.OrdinalIgnoreCase))
-            {
-                sourceProjectPath = pathJail.Validate(sourceProjectPath, "engineeringProjectPath");
-            }
+            // F-signature: not readable through the Openness surface wrapped today, so the
+            // safety baseline is recorded as null.
+            // TODO(extension point): probe scripts/Dump-OpennessApi.ps1 output for a stable
+            // safety signature (e.g. Safety Administration collective F-signature); when one is
+            // reliably readable, capture it here so revision.json records it from day one.
+            string? fSignature = null;
 
             progress?.Report("Creating device folders...");
             var worktreeId = Guid.NewGuid().ToString("N");
             var registration = new WorkbenchWorktreeRegistration(
                 worktreeId, "master", "master", "master");
+            var importedAt = DateTimeOffset.UtcNow.ToString("O");
             workbench = catalog.RegisterWorktree(
                 workbench with
                 {
-                    EngineeringProjectId = ProjectIdentity(project),
-                    SourceProjectPath = sourceProjectPath,
+                    EngineeringProjectId = ProjectIdentity(managedProject),
+                    // 1.2 workbenches: SourceProjectPath mirrors the managed copy for old readers;
+                    // the origin survives only as provenance (OriginProjectPath/OriginImportedAt).
+                    SourceProjectPath = managedProjectPath,
+                    OriginProjectPath = originProjectPath,
+                    OriginImportedAt = importedAt,
+                    ManagedTiaProjectPath = managedProjectPath,
                 },
                 registration);
             // RegisterWorktree writes the supplied updated workbench.
@@ -280,9 +368,10 @@ public sealed class WorkbenchCoordinator
                 workbench.EngineeringProjectId,
                 workbench.SourceProjectPath,
                 Array.Empty<string>(),
-                null);
+                null,
+                ManagedTiaProjectPath: managedProjectPath);
 
-            var devices = project.PlcDevices.Select(plcName =>
+            var devices = managedProject.PlcDevices.Select(plcName =>
                 new DeviceMetadata(
                     WorkbenchSchema.CurrentVersion,
                     Guid.NewGuid().ToString("N"),
@@ -309,14 +398,339 @@ public sealed class WorkbenchCoordinator
                 WriteDevice(context, device);
             }
 
+            // Semantic export bootstrap into devices/<plc>/source on the managed copy.
+            var initialSourcePaths = new List<string>();
+            foreach (var device in devices)
+            {
+                var context = catalog.ResolveDevice(workbench, worktree, device);
+                progress?.Report($"Exporting PLC source for {device.PlcName}...");
+                await StageRefreshAsync(context, cancellationToken, progress).ConfigureAwait(false);
+                var preview = reconciler.Preview(context);
+                var approved = preview.Entries
+                    .Where(entry => entry.Kind is ReconciliationChangeKind.Added or ReconciliationChangeKind.Changed)
+                    .Select(entry => entry.RelativePath)
+                    .ToHashSet(StringComparer.Ordinal);
+                var baseline = await ApplyRefreshAsync(
+                        context,
+                        new ApprovedReconciliation(preview, approved),
+                        cancellationToken,
+                        progress)
+                    .ConfigureAwait(false);
+                initialSourcePaths.AddRange(baseline.ChangedPaths.Where(IsManagedSourceXml));
+            }
+
+            // Rule 8: close/quiesce the TIA session before the native baseline commit, so no
+            // TIA process can still write the managed tree while SVN snapshots it.
+            progress?.Report("Closing the TIA session...");
+            await engineering.CallAsync<object>(
+                "disconnect",
+                new { },
+                cancellationToken).ConfigureAwait(false);
+
+            progress?.Report("Committing the native TIA baseline to SVN...");
+            var nativeBaseline = await versionControl.CallAsync<CoordinatorSvnCommitResult>(
+                "svn_commit",
+                new { path = tiaStore, message = "native: initial managed TIA project baseline" },
+                cancellationToken).ConfigureAwait(false);
+
+            EngineeringStateWriter.Write(masterPath, EngineeringStateWriter.Create(
+                "^/native/main",
+                nativeBaseline.Revision,
+                projectChecksum,
+                fSignature,
+                compileStatus));
+
+            progress?.Report("Creating the initial PLC source baseline commit...");
+            var baselinePaths = initialSourcePaths
+                .Append(EngineeringStateWriter.RelativePath)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            await CommitSelectedSourceAsync(
+                    masterPath,
+                    baselinePaths,
+                    "Initial PLC source baseline",
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             RegisterWorkbench(workbench);
             return new CreateWorkbenchResult(workbench, worktree, devices);
         }
         catch
         {
+            // Best effort: release any TIA hold on the managed tree before deleting it.
+            try
+            {
+                await engineering.CallAsync<object>(
+                    "disconnect", new { }, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // The disconnect is cleanup only; the original failure decides the outcome.
+            }
+
             catalog.RollbackCreate(workbench);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Optional compile of every PLC on the MANAGED project copy. A compile failure is recorded
+    /// as FAILED in revision.json and never fails the import; the checksum stays null then.
+    /// </summary>
+    private async Task<(string CompileStatus, string? ProjectChecksum)> CompileManagedBaselineAsync(
+        IReadOnlyList<string> plcNames,
+        IOperationProgress? progress,
+        CancellationToken cancellationToken)
+    {
+        if (plcNames.Count == 0)
+        {
+            return (EngineeringCompileStatus.NotRun, null);
+        }
+
+        try
+        {
+            var failed = false;
+            foreach (var plcName in plcNames)
+            {
+                progress?.Report($"Compiling {plcName} on the managed project...");
+                var compile = await engineering.CallAsync<CompileResult>(
+                    "compile_plc",
+                    new { plcName },
+                    cancellationToken).ConfigureAwait(false);
+                if (!string.Equals(compile.State, "success", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(compile.State, "warnings", StringComparison.OrdinalIgnoreCase))
+                {
+                    failed = true;
+                }
+            }
+
+            if (failed)
+            {
+                return (EngineeringCompileStatus.Failed, null);
+            }
+
+            var checksums = await engineering.CallAsync<PlcChecksumInfo[]>(
+                "get_plc_checksums",
+                new { plcName = (string?)null },
+                cancellationToken).ConfigureAwait(false);
+            return (EngineeringCompileStatus.Success, AggregateProjectChecksum(checksums));
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Compile evidence is best-effort: a broken compile never blocks the import.
+            return (EngineeringCompileStatus.Failed, null);
+        }
+    }
+
+    /// <summary>
+    /// Required compile of every PLC on the managed project before a combined commit
+    /// (Phase 3): unlike the import baseline, a compile failure ABORTS the commit before
+    /// anything is written to SVN or Git.
+    /// </summary>
+    private async Task<(string CompileStatus, string? ProjectChecksum)> CompileManagedForCommitAsync(
+        IReadOnlyList<string> plcNames,
+        CancellationToken cancellationToken)
+    {
+        if (plcNames.Count == 0)
+        {
+            return (EngineeringCompileStatus.NotRun, null);
+        }
+
+        var failures = new List<string>();
+        foreach (var plcName in plcNames)
+        {
+            var compile = await engineering.CallAsync<CompileResult>(
+                "compile_plc",
+                new { plcName },
+                cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(compile.State, "success", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(compile.State, "warnings", StringComparison.OrdinalIgnoreCase))
+            {
+                failures.Add($"{plcName}: {compile.State}");
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new WorkbenchLifecycleException(
+                "PLC_COMPILE_FAILED",
+                "Compile failed on the managed project; nothing was committed on either side. "
+                + string.Join("; ", failures));
+        }
+
+        var checksums = await engineering.CallAsync<PlcChecksumInfo[]>(
+            "get_plc_checksums",
+            new { plcName = (string?)null },
+            cancellationToken).ConfigureAwait(false);
+        return (EngineeringCompileStatus.Success, AggregateProjectChecksum(checksums));
+    }
+
+    /// <summary>Deterministic single-string project checksum shared by bootstrap and commit.</summary>
+    private static string? AggregateProjectChecksum(IEnumerable<PlcChecksumInfo> checksums)
+    {
+        var aggregate = string.Join(";", checksums
+            .Where(checksum => checksum.IsCompiled)
+            .OrderBy(checksum => checksum.PlcName, StringComparer.Ordinal)
+            .Select(checksum => $"{checksum.PlcName}:{checksum.SoftwareChecksum}"));
+        return aggregate.Length == 0 ? null : aggregate;
+    }
+
+    /// <summary>
+    /// Restores the native TIA project state recorded by revision.json at a Git commit
+    /// (default HEAD): resolves the SVN url+revision and checks out that exact revision into a
+    /// caller-chosen target directory — never into the live tia/ working copy. The returned path
+    /// can be opened in TIA as an independent project.
+    /// </summary>
+    public async Task<RestoreTiaProjectResult> RestoreTiaProjectAsync(
+        string workbenchId,
+        string worktreeId,
+        string targetDirectory,
+        string? gitCommit = null,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        if (string.IsNullOrWhiteSpace(targetDirectory))
+        {
+            throw new ArgumentException("A restore target directory is required.", nameof(targetDirectory));
+        }
+
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        if (string.IsNullOrWhiteSpace(workbench.SvnRepositoryPath)
+            || !Directory.Exists(workbench.SvnRepositoryPath))
+        {
+            throw new WorkbenchLifecycleException(
+                "SVN_HISTORY_UNAVAILABLE",
+                $"Workbench '{workbenchId}' has no SVN native store (workbenches created before "
+                + "schema 1.2 do not record native history).");
+        }
+
+        var registration = workbench.Worktrees.SingleOrDefault(item => item.WorktreeId == worktreeId)
+            ?? throw new WorkbenchCatalogException(
+                "WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+
+        var target = Path.GetFullPath(targetDirectory);
+        var tiaStore = WorkbenchPaths.ResolveTiaStore(worktreeRoot);
+        if (string.Equals(target, tiaStore, StringComparison.OrdinalIgnoreCase)
+            || target.StartsWith(
+                tiaStore.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorkbenchLifecycleException(
+                "RESTORE_TARGET_INVALID",
+                "The restore target must not be the live tia/ working copy or inside it.");
+        }
+
+        if (pathJail is not null)
+        {
+            target = pathJail.Validate(target, nameof(targetDirectory));
+        }
+
+        var head = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
+        var sha = string.IsNullOrWhiteSpace(gitCommit) ? head : gitCommit.Trim();
+        var state = await ReadRevisionStateAtCommitAsync(worktreeRoot, sha, head, token)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(state.Svn?.Url) || state.Svn.Revision is null)
+        {
+            throw new WorkbenchLifecycleException(
+                "REVISION_STATE_INCOMPLETE",
+                $"The engineering revision state at commit '{sha}' records no SVN url/revision.");
+        }
+
+        var svnUrl = ResolveSvnUrl(workbench.SvnRepositoryPath, state.Svn.Url);
+        progress?.Report($"Checking out native revision {state.Svn.Revision}...");
+        await versionControl.CallAsync<object>(
+            "svn_checkout",
+            new { url = svnUrl, path = target },
+            token).ConfigureAwait(false);
+        await versionControl.CallAsync<object>(
+            "svn_update",
+            new { path = target, revision = state.Svn.Revision.Value },
+            token).ConfigureAwait(false);
+
+        var projectFiles = Directory.Exists(target)
+            ? Directory.EnumerateFiles(target, "*.ap17", SearchOption.AllDirectories).ToArray()
+            : Array.Empty<string>();
+        return new RestoreTiaProjectResult(
+            sha,
+            state.Svn.Url,
+            state.Svn.Revision.Value,
+            target,
+            projectFiles.Length == 1 ? projectFiles[0] : null);
+    }
+
+    /// <summary>
+    /// Reads engineering-state/revision.json at a Git commit through the VC boundary. At HEAD the
+    /// working-tree file is read directly; for older commits the file is materialized via
+    /// vc_restore and put back to HEAD afterwards (revision.json is coordinator-managed, so the
+    /// working-tree copy always matches HEAD outside this window).
+    /// </summary>
+    private async Task<EngineeringRevisionState> ReadRevisionStateAtCommitAsync(
+        string worktreeRoot,
+        string sha,
+        string head,
+        CancellationToken token)
+    {
+        var path = WorkbenchPaths.ResolveRevisionState(worktreeRoot);
+        if (string.Equals(sha, head, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(path))
+            {
+                throw new WorkbenchLifecycleException(
+                    "REVISION_STATE_NOT_FOUND",
+                    $"The worktree has no engineering revision state at HEAD '{head}'.");
+            }
+
+            return EngineeringStateWriter.Read(path);
+        }
+
+        try
+        {
+            await versionControl.CallAsync<object>(
+                "vc_restore",
+                new { repoPath = worktreeRoot, filePath = EngineeringStateWriter.RelativePath, sourceSha = sha },
+                token).ConfigureAwait(false);
+        }
+        catch (ToolCallException exception)
+        {
+            throw new WorkbenchLifecycleException(
+                "REVISION_STATE_NOT_FOUND",
+                $"The engineering revision state could not be read at commit '{sha}': {exception.Message}");
+        }
+
+        try
+        {
+            return EngineeringStateWriter.Read(path);
+        }
+        finally
+        {
+            await versionControl.CallAsync<object>(
+                "vc_restore",
+                new
+                {
+                    repoPath = worktreeRoot,
+                    filePath = EngineeringStateWriter.RelativePath,
+                    sourceSha = (string?)head,
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Resolves a repository-relative "^/native/..." url against the local SVN store.</summary>
+    private static string ResolveSvnUrl(string svnRepositoryPath, string recordedUrl)
+    {
+        if (!recordedUrl.StartsWith("^/", StringComparison.Ordinal))
+        {
+            return recordedUrl;
+        }
+
+        var repositoryUri = new Uri(
+            Path.GetFullPath(svnRepositoryPath).TrimEnd(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar);
+        return repositoryUri + recordedUrl[2..];
     }
 
     public async Task<WorktreeMetadata> CreateWorktreeAsync(
@@ -376,6 +790,39 @@ public sealed class WorkbenchCoordinator
         var worktreePath = WorkbenchPaths.ResolveWorktree(
             persistedWorkbench.RootPath,
             relativePath);
+
+        // Phase 4: a 1.2 workbench (SVN native store + master revision baseline) gives the
+        // feature its own SVN branch + tia/ working copy; 1.1 workbenches stay git-only.
+        var masterSvnBase = TryResolveMasterSvnBase(persistedWorkbench, masterPath);
+        string? baseGitCommit = request.StartPoint;
+        string? featureSvnUrl = null;
+        if (masterSvnBase is not null)
+        {
+            baseGitCommit ??= await ReadMasterHeadAsync(masterPath, cancellationToken)
+                .ConfigureAwait(false);
+            var svnSegment = SafeDirectoryName(request.Branch);
+            featureSvnUrl = $"^/native/branches/{svnSegment}";
+            // Cheap collision pre-check before anything is created: the SVN branch copy
+            // itself creates a repository revision, so a predictable collision should fail
+            // here with a clear error instead of after the git worktree exists.
+            var branchUrl = SvnBranchUrl(persistedWorkbench.SvnRepositoryPath!, svnSegment);
+            try
+            {
+                await versionControl.CallAsync<object>(
+                    "svn_log",
+                    new { path = branchUrl, limit = 1 },
+                    cancellationToken).ConfigureAwait(false);
+                throw new WorkbenchLifecycleException(
+                    "SVN_BRANCH_EXISTS",
+                    $"The SVN native branch '{featureSvnUrl}' already exists; choose another branch name.");
+            }
+            catch (Exception exception) when (exception is not WorkbenchLifecycleException
+                and not OperationCanceledException)
+            {
+                // The branch URL does not resolve — the branch does not exist yet.
+            }
+        }
+
         progress?.Report("Creating linked worktree...");
         try
         {
@@ -390,6 +837,32 @@ public sealed class WorkbenchCoordinator
                 },
                 cancellationToken).ConfigureAwait(false);
 
+            string? featureManagedProjectPath = null;
+            long? baseSvnRevision = null;
+            if (masterSvnBase is not null && featureSvnUrl is not null)
+            {
+                progress?.Report("Creating the feature's SVN native branch...");
+                baseSvnRevision = masterSvnBase.Value.Revision;
+                var svnSegment = featureSvnUrl["^/native/branches/".Length..];
+                await versionControl.CallAsync<object>(
+                    "svn_copy_branch",
+                    new
+                    {
+                        repoUrl = SvnRepositoryUri(persistedWorkbench.SvnRepositoryPath!),
+                        sourceBranch = masterSvnBase.Value.Url["^/native/".Length..],
+                        revision = baseSvnRevision.Value,
+                        newBranch = svnSegment,
+                        message = $"native: branch {featureSvnUrl} from {masterSvnBase.Value.Url}@{baseSvnRevision.Value}",
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                var featureTiaStore = WorkbenchPaths.ResolveTiaStore(worktreePath);
+                await versionControl.CallAsync<object>(
+                    "svn_checkout",
+                    new { url = SvnBranchUrl(persistedWorkbench.SvnRepositoryPath!, svnSegment), path = featureTiaStore },
+                    cancellationToken).ConfigureAwait(false);
+                featureManagedProjectPath = DiscoverManagedProject(featureTiaStore);
+            }
+
             progress?.Report("Writing worktree metadata...");
             var worktree = new WorktreeMetadata(
                 WorkbenchSchema.CurrentVersion,
@@ -398,11 +871,14 @@ public sealed class WorkbenchCoordinator
                 request.Name,
                 request.Branch,
                 DateTimeOffset.UtcNow.ToString("O"),
-                request.StartPoint,
+                baseGitCommit,
                 masterWorktree.EngineeringProjectId,
                 masterWorktree.SourceProjectPath,
                 inheritedDevices.Select(device => device.DeviceId).ToArray(),
-                null);
+                null,
+                ManagedTiaProjectPath: featureManagedProjectPath ?? masterWorktree.ManagedTiaProjectPath,
+                SvnUrl: featureSvnUrl,
+                BaseSvnRevision: baseSvnRevision);
             store.Write(Path.Combine(worktreePath, "worktree.json"), worktree);
             foreach (var inherited in inheritedDevices)
             {
@@ -434,6 +910,10 @@ public sealed class WorkbenchCoordinator
         {
             try
             {
+                // A partially created tia/ working copy must go first: SVN pristine files can
+                // be read-only, and git refuses to remove a checkout holding untracked files.
+                // The SVN branch itself is never deleted — branches simply remain.
+                DeleteTiaStoreIfPresent(worktreePath);
                 await versionControl.CallAsync<object>(
                     "vc_remove_worktree",
                     new
@@ -455,6 +935,62 @@ public sealed class WorkbenchCoordinator
 
             throw;
         }
+    }
+
+    /// <summary>Master's SVN base for feature branching: the url+revision recorded in master's
+    /// engineering-state/revision.json. Null when the workbench has no SVN native store (1.1)
+    /// or no baseline — feature creation then stays git-only.</summary>
+    private static (string Url, long Revision)? TryResolveMasterSvnBase(
+        WorkbenchMetadata workbench,
+        string masterRoot)
+    {
+        if (string.IsNullOrWhiteSpace(workbench.SvnRepositoryPath)
+            || !Directory.Exists(workbench.SvnRepositoryPath))
+        {
+            return null;
+        }
+
+        var state = TryReadRevisionState(masterRoot);
+        return state?.Svn is { Url: { Length: > 0 } url, Revision: { } revision }
+            ? (url, revision)
+            : null;
+    }
+
+    /// <summary>file:// root URI of the workbench's local SVN repository (no trailing slash).</summary>
+    private static string SvnRepositoryUri(string svnRepositoryPath) =>
+        new Uri(
+                Path.GetFullPath(svnRepositoryPath).TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar)
+            .ToString()
+            .TrimEnd('/');
+
+    private static string SvnBranchUrl(string svnRepositoryPath, string svnSegment) =>
+        $"{SvnRepositoryUri(svnRepositoryPath)}/native/branches/{svnSegment}";
+
+    /// <summary>The managed TIA project file inside a freshly checked-out tia/ working copy.</summary>
+    private static string DiscoverManagedProject(string tiaStore)
+    {
+        var projects = Directory.EnumerateFiles(tiaStore, "*.ap17", SearchOption.TopDirectoryOnly)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return projects.Length == 1
+            ? projects[0]
+            : throw new WorkbenchLifecycleException(
+                "FEATURE_PROJECT_NOT_FOUND",
+                $"The feature tia/ working copy '{tiaStore}' does not contain exactly one .ap17 project.");
+    }
+
+    private static void DeleteTiaStoreIfPresent(string worktreeRoot)
+    {
+        var tiaStore = WorkbenchPaths.ResolveTiaStore(worktreeRoot);
+        if (!Directory.Exists(tiaStore))
+        {
+            return;
+        }
+
+        WorkbenchCatalog.ClearReadOnlyAttributes(tiaStore);
+        Directory.Delete(tiaStore, recursive: true);
     }
 
     public async Task DeleteWorktreeAsync(
@@ -490,6 +1026,9 @@ public sealed class WorkbenchCoordinator
 
         var worktreeRoot = WorkbenchPaths.ResolveWorktree(persisted.RootPath, registration.RelativePath);
         progress?.Report($"Removing linked worktree '{registration.Name}'...");
+        // The feature's tia/ working copy goes first (read-only SVN pristine files; git
+        // refuses to remove a checkout holding untracked files). The SVN branch stays.
+        DeleteTiaStoreIfPresent(worktreeRoot);
         try
         {
             await versionControl.CallAsync<object>(
@@ -754,7 +1293,8 @@ public sealed class WorkbenchCoordinator
     {
         var worktree = store.Read<WorktreeMetadata>(
             Path.Combine(device.WorktreeRoot, "worktree.json"));
-        if (string.IsNullOrWhiteSpace(worktree.SourceProjectPath))
+        var projectPath = OperationalProjectPath(worktree);
+        if (string.IsNullOrWhiteSpace(projectPath))
         {
             throw new WorkbenchLifecycleException(
                 "ENGINEERING_PROJECT_PATH_MISSING",
@@ -763,7 +1303,7 @@ public sealed class WorkbenchCoordinator
 
         var activeProject = await ReadActiveProjectAsync(cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(activeProject.Path)
-            || !ProjectPathsEqual(worktree.SourceProjectPath, activeProject.Path))
+            || !ProjectPathsEqual(projectPath, activeProject.Path))
         {
             progress?.Report("Opening the selected TIA project before continuing...");
             await engineering.CallAsync<object>(
@@ -776,10 +1316,10 @@ public sealed class WorkbenchCoordinator
                 cancellationToken).ConfigureAwait(false);
             var matchingSession = sessions.FirstOrDefault(session =>
                 !string.IsNullOrWhiteSpace(session.ProjectPath)
-                && ProjectPathsEqual(worktree.SourceProjectPath, session.ProjectPath));
+                && ProjectPathsEqual(projectPath, session.ProjectPath));
             var connectTarget = matchingSession is not null
                 ? (object)new { sessionId = matchingSession.Id }
-                : new { projectPath = worktree.SourceProjectPath, withUI = true };
+                : new { projectPath, withUI = true };
             await engineering.CallAsync<object>(
                 "connect",
                 connectTarget,
@@ -794,11 +1334,11 @@ public sealed class WorkbenchCoordinator
                 "TIA did not report an active project after opening the selected project.");
         }
 
-        if (!ProjectPathsEqual(worktree.SourceProjectPath, activeProject.Path))
+        if (!ProjectPathsEqual(projectPath, activeProject.Path))
         {
             throw new WorkbenchLifecycleException(
                 "ENGINEERING_PROJECT_MISMATCH",
-                $"TIA did not switch to the selected project '{worktree.SourceProjectPath}'. "
+                $"TIA did not switch to the selected project '{projectPath}'. "
                 + $"The active project is still '{activeProject.Path}'.");
         }
     }
@@ -1785,9 +2325,16 @@ public sealed class WorkbenchCoordinator
             ?? throw new WorkbenchCatalogException("WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
         var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
         var worktree = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
-        var selected = NormalizeSourcePaths(paths);
+        // 1.2 workbenches with a managed tia/ store run the combined SVN+Git transaction; an
+        // empty path list is allowed there (safety-only savepoints commit revision.json alone).
+        // 1.1 workbenches keep the git-only behavior unchanged.
+        var combined = IsSvnManaged(workbench, worktree, worktreeRoot);
+        var selected = combined && paths.Count == 0
+            ? Array.Empty<string>()
+            : NormalizeSourcePaths(paths);
+        var isMaster = string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase);
 
-        if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase))
+        if (isMaster)
         {
             var pending = writePolicy.ReadPending(worktreeRoot, worktree.WorktreeId);
             var authorized = pending.Sources.Where(item => selected.Contains(item.RelativePath, StringComparer.Ordinal)).ToArray();
@@ -1812,10 +2359,14 @@ public sealed class WorkbenchCoordinator
                     "Master advanced after TIA authorization; compare TIA with master again before committing.");
         }
 
-        var result = await CommitSelectedSourceAsync(worktreeRoot, selected, message, token, author)
-            .ConfigureAwait(false);
+        var result = combined
+            ? await CommitCombinedAsync(
+                workbench, worktree, worktreeRoot, registration.RelativePath, selected, message.Trim(), token, author)
+                .ConfigureAwait(false)
+            : await CommitSelectedSourceAsync(worktreeRoot, selected, message, token, author)
+                .ConfigureAwait(false);
 
-        if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase))
+        if (isMaster)
         {
             var remaining = writePolicy.ReadPending(worktreeRoot, worktree.WorktreeId).Sources
                 .Where(item => !selected.Contains(item.RelativePath, StringComparer.Ordinal))
@@ -1829,6 +2380,193 @@ public sealed class WorkbenchCoordinator
 
         return result;
     }
+
+    /// <summary>The combined transaction engages only where an SVN native store and a managed
+    /// tia/ working copy exist (1.2 master today; feature worktrees join in Phase 4).</summary>
+    private static bool IsSvnManaged(WorkbenchMetadata workbench, WorktreeMetadata worktree, string worktreeRoot) =>
+        !string.IsNullOrWhiteSpace(workbench.SvnRepositoryPath)
+        && Directory.Exists(workbench.SvnRepositoryPath)
+        && !string.IsNullOrWhiteSpace(worktree.ManagedTiaProjectPath)
+        && Directory.Exists(WorkbenchPaths.ResolveTiaStore(worktreeRoot));
+
+    /// <summary>
+    /// Phase 3 combined commit: TIA Save → compile (required) → checksum → F-signature →
+    /// quiesce TIA → SVN commit (message carries the classification, not a git sha) →
+    /// revision.json → git commit. The semantic export itself already happened upstream
+    /// (ApplyTiaSynchronizationAsync applies the staged TIA sources before calling this);
+    /// the git commit binds exactly those files to the SVN revision of the same TIA state.
+    /// Freeze discipline (Rule 8): the TIA session is disconnected before the SVN commit and
+    /// stays closed afterwards — the next TIA operation reopens the managed project on demand
+    /// via EnsureActiveProjectMatchesWorktreeAsync.
+    /// Minimal recovery: if git fails after the SVN commit, .automation/pending-commit.json
+    /// records the savepoint and the next commit retries the git side only.
+    /// </summary>
+    private async Task<WorkbenchCommitResult> CommitCombinedAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree,
+        string worktreeRoot,
+        string worktreeRelativePath,
+        IReadOnlyList<string> selected,
+        string message,
+        CancellationToken token,
+        string? author)
+    {
+        var commitPaths = selected
+            .Append(EngineeringStateWriter.RelativePath)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        var pending = PendingCommitStore.Read(worktreeRoot);
+        if (pending is not null)
+        {
+            // Retry: the SVN revision is already committed; finish the git side with the SAME
+            // revision — never a second SVN snapshot of the same savepoint.
+            var existing = TryReadRevisionState(worktreeRoot);
+            if (existing?.Svn?.Revision != pending.SvnRevision
+                || !string.Equals(existing?.Svn?.Url, pending.SvnUrl, StringComparison.Ordinal))
+            {
+                EngineeringStateWriter.Write(worktreeRoot, EngineeringStateWriter.Create(
+                    pending.SvnUrl,
+                    pending.SvnRevision,
+                    existing?.Tia?.ProjectChecksum,
+                    existing?.Safety?.FSignature,
+                    existing?.Validation?.CompileStatus ?? EngineeringCompileStatus.Success));
+            }
+
+            var retried = await CommitSelectedSourceAsync(worktreeRoot, commitPaths, message, token, author)
+                .ConfigureAwait(false);
+            PendingCommitStore.Clear(worktreeRoot);
+            return retried;
+        }
+
+        var baseline = TryReadRevisionState(worktreeRoot);
+        var devices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
+        var compileStatus = EngineeringCompileStatus.NotRun;
+        string? projectChecksum = null;
+        if (devices.Count > 0)
+        {
+            await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                await EnsureActiveProjectMatchesWorktreeAsync(devices[0].Context, token, null)
+                    .ConfigureAwait(false);
+                await engineering.CallAsync<object>("save_project", new { }, token).ConfigureAwait(false);
+                (compileStatus, projectChecksum) = await CompileManagedForCommitAsync(
+                    devices.Select(device => device.Metadata.PlcName).ToArray(),
+                    token).ConfigureAwait(false);
+            }
+            finally
+            {
+                engineeringSession.Release();
+            }
+        }
+
+        // F-signature: still not readable via Openness — same extension point as the bootstrap
+        // (see CreateWorkbenchAsync). Recorded as null until the probe lands.
+        string? fSignature = null;
+
+        // Rule 8: quiesce the TIA session before the native commit so no TIA process can still
+        // write the managed tree while SVN snapshots it.
+        if (devices.Count > 0)
+        {
+            await engineering.CallAsync<object>("disconnect", new { }, token).ConfigureAwait(false);
+        }
+
+        var tiaStore = WorkbenchPaths.ResolveTiaStore(worktreeRoot);
+        var svnStatus = await versionControl.CallAsync<CoordinatorSvnStatusResult>(
+            "svn_status",
+            new { path = tiaStore },
+            token).ConfigureAwait(false);
+        var classification = EngineeringStateWriter.Classify(
+            baseline ?? EngineeringStateWriter.Create(
+                null, null, null, null, EngineeringCompileStatus.NotRun),
+            projectChecksum,
+            fSignature,
+            svnWorkingCopyDirty: !svnStatus.IsClean,
+            semanticDiffChanged: selected.Count > 0);
+        if (selected.Count == 0 && !classification.SafetyChanged && !classification.NativeChanged)
+        {
+            throw new WorkbenchLifecycleException(
+                "COMMIT_NOTHING_TO_COMMIT",
+                "No semantic, safety, or native change to commit.");
+        }
+
+        // The commit targets this worktree's own SVN branch (feature worktrees, Phase 4);
+        // master falls back to the recorded baseline url, then to ^/native/main.
+        var svnUrl = worktree.SvnUrl ?? baseline?.Svn?.Url ?? "^/native/main";
+        var svnCommit = await versionControl.CallAsync<CoordinatorSvnCommitResult>(
+            "svn_commit",
+            new { path = tiaStore, message = $"{message} [{FormatClassification(classification)}]" },
+            token).ConfigureAwait(false);
+
+        EngineeringStateWriter.Write(worktreeRoot, EngineeringStateWriter.Create(
+            svnUrl,
+            svnCommit.Revision,
+            projectChecksum,
+            fSignature,
+            compileStatus));
+
+        try
+        {
+            return await CommitSelectedSourceAsync(worktreeRoot, commitPaths, message, token, author)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            PendingCommitStore.Write(worktreeRoot, new PendingSvnCommit(
+                svnUrl, svnCommit.Revision, PendingSvnCommit.PendingGitCommit));
+            throw new WorkbenchLifecycleException(
+                "GIT_COMMIT_PENDING",
+                $"The native SVN revision {svnCommit.Revision} was committed, but the git commit "
+                + "failed. The savepoint is recorded in .automation/pending-commit.json; retry "
+                + "the commit to finish the git side with the same SVN revision. "
+                + $"Cause: {exception.Message}");
+        }
+    }
+
+    private static string FormatClassification(EngineeringChangeClassification classification)
+    {
+        var kinds = new List<string>(3);
+        if (classification.SemanticChanged)
+        {
+            kinds.Add("semantic");
+        }
+
+        if (classification.SafetyChanged)
+        {
+            kinds.Add("safety");
+        }
+
+        if (classification.NativeChanged)
+        {
+            kinds.Add("native");
+        }
+
+        return kinds.Count == 0 ? "no-change" : string.Join(", ", kinds);
+    }
+
+    private static EngineeringRevisionState? TryReadRevisionState(string worktreeRoot)
+    {
+        var path = WorkbenchPaths.ResolveRevisionState(worktreeRoot);
+        return File.Exists(path) ? EngineeringStateWriter.Read(path) : null;
+    }
+
+    private IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> LoadWorktreeDeviceContexts(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree,
+        string worktreeRelativePath) =>
+        LoadInheritedDevices(
+                WorkbenchPaths.ResolveWorktree(workbench.RootPath, worktreeRelativePath),
+                worktree)
+            .Select(device => (device, WorkbenchPaths.ResolveDevice(
+                workbench.WorkbenchId,
+                workbench.RootPath,
+                worktree.WorktreeId,
+                worktreeRelativePath,
+                device.DeviceId,
+                device.PlcName)))
+            .ToArray();
 
     private async Task<WorkbenchCommitResult> CommitSelectedSourceAsync(
         string worktreeRoot,

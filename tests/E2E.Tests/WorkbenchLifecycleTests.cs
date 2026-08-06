@@ -7,6 +7,7 @@ using Contracts.Engineering;
 using Contracts.Knowledge;
 using Mcp.Knowledge.Tools;
 using Mcp.VersionControl.Git;
+using Mcp.VersionControl.Svn;
 using Microsoft.Data.Sqlite;
 using ModelContextProtocol.Protocol;
 using Xunit;
@@ -204,6 +205,8 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var plc2 = catalog.ResolveDevice(created.Workbench, created.Worktree, created.Devices[1]);
         SetKnowledgeCurrent(store, plc1);
         SetKnowledgeCurrent(store, plc2);
+        // The 1.2 create flow already bootstrapped a baseline export into the source trees.
+        var baselineMain = File.ReadAllText(Path.Combine(plc1.SourceRoot, "Blocks", "Main.xml"));
         engineering.SetExport("PLC_1", "v1");
         engineering.SetExport("PLC_2", "v1");
 
@@ -212,8 +215,8 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var rejected = await coordinator.ApplyRefreshAsync(
             plc1, ApprovedReconciliation.Rejected(rejectedPreview), CancellationToken.None);
         Assert.Equal(RefreshApplyState.Rejected, rejected.State);
-        Assert.False(File.Exists(Path.Combine(plc1.SourceRoot, "Blocks", "Main.xml")));
-        Assert.Empty(RepositoryService.Log(plc1.WorktreeRoot, 10).Commits);
+        Assert.Equal(baselineMain, File.ReadAllText(Path.Combine(plc1.SourceRoot, "Blocks", "Main.xml")));
+        Assert.Single(RepositoryService.Log(plc1.WorktreeRoot, 10).Commits);
 
         engineering.SetExport("PLC_1", "stale-preview");
         await coordinator.StageRefreshAsync(plc1, CancellationToken.None);
@@ -345,6 +348,461 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         AssertCompleteDeviceTrees(plc1.WorktreeRoot, "PLC_1", "PLC_2");
         Assert.Equal("do-not-touch", File.ReadAllText(legacySentinel));
         SqliteConnection.ClearAllPools();
+    }
+
+    [Fact]
+    public async Task NewWorkbenchRecordsSvnBaselineAndCommittedRevisionState()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Native baseline line", Path.Combine(root, "native-baseline"), 42, null));
+
+        var workbenchRoot = created.Workbench.RootPath;
+        var masterRoot = WorkbenchPaths.ResolveWorktree(workbenchRoot, "master");
+        var tiaStore = WorkbenchPaths.ResolveTiaStore(masterRoot);
+
+        Assert.Equal("1.2", created.Workbench.SchemaVersion);
+        Assert.Equal(
+            Path.Combine(workbenchRoot, "repository.svn"),
+            created.Workbench.SvnRepositoryPath);
+        Assert.True(Directory.Exists(created.Workbench.SvnRepositoryPath));
+        Assert.Equal(@"C:\Fixture\Line.ap17", created.Workbench.OriginProjectPath);
+        Assert.NotNull(created.Workbench.OriginImportedAt);
+        var managedPath = Assert.IsType<string>(created.Workbench.ManagedTiaProjectPath);
+        Assert.Equal(tiaStore, Path.GetDirectoryName(managedPath));
+        Assert.True(File.Exists(managedPath));
+        Assert.Equal(managedPath, created.Workbench.SourceProjectPath);
+        Assert.Equal(managedPath, created.Worktree.ManagedTiaProjectPath);
+
+        // revision.json records the SVN baseline and is part of the clean git baseline commit.
+        var revision = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
+        Assert.Equal(1, revision.SchemaVersion);
+        Assert.Equal("^/native/main", revision.Svn.Url);
+        Assert.True(revision.Svn.Revision >= 1);
+        Assert.Equal("PLC_1:checksum-PLC_1;PLC_2:checksum-PLC_2", revision.Tia.ProjectChecksum);
+        Assert.Null(revision.Safety.FSignature);
+        Assert.Equal(EngineeringCompileStatus.Success, revision.Validation.CompileStatus);
+        Assert.Empty(RepositoryService.Status(masterRoot).Entries);
+        var gitLog = RepositoryService.Log(masterRoot, 10).Commits;
+        var baseline = Assert.Single(gitLog);
+        Assert.Contains("engineering-state/revision.json", baseline.Files);
+        Assert.Contains("devices/PLC_1/source/Blocks/Main.xml", baseline.Files);
+
+        // The SVN native store holds the baseline revision and the working copy is clean.
+        var svn = new SvnRepositoryService();
+        var mainUrl = new Uri(created.Workbench.SvnRepositoryPath! + Path.DirectorySeparatorChar) + "native/main";
+        var svnLog = svn.Log(mainUrl, 10);
+        Assert.Contains(
+            svnLog.Entries,
+            entry => entry.Message.Contains("native: initial managed TIA project baseline", StringComparison.Ordinal));
+        Assert.True(svn.Status(tiaStore).IsClean);
+    }
+
+    [Fact]
+    public async Task CompileFailureStillCompletesImportWithFailedCompileStatus()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var engineering = new EngineeringBoundary();
+        engineering.SetCompileState("error");
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Compile failure line", Path.Combine(root, "compile-failure"), 42, null));
+
+        var masterRoot = WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master");
+        var revision = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
+        Assert.Equal(EngineeringCompileStatus.Failed, revision.Validation.CompileStatus);
+        Assert.Null(revision.Tia.ProjectChecksum);
+        Assert.True(revision.Svn.Revision >= 1);
+        Assert.Single(RepositoryService.Log(masterRoot, 10).Commits);
+    }
+
+    [Fact]
+    public async Task FailedSaveProjectAsRollsBackSvnRepositoryAndWorkbench()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var engineering = new EngineeringBoundary { FailSaveProjectAs = true };
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var workbenchRoot = Path.Combine(root, "save-as-failure");
+
+        await Assert.ThrowsAsync<ToolCallException>(() =>
+            coordinator.CreateWorkbenchAsync(new("Save failure line", workbenchRoot, 42, null)));
+
+        Assert.False(File.Exists(Path.Combine(workbenchRoot, "workbench.json")));
+        Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "repository.svn")));
+        Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "repository.git")));
+        Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "worktrees")));
+    }
+
+    [Fact]
+    public async Task RestoreTiaProjectChecksOutTheRecordedNativeRevision()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Restore line", Path.Combine(root, "restore"), 42, null));
+        var masterRoot = WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master");
+        var tiaStore = WorkbenchPaths.ResolveTiaStore(masterRoot);
+        var managedPath = Assert.IsType<string>(created.Workbench.ManagedTiaProjectPath);
+        var baselineRevision = EngineeringStateWriter.Read(
+            WorkbenchPaths.ResolveRevisionState(masterRoot)).Svn.Revision!.Value;
+
+        // A later native change advances the SVN HEAD beyond the recorded baseline.
+        var svn = new SvnRepositoryService();
+        File.AppendAllText(managedPath, "later change");
+        svn.AddRecursive(tiaStore);
+        var later = svn.Commit(tiaStore, "native: later change");
+        Assert.True(later.Committed);
+        Assert.Equal(baselineRevision + 1, later.Revision);
+
+        var target = Path.Combine(root, "restored-project");
+        var restored = await coordinator.RestoreTiaProjectAsync(
+            created.Workbench.WorkbenchId,
+            created.Worktree.WorktreeId,
+            target);
+
+        Assert.Equal(baselineRevision, restored.SvnRevision);
+        Assert.Equal("^/native/main", restored.SvnUrl);
+        Assert.Equal(
+            RepositoryService.Log(masterRoot, 1).Commits.Single().Sha,
+            restored.GitCommit);
+        Assert.Equal(target, restored.RestoredDirectory);
+        var restoredProject = Assert.IsType<string>(restored.RestoredProjectPath);
+        Assert.Equal("managed TIA project placeholder", File.ReadAllText(restoredProject));
+        // The live working copy is untouched by the restore.
+        Assert.Equal("managed TIA project placeholderlater change", File.ReadAllText(managedPath));
+    }
+
+    [Fact]
+    public async Task RestoreTiaProjectAtOlderGitCommitReadsHistoricalRevisionState()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Historical restore line", Path.Combine(root, "restore-historical"), 42, null));
+        var masterRoot = WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master");
+        var tiaStore = WorkbenchPaths.ResolveTiaStore(masterRoot);
+        var managedPath = Assert.IsType<string>(created.Workbench.ManagedTiaProjectPath);
+        var firstSha = RepositoryService.Log(masterRoot, 1).Commits.Single().Sha;
+        var firstRevision = EngineeringStateWriter.Read(
+            WorkbenchPaths.ResolveRevisionState(masterRoot)).Svn.Revision!.Value;
+
+        // A later savepoint: native change + second SVN revision + updated revision.json + git commit.
+        var svn = new SvnRepositoryService();
+        File.AppendAllText(managedPath, "second savepoint");
+        svn.AddRecursive(tiaStore);
+        var secondSvn = svn.Commit(tiaStore, "native: second savepoint");
+        EngineeringStateWriter.Write(masterRoot, EngineeringStateWriter.Create(
+            "^/native/main",
+            secondSvn.Revision,
+            "PLC_1:checksum-PLC_1;PLC_2:checksum-PLC_2",
+            null,
+            EngineeringCompileStatus.Success));
+        RepositoryService.CommitSelected(
+            masterRoot, ["engineering-state/revision.json"], "savepoint 2", null);
+
+        var target = Path.Combine(root, "restored-historical");
+        var restored = await coordinator.RestoreTiaProjectAsync(
+            created.Workbench.WorkbenchId,
+            created.Worktree.WorktreeId,
+            target,
+            firstSha);
+
+        Assert.Equal(firstSha, restored.GitCommit);
+        Assert.Equal(firstRevision, restored.SvnRevision);
+        var restoredProject = Assert.IsType<string>(restored.RestoredProjectPath);
+        Assert.Equal("managed TIA project placeholder", File.ReadAllText(restoredProject));
+        // The restore read window is closed again: the worktree file matches HEAD (savepoint 2).
+        var current = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
+        Assert.Equal(secondSvn.Revision, current.Svn.Revision);
+    }
+
+    [Fact]
+    public async Task CombinedCommitAdvancesSvnAndGitToTheSameTiaState()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Combined commit line", Path.Combine(root, "combined-commit"), 42, null));
+        var masterRoot = WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master");
+        var tiaStore = WorkbenchPaths.ResolveTiaStore(masterRoot);
+        var managedPath = Assert.IsType<string>(created.Workbench.ManagedTiaProjectPath);
+        var baselineSvnRevision = EngineeringStateWriter.Read(
+            WorkbenchPaths.ResolveRevisionState(masterRoot)).Svn.Revision!.Value;
+        var headBefore = RepositoryService.Log(masterRoot, 1).Commits.Single().Sha;
+
+        // Simulate an authorized TIA change: the managed project changed natively and the
+        // accepted source XML is written into master with the master-gate pending records.
+        File.AppendAllText(managedPath, "tia-side change");
+        const string sourcePath = "devices/PLC_1/source/Blocks/Main.xml";
+        var sourceFile = WorkbenchPaths.ResolveRelative(masterRoot, sourcePath);
+        File.AppendAllText(sourceFile, "<!-- accepted from TIA -->");
+        var fingerprint = Convert.ToHexString(
+            SHA256.HashData(File.ReadAllBytes(sourceFile))).ToLowerInvariant();
+        new WorkbenchWritePolicy(store).WritePending(masterRoot, new PendingMasterSynchronization(
+            WorkbenchWritePolicy.PendingSchemaVersion,
+            created.Worktree.WorktreeId,
+            new[] { new PendingMasterSource(sourcePath, "comparison-1", headBefore, fingerprint, fingerprint) }));
+
+        var commit = await coordinator.CommitSourceAsync(
+            created.Workbench.WorkbenchId,
+            created.Worktree.WorktreeId,
+            [sourcePath],
+            "accept Main change",
+            CancellationToken.None);
+
+        // Git HEAD and the SVN HEAD revision describe the same TIA state via revision.json.
+        var revision = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
+        Assert.Equal(baselineSvnRevision + 1, revision.Svn.Revision);
+        var svn = new SvnRepositoryService();
+        var mainUrl = new Uri(created.Workbench.SvnRepositoryPath! + Path.DirectorySeparatorChar) + "native/main";
+        var headEntry = svn.Log(mainUrl, 1).Entries.Single();
+        Assert.Equal(revision.Svn.Revision, headEntry.Revision);
+        Assert.StartsWith("accept Main change [", headEntry.Message);
+        Assert.Contains("semantic", headEntry.Message);
+        Assert.Contains("native", headEntry.Message);
+        Assert.Equal(EngineeringCompileStatus.Success, revision.Validation.CompileStatus);
+
+        var head = RepositoryService.Log(masterRoot, 1).Commits.Single();
+        Assert.Equal(commit.Sha, head.Sha);
+        Assert.Contains("engineering-state/revision.json", head.Files);
+        Assert.Contains(sourcePath, head.Files);
+        Assert.Empty(RepositoryService.Status(masterRoot).Entries);
+        Assert.False(File.Exists(PendingCommitStore.PathFor(masterRoot)));
+    }
+
+    [Fact]
+    public async Task SafetyOnlyChangeStillCreatesGitCommitWithUnchangedXml()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Safety line", Path.Combine(root, "safety-only"), 42, null));
+        var masterRoot = WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master");
+        var baseline = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
+        var sourceFile = WorkbenchPaths.ResolveRelative(
+            masterRoot, "devices/PLC_1/source/Blocks/Main.xml");
+        var sourceHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(sourceFile)));
+
+        // Record a prior F-signature, so the current (still uncapturable) null signature
+        // classifies as a safety change — the V1 stand-in for a real safety-only savepoint.
+        EngineeringStateWriter.Write(masterRoot, baseline with
+        {
+            Safety = new EngineeringSafetyState("F-SIG-1"),
+        });
+        RepositoryService.CommitSelected(
+            masterRoot, ["engineering-state/revision.json"], "record F-signature", null);
+
+        var commit = await coordinator.CommitSourceAsync(
+            created.Workbench.WorkbenchId,
+            created.Worktree.WorktreeId,
+            Array.Empty<string>(),
+            "safety update",
+            CancellationToken.None);
+
+        var head = RepositoryService.Log(masterRoot, 1).Commits.Single();
+        Assert.Equal(commit.Sha, head.Sha);
+        Assert.Equal(["engineering-state/revision.json"], head.Files);
+        // The XML stayed byte-identical; only revision.json moved.
+        Assert.Equal(
+            sourceHash,
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(sourceFile))));
+        var revision = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
+        Assert.Null(revision.Safety.FSignature);
+        // No native change: the SVN store was not advanced beyond the baseline revision.
+        var mainUrl = new Uri(created.Workbench.SvnRepositoryPath! + Path.DirectorySeparatorChar) + "native/main";
+        var headRevision = new SvnRepositoryService().Log(mainUrl, 1).Entries.Single().Revision;
+        Assert.Equal(baseline.Svn.Revision, headRevision);
+        Assert.Equal(baseline.Svn.Revision, revision.Svn.Revision);
+    }
+
+    [Fact]
+    public async Task FeatureWorktreeEvolvesOnItsOwnSvnBranchIndependentlyFromMaster()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Feature line", Path.Combine(root, "feature-svn"), 42, null));
+        var masterRoot = WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "master");
+        var masterManagedPath = Assert.IsType<string>(created.Workbench.ManagedTiaProjectPath);
+        var masterBaseRevision = EngineeringStateWriter.Read(
+            WorkbenchPaths.ResolveRevisionState(masterRoot)).Svn.Revision!.Value;
+        var masterHead = RepositoryService.Log(masterRoot, 1).Commits.Single().Sha;
+
+        var feature = await coordinator.CreateWorktreeAsync(new(
+            catalog.Load(created.Workbench.RootPath), "feature-a", "feature-a"));
+
+        Assert.Equal("^/native/branches/feature-a", feature.SvnUrl);
+        Assert.Equal(masterBaseRevision, feature.BaseSvnRevision);
+        Assert.Equal(masterHead, feature.BaseCommit);
+        var featureRoot = WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "feature-a");
+        var featureTia = WorkbenchPaths.ResolveTiaStore(featureRoot);
+        Assert.Equal(Path.Combine(featureTia, "Line.ap17"), feature.ManagedTiaProjectPath);
+        Assert.True(File.Exists(feature.ManagedTiaProjectPath));
+
+        var svn = new SvnRepositoryService();
+        var repoUri = new Uri(created.Workbench.SvnRepositoryPath! + Path.DirectorySeparatorChar).ToString();
+        var mainUrl = repoUri + "native/main";
+        var branchUrl = repoUri + "native/branches/feature-a";
+        var branchHeadAfterCopy = svn.Log(branchUrl, 1).Entries.Single().Revision;
+        Assert.True(branchHeadAfterCopy > masterBaseRevision);
+
+        // A commit on master advances ^/native/main only.
+        const string sourcePath = "devices/PLC_1/source/Blocks/Main.xml";
+        File.AppendAllText(masterManagedPath, "master native change");
+        var masterSource = WorkbenchPaths.ResolveRelative(masterRoot, sourcePath);
+        File.AppendAllText(masterSource, "<!-- master change -->");
+        var masterFingerprint = Convert.ToHexString(
+            SHA256.HashData(File.ReadAllBytes(masterSource))).ToLowerInvariant();
+        new WorkbenchWritePolicy(store).WritePending(masterRoot, new PendingMasterSynchronization(
+            WorkbenchWritePolicy.PendingSchemaVersion,
+            created.Worktree.WorktreeId,
+            new[]
+            {
+                new PendingMasterSource(sourcePath, "comparison-1", masterHead, masterFingerprint, masterFingerprint),
+            }));
+        await coordinator.CommitSourceAsync(
+            created.Workbench.WorkbenchId,
+            created.Worktree.WorktreeId,
+            [sourcePath],
+            "master change",
+            CancellationToken.None);
+        var mainHeadAfterMasterCommit = svn.Log(mainUrl, 1).Entries.Single().Revision;
+        Assert.Equal(branchHeadAfterCopy + 1, mainHeadAfterMasterCommit);
+        Assert.Equal(branchHeadAfterCopy, svn.Log(branchUrl, 1).Entries.Single().Revision);
+        Assert.DoesNotContain(
+            svn.Log(branchUrl, 20).Entries,
+            entry => entry.Message.Contains("master change", StringComparison.Ordinal));
+
+        // A commit on the feature advances its own branch only.
+        File.AppendAllText(feature.ManagedTiaProjectPath!, "feature native change");
+        var featureSource = WorkbenchPaths.ResolveRelative(featureRoot, sourcePath);
+        File.AppendAllText(featureSource, "<!-- feature change -->");
+        await coordinator.CommitSourceAsync(
+            created.Workbench.WorkbenchId,
+            feature.WorktreeId,
+            [sourcePath],
+            "feature change",
+            CancellationToken.None);
+        var branchHead = svn.Log(branchUrl, 1).Entries.Single();
+        Assert.Equal(mainHeadAfterMasterCommit + 1, branchHead.Revision);
+        Assert.StartsWith("feature change [", branchHead.Message);
+        Assert.Equal(mainHeadAfterMasterCommit, svn.Log(mainUrl, 1).Entries.Single().Revision);
+        Assert.DoesNotContain(
+            svn.Log(mainUrl, 20).Entries,
+            entry => entry.Message.Contains("feature change", StringComparison.Ordinal));
+        var featureRevision = EngineeringStateWriter.Read(
+            WorkbenchPaths.ResolveRevisionState(featureRoot));
+        Assert.Equal("^/native/branches/feature-a", featureRevision.Svn.Url);
+        Assert.Equal(branchHead.Revision, featureRevision.Svn.Revision);
+
+        // Restore from the feature's revision.json pins the feature branch revision.
+        var restored = await coordinator.RestoreTiaProjectAsync(
+            created.Workbench.WorkbenchId,
+            feature.WorktreeId,
+            Path.Combine(root, "restored-feature"));
+        Assert.Equal("^/native/branches/feature-a", restored.SvnUrl);
+        Assert.Equal(branchHead.Revision, restored.SvnRevision);
+        Assert.Contains(
+            "feature native change",
+            File.ReadAllText(Assert.IsType<string>(restored.RestoredProjectPath)));
+        Assert.DoesNotContain(
+            "master native change",
+            File.ReadAllText(restored.RestoredProjectPath!));
+    }
+
+    [Fact]
+    public async Task RemovedFeatureWorktreeDeletesTiaCopyButKeepsSvnBranch()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            new EngineeringBoundary(),
+            new KnowledgeBoundary(),
+            new GitBoundary(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var created = await coordinator.CreateWorkbenchAsync(new(
+            "Removal line", Path.Combine(root, "feature-removal"), 42, null));
+        var feature = await coordinator.CreateWorktreeAsync(new(
+            catalog.Load(created.Workbench.RootPath), "feature-a", "feature-a"));
+        var featureRoot = WorkbenchPaths.ResolveWorktree(created.Workbench.RootPath, "feature-a");
+        Assert.True(Directory.Exists(WorkbenchPaths.ResolveTiaStore(featureRoot)));
+
+        await coordinator.DeleteWorktreeAsync(
+            catalog.Load(created.Workbench.RootPath), feature.WorktreeId, CancellationToken.None);
+
+        Assert.False(Directory.Exists(featureRoot));
+        var repoUri = new Uri(created.Workbench.SvnRepositoryPath! + Path.DirectorySeparatorChar).ToString();
+        Assert.NotEmpty(new SvnRepositoryService().Log(repoUri + "native/branches/feature-a", 5).Entries);
     }
 
     [Fact]
@@ -506,6 +964,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
 
     private sealed class GitBoundary : IMcpToolCaller
     {
+        private static readonly SvnRepositoryService Svn = new();
         private readonly bool failAfterAddWorktree;
 
         public GitBoundary(bool failAfterAddWorktree = false) =>
@@ -523,12 +982,29 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                 "vc_remove_worktree" => RemoveWorktree(args),
                 "vc_add" => Add(args),
                 "vc_commit" => Commit(args),
+                "vc_commit_selected" => CommitSelected(args),
+                "vc_log" => Log(args),
                 "vc_restore" => RepositoryService.Restore(
                     Property<string>(args, "repoPath"),
                     args.GetType().GetProperty("filePath")?.GetValue(args) as string,
                     args.GetType().GetProperty("sourceSha")?.GetValue(args) as string),
                 "vc_merge" => RepositoryService.Merge(
                     Property<string>(args, "targetWorktreePath"), Property<string>(args, "sourceBranch")),
+                "svn_init_shared" => SvnInitShared(args),
+                "svn_checkout" => Svn.Checkout(
+                    Property<string>(args, "url"), Property<string>(args, "path")),
+                "svn_commit" => SvnCommit(args),
+                "svn_status" => SvnStatus(args),
+                "svn_copy_branch" => Svn.CopyBranch(
+                    $"{Property<string>(args, "repoUrl").TrimEnd('/')}/native/{Property<string>(args, "sourceBranch")}",
+                    Property<long>(args, "revision"),
+                    Property<string>(args, "newBranch"),
+                    Property<string>(args, "message")),
+                "svn_log" => Svn.Log(
+                    Property<string>(args, "path"),
+                    Property<int?>(args, "limit") ?? 20),
+                "svn_update" => Svn.UpdateToRevision(
+                    Property<string>(args, "path"), Property<long>(args, "revision")),
                 _ => throw new InvalidOperationException(tool),
             };
             return Task.FromResult((T)result);
@@ -575,17 +1051,77 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                 Property<string>(args, "repoPath"), Property<string>(args, "message"), null);
             return new { Sha = commit.Sha };
         }
+
+        private static object CommitSelected(object args)
+        {
+            var commit = RepositoryService.CommitSelected(
+                Property<string>(args, "repoPath"),
+                Property<string[]>(args, "paths"),
+                Property<string>(args, "message"),
+                args.GetType().GetProperty("author")?.GetValue(args) as string);
+            return new WorkbenchCommitResult(commit.Sha, commit.Message, commit.Files);
+        }
+
+        private static object Log(object args)
+        {
+            var log = RepositoryService.Log(
+                Property<string>(args, "repoPath"),
+                Property<int?>(args, "maxCount"),
+                args.GetType().GetProperty("filePath")?.GetValue(args) as string);
+            return new ConsistencyLogResult
+            {
+                Commits = log.Commits
+                    .Select(commit => new ConsistencyCommit { Sha = commit.Sha })
+                    .ToArray(),
+            };
+        }
+
+        private static object SvnInitShared(object args)
+        {
+            var result = Svn.CreateShared(Property<string>(args, "workbenchRoot"));
+            return new CoordinatorSvnInitResult
+            {
+                RepositoryPath = result.RepositoryPath,
+                RepositoryUri = result.RepositoryUri,
+            };
+        }
+
+        private static object SvnCommit(object args)
+        {
+            var path = Property<string>(args, "path");
+            Svn.AddRecursive(path);
+            var result = Svn.Commit(path, Property<string>(args, "message"));
+            return new CoordinatorSvnCommitResult
+            {
+                Committed = result.Committed,
+                Revision = result.Revision,
+            };
+        }
+
+        private static object SvnStatus(object args) =>
+            new CoordinatorSvnStatusResult
+            {
+                IsClean = Svn.Status(Property<string>(args, "path")).IsClean,
+            };
     }
 
     private sealed class EngineeringBoundary : IMcpToolCaller
     {
         private readonly Dictionary<string, string> versions = new(StringComparer.Ordinal);
         private bool disconnected;
+        private string currentProjectPath = @"C:\Fixture\Line.ap17";
+        private string compileState = "success";
         public List<string> ImportCalls { get; } = [];
         public List<string> Calls { get; } = [];
 
         public void SetExport(string plcName, string version) => versions[plcName] = version;
         public void Disconnect() => disconnected = true;
+
+        /// <summary>Simulates a failing compile of the managed project copy during import.</summary>
+        public void SetCompileState(string state) => compileState = state;
+
+        /// <summary>Simulates TIA Save As failing during the import bootstrap.</summary>
+        public bool FailSaveProjectAs { get; set; }
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
@@ -594,13 +1130,19 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                 throw new InvalidOperationException("Engineering is disconnected.");
             object result = tool switch
             {
-                "connect" => new object(),
+                "connect" => Connect(args),
+                "disconnect" => new object(),
+                "save_project" => new object(),
+                "list_sessions" => Array.Empty<SessionInfo>(),
                 "get_project_info" => new ProjectInfo
                 {
                     Name = "Line",
-                    Path = @"C:\Fixture\Line.ap17",
+                    Path = currentProjectPath,
                     PlcDevices = ["PLC_1", "PLC_2"],
                 },
+                "save_project_as" => SaveProjectAs(args),
+                "compile_plc" => new CompileResult { State = compileState },
+                "get_plc_checksums" => Checksums(),
                 "rebuild_export" => Export(args),
                 "import_block" => Import(args),
                 "compile_block" => Compile(args),
@@ -608,6 +1150,39 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             };
             return Task.FromResult((T)result);
         }
+
+        private object Connect(object args)
+        {
+            // A path-based connect switches the fake's active project (e.g. a feature
+            // worktree's own managed copy); a session attach keeps the current one.
+            var projectPath = args.GetType().GetProperty("projectPath")?.GetValue(args) as string;
+            if (!string.IsNullOrWhiteSpace(projectPath))
+            {
+                currentProjectPath = projectPath;
+            }
+
+            return new object();
+        }
+
+        private object SaveProjectAs(object args)
+        {
+            if (FailSaveProjectAs)
+                throw new ToolCallException("TIA_SAVE_AS_FAILED", "simulated TIA Save As failure", null);
+            var target = Property<string>(args, "targetDirectory");
+            Directory.CreateDirectory(target);
+            currentProjectPath = Path.Combine(target, "Line.ap17");
+            File.WriteAllText(currentProjectPath, "managed TIA project placeholder");
+            return new CoordinatorSaveProjectAsResult { ManagedProjectPath = currentProjectPath };
+        }
+
+        private PlcChecksumInfo[] Checksums() =>
+            new[] { "PLC_1", "PLC_2" }
+                .Select(plc => new PlcChecksumInfo
+                {
+                    PlcName = plc,
+                    SoftwareChecksum = $"checksum-{plc}",
+                })
+                .ToArray();
 
         private SyncResult[] Export(object args)
         {
@@ -617,7 +1192,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             File.Copy(
                 Path.Combine(AppContext.BaseDirectory, "Fixtures", "Main [OB1].xml"),
                 Path.Combine(output, "Blocks", "Main.xml"), true);
-            var version = versions[plc];
+            var version = versions.TryGetValue(plc, out var configured) ? configured : "baseline";
             File.AppendAllText(
                 Path.Combine(output, "Blocks", "Main.xml"),
                 $"{Environment.NewLine}<!-- fixture-version:{version} -->{Environment.NewLine}");
