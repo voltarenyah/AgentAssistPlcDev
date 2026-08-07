@@ -121,6 +121,12 @@ internal static class RepositoryService
                 "GIT_INIT_FAILED",
                 "Failed to initialize the shared bare repository.",
                 "init", "--bare", repositoryPath);
+            // PLC group nesting plus long block names can exceed the Windows 260-char path
+            // limit inside worktrees; allow git to handle long paths on Windows.
+            RunGit(
+                "GIT_CONFIG_FAILED",
+                "Failed to enable long path support on the shared repository.",
+                "-C", repositoryPath, "config", "core.longpaths", "true");
         }
 
         if (!existingMaster)

@@ -89,7 +89,10 @@ public sealed class SafeDeviceExportStager
             : "Preparing export staging area...");
         var incoming = WorkbenchPaths.ResolveRelative(
             device.DeviceRoot,
-            $".staging-{Guid.NewGuid():N}.incoming");
+            // Short name on purpose: TIA writes the full export tree under this directory and
+            // fails with "Cannot create file" once a path exceeds the Windows 260-char limit.
+            // The previous .staging-<guid>.incoming name alone consumed ~50 chars.
+            $".st-{Guid.NewGuid().ToString("N")[..12]}");
         try
         {
             files.CreateDirectory(incoming);
