@@ -635,6 +635,26 @@ internal static class RepositoryService
         return ValidationTagStore.Read(repo, commitSha).Evidence;
     }
 
+    /// <summary>Read a git-tracked text file at a specific commit (or HEAD). Returns null when
+    /// the commit or the path does not exist — callers distinguish "no record" from content.</summary>
+    public static string? ShowFile(string repoPath, string? commitSha, string filePath)
+    {
+        var normalized = SourcePathPolicy.Require(filePath);
+        EnsureRepo(repoPath);
+        using var repo = new Repository(repoPath);
+        var commit = string.IsNullOrWhiteSpace(commitSha)
+            ? repo.Head.Tip
+            : repo.Lookup<Commit>(commitSha.Trim());
+        if (commit is null)
+        {
+            return null;
+        }
+
+        // Git tree paths are repository-relative with '/' separators (see Log).
+        var blob = commit[normalized]?.Target as Blob;
+        return blob?.GetContentText();
+    }
+
     /// <summary>Show commit history. Capped at maxCount (default 20, max 100). Optionally filter to one file.</summary>
     public static VcLogResult Log(string repoPath, int? maxCount = null, string? filePath = null)
     {

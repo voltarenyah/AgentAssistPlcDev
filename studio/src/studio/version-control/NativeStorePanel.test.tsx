@@ -23,8 +23,14 @@ const state = (overrides: Partial<api.WorktreeEngineeringState> = {}): api.Workt
   ...overrides,
 })
 
-const render = async (snapshot: api.WorktreeEngineeringState) => {
+const savepoints: api.SavepointInfo[] = [
+  { sha: 'abc123def', message: 'change A', svnUrl: '^/native/main', svnRevision: 7, projectChecksum: 'PLC_1:AA BB', compileStatus: 'SUCCESS', fSignature: null },
+  { sha: '000999eee', message: 'baseline', svnUrl: '^/native/main', svnRevision: 2, projectChecksum: 'PLC_1:00 11', compileStatus: 'SUCCESS', fSignature: null },
+]
+
+const render = async (snapshot: api.WorktreeEngineeringState, points = savepoints) => {
   vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue(snapshot)
+  vi.spyOn(api, 'getWorktreeSavepoints').mockResolvedValue(points)
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -36,14 +42,6 @@ const render = async (snapshot: api.WorktreeEngineeringState) => {
 
 const click = async (element: Element) => {
   await act(async () => element.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-}
-
-const setInput = async (element: HTMLInputElement, value: string) => {
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
-  await act(async () => {
-    setter.call(element, value)
-    element.dispatchEvent(new Event('input', { bubbles: true }))
-  })
 }
 
 afterEach(() => {
@@ -70,26 +68,35 @@ describe('NativeStorePanel', () => {
     expect(clean.host.textContent).not.toContain('PENDING_GIT_COMMIT')
   })
 
-  it('restores via the api and shows the restored project path', async () => {
+  it('lists savepoints as revision + checksum + commit and restores the selection', async () => {
     const restore = vi.spyOn(api, 'restoreTiaProject').mockResolvedValue({
-      gitCommit: 'abc123',
+      gitCommit: '000999eee',
       svnUrl: '^/native/main',
-      svnRevision: 5,
-      restoredDirectory: 'C:/restore-target',
-      restoredProjectPath: 'C:/restore-target/tia.ap17',
+      svnRevision: 2,
+      restoredDirectory: 'C:/wb/export/PLC_1-0011',
+      restoredProjectPath: 'C:/wb/export/PLC_1-0011/tia.ap17',
     })
     const { host } = await render(state())
 
-    const inputs = host.querySelectorAll('input')
-    const button = Array.from(host.querySelectorAll('button')).find(candidate => candidate.textContent?.includes('Restore from SVN'))!
-    expect((button as HTMLButtonElement).disabled).toBe(true)
+    const select = host.querySelector('select')!
+    const options = Array.from(select.querySelectorAll('option'))
+    expect(options).toHaveLength(2)
+    expect(options[0].textContent).toContain('r7')
+    expect(options[0].textContent).toContain('PLC_1:AA BB')
+    expect(options[0].textContent).toContain('abc123d')
+    expect(options[1].textContent).toContain('r2')
 
-    await setInput(inputs[0] as HTMLInputElement, 'C:/restore-target')
-    await setInput(inputs[1] as HTMLInputElement, 'abc123')
+    // Choose the older savepoint, then restore.
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!
+      setter.call(select, '000999eee')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const button = Array.from(host.querySelectorAll('button')).find(candidate => candidate.textContent?.includes('Restore from SVN'))!
     await click(button)
 
-    expect(restore).toHaveBeenCalledWith('wb-1', 'wt-1', 'C:/restore-target', 'abc123')
-    expect(host.textContent).toContain('C:/restore-target/tia.ap17')
-    expect(host.textContent).toContain('^/native/main@5')
+    expect(restore).toHaveBeenCalledWith('wb-1', 'wt-1', '000999eee')
+    expect(host.textContent).toContain('C:/wb/export/PLC_1-0011/tia.ap17')
+    expect(host.textContent).toContain('^/native/main@2')
   })
 })

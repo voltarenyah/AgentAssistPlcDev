@@ -62,12 +62,12 @@ and SHA; any mismatch stops the run.
    each commit's `revision.json` names a distinct or equal SVN revision that
    resolves (step 7).
 7. **Restore either native state from SVN.**
-   Call restore for the baseline commit and for the step-4 commit, each into a
-   fresh target directory outside the workbench.
+   From the Native (SVN) tab's savepoint dropdown, restore the baseline commit and
+   the step-4 commit; each lands in `<workbenchRoot>/export/<checksum>/`.
    Expected: each target contains a complete TIA project at exactly the recorded
-   SVN revision; both open in TIA; the live `worktrees/master/tia/` working copy
-   is untouched; the step-4 restore contains the step-4 edit, the baseline
-   restore does not.
+   SVN revision with no `.svn` metadata; both open in TIA; the live
+   `worktrees/master/tia/` working copy is untouched; the step-4 restore contains
+   the step-4 edit, the baseline restore does not.
 8. **Create a feature worktree from master.**
    Expected: `worktrees/<feature>/tia/` holds a checkout of
    `^/native/branches/<feature>`; `svn log` on that branch URL shows the copy
@@ -84,8 +84,8 @@ and SHA; any mismatch stops the run.
     records `svn.url = "^/native/branches/<feature>"` and the new branch HEAD
     revision.
 11. **Restore both histories correctly.**
-    Restore master's HEAD state and the feature's HEAD state into separate
-    target directories.
+    Restore master's HEAD state and the feature's HEAD state (two separate
+    `export/<checksum>/` targets).
     Expected: each restore pins its own branch revision; the master restore
     contains the step-9 change and not the step-10 change, and vice versa.
 

@@ -22,7 +22,7 @@ public sealed record RefreshApplyApiRequest(
     string? CommitMessage = null);
 public sealed record SourcePathApiRequest(string RelativePath);
 public sealed record CommitSourceApiRequest(string[] Paths, string Message);
-public sealed record RestoreTiaProjectApiRequest(string TargetDirectory, string? GitCommit = null);
+public sealed record RestoreTiaProjectApiRequest(string? GitCommit = null);
 public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths, string Message);
 public sealed record TiaValidationApiRequest(string ConfirmedBy);
 public sealed record UnauthorizedMasterPathsRequest(string[] Paths, string? FeatureName = null, bool Confirm = false);
@@ -640,9 +640,19 @@ public static class WorkbenchEndpoints
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/restore-tia", async (
             string workbenchId, string worktreeId, RestoreTiaProjectApiRequest body,
-            WorkbenchCoordinator coordinator, CancellationToken ct) =>
-            Results.Ok(await coordinator.RestoreTiaProjectAsync(
-                workbenchId, worktreeId, body.TargetDirectory, body.GitCommit, ct)));
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(s.Workbench(workbenchId));
+            return Results.Ok(await coordinator.RestoreTiaProjectAsync(
+                workbenchId, worktreeId, body.GitCommit, ct));
+        });
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/savepoints", async (
+            string workbenchId, string worktreeId, int? maxCount,
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(s.Workbench(workbenchId));
+            return Results.Ok(await coordinator.ListSavepointsAsync(workbenchId, worktreeId, maxCount ?? 30, ct));
+        });
         app.MapPost("/api/workbenches/{workbenchId}/vc/compare-tia", async (
             string workbenchId,
             WorkbenchApiState state,

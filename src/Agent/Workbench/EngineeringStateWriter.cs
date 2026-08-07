@@ -113,6 +113,61 @@ public static class EngineeringStateWriter
         return state with { Validation = state.Validation ?? new EngineeringValidationState(EngineeringCompileStatus.NotRun) };
     }
 
+    /// <summary>Parse a revision state from raw JSON (e.g. read via vc_show_file). Returns null
+    /// when the text is missing or not a valid/supported revision state — unlike Read, which
+    /// throws, because history entries may legitimately predate revision.json.</summary>
+    public static EngineeringRevisionState? TryParse(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        try
+        {
+            var state = JsonSerializer.Deserialize<EngineeringRevisionState>(text, Json);
+            return state is null || state.SchemaVersion != SchemaVersion
+                ? null
+                : state with { Validation = state.Validation ?? new EngineeringValidationState(EngineeringCompileStatus.NotRun) };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Directory-name-safe rendering of a project checksum for restore targets, e.g.
+    /// "Sino_PEI:7F FB BF" → "Sino_PEI-7FFBBF". Deterministic; null/empty → null.</summary>
+    public static string? ChecksumDirectoryName(string? projectChecksum)
+    {
+        if (string.IsNullOrWhiteSpace(projectChecksum))
+        {
+            return null;
+        }
+
+        var builder = new System.Text.StringBuilder(projectChecksum.Length);
+        foreach (var character in projectChecksum.Trim())
+        {
+            switch (character)
+            {
+                case >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_' or '-' or '.':
+                    builder.Append(character);
+                    break;
+                case ':' or ';':
+                    builder.Append('-');
+                    break;
+                case ' ':
+                    break;
+                default:
+                    builder.Append('_');
+                    break;
+            }
+        }
+
+        var name = builder.ToString().Trim('-', '.');
+        return name.Length == 0 ? null : name;
+    }
+
     /// <summary>
     /// Classifies a savepoint against its base revision.json: semanticChanged comes from the
     /// exported-XML diff, safetyChanged from the F-signature (null-safe: a signature appearing

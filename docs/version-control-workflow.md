@@ -133,10 +133,15 @@ never deleted.
 
 ## Restore
 
-`RestoreTiaProjectAsync` reads `revision.json` at a Git commit (default HEAD),
-resolves the recorded SVN URL and revision, and checks out exactly that revision
-into a caller-chosen directory — never into the live `tia/` working copy. The
-restored path can be opened in TIA as an independent project.
+`RestoreTiaProjectAsync` reads `revision.json` at a Git commit (default HEAD, via
+`vc_show_file` — the working tree is never switched), resolves the recorded SVN URL
+and revision, and runs `svn_export` at exactly that revision — a lean tree with no
+`.svn` metadata. The target is deterministic: `<workbenchRoot>/export/<checksum>/`
+(the revision's TIA project checksum, sanitized; `rev-<N>` when the commit recorded
+no checksum). A non-empty existing target is refused. The Version Control page's
+"Native (SVN)" tab lists savepoints as `revision · checksum · commit` from the
+`savepoints` endpoint; the restored path opens in TIA as an independent inspection
+copy and the live `tia/` working copy is never touched.
 
 ## Schema 1.1 and 1.2
 

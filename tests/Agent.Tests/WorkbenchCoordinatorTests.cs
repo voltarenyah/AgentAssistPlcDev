@@ -759,8 +759,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         coordinator.RegisterWorkbench(catalog.Load(workbenchRoot));
 
         var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
-            coordinator.RestoreTiaProjectAsync(
-                "wb-legacy", "wt-1", Path.Combine(root, "restore-target")));
+            coordinator.RestoreTiaProjectAsync("wb-legacy", "wt-1"));
 
         Assert.Equal("SVN_HISTORY_UNAVAILABLE", error.Code);
     }

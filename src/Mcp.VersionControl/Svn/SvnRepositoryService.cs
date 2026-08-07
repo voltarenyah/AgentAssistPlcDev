@@ -110,6 +110,31 @@ internal sealed class SvnRepositoryService
     }
 
     /// <summary>
+    /// Export a clean tree (no .svn metadata) of a repository URL pinned to an exact revision.
+    /// Used for restores: lean, inspection-only snapshots without pristine-copy overhead.
+    /// </summary>
+    public SvnExportResult Export(string url, long revision, string targetPath)
+    {
+        var uri = RequireUri(url, nameof(url));
+        var path = RequirePath(targetPath, nameof(targetPath));
+
+        SvnUpdateResult? update = null;
+        Run("SVN_EXPORT_FAILED", $"Failed to export '{url}' at revision {revision}.", () =>
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using var client = CreateClient();
+            client.Export(new SvnUriTarget(uri, revision), path, new SvnExportArgs(), out update);
+        });
+
+        return new SvnExportResult
+        {
+            Path = path,
+            Uri = uri.ToString(),
+            Revision = update?.Revision ?? revision,
+        };
+    }
+
+    /// <summary>
     /// Commit a working copy. Returns the committed revision; when there is nothing to
     /// commit, returns the repository HEAD revision of the working copy's URL with
     /// Committed=false (SharpSvn reports success with a null result object then).
@@ -388,6 +413,13 @@ internal sealed class SvnCheckoutResult
 internal sealed class SvnAddResult
 {
     public string Path { get; set; } = string.Empty;
+}
+
+internal sealed class SvnExportResult
+{
+    public string Path { get; set; } = string.Empty;
+    public string Uri { get; set; } = string.Empty;
+    public long Revision { get; set; }
 }
 
 internal sealed class SvnCommitResult

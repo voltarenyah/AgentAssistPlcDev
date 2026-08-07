@@ -143,6 +143,14 @@ public sealed class VersionControlTools
         [Description("Optional new commit or ref. With no oldSha, compares HEAD to this ref.")] string? newSha = null)
         => Invoke(() => RepositoryService.Diff(repoPath, filePath, oldSha, newSha));
 
+    [McpServerTool(Name = "vc_show_file")]
+    [Description("Read a git-tracked text file at a specific commit (default HEAD). Returns {content: null} when the commit or path does not exist.")]
+    public CallToolResult VcShowFile(
+        [Description("Path to the git repository or linked worktree.")] string repoPath,
+        [Description("Git-tracked path relative to the worktree root, e.g. engineering-state/revision.json.")] string filePath,
+        [Description("Optional commit SHA (defaults to HEAD).")] string? commitSha = null)
+        => Invoke(() => new { content = RepositoryService.ShowFile(repoPath, commitSha, filePath) });
+
     [McpServerTool(Name = "vc_snapshot")]
     [Description("Compatibility checkpoint that stages and commits all changed PLC source XML only. Runtime, metadata, and other non-source files remain untouched.")]
     public CallToolResult VcSnapshot(
@@ -192,6 +200,14 @@ public sealed class VersionControlTools
         [Description("Local path for the working copy.")] string path,
         [Description("Allow checkout into a non-empty directory (default false).")] bool allowObstructions = false)
         => Invoke(() => _svn.Checkout(url, path, allowObstructions));
+
+    [McpServerTool(Name = "svn_export")]
+    [Description("Export a clean tree (no .svn metadata) of a repository URL pinned to an exact revision. Used for lean native-state restores.")]
+    public CallToolResult SvnExport(
+        [Description("Repository file:// URI or branch URL, e.g. file:///.../repository.svn/native/main.")] string url,
+        [Description("Exact revision to export.")] long revision,
+        [Description("Local target path for the exported tree.")] string path)
+        => Invoke(() => _svn.Export(url, revision, path));
 
     [McpServerTool(Name = "svn_commit")]
     [Description("Recursively add all unversioned items below a working copy and commit it. Returns the committed revision.")]

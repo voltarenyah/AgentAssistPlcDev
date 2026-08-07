@@ -32,8 +32,8 @@
    leaves `.automation/pending-commit.json`; the next commit retries the Git side
    with the same SVN revision.
 7. Any recorded state can be restored: the coordinator reads `revision.json` at a
-   Git commit and checks out the referenced SVN revision into a chosen directory
-   for opening in TIA.
+   Git commit and `svn export`s the referenced SVN revision (lean, no `.svn`) into
+   `<workbenchRoot>/export/<checksum>/` for opening in TIA.
 
 Full source exports never write directly over tracked files. This preserves per-file
 Git history across repeated PLC refreshes.

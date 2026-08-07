@@ -596,23 +596,18 @@ public sealed class WorkbenchCoordinator
 
     /// <summary>
     /// Restores the native TIA project state recorded by revision.json at a Git commit
-    /// (default HEAD): resolves the SVN url+revision and checks out that exact revision into a
-    /// caller-chosen target directory — never into the live tia/ working copy. The returned path
-    /// can be opened in TIA as an independent project.
+    /// (default HEAD) as a lean svn export (no .svn metadata): resolves the SVN url+revision and
+    /// exports that exact revision into &lt;workbenchRoot&gt;/export/&lt;checksum&gt;/ (fallback
+    /// rev-N when the commit recorded no checksum). The live tia/ working copy is never touched;
+    /// the returned path can be opened in TIA as an independent inspection copy.
     /// </summary>
     public async Task<RestoreTiaProjectResult> RestoreTiaProjectAsync(
         string workbenchId,
         string worktreeId,
-        string targetDirectory,
         string? gitCommit = null,
         CancellationToken token = default,
         IOperationProgress? progress = null)
     {
-        if (string.IsNullOrWhiteSpace(targetDirectory))
-        {
-            throw new ArgumentException("A restore target directory is required.", nameof(targetDirectory));
-        }
-
         var workbench = LoadRegisteredWorkbench(workbenchId);
         if (string.IsNullOrWhiteSpace(workbench.SvnRepositoryPath)
             || !Directory.Exists(workbench.SvnRepositoryPath))
@@ -628,24 +623,6 @@ public sealed class WorkbenchCoordinator
                 "WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
         var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
 
-        var target = Path.GetFullPath(targetDirectory);
-        var tiaStore = WorkbenchPaths.ResolveTiaStore(worktreeRoot);
-        if (string.Equals(target, tiaStore, StringComparison.OrdinalIgnoreCase)
-            || target.StartsWith(
-                tiaStore.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                    + Path.DirectorySeparatorChar,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            throw new WorkbenchLifecycleException(
-                "RESTORE_TARGET_INVALID",
-                "The restore target must not be the live tia/ working copy or inside it.");
-        }
-
-        if (pathJail is not null)
-        {
-            target = pathJail.Validate(target, nameof(targetDirectory));
-        }
-
         var head = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
         var sha = string.IsNullOrWhiteSpace(gitCommit) ? head : gitCommit.Trim();
         var state = await ReadRevisionStateAtCommitAsync(worktreeRoot, sha, head, token)
@@ -657,15 +634,22 @@ public sealed class WorkbenchCoordinator
                 $"The engineering revision state at commit '{sha}' records no SVN url/revision.");
         }
 
+        var folderName = EngineeringStateWriter.ChecksumDirectoryName(state.Tia?.ProjectChecksum)
+            ?? $"rev-{state.Svn.Revision.Value}";
+        var target = Path.Combine(workbench.RootPath, "export", folderName);
+        if (Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).Any())
+        {
+            throw new WorkbenchLifecycleException(
+                "RESTORE_TARGET_EXISTS",
+                $"The restore target '{target}' already exists and is not empty. "
+                + "Open it in TIA directly, or delete it to restore this savepoint again.");
+        }
+
         var svnUrl = ResolveSvnUrl(workbench.SvnRepositoryPath, state.Svn.Url);
-        progress?.Report($"Checking out native revision {state.Svn.Revision}...");
+        progress?.Report($"Exporting native revision {state.Svn.Revision}...");
         await versionControl.CallAsync<object>(
-            "svn_checkout",
-            new { url = svnUrl, path = target },
-            token).ConfigureAwait(false);
-        await versionControl.CallAsync<object>(
-            "svn_update",
-            new { path = target, revision = state.Svn.Revision.Value },
+            "svn_export",
+            new { url = svnUrl, revision = state.Svn.Revision.Value, path = target },
             token).ConfigureAwait(false);
 
         var projectFiles = Directory.Exists(target)
@@ -679,11 +663,51 @@ public sealed class WorkbenchCoordinator
             projectFiles.Length == 1 ? projectFiles[0] : null);
     }
 
+    /// <summary>Lists the worktree's savepoints for the restore dropdown: each git commit with
+    /// its recorded SVN revision / checksum / compile status from revision.json at that commit
+    /// (null fields for commits that predate revision.json).</summary>
+    public async Task<IReadOnlyList<SavepointInfo>> ListSavepointsAsync(
+        string workbenchId,
+        string worktreeId,
+        int maxCount = 30,
+        CancellationToken token = default)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var registration = workbench.Worktrees.SingleOrDefault(item => item.WorktreeId == worktreeId)
+            ?? throw new WorkbenchCatalogException(
+                "WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+
+        var log = await versionControl.CallAsync<ConsistencyLogResult>(
+            "vc_log",
+            new { repoPath = worktreeRoot, maxCount },
+            token).ConfigureAwait(false);
+
+        var savepoints = new List<SavepointInfo>(log.Commits.Length);
+        foreach (var commit in log.Commits)
+        {
+            var file = await versionControl.CallAsync<ShowFileResult>(
+                "vc_show_file",
+                new { repoPath = worktreeRoot, filePath = EngineeringStateWriter.RelativePath, commitSha = commit.Sha },
+                token).ConfigureAwait(false);
+            var state = EngineeringStateWriter.TryParse(file.Content);
+            savepoints.Add(new SavepointInfo(
+                commit.Sha,
+                commit.Message,
+                state?.Svn?.Url,
+                state?.Svn?.Revision,
+                state?.Tia?.ProjectChecksum,
+                state?.Validation?.CompileStatus,
+                state?.Safety?.FSignature));
+        }
+
+        return savepoints;
+    }
+
     /// <summary>
     /// Reads engineering-state/revision.json at a Git commit through the VC boundary. At HEAD the
-    /// working-tree file is read directly; for older commits the file is materialized via
-    /// vc_restore and put back to HEAD afterwards (revision.json is coordinator-managed, so the
-    /// working-tree copy always matches HEAD outside this window).
+    /// working-tree file is read directly; for older commits the blob is read via vc_show_file —
+    /// the working tree is never materialized or switched.
     /// </summary>
     private async Task<EngineeringRevisionState> ReadRevisionStateAtCommitAsync(
         string worktreeRoot,
@@ -704,36 +728,19 @@ public sealed class WorkbenchCoordinator
             return EngineeringStateWriter.Read(path);
         }
 
-        try
-        {
-            await versionControl.CallAsync<object>(
-                "vc_restore",
-                new { repoPath = worktreeRoot, filePath = EngineeringStateWriter.RelativePath, sourceSha = sha },
-                token).ConfigureAwait(false);
-        }
-        catch (ToolCallException exception)
+        var file = await versionControl.CallAsync<ShowFileResult>(
+            "vc_show_file",
+            new { repoPath = worktreeRoot, filePath = EngineeringStateWriter.RelativePath, commitSha = sha },
+            token).ConfigureAwait(false);
+        var state = EngineeringStateWriter.TryParse(file.Content);
+        if (state is null)
         {
             throw new WorkbenchLifecycleException(
                 "REVISION_STATE_NOT_FOUND",
-                $"The engineering revision state could not be read at commit '{sha}': {exception.Message}");
+                $"The engineering revision state could not be read at commit '{sha}'.");
         }
 
-        try
-        {
-            return EngineeringStateWriter.Read(path);
-        }
-        finally
-        {
-            await versionControl.CallAsync<object>(
-                "vc_restore",
-                new
-                {
-                    repoPath = worktreeRoot,
-                    filePath = EngineeringStateWriter.RelativePath,
-                    sourceSha = (string?)head,
-                },
-                CancellationToken.None).ConfigureAwait(false);
-        }
+        return state;
     }
 
     /// <summary>Resolves a repository-relative "^/native/..." url against the local SVN store.</summary>

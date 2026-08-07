@@ -172,11 +172,14 @@ A failed creation rolls back the Git worktree and any partial tia/ copy.
 
 ### Restore
 
-`RestoreTiaProjectAsync(workbenchId, worktreeId, targetDirectory, gitCommit?)`:
-read `revision.json` at the given Git commit (default HEAD), resolve the SVN
-url+revision, check out that exact revision into the caller-chosen target
-directory (never the live tia/ copy), and return the restored project path for
-opening in TIA. Workbenches without an SVN store report `SVN_HISTORY_UNAVAILABLE`.
+`RestoreTiaProjectAsync(workbenchId, worktreeId, gitCommit?)`: read `revision.json`
+at the given Git commit (default HEAD, via `vc_show_file` — the working tree is
+never switched), resolve the SVN url+revision, and `svn_export` exactly that
+revision — a lean tree with no `.svn` metadata — into the deterministic target
+`<workbenchRoot>/export/<checksum>/` (`rev-<N>` when no checksum was recorded).
+Existing non-empty targets are refused; the live tia/ copy is never touched. The
+`savepoints` endpoint lists each commit's revision/checksum for the restore
+dropdown. Workbenches without an SVN store report `SVN_HISTORY_UNAVAILABLE`.
 
 ## Schema 1.1 vs 1.2
 

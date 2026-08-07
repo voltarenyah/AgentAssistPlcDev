@@ -1535,12 +1535,24 @@ export type RestoreTiaProjectResult = {
   restoredProjectPath: string | null
 }
 
+export type SavepointInfo = {
+  sha: string
+  message: string
+  svnUrl: string | null
+  svnRevision: number | null
+  projectChecksum: string | null
+  compileStatus: string | null
+  fSignature: string | null
+}
+
 export const getWorktreeEngineeringState = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<WorktreeEngineeringState>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/engineering-state`)
-export const restoreTiaProject = (workbenchId: string, worktreeId: string, targetDirectory: string, gitCommit?: string) =>
+export const getWorktreeSavepoints = (workbenchId: string, worktreeId: string, maxCount = 30) =>
+  workbenchRequest<SavepointInfo[]>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/savepoints?maxCount=${maxCount}`)
+export const restoreTiaProject = (workbenchId: string, worktreeId: string, gitCommit?: string) =>
   workbenchRequest<RestoreTiaProjectResult>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/restore-tia`,
-    jsonRequest('POST', { targetDirectory, gitCommit: gitCommit || null }),
+    jsonRequest('POST', { gitCommit: gitCommit || null }),
   )
 
 export async function getVcLog(workbenchId: string, worktreeId: string, deviceId: string, maxCount?: number, filePath?: string): Promise<VcLogResult> {

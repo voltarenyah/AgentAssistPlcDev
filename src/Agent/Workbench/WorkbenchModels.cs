@@ -166,6 +166,22 @@ public sealed class CoordinatorSaveProjectAsResult
     public string? ManagedProjectPath { get; set; }
 }
 
+public sealed class ShowFileResult
+{
+    public string? Content { get; set; }
+}
+
+/// <summary>One restore-able engineering savepoint: a git commit plus the native-state link and
+/// evidence recorded by revision.json at that commit (null fields predate revision.json).</summary>
+public sealed record SavepointInfo(
+    string Sha,
+    string Message,
+    string? SvnUrl,
+    long? SvnRevision,
+    string? ProjectChecksum,
+    string? CompileStatus,
+    string? FSignature);
+
 public sealed record DeviceContext(
     string WorkbenchId,
     string WorktreeId,

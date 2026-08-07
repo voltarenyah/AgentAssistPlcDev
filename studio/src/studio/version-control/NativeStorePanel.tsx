@@ -16,12 +16,19 @@ function Row({ label, value, mono = true }: { label: string; value: string | nul
   )
 }
 
+function savepointLabel(savepoint: api.SavepointInfo): string {
+  const revision = savepoint.svnRevision != null ? `r${savepoint.svnRevision}` : 'no-svn'
+  const checksum = savepoint.projectChecksum ?? 'no-checksum'
+  const sha = savepoint.sha.slice(0, 7)
+  return `${revision} · ${checksum} · ${sha} · ${savepoint.message}`
+}
+
 export default function NativeStorePanel({ workbenchId, worktreeId }: NativeStorePanelProps) {
   const [state, setState] = useState<api.WorktreeEngineeringState | null>(null)
+  const [savepoints, setSavepoints] = useState<api.SavepointInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [targetDir, setTargetDir] = useState('')
-  const [gitCommit, setGitCommit] = useState('')
+  const [selectedSha, setSelectedSha] = useState('')
   const [restoring, setRestoring] = useState(false)
   const [restoreResult, setRestoreResult] = useState<api.RestoreTiaProjectResult | null>(null)
   const [restoreError, setRestoreError] = useState<string | null>(null)
@@ -30,7 +37,13 @@ export default function NativeStorePanel({ workbenchId, worktreeId }: NativeStor
     setLoading(true)
     setError(null)
     try {
-      setState(await api.getWorktreeEngineeringState(workbenchId, worktreeId))
+      const [nextState, nextSavepoints] = await Promise.all([
+        api.getWorktreeEngineeringState(workbenchId, worktreeId),
+        api.getWorktreeSavepoints(workbenchId, worktreeId).catch(() => [] as api.SavepointInfo[]),
+      ])
+      setState(nextState)
+      setSavepoints(nextSavepoints)
+      setSelectedSha(current => current || nextSavepoints[0]?.sha || '')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Failed to load engineering state')
     } finally {
@@ -45,7 +58,7 @@ export default function NativeStorePanel({ workbenchId, worktreeId }: NativeStor
     setRestoreError(null)
     setRestoreResult(null)
     try {
-      setRestoreResult(await api.restoreTiaProject(workbenchId, worktreeId, targetDir.trim(), gitCommit.trim() || undefined))
+      setRestoreResult(await api.restoreTiaProject(workbenchId, worktreeId, selectedSha || undefined))
     } catch (reason) {
       setRestoreError(reason instanceof Error ? reason.message : 'Restore failed')
     } finally {
@@ -90,31 +103,27 @@ export default function NativeStorePanel({ workbenchId, worktreeId }: NativeStor
       <div className="mt-1 shrink-0 border-t px-3 py-2" style={{ borderColor: 'var(--border)' }}>
         <div className="pb-1 text-[10px] font-semibold">Restore native state from SVN</div>
         <label className="block pb-1 text-[9px] text-muted-foreground">
-          Target directory
-          <input
-            type="text"
+          Savepoint (revision · checksum · commit)
+          <select
             className="mt-0.5 w-full rounded border bg-background px-2 py-1 font-mono text-[9px]"
             style={{ borderColor: 'var(--border)' }}
-            placeholder="C:\path\to\restore-target"
-            value={targetDir}
-            onChange={event => setTargetDir(event.target.value)}
-          />
+            value={selectedSha}
+            onChange={event => setSelectedSha(event.target.value)}
+            disabled={savepoints.length === 0}
+          >
+            {savepoints.length === 0 && <option value="">No savepoints</option>}
+            {savepoints.map(savepoint => (
+              <option key={savepoint.sha} value={savepoint.sha}>{savepointLabel(savepoint)}</option>
+            ))}
+          </select>
         </label>
-        <label className="block pb-1 text-[9px] text-muted-foreground">
-          Git commit (optional, defaults to HEAD)
-          <input
-            type="text"
-            className="mt-0.5 w-full rounded border bg-background px-2 py-1 font-mono text-[9px]"
-            style={{ borderColor: 'var(--border)' }}
-            placeholder="full or short sha"
-            value={gitCommit}
-            onChange={event => setGitCommit(event.target.value)}
-          />
-        </label>
+        <div className="pb-1 text-[8px] text-muted-foreground">
+          Exports a lean copy (no .svn) to &lt;workbench&gt;/export/&lt;checksum&gt;/ — the live project is never touched.
+        </div>
         <button
           type="button"
           className="rounded bg-accent px-2 py-1 text-[9px] font-medium disabled:opacity-50"
-          disabled={restoring || targetDir.trim().length === 0}
+          disabled={restoring || savepoints.length === 0 || !selectedSha}
           onClick={() => void restore()}
         >
           {restoring ? 'Restoring…' : 'Restore from SVN'}

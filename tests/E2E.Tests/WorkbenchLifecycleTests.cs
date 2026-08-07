@@ -518,20 +518,23 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         Assert.True(later.Committed);
         Assert.Equal(baselineRevision + 1, later.Revision);
 
-        var target = Path.Combine(root, "restored-project");
         var restored = await coordinator.RestoreTiaProjectAsync(
             created.Workbench.WorkbenchId,
-            created.Worktree.WorktreeId,
-            target);
+            created.Worktree.WorktreeId);
 
         Assert.Equal(baselineRevision, restored.SvnRevision);
         Assert.Equal("^/native/main", restored.SvnUrl);
         Assert.Equal(
             RepositoryService.Log(masterRoot, 1).Commits.Single().Sha,
             restored.GitCommit);
-        Assert.Equal(target, restored.RestoredDirectory);
+        // The restore target is deterministic: <workbenchRoot>/export/<checksum>.
+        Assert.StartsWith(
+            Path.Combine(created.Workbench.RootPath, "export"),
+            restored.RestoredDirectory);
         var restoredProject = Assert.IsType<string>(restored.RestoredProjectPath);
         Assert.Equal("managed TIA project placeholder", File.ReadAllText(restoredProject));
+        // Lean restore: svn export leaves no .svn metadata behind.
+        Assert.False(Directory.Exists(Path.Combine(restored.RestoredDirectory, ".svn")));
         // The live working copy is untouched by the restore.
         Assert.Equal("managed TIA project placeholderlater change", File.ReadAllText(managedPath));
     }
@@ -572,11 +575,9 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         RepositoryService.CommitSelected(
             masterRoot, ["engineering-state/revision.json"], "savepoint 2", null);
 
-        var target = Path.Combine(root, "restored-historical");
         var restored = await coordinator.RestoreTiaProjectAsync(
             created.Workbench.WorkbenchId,
             created.Worktree.WorktreeId,
-            target,
             firstSha);
 
         Assert.Equal(firstSha, restored.GitCommit);
@@ -794,8 +795,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         // Restore from the feature's revision.json pins the feature branch revision.
         var restored = await coordinator.RestoreTiaProjectAsync(
             created.Workbench.WorkbenchId,
-            feature.WorktreeId,
-            Path.Combine(root, "restored-feature"));
+            feature.WorktreeId);
         Assert.Equal("^/native/branches/feature-a", restored.SvnUrl);
         Assert.Equal(branchHead.Revision, restored.SvnRevision);
         Assert.Contains(
@@ -1041,6 +1041,17 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                     Property<int?>(args, "limit") ?? 20),
                 "svn_update" => Svn.UpdateToRevision(
                     Property<string>(args, "path"), Property<long>(args, "revision")),
+                "svn_export" => Svn.Export(
+                    Property<string>(args, "url"),
+                    Property<long>(args, "revision"),
+                    Property<string>(args, "path")),
+                "vc_show_file" => new ShowFileResult
+                {
+                    Content = RepositoryService.ShowFile(
+                        Property<string>(args, "repoPath"),
+                        args.GetType().GetProperty("commitSha")?.GetValue(args) as string,
+                        Property<string>(args, "filePath")),
+                },
                 _ => throw new InvalidOperationException(tool),
             };
             return Task.FromResult((T)result);
