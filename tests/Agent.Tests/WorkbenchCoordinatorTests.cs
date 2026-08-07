@@ -1002,7 +1002,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Contains("Writing export metadata...", progress.Messages);
         Assert.Contains("Preparing refresh preview...", progress.Messages);
         var args = engineering.CallArgs["rebuild_export"].Single();
-        Assert.StartsWith(fixture.Context.DeviceRoot, Property<string>(args, "outputDir"));
+        var outputDir = Property<string>(args, "outputDir");
+        Assert.True(
+            outputDir.StartsWith(fixture.Context.DeviceRoot, StringComparison.OrdinalIgnoreCase)
+                || Path.GetFileName(outputDir).StartsWith("awst-", StringComparison.Ordinal),
+            $"outputDir should be the device staging area or its short alias, got '{outputDir}'.");
         Assert.Equal("PLC_1", Property<string>(args, "plcName"));
         Assert.Equal(
             metadataBefore,

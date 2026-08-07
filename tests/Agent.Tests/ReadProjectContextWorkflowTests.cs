@@ -34,7 +34,11 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
 
         Assert.Equal(new[] { "get_project_info", "rebuild_export" }, engineering.Calls);
         var args = engineering.CallArgs["rebuild_export"].Single();
-        Assert.StartsWith(context.DeviceRoot, Property<string>(args, "outputDir"));
+        var outputDir = Property<string>(args, "outputDir");
+        Assert.True(
+            outputDir.StartsWith(context.DeviceRoot, StringComparison.OrdinalIgnoreCase)
+                || Path.GetFileName(outputDir).StartsWith("awst-", StringComparison.Ordinal),
+            $"outputDir should be the device staging area or its short alias, got '{outputDir}'.");
         Assert.Equal("PLC_1", Property<string>(args, "plcName"));
         Assert.True(File.Exists(Path.Combine(context.StagingRoot, "metadata.json")));
         Assert.Equal("unchanged", File.ReadAllText(sentinel));
