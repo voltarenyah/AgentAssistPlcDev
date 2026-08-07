@@ -25,11 +25,13 @@
    (`^/native/main`). `engineering-state/revision.json` links the Git commit to
    that SVN revision, and the Git baseline commit records the source XML plus
    `revision.json`. Any import failure rolls back the whole workbench.
-6. Later edits happen in a feature worktree; committing on an SVN-managed workbench
-   is one combined transaction (save → required compile → freeze → SVN commit →
-   `revision.json` → Git commit), so the Git commit and the SVN revision always
-   describe the same TIA state. A failed Git commit after a successful SVN commit
-   leaves `.automation/pending-commit.json`; the next commit retries the Git side
+6. Later edits happen in a feature worktree or directly on master; ordinary
+   commits are Git-only. A restorable native snapshot is created explicitly via
+   "Create SVN savepoint" (Native tab): one combined transaction (save → required
+   compile → freeze → SVN commit → `revision.json` → Git commit), so the Git
+   commit and the SVN revision at a savepoint always describe the same TIA state.
+   A failed Git commit after a successful SVN commit leaves
+   `.automation/pending-commit.json`; the next savepoint retries the Git side
    with the same SVN revision.
 7. Any recorded state can be restored: the coordinator reads `revision.json` at a
    Git commit and `svn export`s the referenced SVN revision (lean, no `.svn`) into

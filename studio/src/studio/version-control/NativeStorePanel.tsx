@@ -32,6 +32,10 @@ export default function NativeStorePanel({ workbenchId, worktreeId }: NativeStor
   const [restoring, setRestoring] = useState(false)
   const [restoreResult, setRestoreResult] = useState<api.RestoreTiaProjectResult | null>(null)
   const [restoreError, setRestoreError] = useState<string | null>(null)
+  const [savepointMessage, setSavepointMessage] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [savepointError, setSavepointError] = useState<string | null>(null)
+  const [savepointDone, setSavepointDone] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -68,6 +72,22 @@ export default function NativeStorePanel({ workbenchId, worktreeId }: NativeStor
 
   const revision = state?.revision ?? null
 
+  const createSavepoint = async () => {
+    setSaving(true)
+    setSavepointError(null)
+    setSavepointDone(null)
+    try {
+      const result = await api.createSvnSavepoint(workbenchId, worktreeId, savepointMessage.trim())
+      setSavepointDone(result.sha.slice(0, 8))
+      setSavepointMessage('')
+      await refresh()
+    } catch (reason) {
+      setSavepointError(reason instanceof Error ? reason.message : 'Savepoint failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto py-1" aria-label="Native TIA store">
       <div className="flex shrink-0 items-center gap-2 px-3 py-1">
@@ -100,6 +120,33 @@ export default function NativeStorePanel({ workbenchId, worktreeId }: NativeStor
           <Row label="Managed project" value={state?.managedTiaProjectPath} />
         </div>
       )}
+      <div className="mt-1 shrink-0 border-t px-3 py-2" style={{ borderColor: 'var(--border)' }}>
+        <div className="pb-1 text-[10px] font-semibold">Create SVN savepoint</div>
+        <div className="pb-1 text-[8px] text-muted-foreground">
+          Saves, compiles, freezes TIA and snapshots the native project into SVN, then records the link in git. Compile must succeed.
+        </div>
+        <label className="block pb-1 text-[9px] text-muted-foreground">
+          Message
+          <input
+            type="text"
+            className="mt-0.5 w-full rounded border bg-background px-2 py-1 text-[9px]"
+            style={{ borderColor: 'var(--border)' }}
+            placeholder="Why this savepoint exists…"
+            value={savepointMessage}
+            onChange={event => setSavepointMessage(event.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          className="rounded bg-accent px-2 py-1 text-[9px] font-medium disabled:opacity-50"
+          disabled={saving || !revision || savepointMessage.trim().length === 0}
+          onClick={() => void createSavepoint()}
+        >
+          {saving ? 'Creating savepoint…' : 'Create SVN savepoint'}
+        </button>
+        {savepointError && <div className="pt-1 text-[9px] text-destructive">{savepointError}</div>}
+        {savepointDone && <div className="pt-1 text-[9px] text-emerald-600">Savepoint committed as {savepointDone}</div>}
+      </div>
       <div className="mt-1 shrink-0 border-t px-3 py-2" style={{ borderColor: 'var(--border)' }}>
         <div className="pb-1 text-[10px] font-semibold">Restore native state from SVN</div>
         <label className="block pb-1 text-[9px] text-muted-foreground">

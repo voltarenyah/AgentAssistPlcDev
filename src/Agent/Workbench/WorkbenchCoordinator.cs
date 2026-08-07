@@ -2346,13 +2346,9 @@ public sealed class WorkbenchCoordinator
             ?? throw new WorkbenchCatalogException("WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
         var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
         var worktree = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
-        // 1.2 workbenches with a managed tia/ store run the combined SVN+Git transaction; an
-        // empty path list is allowed there (safety-only savepoints commit revision.json alone).
-        // 1.1 workbenches keep the git-only behavior unchanged.
-        var combined = IsSvnManaged(workbench, worktree, worktreeRoot);
-        var selected = combined && paths.Count == 0
-            ? Array.Empty<string>()
-            : NormalizeSourcePaths(paths);
+        // Ordinary commits are git-only: git history records what was done; native SVN
+        // snapshots are created only by the explicit savepoint action (CreateNativeSavepointAsync).
+        var selected = NormalizeSourcePaths(paths);
         var isMaster = string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase);
 
         if (isMaster)
@@ -2380,12 +2376,8 @@ public sealed class WorkbenchCoordinator
                     "Master advanced after TIA authorization; compare TIA with master again before committing.");
         }
 
-        var result = combined
-            ? await CommitCombinedAsync(
-                workbench, worktree, worktreeRoot, registration.RelativePath, selected, message.Trim(), token, author)
-                .ConfigureAwait(false)
-            : await CommitSelectedSourceAsync(worktreeRoot, selected, message, token, author)
-                .ConfigureAwait(false);
+        var result = await CommitSelectedSourceAsync(worktreeRoot, selected, message, token, author)
+            .ConfigureAwait(false);
 
         if (isMaster)
         {
@@ -2402,8 +2394,42 @@ public sealed class WorkbenchCoordinator
         return result;
     }
 
-    /// <summary>The combined transaction engages only where an SVN native store and a managed
-    /// tia/ working copy exist (1.2 master today; feature worktrees join in Phase 4).</summary>
+    /// <summary>
+    /// Explicit native savepoint (the "Create SVN savepoint" action): runs the combined
+    /// transaction — TIA Save → compile (required) → freeze → SVN commit → revision.json →
+    /// git commit — binding the current TIA state to a restorable SVN revision. Ordinary git
+    /// commits stay git-only; native snapshots happen only here (and at workbench baseline).
+    /// Requires an SVN-managed worktree; rejects cleanly when nothing changed since the last
+    /// snapshot.
+    /// </summary>
+    public async Task<WorkbenchCommitResult> CreateNativeSavepointAsync(
+        string workbenchId,
+        string worktreeId,
+        string message,
+        CancellationToken token = default,
+        string? author = null)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            throw new ArgumentException("A savepoint message is required.", nameof(message));
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var registration = workbench.Worktrees.SingleOrDefault(item => item.WorktreeId == worktreeId)
+            ?? throw new WorkbenchCatalogException("WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+        var worktree = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
+        if (!IsSvnManaged(workbench, worktree, worktreeRoot))
+        {
+            throw new WorkbenchLifecycleException(
+                "SVN_HISTORY_UNAVAILABLE",
+                $"Worktree '{worktreeId}' has no SVN native store (workbenches created before "
+                + "schema 1.2 do not record native history).");
+        }
+
+        return await CommitCombinedAsync(
+                workbench, worktree, worktreeRoot, registration.RelativePath,
+                Array.Empty<string>(), message.Trim(), token, author)
+            .ConfigureAwait(false);
+    }
+
     private static bool IsSvnManaged(WorkbenchMetadata workbench, WorktreeMetadata worktree, string worktreeRoot) =>
         !string.IsNullOrWhiteSpace(workbench.SvnRepositoryPath)
         && Directory.Exists(workbench.SvnRepositoryPath)
@@ -2411,11 +2437,10 @@ public sealed class WorkbenchCoordinator
         && Directory.Exists(WorkbenchPaths.ResolveTiaStore(worktreeRoot));
 
     /// <summary>
-    /// Phase 3 combined commit: TIA Save → compile (required) → checksum → F-signature →
+    /// The native savepoint transaction: TIA Save → compile (required) → checksum → F-signature →
     /// quiesce TIA → SVN commit (message carries the classification, not a git sha) →
-    /// revision.json → git commit. The semantic export itself already happened upstream
-    /// (ApplyTiaSynchronizationAsync applies the staged TIA sources before calling this);
-    /// the git commit binds exactly those files to the SVN revision of the same TIA state.
+    /// revision.json → git commit. Invoked only by the explicit savepoint action
+    /// (CreateNativeSavepointAsync) and the bootstrap baseline — ordinary commits are git-only.
     /// Freeze discipline (Rule 8): the TIA session is disconnected before the SVN commit and
     /// stays closed afterwards — the next TIA operation reopens the managed project on demand
     /// via EnsureActiveProjectMatchesWorktreeAsync.

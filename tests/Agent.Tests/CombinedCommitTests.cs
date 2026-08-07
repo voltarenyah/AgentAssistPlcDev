@@ -5,14 +5,15 @@ using Xunit;
 
 namespace Agent.Tests;
 
-/// <summary>Phase 3 combined commit: SVN revision + git commit describe the same TIA state.</summary>
+/// <summary>The native savepoint transaction: SVN revision + git commit describe the same TIA
+/// state. Ordinary commits are git-only; only CreateNativeSavepointAsync runs this path.</summary>
 public sealed class CombinedCommitTests : IDisposable
 {
     private readonly string root =
         Path.Combine(Path.GetTempPath(), $"combined-commit-tests-{Guid.NewGuid():N}");
 
     [Fact]
-    public async Task CombinedCommitAdvancesSvnAndGitWithClassification()
+    public async Task NativeSavepointAdvancesSvnAndGitWithClassification()
     {
         var fixture = CombinedFixture.Create(root);
         var order = new List<string>();
@@ -20,10 +21,9 @@ public sealed class CombinedCommitTests : IDisposable
         var versionControl = fixture.ScriptVersionControl(new OrderRecordingCaller(order, "version"));
         var coordinator = fixture.CreateCoordinator(engineering, versionControl);
 
-        var result = await coordinator.CommitSourceAsync(
+        var result = await coordinator.CreateNativeSavepointAsync(
             CombinedFixture.WorkbenchId,
             CombinedFixture.WorktreeId,
-            [CombinedFixture.SourcePath],
             "accept Main change",
             CancellationToken.None);
 
@@ -31,7 +31,6 @@ public sealed class CombinedCommitTests : IDisposable
         var svnCommitArgs = versionControl.CallArgs["svn_commit"].Single();
         var svnMessage = Property<string>(svnCommitArgs, "message");
         Assert.StartsWith("accept Main change [", svnMessage);
-        Assert.Contains("semantic", svnMessage);
         Assert.Contains("native", svnMessage);
         Assert.DoesNotContain("head-", svnMessage);
         Assert.DoesNotContain("safety", svnMessage);
@@ -45,17 +44,16 @@ public sealed class CombinedCommitTests : IDisposable
         var commitPaths = Property<string[]>(
             versionControl.CallArgs["vc_commit_selected"].Single(), "paths");
         Assert.Contains(EngineeringStateWriter.RelativePath, commitPaths);
-        Assert.Contains(CombinedFixture.SourcePath, commitPaths);
         // The TIA session was quiesced before the native commit (Rule 8).
         Assert.True(
             order.IndexOf("engineering:disconnect") < order.IndexOf("version:svn_commit"));
         Assert.False(File.Exists(PendingCommitStore.PathFor(fixture.MasterRoot)));
-        // Master pending-sync records were consumed by the commit.
-        Assert.Empty(fixture.ReadPendingSync());
+        // Savepoints do not consume master pending-sync records (ordinary commits own that).
+        Assert.Single(fixture.ReadPendingSync());
     }
 
     [Fact]
-    public async Task CombinedCommitAbortsOnCompileFailureWithoutTouchingEitherStore()
+    public async Task NativeSavepointAbortsOnCompileFailureWithoutTouchingEitherStore()
     {
         var fixture = CombinedFixture.Create(root);
         var engineering = fixture.ScriptEngineering(new FakeToolCaller(), compileState: "error");
@@ -63,10 +61,9 @@ public sealed class CombinedCommitTests : IDisposable
         var coordinator = fixture.CreateCoordinator(engineering, versionControl);
 
         var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
-            coordinator.CommitSourceAsync(
+            coordinator.CreateNativeSavepointAsync(
                 CombinedFixture.WorkbenchId,
                 CombinedFixture.WorktreeId,
-                [CombinedFixture.SourcePath],
                 "accept Main change",
                 CancellationToken.None));
 
@@ -87,10 +84,9 @@ public sealed class CombinedCommitTests : IDisposable
         var coordinator = fixture.CreateCoordinator(engineering, versionControl);
 
         var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
-            coordinator.CommitSourceAsync(
+            coordinator.CreateNativeSavepointAsync(
                 CombinedFixture.WorkbenchId,
                 CombinedFixture.WorktreeId,
-                [CombinedFixture.SourcePath],
                 "accept Main change",
                 CancellationToken.None));
 
@@ -121,10 +117,9 @@ public sealed class CombinedCommitTests : IDisposable
             });
         var retryCoordinator = fixture.CreateCoordinator(new FakeToolCaller(), retryVersionControl);
 
-        var retried = await retryCoordinator.CommitSourceAsync(
+        var retried = await retryCoordinator.CreateNativeSavepointAsync(
             CombinedFixture.WorkbenchId,
             CombinedFixture.WorktreeId,
-            [CombinedFixture.SourcePath],
             "accept Main change",
             CancellationToken.None);
 
@@ -133,11 +128,11 @@ public sealed class CombinedCommitTests : IDisposable
         Assert.DoesNotContain("svn_status", retryVersionControl.Calls);
         Assert.Equal(2, fixture.ReadRevisionState().Svn.Revision);
         Assert.False(File.Exists(PendingCommitStore.PathFor(fixture.MasterRoot)));
-        Assert.Empty(fixture.ReadPendingSync());
+        Assert.Single(fixture.ReadPendingSync());
     }
 
     [Fact]
-    public async Task CombinedCommitWithoutAnyChangeIsRejectedCleanly()
+    public async Task NativeSavepointWithoutAnyChangeIsRejectedCleanly()
     {
         var fixture = CombinedFixture.Create(root, checksum: "PLC_1:new-checksum");
         var engineering = fixture.ScriptEngineering(new FakeToolCaller());
@@ -145,10 +140,9 @@ public sealed class CombinedCommitTests : IDisposable
         var coordinator = fixture.CreateCoordinator(engineering, versionControl);
 
         var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
-            coordinator.CommitSourceAsync(
+            coordinator.CreateNativeSavepointAsync(
                 CombinedFixture.WorkbenchId,
                 CombinedFixture.WorktreeId,
-                Array.Empty<string>(),
                 "no-op",
                 CancellationToken.None));
 
@@ -158,15 +152,12 @@ public sealed class CombinedCommitTests : IDisposable
     }
 
     [Fact]
-    public async Task MasterRefreshAutoCommitRunsTheCombinedTransaction()
+    public async Task MasterRefreshAutoCommitIsGitOnly()
     {
         var fixture = CombinedFixture.Create(root);
         fixture.StageRefreshChange("changed A");
-        var order = new List<string>();
-        var engineering = fixture.ScriptEngineering(new OrderRecordingCaller(order, "engineering"));
-        var versionControl = fixture.ScriptVersionControl(
-            new OrderRecordingCaller(order, "version"), extraHeadReads: 1);
-        var coordinator = fixture.CreateCoordinator(engineering, versionControl);
+        var versionControl = fixture.ScriptVersionControl(new FakeToolCaller(), extraHeadReads: 1);
+        var coordinator = fixture.CreateCoordinator(new FakeToolCaller(), versionControl);
         var preview = coordinator.PreviewRefresh(fixture.Context);
 
         var result = await coordinator.ApplyRefreshAsync(
@@ -180,15 +171,15 @@ public sealed class CombinedCommitTests : IDisposable
             CancellationToken.None,
             commitMessage: "refresh from TIA");
 
+        // Ordinary commits are git-only: no SVN calls, no revision.json rewrite, no compile.
         Assert.Equal("head-2", result.CommitSha);
-        Assert.Contains("svn_commit", versionControl.Calls);
+        Assert.DoesNotContain("svn_commit", versionControl.Calls);
+        Assert.DoesNotContain("svn_status", versionControl.Calls);
         var commitPaths = Property<string[]>(
             versionControl.CallArgs["vc_commit_selected"].Single(), "paths");
-        Assert.Contains(EngineeringStateWriter.RelativePath, commitPaths);
         Assert.Contains(CombinedFixture.SourcePath, commitPaths);
-        Assert.True(
-            order.IndexOf("engineering:disconnect") < order.IndexOf("version:svn_commit"));
-        Assert.Equal(2, fixture.ReadRevisionState().Svn.Revision);
+        Assert.DoesNotContain(EngineeringStateWriter.RelativePath, commitPaths);
+        Assert.Equal(1, fixture.ReadRevisionState().Svn.Revision);
         Assert.Empty(fixture.ReadPendingSync());
     }
 

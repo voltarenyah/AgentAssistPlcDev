@@ -85,26 +85,29 @@ The origin path and import time are kept as provenance (`originProjectPath`,
 `originImportedAt`); the operational path is `managedTiaProjectPath` inside the
 worktree's `tia/` store.
 
-## Combined commit
+## Commits are git-only; native snapshots are explicit
 
-On a workbench with an SVN native store, committing is one transaction: TIA Save →
-compile (success is required; a compile failure aborts before anything is
-committed) → read the aggregated project checksum → read the F-signature (null in
-V1) → disconnect TIA (freeze) → SVN commit of the worktree's `tia/` copy → write
-`revision.json` → Git commit of the selected source paths plus `revision.json`.
+Ordinary commits (VC panel, refresh apply-and-commit, feature commits) write Git
+history only — they never touch SVN, compile, or `revision.json`. The combined
+transaction runs only for the explicit **Create SVN savepoint** action (Native tab)
+and the workbench baseline: TIA Save → compile (success is required; a compile
+failure aborts before anything is committed) → read the aggregated project
+checksum → read the F-signature (null in V1) → disconnect TIA (freeze) → SVN
+commit of the worktree's `tia/` copy → write `revision.json` → Git commit of
+`revision.json` (plus any selected source paths) — binding the TIA state to a
+restorable SVN revision.
 
 The SVN message carries the change classification, never a Git SHA:
-`"<message> [semantic, native]"`. Classification compares the fresh state against
-the base `revision.json`: `semanticChanged` (committed source paths),
-`safetyChanged` (F-signature difference), `nativeChanged` (dirty SVN working copy
-or changed project checksum). A commit with no semantic, safety, or native change
-is rejected. A safety-only change — unchanged XML, changed signature — still
+`"<message> [native]"`. Classification compares the fresh state against the base
+`revision.json`: `safetyChanged` (F-signature difference), `nativeChanged` (dirty
+SVN working copy or changed project checksum). A savepoint with no safety or
+native change is rejected as nothing-to-commit. A safety-only change still
 produces a Git commit containing only `revision.json`.
 
-The master's existing write gates are unchanged: only TIA-compared and accepted
-source paths may be committed there. The SVN side joins the transaction after
-those gates pass. The TIA session stays disconnected after a commit; the next TIA
-operation reopens the managed project on demand.
+Master write rules: TIA-accepted files keep staleness checks; direct local edits
+commit freely as unlabeled savepoints (see Master and feature write rules). The
+TIA session stays disconnected after a savepoint; the next TIA operation reopens
+the managed project on demand.
 
 ### Pending commit recovery
 

@@ -631,22 +631,34 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             "accept Main change",
             CancellationToken.None);
 
-        // Git HEAD and the SVN HEAD revision describe the same TIA state via revision.json.
-        var revision = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
-        Assert.Equal(baselineSvnRevision + 1, revision.Svn.Revision);
+        // Ordinary commits are git-only: SVN and revision.json have not moved yet.
+        var revisionBeforeSavepoint = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
+        Assert.Equal(baselineSvnRevision, revisionBeforeSavepoint.Svn.Revision);
         var svn = new SvnRepositoryService();
         var mainUrl = new Uri(created.Workbench.SvnRepositoryPath! + Path.DirectorySeparatorChar) + "native/main";
+        Assert.Equal(baselineSvnRevision, svn.Log(mainUrl, 1).Entries.Single().Revision);
+        var sourceCommit = RepositoryService.Log(masterRoot, 1).Commits.Single();
+        Assert.Equal(commit.Sha, sourceCommit.Sha);
+        Assert.Contains(sourcePath, sourceCommit.Files);
+
+        // The explicit savepoint binds the TIA state: SVN revision + revision.json + git commit.
+        var savepoint = await coordinator.CreateNativeSavepointAsync(
+            created.Workbench.WorkbenchId,
+            created.Worktree.WorktreeId,
+            "accept Main change",
+            CancellationToken.None);
+
+        var revision = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
+        Assert.Equal(baselineSvnRevision + 1, revision.Svn.Revision);
         var headEntry = svn.Log(mainUrl, 1).Entries.Single();
         Assert.Equal(revision.Svn.Revision, headEntry.Revision);
         Assert.StartsWith("accept Main change [", headEntry.Message);
-        Assert.Contains("semantic", headEntry.Message);
         Assert.Contains("native", headEntry.Message);
         Assert.Equal(EngineeringCompileStatus.Success, revision.Validation.CompileStatus);
 
         var head = RepositoryService.Log(masterRoot, 1).Commits.Single();
-        Assert.Equal(commit.Sha, head.Sha);
+        Assert.Equal(savepoint.Sha, head.Sha);
         Assert.Contains("engineering-state/revision.json", head.Files);
-        Assert.Contains(sourcePath, head.Files);
         Assert.Empty(RepositoryService.Status(masterRoot).Entries);
         Assert.False(File.Exists(PendingCommitStore.PathFor(masterRoot)));
     }
@@ -681,10 +693,9 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         RepositoryService.CommitSelected(
             masterRoot, ["engineering-state/revision.json"], "record F-signature", null);
 
-        var commit = await coordinator.CommitSourceAsync(
+        var commit = await coordinator.CreateNativeSavepointAsync(
             created.Workbench.WorkbenchId,
             created.Worktree.WorktreeId,
-            Array.Empty<string>(),
             "safety update",
             CancellationToken.None);
 
@@ -743,7 +754,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var branchHeadAfterCopy = svn.Log(branchUrl, 1).Entries.Single().Revision;
         Assert.True(branchHeadAfterCopy > masterBaseRevision);
 
-        // A commit on master advances ^/native/main only.
+        // Master: the source commit is git-only; the explicit savepoint advances ^/native/main only.
         const string sourcePath = "devices/PLC_1/source/Blocks/Main.xml";
         File.AppendAllText(masterManagedPath, "master native change");
         var masterSource = WorkbenchPaths.ResolveRelative(masterRoot, sourcePath);
@@ -763,6 +774,14 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             [sourcePath],
             "master change",
             CancellationToken.None);
+        // Git-only: the SVN store has not moved yet (main stays at the baseline revision).
+        Assert.Equal(masterBaseRevision, svn.Log(mainUrl, 1).Entries.Single().Revision);
+
+        await coordinator.CreateNativeSavepointAsync(
+            created.Workbench.WorkbenchId,
+            created.Worktree.WorktreeId,
+            "master change",
+            CancellationToken.None);
         var mainHeadAfterMasterCommit = svn.Log(mainUrl, 1).Entries.Single().Revision;
         Assert.Equal(branchHeadAfterCopy + 1, mainHeadAfterMasterCommit);
         Assert.Equal(branchHeadAfterCopy, svn.Log(branchUrl, 1).Entries.Single().Revision);
@@ -770,7 +789,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             svn.Log(branchUrl, 20).Entries,
             entry => entry.Message.Contains("master change", StringComparison.Ordinal));
 
-        // A commit on the feature advances its own branch only.
+        // Feature: same split — git-only source commit, savepoint advances its own branch only.
         File.AppendAllText(feature.ManagedTiaProjectPath!, "feature native change");
         var featureSource = WorkbenchPaths.ResolveRelative(featureRoot, sourcePath);
         File.AppendAllText(featureSource, "<!-- feature change -->");
@@ -778,6 +797,13 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             created.Workbench.WorkbenchId,
             feature.WorktreeId,
             [sourcePath],
+            "feature change",
+            CancellationToken.None);
+        // Git-only: the feature's SVN branch has not moved since its copy.
+        Assert.Equal(branchHeadAfterCopy, svn.Log(branchUrl, 1).Entries.Single().Revision);
+        await coordinator.CreateNativeSavepointAsync(
+            created.Workbench.WorkbenchId,
+            feature.WorktreeId,
             "feature change",
             CancellationToken.None);
         var branchHead = svn.Log(branchUrl, 1).Entries.Single();

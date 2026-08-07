@@ -23,6 +23,7 @@ public sealed record RefreshApplyApiRequest(
 public sealed record SourcePathApiRequest(string RelativePath);
 public sealed record CommitSourceApiRequest(string[] Paths, string Message);
 public sealed record RestoreTiaProjectApiRequest(string? GitCommit = null);
+public sealed record NativeSavepointApiRequest(string Message);
 public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths, string Message);
 public sealed record TiaValidationApiRequest(string ConfirmedBy);
 public sealed record UnauthorizedMasterPathsRequest(string[] Paths, string? FeatureName = null, bool Confirm = false);
@@ -652,6 +653,14 @@ public static class WorkbenchEndpoints
         {
             coordinator.RegisterWorkbench(s.Workbench(workbenchId));
             return Results.Ok(await coordinator.ListSavepointsAsync(workbenchId, worktreeId, maxCount ?? 30, ct));
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/svn-savepoint", async (
+            string workbenchId, string worktreeId, NativeSavepointApiRequest body,
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(s.Workbench(workbenchId));
+            return Results.Ok(await coordinator.CreateNativeSavepointAsync(
+                workbenchId, worktreeId, body.Message, ct));
         });
         app.MapPost("/api/workbenches/{workbenchId}/vc/compare-tia", async (
             string workbenchId,

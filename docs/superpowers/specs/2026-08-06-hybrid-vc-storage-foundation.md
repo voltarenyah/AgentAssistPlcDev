@@ -130,29 +130,34 @@ Compile failure during import is not an import failure. Provenance is
 `managedTiaProjectPath`. Schema 1.1 workbenches keep `sourceProjectPath` as the
 operational path; readers fall back automatically.
 
-### Combined commit (Phase 3)
+### Commits are git-only; native savepoints are explicit (Phase 3)
+
+Ordinary commits (VC panel, refresh apply-and-commit, feature commits) write Git
+history only — no SVN, no compile, no `revision.json`. The combined transaction
+runs only for the explicit **Create SVN savepoint** action
+(`CreateNativeSavepointAsync`, Native tab button) and the bootstrap baseline:
 
 ```text
-(master: TIA-accepted files keep staleness checks; direct local edits allowed —
-MASTER_EDIT_NOT_ALLOWED disabled, commits are unlabeled savepoints)
 TIA Save → Compile (success REQUIRED — failure aborts before anything commits)
  → read project checksum → read F-signature (null in V1)
  → disconnect TIA (freeze, rule 8; the session stays closed, next operation reopens)
  → svn_status → classify change
  → SVN commit — message carries the classification, NOT a git sha
- → write revision.json → git commit (selected paths + revision.json)
+ → write revision.json → git commit (revision.json)
 ```
 
-Classification: `semanticChanged` (committed source paths), `safetyChanged`
-(F-signature difference, null-safe), `nativeChanged` (dirty SVN working copy or
-changed checksum). Empty commits are rejected; safety-only commits produce a Git
-commit containing only `revision.json`.
+Classification: `safetyChanged` (F-signature difference, null-safe),
+`nativeChanged` (dirty SVN working copy or changed checksum). A savepoint with no
+safety or native change is rejected; safety-only savepoints produce a Git commit
+containing only `revision.json`. Master: TIA-accepted files keep staleness
+checks; direct local edits allowed (MASTER_EDIT_NOT_ALLOWED disabled) and commit
+as unlabeled savepoints.
 
 Minimal recovery only: SVN committed but Git failed → write ignored
 `.automation/pending-commit.json` `{ svnUrl, svnRevision, status:
-"PENDING_GIT_COMMIT" }` and surface `GIT_COMMIT_PENDING`. The next commit on that
-worktree retries the Git side only with the SAME SVN revision, then deletes the
-pending file. No second SVN snapshot, no state machine.
+"PENDING_GIT_COMMIT" }` and surface `GIT_COMMIT_PENDING`. The next savepoint on
+that worktree retries the Git side only with the SAME SVN revision, then deletes
+the pending file. No second SVN snapshot, no state machine.
 
 ### Feature worktrees (Phase 4)
 
@@ -166,8 +171,9 @@ The base revision is read from master's `engineering-state/revision.json`; the
 branch name is sanitized to one SVN path segment; an existing branch fails with
 `SVN_BRANCH_EXISTS` before anything is created. Worktree metadata stores only
 `branch`, `baseCommit`, `svnUrl`, `baseSvnRevision`, plus the operational
-`managedTiaProjectPath` pointing at the feature's own tia/ copy. Feature commits
-run the same combined flow against their own SVN branch and Git branch.
+`managedTiaProjectPath` pointing at the feature's own tia/ copy. Feature
+savepoints run the same combined flow against their own SVN branch and Git
+branch.
 `vc_remove_worktree` also deletes the tia/ working copy; the SVN branch stays.
 A failed creation rolls back the Git worktree and any partial tia/ copy.
 

@@ -1554,6 +1554,11 @@ export const restoreTiaProject = (workbenchId: string, worktreeId: string, gitCo
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/restore-tia`,
     jsonRequest('POST', { gitCommit: gitCommit || null }),
   )
+export const createSvnSavepoint = (workbenchId: string, worktreeId: string, message: string) =>
+  workbenchRequest<{ sha: string; message: string; files: string[] }>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/svn-savepoint`,
+    jsonRequest('POST', { message }),
+  )
 
 export async function getVcLog(workbenchId: string, worktreeId: string, deviceId: string, maxCount?: number, filePath?: string): Promise<VcLogResult> {
   const params = new URLSearchParams()

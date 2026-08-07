@@ -42,19 +42,19 @@ and SHA; any mismatch stops the run.
    Open the project in TIA from the workbench and make a small block edit.
    Expected: TIA opens the managed copy under `worktrees/master/tia/`, not the
    (renamed) origin; `Compare with TIA` works against the managed copy.
-4. **Commit a normal PLC modification.**
-   Compile succeeds; accept the change and commit on master with a message.
-   Expected: exactly one new Git commit containing the changed XML and
-   `engineering-state/revision.json`; `svn log` on `native/main` shows a new
-   revision whose message is `<message> [semantic, native]`; the new
-   `revision.json` `svn.revision` equals the SVN HEAD revision;
-   `validation.compileStatus = "SUCCESS"` and `tia.projectChecksum` is set.
+4. **Commit a normal PLC modification, then snapshot.**
+   Compile succeeds; accept the change and commit on master with a message — this
+   commit is Git-only (SVN unchanged). Then press "Create SVN savepoint".
+   Expected: the git commit contains the changed XML; the savepoint advances SVN
+   by one revision whose message is `<message> [native]`; the new `revision.json`
+   `svn.revision` equals the SVN HEAD revision and lands in a git commit;
+   `validation.compileStatus = "SUCCESS"` and `tia.projectChecksum` is refreshed.
 5. **Commit a safety-only modification.**
    Make a safety-relevant change in TIA that leaves the exported block XML
-   unchanged, then commit with no selected source paths.
+   unchanged, then create an SVN savepoint with no source changes pending.
    Expected: a Git commit containing only `engineering-state/revision.json`;
    the exported XML is byte-identical before/after; `safety.fSignature` records
-   the signature when the Openness probe lands (null in V1 — the commit must
+   the signature when the Openness probe lands (null in V1 — the savepoint must
    still exist and classify as `[safety]`).
 6. **See both in Git history.**
    Open the History view / `git log`.
