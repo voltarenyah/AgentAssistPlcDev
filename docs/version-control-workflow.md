@@ -152,10 +152,13 @@ provenance/managed-path fields are null, the combined commit and restore report
 
 ## Master and feature write rules
 
-`master` is the clean project baseline. Ordinary source-editor writes are
-rejected there. Users edit source in a feature worktree, where the same source
-tree is writable. A newly created feature inherits the master device metadata and
-source snapshot.
+Direct source edits are allowed on any worktree including `master` (the
+`MASTER_EDIT_NOT_ALLOWED` policy is disabled). Master commits of direct local
+edits are accepted and committed as unlabeled savepoints; only TIA-accepted files
+keep staleness checks (a file or HEAD that moved after its recorded authorization
+is still rejected). Feature worktrees remain the isolated form for longer-running
+changes: a newly created feature inherits the master device metadata and source
+snapshot plus its own SVN branch and native project copy.
 
 ## Refresh and commit
 
@@ -189,8 +192,7 @@ requires an explicit confirmation.
 The Version control tab is worktree-scoped and covers every registered PLC.
 Changes shows only source XML objects, grouped by PLC and category. Select
 individual objects and enter a commit message; there is no staging concept in
-the UI. Direct master edits are shown as unauthorized and cannot be committed
-from this screen.
+the UI. Direct master edits are commitable from this screen (unlabeled).
 
 Compare with TIA first checks the saved checksum evidence. A checksum match is
 shown immediately. A mismatch runs a full source scan and presents individual

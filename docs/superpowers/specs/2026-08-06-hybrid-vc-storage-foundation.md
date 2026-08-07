@@ -133,7 +133,8 @@ operational path; readers fall back automatically.
 ### Combined commit (Phase 3)
 
 ```text
-(master write gates first, unchanged)
+(master: TIA-accepted files keep staleness checks; direct local edits allowed —
+MASTER_EDIT_NOT_ALLOWED disabled, commits are unlabeled savepoints)
 TIA Save → Compile (success REQUIRED — failure aborts before anything commits)
  → read project checksum → read F-signature (null in V1)
  → disconnect TIA (freeze, rule 8; the session stays closed, next operation reopens)

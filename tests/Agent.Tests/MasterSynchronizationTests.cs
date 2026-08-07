@@ -33,7 +33,7 @@ public sealed class MasterSynchronizationTests : IDisposable
     }
 
     [Fact]
-    public async Task MasterCommitRejectsAFileChangedAfterAuthorization()
+    public async Task MasterCommitAllowsADirectLocalEdit()
     {
         var coordinator = fixture.CreateCoordinator();
         await coordinator.ApplyTiaSynchronizationAsync(
@@ -44,15 +44,17 @@ public sealed class MasterSynchronizationTests : IDisposable
             CancellationToken.None);
         File.WriteAllText(fixture.MasterSource("Blocks/A.xml"), "local edit");
 
-        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
-            coordinator.CommitSourceAsync(
-                fixture.Workbench.WorkbenchId,
-                fixture.Master.WorktreeId,
-                [fixture.Path("Blocks/A.xml")],
-                "accept A",
-                CancellationToken.None));
+        // Direct local edits on master are allowed (MASTER_EDIT_NOT_ALLOWED and the
+        // TIA-authorization requirement are disabled); they commit as unlabeled savepoints.
+        var result = await coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            [fixture.Path("Blocks/A.xml")],
+            "direct edit",
+            CancellationToken.None);
 
-        Assert.Equal("MASTER_CHANGE_NOT_AUTHORIZED", error.Code);
+        Assert.Equal("head-2", result.Sha);
+        Assert.Equal("direct edit", fixture.VersionControl.CommitMessage);
     }
 
     public void Dispose() => fixture.Dispose();

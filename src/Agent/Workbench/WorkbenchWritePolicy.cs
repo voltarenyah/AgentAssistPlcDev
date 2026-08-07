@@ -40,6 +40,10 @@ public sealed class WorkbenchWritePolicy(AtomicJsonStore store)
         store.Write(path, pending);
     }
 
+    /// <summary>Validates worktree metadata for ordinary PLC source edits. Direct edits are
+    /// allowed on any worktree including master (vc-restructure decision: MASTER_EDIT_NOT_ALLOWED
+    /// disabled); master commits of direct edits are committed as unlabeled savepoints, while
+    /// TIA-accepted files keep their staleness checks via the pending-authorization records.</summary>
     public void RequireFeatureEdit(DeviceContext context)
     {
         var metadataPath = Path.Combine(context.WorktreeRoot, "worktree.json");
@@ -50,11 +54,5 @@ public sealed class WorkbenchWritePolicy(AtomicJsonStore store)
                 "WORKTREE_METADATA_REQUIRED",
                 "Ordinary PLC source edits require valid worktree metadata.");
         }
-        if (!string.Equals(metadata.Branch, "master", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        throw new WorkbenchLifecycleException(
-            "MASTER_EDIT_NOT_ALLOWED",
-            "Ordinary PLC source edits are only allowed on a feature worktree.");
     }
 }

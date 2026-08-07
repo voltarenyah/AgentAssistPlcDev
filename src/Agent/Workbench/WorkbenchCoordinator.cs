@@ -2357,12 +2357,12 @@ public sealed class WorkbenchCoordinator
 
         if (isMaster)
         {
+            // Master commit rule (relaxed per vc-restructure decision): TIA-accepted paths keep
+            // their staleness checks (file/head must still match the recorded authorization);
+            // selected paths without a pending record are direct local edits and commit freely
+            // as unlabeled savepoints.
             var pending = writePolicy.ReadPending(worktreeRoot, worktree.WorktreeId);
             var authorized = pending.Sources.Where(item => selected.Contains(item.RelativePath, StringComparer.Ordinal)).ToArray();
-            if (authorized.Length != selected.Length)
-                throw new WorkbenchLifecycleException(
-                    "MASTER_CHANGE_NOT_AUTHORIZED",
-                    "Every selected master source file must first be accepted from a TIA comparison.");
 
             foreach (var item in authorized)
             {
