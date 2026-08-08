@@ -491,3 +491,4 @@ config.json
 exported/
 .worktrees/
 hardware/staging/
+tmp/
