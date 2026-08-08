@@ -1157,7 +1157,7 @@ public sealed class WorkbenchCoordinator
                     progress?.Report("Exporting hardware configuration from TIA...");
                     var results = await engineering.CallAsync<HardwareExportResult[]>(
                         "export_hardware_configuration",
-                        new { outputDir = root, includeDeviceExports = true },
+                        new { outputDir = root, includeDeviceExports = false },
                         cancellationToken).ConfigureAwait(false);
                     var warnings = EnsureHardwareExportSucceeded(results, root);
                     RemoveLegacyHardwareLayout(root);
@@ -1214,7 +1214,7 @@ public sealed class WorkbenchCoordinator
                     progress?.Report("Comparing hardware configuration with TIA...");
                     var liveResults = await engineering.CallAsync<HardwareExportResult[]>(
                         "export_hardware_configuration",
-                        new { outputDir = stagingRoot, includeDeviceExports = true },
+                        new { outputDir = stagingRoot, includeDeviceExports = false },
                         cancellationToken).ConfigureAwait(false);
                     var warnings = EnsureHardwareExportSucceeded(liveResults, stagingRoot);
 
@@ -2245,6 +2245,94 @@ public sealed class WorkbenchCoordinator
         var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
         return await consistency.ValidateSynchronizedMasterAsync(workbench, master, confirmedBy, token, progress)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Push direction of Compare with TIA: imports the local master version of selected
+    /// differences back into TIA (local → TIA overwrite) via import_source_object. Per-object
+    /// outcomes; a partial failure does not roll back successful imports. Deleted objects are
+    /// unsupported (Openness import cannot delete). Does not commit anything — the user reviews,
+    /// compiles, then commits or creates an SVN savepoint.
+    /// </summary>
+    public async Task<PushToTiaResult> PushSourcesToTiaAsync(
+        string workbenchId,
+        string comparisonId,
+        IReadOnlyList<string> paths,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
+                string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
+            ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
+        var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
+        var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
+        var comparison = consistency.GetComparison(workbench, comparisonId);
+        var selected = NormalizeSourcePaths(paths);
+        if (selected.Length == 0)
+        {
+            throw new ArgumentException("At least one source path is required.", nameof(paths));
+        }
+        var contexts = LoadMasterContexts(workbench, master)
+            .ToDictionary(item => item.Metadata.DeviceId, item => item.Context, StringComparer.Ordinal);
+
+        var outcomes = new List<PushToTiaObjectOutcome>(selected.Length);
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            var ensured = false;
+            foreach (var path in selected)
+            {
+                var difference = comparison.Differences.SingleOrDefault(item => item.RelativePath == path)
+                    ?? throw new WorkbenchLifecycleException(
+                        "SOURCE_NOT_IN_COMPARISON",
+                        $"Source '{path}' is not a difference in comparison '{comparisonId}'.");
+                if (difference.Kind is not (SourceDifferenceKind.Changed or SourceDifferenceKind.Added))
+                {
+                    outcomes.Add(new PushToTiaObjectOutcome(path, false, "Deleting from TIA is not supported by the import flow."));
+                    continue;
+                }
+                if (!contexts.TryGetValue(difference.DeviceId, out var context))
+                {
+                    outcomes.Add(new PushToTiaObjectOutcome(path, false, $"Device '{difference.DeviceId}' was not found in master."));
+                    continue;
+                }
+
+                var sourceRelativePath = ExtractSourceRelativePath(path);
+                var file = WorkbenchPaths.ResolveRelative(masterRoot, path);
+                if (!File.Exists(file))
+                {
+                    outcomes.Add(new PushToTiaObjectOutcome(path, false, "The local source file is missing."));
+                    continue;
+                }
+
+                if (!ensured)
+                {
+                    await EnsureActiveProjectMatchesWorktreeAsync(context, token, progress).ConfigureAwait(false);
+                    ensured = true;
+                }
+
+                progress?.Report($"Importing {path} into TIA...");
+                try
+                {
+                    await engineering.CallAsync<object>(
+                        "import_source_object",
+                        new { relativePath = sourceRelativePath, xmlFilePath = file, plcName = difference.PlcName },
+                        token).ConfigureAwait(false);
+                    outcomes.Add(new PushToTiaObjectOutcome(path, true, null));
+                }
+                catch (ToolCallException exception)
+                {
+                    outcomes.Add(new PushToTiaObjectOutcome(path, false, exception.Message));
+                }
+            }
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+
+        return new PushToTiaResult(comparisonId, outcomes);
     }
 
     public async Task<TiaSynchronizationResult> ApplyTiaSynchronizationAsync(

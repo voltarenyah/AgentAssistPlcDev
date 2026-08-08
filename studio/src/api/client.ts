@@ -718,6 +718,13 @@ export const acceptTiaSynchronization = (workbenchId: string, comparisonId: stri
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}/accept`,
     withOperation(jsonRequest('POST', { paths, message }), operationId),
   )
+export type PushToTiaOutcome = { path: string; success: boolean; message: string | null }
+export type PushToTiaResult = { comparisonId: string; outcomes: PushToTiaOutcome[] }
+export const pushSourcesToTia = (workbenchId: string, comparisonId: string, paths: string[], operationId?: string) =>
+  workbenchRequest<PushToTiaResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}/push-to-tia`,
+    withOperation(jsonRequest('POST', { paths }), operationId),
+  )
 export const validateTiaSynchronization = (workbenchId: string, confirmedBy: string, operationId?: string) =>
   workbenchRequest<VcValidationEvidence>(
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/validate-sync`,

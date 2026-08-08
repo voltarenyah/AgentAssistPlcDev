@@ -182,6 +182,12 @@ public sealed record SavepointInfo(
     string? CompileStatus,
     string? FSignature);
 
+/// <summary>Outcome of one object in a local → TIA push.</summary>
+public sealed record PushToTiaObjectOutcome(string Path, bool Success, string? Message);
+
+/// <summary>Result of pushing selected local master sources into TIA.</summary>
+public sealed record PushToTiaResult(string ComparisonId, IReadOnlyList<PushToTiaObjectOutcome> Outcomes);
+
 public sealed record DeviceContext(
     string WorkbenchId,
     string WorktreeId,

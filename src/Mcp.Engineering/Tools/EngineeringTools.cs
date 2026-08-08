@@ -142,7 +142,7 @@ public sealed class EngineeringTools
     [Description("Export the TIA V17 CAx hardware configuration as a canonical project AML and, optionally, one AML per device under Devices. Read-only with respect to the project.")]
     public CallToolResult ExportHardwareConfiguration(
         [Description("Export root directory. The project AML is written directly under outputDir/project.aml.")] string outputDir,
-        [Description("Also export one AML per TIA device under outputDir/Devices. Default true.")] bool includeDeviceExports = true,
+        [Description("Also export one AML per TIA device under outputDir/Devices. Default false — project-level AML only; per-device CAx is slow on big projects.")] bool includeDeviceExports = false,
         IProgress<ProgressNotificationValue>? progress = null)
         => Invoke(
             "export_hardware_configuration",

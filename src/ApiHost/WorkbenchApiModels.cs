@@ -697,6 +697,25 @@ public static class WorkbenchEndpoints
                 "Applying selected TIA source to master...",
                 progress => coordinator.ApplyTiaSynchronizationAsync(workbenchId, comparisonId, body.Paths, body.Message, ct, progress),
                 "Selected TIA source accepted.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}/push-to-tia", async (
+            string workbenchId,
+            string comparisonId,
+            FeaturePathsApiRequest body,
+            WorkbenchApiState s,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(s.Workbench(workbenchId));
+            return await RunOperationAsync(
+                http,
+                operations,
+                "push-to-tia",
+                "Importing selected local source into TIA...",
+                progress => coordinator.PushSourcesToTiaAsync(workbenchId, comparisonId, body.Paths, ct, progress),
+                "Selected local source imported into TIA.").ConfigureAwait(false);
+        });
         app.MapPost("/api/workbenches/{workbenchId}/vc/validate-sync", async (
             string workbenchId,
             TiaValidationApiRequest body,

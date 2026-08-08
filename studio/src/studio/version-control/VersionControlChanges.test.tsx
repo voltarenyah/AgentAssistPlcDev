@@ -80,7 +80,7 @@ describe('VersionControlChanges', () => {
     )
   })
 
-  it('selects all eligible objects in a group without selecting unauthorized master edits', async () => {
+  it('selects all objects in a group; direct master edits stay selectable and labeled', async () => {
     const { host } = await render([
       entry({ objectName: 'A', filePath: 'devices/PLC_1/source/Blocks/A.xml' }),
       entry({ objectName: 'B', filePath: 'devices/PLC_1/source/Blocks/B.xml', state: 'Unauthorized', authorizedOnMaster: false }),
@@ -90,7 +90,8 @@ describe('VersionControlChanges', () => {
     await click(groupSelect)
 
     expect((host.querySelector('input[aria-label="Select A"]') as HTMLInputElement).checked).toBe(true)
-    expect((host.querySelector('input[aria-label="Select B"]') as HTMLInputElement).disabled).toBe(true)
+    // Direct master edits are committable (policy relaxed); the label is informational only.
+    expect((host.querySelector('input[aria-label="Select B"]') as HTMLInputElement).checked).toBe(true)
     expect(host.textContent).toContain('Direct master edit')
     expect(host.textContent).not.toMatch(/Stage|Unstage|Restore/)
   })

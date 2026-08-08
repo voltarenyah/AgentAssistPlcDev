@@ -75,6 +75,8 @@ public sealed class VersionControlToolsTests : IDisposable
     [InlineData("devices/PLC_1/source/Main.xml", "devices/PLC_1/source/Main.xml")]
     [InlineData("devices\\PLC_1\\source\\Blocks\\Main.XML", "devices/PLC_1/source/Blocks/Main.XML")]
     [InlineData("engineering-state/revision.json", "engineering-state/revision.json")]
+    [InlineData("hardware/project.aml", "hardware/project.aml")]
+    [InlineData("hardware\\Devices\\PLC_1.aml", "hardware/Devices/PLC_1.aml")]
     public void SourcePathPolicy_AcceptsOnlyNormalizedSourceXml(string path, string expected)
     {
         Assert.Equal(expected, SourcePathPolicy.Require(path));
@@ -96,6 +98,8 @@ public sealed class VersionControlToolsTests : IDisposable
     [InlineData("tia/anything.xml")]
     [InlineData("engineering-state/other.json")]
     [InlineData("engineering-state/revision.json/extra.xml")]
+    [InlineData("hardware/staging/project.aml")]
+    [InlineData("hardware/noextension")]
     public void SourcePathPolicy_RejectsPathsOutsideTrackedXml(string path)
     {
         var error = Assert.Throws<VcInternalException>(() => SourcePathPolicy.Require(path));

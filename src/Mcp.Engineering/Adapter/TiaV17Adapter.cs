@@ -754,7 +754,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             // The Studio lifecycle stages one PLC at a time and passes plcName. Export
             // hardware into that same staging root so the artifacts are promoted with the
             // source tree; a project-wide rebuild still produces the same canonical root.
-            var hardwareResults = ExportHardwareConfigurationCore(outputDir, includeDeviceExports: true, progress);
+            // Project-level AML only: per-device CAx exports are slow on big projects and add
+            // no tracked value for the workbench baseline.
+            var hardwareResults = ExportHardwareConfigurationCore(outputDir, includeDeviceExports: false, progress);
             var hardwareWarnings = hardwareResults
                 .Where(result => !result.Success)
                 .Select(result =>

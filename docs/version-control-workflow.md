@@ -22,6 +22,7 @@ Git commit → revision.json → SVN revision → TIA project
       engineering-state/
         revision.json             # GIT-TRACKED: svn url+revision, checksums, compile status
       devices/<plc>/source/**     # git-tracked exported PLC XML
+      hardware/                   # git-tracked project hardware export (project.aml only)
       tia/                        # SVN working copy of ^/native/main (never git-tracked)
     feature-x/
       engineering-state/revision.json
@@ -31,8 +32,10 @@ Git commit → revision.json → SVN revision → TIA project
 
 The SVN layout is `native/main` plus `native/branches/<feature>` only — no tags,
 no `svn merge`, no branch cleanup; branches simply remain. `worktree.json`,
-`device.json`, staging, knowledge databases, `.automation/`, `repository.svn/`,
-and `tia/` are runtime artifacts and are excluded from Git.
+`device.json`, staging (including `hardware/staging/`), knowledge databases,
+`.automation/`, `repository.svn/`, and `tia/` are runtime artifacts and are
+excluded from Git. Hardware exports produce the project-level `project.aml`
+only (per-device CAx is skipped — slow on big projects).
 
 `revision.json` (schemaVersion 1, deterministic property order, nulls explicit):
 
@@ -193,15 +196,20 @@ requires an explicit confirmation.
 ## Version control workspace
 
 The Version control tab is worktree-scoped and covers every registered PLC.
-Changes shows only source XML objects, grouped by PLC and category. Select
-individual objects and enter a commit message; there is no staging concept in
-the UI. Direct master edits are commitable from this screen (unlabeled).
+Changes shows source XML objects (grouped by PLC and category) plus tracked
+hardware exports under a Hardware group. Select individual objects and enter a
+commit message; there is no staging concept in the UI. Direct master edits are
+committable from this screen (unlabeled).
 
 Compare with TIA first checks the saved checksum evidence. A checksum match is
 shown immediately. A mismatch runs a full source scan and presents individual
-block, DB, UDT, and tag-table differences. Selected supported TIA changes can
-be accepted into master, but remain uncommitted until the user records the
-change.
+block, DB, UDT, and tag-table differences. Both directions are offered:
+accepting selected TIA changes into the local repo (with a commit title), or
+pushing selected local objects back into TIA (per-object import outcomes;
+compile and snapshot afterwards). When no source differences exist but the TIA
+checksum differs from the last savepoint, the view offers creating an SVN
+savepoint to record the untrackable change; when checksums match and nothing
+differs, it reports that no commit is needed.
 
 For a feature worktree, Prepare feature import creates a three-way import plan.
 Objects changed in both TIA and the feature are disabled individually; unrelated

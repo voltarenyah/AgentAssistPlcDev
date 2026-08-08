@@ -27,6 +27,20 @@ const comparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): ap
 })
 
 const render = async (onCommitted?: () => void) => {
+  vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue({
+    revision: {
+      schemaVersion: 1,
+      svn: { url: '^/native/main', revision: 3 },
+      tia: { projectChecksum: 'dev-1:checksum-2' },
+      safety: { fSignature: null },
+      validation: { compileStatus: 'SUCCESS' },
+    },
+    svnUrl: null,
+    baseSvnRevision: null,
+    managedTiaProjectPath: null,
+    tiaStorePath: 'C:/wb/worktrees/master/tia',
+    pendingCommit: false,
+  })
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -100,5 +114,64 @@ describe('VersionControlCompare', () => {
     await click(host.querySelector('button[aria-label="Accept selected TIA changes"]')!)
 
     expect(onCommitted).toHaveBeenCalledOnce()
+  })
+
+  it('pushes selected local objects into TIA and shows per-object outcomes', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    const push = vi.spyOn(api, 'pushSourcesToTia').mockResolvedValue({
+      comparisonId: 'comparison-1',
+      outcomes: [{ path: 'devices/PLC_1/source/Blocks/Main.xml', success: true, message: null }],
+    })
+    const { host } = await render()
+
+    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
+    await click(host.querySelector('input[type="checkbox"]')!)
+    await click(host.querySelector('button[aria-label="Push selected local changes to TIA"]')!)
+
+    expect(push).toHaveBeenCalledWith('wb-1', 'comparison-1', ['devices/PLC_1/source/Blocks/Main.xml'])
+    expect(host.textContent).toContain('✓')
+    expect(host.textContent).toContain('devices/PLC_1/source/Blocks/Main.xml')
+  })
+
+  it('offers an SVN savepoint when checksums drift without source differences', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
+      differences: [],
+      state: 'Consistent',
+      liveChecksums: { 'dev-1': 'checksum-9' },
+    }))
+    const createSavepoint = vi.spyOn(api, 'createSvnSavepoint').mockResolvedValue({
+      sha: 'feedface00',
+      message: 'safety change',
+      files: ['engineering-state/revision.json'],
+    })
+    const { host } = await render()
+
+    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
+
+    expect(host.textContent).toContain('TIA changed outside the tracked source')
+    const messageInput = host.querySelector('input[aria-label="Savepoint message"]') as HTMLInputElement
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+      setter.call(messageInput, 'safety change')
+      messageInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await click(host.querySelector('button[aria-label="Create SVN savepoint"]')!)
+
+    expect(createSavepoint).toHaveBeenCalledWith('wb-1', 'wt-1', 'safety change')
+    expect(host.textContent).toContain('SVN savepoint committed feedface')
+  })
+
+  it('reports no need to commit when checksums match and no differences exist', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
+      differences: [],
+      state: 'Consistent',
+      liveChecksums: { 'dev-1': 'checksum-2' },
+    }))
+    const { host } = await render()
+
+    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
+
+    expect(host.textContent).toContain('no need to commit')
+    expect(host.textContent).not.toContain('TIA changed outside the tracked source')
   })
 })

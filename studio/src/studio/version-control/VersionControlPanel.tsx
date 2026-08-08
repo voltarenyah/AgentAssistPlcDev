@@ -14,6 +14,19 @@ export type VersionControlPanelProps = {
 
 function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSourceEntry | null {
   const parts = entry.filePath.replace(/\\/g, '/').split('/')
+  const state = branch.toLowerCase() === 'master' ? 'Unauthorized' : entry.state === 'Added' || entry.state === 'Untracked' ? 'Added' : entry.state === 'Deleted' ? 'Deleted' : 'Modified'
+  if (parts[0] === 'hardware' && parts.length >= 2 && parts[1] !== 'staging') {
+    const file = parts.at(-1) ?? entry.filePath
+    return {
+      filePath: entry.filePath,
+      deviceId: 'project',
+      plcName: 'Hardware',
+      category: 'Hardware',
+      objectName: file,
+      state,
+      authorizedOnMaster: true,
+    }
+  }
   if (parts.length < 5 || parts[0] !== 'devices' || parts[2] !== 'source' || !entry.filePath.toLowerCase().endsWith('.xml')) return null
   const category = parts[3] === 'Blocks' ? 'Block' : parts[3] === 'DB' ? 'DB' : parts[3] === 'UDT' ? 'Udt' : parts[3] === 'Tags' ? 'Tags' : parts[3]
   const file = parts.at(-1) ?? entry.filePath
@@ -23,7 +36,7 @@ function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSo
     plcName: parts[1],
     category,
     objectName: file.replace(/\.xml$/i, ''),
-    state: branch.toLowerCase() === 'master' ? 'Unauthorized' : entry.state === 'Added' || entry.state === 'Untracked' ? 'Added' : entry.state === 'Deleted' ? 'Deleted' : 'Modified',
+    state,
     authorizedOnMaster: branch.toLowerCase() !== 'master',
   }
 }
