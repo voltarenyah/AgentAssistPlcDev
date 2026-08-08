@@ -66,8 +66,20 @@ public sealed class VersionControlTools
 
     [McpServerTool(Name = "vc_merge_validated")]
     [Description("Create a guarded no-fast-forward feature merge and immutable feature-merge evidence after the all-device validation gate.")]
-    public CallToolResult VcMergeValidated(VcValidatedMergeRequest request) =>
-        Invoke(() => RepositoryService.MergeValidated(request));
+    public CallToolResult VcMergeValidated(
+        [Description("Path to the target linked worktree.")] string targetWorktreePath,
+        [Description("Source branch to merge.")] string sourceBranch,
+        [Description("Expected target HEAD SHA captured during validation.")] string expectedTargetSha,
+        [Description("Expected source branch SHA captured during validation.")] string expectedSourceSha,
+        [Description("Prospective merge tree SHA captured during validation.")] string candidateTreeSha,
+        [Description("Validation evidence; its commitSha is rewritten to the created merge commit.")] VcValidationEvidence evidence) =>
+        Invoke(() => RepositoryService.MergeValidated(new VcValidatedMergeRequest(
+            targetWorktreePath,
+            sourceBranch,
+            expectedTargetSha,
+            expectedSourceSha,
+            candidateTreeSha,
+            evidence)));
 
     [McpServerTool(Name = "vc_apply_historical_paths")]
     [Description("Write selected historical PLC source XML blobs into the current worktree without staging or committing.")]
@@ -110,6 +122,15 @@ public sealed class VersionControlTools
         [Description("Required commit message.")] string message,
         [Description("Optional author string in 'Name <email>' format.")] string? author = null)
         => Invoke(() => RepositoryService.CommitSelected(repoPath, paths, message, author));
+
+    [McpServerTool(Name = "vc_commit_hardware")]
+    [Description("App-internal: atomically commit exactly the given hardware configuration paths (hardware/**). Existing staging is cleared without changing working files.")]
+    public CallToolResult VcCommitHardware(
+        [Description("Path to the git repository or linked worktree.")] string repoPath,
+        [Description("One or more hardware/** paths relative to the worktree root.")] string[] paths,
+        [Description("Required commit message.")] string message,
+        [Description("Optional author string in 'Name <email>' format.")] string? author = null)
+        => Invoke(() => RepositoryService.CommitHardware(repoPath, paths, message, author));
 
     [McpServerTool(Name = "vc_log")]
     [Description("Show commit history. Default last 20 commits; max 100. Optionally filter to commits touching a single file.")]

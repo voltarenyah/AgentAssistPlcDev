@@ -604,13 +604,9 @@ public sealed class WorkbenchCoordinator
                         .OrderBy(path => path, StringComparer.Ordinal)
                         .ToArray();
                     progress?.Report("Committing hardware configuration...");
-                    await versionControl.CallAsync<object>(
-                        "vc_add",
-                        new { repoPath = device.WorktreeRoot, paths },
-                        cancellationToken).ConfigureAwait(false);
                     var commit = await versionControl.CallAsync<CoordinatorGitCommitResult>(
-                        "vc_commit",
-                        new { repoPath = device.WorktreeRoot, message = "hardware: reload configuration" },
+                        "vc_commit_hardware",
+                        new { repoPath = device.WorktreeRoot, paths, message = "hardware: reload configuration" },
                         cancellationToken).ConfigureAwait(false);
 
                     return new HardwareConfigurationReloadResult(
@@ -731,13 +727,9 @@ public sealed class WorkbenchCoordinator
                     .Select(file => Path.Combine("hardware", file.Relative).Replace('\\', '/'))
                     .OrderBy(path => path, StringComparer.Ordinal)
                     .ToArray();
-                await versionControl.CallAsync<object>(
-                    "vc_add",
-                    new { repoPath = device.WorktreeRoot, paths },
-                    cancellationToken).ConfigureAwait(false);
                 var commit = await versionControl.CallAsync<CoordinatorGitCommitResult>(
-                    "vc_commit",
-                    new { repoPath = device.WorktreeRoot, message = "hardware: accept TIA configuration" },
+                    "vc_commit_hardware",
+                    new { repoPath = device.WorktreeRoot, paths, message = "hardware: accept TIA configuration" },
                     cancellationToken).ConfigureAwait(false);
 
                 return new HardwareConfigurationOverwriteResult(root, stagedFiles.Length, commit.Sha);

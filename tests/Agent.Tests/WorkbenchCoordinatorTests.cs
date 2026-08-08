@@ -108,8 +108,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 },
             });
         var versionControl = new FakeToolCaller()
-            .Respond("vc_add", new object())
-            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "commit-1" });
+            .Respond("vc_commit_hardware", new CoordinatorGitCommitResult { Sha = "commit-1" });
         var coordinator = Create(fixture, engineering: engineering, versionControl: versionControl);
 
         var result = await coordinator.ReloadHardwareAsync(fixture.Context, CancellationToken.None);
@@ -197,8 +196,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), "<old />");
         File.WriteAllText(Path.Combine(stagingRoot, "project.aml"), "<new />");
         var versionControl = new FakeToolCaller()
-            .Respond("vc_add", new object())
-            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "hardware-commit" });
+            .Respond("vc_commit_hardware", new CoordinatorGitCommitResult { Sha = "hardware-commit" });
         var coordinator = Create(fixture, versionControl: versionControl);
 
         var result = await coordinator.OverwriteHardwareFromStagingAsync(
@@ -208,10 +206,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Equal("hardware-commit", result.CommitSha);
         Assert.Equal("<new />", File.ReadAllText(Path.Combine(hardwareRoot, "project.aml")));
-        Assert.Equal(["vc_add", "vc_commit"], versionControl.Calls);
+        Assert.Equal(["vc_commit_hardware"], versionControl.Calls);
         Assert.Contains(
             "hardware/project.aml",
-            Property<string[]>(versionControl.CallArgs["vc_add"].Single(), "paths"));
+            Property<string[]>(versionControl.CallArgs["vc_commit_hardware"].Single(), "paths"));
     }
 
     [Fact]
@@ -242,8 +240,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 },
             });
         var versionControl = new FakeToolCaller()
-            .Respond("vc_add", new object())
-            .Respond("vc_commit", new CoordinatorGitCommitResult { Sha = "partial-commit" });
+            .Respond("vc_commit_hardware", new CoordinatorGitCommitResult { Sha = "partial-commit" });
         var coordinator = Create(fixture, engineering: engineering, versionControl: versionControl);
 
         var result = await coordinator.ReloadHardwareAsync(fixture.Context, CancellationToken.None);

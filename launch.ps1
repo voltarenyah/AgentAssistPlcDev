@@ -28,6 +28,12 @@ if (-not $NoKill) {
     # Kill ApiHost directly (it shows as process name "ApiHost", not "dotnet")
     Get-Process -Name "ApiHost" -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
+    # Also catch instances hosted via "dotnet ApiHost.dll" (process name is
+    # "dotnet"), otherwise they keep port 5239 bound and the new backend
+    # fails to start with "address already in use".
+    Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'ApiHost\.dll' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Get-Process -Name "node" -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
     foreach ($name in @("Mcp.Engineering", "Mcp.Knowledge", "Mcp.VersionControl")) {

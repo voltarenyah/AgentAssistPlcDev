@@ -42,12 +42,14 @@ internal static class RepositoryService
     private static readonly string[] SharedExcludeRules =
     {
         "worktree.json",
+        "tasks.json",
         "devices/*/device.json",
         "devices/*/staging/",
         "devices/*/source/metadata.json",
         "devices/*/plc-knowledge.db*",
         ".automation/",
         "sessionexport/",
+        "hardware/staging/",
     };
 
     /// <summary>Init a git repo at repoPath. Idempotent: no-op if .git already exists.</summary>
@@ -340,7 +342,8 @@ internal static class RepositoryService
                     IncludeUntracked = true,
                     RecurseUntrackedDirs = true,
                 })
-                .Where(entry => !entry.State.HasFlag(FileStatus.Ignored))
+                .Where(entry => !entry.State.HasFlag(FileStatus.Ignored)
+                    && !IsWorkbenchBookkeeping(entry.FilePath))
                 .ToArray();
             if (targetStatus.Length > 0)
             {
@@ -403,8 +406,16 @@ internal static class RepositoryService
         if (!string.Equals(currentTarget, request.ExpectedTargetSha, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(source.Sha, request.ExpectedSourceSha, StringComparison.OrdinalIgnoreCase))
             throw new VcInternalException("BRANCH_MOVED", "The target or source branch moved after validation.");
-        if (repository.RetrieveStatus(new StatusOptions { IncludeUntracked = true, RecurseUntrackedDirs = true }).Any(entry => !entry.State.HasFlag(FileStatus.Ignored)))
-            throw new VcInternalException("DIRTY_WORKTREE", "The target worktree must be clean before a validated merge.");
+        var dirty = repository.RetrieveStatus(new StatusOptions { IncludeUntracked = true, RecurseUntrackedDirs = true })
+            .Where(entry => !entry.State.HasFlag(FileStatus.Ignored)
+                && !IsWorkbenchBookkeeping(entry.FilePath))
+            .Select(entry => $"{entry.FilePath}:{entry.State}")
+            .ToArray();
+        if (dirty.Length > 0)
+            throw new VcInternalException(
+                "DIRTY_WORKTREE",
+                $"The target worktree must be clean before a validated merge. Uncommitted changes: {string.Join(", ", dirty)}.",
+                "Commit, restore, or remove the listed files, then retry the merge.");
 
         var preview = MergePreviewService.Preview(target, request.SourceBranch);
         if (preview.HasConflicts || !string.Equals(preview.CandidateTreeSha, request.CandidateTreeSha, StringComparison.OrdinalIgnoreCase))
@@ -593,6 +604,45 @@ internal static class RepositoryService
             var commit = repo.Commit(message, signature, signature);
             var files = GetCommitFiles(repo, commit);
             return new VcCommitResult { Sha = commit.Sha, Message = message, Files = files };
+        }
+        catch
+        {
+            RestoreIndex(indexSnapshot);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// App-internal: atomically commit exactly the given hardware configuration paths.
+    /// Existing staging is cleared without changing working files, mirroring CommitSelected.
+    /// </summary>
+    public static VcCommitResult CommitHardware(
+        string repoPath,
+        string[] paths,
+        string message,
+        string? author = null)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            throw new VcInternalException("MESSAGE_REQUIRED", "Commit message must not be empty.");
+        if (paths == null || paths.Length == 0)
+            throw new VcInternalException("HARDWARE_PATHS_REQUIRED", "At least one hardware configuration path is required.");
+
+        var selected = paths
+            .Select(HardwarePathPolicy.Require)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        EnsureRepo(repoPath);
+        using var repo = new Repository(repoPath);
+        var indexSnapshot = CaptureIndex(repo);
+        try
+        {
+            ResetIndexToHead(repo);
+            Commands.Stage(repo, selected);
+            var signature = ResolveAuthor(repo, author);
+            var commit = repo.Commit(message, signature, signature);
+            return new VcCommitResult { Sha = commit.Sha, Message = message, Files = selected };
         }
         catch
         {
@@ -883,9 +933,60 @@ internal static class RepositoryService
         }
     }
 
-    private static void WriteSharedExclude(string repositoryPath)
+    /// <summary>
+    /// Whether a worktree-relative path is app bookkeeping covered by <see cref="SharedExcludeRules"/>.
+    /// The merge guards filter these directly so workbenches created before a rule was added
+    /// are not falsely reported dirty (the shared exclude file is only written at init time).
+    /// </summary>
+    private static bool IsWorkbenchBookkeeping(string path)
     {
-        var infoDirectory = Path.Combine(repositoryPath, "info");
+        var normalized = path.Replace('\\', '/');
+        foreach (var rule in SharedExcludeRules)
+        {
+            var directoryRule = rule.EndsWith("/", StringComparison.Ordinal);
+            var pattern = directoryRule ? rule[..^1] : rule;
+            var patternSegments = pattern.Split('/');
+            var pathSegments = normalized.Split('/');
+            if (directoryRule)
+            {
+                if (pathSegments.Length > patternSegments.Length
+                    && SegmentsMatch(patternSegments, pathSegments, patternSegments.Length))
+                {
+                    return true;
+                }
+            }
+            else if (pathSegments.Length == patternSegments.Length
+                     && SegmentsMatch(patternSegments, pathSegments, patternSegments.Length))
+            {
+                return true;
+            }
+        }
+
+        return false;
+
+        static bool SegmentsMatch(string[] pattern, string[] path, int count)
+        {
+            for (var index = 0; index < count; index++)
+            {
+                if (!SegmentMatches(pattern[index], path[index]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        static bool SegmentMatches(string pattern, string segment)
+        {
+            // Only '*' wildcards appear in the rules; match within a single path segment.
+            var regex = "^" + Regex.Escape(pattern).Replace("\\*", "[^/]*") + "$";
+            return Regex.IsMatch(segment, regex, RegexOptions.IgnoreCase);
+        }
+    }
+
+    private static void WriteSharedExclude(string repositoryPath)
+    {        var infoDirectory = Path.Combine(repositoryPath, "info");
         Directory.CreateDirectory(infoDirectory);
         var excludePath = Path.Combine(infoDirectory, "exclude");
         var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);

@@ -735,20 +735,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         lock (_gate)
         {
             var project = RequireProject();
-            // The Studio lifecycle stages one PLC at a time and passes plcName. Export
-            // hardware into that same staging root so the artifacts are promoted with the
-            // source tree; a project-wide rebuild still produces the same canonical root.
-            var hardwareResults = ExportHardwareConfigurationCore(outputDir, includeDeviceExports: true, progress);
-            var hardwareFailures = hardwareResults.Where(result => !result.Success).ToArray();
-            if (hardwareFailures.Length > 0)
-            {
-                throw new AdapterException(
-                    "HARDWARE_EXPORT_FAILED",
-                    "Full rebuild could not export the complete hardware configuration: "
-                    + string.Join("; ", hardwareFailures.Select(result =>
-                        $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")),
-                    "Resolve the CAx export errors and retry the full rebuild.");
-            }
+            // Hardware configuration is exported only by the explicit export_hardware_configuration
+            // flow (workbench "Reload hardware configuration"); device-level compare/refresh must
+            // not pay the CAx export cost or touch the saved hardware baseline.
             var plcs = plcName is null
                 ? PlcSoftwareResolver.FindAll(project)
                 : new[] { PlcSoftwareResolver.Resolve(project, plcName) };

@@ -443,6 +443,68 @@ public sealed class VersionControlToolsTests : IDisposable
         Assert.False(IsIndexChange(status[selectedPath].State));
     }
 
+    /* ── vc_commit_hardware ─────────────────────────────── */
+
+    [Fact]
+    public void CommitHardware_CommitsHardwarePathsAndLeavesOtherChanges()
+    {
+        const string projectAml = "hardware/project.aml";
+        const string deviceAml = "hardware/Devices/S7-1500_ET 200SP/device.aml";
+        const string sourcePath = "devices/PLC_1/source/Blocks/A.xml";
+        _tools.VcInit(_fixture.RootPath);
+        _fixture.WriteFile(projectAml, "<CAEXFile />");
+        _fixture.WriteFile(deviceAml, "<CAEXFile><Device /></CAEXFile>");
+        _fixture.WriteFile(sourcePath, "<Document />");
+
+        var result = _tools.VcCommitHardware(
+            _fixture.RootPath,
+            new[] { projectAml, deviceAml },
+            "hardware: reload configuration");
+
+        Assert.False(result.IsError == true);
+        var commit = Assert.IsType<VcCommitResult>(Unwrap<VcCommitResult>(result));
+        Assert.Equal(new[] { deviceAml, projectAml }, commit.Files);
+        using var repo = new Repository(_fixture.RootPath);
+        Assert.NotNull(repo.Head.Tip.Tree[projectAml]);
+        Assert.NotNull(repo.Head.Tip.Tree[deviceAml]);
+        Assert.Null(repo.Head.Tip.Tree[sourcePath]);
+        Assert.Contains(RepositoryService.Status(_fixture.RootPath).Entries, entry => entry.FilePath == sourcePath);
+    }
+
+    [Theory]
+    [InlineData("notes.txt")]
+    [InlineData("devices/PLC_1/source/Blocks/A.xml")]
+    [InlineData("hardware/staging/project.aml")]
+    [InlineData("hardware/../escape.aml")]
+    [InlineData("hardware")]
+    public void CommitHardware_RejectsPathsOutsideCommittableHardwareArea(string path)
+    {
+        _fixture.WriteFile("hardware/project.aml", "<CAEXFile />");
+
+        var result = _tools.VcCommitHardware(_fixture.RootPath, new[] { path }, "must not commit");
+
+        Assert.True(result.IsError == true);
+        Assert.Equal("HARDWARE_PATH_REQUIRED", ErrorCode(result));
+    }
+
+    [Theory]
+    [InlineData(false, "message", "HARDWARE_PATHS_REQUIRED")]
+    [InlineData(true, "", "MESSAGE_REQUIRED")]
+    public void CommitHardware_RequiresPathsAndMessage(bool includePath, string message, string expectedCode)
+    {
+        const string path = "hardware/project.aml";
+        _tools.VcInit(_fixture.RootPath);
+        _fixture.WriteFile(path, "<CAEXFile />");
+
+        var result = _tools.VcCommitHardware(
+            _fixture.RootPath,
+            includePath ? new[] { path } : Array.Empty<string>(),
+            message);
+
+        Assert.True(result.IsError == true);
+        Assert.Equal(expectedCode, ErrorCode(result));
+    }
+
     /* ── vc_log ─────────────────────────────────────────── */
 
     [Fact]
