@@ -89,23 +89,44 @@ public sealed class SafeDeviceExportStager
             : "Preparing export staging area...");
         var incoming = WorkbenchPaths.ResolveRelative(
             device.DeviceRoot,
-            $".staging-{Guid.NewGuid():N}.incoming");
+            // Short name on purpose: TIA writes the full export tree under this directory and
+            // fails with "Cannot create file" once a path exceeds the Windows 260-char limit.
+            // The previous .staging-<guid>.incoming name alone consumed ~50 chars.
+            $".st-{Guid.NewGuid().ToString("N")[..12]}");
         try
         {
             files.CreateDirectory(incoming);
+            // TIA cannot create files once a path exceeds the Windows 260-char limit, and the
+            // worktree path alone consumes most of that budget on deeply nested PLC groups.
+            // Export through a short directory junction that points AT the same incoming dir:
+            // one physical staging folder, but TIA only ever sees the short alias path.
+            var exportAlias = TryCreateExportAlias(incoming, progress);
+            var outputDir = exportAlias ?? incoming;
             progress?.Report("Exporting PLC source...");
             var progressBridge = progress is null ? null : new McpProgressBridge(progress);
-            var result = engineering is IProgressMcpToolCaller progressCaller
-                ? await progressCaller.CallAsync<SyncResult[]>(
-                    "rebuild_export",
-                    new { outputDir = incoming, plcName },
-                    progressBridge,
-                    cancellationToken).ConfigureAwait(false)
-                : await engineering.CallAsync<SyncResult[]>(
-                    "rebuild_export",
-                    new { outputDir = incoming, plcName },
-                    cancellationToken).ConfigureAwait(false);
+            SyncResult[] result;
+            try
+            {
+                result = engineering is IProgressMcpToolCaller progressCaller
+                    ? await progressCaller.CallAsync<SyncResult[]>(
+                        "rebuild_export",
+                        new { outputDir, plcName },
+                        progressBridge,
+                        cancellationToken).ConfigureAwait(false)
+                    : await engineering.CallAsync<SyncResult[]>(
+                        "rebuild_export",
+                        new { outputDir, plcName },
+                        cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                TryRemoveExportAlias(exportAlias);
+            }
             progress?.Report("Writing export metadata...");
+            foreach (var warning in result.SelectMany(item => item.HardwareWarnings).Distinct(StringComparer.Ordinal))
+            {
+                progress?.Report($"Hardware export warning (non-fatal): {warning}");
+            }
             var selected = result.Where(item =>
                 string.Equals(item.PlcName, plcName, StringComparison.Ordinal)).ToArray();
             if (selected.Length == 0 || selected.Any(item => item.Failed.Length > 0))
@@ -166,9 +187,67 @@ public sealed class SafeDeviceExportStager
         }
     }
 
-    private void ReplaceStaging(DeviceContext device, string incoming)
+    /// <summary>Creates a short directory junction (<c>%TEMP%\awst-xxxxxxxx</c>) pointing at the
+    /// incoming staging dir. TIA exports through the alias so deeply nested PLC group paths stay
+    /// under the Windows 260-char limit; files physically land in the worktree staging dir.
+    /// mklink /J needs no elevation for directory junctions. Returns null (caller falls back to
+    /// the full path) when the alias cannot be created.</summary>
+    private static string? TryCreateExportAlias(string target, IOperationProgress? progress)
     {
-        var backup = WorkbenchPaths.ResolveRelative(
+        var alias = Path.Combine(Path.GetTempPath(), $"awst-{Guid.NewGuid().ToString("N")[..8]}");
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c mklink /J \"{alias}\" \"{target}\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit(10_000);
+            if (process.ExitCode == 0 && Directory.Exists(alias))
+            {
+                return alias;
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through to the full-path export below.
+        }
+
+        progress?.Report(
+            "Could not create a short export alias; exporting with the full worktree path "
+            + "(deeply nested PLC groups may hit the Windows path limit).");
+        return null;
+    }
+
+    /// <summary>Removes the junction only — never the target tree (non-recursive delete).</summary>
+    private static void TryRemoveExportAlias(string? alias)
+    {
+        if (alias is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (Directory.Exists(alias))
+            {
+                Directory.Delete(alias);
+            }
+        }
+        catch (Exception)
+        {
+            // Alias cleanup is best effort; a stale empty junction is harmless.
+        }
+    }
+
+    private void ReplaceStaging(DeviceContext device, string incoming)
+    {        var backup = WorkbenchPaths.ResolveRelative(
             device.DeviceRoot,
             $".staging-{Guid.NewGuid():N}.backup");
         var previousMoved = false;

@@ -33,7 +33,7 @@ public sealed class MasterSynchronizationTests : IDisposable
     }
 
     [Fact]
-    public async Task MasterCommitRejectsAFileChangedAfterAuthorization()
+    public async Task MasterCommitAllowsADirectLocalEdit()
     {
         var coordinator = fixture.CreateCoordinator();
         await coordinator.ApplyTiaSynchronizationAsync(
@@ -44,18 +44,52 @@ public sealed class MasterSynchronizationTests : IDisposable
             CancellationToken.None);
         File.WriteAllText(fixture.MasterSource("Blocks/A.xml"), "local edit");
 
-        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
-            coordinator.CommitSourceAsync(
-                fixture.Workbench.WorkbenchId,
-                fixture.Master.WorktreeId,
-                [fixture.Path("Blocks/A.xml")],
-                "accept A",
-                CancellationToken.None));
+        // Direct local edits on master are allowed (MASTER_EDIT_NOT_ALLOWED and the
+        // TIA-authorization requirement are disabled); they commit as unlabeled savepoints.
+        var result = await coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            [fixture.Path("Blocks/A.xml")],
+            "direct edit",
+            CancellationToken.None);
 
-        Assert.Equal("MASTER_CHANGE_NOT_AUTHORIZED", error.Code);
+        Assert.Equal("head-2", result.Sha);
+        Assert.Equal("direct edit", fixture.VersionControl.CommitMessage);
     }
 
     public void Dispose() => fixture.Dispose();
+
+    [Fact]
+    public async Task PushSourcesToTiaImportsSelectedLocalObjectsIntoTia()
+    {
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("import_source_object", new { success = true })
+            .Respond("import_source_object", new { success = true });
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        var result = await coordinator.PushSourcesToTiaAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml"), fixture.Path("Blocks/B.xml")],
+            CancellationToken.None);
+
+        Assert.Equal(2, result.Outcomes.Count);
+        Assert.All(result.Outcomes, outcome => Assert.True(outcome.Success));
+        var imports = engineering.CallArgs["import_source_object"];
+        Assert.Equal(2, imports.Count);
+        Assert.Equal("Blocks/A.xml", Property<string>(imports[0], "relativePath"));
+        Assert.Equal("Blocks/B.xml", Property<string>(imports[1], "relativePath"));
+        Assert.Equal("PLC_1", Property<string>(imports[0], "plcName"));
+    }
+
+    private static T Property<T>(object value, string name) =>
+        (T)value.GetType().GetProperty(name)!.GetValue(value)!;
 
     private sealed class SyncFixture : IDisposable
     {
@@ -79,6 +113,7 @@ public sealed class MasterSynchronizationTests : IDisposable
         public AtomicJsonStore Store { get; }
         public SyncVersionControlCaller VersionControl { get; }
         public string ComparisonId => "comparison-1";
+        public const string ProjectPath = @"C:\Projects\Line.ap17";
 
         public static SyncFixture Create()
         {
@@ -88,7 +123,7 @@ public sealed class MasterSynchronizationTests : IDisposable
                 "1.0", "wb-1", "wb", "now", root, System.IO.Path.Combine(root, "repository.git"), "project-1", null,
                 new[] { new WorkbenchWorktreeRegistration("master-1", "master", "master", "master") });
             var master = new WorktreeMetadata(
-                "1.0", "master-1", "wb-1", "master", "master", "now", "head-1", "project-1", null,
+                "1.0", "master-1", "wb-1", "master", "master", "now", "head-1", "project-1", ProjectPath,
                 new[] { "device-1" }, null);
             var masterRoot = System.IO.Path.Combine(root, "worktrees", "master");
             Directory.CreateDirectory(masterRoot);
@@ -125,11 +160,11 @@ public sealed class MasterSynchronizationTests : IDisposable
         public string MasterSource(string relative) =>
             System.IO.Path.Combine(Root, "worktrees", "master", "devices", "PLC_1", "source", relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
 
-        public WorkbenchCoordinator CreateCoordinator()
+        public WorkbenchCoordinator CreateCoordinator(Agent.Mcp.IMcpToolCaller? engineering = null)
         {
             var catalog = new WorkbenchCatalog(Store, System.IO.Path.Combine(Root, "catalog"));
             var coordinator = new WorkbenchCoordinator(
-                new NoOpCaller(),
+                engineering ?? new NoOpCaller(),
                 new NoOpCaller(),
                 VersionControl,
                 catalog,

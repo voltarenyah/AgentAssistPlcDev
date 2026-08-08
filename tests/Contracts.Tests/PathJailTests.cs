@@ -244,6 +244,50 @@ public sealed class PathJailTests : IDisposable
         }
     }
 
+    [Fact]
+    public void DirectoryLinkIntoAllowedRootResolvesAndPasses()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var target = Path.Combine(root, "deep", "staging");
+        Directory.CreateDirectory(target);
+        var link = Path.Combine(Path.GetTempPath(), "awst-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c mklink /J \"{link}\" \"{target}\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit(10_000);
+            if (process.ExitCode != 0)
+            {
+                return; // environment cannot create junctions
+            }
+
+            // The alias itself is outside every root, but its real target is inside one:
+            // validation resolves the junction and returns the (short) alias path for use.
+            var requested = Path.Combine(link, "Blocks", "A.xml");
+            Assert.Equal(requested, jail.Validate(requested, "outputDir"));
+        }
+        finally
+        {
+            if (Directory.Exists(link))
+            {
+                Directory.Delete(link);
+            }
+        }
+    }
+
     private static void WriteWorkbenchMetadata(string workbenchRoot, string workbenchId)
     {
         File.WriteAllText(

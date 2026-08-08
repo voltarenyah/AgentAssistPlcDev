@@ -233,6 +233,8 @@ public sealed class LinkedWorktreeTests : IDisposable
         Assert.Contains("devices/*/plc-knowledge.db*", exclude);
         Assert.Contains(".automation/", exclude);
         Assert.Contains("sessionexport/", exclude);
+        Assert.Contains("repository.svn/", exclude);
+        Assert.Contains("tia/", exclude);
     }
 
     [Fact]

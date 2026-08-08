@@ -1,19 +1,41 @@
 # PLC source workflow
 
-1. Create a named workbench at the default or a user-selected absolute root.
-2. Connect to the engineering project and persist its discovered devices.
-3. Export one selected device completely into its ignored `staging` folder.
-4. Preview staging against `exported-source`. Rejecting the preview makes no baseline
-   or Git mutation.
-5. Confirm the exact preview. The reconciler copies only added/changed files, removes
-   only approved deletions, and leaves unchanged files untouched.
-6. The changed baseline paths and metadata are staged and committed automatically.
-   If the commit fails, the result explicitly reports that files changed but commit
-   failed; it does not claim a rollback.
-7. Prepare edits in `modified-source`. Existing baseline files are copied only once;
-   new files may be created there. Direct writes to `exported-source` are refused.
-8. Import only the overlay file, compile it, and record the result. The overlay is
-   retained for the lifetime of its worktree.
+1. Create a named workbench at the default or a user-selected absolute root from an
+   existing `.ap17` origin project (or an attached TIA session). The origin is
+   bootstrap-only.
+2. The import opens the origin headless, saves a managed copy via TIA Save As into
+   the plain empty `worktrees/master/tia/` directory (TIA refuses Save As into a
+   non-empty directory, so the SVN checkout happens later), and verifies the
+   managed copy independently. From here on, every TIA operation uses the managed
+   project.
+3. An optional compile on the managed copy records the aggregated PLC checksum;
+   a compile failure is recorded as `FAILED` and never fails the import.
+4. Each discovered device is exported completely into its ignored `staging` folder,
+   previewed against the source tree, and applied: the reconciler copies only
+   added/changed files into `devices/<plc>/source` and leaves unchanged files
+   untouched. Hardware CAx export runs best-effort alongside: CAx failures (e.g.
+   HMI devices) are reported as non-fatal hardware warnings and never abort the
+   import — the AML artifacts are auxiliary data, not PLC semantic source.
+5. TIA is disconnected (freeze). Recognized legacy app export caches (`export/`,
+   `Exports/` with our manifest) that Save As copied from the origin folder are
+   stripped — they are app state, not TIA project data; everything TIA-native
+   stays. Only now is the saved project brought under SVN control: `native/main`
+   is still empty, so an obstruction-allowing checkout into the non-empty `tia/`
+   directory is safe, followed by the native baseline commit to `repository.svn`
+   (`^/native/main`). `engineering-state/revision.json` links the Git commit to
+   that SVN revision, and the Git baseline commit records the source XML plus
+   `revision.json`. Any import failure rolls back the whole workbench.
+6. Later edits happen in a feature worktree or directly on master; ordinary
+   commits are Git-only. A restorable native snapshot is created explicitly via
+   "Create SVN savepoint" (Native tab): one combined transaction (save → required
+   compile → freeze → SVN commit → `revision.json` → Git commit), so the Git
+   commit and the SVN revision at a savepoint always describe the same TIA state.
+   A failed Git commit after a successful SVN commit leaves
+   `.automation/pending-commit.json`; the next savepoint retries the Git side
+   with the same SVN revision.
+7. Any recorded state can be restored: the coordinator reads `revision.json` at a
+   Git commit and `svn export`s the referenced SVN revision (lean, no `.svn`) into
+   `<workbenchRoot>/export/<checksum>/` for opening in TIA.
 
 Full source exports never write directly over tracked files. This preserves per-file
 Git history across repeated PLC refreshes.
@@ -21,6 +43,7 @@ Git history across repeated PLC refreshes.
 ## Live TIA acceptance
 
 Live TIA Portal V17 was not available in the automated test environment. The manual
-acceptance checklist and pending status are recorded in
-[`buildnote/verification/workbench-project-storage.md`](../buildnote/verification/workbench-project-storage.md).
-
+acceptance checklists and pending status are recorded in
+[`buildnote/verification/workbench-project-storage.md`](../buildnote/verification/workbench-project-storage.md)
+and, for the hybrid native-store model,
+[`buildnote/verification/hybrid-vc-v1-manual-acceptance.md`](../buildnote/verification/hybrid-vc-v1-manual-acceptance.md).

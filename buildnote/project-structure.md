@@ -2,22 +2,32 @@
 
 ```text
 <user-selected-root-or-default>\
-  workbench.json                         # workbench identity and registrations
-  repository.git\                        # shared Git object database (bare)
+  workbench.json                         # identity, registrations, SVN store path, provenance
+  repository.git\                        # shared Git object database (bare) — semantic store
+  repository.svn\                        # local SVN repository (file://) — native TIA store
   worktrees\
     <worktree>\
       .git                               # link to repository.git
       .gitignore
-      worktree.json                      # branch, engineering project, device IDs
+      worktree.json                      # branch, device IDs, managed TIA/SVN base state
+      engineering-state\
+        revision.json                    # GIT-TRACKED: svn url+revision, checksums, compile status
+      tia\                               # SVN working copy of the worktree's native branch
       devices\
         <device>\
           device.json                    # PLC identity, reconciliation/knowledge/import state
-          exported-source\               # complete tracked PLC baseline
-          modified-source\               # tracked sparse files to import back
+          source\                        # tracked exported PLC XML baseline
           staging\                       # ignored complete temporary export
           plc-knowledge.db               # ignored database for this device only
-      .automation\sessions\              # ignored worktree chat sessions
+      .automation\                       # ignored sessions, pending sync/commit records
 ```
+
+Git tracks only `devices/<device>/source/**/*.xml` and
+`engineering-state/revision.json`. `tia/` (the native TIA project working copy)
+and `repository.svn/` are never Git-tracked; SVN holds the complete native
+project under `native/main` and `native/branches/<feature>`. Workbenches created
+before schema `1.2` have no `repository.svn` and no `tia/` store; they keep the
+Git-only behavior.
 
 The default parent is `%LOCALAPPDATA%\AutomationWorkbench\Project`; the final
 directory is the sanitized user-provided workbench name. A caller may instead pass an

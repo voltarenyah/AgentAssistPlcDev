@@ -11,6 +11,7 @@ public sealed class ConsistencyLogResult
 public sealed class ConsistencyCommit
 {
     public string Sha { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
 }
 
 public sealed class ConsistencyValidationEvidence

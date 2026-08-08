@@ -22,6 +22,8 @@ public sealed record RefreshApplyApiRequest(
     string? CommitMessage = null);
 public sealed record SourcePathApiRequest(string RelativePath);
 public sealed record CommitSourceApiRequest(string[] Paths, string Message);
+public sealed record RestoreTiaProjectApiRequest(string? GitCommit = null);
+public sealed record NativeSavepointApiRequest(string Message);
 public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths, string Message);
 public sealed record TiaValidationApiRequest(string ConfirmedBy);
 public sealed record UnauthorizedMasterPathsRequest(string[] Paths, string? FeatureName = null, bool Confirm = false);
@@ -583,7 +585,6 @@ public static class WorkbenchEndpoints
             string workbenchId, string worktreeId, CommitSourceApiRequest body,
             WorkbenchApiState s, WorkbenchCoordinator coordinator, ApiMcpGateway gateway, CancellationToken ct) =>
         {
-            var worktree = s.Worktree(workbenchId, worktreeId);
             var root = s.WorktreeRoot(workbenchId, worktreeId);
             var hasExistingSource = body.Paths.Any(path =>
             {
@@ -596,8 +597,13 @@ public static class WorkbenchEndpoints
                     return false;
                 }
             });
-            if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase) && hasExistingSource)
+            if (hasExistingSource)
             {
+                // All registered worktrees commit through the coordinator: master enforces the
+                // TIA-authorization gate, and SVN-managed workbenches (master or feature) run
+                // the combined SVN+Git transaction. The gateway fallback below only remains for
+                // empty/legacy worktrees without on-disk source files.
+                coordinator.RegisterWorkbench(s.Workbench(workbenchId));
                 return Results.Ok(await coordinator.CommitSourceAsync(workbenchId, worktreeId, body.Paths, body.Message, ct));
             }
 
@@ -611,6 +617,51 @@ public static class WorkbenchEndpoints
             WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_validation_get").CallAsync<System.Text.Json.JsonElement?>(
                 "vc_validation_get", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), commitSha = sha }, ct));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/engineering-state", (
+            string workbenchId, string worktreeId, WorkbenchApiState s) =>
+        {
+            var worktree = s.Worktree(workbenchId, worktreeId);
+            var root = s.WorktreeRoot(workbenchId, worktreeId);
+            System.Text.Json.JsonElement? revision = null;
+            var revisionPath = WorkbenchPaths.ResolveRevisionState(root);
+            if (File.Exists(revisionPath))
+            {
+                revision = System.Text.Json.JsonDocument.Parse(File.ReadAllText(revisionPath)).RootElement.Clone();
+            }
+
+            return Results.Ok(new
+            {
+                revision,
+                svnUrl = worktree.SvnUrl,
+                baseSvnRevision = worktree.BaseSvnRevision,
+                managedTiaProjectPath = worktree.ManagedTiaProjectPath,
+                tiaStorePath = WorkbenchPaths.ResolveTiaStore(root),
+                pendingCommit = File.Exists(Path.Combine(root, ".automation", "pending-commit.json")),
+            });
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/restore-tia", async (
+            string workbenchId, string worktreeId, RestoreTiaProjectApiRequest body,
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(s.Workbench(workbenchId));
+            return Results.Ok(await coordinator.RestoreTiaProjectAsync(
+                workbenchId, worktreeId, body.GitCommit, ct));
+        });
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/savepoints", async (
+            string workbenchId, string worktreeId, int? maxCount,
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(s.Workbench(workbenchId));
+            return Results.Ok(await coordinator.ListSavepointsAsync(workbenchId, worktreeId, maxCount ?? 30, ct));
+        });
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/svn-savepoint", async (
+            string workbenchId, string worktreeId, NativeSavepointApiRequest body,
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(s.Workbench(workbenchId));
+            return Results.Ok(await coordinator.CreateNativeSavepointAsync(
+                workbenchId, worktreeId, body.Message, ct));
+        });
         app.MapPost("/api/workbenches/{workbenchId}/vc/compare-tia", async (
             string workbenchId,
             WorkbenchApiState state,
@@ -646,6 +697,25 @@ public static class WorkbenchEndpoints
                 "Applying selected TIA source to master...",
                 progress => coordinator.ApplyTiaSynchronizationAsync(workbenchId, comparisonId, body.Paths, body.Message, ct, progress),
                 "Selected TIA source accepted.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}/push-to-tia", async (
+            string workbenchId,
+            string comparisonId,
+            FeaturePathsApiRequest body,
+            WorkbenchApiState s,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(s.Workbench(workbenchId));
+            return await RunOperationAsync(
+                http,
+                operations,
+                "push-to-tia",
+                "Importing selected local source into TIA...",
+                progress => coordinator.PushSourcesToTiaAsync(workbenchId, comparisonId, body.Paths, ct, progress),
+                "Selected local source imported into TIA.").ConfigureAwait(false);
+        });
         app.MapPost("/api/workbenches/{workbenchId}/vc/validate-sync", async (
             string workbenchId,
             TiaValidationApiRequest body,

@@ -64,8 +64,17 @@ public sealed class EngineeringTools
         => Invoke("close_session", () => { _adapter.CloseSession(sessionId); return true; });
 
     [McpServerTool(Name = "save_project")]
-    [Description("Explicitly save the open TIA project — the only tool that persists it.")]
+    [Description("Explicitly save the open TIA project in place (save_project_as saves a copy to a new directory).")]
     public CallToolResult SaveProject() => Invoke("save_project", () => { _adapter.SaveProject(); return new { }; });
+
+    [McpServerTool(Name = "save_project_as")]
+    [Description("Save the open TIA project to a new directory (TIA Save As) and switch the session to the managed copy. Returns the actual managed project path reported by TIA — never a constructed path.")]
+    public CallToolResult SaveProjectAs(
+        [Description("Target directory for the managed project copy.")] string targetDirectory)
+        => Invoke(
+            "save_project_as",
+            () => new { managedProjectPath = _adapter.SaveProjectAs(new DirectoryInfo(targetDirectory)) },
+            ("targetDirectory", targetDirectory));
 
     [McpServerTool(Name = "get_project_info")]
     [Description("Project name, path, PLC devices, block count, last modified (read-only).")]
@@ -133,7 +142,7 @@ public sealed class EngineeringTools
     [Description("Export the TIA V17 CAx hardware configuration as a canonical project AML and, optionally, one AML per device under Devices. Read-only with respect to the project.")]
     public CallToolResult ExportHardwareConfiguration(
         [Description("Export root directory. The project AML is written directly under outputDir/project.aml.")] string outputDir,
-        [Description("Also export one AML per TIA device under outputDir/Devices. Default true.")] bool includeDeviceExports = true,
+        [Description("Also export one AML per TIA device under outputDir/Devices. Default false — project-level AML only; per-device CAx is slow on big projects.")] bool includeDeviceExports = false,
         IProgress<ProgressNotificationValue>? progress = null)
         => Invoke(
             "export_hardware_configuration",

@@ -55,6 +55,7 @@ public sealed class SandboxPolicy
             ["open_block_in_editor"] = SandboxTier.Write,
             // Engineering — persist/overwrite user work.
             ["save_project"] = SandboxTier.Destructive,
+            ["save_project_as"] = SandboxTier.Destructive,
             ["import_block"] = SandboxTier.Destructive,
             ["import_hardware_configuration"] = SandboxTier.Destructive,
             ["create_block"] = SandboxTier.Write,

@@ -279,7 +279,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Existing.ap17");
         var engineering = new BlockingDiscoveryEngineeringCaller();
-        var versionControl = new FakeToolCaller().Respond("vc_init_shared", new object());
+        var versionControl = ScriptCreateVersionControl(new FakeToolCaller());
         var coordinator = Create(
             fixture,
             engineering: engineering,
@@ -299,7 +299,19 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         engineering.ReleaseProjectInfo.SetResult();
         await Task.WhenAll(creating, opening);
-        Assert.Equal(["connect", "get_project_info", "connect"], engineering.Calls);
+        Assert.Equal(
+            new[]
+            {
+                "connect", "get_project_info", "save_project_as", "get_project_info",
+                "compile_plc", "get_plc_checksums",
+            },
+            engineering.Calls.Take(6).ToArray());
+        // The engineering session is released between the managed-copy phase and the export,
+        // so the waiting OpenProjectInTia connect interleaves with the bootstrap tail.
+        Assert.Equal(9, engineering.Calls.Count);
+        Assert.Equal(2, engineering.Calls.Count(call => call == "connect"));
+        Assert.True(
+            engineering.Calls.IndexOf("rebuild_export") < engineering.Calls.IndexOf("disconnect"));
     }
 
     [Fact]
@@ -307,7 +319,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Existing.ap17");
         var engineering = new BlockingDiscoveryEngineeringCaller();
-        var versionControl = new FakeToolCaller().Respond("vc_init_shared", new object());
+        var versionControl = ScriptCreateVersionControl(new FakeToolCaller());
         var coordinator = Create(
             fixture,
             engineering: engineering,
@@ -326,7 +338,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => creating);
         await coordinator.OpenProjectInTiaAsync(fixture.Context, CancellationToken.None);
 
-        Assert.Equal(["connect", "get_project_info", "connect"], engineering.Calls);
+        Assert.Equal(["connect", "get_project_info", "disconnect", "connect"], engineering.Calls);
     }
 
     [Fact]
@@ -356,18 +368,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateInitializesGitThenConnectsAndDiscoversDevicesBeforeMetadata()
+    public async Task CreateInitializesStoresThenImportsAndBootstrapsManagedProject()
     {
         var calls = new List<string>();
-        var versionControl = Caller(calls).Respond("vc_init_shared", new object());
-        var engineering = Caller(calls)
-            .Respond("connect", new object())
-            .Respond("get_project_info", new ProjectInfo
-            {
-                Name = "Line",
-                Path = @"C:\Projects\Line.ap17",
-                PlcDevices = new[] { "PLC_1", "PLC_2" },
-            });
+        var versionControl = ScriptCreateVersionControl(Caller(calls));
+        var engineering = ScriptCreateEngineering(Caller(calls), new[] { "PLC_1", "PLC_2" });
         var catalog = new WorkbenchCatalog(
             new AtomicJsonStore(),
             Path.Combine(root, "catalog"));
@@ -393,21 +398,40 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal(
             new[]
             {
-                "Preparing workbench storage...",
-                "Initializing Git repository...",
-                "Attaching to TIA Portal...",
-                "Discovering PLC devices...",
-                "Creating device folders...",
+                "version:vc_init_shared",
+                "version:svn_init_shared",
+                "engineering:connect",
+                "engineering:get_project_info",
+                "engineering:save_project_as",
+                "engineering:get_project_info",
+                "engineering:compile_plc",
+                "engineering:compile_plc",
+                "engineering:get_plc_checksums",
+                "engineering:rebuild_export",
+                "engineering:rebuild_export",
+                "engineering:disconnect",
+                "version:svn_checkout",
+                "version:svn_commit",
+                "version:vc_commit_selected",
             },
-            progress.Messages);
+            calls);
         Assert.Equal(
             new[]
             {
-                "version:vc_init_shared",
-                "engineering:connect",
-                "engineering:get_project_info",
+                "Preparing workbench storage...",
+                "Initializing Git repository...",
+                "Initializing SVN native store...",
+                "Attaching to TIA Portal...",
+                "Saving the managed project copy into the workbench...",
+                "Verifying the managed project copy...",
+                "Compiling PLC_1 on the managed project...",
+                "Compiling PLC_2 on the managed project...",
+                "Creating device folders...",
             },
-            calls);
+            progress.Messages.Take(9).ToArray());
+        Assert.Contains("Closing the TIA session...", progress.Messages);
+        Assert.Contains("Committing the native TIA baseline to SVN...", progress.Messages);
+        Assert.Contains("Creating the initial PLC source baseline commit...", progress.Messages);
         Assert.Equal(
             42,
             Property<int>(engineering.CallArgs["connect"].Single(), "sessionId"));
@@ -416,23 +440,69 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         {
             var context = catalog.ResolveDevice(result.Workbench, result.Worktree, device);
             Assert.True(File.Exists(Path.Combine(context.DeviceRoot, "device.json")));
+            Assert.True(File.Exists(Path.Combine(context.SourceRoot, "Blocks", "Main.xml")));
         });
+        var masterRoot = Path.Combine(result.Workbench.RootPath, "worktrees", "master");
+        Assert.True(File.Exists(Path.Combine(masterRoot, "worktree.json")));
         Assert.True(File.Exists(Path.Combine(
-            result.Workbench.RootPath, "worktrees", "master", "worktree.json")));
+            masterRoot, "engineering-state", "revision.json")));
+        var managedPath = Assert.IsType<string>(result.Workbench.ManagedTiaProjectPath);
+        Assert.Equal(managedPath, result.Workbench.SourceProjectPath);
+        Assert.Equal(managedPath, result.Worktree.ManagedTiaProjectPath);
+        Assert.Equal(@"C:\Projects\Line.ap17", result.Workbench.OriginProjectPath);
+        Assert.NotNull(result.Workbench.OriginImportedAt);
+        Assert.Equal(
+            Path.Combine(result.Workbench.RootPath, "repository.svn"),
+            result.Workbench.SvnRepositoryPath);
+
+        var revision = EngineeringStateWriter.Read(Path.Combine(
+            masterRoot, "engineering-state", "revision.json"));
+        Assert.Equal("^/native/main", revision.Svn.Url);
+        Assert.Equal(1, revision.Svn.Revision);
+        Assert.Equal("PLC_1:checksum-PLC_1;PLC_2:checksum-PLC_2", revision.Tia.ProjectChecksum);
+        Assert.Null(revision.Safety.FSignature);
+        Assert.Equal(EngineeringCompileStatus.Success, revision.Validation.CompileStatus);
+
+        var commitArgs = versionControl.CallArgs["vc_commit_selected"].Single();
+        var committedPaths = Property<string[]>(commitArgs, "paths");
+        Assert.Contains(EngineeringStateWriter.RelativePath, committedPaths);
+        Assert.Contains("devices/PLC_1/source/Blocks/Main.xml", committedPaths);
+        Assert.Contains("devices/PLC_2/source/Blocks/Main.xml", committedPaths);
+    }
+
+    [Fact]
+    public async Task CreateCompileFailureStillCompletesImportWithFailedStatus()
+    {
+        var versionControl = ScriptCreateVersionControl(new FakeToolCaller());
+        var engineering = ScriptCreateEngineering(
+            new FakeToolCaller(), new[] { "PLC_1" }, compileState: "error");
+        var catalog = new WorkbenchCatalog(
+            new AtomicJsonStore(),
+            Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        var result = await coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest("Line", Path.Combine(root, "compile-failure"), 42, null));
+
+        var revision = EngineeringStateWriter.Read(Path.Combine(
+            result.Workbench.RootPath, "worktrees", "master", "engineering-state", "revision.json"));
+        Assert.Equal(EngineeringCompileStatus.Failed, revision.Validation.CompileStatus);
+        Assert.Null(revision.Tia.ProjectChecksum);
+        Assert.DoesNotContain("get_plc_checksums", engineering.Calls);
     }
 
     [Fact]
     public async Task CreateWorkbenchCreatesOnlySourceStagingAndRuntimeDeviceArtifacts()
     {
-        var versionControl = new FakeToolCaller().Respond("vc_init_shared", new object());
-        var engineering = new FakeToolCaller()
-            .Respond("connect", new object())
-            .Respond("get_project_info", new ProjectInfo
-            {
-                Name = "Line",
-                Path = @"C:\Projects\Line.ap17",
-                PlcDevices = ["PLC_1"],
-            });
+        var versionControl = ScriptCreateVersionControl(new FakeToolCaller());
+        var engineering = ScriptCreateEngineering(new FakeToolCaller(), new[] { "PLC_1" });
         var catalog = new WorkbenchCatalog(
             new AtomicJsonStore(),
             Path.Combine(root, "catalog"));
@@ -477,14 +547,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             "PLC_1",
             "device.json");
         var versionControl = new MetadataRemovingWorktreeCaller(masterDevicePath);
-        var engineering = new FakeToolCaller()
-            .Respond("connect", new object())
-            .Respond("get_project_info", new ProjectInfo
-            {
-                Name = "Line",
-                Path = @"C:\Projects\Line.ap17",
-                PlcDevices = ["PLC_1"],
-            });
+        var engineering = ScriptCreateEngineering(new FakeToolCaller(), new[] { "PLC_1" });
         var store = new AtomicJsonStore();
         var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
@@ -543,7 +606,13 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             workbenchRoot, "worktrees", "feature-a", "devices", "PLC_1", "source")));
         Assert.True(Directory.Exists(Path.Combine(
             workbenchRoot, "worktrees", "feature-a", "devices", "PLC_1", "staging")));
-        Assert.Equal(["vc_init_shared", "vc_add_worktree"], versionControl.Calls);
+        Assert.Equal(
+            new[]
+            {
+                "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit",
+                "vc_commit_selected", "vc_add_worktree",
+            },
+            versionControl.Calls);
     }
 
     [Fact]
@@ -551,18 +620,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         var workbenchRoot = Path.Combine(root, "feature-metadata-failure");
         var store = new AtomicJsonStore();
-        var versionControl = new FakeToolCaller()
-            .Respond("vc_init_shared", new object())
+        var versionControl = ScriptCreateVersionControl(new FakeToolCaller())
             .Respond("vc_add_worktree", new object())
             .Respond("vc_remove_worktree", new object());
-        var engineering = new FakeToolCaller()
-            .Respond("connect", new object())
-            .Respond("get_project_info", new ProjectInfo
-            {
-                Name = "Line",
-                Path = @"C:\Projects\Line.ap17",
-                PlcDevices = ["PLC_1"],
-            });
+        var engineering = ScriptCreateEngineering(new FakeToolCaller(), new[] { "PLC_1" });
         var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
             engineering,
@@ -586,7 +647,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 CancellationToken.None));
 
         Assert.Equal(
-            ["vc_init_shared", "vc_add_worktree", "vc_remove_worktree"],
+            new[]
+            {
+                "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit",
+                "vc_commit_selected", "vc_add_worktree", "vc_remove_worktree",
+            },
             versionControl.Calls);
         var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
         Assert.Equal("feature-a", Property<string>(rollback, "branchName"));
@@ -602,14 +667,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var workbenchRoot = Path.Combine(root, "feature-partial-creation");
         var store = new AtomicJsonStore();
         var versionControl = new PartialWorktreeCreationCaller();
-        var engineering = new FakeToolCaller()
-            .Respond("connect", new object())
-            .Respond("get_project_info", new ProjectInfo
-            {
-                Name = "Line",
-                Path = @"C:\Projects\Line.ap17",
-                PlcDevices = ["PLC_1"],
-            });
+        var engineering = ScriptCreateEngineering(new FakeToolCaller(), new[] { "PLC_1" });
         var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
             engineering,
@@ -627,7 +685,13 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 new CreateWorktreeRequest(created.Workbench, "feature-a", "feature-a"),
                 CancellationToken.None));
 
-        Assert.Equal(["vc_init_shared", "vc_add_worktree", "vc_remove_worktree"], versionControl.Calls);
+        Assert.Equal(
+            new[]
+            {
+                "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit",
+                "vc_commit_selected", "vc_add_worktree", "vc_remove_worktree",
+            },
+            versionControl.Calls);
         var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
         Assert.Equal("feature-a", Property<string>(rollback, "branchName"));
         Assert.True(Property<bool>(rollback, "deleteBranch"));
@@ -660,6 +724,41 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.False(File.Exists(Path.Combine(workbenchRoot, "workbench.json")));
         Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "repository.git")));
         Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "worktrees")));
+    }
+
+    [Fact]
+    public async Task RestoreTiaProjectRejectsWorkbenchWithoutSvnNativeStore()
+    {
+        var store = new AtomicJsonStore();
+        var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
+        var workbenchRoot = Path.Combine(root, "legacy-wb");
+        Directory.CreateDirectory(workbenchRoot);
+        store.Write(
+            Path.Combine(workbenchRoot, "workbench.json"),
+            new WorkbenchMetadata(
+                "1.1",
+                "wb-legacy",
+                "Legacy",
+                "2026-08-01T00:00:00.0000000Z",
+                workbenchRoot,
+                Path.Combine(workbenchRoot, "repository.git"),
+                null,
+                @"C:\Projects\Line.ap17",
+                Array.Empty<WorkbenchWorktreeRegistration>()));
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            catalog,
+            store,
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        coordinator.RegisterWorkbench(catalog.Load(workbenchRoot));
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.RestoreTiaProjectAsync("wb-legacy", "wt-1"));
+
+        Assert.Equal("SVN_HISTORY_UNAVAILABLE", error.Code);
     }
 
     [Fact]
@@ -709,18 +808,14 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateWithProjectPathOpensNewTiaInstanceWithUi()
+    public async Task CreateWithProjectPathImportsOriginHeadless()
     {
         var calls = new List<string>();
-        var versionControl = Caller(calls).Respond("vc_init_shared", new object());
-        var engineering = Caller(calls)
-            .Respond("connect", new object())
-            .Respond("get_project_info", new ProjectInfo
-            {
-                Name = "Line",
-                Path = @"C:\Projects\Line.ap17",
-                PlcDevices = new[] { "PLC_1" },
-            });
+        var originPath = Path.Combine(root, "origin", "Line.ap17");
+        Directory.CreateDirectory(Path.GetDirectoryName(originPath)!);
+        File.WriteAllText(originPath, "origin project placeholder");
+        var versionControl = ScriptCreateVersionControl(Caller(calls));
+        var engineering = ScriptCreateEngineering(Caller(calls), new[] { "PLC_1" }, originPath);
         var catalog = new WorkbenchCatalog(
             new AtomicJsonStore(),
             Path.Combine(root, "catalog"));
@@ -738,17 +833,66 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "Line",
                 Path.Combine(root, "LineFromPath"),
                 null,
-                @"C:\Projects\Line.ap17"));
+                originPath));
 
         var args = engineering.CallArgs["connect"].Single();
-        Assert.Equal(@"C:\Projects\Line.ap17", Property<string>(args, "projectPath"));
-        Assert.True(Property<bool>(args, "withUI"));
+        Assert.Equal(originPath, Property<string>(args, "projectPath"));
+        Assert.False(Property<bool>(args, "withUI"));
         Assert.Null(args.GetType().GetProperty("sessionId"));
         Assert.Equal(
-            new[] { "version:vc_init_shared", "engineering:connect", "engineering:get_project_info" },
+            new[]
+            {
+                "version:vc_init_shared",
+                "version:svn_init_shared",
+                "engineering:connect",
+                "engineering:get_project_info",
+                "engineering:save_project_as",
+                "engineering:get_project_info",
+                "engineering:compile_plc",
+                "engineering:get_plc_checksums",
+                "engineering:rebuild_export",
+                "engineering:disconnect",
+                "version:svn_checkout",
+                "version:svn_commit",
+                "version:vc_commit_selected",
+            },
             calls);
-        Assert.Equal(@"C:\Projects\Line.ap17", result.Workbench.SourceProjectPath);
+        var managedPath = Assert.IsType<string>(result.Workbench.ManagedTiaProjectPath);
+        Assert.Equal(managedPath, result.Workbench.SourceProjectPath);
+        Assert.Equal(originPath, result.Workbench.OriginProjectPath);
         Assert.Single(result.Devices);
+    }
+
+    [Fact]
+    public async Task CreateWithMissingOriginProjectFailsBeforeCreatingAnything()
+    {
+        var engineering = new FakeToolCaller();
+        var versionControl = new FakeToolCaller();
+        var catalog = new WorkbenchCatalog(
+            new AtomicJsonStore(),
+            Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        var workbenchRoot = Path.Combine(root, "MissingOrigin");
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.CreateWorkbenchAsync(
+                new CreateWorkbenchRequest(
+                    "MissingOrigin",
+                    workbenchRoot,
+                    null,
+                    Path.Combine(root, "missing", "Line.ap17"))));
+
+        Assert.Equal("ENGINEERING_ORIGIN_NOT_FOUND", error.Code);
+        Assert.Empty(engineering.Calls);
+        Assert.Empty(versionControl.Calls);
+        Assert.False(Directory.Exists(workbenchRoot));
     }
 
     [Fact]
@@ -800,7 +944,14 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 Path = @"C:\Projects\Line.ap17",
                 PlcDevices = new[] { "PLC_1" },
             });
-        var versionControl = new FakeToolCaller().Respond("vc_init_shared", new object());
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_init_shared", new object())
+            .Respond("svn_init_shared", new CoordinatorSvnInitResult
+            {
+                RepositoryPath = "repository.svn",
+                RepositoryUri = "file:///repository.svn/",
+            })
+            .Respond("svn_checkout", new object());
         var catalog = new WorkbenchCatalog(
             new AtomicJsonStore(),
             Path.Combine(root, "catalog"));
@@ -847,7 +998,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Contains("Writing export metadata...", progress.Messages);
         Assert.Contains("Preparing refresh preview...", progress.Messages);
         var args = engineering.CallArgs["rebuild_export"].Single();
-        Assert.StartsWith(fixture.Context.DeviceRoot, Property<string>(args, "outputDir"));
+        var outputDir = Property<string>(args, "outputDir");
+        Assert.True(
+            outputDir.StartsWith(fixture.Context.DeviceRoot, StringComparison.OrdinalIgnoreCase)
+                || Path.GetFileName(outputDir).StartsWith("awst-", StringComparison.Ordinal),
+            $"outputDir should be the device staging area or its short alias, got '{outputDir}'.");
         Assert.Equal("PLC_1", Property<string>(args, "plcName"));
         Assert.Equal(
             metadataBefore,
@@ -943,6 +1098,29 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Contains("Exporting block Main_OB1...", progress.Messages);
         Assert.Contains("Exporting tag table MachineTags...", progress.Messages);
+    }
+
+    [Fact]
+    public async Task StageRefreshReportsHardwareWarningsWithoutFailing()
+    {
+        var fixture = Fixture.Create(root);
+        var engineering = new MutatingExportCaller(new[]
+        {
+            new SyncResult
+            {
+                PlcName = "PLC_1",
+                HardwareWarnings = new[] { "device 'HMI_1': CAx export failed" },
+            },
+        });
+        var coordinator = Create(fixture, engineering: engineering);
+        var progress = new RecordingProgress();
+
+        await coordinator.StageRefreshAsync(fixture.Context, CancellationToken.None, progress);
+
+        Assert.Contains(
+            progress.Messages,
+            message => message.Contains("Hardware export warning (non-fatal)", StringComparison.Ordinal)
+                && message.Contains("HMI_1", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1676,9 +1854,103 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         }
 
         private static string Prefix(string tool) =>
-            tool.StartsWith("vc_", StringComparison.Ordinal) ? "version"
+            tool.StartsWith("vc_", StringComparison.Ordinal)
+            || tool.StartsWith("svn_", StringComparison.Ordinal) ? "version"
             : tool is "update_components" or "ingest_source" ? "knowledge"
             : "engineering";
+    }
+
+    /// <summary>Scripts the 1.2 create flow on an engineering caller: connect, origin
+    /// get_project_info, save_project_as into the tia/ store, managed verify, per-PLC
+    /// compile_plc + get_plc_checksums, rebuild_export per PLC, disconnect.</summary>
+    private static FakeToolCaller ScriptCreateEngineering(
+        FakeToolCaller caller,
+        string[] plcs,
+        string originPath = @"C:\Projects\Line.ap17",
+        string compileState = "success")
+    {
+        string? managedPath = null;
+        caller
+            .Respond("connect", new object())
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = originPath,
+                PlcDevices = plcs,
+            })
+            .Respond("save_project_as", args =>
+            {
+                var target = Property<string>(args, "targetDirectory");
+                Directory.CreateDirectory(target);
+                managedPath = Path.Combine(target, "Line.ap17");
+                File.WriteAllText(managedPath, "managed project placeholder");
+                return new CoordinatorSaveProjectAsResult { ManagedProjectPath = managedPath };
+            })
+            .Respond("get_project_info", _ => new ProjectInfo
+            {
+                Name = "Line",
+                Path = managedPath,
+                PlcDevices = plcs,
+            });
+        foreach (var plc in plcs)
+        {
+            caller.Respond("compile_plc", new CompileResult { State = compileState });
+        }
+
+        caller.Respond("get_plc_checksums", plcs
+            .Select(plc => new PlcChecksumInfo { PlcName = plc, SoftwareChecksum = $"checksum-{plc}" })
+            .ToArray());
+        foreach (var plc in plcs)
+        {
+            caller.Respond("rebuild_export", (Func<object, object>)WriteCreateExport);
+        }
+
+        return caller.Respond("disconnect", new object());
+    }
+
+    /// <summary>Scripts the version-control side of the 1.2 create flow.</summary>
+    private static FakeToolCaller ScriptCreateVersionControl(FakeToolCaller caller) =>
+        caller
+            .Respond("vc_init_shared", new object())
+            .Respond("svn_init_shared", new CoordinatorSvnInitResult
+            {
+                RepositoryPath = "repository.svn",
+                RepositoryUri = "file:///repository.svn/",
+            })
+            .Respond("svn_checkout", new object())
+            .Respond("svn_commit", new CoordinatorSvnCommitResult { Committed = true, Revision = 1 })
+            .Respond("vc_commit_selected", new WorkbenchCommitResult(
+                "baseline-sha",
+                "Initial PLC source baseline",
+                new[] { EngineeringStateWriter.RelativePath }));
+
+    private static object WriteCreateExport(object args)
+    {
+        var output = Property<string>(args, "outputDir");
+        var plc = Property<string>(args, "plcName");
+        Directory.CreateDirectory(Path.Combine(output, "Blocks"));
+        File.WriteAllText(Path.Combine(output, "Blocks", "Main.xml"), $"<block plc=\"{plc}\" />");
+        File.WriteAllText(
+            Path.Combine(output, "metadata.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                exportStartedUtc = "2026-08-06T00:00:00Z",
+                exportFinishedUtc = "2026-08-06T00:00:01Z",
+                exportRoot = output,
+                components = new[]
+                {
+                    new
+                    {
+                        name = "Main",
+                        sourcePath = "Program blocks/Main",
+                        category = "OB",
+                        status = "Exported",
+                        exportedFile = "Blocks/Main.xml",
+                    },
+                },
+            }));
+        return new[] { new SyncResult { PlcName = plc, ExportRoot = output } };
     }
 
     private sealed class MetadataRemovingWorktreeCaller(string masterDevicePath) : FakeToolCaller
@@ -1702,8 +1974,23 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 File.Delete(masterDevicePath);
             }
 
-            return Task.FromResult((T)(object)new object());
+            return Task.FromResult((T)CreateFlowResult(tool));
         }
+
+        internal static object CreateFlowResult(string tool) => tool switch
+        {
+            "svn_init_shared" => new CoordinatorSvnInitResult
+            {
+                RepositoryPath = "repository.svn",
+                RepositoryUri = "file:///repository.svn/",
+            },
+            "svn_commit" => new CoordinatorSvnCommitResult { Committed = true, Revision = 1 },
+            "vc_commit_selected" => new WorkbenchCommitResult(
+                "baseline-sha",
+                "Initial PLC source baseline",
+                new[] { EngineeringStateWriter.RelativePath }),
+            _ => new object(),
+        };
     }
 
     private sealed class PartialWorktreeCreationCaller : FakeToolCaller
@@ -1730,7 +2017,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     null);
             }
 
-            return Task.FromResult((T)(object)new object());
+            return Task.FromResult((T)MetadataRemovingWorktreeCaller.CreateFlowResult(tool));
         }
     }
 
@@ -2107,6 +2394,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseProjectInfo { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private string? managedPath;
+        private int projectInfoCalls;
 
         public override async Task<T> CallAsync<T>(
             string tool,
@@ -2114,20 +2403,54 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             Calls.Add(tool);
-            if (tool == "connect")
-                return (T)(object)new object();
-            if (tool == "get_project_info")
+            switch (tool)
             {
-                ProjectInfoEntered.SetResult();
-                await ReleaseProjectInfo.Task.WaitAsync(cancellationToken);
-                return (T)(object)new ProjectInfo
+                case "connect":
+                case "disconnect":
+                    return (T)(object)new object();
+                case "get_project_info":
+                    projectInfoCalls++;
+                    if (projectInfoCalls == 1)
+                    {
+                        ProjectInfoEntered.SetResult();
+                        await ReleaseProjectInfo.Task.WaitAsync(cancellationToken);
+                        return (T)(object)new ProjectInfo
+                        {
+                            Name = "Created",
+                            Path = @"C:\Projects\Created.ap17",
+                            PlcDevices = ["PLC_1"],
+                        };
+                    }
+
+                    return (T)(object)new ProjectInfo
+                    {
+                        Name = "Created",
+                        Path = managedPath,
+                        PlcDevices = ["PLC_1"],
+                    };
+                case "save_project_as":
                 {
-                    Name = "Created",
-                    Path = @"C:\Projects\Created.ap17",
-                    PlcDevices = ["PLC_1"],
-                };
+                    var target = Property<string>(args, "targetDirectory");
+                    Directory.CreateDirectory(target);
+                    managedPath = Path.Combine(target, "Created.ap17");
+                    File.WriteAllText(managedPath, "managed project placeholder");
+                    return (T)(object)new CoordinatorSaveProjectAsResult
+                    {
+                        ManagedProjectPath = managedPath,
+                    };
+                }
+                case "compile_plc":
+                    return (T)(object)new CompileResult { State = "success" };
+                case "get_plc_checksums":
+                    return (T)(object)new[]
+                    {
+                        new PlcChecksumInfo { PlcName = "PLC_1", SoftwareChecksum = "checksum-PLC_1" },
+                    };
+                case "rebuild_export":
+                    return (T)WriteCreateExport(args);
+                default:
+                    throw new InvalidOperationException(tool);
             }
-            throw new InvalidOperationException(tool);
         }
     }
 

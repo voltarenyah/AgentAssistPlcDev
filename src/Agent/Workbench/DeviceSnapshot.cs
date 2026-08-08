@@ -214,6 +214,14 @@ public sealed class DeviceSnapshotReader
                 if (!string.Equals(Path.GetExtension(entry), ".xml", StringComparison.OrdinalIgnoreCase))
                     continue;
 
+                // Only block categories (Blocks/, DB/) are parsed into block info. Tags/ and
+                // UDT/ exports are valid XML but not blocks — reading them as blocks produced
+                // one spurious "malformed or unsupported" diagnostic per file per snapshot.
+                var slash = relativePath.Replace('\\', '/');
+                if (!slash.StartsWith("Blocks/", StringComparison.Ordinal)
+                    && !slash.StartsWith("DB/", StringComparison.Ordinal))
+                    continue;
+
                 try
                 {
                     _ = WorkbenchPaths.ResolveRelativeBelowValidatedRoot(sourceRoot, relativePath);

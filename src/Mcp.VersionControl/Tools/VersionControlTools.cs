@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Mcp.VersionControl.Git;
+using Mcp.VersionControl.Svn;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -163,6 +164,14 @@ public sealed class VersionControlTools
         [Description("Optional new commit or ref. With no oldSha, compares HEAD to this ref.")] string? newSha = null)
         => Invoke(() => RepositoryService.Diff(repoPath, filePath, oldSha, newSha));
 
+    [McpServerTool(Name = "vc_show_file")]
+    [Description("Read a git-tracked text file at a specific commit (default HEAD). Returns {content: null} when the commit or path does not exist.")]
+    public CallToolResult VcShowFile(
+        [Description("Path to the git repository or linked worktree.")] string repoPath,
+        [Description("Git-tracked path relative to the worktree root, e.g. engineering-state/revision.json.")] string filePath,
+        [Description("Optional commit SHA (defaults to HEAD).")] string? commitSha = null)
+        => Invoke(() => new { content = RepositoryService.ShowFile(repoPath, commitSha, filePath) });
+
     [McpServerTool(Name = "vc_snapshot")]
     [Description("Compatibility checkpoint that stages and commits all changed PLC source XML only. Runtime, metadata, and other non-source files remain untouched.")]
     public CallToolResult VcSnapshot(
@@ -198,6 +207,75 @@ public sealed class VersionControlTools
         [Description("Config key, e.g. 'user.name' or 'user.email'.")] string key,
         [Description("Value to set. Omit to read the current value.")] string? value = null)
         => Invoke(() => RepositoryService.Config(repoPath, key, value));
+
+    [McpServerTool(Name = "svn_init_shared")]
+    [Description("Create the shared local SVN native store (repository.svn with native/main and native/branches) inside a workbench root. Returns the file:// repository URI.")]
+    public CallToolResult SvnInitShared(
+        [Description("Root directory of the workbench.")] string workbenchRoot)
+        => Invoke(() => _svn.CreateShared(workbenchRoot));
+
+    [McpServerTool(Name = "svn_checkout")]
+    [Description("Check out a repository or branch URL into a local SVN working copy. allowObstructions permits a non-empty target (only safe while the URL is empty, e.g. adopting a freshly saved TIA project).")]
+    public CallToolResult SvnCheckout(
+        [Description("Repository file:// URI or branch URL, e.g. file:///.../repository.svn/native/main.")] string url,
+        [Description("Local path for the working copy.")] string path,
+        [Description("Allow checkout into a non-empty directory (default false).")] bool allowObstructions = false)
+        => Invoke(() => _svn.Checkout(url, path, allowObstructions));
+
+    [McpServerTool(Name = "svn_export")]
+    [Description("Export a clean tree (no .svn metadata) of a repository URL pinned to an exact revision. Used for lean native-state restores.")]
+    public CallToolResult SvnExport(
+        [Description("Repository file:// URI or branch URL, e.g. file:///.../repository.svn/native/main.")] string url,
+        [Description("Exact revision to export.")] long revision,
+        [Description("Local target path for the exported tree.")] string path)
+        => Invoke(() => _svn.Export(url, revision, path));
+
+    [McpServerTool(Name = "svn_commit")]
+    [Description("Recursively add all unversioned items below a working copy and commit it. Returns the committed revision.")]
+    public CallToolResult SvnCommit(
+        [Description("Path of the SVN working copy.")] string path,
+        [Description("Commit message.")] string message)
+        => Invoke(() =>
+        {
+            _svn.AddRecursive(path);
+            return _svn.Commit(path, message);
+        });
+
+    [McpServerTool(Name = "svn_copy_branch")]
+    [Description("Server-side copy of a branch at a peg revision into native/branches/<newBranch> of the same repository.")]
+    public CallToolResult SvnCopyBranch(
+        [Description("Repository file:// URI, e.g. file:///.../repository.svn.")] string repoUrl,
+        [Description("Source branch under native/, e.g. 'main' or 'branches/feature-x'.")] string sourceBranch,
+        [Description("Peg revision of the source branch to copy.")] long revision,
+        [Description("Name of the new branch (single path segment).")] string newBranch,
+        [Description("Commit message for the copy.")] string message)
+        => Invoke(() => _svn.CopyBranch(
+            $"{repoUrl.TrimEnd('/')}/native/{sourceBranch}",
+            revision,
+            newBranch,
+            message));
+
+    [McpServerTool(Name = "svn_status")]
+    [Description("Show working-copy status: clean/dirty plus the changed entries. Read-only.")]
+    public CallToolResult SvnStatus(
+        [Description("Path of the SVN working copy.")] string path)
+        => Invoke(() => _svn.Status(path));
+
+    [McpServerTool(Name = "svn_log")]
+    [Description("Show commit history of a working-copy path or repository URL, newest first. Default last 20 entries.")]
+    public CallToolResult SvnLog(
+        [Description("Working-copy path or repository URL.")] string path,
+        [Description("Maximum number of log entries (default 20).")] int? limit = null)
+        => Invoke(() => _svn.Log(path, limit ?? 20));
+
+    [McpServerTool(Name = "svn_update")]
+    [Description("Update a working copy to an exact revision. Used to pin a checked-out native project to the revision recorded in revision.json.")]
+    public CallToolResult SvnUpdate(
+        [Description("Path of the SVN working copy.")] string path,
+        [Description("Target revision (zero or greater).")] long revision)
+        => Invoke(() => _svn.UpdateToRevision(path, revision));
+
+    private static readonly SvnRepositoryService _svn = new();
 
     private static CallToolResult Invoke(Func<object> action)
     {

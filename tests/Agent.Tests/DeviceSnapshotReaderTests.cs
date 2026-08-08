@@ -311,7 +311,7 @@ public sealed class DeviceSnapshotReaderTests
     }
 
     [Fact]
-    public void ReadReportsUnsupportedSourceXmlWithoutDiscardingSupportedBlocks()
+    public void ReadSkipsNonBlockCategoriesSilentlyWithoutDiscardingSupportedBlocks()
     {
         using var fixture = SnapshotFixture.Create();
         fixture.WriteSource("Blocks/Main [OB1].xml", BlockXml("SW.Blocks.OB", "Main", 1, "LAD"));
@@ -320,10 +320,10 @@ public sealed class DeviceSnapshotReaderTests
         var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
 
         Assert.Single(snapshot.Blocks);
-        Assert.Equal(1, snapshot.SourceObjectCount);
-        Assert.Contains(snapshot.Diagnostics, message =>
-            message.Contains("Tags/NotABlock.xml", StringComparison.Ordinal)
-            && message.Contains("unsupported", StringComparison.OrdinalIgnoreCase));
+        // Tags/UDT exports are valid non-block categories: skipped without a diagnostic
+        // (previously one spurious "malformed or unsupported" warning per file per snapshot).
+        Assert.DoesNotContain(snapshot.Diagnostics, message =>
+            message.Contains("Tags/NotABlock.xml", StringComparison.Ordinal));
     }
 
     [Fact]

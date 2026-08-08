@@ -5,11 +5,13 @@ namespace Agent.Workbench;
 
 public static class WorkbenchSchema
 {
-    public const string CurrentVersion = "1.1";
+    public const string CurrentVersion = "1.2";
 
     /// <summary>Versions readers accept; 1.0 files predate the landing-page fields and
-    /// deserialize with defaults (null purpose/owner, ongoing status).</summary>
-    public static readonly IReadOnlyList<string> SupportedVersions = ["1.0", CurrentVersion];
+    /// deserialize with defaults (null purpose/owner, ongoing status). 1.1 files predate the
+    /// SVN native store and deserialize with null SvnRepositoryPath/provenance fields — SVN
+    /// features stay unavailable for those workbenches (no migration).</summary>
+    public static readonly IReadOnlyList<string> SupportedVersions = ["1.0", "1.1", CurrentVersion];
 }
 
 public sealed record WorkbenchMetadata(
@@ -23,7 +25,14 @@ public sealed record WorkbenchMetadata(
     string? SourceProjectPath,
     IReadOnlyList<WorkbenchWorktreeRegistration> Worktrees,
     string? Purpose = null,
-    string? Owner = null);
+    string? Owner = null,
+    /// <summary>&lt;root&gt;/repository.svn — the local SVN native store (1.2+; null for 1.1).</summary>
+    string? SvnRepositoryPath = null,
+    /// <summary>Provenance only: the origin .ap17 the workbench was imported from (1.2+).</summary>
+    string? OriginProjectPath = null,
+    string? OriginImportedAt = null,
+    /// <summary>Operational TIA project inside the worktree's tia/ working copy (1.2+).</summary>
+    string? ManagedTiaProjectPath = null);
 
 public sealed record WorkbenchWorktreeRegistration(
     string WorktreeId,
@@ -46,7 +55,15 @@ public sealed record WorktreeMetadata(
     string? Purpose = null,
     string? Owner = null,
     WorktreeStatus Status = WorktreeStatus.Ongoing,
-    DateTimeOffset? FinishedUtc = null);
+    DateTimeOffset? FinishedUtc = null,
+    /// <summary>Operational TIA project inside this worktree's tia/ working copy (1.2+);
+    /// null on 1.1 worktrees, where SourceProjectPath stays the operational path.</summary>
+    string? ManagedTiaProjectPath = null,
+    /// <summary>This worktree's own SVN branch (1.2+ feature worktrees), e.g.
+    /// "^/native/branches/feature-x"; null on master and on 1.1 worktrees.</summary>
+    string? SvnUrl = null,
+    /// <summary>The ^/native/main revision this feature's SVN branch was copied from.</summary>
+    long? BaseSvnRevision = null);
 
 [JsonConverter(typeof(WorktreeStatusJsonConverter))]
 public enum WorktreeStatus
@@ -126,6 +143,50 @@ public sealed class CoordinatorGitCommitResult
 {
     public string Sha { get; set; } = string.Empty;
 }
+
+public sealed class CoordinatorSvnInitResult
+{
+    public string RepositoryPath { get; set; } = string.Empty;
+    public string RepositoryUri { get; set; } = string.Empty;
+}
+
+public sealed class CoordinatorSvnCommitResult
+{
+    public bool Committed { get; set; }
+    public long Revision { get; set; }
+}
+
+public sealed class CoordinatorSvnStatusResult
+{
+    public bool IsClean { get; set; }
+}
+
+public sealed class CoordinatorSaveProjectAsResult
+{
+    public string? ManagedProjectPath { get; set; }
+}
+
+public sealed class ShowFileResult
+{
+    public string? Content { get; set; }
+}
+
+/// <summary>One restore-able engineering savepoint: a git commit plus the native-state link and
+/// evidence recorded by revision.json at that commit (null fields predate revision.json).</summary>
+public sealed record SavepointInfo(
+    string Sha,
+    string Message,
+    string? SvnUrl,
+    long? SvnRevision,
+    string? ProjectChecksum,
+    string? CompileStatus,
+    string? FSignature);
+
+/// <summary>Outcome of one object in a local → TIA push.</summary>
+public sealed record PushToTiaObjectOutcome(string Path, bool Success, string? Message);
+
+/// <summary>Result of pushing selected local master sources into TIA.</summary>
+public sealed record PushToTiaResult(string ComparisonId, IReadOnlyList<PushToTiaObjectOutcome> Outcomes);
 
 public sealed record DeviceContext(
     string WorkbenchId,

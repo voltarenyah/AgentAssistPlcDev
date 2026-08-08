@@ -4,6 +4,7 @@ import * as api from '@/api/client'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 import VersionControlCompare from './VersionControlCompare'
 import VersionControlHistory from './VersionControlHistory'
+import NativeStorePanel from './NativeStorePanel'
 
 export type VersionControlPanelProps = {
   workbenchId: string
@@ -13,6 +14,19 @@ export type VersionControlPanelProps = {
 
 function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSourceEntry | null {
   const parts = entry.filePath.replace(/\\/g, '/').split('/')
+  const state = branch.toLowerCase() === 'master' ? 'Unauthorized' : entry.state === 'Added' || entry.state === 'Untracked' ? 'Added' : entry.state === 'Deleted' ? 'Deleted' : 'Modified'
+  if (parts[0] === 'hardware' && parts.length >= 2 && parts[1] !== 'staging') {
+    const file = parts.at(-1) ?? entry.filePath
+    return {
+      filePath: entry.filePath,
+      deviceId: 'project',
+      plcName: 'Hardware',
+      category: 'Hardware',
+      objectName: file,
+      state,
+      authorizedOnMaster: true,
+    }
+  }
   if (parts.length < 5 || parts[0] !== 'devices' || parts[2] !== 'source' || !entry.filePath.toLowerCase().endsWith('.xml')) return null
   const category = parts[3] === 'Blocks' ? 'Block' : parts[3] === 'DB' ? 'DB' : parts[3] === 'UDT' ? 'Udt' : parts[3] === 'Tags' ? 'Tags' : parts[3]
   const file = parts.at(-1) ?? entry.filePath
@@ -22,7 +36,7 @@ function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSo
     plcName: parts[1],
     category,
     objectName: file.replace(/\.xml$/i, ''),
-    state: branch.toLowerCase() === 'master' ? 'Unauthorized' : entry.state === 'Added' || entry.state === 'Untracked' ? 'Added' : entry.state === 'Deleted' ? 'Deleted' : 'Modified',
+    state,
     authorizedOnMaster: branch.toLowerCase() !== 'master',
   }
 }
@@ -30,7 +44,7 @@ function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSo
 export default function VersionControlPanel({ workbenchId, worktreeId, onSelectionChange }: VersionControlPanelProps) {
   const [status, setStatus] = useState<api.VcStatusResult | null>(null)
   const [history, setHistory] = useState<api.VcCommitEntry[]>([])
-  const [tab, setTab] = useState<'changes' | 'compare' | 'history'>('changes')
+  const [tab, setTab] = useState<'changes' | 'compare' | 'history' | 'native'>('changes')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -75,9 +89,9 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onSelecti
       </header>
       {error && <div className="shrink-0 px-3 py-2 text-[9px] text-destructive">{error}</div>}
       <nav className="flex shrink-0 gap-1 border-b px-2 py-1" style={{ borderColor: 'var(--border)' }}>
-        {(['changes', 'compare', 'history'] as const).map(item => (
+        {(['changes', 'compare', 'history', 'native'] as const).map(item => (
           <button key={item} type="button" className={`rounded px-2 py-1 text-[9px] ${tab === item ? 'bg-accent font-medium' : 'text-muted-foreground hover:bg-accent/50'}`} onClick={() => setTab(item)}>
-            {item === 'changes' ? 'Changes' : item === 'compare' ? 'Compare with TIA' : 'History'}
+            {item === 'changes' ? 'Changes' : item === 'compare' ? 'Compare with TIA' : item === 'history' ? 'History' : 'Native (SVN)'}
           </button>
         ))}
       </nav>
@@ -85,6 +99,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onSelecti
         {tab === 'changes' && <VersionControlChanges workbenchId={workbenchId} worktreeId={worktreeId} entries={entries} onSelectionChange={entry => onSelectionChange?.(entry ? { kind: 'source', entry } : null)} onCommitted={() => void refresh()} />}
         {tab === 'compare' && <VersionControlCompare workbenchId={workbenchId} worktreeId={worktreeId} branch={status?.branch ?? ''} onCommitted={() => void refresh()} />}
         {tab === 'history' && <VersionControlHistory workbenchId={workbenchId} worktreeId={worktreeId} commits={history} onCommitSelect={commit => onSelectionChange?.({ kind: 'commit', commit })} onObjectSelect={(commit, path) => onSelectionChange?.({ kind: 'commit', commit, path })} />}
+        {tab === 'native' && <NativeStorePanel workbenchId={workbenchId} worktreeId={worktreeId} />}
       </div>
     </section>
   )

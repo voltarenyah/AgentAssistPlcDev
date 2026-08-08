@@ -75,12 +75,13 @@ export default function VersionControlChanges({
     return [...grouped.entries()].map(([key, group]) => ({ key, entries: group }))
   }, [entries])
 
-  const eligibleEntries = entries.filter(entry => !isUnauthorized(entry))
-  const selectedEntries = entries.filter(entry => selectedPaths.has(entry.filePath) && !isUnauthorized(entry))
+  // Direct master edits are committable (policy relaxed); the "Direct master edit" label is
+  // informational only and no longer blocks selection.
+  const eligibleEntries = entries
+  const selectedEntries = entries.filter(entry => selectedPaths.has(entry.filePath))
   const canCommit = selectedEntries.length > 0 && commitMessage.trim().length > 0 && !operating
 
   const setPathSelected = (entry: VersionControlSourceEntry, selected: boolean) => {
-    if (isUnauthorized(entry)) return
     setSelectedPaths(previous => {
       const next = new Set(previous)
       if (selected) next.add(entry.filePath)
@@ -93,7 +94,6 @@ export default function VersionControlChanges({
     setSelectedPaths(previous => {
       const next = new Set(previous)
       for (const entry of groupEntries) {
-        if (isUnauthorized(entry)) continue
         if (selected) next.add(entry.filePath)
         else next.delete(entry.filePath)
       }
@@ -152,7 +152,7 @@ export default function VersionControlChanges({
         {groups.length === 0 ? (
           <div className="p-4 text-center text-[10px]" style={{ color: 'var(--muted-foreground)' }}>No PLC source changes</div>
         ) : groups.map(group => {
-          const selectable = group.entries.filter(entry => !isUnauthorized(entry))
+          const selectable = group.entries
           const allSelected = selectable.length > 0 && selectable.every(entry => selectedPaths.has(entry.filePath))
           return (
             <section key={group.key} className="mb-2 rounded border" style={{ borderColor: 'var(--border)' }}>
@@ -180,8 +180,8 @@ export default function VersionControlChanges({
                     <input
                       type="checkbox"
                       aria-label={`Select ${entry.objectName}`}
-                      checked={!unauthorized && selectedPaths.has(entry.filePath)}
-                      disabled={unauthorized || operating}
+                      checked={selectedPaths.has(entry.filePath)}
+                      disabled={operating}
                       onClick={event => event.stopPropagation()}
                       onChange={event => setPathSelected(entry, event.currentTarget.checked)}
                     />

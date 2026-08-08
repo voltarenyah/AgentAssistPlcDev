@@ -312,6 +312,22 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
+    public string SaveProjectAs(DirectoryInfo targetDirectory)
+    {
+        lock (_gate)
+        {
+            var project = RequireProject();
+            // Openness SaveAs keeps the project open at the new location and updates the
+            // tracked Project object in place, so _project already points at the managed copy.
+            project.SaveAs(targetDirectory);
+            // Report the ACTUAL managed path from the post-SaveAs project object — never
+            // construct the .ap17 path by assumption (TIA names the file itself).
+            return project.Path?.FullName
+                ?? throw new AdapterException("SAVE_AS_PATH_UNKNOWN",
+                    "TIA did not report the managed project path after Save As.");
+        }
+    }
+
     public ProjectInfo GetProjectInfo()
     {
         lock (_gate)

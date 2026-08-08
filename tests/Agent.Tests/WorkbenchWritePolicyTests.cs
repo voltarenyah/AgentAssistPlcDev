@@ -11,14 +11,12 @@ public sealed class WorkbenchWritePolicyTests : IDisposable
         "workbench-write-policy-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
-    public void NormalEditIsRejectedOnMaster()
+    public void NormalEditIsAllowedOnMaster()
     {
         var policy = PolicyFor("master");
 
-        var error = Assert.Throws<WorkbenchLifecycleException>(() =>
-            policy.RequireFeatureEdit(ContextFor("master")));
-
-        Assert.Equal("MASTER_EDIT_NOT_ALLOWED", error.Code);
+        // MASTER_EDIT_NOT_ALLOWED is disabled: direct master edits are allowed by policy.
+        policy.RequireFeatureEdit(ContextFor("master"));
     }
 
     [Fact]

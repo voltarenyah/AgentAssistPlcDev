@@ -63,7 +63,8 @@ public sealed class WorkbenchCatalog
                 Path.Combine(root, "repository.git"),
                 null,
                 null,
-                Array.Empty<WorkbenchWorktreeRegistration>());
+                Array.Empty<WorkbenchWorktreeRegistration>(),
+                SvnRepositoryPath: Path.Combine(root, "repository.svn"));
 
             _store.Write(MetadataPath(root), metadata);
             return metadata;
@@ -106,7 +107,14 @@ public sealed class WorkbenchCatalog
 
         var root = WorkbenchPaths.ResolveWorkbench("workbench", workbench.RootPath);
         DeleteDirectoryIfPresent(Path.Combine(root, "repository.git"));
-        DeleteDirectoryIfPresent(Path.Combine(root, "worktrees"));
+        // SVN pristine files and the tia/ working copy may be read-only; clear attributes
+        // before the recursive delete (the tia/ store lives under worktrees/).
+        var svnRepository = Path.Combine(root, "repository.svn");
+        ClearReadOnlyAttributes(svnRepository);
+        DeleteDirectoryIfPresent(svnRepository);
+        var worktrees = Path.Combine(root, "worktrees");
+        ClearReadOnlyAttributes(worktrees);
+        DeleteDirectoryIfPresent(worktrees);
 
         var metadataPath = MetadataPath(root);
         if (File.Exists(metadataPath))
@@ -358,7 +366,7 @@ public sealed class WorkbenchCatalog
     }
 
     /// <summary>Git object and pack files are read-only on Windows; reset attributes so the recursive delete succeeds.</summary>
-    private static void ClearReadOnlyAttributes(string root)
+    internal static void ClearReadOnlyAttributes(string root)
     {
         if (!Directory.Exists(root))
         {
