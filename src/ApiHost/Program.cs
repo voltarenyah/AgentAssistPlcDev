@@ -134,7 +134,17 @@ else
         s.GetRequiredService<SandboxConfig>().PathJail));
 }
 
-builder.Services.AddSingleton<WorkbenchApiState>();
+builder.Services.AddSingleton<WorkbenchRuntimeStateCoordinator>();
+builder.Services.AddSingleton<WorkbenchApiState>(services =>
+{
+    var state = new WorkbenchApiState(
+        services.GetRequiredService<WorkbenchCatalog>(),
+        services.GetRequiredService<AtomicJsonStore>(),
+        services.GetRequiredService<TrustedWorkbenchRootRegistry>());
+    state.AttachRuntimeStateCoordinator(
+        services.GetRequiredService<WorkbenchRuntimeStateCoordinator>());
+    return state;
+});
 builder.Services.AddSingleton<CompatibilityRuntimeState>();
 builder.Services.AddSingleton(_ => new CompatibilityConfigStore());
 builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
@@ -199,6 +209,7 @@ app.MapGet("/api/status", () => Results.Ok(new
     version = applicationVersion,
 }));
 app.MapWorkbenchEndpoints();
+app.MapRuntimeStateEndpoints();
 app.MapCompatibilityEndpoints();
 var browserUrl = isProduction || string.IsNullOrWhiteSpace(configuredUrls)
     ? startupOptions.Url

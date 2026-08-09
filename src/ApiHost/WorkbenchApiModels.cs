@@ -95,6 +95,7 @@ public sealed class WorkbenchApiState
     private readonly WorkbenchCatalog catalog;
     private readonly AtomicJsonStore store;
     private readonly TrustedWorkbenchRootRegistry? trustedRoots;
+    private WorkbenchRuntimeStateCoordinator? runtimeStateCoordinator;
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> workbenches = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ReconciliationPreview> previews = new(StringComparer.Ordinal);
 
@@ -115,6 +116,8 @@ public sealed class WorkbenchApiState
     }
 
     public WorkbenchSelection? Selection { get; private set; }
+    public void AttachRuntimeStateCoordinator(WorkbenchRuntimeStateCoordinator coordinator) =>
+        runtimeStateCoordinator = coordinator;
     public IReadOnlyList<WorkbenchMetadata> List()
     {
         ReconcileCatalog();
@@ -131,8 +134,63 @@ public sealed class WorkbenchApiState
         ReconcileTrustedRoots();
         return persisted;
     }
-    public WorkbenchMetadata Refresh(string id) => Add(catalog.Load(Workbench(id).RootPath));
+    public WorkbenchMetadata Refresh(string id)
+    {
+        var workbench = Add(catalog.Load(Workbench(id).RootPath));
+        runtimeStateCoordinator?.Refresh(id, BuildRuntimeSummaries(workbench));
+        return workbench;
+    }
     public WorkbenchMetadata Open(string root) => Add(catalog.Load(root));
+
+    private IReadOnlyList<WorktreeRuntimeSummary> BuildRuntimeSummaries(WorkbenchMetadata workbench) =>
+        workbench.Worktrees.Select(registration =>
+        {
+            var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+            WorktreeMetadata? metadata = null;
+            try
+            {
+                metadata = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
+            }
+            catch (Exception exception) when (exception is IOException or JsonException)
+            {
+                // The catalog is authoritative for membership; a missing worktree file is
+                // represented as an unknown runtime observation until the next refresh.
+            }
+
+            var devices = metadata?.DeviceIds
+                .Select(deviceId => ReadDeviceRuntimeSummary(worktreeRoot, deviceId))
+                .ToArray()
+                ?? Array.Empty<DeviceRuntimeSummary>();
+            return new WorktreeRuntimeSummary(
+                registration.WorktreeId,
+                metadata?.Name ?? registration.Name,
+                metadata?.Branch ?? registration.Branch,
+                "unknown",
+                metadata?.BaseCommit,
+                0,
+                metadata?.BaseSvnRevision,
+                null,
+                metadata?.Status.ToString().ToLowerInvariant() ?? "unknown",
+                devices);
+        }).ToArray();
+
+    private DeviceRuntimeSummary ReadDeviceRuntimeSummary(string worktreeRoot, string deviceId)
+    {
+        try
+        {
+            var metadata = store.Read<DeviceMetadata>(
+                Path.Combine(WorkbenchPaths.ResolveRelative(worktreeRoot, "devices"), deviceId, "device.json"));
+            return new(
+                deviceId,
+                metadata.PlcName,
+                "unknown",
+                metadata.Knowledge.Stale ? "stale" : "fresh");
+        }
+        catch (Exception exception) when (exception is IOException or JsonException)
+        {
+            return new(deviceId, null, "unknown", "unknown");
+        }
+    }
 
     public void ReconcileCatalog()
     {
@@ -203,7 +261,11 @@ public sealed class WorkbenchApiState
         if (metadataPath.device is null) throw new KeyNotFoundException("DEVICE_NOT_FOUND");
         return (catalog.ResolveDevice(wb, wt, metadataPath.device), metadataPath.device);
     }
-    public void Select(string wb, string? wt = null, string? device = null) => Selection = new(wb, wt, device);
+    public void Select(string wb, string? wt = null, string? device = null)
+    {
+        Selection = new(wb, wt, device);
+        runtimeStateCoordinator?.SetFocus(wb, wt, device);
+    }
 
     /// <summary>Registered devices of a worktree with their human-readable PLC names (from each
     /// device.json; falls back to the device folder name, then the raw id). The navigator displays
