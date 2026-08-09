@@ -79,6 +79,27 @@ public sealed class BackendProcessHostTests
     }
 
     [Fact]
+    public void AssistantStartInfoForwardsApiKeyFromExistingConfigJson()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "assistant-config-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var configPath = Path.Combine(root, "config.json");
+        File.WriteAllText(configPath, "{\"deepSeekApiKey\":\"config-secret\"}");
+
+        try
+        {
+            var paths = RuntimePaths.Create("C:\\Automation Workbench", appAssistantEnabled: true, appAssistantPort: 8791);
+            var info = BackendProcessHost.CreateAppAssistantStartInfo(paths, new[] { configPath });
+
+            Assert.Equal("config-secret", info.Environment["DEEPSEEK_API_KEY"]);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task StartsAndStopsTheLivePythonSidecarThroughTheDesktopHost()
     {
         var root = Path.Combine(Path.GetTempPath(), "assistant-desktop-live-" + Guid.NewGuid().ToString("N"));

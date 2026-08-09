@@ -59,6 +59,11 @@ public sealed class BackendProcessHost : IAsyncDisposable
     }
 
     public static ProcessStartInfo CreateAppAssistantStartInfo(RuntimePaths paths)
+        => CreateAppAssistantStartInfo(paths, null);
+
+    internal static ProcessStartInfo CreateAppAssistantStartInfo(
+        RuntimePaths paths,
+        IReadOnlyList<string>? deepSeekConfigPaths)
     {
         var port = paths.AppAssistantPort.ToString();
         var startInfo = new ProcessStartInfo
@@ -78,6 +83,9 @@ public sealed class BackendProcessHost : IAsyncDisposable
         };
         startInfo.Environment["APP_ASSISTANT_APIHOST_URL"] = paths.BaseUrl;
         startInfo.Environment["APP_ASSISTANT_DATA_DIR"] = paths.AppAssistantDataDirectory;
+        var apiKey = DeepSeekCredentialResolver.ResolveApiKey(deepSeekConfigPaths);
+        if (!string.IsNullOrWhiteSpace(apiKey))
+            startInfo.Environment["DEEPSEEK_API_KEY"] = apiKey;
         return startInfo;
     }
 
