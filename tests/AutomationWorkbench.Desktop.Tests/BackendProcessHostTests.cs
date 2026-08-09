@@ -75,6 +75,7 @@ public sealed class BackendProcessHostTests
             "-3.13", "-m", "uvicorn", "app_assistant.server:app",
             "--host", "127.0.0.1", "--port", "8791",
         }, info.ArgumentList);
+        Assert.Equal(paths.AppAssistantDataDirectory, info.Environment["APP_ASSISTANT_DATA_DIR"]);
     }
 
     [Fact]

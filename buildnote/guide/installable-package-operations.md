@@ -87,6 +87,23 @@ artifacts\installer\AutomationWorkbench-0.1.0-dev.3-win-x64-setup.exe.sha256
 
 The build requires the .NET 8 SDK, Node/npm, Git, and Inno Setup 6. The current packaging baseline intentionally remains on the existing framework targets; do not upgrade it to .NET 10 as part of routine package generation.
 
+The release also includes the optional `agent-service` source under the install
+root. It does not bundle Python or third-party Python packages. To enable the
+Workbench App Assistant on a machine, install Python 3.13, install the service
+dependencies from the installed `agent-service` directory, and set these user or
+machine environment variables before launching the desktop shell:
+
+```powershell
+py -3.13 -m pip install -e 'C:\Program Files\Automation Workbench\agent-service'
+[Environment]::SetEnvironmentVariable('AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED', 'true', 'User')
+[Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY', '<key>', 'User')
+```
+
+The shell passes the ApiHost URL and a writable user-local data directory to the
+sidecar. If the sidecar cannot start, ApiHost and the existing PLC AgentLoop stay
+available; inspect `%LOCALAPPDATA%\AutomationWorkbench\logs\backend.log` for the
+diagnostic.
+
 Verify the outputs before installing:
 
 ```powershell

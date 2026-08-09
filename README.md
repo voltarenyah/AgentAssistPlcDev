@@ -69,6 +69,8 @@ log. Tool arguments and model output cannot grant themselves new filesystem acce
 - `studio/` — React + Vite workbench UI
 - `src/ApiHost/` — ASP.NET Core API hosting the UI and bridging chat/logs
 - `src/Agent/` — AI agent loop (DeepSeek) with sandboxed tool routing
+- `agent-service/` — optional LangGraph Workbench App Assistant sidecar; it guides
+  project/worktree actions while the existing PLC AgentLoop remains independent
 - `src/Mcp.*` — the MCP servers described above
 - `src/Contracts/` — shared contracts and sandbox policy
 
@@ -79,6 +81,14 @@ log. Tool arguments and model output cannot grant themselves new filesystem acce
 - .NET Framework 4.8 and .NET 8 SDKs
 - Node.js for the studio UI
 - A DeepSeek API key for the AI agent
+- Python 3.13 and the `agent-service` dependencies when the optional Workbench
+  App Assistant is enabled
+
+The Workbench App Assistant is opt-in. Start it in a development environment by
+installing `agent-service` dependencies and setting
+`AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED=true`. The desktop shell starts it
+automatically when enabled, passes the shared `DEEPSEEK_API_KEY`, and stores its
+checkpoint/feedback data under the user-local Automation Workbench data folder.
 
 ## Status
 

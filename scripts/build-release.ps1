@@ -19,6 +19,7 @@ $versionControlProject = Join-Path $repoRoot 'src\Mcp.VersionControl\Mcp.Version
 $engineeringProject = Join-Path $repoRoot 'src\Mcp.Engineering\Mcp.Engineering.csproj'
 $whitelistProject = Join-Path $repoRoot 'src\Tools.OpennessWhitelist\Tools.OpennessWhitelist.csproj'
 $desktopProject = Join-Path $repoRoot 'src\AutomationWorkbench.Desktop\AutomationWorkbench.Desktop.csproj'
+$assistantServiceSource = Join-Path $repoRoot 'agent-service'
 $studioRoot = Join-Path $repoRoot 'studio'
 
 function Invoke-Tool {
@@ -68,6 +69,9 @@ if (-not (Test-Path -LiteralPath $solution -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath (Join-Path $studioRoot 'package-lock.json') -PathType Leaf)) {
     throw "Frontend lockfile was not found: $(Join-Path $studioRoot 'package-lock.json')"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $assistantServiceSource 'pyproject.toml') -PathType Leaf)) {
+    throw "App Assistant service manifest was not found: $(Join-Path $assistantServiceSource 'pyproject.toml')"
 }
 
 Require-Command 'dotnet'
@@ -162,6 +166,7 @@ $sourceEditorDestination = Join-Path $mcpRoot 'source-editor'
 $versionControlDestination = Join-Path $mcpRoot 'version-control'
 $engineeringDestination = Join-Path $mcpRoot 'engineering'
 $toolsDestination = Join-Path $releaseRootFull 'tools'
+$assistantServiceDestination = Join-Path $releaseRootFull 'agent-service'
 Copy-DirectoryContents $apiStage $apiDestination
 Copy-DirectoryContents $knowledgeStage $knowledgeDestination
 Copy-DirectoryContents $sourceEditorStage $sourceEditorDestination
@@ -169,6 +174,7 @@ Copy-DirectoryContents $versionControlStage $versionControlDestination
 Copy-DirectoryContents $engineeringStage $engineeringDestination
 Copy-DirectoryContents $whitelistStage $toolsDestination
 Copy-DirectoryContents $desktopStage $releaseRootFull
+Copy-DirectoryContents $assistantServiceSource $assistantServiceDestination
 
 $engineeringConfig = Join-Path $engineeringDestination 'Mcp.Engineering.exe.config'
 Require-File (Join-Path $engineeringDestination 'Mcp.Engineering.exe')
@@ -193,7 +199,9 @@ $requiredExecutables = @(
     (Join-Path $knowledgeDestination 'Mcp.Knowledge.exe'),
     (Join-Path $sourceEditorDestination 'Mcp.SourceEditor.exe'),
     (Join-Path $versionControlDestination 'Mcp.VersionControl.exe'),
-    (Join-Path $releaseRootFull 'AutomationWorkbench.exe')
+    (Join-Path $releaseRootFull 'AutomationWorkbench.exe'),
+    (Join-Path $assistantServiceDestination 'pyproject.toml'),
+    (Join-Path $assistantServiceDestination 'langgraph.json')
 )
 foreach ($requiredExecutable in $requiredExecutables) {
     Require-File $requiredExecutable
@@ -222,6 +230,7 @@ $manifest = [ordered]@{
         McpVersionControl = 'net8.0'
         McpEngineering = 'net48'
         DesktopShell = 'net8.0-windows'
+        AppAssistant = 'Python 3.13'
     }
     files = $manifestFiles
 }

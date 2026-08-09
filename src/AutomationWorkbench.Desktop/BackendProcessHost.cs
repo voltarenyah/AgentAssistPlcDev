@@ -77,6 +77,7 @@ public sealed class BackendProcessHost : IAsyncDisposable
             },
         };
         startInfo.Environment["APP_ASSISTANT_APIHOST_URL"] = paths.BaseUrl;
+        startInfo.Environment["APP_ASSISTANT_DATA_DIR"] = paths.AppAssistantDataDirectory;
         return startInfo;
     }
 
