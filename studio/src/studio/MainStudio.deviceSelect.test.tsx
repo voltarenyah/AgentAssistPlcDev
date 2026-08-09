@@ -39,6 +39,8 @@ vi.mock('@/api/client', async importOriginal => {
   return {
     ...actual,
     listWorkbenches: vi.fn(async () => [workbench]),
+    selectWorkbench: vi.fn(async () => ({})),
+    selectWorktree: vi.fn(async () => ({})),
     listDevices: vi.fn(async () => [{ deviceId: 'dev1', plcName: 'PLC_Demo' }]),
     getDeviceInfo: vi.fn(async () => snapshot),
     listDeviceSessions: vi.fn(async () => []),
