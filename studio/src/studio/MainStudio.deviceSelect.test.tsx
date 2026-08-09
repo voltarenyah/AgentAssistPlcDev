@@ -167,6 +167,8 @@ describe('MainStudio device selection resilience', () => {
     clickText(host, 'master')
     await act(async () => {})
     await act(async () => {})
+    clickText(host, 'PLC_Demo')
+    await act(async () => {})
 
     const sourceTab = Array.from(host.querySelectorAll<HTMLButtonElement>('button'))
       .find(element => element.textContent?.trim() === 'PLC source')
