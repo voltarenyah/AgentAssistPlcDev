@@ -40,9 +40,13 @@ public static class AppAssistantChatEndpoints
             .ConfigureAwait(false);
         try
         {
-            var payload = await client.SendAsync(operation, workbenchId, request.Message, cancellationToken)
+            var payload = await client.SendAsync(operation, workbenchId, request.Message, request.Approval, cancellationToken)
                 .ConfigureAwait(false);
             await WriteEventAsync(http, "state", payload).ConfigureAwait(false);
+            if (payload.ValueKind == JsonValueKind.Object
+                && payload.TryGetProperty("pendingApproval", out var pendingApproval)
+                && pendingApproval.ValueKind == JsonValueKind.Object)
+                await WriteEventAsync(http, "interrupt", pendingApproval).ConfigureAwait(false);
             var answer = payload.ValueKind == JsonValueKind.Object
                 && payload.TryGetProperty("answer", out var answerProperty)
                 ? answerProperty.GetString()
@@ -68,4 +72,4 @@ public static class AppAssistantChatEndpoints
     }
 }
 
-public sealed record AppAssistantChatRequest(string Message);
+public sealed record AppAssistantChatRequest(string Message, JsonElement? Approval = null);

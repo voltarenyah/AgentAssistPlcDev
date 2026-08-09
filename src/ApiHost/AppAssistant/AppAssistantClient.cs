@@ -9,6 +9,7 @@ public sealed class AppAssistantClient(HttpClient httpClient, IConfiguration con
         string operation,
         string workbenchId,
         string message,
+        JsonElement? approval = null,
         CancellationToken cancellationToken = default)
     {
         var baseUrl = configuration["AppAssistant:ServiceUrl"] ?? "http://127.0.0.1:8787";
@@ -17,7 +18,7 @@ public sealed class AppAssistantClient(HttpClient httpClient, IConfiguration con
             HttpMethod.Post,
             $"{baseUrl.TrimEnd('/')}/v1/workbenches/{Uri.EscapeDataString(workbenchId)}/{path}")
         {
-            Content = JsonContent.Create(new { message }),
+            Content = JsonContent.Create(new { message, approval }),
         };
         var token = configuration["AppAssistant:InternalToken"];
         if (!string.IsNullOrWhiteSpace(token))
