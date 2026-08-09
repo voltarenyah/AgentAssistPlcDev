@@ -138,6 +138,7 @@ else
 builder.Services.AddSingleton<WorkbenchRuntimeStateCoordinator>();
 builder.Services.AddSingleton<AppAssistantGateway>();
 builder.Services.AddSingleton<AppAssistantAccessPolicy>();
+builder.Services.AddSingleton<AppAssistantClient>();
 builder.Services.AddSingleton<WorkbenchApiState>(services =>
 {
     var state = new WorkbenchApiState(
@@ -214,6 +215,7 @@ app.MapGet("/api/status", () => Results.Ok(new
 app.MapWorkbenchEndpoints();
 app.MapRuntimeStateEndpoints();
 app.MapAppAssistantEndpoints();
+app.MapAppAssistantChatEndpoints();
 app.MapCompatibilityEndpoints();
 var browserUrl = isProduction || string.IsNullOrWhiteSpace(configuredUrls)
     ? startupOptions.Url

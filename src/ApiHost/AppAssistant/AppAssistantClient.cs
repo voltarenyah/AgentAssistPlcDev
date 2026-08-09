@@ -1,0 +1,52 @@
+using System.Net.Http.Json;
+using System.Text.Json;
+
+namespace ApiHost.AppAssistant;
+
+public sealed class AppAssistantClient(HttpClient httpClient, IConfiguration configuration)
+{
+    public async Task<JsonElement> SendAsync(
+        string operation,
+        string workbenchId,
+        string message,
+        CancellationToken cancellationToken = default)
+    {
+        var baseUrl = configuration["AppAssistant:ServiceUrl"] ?? "http://127.0.0.1:8787";
+        var path = operation == "bootstrap" ? "bootstrap" : "chat";
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{baseUrl.TrimEnd('/')}/v1/workbenches/{Uri.EscapeDataString(workbenchId)}/{path}")
+        {
+            Content = JsonContent.Create(new { message }),
+        };
+        var token = configuration["AppAssistant:InternalToken"];
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.TryAddWithoutValidation("X-App-Assistant-Token", token);
+
+        try
+        {
+            using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var payload = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return payload;
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            throw new AppAssistantClientException(
+                "APP_ASSISTANT_UNAVAILABLE",
+                "The LangGraph app assistant is currently unavailable.",
+                exception);
+        }
+    }
+}
+
+public sealed class AppAssistantClientException(
+    string code,
+    string message,
+    Exception innerException)
+    : Exception(message, innerException)
+{
+    public string Code { get; } = code;
+}

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "workbench-app-assistant"
+version = "0.1.0"
+description = "Read-only LangGraph assistant for the Automation Workbench."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "langgraph==0.6.6",
+  "langgraph-checkpoint-sqlite==2.0.10",
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.34.0",
+  "httpx==0.28.1",
+  "pydantic==2.10.5",
+  "langchain-openai==0.3.3",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest==8.3.4",
+  "pytest-asyncio==0.25.3",
+  "pytest-httpx==0.35.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app_assistant"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

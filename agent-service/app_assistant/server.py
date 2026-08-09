@@ -1,0 +1,71 @@
+from contextlib import asynccontextmanager
+import os
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from pydantic import BaseModel
+
+from . import __version__
+from .gateway import WorkbenchGateway
+from .graph import build_graph, thread_id_for
+
+
+class AssistantRequest(BaseModel):
+    message: str = "Inspect the current workbench and suggest the first useful move."
+
+
+def _response(result: dict[str, Any], workbench_id: str) -> dict[str, Any]:
+    return {
+        "threadId": thread_id_for(workbench_id),
+        "workbenchId": workbench_id,
+        "contextRevision": result.get("context_revision", 0),
+        "runtimeSnapshot": result.get("runtime_snapshot"),
+        "intent": result.get("intent"),
+        "proposedAction": result.get("proposed_action"),
+        "answer": result.get("answer"),
+    }
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    gateway = WorkbenchGateway.from_env()
+    data_dir = Path(os.getenv("APP_ASSISTANT_DATA_DIR", ".assistant-data"))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = data_dir / "checkpoints.sqlite"
+    app.state.gateway = gateway
+    async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
+        await checkpointer.setup()
+        app.state.graph = build_graph(gateway, checkpointer=checkpointer)
+        yield
+    await gateway.client.aclose()
+
+
+app = FastAPI(title="Workbench App Assistant", version=__version__, lifespan=lifespan)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "graphVersion": __version__,
+        "gateway": "configured",
+    }
+
+
+@app.post("/v1/workbenches/{workbench_id}/bootstrap")
+async def bootstrap(workbench_id: str, request: AssistantRequest) -> dict[str, Any]:
+    result = await app.state.graph.ainvoke(
+        {
+            "workbench_id": workbench_id,
+            "messages": [{"role": "user", "content": request.message}],
+        },
+        config={"configurable": {"thread_id": thread_id_for(workbench_id)}},
+    )
+    return _response(result, workbench_id)
+
+
+@app.post("/v1/workbenches/{workbench_id}/chat")
+async def chat(workbench_id: str, request: AssistantRequest) -> dict[str, Any]:
+    return await bootstrap(workbench_id, request)
