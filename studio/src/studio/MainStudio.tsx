@@ -2171,6 +2171,10 @@ export default function MainStudio() {
             workbenchName={activeWorkbench?.name ?? 'Selected workbench'}
             runtime={appAssistantRuntime}
             onClose={() => setAppAssistantOpen(false)}
+            onSelectWorktree={worktreeId => {
+              const worktree = activeWorkbench?.worktrees.find(item => item.worktreeId === worktreeId)
+              if (activeWorkbench && worktree) return selectWorktree(activeWorkbench, worktree)
+            }}
           />
         )}
       </div>}

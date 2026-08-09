@@ -13,11 +13,13 @@ type Props = {
   workbenchName: string
   runtime: api.AppAssistantRuntimeSnapshot | null
   onClose?: () => void
+  onSelectWorktree?: (worktreeId: string) => Promise<void> | void
 }
 
-export default function AppAssistantPanel({ workbenchId, workbenchName, runtime, onClose }: Props) {
+export default function AppAssistantPanel({ workbenchId, workbenchName, runtime, onClose, onSelectWorktree }: Props) {
   const [state, setState] = useState<AppAssistantPanelState>(() => initialAppAssistantState(runtime))
   const [draft, setDraft] = useState('')
+  const [selectingWorktree, setSelectingWorktree] = useState<string | null>(null)
   const latestRuntime = useRef<api.AppAssistantRuntimeSnapshot | null>(runtime)
 
   useEffect(() => {
@@ -80,6 +82,21 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
     }
   }
 
+  const selectWorktree = async (worktreeId: string) => {
+    if (!onSelectWorktree) return
+    setSelectingWorktree(worktreeId)
+    try {
+      await onSelectWorktree(worktreeId)
+    } catch (error) {
+      setState(current => ({
+        ...current,
+        messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Worktree selection failed' }],
+      }))
+    } finally {
+      setSelectingWorktree(null)
+    }
+  }
+
   const worktrees = useMemo(() => state.runtime?.worktrees ?? runtime?.worktrees ?? [], [runtime?.worktrees, state.runtime?.worktrees])
 
   return (
@@ -101,6 +118,16 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
           <div key={worktree.worktreeId} className="rounded-md border px-2 py-1.5 text-[9px]" style={{ borderColor: 'var(--border)' }}>
             <div className="font-medium">{worktree.name}</div>
             <div className="text-muted-foreground">{worktree.branch} · {worktree.todoCount} todo{worktree.todoCount === 1 ? '' : 's'} · {worktree.gitStatus}</div>
+            {onSelectWorktree && state.runtime?.focus.worktreeId !== worktree.worktreeId && (
+              <button
+                className="secondary-button mt-1 h-6 px-2 text-[9px]"
+                data-assistant-select-worktree={worktree.worktreeId}
+                disabled={selectingWorktree !== null}
+                onClick={() => void selectWorktree(worktree.worktreeId)}
+              >
+                {selectingWorktree === worktree.worktreeId ? 'Selecting…' : 'Select worktree'}
+              </button>
+            )}
           </div>
         ))}
         {state.messages.map((message, index) => (

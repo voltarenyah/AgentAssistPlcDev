@@ -96,4 +96,26 @@ describe('AppAssistantPanel', () => {
     expect(api.bootstrapAppAssistant).toHaveBeenCalledTimes(2)
     expect(host.textContent).toContain('feature')
   })
+
+  it('offers an explicit selection action for an unselected worktree', async () => {
+    const selectWorktree = vi.fn(async () => {})
+    const { host } = render(
+      <AppAssistantPanel
+        workbenchId="wb1"
+        workbenchName="Demo"
+        runtime={{
+          ...runtime,
+          worktrees: [...runtime.worktrees, { worktreeId: 'wt2', name: 'feature', branch: 'feature', todoCount: 0, gitStatus: 'clean' }],
+        }}
+        onSelectWorktree={selectWorktree}
+      />,
+    )
+    await act(async () => {})
+
+    const button = host.querySelector<HTMLButtonElement>('[data-assistant-select-worktree="wt2"]')
+    expect(button).not.toBeNull()
+    await act(async () => button!.click())
+
+    expect(selectWorktree).toHaveBeenCalledWith('wt2')
+  })
 })
