@@ -59,6 +59,7 @@ import {
 } from '@/studio/deviceSnapshot'
 import * as api from '@/api/client'
 import ChatWorkspace from '@/studio/chat/ChatWorkspace'
+import AppAssistantPanel from '@/studio/appAssistant/AppAssistantPanel'
 import SessionDock from '@/studio/chat/SessionDock'
 import NodeEdgesView from '@/studio/NodeEdgesView'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
@@ -488,11 +489,29 @@ export default function MainStudio() {
   const [blockIndexExpanded, setBlockIndexExpanded] = useState(false)
   const [blockFilter, setBlockFilter] = useState('')
   const [versionControlSelection, setVersionControlSelection] = useState<unknown>(null)
+  const [appAssistantOpen, setAppAssistantOpen] = useState(false)
+  const [appAssistantRuntime, setAppAssistantRuntime] = useState<api.AppAssistantRuntimeSnapshot | null>(null)
 
   useEffect(() => {
     setVersionControlSelection(null)
     setLastImport(null)
   }, [selection.workbenchId, selection.worktreeId, selection.deviceId])
+
+  useEffect(() => {
+    setAppAssistantRuntime(null)
+    if (!appAssistantOpen || !selection.workbenchId) return
+    let cancelled = false
+    void api.getAppAssistantRuntimeState(selection.workbenchId).then(snapshot => {
+      if (!cancelled) setAppAssistantRuntime(snapshot)
+    }).catch(() => { /* The panel reports service/API availability independently. */ })
+    const unsubscribe = api.subscribeAppAssistantRuntime(selection.workbenchId, snapshot => {
+      if (!cancelled) setAppAssistantRuntime(snapshot)
+    })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [appAssistantOpen, selection.workbenchId])
 
   useEffect(() => {
     try { writeShellLayout(window.localStorage, shellLayout) } catch { /* storage is optional */ }
@@ -1589,6 +1608,17 @@ export default function MainStudio() {
           >
             <Wrench className="h-3.5 w-3.5" />
           </button>
+          {selection.workbenchId && (
+            <button
+              className={`icon-button ${appAssistantOpen ? 'bg-accent text-foreground' : ''}`}
+              aria-label="Open Workbench Assistant"
+              title="Open Workbench Assistant"
+              aria-pressed={appAssistantOpen}
+              onClick={() => setAppAssistantOpen(previous => !previous)}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             data-dock-toggle="right"
             className="icon-button"
@@ -2134,6 +2164,14 @@ export default function MainStudio() {
               )}
             </div>
           </>
+        )}
+        {appAssistantOpen && selection.workbenchId && (
+          <AppAssistantPanel
+            workbenchId={selection.workbenchId}
+            workbenchName={activeWorkbench?.name ?? 'Selected workbench'}
+            runtime={appAssistantRuntime}
+            onClose={() => setAppAssistantOpen(false)}
+          />
         )}
       </div>}
 

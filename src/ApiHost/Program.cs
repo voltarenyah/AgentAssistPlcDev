@@ -214,6 +214,7 @@ app.MapGet("/api/status", () => Results.Ok(new
 }));
 app.MapWorkbenchEndpoints();
 app.MapRuntimeStateEndpoints();
+app.MapRuntimeStateEventEndpoints();
 app.MapAppAssistantEndpoints();
 app.MapAppAssistantChatEndpoints();
 app.MapCompatibilityEndpoints();

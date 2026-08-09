@@ -242,6 +242,67 @@ export type WorktreeTaskList = {
   tasks: WorktreeTask[]
 }
 
+export type AppAssistantRuntimeSnapshot = {
+  schemaVersion: number
+  workbenchId: string
+  workbenchRevision: number
+  focus: { worktreeId: string | null; deviceId: string | null }
+  worktrees: Array<{ worktreeId: string; name: string; branch: string; todoCount: number; gitStatus: string }>
+  availableActions: Array<{ id: string; label: string; enabled: boolean; requiresApproval: boolean; blockedBy: string[] }>
+  operation: { operationId: string | null; kind: string | null; status: string; message: string | null }
+  observedAt: string
+}
+
+export type AppAssistantEvent = {
+  kind: string
+  data: Record<string, unknown>
+}
+
+const parseAssistantEvents = (body: string): AppAssistantEvent[] => body
+  .split('\n\n')
+  .map(block => {
+    const event = block.match(/^event: ([^\n]+)$/m)?.[1]
+    const data = block.match(/^data: ([^\n]+)$/m)?.[1]
+    if (!event || !data) return null
+    try { return { kind: event, data: JSON.parse(data) as Record<string, unknown> } } catch { return null }
+  })
+  .filter((value): value is AppAssistantEvent => value !== null)
+
+const postAppAssistant = async (path: string, message: string, approval?: Record<string, unknown>) => {
+  const response = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, ...(approval ? { approval } : {}) }),
+  })
+  if (!response.ok) {
+    let body: { error?: string; message?: string } = {}
+    try { body = await response.json() as typeof body } catch { /* plain error */ }
+    throw new WorkbenchApiError(response.status, body.error ?? 'APP_ASSISTANT_ERROR', body.message ?? response.statusText)
+  }
+  return parseAssistantEvents(await response.text())
+}
+
+export const bootstrapAppAssistant = (message = 'Inspect the current workbench and suggest the first useful move.') =>
+  postAppAssistant('/app-assistant/bootstrap', message)
+export const chatAppAssistant = (message: string, approval?: Record<string, unknown>) =>
+  postAppAssistant('/app-assistant/chat', message, approval)
+export const getAppAssistantRuntimeState = (workbenchId: string) =>
+  workbenchRequest<AppAssistantRuntimeSnapshot>(`/workbenches/${encodeURIComponent(workbenchId)}/runtime-state`)
+export const subscribeAppAssistantRuntime = (workbenchId: string, onSnapshot: (snapshot: AppAssistantRuntimeSnapshot) => void) => {
+  const source = new EventSource(`${BASE}/workbenches/${encodeURIComponent(workbenchId)}/runtime-events`)
+  const handler = (event: Event) => {
+    try {
+      const data = JSON.parse((event as MessageEvent).data) as { snapshot?: AppAssistantRuntimeSnapshot }
+      if (data.snapshot) onSnapshot(data.snapshot)
+    } catch { /* reconnecting stream can contain partial data */ }
+  }
+  source.addEventListener('runtime-state', handler)
+  return () => {
+    source.removeEventListener('runtime-state', handler)
+    source.close()
+  }
+}
+
 export type FeatureImportObject = {
   deviceId: string
   plcName: string
