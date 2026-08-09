@@ -28,6 +28,46 @@ class FeedbackRequest(BaseModel):
     run_id: str | None = Field(default=None, alias="runId")
 
 
+async def _setup_checkpointer(checkpointer: AsyncSqliteSaver) -> None:
+    """Initialize checkpoints across the aiosqlite APIs supported by the pinned saver."""
+
+    connection = checkpointer.conn
+    if hasattr(connection, "is_alive"):
+        await checkpointer.setup()
+        return
+    async with checkpointer.lock:
+        if checkpointer.is_setup:
+            return
+        async with connection.executescript(
+            """
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL,
+                parent_checkpoint_id TEXT,
+                type TEXT,
+                checkpoint BLOB,
+                metadata BLOB,
+                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+            );
+            CREATE TABLE IF NOT EXISTS writes (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                idx INTEGER NOT NULL,
+                channel TEXT NOT NULL,
+                type TEXT,
+                value BLOB,
+                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+            );
+            """
+        ):
+            await connection.commit()
+        checkpointer.is_setup = True
+
+
 def _response(result: dict[str, Any], workbench_id: str, run_id: str) -> dict[str, Any]:
     interrupts = result.get("__interrupt__") or []
     interrupt_values = [item.value if hasattr(item, "value") else item for item in interrupts]
@@ -57,7 +97,7 @@ async def lifespan(app: FastAPI):
     app.state.recorder = RunRecorder(data_dir / "assistant-events.jsonl")
     model, model_metadata = build_model_from_env()
     async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
-        await checkpointer.setup()
+        await _setup_checkpointer(checkpointer)
         app.state.graph = build_graph(
             gateway,
             checkpointer=checkpointer,
