@@ -249,7 +249,7 @@ export type AppAssistantRuntimeSnapshot = {
   focus: { worktreeId: string | null; deviceId: string | null }
   worktrees: Array<{ worktreeId: string; name: string; branch: string; todoCount: number; gitStatus: string }>
   availableActions: Array<{ id: string; label: string; enabled: boolean; requiresApproval: boolean; blockedBy: string[] }>
-  operation: { operationId: string | null; kind: string | null; status: string; message: string | null }
+  operation: { operationId: string | null; kind: string | null; status: string | number; message: string | null }
   observedAt: string
 }
 

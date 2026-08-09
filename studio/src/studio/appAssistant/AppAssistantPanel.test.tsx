@@ -5,13 +5,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import AppAssistantPanel from './AppAssistantPanel'
 import * as api from '@/api/client'
 
+const runtimeHarness = vi.hoisted(() => ({
+  listener: null as ((snapshot: api.AppAssistantRuntimeSnapshot) => void) | null,
+}))
+
 vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
   return {
     ...actual,
     bootstrapAppAssistant: vi.fn(async () => [{ kind: 'answer', data: { answer: 'Start by reviewing the open worktree todos.' } }]),
     chatAppAssistant: vi.fn(async () => [{ kind: 'answer', data: { answer: 'The worktree remains user-selected.' } }]),
-    subscribeAppAssistantRuntime: vi.fn(() => () => {}),
+    subscribeAppAssistantRuntime: vi.fn((_workbenchId: string, listener: (snapshot: api.AppAssistantRuntimeSnapshot) => void) => {
+      runtimeHarness.listener = listener
+      return () => { runtimeHarness.listener = null }
+    }),
   }
 })
 
@@ -36,6 +43,7 @@ const render = (element: React.ReactNode) => {
 
 afterEach(() => {
   document.body.innerHTML = ''
+  runtimeHarness.listener = null
   vi.clearAllMocks()
 })
 
@@ -69,5 +77,23 @@ describe('AppAssistantPanel', () => {
 
     expect(api.chatAppAssistant).toHaveBeenCalledWith('What should I do next?')
     expect(host.textContent).toContain('The worktree remains user-selected.')
+  })
+
+  it('automatically re-bootstraps after a consequential runtime change', async () => {
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+    expect(api.bootstrapAppAssistant).toHaveBeenCalledTimes(1)
+
+    act(() => runtimeHarness.listener?.({
+      ...runtime,
+      workbenchRevision: 4,
+      worktrees: [{ worktreeId: 'wt2', name: 'feature', branch: 'feature', todoCount: 0, gitStatus: 'dirty' }],
+    }))
+    await act(async () => {})
+
+    expect(api.bootstrapAppAssistant).toHaveBeenCalledTimes(2)
+    expect(host.textContent).toContain('feature')
   })
 })

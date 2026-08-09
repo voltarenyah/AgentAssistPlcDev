@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Send, Sparkles, X } from 'lucide-react'
 import * as api from '@/api/client'
 import {
   applyAssistantEvents,
+  applyAssistantRuntimeSnapshot,
   initialAppAssistantState,
   type AppAssistantPanelState,
 } from './appAssistantState'
@@ -17,9 +18,11 @@ type Props = {
 export default function AppAssistantPanel({ workbenchId, workbenchName, runtime, onClose }: Props) {
   const [state, setState] = useState<AppAssistantPanelState>(() => initialAppAssistantState(runtime))
   const [draft, setDraft] = useState('')
+  const latestRuntime = useRef<api.AppAssistantRuntimeSnapshot | null>(runtime)
 
   useEffect(() => {
     let cancelled = false
+    latestRuntime.current = runtime
     setState(initialAppAssistantState(runtime))
     void api.bootstrapAppAssistant().then(events => {
       if (!cancelled) setState(current => applyAssistantEvents(current, events))
@@ -30,8 +33,29 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
   }, [workbenchId])
 
   useEffect(() => api.subscribeAppAssistantRuntime(workbenchId, snapshot => {
-    setState(current => ({ ...current, runtime: snapshot }))
+    const previous = latestRuntime.current
+    latestRuntime.current = snapshot
+    setState(current => applyAssistantRuntimeSnapshot(current, snapshot, previous))
   }), [workbenchId])
+
+  useEffect(() => {
+    if (!state.autoRefreshPending || state.busy) return
+    let cancelled = false
+    setState(current => ({ ...current, busy: true, autoRefreshPending: false }))
+    void api.bootstrapAppAssistant('The workbench changed. Re-read the current state and suggest the next useful move.')
+      .then(events => {
+        if (!cancelled) setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
+      })
+      .catch(error => {
+        if (!cancelled) setState(current => ({
+          ...current,
+          busy: false,
+          contextStale: true,
+          messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Assistant refresh unavailable' }],
+        }))
+      })
+    return () => { cancelled = true }
+  }, [state.autoRefreshPending, state.busy, workbenchId])
 
   const send = async (message: string, approval?: Record<string, unknown>) => {
     const trimmed = message.trim()
@@ -70,6 +94,7 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
       </header>
       <div className="border-b px-3 py-2 text-[9px] text-muted-foreground">
         Runtime revision {state.runtime?.workbenchRevision ?? runtime?.workbenchRevision ?? '—'} · selection stays with you
+        {state.contextStale && <span data-assistant-context-stale> · {state.autoRefreshPending ? 'refreshing suggestion…' : 'context changed; refreshes before next request'}</span>}
       </div>
       <div className="scrollbar-sleek min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         {worktrees.map(worktree => (
