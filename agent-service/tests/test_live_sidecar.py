@@ -7,6 +7,24 @@ from pathlib import Path
 
 import httpx
 
+from app_assistant.decisions import AssistantRequestMode
+from app_assistant.server import AssistantRequest
+
+
+def test_bootstrap_request_uses_orientation_mode_by_default():
+    request = AssistantRequest.model_validate({"message": ""})
+
+    assert request.request_mode == AssistantRequestMode.ORIENTATION
+
+
+def test_chat_request_uses_command_mode():
+    request = AssistantRequest.model_validate({
+        "requestMode": "command",
+        "message": "Please read the current worktree tasks",
+    })
+
+    assert request.request_mode == AssistantRequestMode.COMMAND
+
 
 def _free_port() -> int:
     with socket.socket() as sock:

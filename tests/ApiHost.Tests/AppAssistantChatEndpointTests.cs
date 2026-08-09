@@ -54,6 +54,33 @@ public sealed class AppAssistantChatEndpointTests
     }
 
     [Fact]
+    public async Task BootstrapAllowsAnEmptyOrientationMessage()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Testing");
+                builder.UseSetting("AppAssistant:ServiceUrl", "http://127.0.0.1:1");
+            });
+        using var client = factory.CreateClient();
+        var catalog = factory.Services.GetRequiredService<WorkbenchCatalog>();
+        var state = factory.Services.GetRequiredService<WorkbenchApiState>();
+        var root = Path.Combine(Path.GetTempPath(), "assistant-bootstrap-" + Guid.NewGuid().ToString("N"));
+        var workbench = catalog.Create("Assistant Bootstrap", root);
+        state.Open(root);
+        state.Select(workbench.WorkbenchId);
+
+        var response = await client.PostAsJsonAsync(
+            "/api/app-assistant/bootstrap",
+            new { message = string.Empty });
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("event: progress", body);
+        Assert.Contains("APP_ASSISTANT_UNAVAILABLE", body);
+    }
+
+    [Fact]
     public async Task FeedbackRejectsRequestsWithoutASelectedWorkbench()
     {
         await using var factory = new WebApplicationFactory<Program>()

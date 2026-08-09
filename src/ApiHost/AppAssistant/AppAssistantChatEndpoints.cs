@@ -53,7 +53,7 @@ public static class AppAssistantChatEndpoints
         var workbenchId = state.Selection?.WorkbenchId;
         if (string.IsNullOrWhiteSpace(workbenchId))
             return Results.BadRequest(new { error = "WORKBENCH_SELECTION_REQUIRED" });
-        if (string.IsNullOrWhiteSpace(request.Message))
+        if (operation == "chat" && string.IsNullOrWhiteSpace(request.Message))
             return Results.BadRequest(new { error = "ASSISTANT_MESSAGE_REQUIRED" });
 
         http.Response.StatusCode = StatusCodes.Status200OK;

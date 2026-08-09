@@ -10,6 +10,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
+from .decisions import AssistantRequestMode
 from .gateway import WorkbenchGateway
 from .graph import build_graph, thread_id_for
 from .model import build_model_from_env
@@ -17,7 +18,13 @@ from .observability import RunRecorder, build_run_metadata
 
 
 class AssistantRequest(BaseModel):
-    message: str = "Inspect the current workbench and suggest the first useful move."
+    model_config = ConfigDict(populate_by_name=True)
+
+    message: str = ""
+    request_mode: AssistantRequestMode = Field(
+        default=AssistantRequestMode.ORIENTATION,
+        alias="requestMode",
+    )
     approval: dict[str, Any] | None = None
 
 
@@ -125,7 +132,7 @@ async def bootstrap(workbench_id: str, request: AssistantRequest) -> dict[str, A
     run_id = uuid4().hex
     input_value: Any = {
         "workbench_id": workbench_id,
-        "messages": [{"role": "user", "content": request.message}],
+        "request_mode": AssistantRequestMode.ORIENTATION,
     }
     if request.approval is not None:
         input_value = Command(resume=request.approval)
@@ -140,7 +147,21 @@ async def bootstrap(workbench_id: str, request: AssistantRequest) -> dict[str, A
 
 @app.post("/v1/workbenches/{workbench_id}/chat")
 async def chat(workbench_id: str, request: AssistantRequest) -> dict[str, Any]:
-    return await bootstrap(workbench_id, request)
+    run_id = uuid4().hex
+    input_value: Any = {
+        "workbench_id": workbench_id,
+        "request_mode": AssistantRequestMode.COMMAND,
+        "messages": [{"role": "user", "content": request.message}],
+    }
+    if request.approval is not None:
+        input_value = Command(resume=request.approval)
+    result = await app.state.graph.ainvoke(
+        input_value,
+        config={"configurable": {"thread_id": thread_id_for(workbench_id)}},
+    )
+    response = _response(result, workbench_id, run_id)
+    app.state.recorder.record_run(response["runMetadata"])
+    return response
 
 
 @app.post("/v1/workbenches/{workbench_id}/feedback", status_code=204)

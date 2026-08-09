@@ -18,7 +18,12 @@ public sealed class AppAssistantClient(HttpClient httpClient, IConfiguration con
             HttpMethod.Post,
             $"{baseUrl.TrimEnd('/')}/v1/workbenches/{Uri.EscapeDataString(workbenchId)}/{path}")
         {
-            Content = JsonContent.Create(new { message, approval }),
+            Content = JsonContent.Create(new
+            {
+                requestMode = operation == "bootstrap" ? "orientation" : "command",
+                message = operation == "bootstrap" ? string.Empty : message,
+                approval,
+            }),
         };
         var token = configuration["AppAssistant:InternalToken"];
         if (!string.IsNullOrWhiteSpace(token))
