@@ -1,15 +1,21 @@
+import json
 import os
-from typing import Mapping
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from . import __version__
-from .gateway import WorkbenchGateway
+from .decisions import AssistantDecision, AssistantRequestMode, OrientationProposal
+from .gateway import GatewayStaleError, WorkbenchGateway
 from .model import DEFAULT_MODEL, build_model_from_env
-from .prompts import PROMPT_VERSION, build_system_prompt
+from .prompts import (
+    COMMAND_PROMPT_VERSION,
+    ORIENTATION_PROMPT_VERSION,
+    build_command_prompt,
+    build_orientation_prompt,
+)
 from .state import AppAssistantState
 
 
@@ -57,8 +63,48 @@ def _metadata(model_metadata: Mapping[str, str]) -> dict[str, str]:
     return {
         **model_metadata,
         "graphVersion": __version__,
-        "promptVersion": PROMPT_VERSION,
+        "promptVersion": COMMAND_PROMPT_VERSION,
+        "orientationPromptVersion": ORIENTATION_PROMPT_VERSION,
     }
+
+
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            item if isinstance(item, str) else str(item.get("text", ""))
+            for item in content
+            if isinstance(item, (str, dict))
+        )
+    return str(content)
+
+
+def _json_content(content: Any) -> dict[str, Any]:
+    text = _content_text(content).strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(lines[1:-1]).strip()
+    value = json.loads(text)
+    if not isinstance(value, dict):
+        raise ValueError("The assistant model must return a JSON object.")
+    return value
+
+
+async def _invoke_model_json(model: Any, prompt: str, user_message: str) -> dict[str, Any]:
+    response = await model.ainvoke([
+        SystemMessage(content=prompt),
+        HumanMessage(content=user_message),
+    ])
+    return _json_content(getattr(response, "content", response))
+
+
+async def _invoke_model_text(model: Any, prompt: str, user_message: str) -> str:
+    response = await model.ainvoke([
+        SystemMessage(content=prompt),
+        HumanMessage(content=user_message),
+    ])
+    return _content_text(getattr(response, "content", response)).strip()
 
 
 async def _bootstrap_async(
@@ -75,171 +121,223 @@ async def _bootstrap_async(
     }
 
 
-def _classify(state: AppAssistantState) -> dict[str, Any]:
-    text = _message_text(state.get("messages", [])).lower()
-    if any(word in text for word in ("create worktree", "new worktree", "create branch")):
-        intent = "create_worktree"
-    elif any(word in text for word in ("plc", "network", "block", "diagnos", "program")):
-        intent = "plc_question"
-    elif any(word in text for word in ("todo", "task", "next")):
-        intent = "todos"
-    elif any(word in text for word in ("commit", "history", "git")):
-        intent = "history"
-    elif any(word in text for word in ("svn", "revision")):
-        intent = "svn"
-    else:
-        intent = "status"
-    return {"intent": intent}
+def _runtime(state: AppAssistantState) -> dict[str, Any]:
+    context = state.get("runtime_snapshot", {})
+    return context.get("runtime", context)
 
 
 def _detail_worktree(state: AppAssistantState) -> str | None:
-    runtime = state.get("runtime_snapshot", {}).get("runtime", state.get("runtime_snapshot", {}))
-    focus = runtime.get("focus", {})
+    focus = _runtime(state).get("focus", {})
     return focus.get("worktreeId") or focus.get("worktree_id")
+
+
+def _fallback_orientation(state: AppAssistantState) -> OrientationProposal:
+    runtime = _runtime(state)
+    worktrees = runtime.get("worktrees", [])
+    focus = runtime.get("focus", {})
+    focused_id = focus.get("worktreeId") or focus.get("worktree_id")
+    focused = next((item for item in worktrees if item.get("worktreeId") == focused_id), None)
+    observations = [
+        f"The workbench has {len(worktrees)} registered worktree(s).",
+        f"The selected worktree is {focused.get('name', focused_id)}." if focused else "No worktree is currently selected.",
+    ]
+    if focused:
+        next_step = f"Review the todo list for the selected worktree '{focused.get('name', focused_id)}'."
+    else:
+        next_step = "Select a worktree in the UI so I can inspect its current work items."
+    return OrientationProposal(
+        likelyIntent="understand the current workbench and choose the next useful move",
+        observations=observations,
+        proposedNextStep=next_step,
+        confirmationQuestion="Would you like me to proceed with that next step?",
+    )
+
+
+def _orientation_answer(proposal: OrientationProposal) -> str:
+    observations = " ".join(proposal.observations)
+    return (
+        f"{observations} Likely intention: {proposal.likely_intent}. "
+        f"Suggested next step: {proposal.proposed_next_step} {proposal.confirmation_question}"
+    )
+
+
+async def _orient_async(
+    state: AppAssistantState,
+    model: Any | None,
+) -> dict[str, Any]:
+    proposal = _fallback_orientation(state)
+    if model is not None:
+        try:
+            proposal = OrientationProposal.model_validate(
+                await _invoke_model_json(model, build_orientation_prompt(state["runtime_snapshot"]), "Orient me to this workbench.")
+            )
+        except Exception:
+            pass
+    serialized = proposal.model_dump(by_alias=True)
+    return {
+        "orientation_complete": True,
+        "orientation_proposal": serialized,
+        "answer": _orientation_answer(proposal),
+    }
+
+
+async def _decide_async(
+    state: AppAssistantState,
+    model: Any | None,
+    prompt_append: str,
+) -> dict[str, Any]:
+    if model is None:
+        decision = AssistantDecision(
+            kind="clarification",
+            question="The assistant model is unavailable. What would you like me to inspect or explain?",
+        )
+    else:
+        try:
+            decision = AssistantDecision.model_validate(
+                await _invoke_model_json(
+                    model,
+                    build_command_prompt(
+                        runtime_snapshot=state["runtime_snapshot"],
+                        user_message=_message_text(state.get("messages", [])),
+                        messages=state.get("messages", []),
+                        prompt_append=prompt_append,
+                    ),
+                    _message_text(state.get("messages", [])),
+                )
+            )
+        except Exception:
+            decision = AssistantDecision(
+                kind="clarification",
+                question="I could not safely interpret that request. Which worktree and action should I use?",
+            )
+    return {"decision": decision.model_dump(by_alias=True, exclude_none=True)}
+
+
+def _decision_answer(state: AppAssistantState) -> str:
+    decision = state.get("decision") or {}
+    return str(decision.get("answer") or decision.get("question") or "Please tell me what you would like to do next.")
 
 
 async def _read_detail(state: AppAssistantState, gateway: Gateway) -> dict[str, Any]:
     worktree_id = _detail_worktree(state)
     if not worktree_id:
-        return {"detail": {"error": "Select a worktree first."}}
+        return {"tool_result": {"error": "Select a worktree first."}}
     workbench_id = state["workbench_id"]
-    intent = state.get("intent")
-    if intent == "todos":
+    tool_name = (state.get("decision") or {}).get("toolName")
+    if tool_name == "read_worktree_todos":
         detail = _as_dict(await gateway.get_todos(workbench_id, worktree_id))
-    elif intent == "history":
+    elif tool_name == "read_commit_history":
         detail = _as_dict(await gateway.get_history(workbench_id, worktree_id))
-    else:
+    elif tool_name == "read_svn_state":
         detail = _as_dict(await gateway.get_svn(workbench_id, worktree_id))
-    return {"detail": detail}
-
-
-async def _propose_create_worktree(state: AppAssistantState, gateway: Gateway) -> dict[str, Any]:
-    runtime = state.get("runtime_snapshot", {}).get("runtime", state.get("runtime_snapshot", {}))
-    revision = int(state.get("context_revision", runtime.get("workbenchRevision", 0)))
-    workbench_id = state["workbench_id"]
-    proposal = {
-        "kind": "create_worktree",
-        "workbenchId": workbench_id,
-        "name": "assistant-feature",
-        "branch": "assistant/feature",
-        "startPoint": "master",
-        "expectedWorkbenchRevision": revision,
-        "requestId": f"app-assistant:{workbench_id}:create:{revision}",
-    }
-    decision = interrupt(proposal)
-    if not isinstance(decision, dict) or decision.get("decision") != "approve":
-        return {"proposed_action": proposal, "answer": "The worktree creation proposal was cancelled."}
-    try:
-        result = await gateway.create_worktree(
-            workbench_id,
-            name=proposal["name"],
-            branch=proposal["branch"],
-            start_point=proposal["startPoint"],
-            expected_revision=proposal["expectedWorkbenchRevision"],
-            request_id=proposal["requestId"],
-        )
-        return {"proposed_action": proposal, "detail": {"mutation": result}}
-    except Exception as exception:
-        if exception.__class__.__name__ == "GatewayStaleError":
-            try:
-                context = _as_dict(await gateway.get_context(workbench_id))
-                runtime = context.get("runtime", context)
-                revision = int(runtime.get("workbenchRevision", 0))
-                return {
-                    "runtime_snapshot": context,
-                    "context_revision": revision,
-                    "proposed_action": None,
-                    "answer": (
-                        "The workbench changed before approval. I refreshed the context to "
-                        f"runtime revision {revision}; please review the worktree state and request the action again."
-                    ),
-                }
-            except Exception as refresh_exception:
-                return {
-                    "proposed_action": proposal,
-                    "answer": f"The workbench changed before approval and the refresh failed: {refresh_exception}",
-                }
-        return {"proposed_action": proposal, "answer": f"Worktree creation was not completed: {exception}"}
-
-
-def _fallback_answer(state: AppAssistantState) -> str:
-    intent = state.get("intent")
-    if intent == "create_worktree" and state.get("answer"):
-        return state["answer"] or "The worktree creation proposal was cancelled."
-    context = state.get("runtime_snapshot", {})
-    runtime = context.get("runtime", context)
-    if intent == "plc_question":
-        answer = "This is a PLC-program question. Please continue in the existing PLC Assistant for knowledge-db-backed diagnosis."
-    elif intent == "status":
-        worktrees = runtime.get("worktrees", [])
-        names = ", ".join(item.get("name", item.get("worktreeId", "unknown")) for item in worktrees)
-        actions = [item.get("label", item.get("id")) for item in context.get("availableActions", runtime.get("availableActions", [])) if item.get("enabled")]
-        answer = f"Workbench status is at runtime revision {state.get('context_revision', 0)}."
-        answer += f" Registered worktrees: {names or 'none'}."
-        if actions:
-            answer += f" Available read actions: {', '.join(str(action) for action in actions)}."
-    elif intent == "create_worktree":
-        mutation = (state.get("detail") or {}).get("mutation", {})
-        answer = f"Created worktree '{mutation.get('name', 'new worktree')}' on branch '{mutation.get('branch', 'unknown')}'. It remains unselected; you can select it from the workbench UI."
-    elif intent == "todos":
-        tasks = (state.get("detail") or {}).get("tasks", [])
-        answer = "Todo items: " + (", ".join(item.get("title", item.get("taskId", "unnamed")) for item in tasks) if tasks else "none recorded.")
-    elif intent == "history":
-        commits = (state.get("detail") or {}).get("commits", [])
-        answer = "Recent commits: " + (", ".join(item.get("message", item.get("sha", "unknown")) for item in commits) if commits else "none available.")
     else:
-        detail = state.get("detail") or {}
-        if detail.get("error"):
-            answer = detail["error"]
-        else:
-            answer = f"SVN state: base revision {detail.get('baseRevision', 'unknown')}, current revision {detail.get('currentRevision', 'unknown')}."
-    return answer
+        return {"tool_result": {"error": "The requested read action is not available."}}
+    return {"tool_result": detail, "detail": detail}
 
 
-def _content_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            item if isinstance(item, str) else str(item.get("text", ""))
-            for item in content
-            if isinstance(item, (str, dict))
-        )
-    return str(content)
+def _fallback_tool_answer(state: AppAssistantState) -> str:
+    result = state.get("tool_result") or {}
+    if result.get("error"):
+        return str(result["error"])
+    tool_name = (state.get("decision") or {}).get("toolName")
+    if tool_name == "read_worktree_todos":
+        tasks = result.get("tasks", [])
+        titles = ", ".join(item.get("title", item.get("taskId", "unnamed")) for item in tasks)
+        return "Todo items: " + (titles or "none recorded.")
+    if tool_name == "read_commit_history":
+        commits = result.get("commits", [])
+        messages = ", ".join(item.get("message", item.get("sha", "unknown")) for item in commits)
+        return "Recent commits: " + (messages or "none available.")
+    return f"SVN state: base revision {result.get('baseRevision', 'unknown')}, current revision {result.get('currentRevision', 'unknown')}."
 
 
-async def _compose_async(
+async def _summarize_async(
     state: AppAssistantState,
     model: Any | None,
     prompt_append: str,
 ) -> dict[str, Any]:
-    if state.get("intent") == "create_worktree" and state.get("answer"):
-        return {}
-
-    fallback = _fallback_answer(state)
-    intent = state.get("intent")
-    # Status and SVN values are authoritative state facts. Keep them
-    # deterministic so a model cannot replace an observed worktree count or
-    # revision with a plausible but incorrect value. The model remains useful
-    # for contextual recommendations about todos and history.
-    use_model = model is not None and intent in {"todos", "history"}
-    if not use_model:
+    fallback = _fallback_tool_answer(state)
+    if model is None:
         return {"answer": fallback}
-
-    prompt = build_system_prompt(
-        runtime_snapshot=state.get("runtime_snapshot", {}),
-        detail=state.get("detail"),
+    prompt = build_command_prompt(
+        runtime_snapshot=state["runtime_snapshot"],
+        user_message="Summarize the observed tool result and give one practical next step.",
+        messages=state.get("messages", []),
+        detail=state.get("tool_result"),
         prompt_append=prompt_append,
     )
-    question = _message_text(state.get("messages", []))
     try:
-        response = await model.ainvoke(
-            [SystemMessage(content=prompt), HumanMessage(content=question)]
-        )
-        answer = _content_text(getattr(response, "content", response)).strip()
+        answer = await _invoke_model_text(model, prompt, "Summarize the observed result without inventing facts.")
         return {"answer": answer or fallback}
     except Exception:
         return {"answer": fallback}
+
+
+async def _propose_mutation(state: AppAssistantState, gateway: Gateway) -> dict[str, Any]:
+    decision = AssistantDecision.model_validate(state.get("decision") or {})
+    mutation = decision.mutation
+    if mutation is None:
+        return {"answer": "I need a complete worktree proposal before asking for approval."}
+    revision = int(state.get("context_revision", _runtime(state).get("workbenchRevision", 0)))
+    workbench_id = state["workbench_id"]
+    proposal = {
+        "kind": "create_worktree",
+        "workbenchId": workbench_id,
+        "name": mutation.name,
+        "branch": mutation.branch,
+        "startPoint": mutation.start_point,
+        "expectedWorkbenchRevision": revision,
+        "requestId": f"app-assistant:{workbench_id}:create:{revision}",
+    }
+    approval = interrupt(proposal)
+    if not isinstance(approval, dict) or approval.get("decision") != "approve":
+        return {"proposed_action": proposal, "answer": "The worktree creation proposal was cancelled."}
+    try:
+        result = await gateway.create_worktree(
+            workbench_id,
+            name=mutation.name,
+            branch=mutation.branch,
+            start_point=mutation.start_point,
+            expected_revision=revision,
+            request_id=proposal["requestId"],
+        )
+        return {
+            "proposed_action": proposal,
+            "detail": {"mutation": result},
+            "answer": f"Created worktree '{mutation.name}' on branch '{mutation.branch}'. It remains unselected; you can select it from the workbench UI.",
+        }
+    except GatewayStaleError:
+        try:
+            context = _as_dict(await gateway.get_context(workbench_id))
+            runtime = context.get("runtime", context)
+            refreshed_revision = int(runtime.get("workbenchRevision", 0))
+            return {
+                "runtime_snapshot": context,
+                "context_revision": refreshed_revision,
+                "proposed_action": None,
+                "answer": (
+                    "The workbench changed before approval. I refreshed the context to "
+                    f"runtime revision {refreshed_revision}; please review the state and request the action again."
+                ),
+            }
+        except Exception as exception:
+            return {"proposed_action": proposal, "answer": f"The workbench changed before approval and refresh failed: {exception}"}
+    except Exception as exception:
+        return {"proposed_action": proposal, "answer": f"Worktree creation was not completed: {exception}"}
+
+
+def _route_request(state: AppAssistantState) -> str:
+    return "orient_with_llm" if state.get("request_mode", AssistantRequestMode.COMMAND) == AssistantRequestMode.ORIENTATION else "decide_with_llm"
+
+
+def _route_decision(state: AppAssistantState) -> str:
+    kind = (state.get("decision") or {}).get("kind")
+    return {
+        "answer": "answer_decision",
+        "clarification": "answer_decision",
+        "read_tool": "execute_read_tool",
+        "mutation_proposal": "propose_mutation",
+    }.get(kind, "answer_decision")
 
 
 def build_graph(
@@ -259,58 +357,63 @@ def build_graph(
             "mode": "deterministic-fallback",
         }
     assistant_metadata = _metadata(resolved_metadata)
-    resolved_prompt_append = (
-        prompt_append if prompt_append is not None else os.getenv("APP_ASSISTANT_PROMPT_APPEND", "")
-    )
+    resolved_prompt_append = prompt_append if prompt_append is not None else os.getenv("APP_ASSISTANT_PROMPT_APPEND", "")
     builder = StateGraph(AppAssistantState)
 
     async def bootstrap_node(state: AppAssistantState) -> dict[str, Any]:
         return await _bootstrap_async(state, gateway, assistant_metadata)
 
-    async def detail_node(state: AppAssistantState) -> dict[str, Any]:
+    async def orientation_node(state: AppAssistantState) -> dict[str, Any]:
+        return await _orient_async(state, resolved_model)
+
+    async def decision_node(state: AppAssistantState) -> dict[str, Any]:
+        return await _decide_async(state, resolved_model, resolved_prompt_append)
+
+    async def read_node(state: AppAssistantState) -> dict[str, Any]:
         return await _read_detail(state, gateway)
 
-    async def proposal_node(state: AppAssistantState) -> dict[str, Any]:
-        return await _propose_create_worktree(state, gateway)
+    async def summary_node(state: AppAssistantState) -> dict[str, Any]:
+        return await _summarize_async(state, resolved_model, resolved_prompt_append)
 
-    async def compose_node(state: AppAssistantState) -> dict[str, Any]:
-        return await _compose_async(state, resolved_model, resolved_prompt_append)
+    async def answer_node(state: AppAssistantState) -> dict[str, Any]:
+        return {"answer": _decision_answer(state)}
 
-    builder.add_node("bootstrap", bootstrap_node)
-    builder.add_node("classify_intent", _classify)
-    builder.add_node("read_worktree_detail", detail_node)
-    builder.add_node("propose_create_worktree", proposal_node)
-    builder.add_node("compose_answer", compose_node)
-    builder.add_edge(START, "bootstrap")
-    builder.add_edge("bootstrap", "classify_intent")
+    async def mutation_node(state: AppAssistantState) -> dict[str, Any]:
+        return await _propose_mutation(state, gateway)
+
+    builder.add_node("bootstrap_context", bootstrap_node)
+    builder.add_node("orient_with_llm", orientation_node)
+    builder.add_node("decide_with_llm", decision_node)
+    builder.add_node("answer_decision", answer_node)
+    builder.add_node("execute_read_tool", read_node)
+    builder.add_node("summarize_tool_result", summary_node)
+    builder.add_node("propose_mutation", mutation_node)
+    builder.add_edge(START, "bootstrap_context")
     builder.add_conditional_edges(
-        "classify_intent",
-        lambda state: (
-            "read_worktree_detail" if state.get("intent") in {"todos", "history", "svn"}
-            else "propose_create_worktree" if state.get("intent") == "create_worktree"
-            else "compose_answer"
-        ),
+        "bootstrap_context",
+        _route_request,
+        {"orient_with_llm": "orient_with_llm", "decide_with_llm": "decide_with_llm"},
+    )
+    builder.add_edge("orient_with_llm", END)
+    builder.add_conditional_edges(
+        "decide_with_llm",
+        _route_decision,
         {
-            "read_worktree_detail": "read_worktree_detail",
-            "propose_create_worktree": "propose_create_worktree",
-            "compose_answer": "compose_answer",
+            "answer_decision": "answer_decision",
+            "execute_read_tool": "execute_read_tool",
+            "propose_mutation": "propose_mutation",
         },
     )
-    builder.add_edge("read_worktree_detail", "compose_answer")
-    builder.add_edge("propose_create_worktree", "compose_answer")
-    builder.add_edge("compose_answer", END)
+    builder.add_edge("answer_decision", END)
+    builder.add_edge("execute_read_tool", "summarize_tool_result")
+    builder.add_edge("summarize_tool_result", END)
+    builder.add_edge("propose_mutation", END)
     return builder.compile(checkpointer=checkpointer)
-
-
 
 
 def build_environment_graph() -> Any:
     model, model_metadata = build_model_from_env()
-    return build_graph(
-        WorkbenchGateway.from_env(),
-        model=model,
-        model_metadata=model_metadata,
-    )
+    return build_graph(WorkbenchGateway.from_env(), model=model, model_metadata=model_metadata)
 
 
 graph = build_environment_graph()

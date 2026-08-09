@@ -1,3 +1,7 @@
+import json
+
+from langgraph.checkpoint.memory import MemorySaver
+
 from app_assistant.graph import build_graph, thread_id_for
 
 
@@ -42,13 +46,28 @@ class FakeModel:
         return type("Response", (), {"content": "Review the focused worktree todo list first."})()
 
 
+class StructuredFakeModel:
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        return type("Response", (), {"content": self.responses.pop(0)})()
+
+
 async def test_status_question_uses_bootstrap_without_detail_reads():
     gateway = FakeGateway()
-    graph = build_graph(gateway)
+    model = StructuredFakeModel(json.dumps({
+        "kind": "answer",
+        "answer": "Workbench status: Feature A is the focused worktree.",
+    }))
+    graph = build_graph(gateway, model=model)
 
     result = await graph.ainvoke(
         {
             "workbench_id": "wb-1",
+            "request_mode": "command",
             "messages": [{"role": "user", "content": "What can I do now?"}],
         },
         config={"configurable": {"thread_id": thread_id_for("wb-1")}},
@@ -57,44 +76,61 @@ async def test_status_question_uses_bootstrap_without_detail_reads():
     assert gateway.context_calls == 1
     assert gateway.detail_calls == []
     assert result["context_revision"] == 4
-    assert result["intent"] == "status"
+    assert result["decision"]["kind"] == "answer"
     assert "Feature A" in result["answer"]
 
 
 async def test_todo_question_reads_focused_worktree():
     gateway = FakeGateway()
-    graph = build_graph(gateway)
+    model = StructuredFakeModel(
+        json.dumps({
+            "kind": "read_tool",
+            "toolName": "read_worktree_todos",
+            "toolReason": "The user requested open tasks.",
+        }),
+        "Todo items: Review changes.",
+    )
+    graph = build_graph(gateway, model=model)
 
     result = await graph.ainvoke(
         {
             "workbench_id": "wb-1",
+            "request_mode": "command",
             "messages": [{"role": "user", "content": "Show me the todo list."}],
         }
     )
 
     assert gateway.detail_calls == ["todos"]
-    assert result["intent"] == "todos"
+    assert result["decision"]["toolName"] == "read_worktree_todos"
     assert "Review changes" in result["answer"]
 
 
 async def test_plc_question_hands_off_to_existing_agent():
     gateway = FakeGateway()
-    graph = build_graph(gateway)
+    model = StructuredFakeModel(json.dumps({
+        "kind": "answer",
+        "answer": "This belongs in the existing PLC Assistant.",
+    }))
+    graph = build_graph(gateway, model=model)
 
     result = await graph.ainvoke(
         {
             "workbench_id": "wb-1",
+            "request_mode": "command",
             "messages": [{"role": "user", "content": "Why does this PLC network fail?"}],
         }
     )
 
-    assert result["intent"] == "plc_question"
+    assert result["decision"]["kind"] == "answer"
     assert "PLC Assistant" in result["answer"]
 
 
 async def test_configured_model_composes_read_only_answer_with_versioned_metadata():
     gateway = FakeGateway()
-    model = FakeModel()
+    model = StructuredFakeModel(json.dumps({
+        "kind": "answer",
+        "answer": "Review the focused worktree todo list first.",
+    }))
     graph = build_graph(
         gateway,
         model=model,
@@ -105,6 +141,7 @@ async def test_configured_model_composes_read_only_answer_with_versioned_metadat
     result = await graph.ainvoke(
         {
             "workbench_id": "wb-1",
+            "request_mode": "command",
             "messages": [{"role": "user", "content": "What should I do next?"}],
         }
     )
@@ -115,7 +152,8 @@ async def test_configured_model_composes_read_only_answer_with_versioned_metadat
         "model": "deepseek-v4-flash",
         "mode": "llm",
         "graphVersion": "0.1.0",
-        "promptVersion": "workbench-assistant-v1",
+        "promptVersion": "workbench-assistant-command-v1",
+        "orientationPromptVersion": "workbench-assistant-orientation-v1",
     }
     assert len(model.calls) == 1
     prompt = "\n".join(str(message.content) for message in model.calls[0])
@@ -129,35 +167,136 @@ async def test_status_facts_do_not_allow_model_to_override_runtime_worktree_memb
         return _status_context(workbench_id)
 
     gateway.get_context = get_context
-    model = FakeModel()
-    model.ainvoke = _wrong_model_answer
+    model = StructuredFakeModel(json.dumps({
+        "kind": "answer",
+        "answer": "Registered worktrees: Feature A, Feature B.",
+    }))
     graph = build_graph(gateway, model=model)
 
     result = await graph.ainvoke({
         "workbench_id": "wb-1",
+        "request_mode": "command",
         "messages": [{"role": "user", "content": "How many worktrees are there?"}],
     })
 
     assert "Feature A" in result["answer"]
     assert "Feature B" in result["answer"]
     assert "only master" not in result["answer"].lower()
-    assert model.calls == []
+    assert len(model.calls) == 1
 
 
 async def test_svn_facts_use_the_authoritative_worktree_detail():
     gateway = FakeGateway()
-    model = FakeModel()
-    model.ainvoke = _wrong_model_answer
+    model = StructuredFakeModel(
+        json.dumps({
+            "kind": "read_tool",
+            "toolName": "read_svn_state",
+            "toolReason": "The user asked for the current revision.",
+        }),
+        "SVN state: base revision 40, current revision 42.",
+    )
     graph = build_graph(gateway, model=model)
 
     result = await graph.ainvoke({
         "workbench_id": "wb-1",
+        "request_mode": "command",
         "messages": [{"role": "user", "content": "What is the current SVN revision?"}],
     })
 
     assert "current revision 42" in result["answer"]
     assert "revision 1" not in result["answer"]
-    assert model.calls == []
+    assert gateway.detail_calls == ["svn"]
+    assert len(model.calls) == 2
+
+
+async def test_orientation_proposes_one_next_step_without_tools():
+    gateway = FakeGateway()
+    model = StructuredFakeModel(json.dumps({
+        "likelyIntent": "review the focused worktree",
+        "observations": ["Feature A has two open tasks"],
+        "proposedNextStep": "Read the focused worktree todo list.",
+        "confirmationQuestion": "Would you like me to read it?",
+    }))
+    graph = build_graph(gateway, model=model)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "request_mode": "orientation",
+    })
+
+    assert result["orientation_complete"] is True
+    assert result["orientation_proposal"]["confirmationQuestion"] == "Would you like me to read it?"
+    assert gateway.context_calls == 1
+    assert gateway.detail_calls == []
+    assert len(model.calls) == 1
+
+
+async def test_command_model_can_choose_read_tool_then_summarize():
+    gateway = FakeGateway()
+    model = StructuredFakeModel(
+        json.dumps({
+            "kind": "read_tool",
+            "toolName": "read_worktree_todos",
+            "toolReason": "The user needs the outstanding work items.",
+        }),
+        "The focused worktree has one todo: Review changes.",
+    )
+    graph = build_graph(gateway, model=model)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "request_mode": "command",
+        "messages": [{"role": "user", "content": "Please inspect the outstanding work items."}],
+    })
+
+    assert gateway.detail_calls == ["todos"]
+    assert result["decision"]["kind"] == "read_tool"
+    assert result["answer"] == "The focused worktree has one todo: Review changes."
+    assert len(model.calls) == 2
+
+
+async def test_command_model_can_ask_clarification_without_tool_call():
+    gateway = FakeGateway()
+    model = StructuredFakeModel(json.dumps({
+        "kind": "clarification",
+        "question": "Which worktree should I inspect?",
+    }))
+    graph = build_graph(gateway, model=model)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "request_mode": "command",
+        "messages": [{"role": "user", "content": "Inspect the work."}],
+    })
+
+    assert gateway.detail_calls == []
+    assert result["answer"] == "Which worktree should I inspect?"
+
+
+async def test_command_model_mutation_waits_for_approval():
+    gateway = FakeGateway()
+    model = StructuredFakeModel(json.dumps({
+        "kind": "mutation_proposal",
+        "mutation": {
+            "kind": "create_worktree",
+            "name": "assistant-feature",
+            "branch": "assistant/feature",
+            "startPoint": "master",
+        },
+    }))
+    graph = build_graph(gateway, model=model, checkpointer=MemorySaver())
+
+    result = await graph.ainvoke(
+        {
+            "workbench_id": "wb-1",
+            "request_mode": "command",
+            "messages": [{"role": "user", "content": "Please prepare a new work area."}],
+        },
+        config={"configurable": {"thread_id": thread_id_for("wb-1")}},
+    )
+
+    assert result["__interrupt__"]
+    assert gateway.detail_calls == []
 
 
 def _status_context(workbench_id: str):

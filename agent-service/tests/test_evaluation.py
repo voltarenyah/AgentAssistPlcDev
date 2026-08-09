@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -5,7 +7,28 @@ from app_assistant.graph import build_graph, thread_id_for
 from langgraph.types import Command
 
 
+class EvaluationDecisionModel:
+    def __init__(self, responses):
+        self.responses = list(responses)
+
+    async def ainvoke(self, messages):
+        return type("Response", (), {"content": self.responses.pop(0)})()
+
+
+def decision(kind: str, *, tool_name: str | None = None, answer: str | None = None):
+    value = {"kind": kind}
+    if tool_name:
+        value["toolName"] = tool_name
+        value["toolReason"] = "The user requested this read."
+    if answer:
+        value["answer"] = answer
+    return json.dumps(value)
+
+
 class EvaluationGateway:
+    def __init__(self):
+        self.detail_calls = []
+
     async def get_context(self, workbench_id: str):
         return {
             "workbenchId": workbench_id,
@@ -19,12 +42,15 @@ class EvaluationGateway:
         }
 
     async def get_todos(self, workbench_id: str, worktree_id: str):
+        self.detail_calls.append("todos")
         return {"tasks": [{"taskId": "task-1", "title": "Review changes"}]}
 
     async def get_history(self, workbench_id: str, worktree_id: str):
+        self.detail_calls.append("history")
         return {"commits": [{"sha": "abc", "message": "Add feature"}]}
 
     async def get_svn(self, workbench_id: str, worktree_id: str):
+        self.detail_calls.append("svn")
         return {"currentRevision": 42, "baseRevision": 40}
 
     async def create_worktree(self, workbench_id: str, **kwargs):
@@ -32,33 +58,47 @@ class EvaluationGateway:
 
 
 @pytest.mark.parametrize(
-    ("question", "intent"),
+    ("question", "responses", "detail_calls"),
     [
-        ("What can I do now?", "status"),
-        ("Show the todo list.", "todos"),
-        ("Show recent commit history.", "history"),
-        ("What is the current SVN revision?", "svn"),
-        ("Why does this PLC network fail?", "plc_question"),
+        ("What can I do now?", [decision("answer", answer="Review the focused worktree." )], []),
+        ("Show the todo list.", [decision("read_tool", tool_name="read_worktree_todos"), "Todo items: Review changes."], ["todos"]),
+        ("Show recent commit history.", [decision("read_tool", tool_name="read_commit_history"), "Recent commits: Add feature."], ["history"]),
+        ("What is the current SVN revision?", [decision("read_tool", tool_name="read_svn_state"), "SVN state: current revision 42."], ["svn"]),
+        ("Why does this PLC network fail?", [decision("answer", answer="Continue in the existing PLC Assistant." )], []),
     ],
 )
-async def test_supported_read_only_intents_have_regression_coverage(question: str, intent: str):
-    graph = build_graph(EvaluationGateway())
+async def test_supported_command_decisions_have_regression_coverage(question, responses, detail_calls):
+    gateway = EvaluationGateway()
+    graph = build_graph(gateway, model=EvaluationDecisionModel(responses))
 
     result = await graph.ainvoke(
-        {"workbench_id": "wb-eval", "messages": [{"role": "user", "content": question}]},
+        {"workbench_id": "wb-eval", "request_mode": "command", "messages": [{"role": "user", "content": question}]},
     )
 
-    assert result["intent"] == intent
+    assert gateway.detail_calls == detail_calls
     assert result.get("answer")
 
 
 async def test_mutation_intent_stops_at_explicit_approval_boundary():
-    graph = build_graph(EvaluationGateway(), checkpointer=MemorySaver())
+    graph = build_graph(
+        EvaluationGateway(),
+        checkpointer=MemorySaver(),
+        model=EvaluationDecisionModel([json.dumps({
+            "kind": "mutation_proposal",
+            "mutation": {
+                "kind": "create_worktree",
+                "name": "assistant-feature",
+                "branch": "assistant/feature",
+                "startPoint": "master",
+            },
+        })]),
+    )
 
     result = await graph.ainvoke(
         {
             "workbench_id": "wb-eval-mutation",
-            "messages": [{"role": "user", "content": "Create a new worktree."}],
+            "request_mode": "command",
+            "messages": [{"role": "user", "content": "Please prepare a new work area."}],
         },
         config={"configurable": {"thread_id": thread_id_for("wb-eval-mutation")}},
     )
