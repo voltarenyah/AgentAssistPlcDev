@@ -492,3 +492,4 @@ exported/
 .worktrees/
 hardware/staging/
 tmp/
+agent-service/.assistant-data/
