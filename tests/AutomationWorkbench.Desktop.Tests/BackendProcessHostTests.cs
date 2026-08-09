@@ -65,6 +65,7 @@ public sealed class BackendProcessHostTests
 
         Assert.Equal("py", info.FileName);
         Assert.Equal(paths.EffectiveAppAssistantWorkingDirectory, info.WorkingDirectory);
+        Assert.Equal(paths.BaseUrl, info.Environment["APP_ASSISTANT_APIHOST_URL"]);
         Assert.False(info.UseShellExecute);
         Assert.True(info.CreateNoWindow);
         Assert.Equal(new[]

@@ -61,7 +61,7 @@ public sealed class BackendProcessHost : IAsyncDisposable
     public static ProcessStartInfo CreateAppAssistantStartInfo(RuntimePaths paths)
     {
         var port = paths.AppAssistantPort.ToString();
-        return new ProcessStartInfo
+        var startInfo = new ProcessStartInfo
         {
             FileName = paths.AppAssistantCommand,
             WorkingDirectory = paths.EffectiveAppAssistantWorkingDirectory,
@@ -76,6 +76,8 @@ public sealed class BackendProcessHost : IAsyncDisposable
                 "--host", "127.0.0.1", "--port", port,
             },
         };
+        startInfo.Environment["APP_ASSISTANT_APIHOST_URL"] = paths.BaseUrl;
+        return startInfo;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)

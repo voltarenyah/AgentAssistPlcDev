@@ -1,10 +1,15 @@
 import os
+from typing import Mapping
 from typing import Any, Protocol
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from . import __version__
 from .gateway import WorkbenchGateway
+from .model import DEFAULT_MODEL, build_model_from_env
+from .prompts import PROMPT_VERSION, build_system_prompt
 from .state import AppAssistantState
 
 
@@ -48,12 +53,25 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return value
 
 
-async def _bootstrap_async(state: AppAssistantState, gateway: Gateway) -> dict[str, Any]:
+def _metadata(model_metadata: Mapping[str, str]) -> dict[str, str]:
+    return {
+        **model_metadata,
+        "graphVersion": __version__,
+        "promptVersion": PROMPT_VERSION,
+    }
+
+
+async def _bootstrap_async(
+    state: AppAssistantState,
+    gateway: Gateway,
+    assistant_metadata: Mapping[str, str],
+) -> dict[str, Any]:
     context = _as_dict(await gateway.get_context(state["workbench_id"]))
     runtime = context.get("runtime", context)
     return {
         "runtime_snapshot": context,
         "context_revision": int(runtime.get("workbenchRevision", 0)),
+        "assistant_metadata": dict(assistant_metadata),
     }
 
 
@@ -127,10 +145,10 @@ async def _propose_create_worktree(state: AppAssistantState, gateway: Gateway) -
         return {"proposed_action": proposal, "answer": f"Worktree creation was not completed: {exception}"}
 
 
-def _compose(state: AppAssistantState) -> dict[str, Any]:
+def _fallback_answer(state: AppAssistantState) -> str:
     intent = state.get("intent")
     if intent == "create_worktree" and state.get("answer"):
-        return {}
+        return state["answer"] or "The worktree creation proposal was cancelled."
     context = state.get("runtime_snapshot", {})
     runtime = context.get("runtime", context)
     if intent == "plc_question":
@@ -158,14 +176,75 @@ def _compose(state: AppAssistantState) -> dict[str, Any]:
             answer = detail["error"]
         else:
             answer = f"SVN state: base revision {detail.get('baseRevision', 'unknown')}, current revision {detail.get('currentRevision', 'unknown')}."
-    return {"answer": answer}
+    return answer
 
 
-def build_graph(gateway: Gateway, checkpointer: Any = None):
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            item if isinstance(item, str) else str(item.get("text", ""))
+            for item in content
+            if isinstance(item, (str, dict))
+        )
+    return str(content)
+
+
+async def _compose_async(
+    state: AppAssistantState,
+    model: Any | None,
+    prompt_append: str,
+) -> dict[str, Any]:
+    if state.get("intent") == "create_worktree" and state.get("answer"):
+        return {}
+
+    fallback = _fallback_answer(state)
+    intent = state.get("intent")
+    use_model = model is not None and intent in {"status", "todos", "history", "svn"}
+    if not use_model:
+        return {"answer": fallback}
+
+    prompt = build_system_prompt(
+        runtime_snapshot=state.get("runtime_snapshot", {}),
+        detail=state.get("detail"),
+        prompt_append=prompt_append,
+    )
+    question = _message_text(state.get("messages", []))
+    try:
+        response = await model.ainvoke(
+            [SystemMessage(content=prompt), HumanMessage(content=question)]
+        )
+        answer = _content_text(getattr(response, "content", response)).strip()
+        return {"answer": answer or fallback}
+    except Exception:
+        return {"answer": fallback}
+
+
+def build_graph(
+    gateway: Gateway,
+    checkpointer: Any = None,
+    *,
+    model: Any | None = None,
+    model_metadata: Mapping[str, str] | None = None,
+    prompt_append: str | None = None,
+):
+    resolved_model = model
+    resolved_metadata = dict(model_metadata or {})
+    if not resolved_metadata:
+        resolved_metadata = {
+            "provider": "deepseek",
+            "model": DEFAULT_MODEL,
+            "mode": "deterministic-fallback",
+        }
+    assistant_metadata = _metadata(resolved_metadata)
+    resolved_prompt_append = (
+        prompt_append if prompt_append is not None else os.getenv("APP_ASSISTANT_PROMPT_APPEND", "")
+    )
     builder = StateGraph(AppAssistantState)
 
     async def bootstrap_node(state: AppAssistantState) -> dict[str, Any]:
-        return await _bootstrap_async(state, gateway)
+        return await _bootstrap_async(state, gateway, assistant_metadata)
 
     async def detail_node(state: AppAssistantState) -> dict[str, Any]:
         return await _read_detail(state, gateway)
@@ -173,11 +252,14 @@ def build_graph(gateway: Gateway, checkpointer: Any = None):
     async def proposal_node(state: AppAssistantState) -> dict[str, Any]:
         return await _propose_create_worktree(state, gateway)
 
+    async def compose_node(state: AppAssistantState) -> dict[str, Any]:
+        return await _compose_async(state, resolved_model, resolved_prompt_append)
+
     builder.add_node("bootstrap", bootstrap_node)
     builder.add_node("classify_intent", _classify)
     builder.add_node("read_worktree_detail", detail_node)
     builder.add_node("propose_create_worktree", proposal_node)
-    builder.add_node("compose_answer", _compose)
+    builder.add_node("compose_answer", compose_node)
     builder.add_edge(START, "bootstrap")
     builder.add_edge("bootstrap", "classify_intent")
     builder.add_conditional_edges(
@@ -199,4 +281,15 @@ def build_graph(gateway: Gateway, checkpointer: Any = None):
     return builder.compile(checkpointer=checkpointer)
 
 
-graph = build_graph(WorkbenchGateway.from_env())
+
+
+def build_environment_graph() -> Any:
+    model, model_metadata = build_model_from_env()
+    return build_graph(
+        WorkbenchGateway.from_env(),
+        model=model,
+        model_metadata=model_metadata,
+    )
+
+
+graph = build_environment_graph()

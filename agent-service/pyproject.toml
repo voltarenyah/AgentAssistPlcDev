@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "workbench-app-assistant"
 version = "0.1.0"
-description = "Read-only LangGraph assistant for the Automation Workbench."
+description = "LangGraph assistant for the Automation Workbench."
 requires-python = ">=3.11,<3.14"
 dependencies = [
   "langgraph==0.6.6",

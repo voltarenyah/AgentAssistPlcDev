@@ -33,6 +33,15 @@ class FakeGateway:
         return {"currentRevision": 42, "baseRevision": 40}
 
 
+class FakeModel:
+    def __init__(self):
+        self.calls = []
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages)
+        return type("Response", (), {"content": "Review the focused worktree todo list first."})()
+
+
 async def test_status_question_uses_bootstrap_without_detail_reads():
     gateway = FakeGateway()
     graph = build_graph(gateway)
@@ -82,3 +91,33 @@ async def test_plc_question_hands_off_to_existing_agent():
     assert result["intent"] == "plc_question"
     assert "PLC Assistant" in result["answer"]
 
+
+async def test_configured_model_composes_read_only_answer_with_versioned_metadata():
+    gateway = FakeGateway()
+    model = FakeModel()
+    graph = build_graph(
+        gateway,
+        model=model,
+        model_metadata={"provider": "deepseek", "model": "deepseek-v4-flash", "mode": "llm"},
+        prompt_append="Prefer one concrete next step.",
+    )
+
+    result = await graph.ainvoke(
+        {
+            "workbench_id": "wb-1",
+            "messages": [{"role": "user", "content": "What should I do next?"}],
+        }
+    )
+
+    assert result["answer"] == "Review the focused worktree todo list first."
+    assert result["assistant_metadata"] == {
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "mode": "llm",
+        "graphVersion": "0.1.0",
+        "promptVersion": "workbench-assistant-v1",
+    }
+    assert len(model.calls) == 1
+    prompt = "\n".join(str(message.content) for message in model.calls[0])
+    assert "Feature A" in prompt
+    assert "Prefer one concrete next step." in prompt

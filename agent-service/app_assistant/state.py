@@ -14,3 +14,4 @@ class AppAssistantState(TypedDict, total=False):
     answer: str | None
     detail: dict[str, Any] | None
     pending_approval: dict[str, Any] | None
+    assistant_metadata: dict[str, str]
