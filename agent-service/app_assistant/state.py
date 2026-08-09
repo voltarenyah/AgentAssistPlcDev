@@ -13,4 +13,4 @@ class AppAssistantState(TypedDict, total=False):
     proposed_action: dict[str, Any] | None
     answer: str | None
     detail: dict[str, Any] | None
-
+    pending_approval: dict[str, Any] | None

@@ -44,6 +44,18 @@ public static class AppAssistantEndpoints
                     ? Results.Ok(await gateway.GetActionsAsync(workbenchId).ConfigureAwait(false))
                     : Results.StatusCode(StatusCodes.Status403Forbidden));
 
+        app.MapPost(
+            "/internal/app-assistant/workbenches/{workbenchId}/mutations/create-worktree",
+            async (HttpContext http, string workbenchId, CreateWorktreeAssistantRequest request,
+                AppAssistantGateway gateway, AppAssistantAccessPolicy access, CancellationToken cancellationToken) =>
+            {
+                if (!access.Allowed(http))
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                var result = await gateway.CreateWorktreeAsync(workbenchId, request, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(result);
+            });
+
         return app;
     }
 }

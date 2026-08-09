@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.types import Command
 from pydantic import BaseModel
 
 from . import __version__
@@ -14,9 +15,12 @@ from .graph import build_graph, thread_id_for
 
 class AssistantRequest(BaseModel):
     message: str = "Inspect the current workbench and suggest the first useful move."
+    approval: dict[str, Any] | None = None
 
 
 def _response(result: dict[str, Any], workbench_id: str) -> dict[str, Any]:
+    interrupts = result.get("__interrupt__") or []
+    interrupt_values = [item.value if hasattr(item, "value") else item for item in interrupts]
     return {
         "threadId": thread_id_for(workbench_id),
         "workbenchId": workbench_id,
@@ -25,6 +29,8 @@ def _response(result: dict[str, Any], workbench_id: str) -> dict[str, Any]:
         "intent": result.get("intent"),
         "proposedAction": result.get("proposed_action"),
         "answer": result.get("answer"),
+        "interrupt": interrupt_values or None,
+        "pendingApproval": interrupt_values[0] if interrupt_values else result.get("proposed_action"),
     }
 
 
@@ -56,11 +62,14 @@ async def health() -> dict[str, str]:
 
 @app.post("/v1/workbenches/{workbench_id}/bootstrap")
 async def bootstrap(workbench_id: str, request: AssistantRequest) -> dict[str, Any]:
+    input_value: Any = {
+        "workbench_id": workbench_id,
+        "messages": [{"role": "user", "content": request.message}],
+    }
+    if request.approval is not None:
+        input_value = Command(resume=request.approval)
     result = await app.state.graph.ainvoke(
-        {
-            "workbench_id": workbench_id,
-            "messages": [{"role": "user", "content": request.message}],
-        },
+        input_value,
         config={"configurable": {"thread_id": thread_id_for(workbench_id)}},
     )
     return _response(result, workbench_id)

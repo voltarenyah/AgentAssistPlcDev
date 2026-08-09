@@ -1,0 +1,73 @@
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
+
+from app_assistant.graph import build_graph, thread_id_for
+
+
+class MutationGateway:
+    async def get_context(self, workbench_id: str):
+        return {
+            "workbenchId": workbench_id,
+            "runtime": {
+                "workbenchRevision": 8,
+                "focus": {"worktreeId": "wt-1"},
+                "worktrees": [],
+                "availableActions": [],
+            },
+            "availableActions": [],
+        }
+
+    async def get_todos(self, workbench_id: str, worktree_id: str):
+        return {"tasks": []}
+
+    async def get_history(self, workbench_id: str, worktree_id: str):
+        return {"commits": []}
+
+    async def get_svn(self, workbench_id: str, worktree_id: str):
+        return {}
+
+    async def create_worktree(self, workbench_id: str, **kwargs):
+        return {"workbenchId": workbench_id, "name": kwargs["name"], "branch": kwargs["branch"], "selected": False}
+
+
+async def test_create_worktree_pauses_for_explicit_approval():
+    graph = build_graph(MutationGateway(), checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": thread_id_for("wb-1")}}
+
+    result = await graph.ainvoke(
+        {"workbench_id": "wb-1", "messages": [{"role": "user", "content": "Create worktree"}]},
+        config=config,
+    )
+
+    assert result["__interrupt__"]
+    proposal = result["__interrupt__"][0].value
+    assert proposal["kind"] == "create_worktree"
+    assert proposal["expectedWorkbenchRevision"] == 8
+
+
+async def test_rejection_is_cancelled_without_mutation():
+    graph = build_graph(MutationGateway(), checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": thread_id_for("wb-2")}}
+    await graph.ainvoke(
+        {"workbench_id": "wb-2", "messages": [{"role": "user", "content": "Create worktree"}]},
+        config=config,
+    )
+
+    result = await graph.ainvoke(Command(resume={"decision": "reject"}), config=config)
+
+    assert result["answer"] == "The worktree creation proposal was cancelled."
+
+
+async def test_approval_calls_gateway_with_captured_revision():
+    gateway = MutationGateway()
+    graph = build_graph(gateway, checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": thread_id_for("wb-3")}}
+    await graph.ainvoke(
+        {"workbench_id": "wb-3", "messages": [{"role": "user", "content": "Create worktree"}]},
+        config=config,
+    )
+
+    result = await graph.ainvoke(Command(resume={"decision": "approve"}), config=config)
+
+    assert result["detail"]["mutation"]["selected"] is False
+    assert "assistant-feature" in result["answer"]

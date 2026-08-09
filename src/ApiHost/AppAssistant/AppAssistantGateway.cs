@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Collections.Concurrent;
 using Agent.Mcp;
 using Agent.Workbench;
 
@@ -8,8 +9,12 @@ public sealed class AppAssistantGateway(
     WorkbenchApiState state,
     WorkbenchRuntimeStateCoordinator runtime,
     WorktreeTaskStore tasks,
-    ApiMcpGateway mcp)
+    ApiMcpGateway mcp,
+    WorkbenchCoordinator coordinator,
+    OperationStatusRegistry operations)
 {
+    private readonly ConcurrentDictionary<string, Lazy<Task<CreateWorktreeAssistantResult>>> mutationRequests = new(StringComparer.Ordinal);
+
     public Task<AppAssistantWorkbenchContext> GetContextAsync(string workbenchId)
     {
         var workbench = state.Workbench(workbenchId);
@@ -123,6 +128,84 @@ public sealed class AppAssistantGateway(
                 BlockedBy = action.BlockedBy.Append("Assistant worktree mutations require the approved mutation flow.").ToArray(),
             }
             : action).ToArray();
+    }
+
+    public Task<CreateWorktreeAssistantResult> CreateWorktreeAsync(
+        string workbenchId,
+        CreateWorktreeAssistantRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!string.Equals(workbenchId, request.WorkbenchId, StringComparison.Ordinal))
+            throw new AppAssistantGatewayException("WORKBENCH_SCOPE_MISMATCH", "The mutation workbench does not match the route scope.");
+        ValidateMutationRequest(request);
+        var key = $"{workbenchId}:{request.RequestId}";
+        var operation = mutationRequests.GetOrAdd(
+            key,
+            _ => new Lazy<Task<CreateWorktreeAssistantResult>>(
+                () => ExecuteCreateWorktreeAsync(request, cancellationToken),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+        return operation.Value;
+    }
+
+    private async Task<CreateWorktreeAssistantResult> ExecuteCreateWorktreeAsync(
+        CreateWorktreeAssistantRequest request,
+        CancellationToken cancellationToken)
+    {
+        var workbench = state.Workbench(request.WorkbenchId);
+        var current = runtime.GetSnapshot(request.WorkbenchId);
+        if (current.WorkbenchRevision != request.ExpectedWorkbenchRevision)
+            throw new RuntimeStateConflictException(request.ExpectedWorkbenchRevision, current.WorkbenchRevision);
+        if (current.Operation.Status is RuntimeOperationStatus.Running or RuntimeOperationStatus.AwaitingApproval)
+            throw new WorkbenchLifecycleException("WORKBENCH_OPERATION_BUSY", "Another workbench operation is running.");
+        if (workbench.Worktrees.Any(worktree =>
+                string.Equals(worktree.Name, request.Name, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(worktree.Branch, request.Branch, StringComparison.OrdinalIgnoreCase)))
+            throw new WorkbenchLifecycleException("WORKTREE_CONFLICT", "A worktree with the same name or branch already exists.");
+
+        runtime.StartOperation(request.WorkbenchId, request.RequestId, "create-worktree");
+        operations.Start(request.RequestId, "assistant-create-worktree", "Creating linked worktree...");
+        try
+        {
+            var created = await coordinator.CreateWorktreeAsync(
+                new CreateWorktreeRequest(workbench, request.Name, request.Branch, request.StartPoint),
+                cancellationToken,
+                operations.For(request.RequestId)).ConfigureAwait(false);
+            state.Refresh(request.WorkbenchId);
+            runtime.CompleteOperation(request.WorkbenchId, request.RequestId, "Worktree created.");
+            var refreshed = runtime.GetSnapshot(request.WorkbenchId);
+            operations.Succeed(request.RequestId, "Worktree created.");
+            return new CreateWorktreeAssistantResult(
+                request.WorkbenchId,
+                created.WorktreeId,
+                created.Name,
+                created.Branch,
+                refreshed.WorkbenchRevision,
+                false);
+        }
+        catch (Exception exception)
+        {
+            runtime.FailOperation(request.WorkbenchId, request.RequestId, exception.Message);
+            operations.Fail(request.RequestId, "Worktree creation failed.", exception.Message);
+            throw;
+        }
+    }
+
+    private static void ValidateMutationRequest(CreateWorktreeAssistantRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.RequestId))
+            throw new AppAssistantGatewayException("REQUEST_ID_REQUIRED", "A deterministic request ID is required.");
+        if (string.IsNullOrWhiteSpace(request.Name)
+            || request.Name.Contains('/')
+            || request.Name.Contains('\\')
+            || request.Name.Contains("..", StringComparison.Ordinal))
+            throw new AppAssistantGatewayException("INVALID_WORKTREE_NAME", "The worktree name must be a single relative name.");
+        if (string.IsNullOrWhiteSpace(request.Branch)
+            || Path.IsPathRooted(request.Branch)
+            || request.Branch.Contains("..", StringComparison.Ordinal))
+            throw new AppAssistantGatewayException("INVALID_BRANCH", "The branch must be a relative branch name.");
+        if (!string.IsNullOrWhiteSpace(request.StartPoint) && Path.IsPathRooted(request.StartPoint))
+            throw new AppAssistantGatewayException("INVALID_START_POINT", "The start point cannot be a filesystem path.");
     }
 
     private static int ValidateLimit(int? requested, int defaultValue, int maximum)

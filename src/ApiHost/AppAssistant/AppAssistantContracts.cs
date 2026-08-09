@@ -41,6 +41,22 @@ public sealed record WorktreeSvnResponse(
     long? CurrentRevision,
     string? ValidationState);
 
+public sealed record CreateWorktreeAssistantRequest(
+    string WorkbenchId,
+    string Name,
+    string Branch,
+    string? StartPoint,
+    long ExpectedWorkbenchRevision,
+    string RequestId);
+
+public sealed record CreateWorktreeAssistantResult(
+    string WorkbenchId,
+    string WorktreeId,
+    string Name,
+    string Branch,
+    long WorkbenchRevision,
+    bool Selected);
+
 public sealed class AppAssistantGatewayException(
     string code,
     string message,

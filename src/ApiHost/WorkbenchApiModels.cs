@@ -1486,6 +1486,16 @@ public sealed class WorkbenchApiExceptionMiddleware(RequestDelegate next)
             context.Response.StatusCode = exception.StatusCode;
             await context.Response.WriteAsJsonAsync(new { error = exception.Code, message = exception.Message });
         }
+        catch (RuntimeStateConflictException exception)
+        {
+            context.Response.StatusCode = StatusCodes.Status409Conflict;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = exception.Code,
+                expectedRevision = exception.ExpectedRevision,
+                actualRevision = exception.ActualRevision,
+            });
+        }
         catch (KeyNotFoundException exception)
         {
             context.Response.StatusCode = exception.Message.Contains("PREVIEW", StringComparison.Ordinal) ? 409 : 404;

@@ -2,6 +2,7 @@ import os
 from typing import Any, Protocol
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 
 from .gateway import WorkbenchGateway
 from .state import AppAssistantState
@@ -15,6 +16,17 @@ class Gateway(Protocol):
     async def get_history(self, workbench_id: str, worktree_id: str) -> Any: ...
 
     async def get_svn(self, workbench_id: str, worktree_id: str) -> Any: ...
+
+    async def create_worktree(
+        self,
+        workbench_id: str,
+        *,
+        name: str,
+        branch: str,
+        start_point: str | None,
+        expected_revision: int,
+        request_id: str,
+    ) -> dict[str, Any]: ...
 
 
 def thread_id_for(workbench_id: str) -> str:
@@ -47,7 +59,9 @@ async def _bootstrap_async(state: AppAssistantState, gateway: Gateway) -> dict[s
 
 def _classify(state: AppAssistantState) -> dict[str, Any]:
     text = _message_text(state.get("messages", [])).lower()
-    if any(word in text for word in ("plc", "network", "block", "diagnos", "program")):
+    if any(word in text for word in ("create worktree", "new worktree", "create branch")):
+        intent = "create_worktree"
+    elif any(word in text for word in ("plc", "network", "block", "diagnos", "program")):
         intent = "plc_question"
     elif any(word in text for word in ("todo", "task", "next")):
         intent = "todos"
@@ -81,8 +95,42 @@ async def _read_detail(state: AppAssistantState, gateway: Gateway) -> dict[str, 
     return {"detail": detail}
 
 
+async def _propose_create_worktree(state: AppAssistantState, gateway: Gateway) -> dict[str, Any]:
+    runtime = state.get("runtime_snapshot", {}).get("runtime", state.get("runtime_snapshot", {}))
+    revision = int(state.get("context_revision", runtime.get("workbenchRevision", 0)))
+    workbench_id = state["workbench_id"]
+    proposal = {
+        "kind": "create_worktree",
+        "workbenchId": workbench_id,
+        "name": "assistant-feature",
+        "branch": "assistant/feature",
+        "startPoint": "master",
+        "expectedWorkbenchRevision": revision,
+        "requestId": f"app-assistant:{workbench_id}:create:{revision}",
+    }
+    decision = interrupt(proposal)
+    if not isinstance(decision, dict) or decision.get("decision") != "approve":
+        return {"proposed_action": proposal, "answer": "The worktree creation proposal was cancelled."}
+    try:
+        result = await gateway.create_worktree(
+            workbench_id,
+            name=proposal["name"],
+            branch=proposal["branch"],
+            start_point=proposal["startPoint"],
+            expected_revision=proposal["expectedWorkbenchRevision"],
+            request_id=proposal["requestId"],
+        )
+        return {"proposed_action": proposal, "detail": {"mutation": result}}
+    except Exception as exception:
+        if exception.__class__.__name__ == "GatewayStaleError":
+            return {"proposed_action": proposal, "answer": "The workbench changed before approval. I refreshed the proposal context; please review it again."}
+        return {"proposed_action": proposal, "answer": f"Worktree creation was not completed: {exception}"}
+
+
 def _compose(state: AppAssistantState) -> dict[str, Any]:
     intent = state.get("intent")
+    if intent == "create_worktree" and state.get("answer"):
+        return {}
     context = state.get("runtime_snapshot", {})
     runtime = context.get("runtime", context)
     if intent == "plc_question":
@@ -95,6 +143,9 @@ def _compose(state: AppAssistantState) -> dict[str, Any]:
         answer += f" Registered worktrees: {names or 'none'}."
         if actions:
             answer += f" Available read actions: {', '.join(str(action) for action in actions)}."
+    elif intent == "create_worktree":
+        mutation = (state.get("detail") or {}).get("mutation", {})
+        answer = f"Created worktree '{mutation.get('name', 'new worktree')}' on branch '{mutation.get('branch', 'unknown')}'. It remains unselected; you can select it from the workbench UI."
     elif intent == "todos":
         tasks = (state.get("detail") or {}).get("tasks", [])
         answer = "Todo items: " + (", ".join(item.get("title", item.get("taskId", "unnamed")) for item in tasks) if tasks else "none recorded.")
@@ -119,18 +170,31 @@ def build_graph(gateway: Gateway, checkpointer: Any = None):
     async def detail_node(state: AppAssistantState) -> dict[str, Any]:
         return await _read_detail(state, gateway)
 
+    async def proposal_node(state: AppAssistantState) -> dict[str, Any]:
+        return await _propose_create_worktree(state, gateway)
+
     builder.add_node("bootstrap", bootstrap_node)
     builder.add_node("classify_intent", _classify)
     builder.add_node("read_worktree_detail", detail_node)
+    builder.add_node("propose_create_worktree", proposal_node)
     builder.add_node("compose_answer", _compose)
     builder.add_edge(START, "bootstrap")
     builder.add_edge("bootstrap", "classify_intent")
     builder.add_conditional_edges(
         "classify_intent",
-        lambda state: "read_worktree_detail" if state.get("intent") in {"todos", "history", "svn"} else "compose_answer",
-        {"read_worktree_detail": "read_worktree_detail", "compose_answer": "compose_answer"},
+        lambda state: (
+            "read_worktree_detail" if state.get("intent") in {"todos", "history", "svn"}
+            else "propose_create_worktree" if state.get("intent") == "create_worktree"
+            else "compose_answer"
+        ),
+        {
+            "read_worktree_detail": "read_worktree_detail",
+            "propose_create_worktree": "propose_create_worktree",
+            "compose_answer": "compose_answer",
+        },
     )
     builder.add_edge("read_worktree_detail", "compose_answer")
+    builder.add_edge("propose_create_worktree", "compose_answer")
     builder.add_edge("compose_answer", END)
     return builder.compile(checkpointer=checkpointer)
 
