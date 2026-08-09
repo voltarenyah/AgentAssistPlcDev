@@ -108,6 +108,21 @@ describe('ProjectLandingPage', () => {
     await act(async () => root.unmount())
   })
 
+  it('opens the workbench assistant from the project landing page', async () => {
+    const onOpenAssistant = vi.fn()
+    const { host, root } = await render(
+      <ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} onOpenAssistant={onOpenAssistant} />,
+    )
+
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Open Workbench Assistant"]')
+    expect(button).not.toBeNull()
+    await act(async () => button!.click())
+
+    expect(onOpenAssistant).toHaveBeenCalledTimes(1)
+
+    await act(async () => root.unmount())
+  })
+
   it('orders ongoing worktrees first, then finished by finishedUtc descending', async () => {
     const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
 

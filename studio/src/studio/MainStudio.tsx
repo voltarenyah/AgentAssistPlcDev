@@ -1764,6 +1764,7 @@ export default function MainStudio() {
           ) : !selection.deviceId && selection.workbenchId ? (
             <ProjectLandingPage
               workbenchId={selection.workbenchId}
+              onOpenAssistant={() => setAppAssistantOpen(true)}
               onSelectWorktree={worktreeId => {
                 const worktree = activeWorkbench?.worktrees.find(candidate => candidate.worktreeId === worktreeId)
                 if (activeWorkbench && worktree) void selectWorktree(activeWorkbench, worktree)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, Boxes, GitBranch, Loader2, RefreshCw } from 'lucide-react'
+import { AlertCircle, Boxes, GitBranch, Loader2, RefreshCw, Sparkles } from 'lucide-react'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import InlineEdit from './InlineEdit'
@@ -8,6 +8,7 @@ import StatusBadge from './StatusBadge'
 type Props = {
   workbenchId: string
   onSelectWorktree: (worktreeId: string) => void
+  onOpenAssistant?: () => void
 }
 
 const displayError = (error: unknown) => {
@@ -26,7 +27,7 @@ const orderWorktrees = (worktrees: api.WorktreeOverview[]) => {
   return [...ongoing, ...finished]
 }
 
-export default function ProjectLandingPage({ workbenchId, onSelectWorktree }: Props) {
+export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOpenAssistant }: Props) {
   const [overview, setOverview] = useState<api.WorkbenchOverview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -127,6 +128,16 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree }: Pr
               <p className="break-all">Source project: {overview.sourceProjectPath ?? '—'}</p>
             </div>
           </div>
+          {onOpenAssistant && (
+            <button
+              className="secondary-button shrink-0"
+              aria-label="Open Workbench Assistant"
+              onClick={onOpenAssistant}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Open Workbench Assistant
+            </button>
+          )}
           <div className="grid w-full max-w-sm grid-cols-[64px_1fr] items-center gap-x-3 gap-y-2">
             <span className="self-center text-[9px] uppercase tracking-wide text-muted-foreground">Purpose</span>
             <InlineEdit
