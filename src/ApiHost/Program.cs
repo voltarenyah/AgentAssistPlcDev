@@ -1,6 +1,7 @@
 using Agent.Mcp;
 using Agent.Chat;
 using Agent.Workbench;
+using ApiHost.AppAssistant;
 using Contracts.Sandbox;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -135,6 +136,8 @@ else
 }
 
 builder.Services.AddSingleton<WorkbenchRuntimeStateCoordinator>();
+builder.Services.AddSingleton<AppAssistantGateway>();
+builder.Services.AddSingleton<AppAssistantAccessPolicy>();
 builder.Services.AddSingleton<WorkbenchApiState>(services =>
 {
     var state = new WorkbenchApiState(
@@ -210,6 +213,7 @@ app.MapGet("/api/status", () => Results.Ok(new
 }));
 app.MapWorkbenchEndpoints();
 app.MapRuntimeStateEndpoints();
+app.MapAppAssistantEndpoints();
 app.MapCompatibilityEndpoints();
 var browserUrl = isProduction || string.IsNullOrWhiteSpace(configuredUrls)
     ? startupOptions.Url

@@ -4,6 +4,7 @@ using Agent.Chat;
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Sandbox;
+using ApiHost.AppAssistant;
 
 public sealed record WorkbenchSelection(string WorkbenchId, string? WorktreeId, string? DeviceId);
 public sealed record CreateWorkbenchApiRequest(
@@ -1480,6 +1481,11 @@ public sealed class WorkbenchApiExceptionMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context)
     {
         try { await next(context); }
+        catch (AppAssistantGatewayException exception)
+        {
+            context.Response.StatusCode = exception.StatusCode;
+            await context.Response.WriteAsJsonAsync(new { error = exception.Code, message = exception.Message });
+        }
         catch (KeyNotFoundException exception)
         {
             context.Response.StatusCode = exception.Message.Contains("PREVIEW", StringComparison.Ordinal) ? 409 : 404;
