@@ -118,7 +118,7 @@ public sealed class BackendProcessHostTests
         {
             await host.StartAsync();
             Assert.True(host.IsRunning);
-            Assert.True(host.IsAppAssistantRunning, File.ReadAllText(paths.BackendLogPath));
+            Assert.True(host.IsAppAssistantRunning);
         }
         finally
         {
