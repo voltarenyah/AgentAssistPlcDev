@@ -121,3 +121,61 @@ async def test_configured_model_composes_read_only_answer_with_versioned_metadat
     prompt = "\n".join(str(message.content) for message in model.calls[0])
     assert "Feature A" in prompt
     assert "Prefer one concrete next step." in prompt
+
+
+async def test_status_facts_do_not_allow_model_to_override_runtime_worktree_membership():
+    gateway = FakeGateway()
+    async def get_context(workbench_id):
+        return _status_context(workbench_id)
+
+    gateway.get_context = get_context
+    model = FakeModel()
+    model.ainvoke = _wrong_model_answer
+    graph = build_graph(gateway, model=model)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "messages": [{"role": "user", "content": "How many worktrees are there?"}],
+    })
+
+    assert "Feature A" in result["answer"]
+    assert "Feature B" in result["answer"]
+    assert "only master" not in result["answer"].lower()
+    assert model.calls == []
+
+
+async def test_svn_facts_use_the_authoritative_worktree_detail():
+    gateway = FakeGateway()
+    model = FakeModel()
+    model.ainvoke = _wrong_model_answer
+    graph = build_graph(gateway, model=model)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "messages": [{"role": "user", "content": "What is the current SVN revision?"}],
+    })
+
+    assert "current revision 42" in result["answer"]
+    assert "revision 1" not in result["answer"]
+    assert model.calls == []
+
+
+def _status_context(workbench_id: str):
+    return {
+        "workbenchId": workbench_id,
+        "runtime": {
+            "workbenchRevision": 4,
+            "focus": {"worktreeId": "wt-1", "deviceId": None},
+            "availableActions": [],
+            "worktrees": [
+                {"worktreeId": "wt-1", "name": "Feature A", "todoCount": 2},
+                {"worktreeId": "wt-2", "name": "Feature B", "todoCount": 0},
+            ],
+        },
+        "availableActions": [],
+        "observedAt": "2026-08-09T00:00:00Z",
+    }
+
+
+async def _wrong_model_answer(messages):
+    raise AssertionError("authoritative facts must not be delegated to the model")

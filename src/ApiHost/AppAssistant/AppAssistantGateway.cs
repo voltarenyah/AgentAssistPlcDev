@@ -17,13 +17,8 @@ public sealed class AppAssistantGateway(
 
     public Task<AppAssistantWorkbenchContext> GetContextAsync(string workbenchId)
     {
-        var workbench = state.Workbench(workbenchId);
+        var workbench = state.RefreshRuntimeIfChanged(workbenchId);
         var snapshot = runtime.GetSnapshot(workbenchId);
-        if (snapshot.Worktrees.Count != workbench.Worktrees.Count)
-        {
-            state.Refresh(workbenchId);
-            snapshot = runtime.GetSnapshot(workbenchId);
-        }
 
         var focus = state.Selection?.WorkbenchId == workbenchId ? state.Selection : null;
         var actions = snapshot.AvailableActions;
@@ -43,8 +38,9 @@ public sealed class AppAssistantGateway(
     {
         var count = ValidateLimit(limit, 20, 100);
         var worktreeRoot = state.WorktreeRoot(workbenchId, worktreeId);
-        var snapshot = runtime.GetSnapshot(workbenchId);
         var items = tasks.Load(worktreeRoot).Tasks.Take(count).ToArray();
+        runtime.ObserveTodos(workbenchId, worktreeId, items.Length);
+        var snapshot = runtime.GetSnapshot(workbenchId);
         return Task.FromResult(new WorktreeTodosResponse(
             workbenchId,
             worktreeId,
@@ -91,7 +87,6 @@ public sealed class AppAssistantGateway(
     {
         var workbench = state.Workbench(workbenchId);
         var worktree = state.Worktree(workbenchId, worktreeId);
-        var snapshot = runtime.GetSnapshot(workbenchId);
         var worktreeRoot = state.WorktreeRoot(workbenchId, worktreeId);
         EngineeringRevisionState? revision = null;
         var revisionPath = WorkbenchPaths.ResolveRevisionState(worktreeRoot);
@@ -107,6 +102,8 @@ public sealed class AppAssistantGateway(
             }
         }
 
+        runtime.ObserveSvnState(workbenchId, worktreeId, worktree.BaseSvnRevision, revision?.Svn.Revision);
+        var snapshot = runtime.GetSnapshot(workbenchId);
         return Task.FromResult(new WorktreeSvnResponse(
             workbench.WorkbenchId,
             worktree.WorktreeId,

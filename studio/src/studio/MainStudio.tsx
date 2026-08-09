@@ -843,6 +843,8 @@ export default function MainStudio() {
 
   const selectWorkbench = async (workbench: api.Workbench) => {
     try {
+      await api.selectWorkbench(workbench.workbenchId)
+      setAppAssistantRuntime(null)
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
       setMainView({ kind: 'project' })
       setDeviceSelection(null)
@@ -855,6 +857,7 @@ export default function MainStudio() {
   const selectWorktree = async (workbench: api.Workbench, worktree: api.WorkbenchRegistration) => {
     setOperation('select-worktree')
     try {
+      await api.selectWorktree(workbench.workbenchId, worktree.worktreeId)
       const devices = await api.listDevices(workbench.workbenchId, worktree.worktreeId)
       setDevicesByWorktree(previous => ({
         ...previous,
@@ -2168,6 +2171,7 @@ export default function MainStudio() {
         )}
         {appAssistantOpen && selection.workbenchId && (
           <AppAssistantPanel
+            key={selection.workbenchId}
             workbenchId={selection.workbenchId}
             workbenchName={activeWorkbench?.name ?? 'Selected workbench'}
             runtime={appAssistantRuntime}

@@ -141,6 +141,27 @@ public sealed class WorkbenchApiState
         runtimeStateCoordinator?.Refresh(id, BuildRuntimeSummaries(workbench));
         return workbench;
     }
+
+    /// <summary>Refreshes the runtime projection when its observed worktree facts changed.
+    /// Re-reading unchanged data must not advance the runtime revision, otherwise an assistant
+    /// bootstrap would create its own consequential-change refresh loop.</summary>
+    public WorkbenchMetadata RefreshRuntimeIfChanged(string id)
+    {
+        var workbench = Add(catalog.Load(Workbench(id).RootPath));
+        if (runtimeStateCoordinator is null) return workbench;
+
+        var summaries = BuildRuntimeSummaries(workbench);
+        var current = runtimeStateCoordinator.GetSnapshot(id);
+        if (!string.Equals(
+                JsonSerializer.Serialize(current.Worktrees),
+                JsonSerializer.Serialize(summaries),
+                StringComparison.Ordinal))
+        {
+            runtimeStateCoordinator.Refresh(id, summaries);
+        }
+
+        return workbench;
+    }
     public WorkbenchMetadata Open(string root) => Add(catalog.Load(root));
 
     private IReadOnlyList<WorktreeRuntimeSummary> BuildRuntimeSummaries(WorkbenchMetadata workbench) =>
@@ -162,6 +183,7 @@ public sealed class WorkbenchApiState
                 .Select(deviceId => ReadDeviceRuntimeSummary(worktreeRoot, deviceId))
                 .ToArray()
                 ?? Array.Empty<DeviceRuntimeSummary>();
+            var revision = ReadEngineeringRevision(worktreeRoot);
             return new WorktreeRuntimeSummary(
                 registration.WorktreeId,
                 metadata?.Name ?? registration.Name,
@@ -170,10 +192,26 @@ public sealed class WorkbenchApiState
                 metadata?.BaseCommit,
                 0,
                 metadata?.BaseSvnRevision,
-                null,
-                metadata?.Status.ToString().ToLowerInvariant() ?? "unknown",
+                revision?.Svn.Revision,
+                revision?.Validation.CompileStatus
+                    ?? metadata?.Status.ToString().ToLowerInvariant()
+                    ?? "unknown",
                 devices);
         }).ToArray();
+
+    private static EngineeringRevisionState? ReadEngineeringRevision(string worktreeRoot)
+    {
+        var path = WorkbenchPaths.ResolveRevisionState(worktreeRoot);
+        if (!File.Exists(path)) return null;
+        try
+        {
+            return EngineeringStateWriter.Read(path);
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or WorkbenchLifecycleException)
+        {
+            return null;
+        }
+    }
 
     private DeviceRuntimeSummary ReadDeviceRuntimeSummary(string worktreeRoot, string deviceId)
     {

@@ -12,6 +12,21 @@ const functionBody = (name: string, nextName: string) => {
 }
 
 describe('MainStudio offline snapshot contract', () => {
+  it('synchronizes the ApiHost project selection before opening the assistant context', () => {
+    const body = functionBody('selectWorkbench', 'selectWorktree')
+    expect(body).toContain('await api.selectWorkbench(workbench.workbenchId)')
+  })
+
+  it('synchronizes the ApiHost worktree selection before loading worktree context', () => {
+    const body = functionBody('selectWorktree', 'selectDevice')
+    expect(body).toContain('await api.selectWorktree(workbench.workbenchId, worktree.worktreeId)')
+  })
+
+  it('remounts the assistant when the selected project changes', () => {
+    expect(source).toContain('<AppAssistantPanel')
+    expect(source).toContain('key={selection.workbenchId}')
+  })
+
   it('does not request live blocks while selecting a device', () => {
     const body = functionBody('selectDevice', 'createWorkbench')
     expect(body).toContain('api.getDeviceInfo(workbench.workbenchId, worktree.worktreeId, deviceId)')

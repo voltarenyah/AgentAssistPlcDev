@@ -48,6 +48,64 @@ public sealed class AppAssistantGatewayTests
     }
 
     [Fact]
+    public async Task ContextRefreshesChangedWorktreeFactsWithoutDuplicatingTheWorktree()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        var catalog = factory.Services.GetRequiredService<WorkbenchCatalog>();
+        var store = factory.Services.GetRequiredService<AtomicJsonStore>();
+        var state = factory.Services.GetRequiredService<WorkbenchApiState>();
+        var gateway = factory.Services.GetRequiredService<AppAssistantGateway>();
+        var root = Path.Combine(Path.GetTempPath(), "assistant-runtime-facts-" + Guid.NewGuid().ToString("N"));
+        var workbench = catalog.Create("Assistant Runtime Facts", root);
+        workbench = catalog.RegisterWorktree(
+            workbench,
+            new WorkbenchWorktreeRegistration("wt-1", "master", "master", "master"));
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(root, "master");
+        Directory.CreateDirectory(worktreeRoot);
+        store.Write(
+            Path.Combine(worktreeRoot, "worktree.json"),
+            new WorktreeMetadata(
+                WorkbenchSchema.CurrentVersion,
+                "wt-1",
+                workbench.WorkbenchId,
+                "master",
+                "master",
+                DateTimeOffset.UtcNow.ToString("O"),
+                null,
+                null,
+                null,
+                Array.Empty<string>(),
+                null));
+        state.Open(root);
+
+        _ = await gateway.GetContextAsync(workbench.WorkbenchId);
+        store.Write(
+            Path.Combine(worktreeRoot, "worktree.json"),
+            new WorktreeMetadata(
+                WorkbenchSchema.CurrentVersion,
+                "wt-1",
+                workbench.WorkbenchId,
+                "Feature A",
+                "feature/a",
+                DateTimeOffset.UtcNow.ToString("O"),
+                null,
+                null,
+                null,
+                Array.Empty<string>(),
+                null));
+        EngineeringStateWriter.Write(
+            worktreeRoot,
+            EngineeringStateWriter.Create("^/native/main", 4, null, null, EngineeringCompileStatus.Success));
+
+        var context = await gateway.GetContextAsync(workbench.WorkbenchId);
+
+        var summary = Assert.Single(context.Runtime.Worktrees);
+        Assert.Equal("Feature A", summary.Name);
+        Assert.Equal(4, summary.SvnCurrentRevision);
+    }
+
+    [Fact]
     public async Task TodoReadRejectsAWorktreeOutsideTheRequestedWorkbench()
     {
         await using var factory = new WebApplicationFactory<Program>()

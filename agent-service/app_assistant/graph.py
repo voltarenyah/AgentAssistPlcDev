@@ -218,7 +218,11 @@ async def _compose_async(
 
     fallback = _fallback_answer(state)
     intent = state.get("intent")
-    use_model = model is not None and intent in {"status", "todos", "history", "svn"}
+    # Status and SVN values are authoritative state facts. Keep them
+    # deterministic so a model cannot replace an observed worktree count or
+    # revision with a plausible but incorrect value. The model remains useful
+    # for contextual recommendations about todos and history.
+    use_model = model is not None and intent in {"todos", "history"}
     if not use_model:
         return {"answer": fallback}
 
