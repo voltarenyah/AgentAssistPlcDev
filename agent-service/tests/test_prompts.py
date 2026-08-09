@@ -18,6 +18,8 @@ def test_orientation_prompt_describes_workflow_and_forbids_execution():
     assert "PLC Assistant" in prompt
     assert "Do not call tools" in prompt
     assert "ask whether the user wants to proceed" in prompt.lower()
+    assert "Return only one JSON object" in prompt
+    assert '"likelyIntent"' in prompt
 
 
 def test_command_prompt_requires_one_decision_kind_and_includes_context():
@@ -30,3 +32,5 @@ def test_command_prompt_requires_one_decision_kind_and_includes_context():
     assert "read_tool" in prompt
     assert "master" in prompt
     assert "exactly one" in prompt.lower()
+    assert "Return only JSON" in prompt
+    assert '"toolName"' in prompt

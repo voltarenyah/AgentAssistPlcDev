@@ -13,12 +13,18 @@ def test_run_metadata_contains_trace_fields_without_user_content():
     metadata = build_run_metadata(
         {
             "intent": "todos",
+            "request_mode": "command",
+            "decision": {
+                "kind": "read_tool",
+                "toolName": "read_worktree_todos",
+            },
             "context_revision": 12,
             "assistant_metadata": {
                 "provider": "deepseek",
                 "model": "deepseek-v4-flash",
                 "graphVersion": "0.1.0",
                 "promptVersion": "workbench-assistant-v1",
+                "orientationPromptVersion": "workbench-assistant-orientation-v1",
             },
             "runtime_snapshot": {
                 "runtime": {"operation": {"operationId": "op-7"}},
@@ -35,14 +41,41 @@ def test_run_metadata_contains_trace_fields_without_user_content():
         "workbenchId": "wb-1",
         "contextRevision": 12,
         "intent": "todos",
+        "requestMode": "command",
+        "decisionKind": "read_tool",
+        "toolName": "read_worktree_todos",
         "actionId": None,
         "operationId": "op-7",
         "outcome": "completed",
         "graphVersion": "0.1.0",
         "promptVersion": "workbench-assistant-v1",
+        "orientationPromptVersion": "workbench-assistant-orientation-v1",
         "modelVersion": "deepseek-v4-flash",
     }
     assert "secret user prompt" not in json.dumps(metadata)
+
+
+def test_run_metadata_records_orientation_without_user_content():
+    metadata = build_run_metadata(
+        {
+            "request_mode": "orientation",
+            "context_revision": 4,
+            "assistant_metadata": {
+                "graphVersion": "0.1.0",
+                "promptVersion": "workbench-assistant-command-v1",
+                "orientationPromptVersion": "workbench-assistant-orientation-v1",
+                "model": "deepseek-v4-flash",
+            },
+            "answer": "The orientation proposal.",
+        },
+        workbench_id="wb-1",
+        run_id="run-2",
+    )
+
+    assert metadata["requestMode"] == "orientation"
+    assert metadata["decisionKind"] is None
+    assert metadata["toolName"] is None
+    assert metadata["orientationPromptVersion"] == "workbench-assistant-orientation-v1"
 
 
 def test_recorder_writes_redacted_runs_and_feedback(tmp_path):

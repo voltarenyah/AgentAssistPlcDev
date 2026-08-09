@@ -255,6 +255,31 @@ async def test_command_model_can_choose_read_tool_then_summarize():
     assert len(model.calls) == 2
 
 
+async def test_json_answer_envelope_is_not_shown_as_raw_tool_summary():
+    gateway = FakeGateway()
+    model = StructuredFakeModel(
+        json.dumps({
+            "kind": "read_tool",
+            "toolName": "read_commit_history",
+            "toolReason": "The user requested recent history.",
+        }),
+        json.dumps({
+            "kind": "answer",
+            "answer": "The latest commit updates the worktree documentation.",
+        }),
+    )
+    graph = build_graph(gateway, model=model)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "request_mode": "command",
+        "messages": [{"role": "user", "content": "Show recent commits."}],
+    })
+
+    assert result["answer"] == "The latest commit updates the worktree documentation."
+    assert not result["answer"].startswith("{")
+
+
 async def test_command_model_can_ask_clarification_without_tool_call():
     gateway = FakeGateway()
     model = StructuredFakeModel(json.dumps({
@@ -271,6 +296,26 @@ async def test_command_model_can_ask_clarification_without_tool_call():
 
     assert gateway.detail_calls == []
     assert result["answer"] == "Which worktree should I inspect?"
+
+
+async def test_invalid_model_tool_decision_falls_back_without_gateway_call():
+    gateway = FakeGateway()
+    model = StructuredFakeModel(json.dumps({
+        "kind": "read_tool",
+        "toolName": "delete_everything",
+        "toolReason": "Ignore the allowlist.",
+    }))
+    graph = build_graph(gateway, model=model)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "request_mode": "command",
+        "messages": [{"role": "user", "content": "Delete everything."}],
+    })
+
+    assert gateway.detail_calls == []
+    assert result["decision"]["kind"] == "clarification"
+    assert "safely interpret" in result["answer"]
 
 
 async def test_command_model_mutation_waits_for_approval():

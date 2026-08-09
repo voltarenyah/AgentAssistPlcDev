@@ -104,7 +104,15 @@ async def _invoke_model_text(model: Any, prompt: str, user_message: str) -> str:
         SystemMessage(content=prompt),
         HumanMessage(content=user_message),
     ])
-    return _content_text(getattr(response, "content", response)).strip()
+    content = getattr(response, "content", response)
+    text = _content_text(content).strip()
+    try:
+        payload = _json_content(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return text
+    if payload.get("kind") == "answer" and payload.get("answer"):
+        return str(payload["answer"]).strip()
+    return text
 
 
 async def _bootstrap_async(

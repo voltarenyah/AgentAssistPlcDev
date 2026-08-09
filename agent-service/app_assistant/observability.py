@@ -19,12 +19,16 @@ _RUN_METADATA_KEYS = {
     "threadId",
     "workbenchId",
     "contextRevision",
+    "requestMode",
     "intent",
+    "decisionKind",
+    "toolName",
     "actionId",
     "operationId",
     "outcome",
     "graphVersion",
     "promptVersion",
+    "orientationPromptVersion",
     "modelVersion",
 }
 
@@ -39,6 +43,10 @@ def build_run_metadata(result: dict[str, Any], *, workbench_id: str, run_id: str
     assistant_metadata = result.get("assistant_metadata") or {}
     interrupts = result.get("__interrupt__") or []
     proposed_action = result.get("proposed_action")
+    decision = result.get("decision") or {}
+    request_mode = result.get("request_mode")
+    if hasattr(request_mode, "value"):
+        request_mode = request_mode.value
     if interrupts:
         outcome = "awaiting_approval"
     elif result.get("answer"):
@@ -50,12 +58,16 @@ def build_run_metadata(result: dict[str, Any], *, workbench_id: str, run_id: str
         "threadId": thread_id_for(workbench_id),
         "workbenchId": workbench_id,
         "contextRevision": result.get("context_revision", 0),
+        "requestMode": request_mode,
         "intent": result.get("intent"),
+        "decisionKind": decision.get("kind"),
+        "toolName": decision.get("toolName") or decision.get("tool_name"),
         "actionId": proposed_action.get("kind") if isinstance(proposed_action, dict) else None,
         "operationId": _operation_id(result),
         "outcome": outcome,
         "graphVersion": assistant_metadata.get("graphVersion"),
         "promptVersion": assistant_metadata.get("promptVersion"),
+        "orientationPromptVersion": assistant_metadata.get("orientationPromptVersion"),
         "modelVersion": assistant_metadata.get("model"),
     }
 
