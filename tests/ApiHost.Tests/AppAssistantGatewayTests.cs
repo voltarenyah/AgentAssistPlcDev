@@ -97,12 +97,17 @@ public sealed class AppAssistantGatewayTests
         EngineeringStateWriter.Write(
             worktreeRoot,
             EngineeringStateWriter.Create("^/native/main", 4, null, null, EngineeringCompileStatus.Success));
+        var tasks = new WorktreeTaskStore(store);
+        tasks.Add(worktreeRoot, "Fix that bug");
+        var secondTask = tasks.Add(worktreeRoot, "Implement new function");
+        tasks.Update(worktreeRoot, secondTask.TaskId, task => task with { Status = WorktreeTaskStatus.InProgress });
 
         var context = await gateway.GetContextAsync(workbench.WorkbenchId);
 
         var summary = Assert.Single(context.Runtime.Worktrees);
         Assert.Equal("Feature A", summary.Name);
         Assert.Equal(4, summary.SvnCurrentRevision);
+        Assert.Equal(2, summary.TodoCount);
     }
 
     [Fact]

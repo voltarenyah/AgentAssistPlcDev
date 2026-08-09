@@ -95,6 +95,7 @@ public sealed class WorkbenchApiState
 {
     private readonly WorkbenchCatalog catalog;
     private readonly AtomicJsonStore store;
+    private readonly WorktreeTaskStore taskStore;
     private readonly TrustedWorkbenchRootRegistry? trustedRoots;
     private WorkbenchRuntimeStateCoordinator? runtimeStateCoordinator;
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> workbenches = new(StringComparer.Ordinal);
@@ -112,6 +113,7 @@ public sealed class WorkbenchApiState
     {
         this.catalog = catalog;
         this.store = store;
+        taskStore = new WorktreeTaskStore(store);
         this.trustedRoots = trustedRoots;
         foreach (var item in catalog.ListDefaultRoot()) Add(item);
     }
@@ -183,6 +185,8 @@ public sealed class WorkbenchApiState
                 .Select(deviceId => ReadDeviceRuntimeSummary(worktreeRoot, deviceId))
                 .ToArray()
                 ?? Array.Empty<DeviceRuntimeSummary>();
+            var todoCount = taskStore.Load(worktreeRoot).Tasks
+                .Count(task => task.Status != WorktreeTaskStatus.Done);
             var revision = ReadEngineeringRevision(worktreeRoot);
             return new WorktreeRuntimeSummary(
                 registration.WorktreeId,
@@ -190,7 +194,7 @@ public sealed class WorkbenchApiState
                 metadata?.Branch ?? registration.Branch,
                 "unknown",
                 metadata?.BaseCommit,
-                0,
+                todoCount,
                 metadata?.BaseSvnRevision,
                 revision?.Svn.Revision,
                 revision?.Validation.CompileStatus
