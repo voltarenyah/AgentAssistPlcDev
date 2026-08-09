@@ -282,8 +282,8 @@ const postAppAssistant = async (path: string, message: string, approval?: Record
   return parseAssistantEvents(await response.text())
 }
 
-export const bootstrapAppAssistant = (message = 'Inspect the current workbench and suggest the first useful move.') =>
-  postAppAssistant('/app-assistant/bootstrap', message)
+export const bootstrapAppAssistant = () =>
+  postAppAssistant('/app-assistant/bootstrap', '')
 export const chatAppAssistant = (message: string, approval?: Record<string, unknown>) =>
   postAppAssistant('/app-assistant/chat', message, approval)
 export type AppAssistantFeedbackCategory =

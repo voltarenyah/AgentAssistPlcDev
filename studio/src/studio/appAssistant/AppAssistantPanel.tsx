@@ -45,7 +45,7 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
     if (!state.autoRefreshPending || state.busy) return
     let cancelled = false
     setState(current => ({ ...current, busy: true, autoRefreshPending: false }))
-    void api.bootstrapAppAssistant('The workbench changed. Re-read the current state and suggest the next useful move.')
+    void api.chatAppAssistant('The workbench changed. Re-read the current state and suggest the next useful move.')
       .then(events => {
         if (!cancelled) setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
       })

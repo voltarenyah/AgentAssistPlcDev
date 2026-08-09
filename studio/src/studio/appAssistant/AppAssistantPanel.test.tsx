@@ -49,6 +49,20 @@ afterEach(() => {
 })
 
 describe('AppAssistantPanel', () => {
+  it('shows orientation and waits for an explicit user command', async () => {
+    vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
+      { kind: 'answer', data: { answer: 'Likely intention: review the worktree. Would you like me to read the focused todo list?' } },
+    ])
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+
+    expect(api.bootstrapAppAssistant).toHaveBeenCalledWith()
+    expect(api.chatAppAssistant).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('Would you like me to read the focused todo list?')
+  })
+
   it('shows initial orientation and keeps the selected worktree under user control', async () => {
     const { host } = render(
       <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
@@ -94,7 +108,7 @@ describe('AppAssistantPanel', () => {
     }))
     await act(async () => {})
 
-    expect(api.bootstrapAppAssistant).toHaveBeenCalledTimes(2)
+    expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.')
     expect(host.textContent).toContain('feature')
   })
 
