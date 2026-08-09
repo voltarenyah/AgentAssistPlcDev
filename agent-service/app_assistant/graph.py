@@ -141,7 +141,24 @@ async def _propose_create_worktree(state: AppAssistantState, gateway: Gateway) -
         return {"proposed_action": proposal, "detail": {"mutation": result}}
     except Exception as exception:
         if exception.__class__.__name__ == "GatewayStaleError":
-            return {"proposed_action": proposal, "answer": "The workbench changed before approval. I refreshed the proposal context; please review it again."}
+            try:
+                context = _as_dict(await gateway.get_context(workbench_id))
+                runtime = context.get("runtime", context)
+                revision = int(runtime.get("workbenchRevision", 0))
+                return {
+                    "runtime_snapshot": context,
+                    "context_revision": revision,
+                    "proposed_action": None,
+                    "answer": (
+                        "The workbench changed before approval. I refreshed the context to "
+                        f"runtime revision {revision}; please review the worktree state and request the action again."
+                    ),
+                }
+            except Exception as refresh_exception:
+                return {
+                    "proposed_action": proposal,
+                    "answer": f"The workbench changed before approval and the refresh failed: {refresh_exception}",
+                }
         return {"proposed_action": proposal, "answer": f"Worktree creation was not completed: {exception}"}
 
 

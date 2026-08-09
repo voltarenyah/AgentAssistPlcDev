@@ -1,6 +1,7 @@
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
+from app_assistant.gateway import GatewayStaleError
 from app_assistant.graph import build_graph, thread_id_for
 
 
@@ -28,6 +29,28 @@ class MutationGateway:
 
     async def create_worktree(self, workbench_id: str, **kwargs):
         return {"workbenchId": workbench_id, "name": kwargs["name"], "branch": kwargs["branch"], "selected": False}
+
+
+class StaleMutationGateway(MutationGateway):
+    def __init__(self):
+        self.context_calls = 0
+
+    async def get_context(self, workbench_id: str):
+        self.context_calls += 1
+        revision = 8 if self.context_calls == 1 else 9
+        return {
+            "workbenchId": workbench_id,
+            "runtime": {
+                "workbenchRevision": revision,
+                "focus": {"worktreeId": "wt-1"},
+                "worktrees": [],
+                "availableActions": [],
+            },
+            "availableActions": [],
+        }
+
+    async def create_worktree(self, workbench_id: str, **kwargs):
+        raise GatewayStaleError("ApiHost runtime context is stale.")
 
 
 async def test_create_worktree_pauses_for_explicit_approval():
@@ -71,3 +94,21 @@ async def test_approval_calls_gateway_with_captured_revision():
 
     assert result["detail"]["mutation"]["selected"] is False
     assert "assistant-feature" in result["answer"]
+
+
+async def test_stale_approval_refreshes_runtime_context_before_responding():
+    gateway = StaleMutationGateway()
+    graph = build_graph(gateway, checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": thread_id_for("wb-stale")}}
+    await graph.ainvoke(
+        {"workbench_id": "wb-stale", "messages": [{"role": "user", "content": "Create worktree"}]},
+        config=config,
+    )
+
+    result = await graph.ainvoke(Command(resume={"decision": "approve"}), config=config)
+
+    assert gateway.context_calls == 2
+    assert result["context_revision"] == 9
+    assert result["runtime_snapshot"]["runtime"]["workbenchRevision"] == 9
+    assert result["proposed_action"] is None
+    assert "changed before approval" in result["answer"]
