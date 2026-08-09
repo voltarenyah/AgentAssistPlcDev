@@ -16,6 +16,29 @@ public static class AppAssistantChatEndpoints
             (HttpContext http, AppAssistantChatRequest request, WorkbenchApiState state,
                 AppAssistantClient client, CancellationToken cancellationToken) =>
                 StreamAssistantAsync(http, request, state, client, "chat", cancellationToken));
+        app.MapPost(
+            "/api/app-assistant/feedback",
+            async (AppAssistantFeedbackRequest request, WorkbenchApiState state,
+                AppAssistantClient client, CancellationToken cancellationToken) =>
+            {
+                var workbenchId = state.Selection?.WorkbenchId;
+                if (string.IsNullOrWhiteSpace(workbenchId))
+                    return Results.BadRequest(new { error = "WORKBENCH_SELECTION_REQUIRED" });
+                if (string.IsNullOrWhiteSpace(request.Category))
+                    return Results.BadRequest(new { error = "ASSISTANT_FEEDBACK_CATEGORY_REQUIRED" });
+                try
+                {
+                    await client.SendFeedbackAsync(workbenchId, request.Category, request.RunId, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.NoContent();
+                }
+                catch (AppAssistantClientException exception)
+                {
+                    return Results.Json(
+                        new { error = exception.Code, message = exception.Message },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            });
         return app;
     }
 
@@ -73,3 +96,5 @@ public static class AppAssistantChatEndpoints
 }
 
 public sealed record AppAssistantChatRequest(string Message, JsonElement? Approval = null);
+
+public sealed record AppAssistantFeedbackRequest(string Category, string? RunId = null);

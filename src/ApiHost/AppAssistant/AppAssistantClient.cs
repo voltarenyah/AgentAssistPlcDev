@@ -41,6 +41,38 @@ public sealed class AppAssistantClient(HttpClient httpClient, IConfiguration con
                 exception);
         }
     }
+
+    public async Task SendFeedbackAsync(
+        string workbenchId,
+        string category,
+        string? runId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var baseUrl = configuration["AppAssistant:ServiceUrl"] ?? "http://127.0.0.1:8787";
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{baseUrl.TrimEnd('/')}/v1/workbenches/{Uri.EscapeDataString(workbenchId)}/feedback")
+        {
+            Content = JsonContent.Create(new { category, runId }),
+        };
+        var token = configuration["AppAssistant:InternalToken"];
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.TryAddWithoutValidation("X-App-Assistant-Token", token);
+
+        try
+        {
+            using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            throw new AppAssistantClientException(
+                "APP_ASSISTANT_FEEDBACK_UNAVAILABLE",
+                "The LangGraph app assistant feedback service is currently unavailable.",
+                exception);
+        }
+    }
 }
 
 public sealed class AppAssistantClientException(

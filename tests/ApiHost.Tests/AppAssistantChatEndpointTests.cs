@@ -52,4 +52,20 @@ public sealed class AppAssistantChatEndpointTests
         Assert.Contains("event: error", body);
         Assert.Contains("APP_ASSISTANT_UNAVAILABLE", body);
     }
+
+    [Fact]
+    public async Task FeedbackRejectsRequestsWithoutASelectedWorkbench()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            "/api/app-assistant/feedback",
+            new { category = "successful_completion", runId = "run-1" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+        Assert.Equal("WORKBENCH_SELECTION_REQUIRED", body!["error"]);
+    }
 }

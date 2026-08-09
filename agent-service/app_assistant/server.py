@@ -2,16 +2,18 @@ from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
 from .gateway import WorkbenchGateway
 from .graph import build_graph, thread_id_for
 from .model import build_model_from_env
+from .observability import RunRecorder, build_run_metadata
 
 
 class AssistantRequest(BaseModel):
@@ -19,10 +21,17 @@ class AssistantRequest(BaseModel):
     approval: dict[str, Any] | None = None
 
 
-def _response(result: dict[str, Any], workbench_id: str) -> dict[str, Any]:
+class FeedbackRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    category: str
+    run_id: str | None = Field(default=None, alias="runId")
+
+
+def _response(result: dict[str, Any], workbench_id: str, run_id: str) -> dict[str, Any]:
     interrupts = result.get("__interrupt__") or []
     interrupt_values = [item.value if hasattr(item, "value") else item for item in interrupts]
-    return {
+    response = {
         "threadId": thread_id_for(workbench_id),
         "workbenchId": workbench_id,
         "contextRevision": result.get("context_revision", 0),
@@ -34,6 +43,8 @@ def _response(result: dict[str, Any], workbench_id: str) -> dict[str, Any]:
         "interrupt": interrupt_values or None,
         "pendingApproval": interrupt_values[0] if interrupt_values else result.get("proposed_action"),
     }
+    response["runMetadata"] = build_run_metadata(result, workbench_id=workbench_id, run_id=run_id)
+    return response
 
 
 @asynccontextmanager
@@ -43,6 +54,7 @@ async def lifespan(app: FastAPI):
     data_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = data_dir / "checkpoints.sqlite"
     app.state.gateway = gateway
+    app.state.recorder = RunRecorder(data_dir / "assistant-events.jsonl")
     model, model_metadata = build_model_from_env()
     async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
         await checkpointer.setup()
@@ -70,6 +82,7 @@ async def health() -> dict[str, str]:
 
 @app.post("/v1/workbenches/{workbench_id}/bootstrap")
 async def bootstrap(workbench_id: str, request: AssistantRequest) -> dict[str, Any]:
+    run_id = uuid4().hex
     input_value: Any = {
         "workbench_id": workbench_id,
         "messages": [{"role": "user", "content": request.message}],
@@ -80,9 +93,17 @@ async def bootstrap(workbench_id: str, request: AssistantRequest) -> dict[str, A
         input_value,
         config={"configurable": {"thread_id": thread_id_for(workbench_id)}},
     )
-    return _response(result, workbench_id)
+    response = _response(result, workbench_id, run_id)
+    app.state.recorder.record_run(response["runMetadata"])
+    return response
 
 
 @app.post("/v1/workbenches/{workbench_id}/chat")
 async def chat(workbench_id: str, request: AssistantRequest) -> dict[str, Any]:
     return await bootstrap(workbench_id, request)
+
+
+@app.post("/v1/workbenches/{workbench_id}/feedback", status_code=204)
+async def feedback(workbench_id: str, request: FeedbackRequest) -> Response:
+    app.state.recorder.record_feedback(workbench_id, request.run_id, request.category)
+    return Response(status_code=204)

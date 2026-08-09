@@ -15,6 +15,7 @@ vi.mock('@/api/client', async importOriginal => {
     ...actual,
     bootstrapAppAssistant: vi.fn(async () => [{ kind: 'answer', data: { answer: 'Start by reviewing the open worktree todos.' } }]),
     chatAppAssistant: vi.fn(async () => [{ kind: 'answer', data: { answer: 'The worktree remains user-selected.' } }]),
+    submitAppAssistantFeedback: vi.fn(async () => {}),
     subscribeAppAssistantRuntime: vi.fn((_workbenchId: string, listener: (snapshot: api.AppAssistantRuntimeSnapshot) => void) => {
       runtimeHarness.listener = listener
       return () => { runtimeHarness.listener = null }
@@ -117,5 +118,22 @@ describe('AppAssistantPanel', () => {
     await act(async () => button!.click())
 
     expect(selectWorktree).toHaveBeenCalledWith('wt2')
+  })
+
+  it('records a categorized outcome for the latest assistant run', async () => {
+    vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
+      { kind: 'state', data: { runtimeSnapshot: runtime, runMetadata: { runId: 'run-1' } } },
+      { kind: 'answer', data: { answer: 'Review the current todo list.' } },
+    ])
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+
+    const button = host.querySelector<HTMLButtonElement>('[data-assistant-feedback="successful_completion"]')
+    expect(button).not.toBeNull()
+    await act(async () => button!.click())
+
+    expect(api.submitAppAssistantFeedback).toHaveBeenCalledWith('successful_completion', 'run-1')
   })
 })

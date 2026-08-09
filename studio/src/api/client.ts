@@ -286,6 +286,14 @@ export const bootstrapAppAssistant = (message = 'Inspect the current workbench a
   postAppAssistant('/app-assistant/bootstrap', message)
 export const chatAppAssistant = (message: string, approval?: Record<string, unknown>) =>
   postAppAssistant('/app-assistant/chat', message, approval)
+export type AppAssistantFeedbackCategory =
+  | 'wrong_worktree'
+  | 'stale_status'
+  | 'wrong_recommendation'
+  | 'unavailable_action'
+  | 'successful_completion'
+export const submitAppAssistantFeedback = (category: AppAssistantFeedbackCategory, runId?: string) =>
+  workbenchRequest<void>('/app-assistant/feedback', jsonRequest('POST', { category, runId }))
 export const getAppAssistantRuntimeState = (workbenchId: string) =>
   workbenchRequest<AppAssistantRuntimeSnapshot>(`/workbenches/${encodeURIComponent(workbenchId)}/runtime-state`)
 export const subscribeAppAssistantRuntime = (workbenchId: string, onSnapshot: (snapshot: AppAssistantRuntimeSnapshot) => void) => {

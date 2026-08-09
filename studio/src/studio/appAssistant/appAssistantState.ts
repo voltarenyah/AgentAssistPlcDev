@@ -8,6 +8,8 @@ export type AppAssistantMessage = {
 export type AppAssistantPanelState = {
   messages: AppAssistantMessage[]
   runtime: AppAssistantRuntimeSnapshot | null
+  lastRunId: string | null
+  feedbackSubmitted: boolean
   assistantRevision: number | null
   contextStale: boolean
   autoRefreshPending: boolean
@@ -18,6 +20,8 @@ export type AppAssistantPanelState = {
 export const initialAppAssistantState = (runtime: AppAssistantRuntimeSnapshot | null): AppAssistantPanelState => ({
   messages: [],
   runtime,
+  lastRunId: null,
+  feedbackSubmitted: false,
   assistantRevision: runtime?.workbenchRevision ?? null,
   contextStale: false,
   autoRefreshPending: false,
@@ -84,6 +88,10 @@ export const applyAssistantEvents = (
         ...next,
         runtime,
         assistantRevision: snapshot.workbenchRevision,
+        lastRunId: typeof (event.data.runMetadata as { runId?: unknown } | undefined)?.runId === 'string'
+          ? (event.data.runMetadata as { runId: string }).runId
+          : next.lastRunId,
+        feedbackSubmitted: false,
         contextStale: runtime.workbenchRevision > snapshot.workbenchRevision,
         autoRefreshPending: false,
       }

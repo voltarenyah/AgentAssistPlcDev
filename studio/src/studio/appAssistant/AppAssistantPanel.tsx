@@ -20,6 +20,7 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
   const [state, setState] = useState<AppAssistantPanelState>(() => initialAppAssistantState(runtime))
   const [draft, setDraft] = useState('')
   const [selectingWorktree, setSelectingWorktree] = useState<string | null>(null)
+  const [feedbackBusy, setFeedbackBusy] = useState(false)
   const latestRuntime = useRef<api.AppAssistantRuntimeSnapshot | null>(runtime)
 
   useEffect(() => {
@@ -97,6 +98,22 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
     }
   }
 
+  const submitFeedback = async (category: api.AppAssistantFeedbackCategory) => {
+    if (!state.lastRunId || feedbackBusy) return
+    setFeedbackBusy(true)
+    try {
+      await api.submitAppAssistantFeedback(category, state.lastRunId)
+      setState(current => ({ ...current, feedbackSubmitted: true }))
+    } catch (error) {
+      setState(current => ({
+        ...current,
+        messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Feedback unavailable' }],
+      }))
+    } finally {
+      setFeedbackBusy(false)
+    }
+  }
+
   const worktrees = useMemo(() => state.runtime?.worktrees ?? runtime?.worktrees ?? [], [runtime?.worktrees, state.runtime?.worktrees])
 
   return (
@@ -135,6 +152,18 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
             {message.content}
           </div>
         ))}
+        {state.lastRunId && state.messages.some(message => message.role === 'assistant') && !state.feedbackSubmitted && (
+          <div className="rounded-md border px-2.5 py-2 text-[9px]" data-assistant-feedback>
+            <div className="mb-1 text-muted-foreground">Was this useful?</div>
+            <div className="flex flex-wrap gap-1">
+              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="successful_completion" disabled={feedbackBusy} onClick={() => void submitFeedback('successful_completion')}>Success</button>
+              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="wrong_recommendation" disabled={feedbackBusy} onClick={() => void submitFeedback('wrong_recommendation')}>Wrong suggestion</button>
+              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="stale_status" disabled={feedbackBusy} onClick={() => void submitFeedback('stale_status')}>Stale status</button>
+              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="wrong_worktree" disabled={feedbackBusy} onClick={() => void submitFeedback('wrong_worktree')}>Wrong worktree</button>
+              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="unavailable_action" disabled={feedbackBusy} onClick={() => void submitFeedback('unavailable_action')}>Unavailable action</button>
+            </div>
+          </div>
+        )}
         {state.pendingApproval && (
           <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-[10px]">
             <div className="font-medium">Approve worktree creation?</div>
