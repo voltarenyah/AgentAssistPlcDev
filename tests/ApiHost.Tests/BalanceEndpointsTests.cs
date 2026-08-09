@@ -84,6 +84,27 @@ public sealed class BalanceEndpointsTests
     }
 
     [Fact]
+    public async Task BalanceUsesTheSharedDeepSeekEnvironmentApiKey()
+    {
+        var handler = new BalanceHandler(HttpStatusCode.OK, "{\"is_available\":false,\"balance_infos\":[]}");
+        await using var factory = CreateFactory(
+            handler,
+            new CompatibilityRuntimeState(),
+            new Dictionary<string, string?>
+            {
+                ["DEEPSEEK_API_KEY"] = "shared-environment-secret",
+                ["DeepSeek:ApiKey"] = "",
+                ["deepSeekApiKey"] = "",
+            });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/config/balance");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("Bearer shared-environment-secret", handler.Authorization);
+    }
+
+    [Fact]
     public async Task BalanceWithoutApiKeyReturnsProblemDetailsWithoutCallingUpstream()
     {
         var handler = new BalanceHandler(HttpStatusCode.OK, "{}");

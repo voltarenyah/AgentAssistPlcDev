@@ -304,7 +304,7 @@ public static class CompatibilityEndpoints
         });
         app.MapGet("/api/config/key/status", (CompatibilityRuntimeState state, IConfiguration configuration) => Results.Ok(new
         {
-            configured = !string.IsNullOrWhiteSpace(state.ApiKey ?? configuration["DeepSeek:ApiKey"] ?? configuration["deepSeekApiKey"]),
+            configured = !string.IsNullOrWhiteSpace(ResolveApiKey(state, configuration)),
         }));
         app.MapGet("/api/config/balance", async (
             CompatibilityRuntimeState state,
@@ -490,10 +490,11 @@ public static class CompatibilityEndpoints
 
     }
 
-    private static string? ResolveApiKey(CompatibilityRuntimeState state, IConfiguration configuration) =>
+    internal static string? ResolveApiKey(CompatibilityRuntimeState state, IConfiguration configuration) =>
         !string.IsNullOrWhiteSpace(state.ApiKey) ? state.ApiKey
         : !string.IsNullOrWhiteSpace(configuration["DeepSeek:ApiKey"]) ? configuration["DeepSeek:ApiKey"]
-        : configuration["deepSeekApiKey"];
+        : !string.IsNullOrWhiteSpace(configuration["deepSeekApiKey"]) ? configuration["deepSeekApiKey"]
+        : configuration["DEEPSEEK_API_KEY"];
 
     private static void ApplyDevicePaths(string tool, IDictionary<string, object?> args, DeviceContext device)
     {
@@ -706,7 +707,7 @@ internal sealed class ApiChatService(
 
     private async Task<ActiveChat> EnsureActiveChatAsync(DeviceContext device, CancellationToken token)
     {
-        var apiKey = state.ApiKey ?? configuration["DeepSeek:ApiKey"] ?? configuration["deepSeekApiKey"];
+        var apiKey = CompatibilityEndpoints.ResolveApiKey(state, configuration);
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("CHAT_API_KEY_REQUIRED");
         var runtime = services.GetService<McpRuntime>()
