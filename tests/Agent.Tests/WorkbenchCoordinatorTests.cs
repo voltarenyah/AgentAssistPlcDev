@@ -15,6 +15,93 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Path.Combine(Path.GetTempPath(), $"coordinator-tests-{Guid.NewGuid():N}");
 
     [Fact]
+    public void ConsistencyCommitPreservesTimelineMetadata()
+    {
+        var commit = JsonSerializer.Deserialize<ConsistencyCommit>("""
+            {"sha":"abc","message":"savepoint","author":"Ansel","timestamp":"2026-08-10T08:00:00Z","files":["engineering-state/revision.json"]}
+            """, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+
+        Assert.Equal("Ansel", commit.Author);
+        Assert.Equal("2026-08-10T08:00:00Z", commit.Timestamp);
+        Assert.Equal("engineering-state/revision.json", Assert.Single(commit.Files));
+    }
+
+    [Fact]
+    public async Task TimelineMarksOnlyRevisionStateCommitsWithChecksumAndSvnLink()
+    {
+        var fixture = Fixture.Create(root);
+        var workbench = RegisterTimelineWorkbench(fixture);
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_log", new ConsistencyLogResult
+            {
+                Commits =
+                [
+                    new ConsistencyCommit
+                    {
+                        Sha = "git-only",
+                        Author = "Ansel",
+                        Message = "Edit local XML",
+                        Timestamp = "2026-08-10T09:00:00Z",
+                        Files = ["devices/PLC_1/source/Blocks/Main.xml"],
+                    },
+                    new ConsistencyCommit
+                    {
+                        Sha = "savepoint",
+                        Author = "Ansel",
+                        Message = "Save TIA state",
+                        Timestamp = "2026-08-10T08:00:00Z",
+                        Files = [EngineeringStateWriter.RelativePath],
+                    },
+                ],
+            })
+            .Respond("vc_show_file", new ShowFileResult
+            {
+                Content = """
+                    {
+                      "schemaVersion": 1,
+                      "svn": { "url": "^/native/main", "revision": 184 },
+                      "tia": { "projectChecksum": "PLC_1:checksum-1" },
+                      "safety": { "fSignature": null },
+                      "validation": { "compileStatus": "SUCCESS" }
+                    }
+                    """,
+            })
+            .Respond("svn_log", new TimelineSvnLogResult
+            {
+                Entries =
+                [
+                    new TimelineSvnLogEntry
+                    {
+                        Revision = 184,
+                        Author = "Ansel",
+                        Message = "Save TIA state [native]",
+                        Time = new DateTime(2026, 8, 10, 8, 0, 0, DateTimeKind.Utc),
+                    },
+                ],
+            });
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "timeline-catalog")),
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        coordinator.RegisterWorkbench(workbench);
+
+        var result = await coordinator.ListVersionControlTimelineAsync("wb-1", "wt-1");
+
+        Assert.Null(result.GitCommits[0].TiaChecksum);
+        Assert.Null(result.GitCommits[0].SvnRevision);
+        Assert.Equal("PLC_1:checksum-1", result.GitCommits[1].TiaChecksum);
+        Assert.Equal(184, result.GitCommits[1].SvnRevision);
+        var svn = Assert.Single(result.SvnRevisions);
+        Assert.Equal(184, svn.Revision);
+        Assert.Equal("savepoint", svn.GitCommitSha);
+        Assert.Equal("Save TIA state [native]", svn.Message);
+    }
+
+    [Fact]
     public async Task OpenProjectInTiaUsesRegisteredProjectWithUi()
     {
         var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
@@ -1824,6 +1911,32 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new AtomicJsonStore(),
             new DeviceReconciler(),
             new DeviceSourceResolver(_ => { }));
+
+    private static WorkbenchMetadata RegisterTimelineWorkbench(Fixture fixture)
+    {
+        var workbenchRoot = fixture.Context.WorkbenchRoot;
+        var repositoryPath = Path.Combine(workbenchRoot, "repository.git");
+        var svnRepositoryPath = Path.Combine(workbenchRoot, "repository.svn");
+        Directory.CreateDirectory(repositoryPath);
+        Directory.CreateDirectory(svnRepositoryPath);
+        var workbench = new WorkbenchMetadata(
+            WorkbenchSchema.CurrentVersion,
+            "wb-1",
+            "Timeline",
+            "2026-08-10T00:00:00Z",
+            workbenchRoot,
+            repositoryPath,
+            null,
+            null,
+            [new WorkbenchWorktreeRegistration(
+                "wt-1",
+                "master",
+                "master",
+                Path.GetRelativePath(workbenchRoot, fixture.Context.WorktreeRoot).Replace('\\', '/'))],
+            SvnRepositoryPath: svnRepositoryPath);
+        new AtomicJsonStore().Write(Path.Combine(workbenchRoot, "workbench.json"), workbench);
+        return workbench;
+    }
 
     private static FakeToolCaller Caller(List<string> calls) => new RecordingCaller(calls);
 

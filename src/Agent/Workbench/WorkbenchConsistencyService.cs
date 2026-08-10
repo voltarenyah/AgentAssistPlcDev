@@ -12,6 +12,9 @@ public sealed class ConsistencyCommit
 {
     public string Sha { get; set; } = string.Empty;
     public string Message { get; set; } = string.Empty;
+    public string Author { get; set; } = string.Empty;
+    public string Timestamp { get; set; } = string.Empty;
+    public string[] Files { get; set; } = Array.Empty<string>();
 }
 
 public sealed class ConsistencyValidationEvidence
