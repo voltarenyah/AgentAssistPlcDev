@@ -803,6 +803,14 @@ export const getVersionControlWorktreeStatus = (workbenchId: string, worktreeId:
   workbenchRequest<VcStatusResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/status`)
 export const getVersionControlWorktreeLog = (workbenchId: string, worktreeId: string, maxCount = 30) =>
   workbenchRequest<VcLogResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/log?maxCount=${maxCount}`)
+export const getWorktreeVersionControlTimeline = (
+  workbenchId: string,
+  worktreeId: string,
+  offset = 0,
+  limit = 10,
+) => workbenchRequest<VersionControlTimelineResult>(
+  `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/timeline?offset=${offset}&limit=${limit}`,
+)
 export const getVersionControlWorktreeDiff = (workbenchId: string, worktreeId: string, filePath: string, oldSha?: string, newSha?: string) => {
   const params = new URLSearchParams({ filePath })
   if (oldSha) params.set('oldSha', oldSha)
@@ -1023,6 +1031,28 @@ export type VcCommitEntry = {
 export type VcLogResult = {
   repoPath: string
   commits: VcCommitEntry[]
+}
+export type VersionControlTimelineGitCommit = {
+  sha: string
+  author: string
+  message: string
+  timestamp: string
+  files: string[]
+  tiaChecksum: string | null
+  svnRevision: number | null
+}
+export type VersionControlTimelineSvnRevision = {
+  revision: number
+  author: string
+  message: string
+  timestamp: string
+  tiaChecksum: string | null
+  gitCommitSha: string
+}
+export type VersionControlTimelineResult = {
+  gitCommits: VersionControlTimelineGitCommit[]
+  svnRevisions: VersionControlTimelineSvnRevision[]
+  hasMore: boolean
 }
 export type VcValidationEvidence = {
   schemaVersion: string

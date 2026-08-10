@@ -268,6 +268,20 @@ public sealed class WorktreeLandingEndpointsTests : IDisposable
                 $"/api/workbenches/{wb}/worktrees/wt-1/tasks/missing")).StatusCode);
     }
 
+    [Fact]
+    public async Task VersionControlTimelineRejectsAnInvalidPageBeforeCallingVersionControl()
+    {
+        await using var fixture = LandingFixture.Create(root);
+        fixture.WriteWorktree("wt-1", "master", "master");
+
+        var response = await fixture.Client.GetAsync(
+            $"/api/workbenches/{fixture.WorkbenchId}/worktrees/wt-1/vc/timeline?offset=0&limit=0");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("TIMELINE_PAGE_INVALID", body.GetProperty("error").GetString());
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root))

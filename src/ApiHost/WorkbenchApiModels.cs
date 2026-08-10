@@ -681,6 +681,23 @@ public static class WorkbenchEndpoints
             WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_log").CallAsync<System.Text.Json.JsonElement>(
                 "vc_log", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), maxCount, filePath }, ct));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/timeline", async (
+            string workbenchId,
+            string worktreeId,
+            int? offset,
+            int? limit,
+            WorkbenchApiState s,
+            WorkbenchCoordinator coordinator,
+            CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(s.Workbench(workbenchId));
+            return Results.Ok(await coordinator.ListVersionControlTimelineAsync(
+                workbenchId,
+                worktreeId,
+                offset ?? 0,
+                limit ?? 10,
+                ct));
+        });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/diff", async (
             string workbenchId, string worktreeId, string filePath, string? oldSha, string? newSha,
             WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
