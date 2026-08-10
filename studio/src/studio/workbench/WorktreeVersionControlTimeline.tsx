@@ -108,22 +108,21 @@ function TimelineColumnView({
 function EventDetails({ active }: { active: ActiveEvent }) {
   const isGit = active.kind === 'git'
   const event = active.event
+  const identifier = 'sha' in event ? event.sha : `r${event.revision}`
   return (
     <div className="mx-4 mb-3 rounded-lg border bg-muted/40 p-3 text-[9px]" style={{ borderColor: 'var(--border)' }}>
       <div className="flex items-center gap-2">
         <span className={`h-2.5 w-2.5 ${isGit ? 'rounded-full bg-chart-3' : 'rounded-[2px] bg-chart-2'}`} />
         <span className="font-semibold">{isGit ? 'Git commit' : 'SVN revision'}</span>
-        <span className="font-mono text-muted-foreground">
-          {isGit ? event.sha : `r${event.revision}`}
-        </span>
+        <span className="font-mono text-muted-foreground">{identifier}</span>
       </div>
       <p className="mt-2 font-medium">{event.message || 'No commit message'}</p>
       <div className="mt-1 grid grid-cols-1 gap-x-4 gap-y-1 text-muted-foreground sm:grid-cols-2">
         <span>Author: {event.author || 'Unknown author'}</span>
         <span>Time: {formatDate(event.timestamp)}</span>
         <span>TIA checksum: {event.tiaChecksum ?? '—'}</span>
-        {!isGit && <span>Git commit: {event.gitCommitSha}</span>}
-        {isGit && event.files.length > 0 && <span>Changed files: {event.files.length}</span>}
+        {!isGit && 'gitCommitSha' in event && <span>Git commit: {event.gitCommitSha}</span>}
+        {isGit && 'files' in event && event.files.length > 0 && <span>Changed files: {event.files.length}</span>}
       </div>
     </div>
   )

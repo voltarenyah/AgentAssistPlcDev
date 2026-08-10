@@ -81,6 +81,11 @@ vi.mock('@/api/client', async importOriginal => {
       finishedUtc: patch.status === 'finished' ? '2026-08-03T00:00:00Z' : detail.finishedUtc,
     })),
     listWorktreeTasks: vi.fn(async () => taskList),
+    getWorktreeVersionControlTimeline: vi.fn(async () => ({
+      gitCommits: [],
+      svnRevisions: [],
+      hasMore: false,
+    } as api.VersionControlTimelineResult)),
     listDevices: vi.fn(async () => [
       { deviceId: 'dev1', plcName: 'PLC_One' },
       { deviceId: 'dev2', plcName: 'PLC_Two' },
@@ -134,6 +139,20 @@ describe('WorktreeLandingPage', () => {
     expect((host.querySelector('textarea[aria-label="Worktree purpose"]') as HTMLTextAreaElement).value)
       .toBe('Rework motor control')
     expect((host.querySelector('input[aria-label="Worktree owner"]') as HTMLInputElement).value).toBe('Bo')
+
+    await act(async () => root.unmount())
+  })
+
+  it('renders version-control history between metadata and tasks on the overview', async () => {
+    const { host, root } = await renderPage()
+
+    expect(host.textContent).toContain('Worktree version control')
+    const sections = [...host.querySelectorAll('section')]
+    const metadataIndex = sections.findIndex(section => section.textContent?.includes('Worktree metadata'))
+    const timelineIndex = sections.findIndex(section => section.getAttribute('aria-label') === 'Worktree version control')
+    const tasksIndex = sections.findIndex(section => section.textContent?.includes('Open task list'))
+    expect(metadataIndex).toBeLessThan(timelineIndex)
+    expect(timelineIndex).toBeLessThan(tasksIndex)
 
     await act(async () => root.unmount())
   })
