@@ -36,6 +36,7 @@ def test_live_uvicorn_sidecar_health_and_shutdown(tmp_path: Path):
     port = _free_port()
     environment = os.environ.copy()
     environment.pop("DEEPSEEK_API_KEY", None)
+    environment["APPDATA"] = str(tmp_path / "appdata")
     environment["APP_ASSISTANT_DATA_DIR"] = str(tmp_path / "assistant-data")
     environment["APP_ASSISTANT_APIHOST_URL"] = "http://127.0.0.1:1"
 
@@ -63,6 +64,8 @@ def test_live_uvicorn_sidecar_health_and_shutdown(tmp_path: Path):
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
         assert health.json()["graphVersion"] == "0.1.0"
+        assert health.json()["modelConfigured"] is False
+        assert health.json()["modelMode"] == "deterministic-fallback"
     finally:
         process.terminate()
         try:

@@ -103,6 +103,7 @@ async def lifespan(app: FastAPI):
     app.state.gateway = gateway
     app.state.recorder = RunRecorder(data_dir / "assistant-events.jsonl")
     model, model_metadata = build_model_from_env()
+    app.state.model_metadata = model_metadata
     async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
         await _setup_checkpointer(checkpointer)
         app.state.graph = build_graph(
@@ -119,11 +120,19 @@ app = FastAPI(title="Workbench App Assistant", version=__version__, lifespan=lif
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health() -> dict[str, Any]:
+    model_metadata = getattr(
+        app.state,
+        "model_metadata",
+        {"model": "unknown", "mode": "unknown"},
+    )
     return {
         "status": "ok",
         "graphVersion": __version__,
         "gateway": "configured",
+        "modelConfigured": model_metadata.get("mode") == "llm",
+        "modelMode": model_metadata.get("mode", "unknown"),
+        "model": model_metadata.get("model", "unknown"),
     }
 
 
