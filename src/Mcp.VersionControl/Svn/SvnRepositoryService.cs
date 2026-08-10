@@ -219,6 +219,22 @@ internal sealed class SvnRepositoryService
         if (limit <= 0)
             throw new VcInternalException("LIMIT_INVALID", "limit must be a positive number.");
 
+        Uri? targetUri = IsUri(pathOrUrl) ? new Uri(pathOrUrl) : null;
+        if (targetUri is null)
+        {
+            var path = RequirePath(pathOrUrl, nameof(pathOrUrl));
+            Run("SVN_INFO_FAILED", $"Failed to resolve the SVN URL for '{pathOrUrl}'.", () =>
+            {
+                using var client = CreateClient();
+                client.GetInfo(SvnTarget.FromString(path), out var info);
+                targetUri = info?.Uri;
+            });
+            if (targetUri is null)
+                throw new VcInternalException(
+                    "SVN_INFO_FAILED",
+                    $"Failed to resolve the SVN URL for '{pathOrUrl}'.");
+        }
+
         Collection<SvnLogEventArgs>? entries = null;
         Run("SVN_LOG_FAILED", $"Failed to read log of '{pathOrUrl}'.", () =>
         {
@@ -226,10 +242,7 @@ internal sealed class SvnRepositoryService
             var args = new SvnLogArgs();
             if (!allHistory)
                 args.Limit = limit;
-            if (IsUri(pathOrUrl))
-                client.GetLog(new Uri(pathOrUrl), args, out entries);
-            else
-                client.GetLog(RequirePath(pathOrUrl, nameof(pathOrUrl)), args, out entries);
+            client.GetLog(targetUri, args, out entries);
         });
 
         return new SvnLogResult
@@ -341,6 +354,7 @@ internal sealed class SvnRepositoryService
     }
 
     private static bool IsUri(string value) =>
+        !Path.IsPathRooted(value) &&
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         (uri.Scheme == Uri.UriSchemeFile || uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps ||
          string.Equals(uri.Scheme, "svn", StringComparison.OrdinalIgnoreCase));

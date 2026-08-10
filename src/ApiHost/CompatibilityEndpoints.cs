@@ -25,7 +25,8 @@ public sealed class ApiMcpGateway(
     };
     public IMcpToolCaller For(string tool)
     {
-        if (tool.StartsWith("vc_", StringComparison.Ordinal)) return versionControl;
+        if (tool.StartsWith("vc_", StringComparison.Ordinal)
+            || tool.StartsWith("svn_", StringComparison.Ordinal)) return versionControl;
         if (tool.StartsWith("src_", StringComparison.Ordinal)) return sourceEditor;
         if (KnowledgeTools.Contains(tool)) return knowledge;
         return engineering;

@@ -185,6 +185,25 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void Log_ReadsHistoryFromAWorkingCopyPath()
+    {
+        var shared = CreateShared();
+        var workingCopy = Path.Combine(_root, "tia-working-copy-log");
+        _svn.Checkout(MainUrl(shared), workingCopy);
+
+        File.WriteAllText(Path.Combine(workingCopy, "history.txt"), "one");
+        _svn.AddRecursive(workingCopy);
+        _svn.Commit(workingCopy, "working copy history");
+
+        var info = _svn.Info(workingCopy);
+        Assert.Equal(MainUrl(shared), info.Uri);
+
+        var log = _svn.Log(workingCopy, 10);
+
+        Assert.Contains(log.Entries, entry => entry.Message == "working copy history");
+    }
+
+    [Fact]
     public void UpdateToRevision_MovesWorkingCopyBackAndForward()
     {
         var shared = CreateShared();
