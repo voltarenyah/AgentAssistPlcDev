@@ -64,6 +64,10 @@ class FakeGateway:
         self.detail_calls.append("history")
         return {"commits": [{"sha": "abc", "message": "Add feature"}]}
 
+    async def get_svn_history(self, workbench_id: str, worktree_id: str, depth="recent"):
+        self.detail_calls.append(f"svn-history:{depth}")
+        return {"entries": [{"revision": 42, "message": "Native update"}], "complete": depth == "all"}
+
     async def get_svn(self, workbench_id: str, worktree_id: str):
         self.detail_calls.append("svn")
         return {"currentRevision": 42, "baseRevision": 40}
@@ -310,6 +314,30 @@ async def test_json_answer_envelope_is_not_shown_as_raw_tool_summary():
 
     assert result["answer"] == "The latest commit updates the worktree documentation."
     assert not result["answer"].startswith("{")
+
+
+async def test_explicit_all_history_reads_svn_history_without_dumping_it_by_default():
+    gateway = FakeGateway()
+    model = StructuredFakeModel(
+        json.dumps({
+            "kind": "read_tool",
+            "toolName": "read_svn_history",
+            "toolReason": "The user asked for the complete SVN history.",
+            "historyDepth": "all",
+        }),
+        "The SVN branch has one recent native update.",
+    )
+    graph = build_graph(gateway, model=model)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "request_mode": "command",
+        "messages": [{"role": "user", "content": "Fetch all SVN history and summarize it."}],
+    })
+
+    assert gateway.detail_calls == ["svn-history:all"]
+    assert result["decision"]["historyDepth"] == "all"
+    assert result["answer"] == "The SVN branch has one recent native update."
 
 
 async def test_command_model_can_ask_clarification_without_tool_call():

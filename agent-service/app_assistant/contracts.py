@@ -28,6 +28,7 @@ class WorkbenchContext(BaseModel):
     runtime: RuntimeSnapshot
     available_actions: list[dict[str, Any]] = Field(default_factory=list, alias="availableActions")
     observed_at: str | None = Field(default=None, alias="observedAt")
+    history: "HistoryEvidence | None" = None
 
 
 class WorktreeTodos(BaseModel):
@@ -44,6 +45,8 @@ class WorktreeHistory(BaseModel):
     worktree_id: str = Field(alias="worktreeId")
     source_revision: int = Field(alias="sourceRevision")
     commits: list[dict[str, Any]] = Field(default_factory=list)
+    complete: bool = False
+    unavailable_reason: str | None = Field(default=None, alias="unavailableReason")
 
 
 HistoryDepth = Literal["recent", "all"] | int

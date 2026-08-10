@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from . import __version__
+from .contracts import HistoryDepth
 from .decisions import AssistantDecision, AssistantRequestMode, OrientationProposal
 from .gateway import GatewayStaleError, WorkbenchGateway
 from .model import DEFAULT_MODEL, build_model_from_env
@@ -24,7 +25,13 @@ class Gateway(Protocol):
 
     async def get_todos(self, workbench_id: str, worktree_id: str) -> Any: ...
 
-    async def get_history(self, workbench_id: str, worktree_id: str) -> Any: ...
+    async def get_history(
+        self, workbench_id: str, worktree_id: str, depth: HistoryDepth = "recent"
+    ) -> Any: ...
+
+    async def get_svn_history(
+        self, workbench_id: str, worktree_id: str, depth: HistoryDepth = "recent"
+    ) -> Any: ...
 
     async def get_svn(self, workbench_id: str, worktree_id: str) -> Any: ...
 
@@ -232,10 +239,21 @@ async def _read_detail(state: AppAssistantState, gateway: Gateway) -> dict[str, 
         return {"tool_result": {"error": "Select a worktree first."}}
     workbench_id = state["workbench_id"]
     tool_name = (state.get("decision") or {}).get("toolName")
+    history_depth = (state.get("decision") or {}).get("historyDepth") or "recent"
     if tool_name == "read_worktree_todos":
         detail = _as_dict(await gateway.get_todos(workbench_id, worktree_id))
     elif tool_name == "read_commit_history":
-        detail = _as_dict(await gateway.get_history(workbench_id, worktree_id))
+        detail = _as_dict(
+            await gateway.get_history(workbench_id, worktree_id, history_depth)
+            if history_depth != "recent"
+            else await gateway.get_history(workbench_id, worktree_id)
+        )
+    elif tool_name == "read_svn_history":
+        detail = _as_dict(
+            await gateway.get_svn_history(workbench_id, worktree_id, history_depth)
+            if history_depth != "recent"
+            else await gateway.get_svn_history(workbench_id, worktree_id)
+        )
     elif tool_name == "read_svn_state":
         detail = _as_dict(await gateway.get_svn(workbench_id, worktree_id))
     else:
@@ -255,7 +273,19 @@ def _fallback_tool_answer(state: AppAssistantState) -> str:
     if tool_name == "read_commit_history":
         commits = result.get("commits", [])
         messages = ", ".join(item.get("message", item.get("sha", "unknown")) for item in commits)
-        return "Recent commits: " + (messages or "none available.")
+        label = "All commits" if result.get("complete") else "Recent commits"
+        if result.get("unavailableReason"):
+            return f"Git history unavailable: {result['unavailableReason']}."
+        return label + ": " + (messages or "none available.")
+    if tool_name == "read_svn_history":
+        if result.get("unavailableReason"):
+            return f"SVN history unavailable: {result['unavailableReason']}."
+        entries = result.get("entries", [])
+        revisions = ", ".join(
+            f"r{item.get('revision', 'unknown')}: {item.get('message', '').strip()}" for item in entries
+        )
+        label = "All SVN history" if result.get("complete") else "Recent SVN history"
+        return label + ": " + (revisions or "none available.")
     return f"SVN state: base revision {result.get('baseRevision', 'unknown')}, current revision {result.get('currentRevision', 'unknown')}."
 
 

@@ -1,9 +1,10 @@
 import os
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
-from .contracts import WorkbenchContext, WorktreeHistory, WorktreeSvn, WorktreeTodos
+from .contracts import HistoryDepth, WorkbenchContext, WorktreeHistory, WorktreeSvn, WorktreeSvnHistory, WorktreeTodos
 
 
 class GatewayUnavailableError(RuntimeError):
@@ -33,11 +34,27 @@ class WorkbenchGateway:
         )
         return WorktreeTodos.model_validate(response)
 
-    async def get_history(self, workbench_id: str, worktree_id: str) -> WorktreeHistory:
+    async def get_history(
+        self,
+        workbench_id: str,
+        worktree_id: str,
+        depth: HistoryDepth = "recent",
+    ) -> WorktreeHistory:
         response = await self._get(
-            f"/internal/app-assistant/workbenches/{workbench_id}/worktrees/{worktree_id}/history"
+            self._history_path(workbench_id, worktree_id, "history", depth)
         )
         return WorktreeHistory.model_validate(response)
+
+    async def get_svn_history(
+        self,
+        workbench_id: str,
+        worktree_id: str,
+        depth: HistoryDepth = "recent",
+    ) -> WorktreeSvnHistory:
+        response = await self._get(
+            self._history_path(workbench_id, worktree_id, "svn-history", depth)
+        )
+        return WorktreeSvnHistory.model_validate(response)
 
     async def get_svn(self, workbench_id: str, worktree_id: str) -> WorktreeSvn:
         response = await self._get(
@@ -98,3 +115,10 @@ class WorkbenchGateway:
     def _headers(self) -> dict[str, str]:
         token = os.getenv("APP_ASSISTANT_INTERNAL_TOKEN")
         return {"X-App-Assistant-Token": token} if token else {}
+
+    @staticmethod
+    def _history_path(workbench_id: str, worktree_id: str, resource: str, depth: HistoryDepth) -> str:
+        return (
+            f"/internal/app-assistant/workbenches/{workbench_id}/worktrees/{worktree_id}/{resource}"
+            f"?{urlencode({'depth': str(depth)})}"
+        )
