@@ -4,6 +4,7 @@ import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
 from app_assistant.graph import build_graph, thread_id_for
+from app_assistant.prompts import build_command_prompt
 from langgraph.types import Command
 
 
@@ -55,6 +56,26 @@ class EvaluationGateway:
 
     async def create_worktree(self, workbench_id: str, **kwargs):
         return {"workbenchId": workbench_id, "name": kwargs["name"], "selected": False}
+
+
+def test_history_prompt_exposes_bootstrap_evidence_and_depth_rules():
+    prompt = build_command_prompt(
+        runtime_snapshot={
+            "runtime": {"workbenchRevision": 4, "focus": {"worktreeId": "wt-1"}},
+            "history": {
+                "worktreeId": "wt-1",
+                "git": {"commits": [{"message": "Add feature"}]},
+                "svn": {"entries": [{"revision": 42, "message": "Native update"}]},
+            },
+        },
+        user_message="Analyze the recent changes.",
+        messages=[],
+    )
+
+    assert "Add feature" in prompt
+    assert "Native update" in prompt
+    assert "historyDepth=all" in prompt
+    assert "Summarize history normally" in prompt
 
 
 @pytest.mark.parametrize(
