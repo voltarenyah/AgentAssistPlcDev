@@ -144,10 +144,15 @@ public sealed class AppAssistantGateway(
         {
             result = await mcp.For("svn_log").CallAsync<JsonElement>(
                 "svn_log",
-                new { path = state.WorktreeRoot(workbenchId, worktreeId), limit = request.Limit, allHistory = request.AllHistory },
+                new
+                {
+                    path = ResolveSvnHistoryTarget(worktree, state.WorktreeRoot(workbenchId, worktreeId)),
+                    limit = request.Limit,
+                    allHistory = request.AllHistory,
+                },
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is ToolCallException or InvalidOperationException)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             throw new AppAssistantGatewayException(
                 "SVN_HISTORY_UNAVAILABLE",
@@ -164,6 +169,20 @@ public sealed class AppAssistantGateway(
             worktree.SvnUrl,
             entries,
             request.AllHistory);
+    }
+
+    private static string ResolveSvnHistoryTarget(WorktreeMetadata worktree, string worktreeRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(worktree.ManagedTiaProjectPath))
+        {
+            var directory = Path.GetDirectoryName(worktree.ManagedTiaProjectPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                return directory;
+        }
+
+        return string.IsNullOrWhiteSpace(worktree.SvnUrl)
+            ? worktreeRoot
+            : worktree.SvnUrl;
     }
 
     private async Task<AppAssistantHistoryContext> GetFocusedHistoryAsync(
