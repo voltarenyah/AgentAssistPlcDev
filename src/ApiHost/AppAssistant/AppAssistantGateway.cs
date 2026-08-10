@@ -125,7 +125,8 @@ public sealed class AppAssistantGateway(
         var workbench = state.Workbench(workbenchId);
         var worktree = state.Worktree(workbenchId, worktreeId);
         var snapshot = runtime.GetSnapshot(workbenchId);
-        if (string.IsNullOrWhiteSpace(worktree.SvnUrl))
+        if (string.IsNullOrWhiteSpace(worktree.SvnUrl)
+            && string.IsNullOrWhiteSpace(workbench.SvnRepositoryPath))
         {
             return new WorktreeSvnHistoryResponse(
                 workbench.WorkbenchId,
@@ -134,7 +135,7 @@ public sealed class AppAssistantGateway(
                 snapshot.ObservedAt,
                 worktree.SvnUrl,
                 Array.Empty<WorktreeSvnHistoryEntry>(),
-                request.AllHistory,
+                false,
                 "SVN_NOT_CONFIGURED");
         }
 
