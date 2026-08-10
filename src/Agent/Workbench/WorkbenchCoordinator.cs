@@ -704,6 +704,158 @@ public sealed class WorkbenchCoordinator
         return savepoints;
     }
 
+    /// <summary>Returns a paged, worktree-scoped Git/SVN/TIA timeline. Git-only commits keep
+    /// their own row and never inherit checksum or SVN metadata from an earlier savepoint.</summary>
+    public async Task<VersionControlTimelineResult> ListVersionControlTimelineAsync(
+        string workbenchId,
+        string worktreeId,
+        int offset = 0,
+        int limit = 10,
+        CancellationToken token = default)
+    {
+        if (offset < 0 || limit is < 1 or > 50)
+        {
+            throw new WorkbenchLifecycleException(
+                "TIMELINE_PAGE_INVALID",
+                "Timeline offset must be zero or greater and limit must be between 1 and 50.");
+        }
+
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var registration = workbench.Worktrees.SingleOrDefault(item => item.WorktreeId == worktreeId)
+            ?? throw new WorkbenchCatalogException(
+                "WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+        var requestedCount = checked(offset + limit + 1);
+        var log = await versionControl.CallAsync<ConsistencyLogResult>(
+            "vc_log",
+            new { repoPath = worktreeRoot, maxCount = requestedCount },
+            token).ConfigureAwait(false);
+
+        var commits = log.Commits ?? Array.Empty<ConsistencyCommit>();
+        var candidates = new List<TimelineSvnCandidate>();
+        var seenRevisions = new HashSet<long>();
+        var gitRows = new List<VersionControlTimelineGitCommit>(commits.Length);
+        foreach (var commit in commits)
+        {
+            var files = commit.Files ?? Array.Empty<string>();
+            var revisionStateChanged = files.Any(path =>
+                string.Equals(path, EngineeringStateWriter.RelativePath, StringComparison.OrdinalIgnoreCase));
+            EngineeringRevisionState? state = null;
+            if (revisionStateChanged)
+            {
+                try
+                {
+                    var file = await versionControl.CallAsync<ShowFileResult>(
+                        "vc_show_file",
+                        new
+                        {
+                            repoPath = worktreeRoot,
+                            filePath = EngineeringStateWriter.RelativePath,
+                            commitSha = commit.Sha,
+                        },
+                        token).ConfigureAwait(false);
+                    state = EngineeringStateWriter.TryParse(file.Content);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    state = null;
+                }
+            }
+
+            long? linkedRevision = null;
+            if (revisionStateChanged
+                && state?.Svn?.Revision is { } revision
+                && state.Svn.Url is { Length: > 0 } svnUrl
+                && seenRevisions.Add(revision))
+            {
+                linkedRevision = revision;
+                candidates.Add(new TimelineSvnCandidate(
+                    revision,
+                    svnUrl,
+                    state.Tia?.ProjectChecksum,
+                    commit.Sha,
+                    commit.Author,
+                    commit.Message,
+                    commit.Timestamp));
+            }
+
+            gitRows.Add(new VersionControlTimelineGitCommit(
+                commit.Sha,
+                commit.Author,
+                commit.Message,
+                commit.Timestamp,
+                files,
+                revisionStateChanged ? state?.Tia?.ProjectChecksum : null,
+                linkedRevision));
+        }
+
+        var svnMetadata = new Dictionary<long, TimelineSvnLogEntry>();
+        foreach (var group in candidates.GroupBy(item => item.Url, StringComparer.Ordinal))
+        {
+            try
+            {
+                var logResult = await versionControl.CallAsync<TimelineSvnLogResult>(
+                    "svn_log",
+                    new
+                    {
+                        path = ResolveSvnUrl(workbench.SvnRepositoryPath ?? string.Empty, group.Key),
+                        limit = requestedCount,
+                    },
+                    token).ConfigureAwait(false);
+                foreach (var entry in logResult.Entries ?? Array.Empty<TimelineSvnLogEntry>())
+                {
+                    svnMetadata[entry.Revision] = entry;
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Git metadata remains sufficient to render the linked event if SVN history
+                // is unavailable for an older or legacy worktree.
+            }
+        }
+
+        var page = gitRows.Skip(offset).Take(limit).ToArray();
+        var pageShas = page.Select(commit => commit.Sha).ToHashSet(StringComparer.Ordinal);
+        var svnRows = candidates
+            .Where(candidate => pageShas.Contains(candidate.GitCommitSha))
+            .Select(candidate =>
+            {
+                if (svnMetadata.TryGetValue(candidate.Revision, out var entry))
+                {
+                    return new VersionControlTimelineSvnRevision(
+                        candidate.Revision,
+                        entry.Author,
+                        entry.Message,
+                        entry.Time.ToUniversalTime().ToString("O"),
+                        candidate.TiaChecksum,
+                        candidate.GitCommitSha);
+                }
+
+                return new VersionControlTimelineSvnRevision(
+                    candidate.Revision,
+                    candidate.Author,
+                    candidate.Message,
+                    candidate.Timestamp,
+                    candidate.TiaChecksum,
+                    candidate.GitCommitSha);
+            })
+            .ToArray();
+
+        return new VersionControlTimelineResult(
+            page,
+            svnRows,
+            commits.Length > offset + limit);
+    }
+
+    private sealed record TimelineSvnCandidate(
+        long Revision,
+        string Url,
+        string? TiaChecksum,
+        string GitCommitSha,
+        string Author,
+        string Message,
+        string Timestamp);
+
     /// <summary>
     /// Reads engineering-state/revision.json at a Git commit through the VC boundary. At HEAD the
     /// working-tree file is read directly; for older commits the blob is read via vc_show_file —
