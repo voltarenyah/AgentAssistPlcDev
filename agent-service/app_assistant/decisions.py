@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .contracts import HistoryDepth
+
 
 class AssistantRequestMode(str, Enum):
     ORIENTATION = "orientation"
@@ -36,7 +38,9 @@ class AssistantDecision(BaseModel):
     tool_name: Literal[
         "read_worktree_todos",
         "read_commit_history",
+        "read_svn_history",
         "read_svn_state",
     ] | None = Field(default=None, alias="toolName")
     tool_reason: str | None = Field(default=None, alias="toolReason")
+    history_depth: HistoryDepth | None = Field(default=None, alias="historyDepth")
     mutation: MutationProposal | None = None

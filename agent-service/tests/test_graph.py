@@ -2,7 +2,39 @@ import json
 
 from langgraph.checkpoint.memory import MemorySaver
 
+from app_assistant.contracts import HistoryEvidence, WorktreeSvnHistory
+from app_assistant.decisions import AssistantDecision
 from app_assistant.graph import build_graph, thread_id_for
+
+
+def test_history_decision_accepts_svn_history_and_all_depth():
+    decision = AssistantDecision.model_validate({
+        "kind": "read_tool",
+        "toolName": "read_svn_history",
+        "toolReason": "The user asked for all SVN commits.",
+        "historyDepth": "all",
+    })
+
+    assert decision.tool_name == "read_svn_history"
+    assert decision.history_depth == "all"
+
+
+def test_history_evidence_preserves_api_aliases():
+    evidence = HistoryEvidence.model_validate({
+        "worktreeId": "wt-1",
+        "svn": {
+            "workbenchId": "wb-1",
+            "worktreeId": "wt-1",
+            "sourceRevision": 8,
+            "entries": [{"revision": 7, "message": "Native update", "author": "alice"}],
+            "complete": True,
+        },
+    })
+
+    assert evidence.worktree_id == "wt-1"
+    assert isinstance(evidence.svn, WorktreeSvnHistory)
+    assert evidence.svn.entries[0].revision == 7
+    assert evidence.svn.complete is True
 
 
 class FakeGateway:
