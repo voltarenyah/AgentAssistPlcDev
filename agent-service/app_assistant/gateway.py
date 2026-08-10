@@ -21,7 +21,7 @@ class WorkbenchGateway:
 
     @classmethod
     def from_env(cls) -> "WorkbenchGateway":
-        return cls(os.getenv("APP_ASSISTANT_APIHOST_URL", "http://127.0.0.1:5000"))
+        return cls(os.getenv("APP_ASSISTANT_APIHOST_URL", "http://127.0.0.1:5239"))
 
     async def get_context(self, workbench_id: str) -> WorkbenchContext:
         response = await self._get(f"/internal/app-assistant/workbenches/{workbench_id}/context")

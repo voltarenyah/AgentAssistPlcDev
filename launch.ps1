@@ -15,6 +15,9 @@ Rebuilds and launches the full stack:
 Options:
   -NoBuild    Skip the dotnet build step (start faster when code is already compiled)
   -NoKill     Don't kill existing ApiHost / node processes before starting
+
+The optional LangGraph App Assistant is started when
+AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED=true (or 1).
 "@
     return
 }
@@ -33,6 +36,9 @@ if (-not $NoKill) {
     # fails to start with "address already in use".
     Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match 'ApiHost\.dll' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'app_assistant\.server:app' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Get-Process -Name "node" -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
@@ -78,7 +84,132 @@ Start-Process `
     -FilePath "dotnet" `
     -ArgumentList @("run", "--project", $apiProject, "--", "Application:OpenBrowserOnStart=false")
 
-# 4. Launch Studio Vite dev server in a new window
+# 4. Start the optional LangGraph App Assistant. The desktop host owns this
+#    lifecycle in packaged mode; the development launcher must do the same
+#    when the documented opt-in flag is enabled.
+$assistantEnabled = $env:AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED -in @("1", "true")
+if ($assistantEnabled) {
+    $assistantRoot = Join-Path $root "agent-service"
+    $assistantLogRoot = Join-Path $root ".assistant-logs"
+    $assistantStdout = Join-Path $assistantLogRoot "stdout.log"
+    $assistantStderr = Join-Path $assistantLogRoot "stderr.log"
+    $assistantDataDir = $env:AUTOMATION_WORKBENCH_APP_ASSISTANT_DATA_DIR
+    if ([string]::IsNullOrWhiteSpace($assistantDataDir)) {
+        $assistantDataDir = Join-Path $env:LOCALAPPDATA "AutomationWorkbench\AppAssistant"
+    }
+
+    if (-not (Test-Path (Join-Path $assistantRoot "pyproject.toml"))) {
+        Write-Host "!!! LangGraph service was not found at $assistantRoot." -ForegroundColor Red
+        exit 1
+    }
+    if (-not (Get-Command py.exe -ErrorAction SilentlyContinue)) {
+        Write-Host "!!! Python launcher py.exe is required for the LangGraph App Assistant." -ForegroundColor Red
+        exit 1
+    }
+
+    New-Item -ItemType Directory -Force -Path $assistantLogRoot, $assistantDataDir | Out-Null
+    $env:APP_ASSISTANT_APIHOST_URL = "http://127.0.0.1:5239"
+    $env:APP_ASSISTANT_DATA_DIR = $assistantDataDir
+
+    # Match the packaged desktop host: forward the existing local DeepSeek
+    # configuration to the sidecar without ever printing the credential.
+    $assistantApiKey = $env:DEEPSEEK_API_KEY
+    $assistantModel = $env:DEEPSEEK_MODEL
+    $assistantBaseUrl = $env:DEEPSEEK_BASE_URL
+    if ([string]::IsNullOrWhiteSpace($assistantApiKey) -or
+        [string]::IsNullOrWhiteSpace($assistantModel) -or
+        [string]::IsNullOrWhiteSpace($assistantBaseUrl)) {
+        $assistantConfigPaths = @(
+            (Join-Path $env:APPDATA "AutomationWorkbench\config.json"),
+            (Join-Path $env:APPDATA "PlcAiAssistant\config.json")
+        )
+        foreach ($assistantConfigPath in $assistantConfigPaths) {
+            if (-not (Test-Path $assistantConfigPath)) {
+                continue
+            }
+            try {
+                $assistantConfig = Get-Content -Raw $assistantConfigPath | ConvertFrom-Json
+                if ([string]::IsNullOrWhiteSpace($assistantApiKey)) {
+                    $keyProperty = $assistantConfig.PSObject.Properties["deepSeekApiKey"]
+                    if ($null -eq $keyProperty) {
+                        $keyProperty = $assistantConfig.PSObject.Properties["DeepSeek:ApiKey"]
+                    }
+                    if ($null -ne $keyProperty) {
+                        $assistantApiKey = [string]$keyProperty.Value
+                    }
+                    $deepSeekSection = $assistantConfig.PSObject.Properties["DeepSeek"]
+                    if ([string]::IsNullOrWhiteSpace($assistantApiKey) -and $null -ne $deepSeekSection) {
+                        $nestedKey = $deepSeekSection.Value.PSObject.Properties["ApiKey"]
+                        if ($null -ne $nestedKey) {
+                            $assistantApiKey = [string]$nestedKey.Value
+                        }
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($assistantModel)) {
+                    $modelProperty = $assistantConfig.PSObject.Properties["deepSeekModel"]
+                    if ($null -ne $modelProperty) {
+                        $assistantModel = [string]$modelProperty.Value
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($assistantBaseUrl)) {
+                    $baseUrlProperty = $assistantConfig.PSObject.Properties["deepSeekBaseUrl"]
+                    if ($null -ne $baseUrlProperty) {
+                        $assistantBaseUrl = [string]$baseUrlProperty.Value
+                    }
+                }
+            } catch {
+                # Ignore malformed optional config and let the sidecar use its fallback.
+            }
+            if (-not [string]::IsNullOrWhiteSpace($assistantApiKey) -and
+                -not [string]::IsNullOrWhiteSpace($assistantModel) -and
+                -not [string]::IsNullOrWhiteSpace($assistantBaseUrl)) {
+                break
+            }
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($assistantApiKey)) {
+        $env:DEEPSEEK_API_KEY = $assistantApiKey.Trim()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($assistantModel)) {
+        $env:DEEPSEEK_MODEL = $assistantModel.Trim()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($assistantBaseUrl)) {
+        $env:DEEPSEEK_BASE_URL = $assistantBaseUrl.Trim()
+    }
+
+    Write-Host ">>> Starting LangGraph App Assistant (port 8787)..." -ForegroundColor Cyan
+    $assistantProcess = Start-Process `
+        -WindowStyle Hidden `
+        -WorkingDirectory $assistantRoot `
+        -FilePath "py.exe" `
+        -ArgumentList @("-3.13", "-m", "uvicorn", "app_assistant.server:app", "--host", "127.0.0.1", "--port", "8787") `
+        -RedirectStandardOutput $assistantStdout `
+        -RedirectStandardError $assistantStderr `
+        -PassThru
+
+    $assistantReady = $false
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+        if ($assistantProcess.HasExited) {
+            break
+        }
+        try {
+            $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8787/health" -TimeoutSec 1
+            if ($health.StatusCode -eq 200) {
+                $assistantReady = $true
+                break
+            }
+        } catch {
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    if (-not $assistantReady) {
+        Write-Host "!!! LangGraph App Assistant failed health check. See $assistantStderr" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "    LangGraph App Assistant is ready." -ForegroundColor Green
+}
+
+# 5. Launch Studio Vite dev server in a new window
 Write-Host ">>> Starting Studio (port 5173)..." -ForegroundColor Cyan
 $studioRoot = Join-Path $root "studio"
 Start-Process `

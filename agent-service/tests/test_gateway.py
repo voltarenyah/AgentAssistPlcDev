@@ -4,6 +4,14 @@ import pytest
 from app_assistant.gateway import GatewayUnavailableError, WorkbenchGateway
 
 
+def test_gateway_defaults_to_the_development_api_host(monkeypatch):
+    monkeypatch.delenv("APP_ASSISTANT_APIHOST_URL", raising=False)
+
+    gateway = WorkbenchGateway.from_env()
+
+    assert gateway.base_url == "http://127.0.0.1:5239"
+
+
 @pytest.mark.asyncio
 async def test_gateway_validates_context_and_preserves_revision():
     transport = httpx.MockTransport(
