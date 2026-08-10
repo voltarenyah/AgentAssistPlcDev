@@ -4,7 +4,7 @@ import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
 from app_assistant.graph import build_graph, thread_id_for
-from app_assistant.prompts import build_command_prompt
+from app_assistant.prompts import build_command_prompt, build_orientation_prompt
 from langgraph.types import Command
 
 
@@ -76,6 +76,22 @@ def test_history_prompt_exposes_bootstrap_evidence_and_depth_rules():
     assert "Native update" in prompt
     assert "historyDepth=all" in prompt
     assert "Summarize history normally" in prompt
+
+
+def test_prompts_define_friendly_concise_and_non_reasoning_reply_style():
+    command_prompt = build_command_prompt(
+        runtime_snapshot={"runtime": {"workbenchRevision": 4}},
+        user_message="What changed?",
+        messages=[],
+    )
+    orientation_prompt = build_orientation_prompt({"runtime": {"workbenchRevision": 4}})
+
+    for prompt in (command_prompt, orientation_prompt):
+        assert "friendly" in prompt.lower()
+        assert "concise" in prompt.lower()
+        assert "user's level" in prompt.lower()
+        assert "private chain-of-thought" in prompt.lower()
+        assert "unnecessary" in prompt.lower()
 
 
 @pytest.mark.parametrize(
