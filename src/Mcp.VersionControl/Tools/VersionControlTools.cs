@@ -134,12 +134,13 @@ public sealed class VersionControlTools
         => Invoke(() => RepositoryService.CommitHardware(repoPath, paths, message, author));
 
     [McpServerTool(Name = "vc_log")]
-    [Description("Show commit history. Default last 20 commits; max 100. Optionally filter to commits touching a single file.")]
+    [Description("Show commit history. Default last 20 commits; max 100. Set allHistory=true for complete history. Optionally filter to commits touching a single file.")]
     public CallToolResult VcLog(
         [Description("Path to the git repository.")] string repoPath,
         [Description("Maximum number of commits (default 20, max 100).")] int? maxCount = null,
-        [Description("Optional: filter log to commits touching this file path.")] string? filePath = null)
-        => Invoke(() => RepositoryService.Log(repoPath, maxCount, filePath));
+        [Description("Optional: filter log to commits touching this file path.")] string? filePath = null,
+        [Description("When true, return complete history and ignore the bounded maxCount default.")] bool allHistory = false)
+        => Invoke(() => RepositoryService.Log(repoPath, maxCount, filePath, allHistory));
 
     [McpServerTool(Name = "vc_validation_get")]
     [Description("Read immutable TIA validation evidence for an exact commit. Returns null when the commit is unlabeled or has invalid evidence.")]
@@ -262,11 +263,12 @@ public sealed class VersionControlTools
         => Invoke(() => _svn.Status(path));
 
     [McpServerTool(Name = "svn_log")]
-    [Description("Show commit history of a working-copy path or repository URL, newest first. Default last 20 entries.")]
+    [Description("Show commit history of a working-copy path or repository URL, newest first. Default last 20 entries; set allHistory=true for complete history.")]
     public CallToolResult SvnLog(
         [Description("Working-copy path or repository URL.")] string path,
-        [Description("Maximum number of log entries (default 20).")] int? limit = null)
-        => Invoke(() => _svn.Log(path, limit ?? 20));
+        [Description("Maximum number of log entries (default 20).")] int? limit = null,
+        [Description("When true, return complete history and ignore the bounded limit default.")] bool allHistory = false)
+        => Invoke(() => _svn.Log(path, limit ?? 20, allHistory));
 
     [McpServerTool(Name = "svn_update")]
     [Description("Update a working copy to an exact revision. Used to pin a checked-out native project to the revision recorded in revision.json.")]

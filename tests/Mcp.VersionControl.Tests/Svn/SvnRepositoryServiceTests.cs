@@ -163,6 +163,28 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void Log_AllHistoryReturnsEveryEntry()
+    {
+        var shared = CreateShared();
+        var workingCopy = Path.Combine(_root, "tia-all-history");
+        _svn.Checkout(MainUrl(shared), workingCopy);
+
+        File.WriteAllText(Path.Combine(workingCopy, "one.txt"), "one");
+        _svn.AddRecursive(workingCopy);
+        _svn.Commit(workingCopy, "one");
+        File.WriteAllText(Path.Combine(workingCopy, "one.txt"), "two");
+        _svn.Commit(workingCopy, "two");
+        File.WriteAllText(Path.Combine(workingCopy, "one.txt"), "three");
+        _svn.Commit(workingCopy, "three");
+
+        var log = _svn.Log(MainUrl(shared), allHistory: true);
+
+        Assert.Contains(log.Entries, entry => entry.Message == "one");
+        Assert.Contains(log.Entries, entry => entry.Message == "two");
+        Assert.Contains(log.Entries, entry => entry.Message == "three");
+    }
+
+    [Fact]
     public void UpdateToRevision_MovesWorkingCopyBackAndForward()
     {
         var shared = CreateShared();

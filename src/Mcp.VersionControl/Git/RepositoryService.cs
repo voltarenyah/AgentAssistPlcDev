@@ -705,8 +705,12 @@ internal static class RepositoryService
         return blob?.GetContentText();
     }
 
-    /// <summary>Show commit history. Capped at maxCount (default 20, max 100). Optionally filter to one file.</summary>
-    public static VcLogResult Log(string repoPath, int? maxCount = null, string? filePath = null)
+    /// <summary>Show commit history. Capped at maxCount (default 20, max 100), unless allHistory is true.</summary>
+    public static VcLogResult Log(
+        string repoPath,
+        int? maxCount = null,
+        string? filePath = null,
+        bool allHistory = false)
     {
         var cap = Math.Clamp(maxCount ?? 20, 1, 100);
         EnsureRepo(repoPath);
@@ -720,11 +724,14 @@ internal static class RepositoryService
             // Git tree paths are repository-relative and always use '/'. Keeping the
             // caller's path in that form is required by LibGit2Sharp's QueryBy on
             // Windows linked worktrees; converting to '\\' silently returns no commits.
-            commits = repo.Commits.QueryBy(normalizedFilePath, filter).Take(cap).Select(c => c.Commit);
+            commits = repo.Commits.QueryBy(normalizedFilePath, filter)
+                .Select(c => c.Commit);
+            if (!allHistory)
+                commits = commits.Take(cap);
         }
         else
         {
-            commits = repo.Commits.Take(cap);
+            commits = allHistory ? repo.Commits : repo.Commits.Take(cap);
         }
 
         var entries = commits.Select(c =>

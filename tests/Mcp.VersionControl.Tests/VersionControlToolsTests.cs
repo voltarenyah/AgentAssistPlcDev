@@ -543,6 +543,19 @@ public sealed class VersionControlToolsTests : IDisposable
     }
 
     [Fact]
+    public void Log_AllHistoryReturnsEveryCommitBeyondTheDefaultCap()
+    {
+        for (int i = 0; i < 105; i++)
+            _fixture.CommitFile($"devices/PLC_1/source/Blocks/F{i}.xml", $"<Document ID=\"{i}\" />", $"commit {i}");
+
+        var result = _tools.VcLog(_fixture.RootPath, allHistory: true);
+        var data = Unwrap<VcLogResult>(result);
+
+        Assert.NotNull(data);
+        Assert.Equal(105, data!.Commits.Length);
+    }
+
+    [Fact]
     public void Log_ListsActualFilesForRootAndNonRootCommits()
     {
         const string firstPath = "devices/PLC_1/source/Blocks/A.xml";

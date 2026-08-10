@@ -212,7 +212,7 @@ internal sealed class SvnRepositoryService
     }
 
     /// <summary>Log of a working-copy path or repository URL, newest first.</summary>
-    public SvnLogResult Log(string pathOrUrl, int limit = 20)
+    public SvnLogResult Log(string pathOrUrl, int limit = 20, bool allHistory = false)
     {
         if (string.IsNullOrWhiteSpace(pathOrUrl))
             throw new VcInternalException("PATH_REQUIRED", "pathOrUrl must not be empty.");
@@ -223,7 +223,9 @@ internal sealed class SvnRepositoryService
         Run("SVN_LOG_FAILED", $"Failed to read log of '{pathOrUrl}'.", () =>
         {
             using var client = CreateClient();
-            var args = new SvnLogArgs { Limit = limit };
+            var args = new SvnLogArgs();
+            if (!allHistory)
+                args.Limit = limit;
             if (IsUri(pathOrUrl))
                 client.GetLog(new Uri(pathOrUrl), args, out entries);
             else
