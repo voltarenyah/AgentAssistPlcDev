@@ -23,10 +23,20 @@ public static class AppAssistantEndpoints
 
         app.MapGet(
             "/internal/app-assistant/workbenches/{workbenchId}/worktrees/{worktreeId}/history",
-            async (HttpContext http, string workbenchId, string worktreeId, int? limit,
+            async (HttpContext http, string workbenchId, string worktreeId, int? limit, string? depth,
                 AppAssistantGateway gateway, AppAssistantAccessPolicy access, CancellationToken cancellationToken) =>
                 access.Allowed(http)
-                    ? Results.Ok(await gateway.GetHistoryAsync(workbenchId, worktreeId, limit, cancellationToken).ConfigureAwait(false))
+                    ? Results.Ok(string.IsNullOrWhiteSpace(depth)
+                        ? await gateway.GetHistoryAsync(workbenchId, worktreeId, limit, cancellationToken).ConfigureAwait(false)
+                        : await gateway.GetHistoryByDepthAsync(workbenchId, worktreeId, depth, cancellationToken).ConfigureAwait(false))
+                    : Results.StatusCode(StatusCodes.Status403Forbidden));
+
+        app.MapGet(
+            "/internal/app-assistant/workbenches/{workbenchId}/worktrees/{worktreeId}/svn-history",
+            async (HttpContext http, string workbenchId, string worktreeId, string? depth,
+                AppAssistantGateway gateway, AppAssistantAccessPolicy access, CancellationToken cancellationToken) =>
+                access.Allowed(http)
+                    ? Results.Ok(await gateway.GetSvnHistoryByDepthAsync(workbenchId, worktreeId, depth, cancellationToken).ConfigureAwait(false))
                     : Results.StatusCode(StatusCodes.Status403Forbidden));
 
         app.MapGet(

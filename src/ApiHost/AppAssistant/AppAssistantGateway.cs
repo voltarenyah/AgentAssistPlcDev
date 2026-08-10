@@ -15,20 +15,22 @@ public sealed class AppAssistantGateway(
 {
     private readonly ConcurrentDictionary<string, Lazy<Task<CreateWorktreeAssistantResult>>> mutationRequests = new(StringComparer.Ordinal);
 
-    public Task<AppAssistantWorkbenchContext> GetContextAsync(string workbenchId)
+    public async Task<AppAssistantWorkbenchContext> GetContextAsync(string workbenchId)
     {
         var workbench = state.RefreshRuntimeIfChanged(workbenchId);
         var snapshot = runtime.GetSnapshot(workbenchId);
 
         var focus = state.Selection?.WorkbenchId == workbenchId ? state.Selection : null;
         var actions = snapshot.AvailableActions;
-        return Task.FromResult(new AppAssistantWorkbenchContext(
+        var history = await GetFocusedHistoryAsync(workbenchId, focus).ConfigureAwait(false);
+        return new AppAssistantWorkbenchContext(
             workbench.WorkbenchId,
             workbench.Name,
             snapshot,
             focus,
             actions,
-            snapshot.ObservedAt));
+            snapshot.ObservedAt,
+            history);
     }
 
     public Task<WorktreeTodosResponse> GetTodosAsync(
@@ -55,14 +57,33 @@ public sealed class AppAssistantGateway(
         int? limit = null,
         CancellationToken cancellationToken = default)
     {
-        var count = ValidateLimit(limit, 30, 100);
+        return await GetHistoryAsync(
+            workbenchId,
+            worktreeId,
+            new HistoryRequest(limit ?? 30, false),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task<WorktreeHistoryResponse> GetHistoryByDepthAsync(
+        string workbenchId,
+        string worktreeId,
+        string? depth,
+        CancellationToken cancellationToken = default) =>
+        GetHistoryAsync(workbenchId, worktreeId, ParseHistoryRequest(depth, 30), cancellationToken);
+
+    private async Task<WorktreeHistoryResponse> GetHistoryAsync(
+        string workbenchId,
+        string worktreeId,
+        HistoryRequest request,
+        CancellationToken cancellationToken)
+    {
         var worktreeRoot = state.WorktreeRoot(workbenchId, worktreeId);
         JsonElement result;
         try
         {
             result = await mcp.For("vc_log").CallAsync<JsonElement>(
                 "vc_log",
-                new { repoPath = worktreeRoot, maxCount = count },
+                new { repoPath = worktreeRoot, maxCount = request.Limit, allHistory = request.AllHistory },
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is ToolCallException or InvalidOperationException)
@@ -73,14 +94,131 @@ public sealed class AppAssistantGateway(
                 StatusCodes.Status503ServiceUnavailable);
         }
 
-        var commits = ParseCommits(result, count);
+        var commits = ParseCommits(result, request.Limit);
         var snapshot = runtime.GetSnapshot(workbenchId);
         return new WorktreeHistoryResponse(
             workbenchId,
             worktreeId,
             snapshot.WorkbenchRevision,
             snapshot.ObservedAt,
-            commits);
+            commits,
+            request.AllHistory);
+    }
+
+    public Task<WorktreeSvnHistoryResponse> GetSvnHistoryByDepthAsync(
+        string workbenchId,
+        string worktreeId,
+        string? depth,
+        CancellationToken cancellationToken = default) =>
+        GetSvnHistoryAsync(
+            workbenchId,
+            worktreeId,
+            ParseHistoryRequest(depth, 30),
+            cancellationToken);
+
+    private async Task<WorktreeSvnHistoryResponse> GetSvnHistoryAsync(
+        string workbenchId,
+        string worktreeId,
+        HistoryRequest request,
+        CancellationToken cancellationToken)
+    {
+        var workbench = state.Workbench(workbenchId);
+        var worktree = state.Worktree(workbenchId, worktreeId);
+        var snapshot = runtime.GetSnapshot(workbenchId);
+        if (string.IsNullOrWhiteSpace(worktree.SvnUrl))
+        {
+            return new WorktreeSvnHistoryResponse(
+                workbench.WorkbenchId,
+                worktree.WorktreeId,
+                snapshot.WorkbenchRevision,
+                snapshot.ObservedAt,
+                worktree.SvnUrl,
+                Array.Empty<WorktreeSvnHistoryEntry>(),
+                request.AllHistory,
+                "SVN_NOT_CONFIGURED");
+        }
+
+        JsonElement result;
+        try
+        {
+            result = await mcp.For("svn_log").CallAsync<JsonElement>(
+                "svn_log",
+                new { path = state.WorktreeRoot(workbenchId, worktreeId), limit = request.Limit, allHistory = request.AllHistory },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is ToolCallException or InvalidOperationException)
+        {
+            throw new AppAssistantGatewayException(
+                "SVN_HISTORY_UNAVAILABLE",
+                "SVN history is currently unavailable.",
+                StatusCodes.Status503ServiceUnavailable);
+        }
+
+        var entries = ParseSvnHistory(result, request.Limit);
+        return new WorktreeSvnHistoryResponse(
+            workbench.WorkbenchId,
+            worktree.WorktreeId,
+            snapshot.WorkbenchRevision,
+            snapshot.ObservedAt,
+            worktree.SvnUrl,
+            entries,
+            request.AllHistory);
+    }
+
+    private async Task<AppAssistantHistoryContext> GetFocusedHistoryAsync(
+        string workbenchId,
+        WorkbenchSelection? focus)
+    {
+        if (string.IsNullOrWhiteSpace(focus?.WorktreeId))
+            return new AppAssistantHistoryContext(null, null, null, "NO_FOCUSED_WORKTREE");
+
+        var worktreeId = focus.WorktreeId!;
+        WorktreeHistoryResponse? git = null;
+        WorktreeSvnHistoryResponse? svn = null;
+        try
+        {
+            git = await GetHistoryAsync(
+                workbenchId,
+                worktreeId,
+                new HistoryRequest(10, false),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (AppAssistantGatewayException exception)
+        {
+            var snapshot = runtime.GetSnapshot(workbenchId);
+            git = new WorktreeHistoryResponse(
+                workbenchId,
+                worktreeId,
+                snapshot.WorkbenchRevision,
+                snapshot.ObservedAt,
+                Array.Empty<WorktreeHistoryEntry>(),
+                false,
+                exception.Code);
+        }
+
+        try
+        {
+            svn = await GetSvnHistoryAsync(
+                workbenchId,
+                worktreeId,
+                new HistoryRequest(10, false),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (AppAssistantGatewayException exception)
+        {
+            var snapshot = runtime.GetSnapshot(workbenchId);
+            svn = new WorktreeSvnHistoryResponse(
+                workbenchId,
+                worktreeId,
+                snapshot.WorkbenchRevision,
+                snapshot.ObservedAt,
+                null,
+                Array.Empty<WorktreeSvnHistoryEntry>(),
+                false,
+                exception.Code);
+        }
+
+        return new AppAssistantHistoryContext(worktreeId, git, svn, null);
     }
 
     public Task<WorktreeSvnResponse> GetSvnAsync(string workbenchId, string worktreeId)
@@ -215,7 +353,22 @@ public sealed class AppAssistantGateway(
         return value;
     }
 
-    private static IReadOnlyList<WorktreeHistoryEntry> ParseCommits(JsonElement result, int limit)
+    private sealed record HistoryRequest(int? Limit, bool AllHistory);
+
+    private static HistoryRequest ParseHistoryRequest(string? depth, int defaultLimit)
+    {
+        if (string.IsNullOrWhiteSpace(depth) || string.Equals(depth, "recent", StringComparison.OrdinalIgnoreCase))
+            return new HistoryRequest(defaultLimit, false);
+        if (string.Equals(depth, "all", StringComparison.OrdinalIgnoreCase))
+            return new HistoryRequest(null, true);
+        if (int.TryParse(depth, out var requested))
+            return new HistoryRequest(ValidateLimit(requested, defaultLimit, 100), false);
+        throw new AppAssistantGatewayException(
+            "INVALID_HISTORY_DEPTH",
+            "History depth must be recent, all, or a number between 1 and 100.");
+    }
+
+    private static IReadOnlyList<WorktreeHistoryEntry> ParseCommits(JsonElement result, int? limit)
     {
         var commits = result.ValueKind == JsonValueKind.Object
             && result.TryGetProperty("commits", out var property)
@@ -225,13 +378,40 @@ public sealed class AppAssistantGateway(
         if (commits.ValueKind != JsonValueKind.Array)
             return Array.Empty<WorktreeHistoryEntry>();
 
-        return commits.EnumerateArray().Take(limit).Select(commit => new WorktreeHistoryEntry(
+        var items = limit is int count ? commits.EnumerateArray().Take(count) : commits.EnumerateArray();
+        return items.Select(commit => new WorktreeHistoryEntry(
             ReadString(commit, "sha") ?? string.Empty,
             ReadString(commit, "message") ?? string.Empty,
             ReadString(commit, "author"),
             ReadString(commit, "timestamp"),
             ReadString(commit, "validationState"))).ToArray();
     }
+
+    private static IReadOnlyList<WorktreeSvnHistoryEntry> ParseSvnHistory(JsonElement result, int? limit)
+    {
+        var entries = result.ValueKind == JsonValueKind.Object
+            && result.TryGetProperty("entries", out var property)
+            && property.ValueKind == JsonValueKind.Array
+            ? property
+            : result.ValueKind == JsonValueKind.Array ? result : default;
+        if (entries.ValueKind != JsonValueKind.Array)
+            return Array.Empty<WorktreeSvnHistoryEntry>();
+
+        var items = limit is int count ? entries.EnumerateArray().Take(count) : entries.EnumerateArray();
+        return items.Select(entry => new WorktreeSvnHistoryEntry(
+            ReadInt64(entry, "revision"),
+            ReadString(entry, "message") ?? string.Empty,
+            ReadString(entry, "author") ?? string.Empty,
+            ReadString(entry, "time") ?? ReadString(entry, "timestamp"))).ToArray();
+    }
+
+    private static long ReadInt64(JsonElement value, string name) =>
+        value.ValueKind == JsonValueKind.Object
+        && value.TryGetProperty(name, out var property)
+        && property.ValueKind == JsonValueKind.Number
+        && property.TryGetInt64(out var result)
+            ? result
+            : 0;
 
     private static string? ReadString(JsonElement value, string name) =>
         value.ValueKind == JsonValueKind.Object

@@ -8,7 +8,14 @@ public sealed record AppAssistantWorkbenchContext(
     WorkbenchRuntimeSnapshot Runtime,
     WorkbenchSelection? UiFocus,
     IReadOnlyList<ActionCapability> AvailableActions,
-    DateTimeOffset ObservedAt);
+    DateTimeOffset ObservedAt,
+    AppAssistantHistoryContext? History = null);
+
+public sealed record AppAssistantHistoryContext(
+    string? WorktreeId,
+    WorktreeHistoryResponse? Git,
+    WorktreeSvnHistoryResponse? Svn,
+    string? UnavailableReason);
 
 public sealed record WorktreeTodosResponse(
     string WorkbenchId,
@@ -29,7 +36,9 @@ public sealed record WorktreeHistoryResponse(
     string WorktreeId,
     long SourceRevision,
     DateTimeOffset ObservedAt,
-    IReadOnlyList<WorktreeHistoryEntry> Commits);
+    IReadOnlyList<WorktreeHistoryEntry> Commits,
+    bool Complete = false,
+    string? UnavailableReason = null);
 
 public sealed record WorktreeSvnResponse(
     string WorkbenchId,
@@ -40,6 +49,22 @@ public sealed record WorktreeSvnResponse(
     long? BaseRevision,
     long? CurrentRevision,
     string? ValidationState);
+
+public sealed record WorktreeSvnHistoryEntry(
+    long Revision,
+    string Message,
+    string Author,
+    string? Timestamp);
+
+public sealed record WorktreeSvnHistoryResponse(
+    string WorkbenchId,
+    string WorktreeId,
+    long SourceRevision,
+    DateTimeOffset ObservedAt,
+    string? BranchUrl,
+    IReadOnlyList<WorktreeSvnHistoryEntry> Entries,
+    bool Complete = false,
+    string? UnavailableReason = null);
 
 public sealed record CreateWorktreeAssistantRequest(
     string WorkbenchId,

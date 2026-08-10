@@ -29,6 +29,24 @@ public sealed class AppAssistantGatewayTests
     }
 
     [Fact]
+    public async Task ContextReportsHistoryNeedsFocusedWorktree()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        var catalog = factory.Services.GetRequiredService<WorkbenchCatalog>();
+        var state = factory.Services.GetRequiredService<WorkbenchApiState>();
+        var gateway = factory.Services.GetRequiredService<AppAssistantGateway>();
+        var root = Path.Combine(Path.GetTempPath(), "assistant-history-focus-" + Guid.NewGuid().ToString("N"));
+        var workbench = catalog.Create("Assistant History Focus", root);
+        state.Open(root);
+
+        var context = await gateway.GetContextAsync(workbench.WorkbenchId);
+
+        Assert.NotNull(context.History);
+        Assert.Equal("NO_FOCUSED_WORKTREE", context.History!.UnavailableReason);
+    }
+
+    [Fact]
     public async Task AssistantActionsKeepWorktreeCreationDisabledUntilMutationPlan()
     {
         await using var factory = new WebApplicationFactory<Program>()
