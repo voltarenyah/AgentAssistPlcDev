@@ -29,7 +29,7 @@ public sealed class AppAssistantGatewayTests
     }
 
     [Fact]
-    public async Task ContextReportsHistoryNeedsFocusedWorktree()
+    public async Task ContextOmitsHistoryUntilTheAssistantRequestsIt()
     {
         await using var factory = new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
@@ -42,8 +42,7 @@ public sealed class AppAssistantGatewayTests
 
         var context = await gateway.GetContextAsync(workbench.WorkbenchId);
 
-        Assert.NotNull(context.History);
-        Assert.Equal("NO_FOCUSED_WORKTREE", context.History!.UnavailableReason);
+        Assert.Null(context.History);
     }
 
     [Fact]

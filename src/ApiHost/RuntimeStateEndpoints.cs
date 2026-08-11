@@ -8,7 +8,7 @@ public static class RuntimeStateEndpoints
             "/api/workbenches/{workbenchId}/runtime-state",
             (string workbenchId, WorkbenchApiState state, WorkbenchRuntimeStateCoordinator runtime) =>
             {
-                state.Workbench(workbenchId);
+                state.RefreshRuntimeIfChanged(workbenchId);
                 return Results.Ok(runtime.GetSnapshot(workbenchId));
             });
 
@@ -16,7 +16,7 @@ public static class RuntimeStateEndpoints
             "/api/workbenches/{workbenchId}/runtime-state/revision",
             (string workbenchId, WorkbenchApiState state, WorkbenchRuntimeStateCoordinator runtime) =>
             {
-                state.Workbench(workbenchId);
+                state.RefreshRuntimeIfChanged(workbenchId);
                 var snapshot = runtime.GetSnapshot(workbenchId);
                 return Results.Ok(new
                 {

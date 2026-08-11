@@ -11,7 +11,7 @@ public static class RuntimeStateEventEndpoints
             async (HttpContext http, string workbenchId, WorkbenchApiState state,
                 WorkbenchRuntimeStateCoordinator runtime) =>
             {
-                state.Workbench(workbenchId);
+                state.RefreshRuntimeIfChanged(workbenchId);
                 http.Response.StatusCode = StatusCodes.Status200OK;
                 http.Response.ContentType = "text/event-stream";
                 http.Response.Headers.CacheControl = "no-cache";

@@ -5,6 +5,12 @@ export type AppAssistantMessage = {
   content: string
 }
 
+export type AppAssistantClarificationOption = {
+  value: string
+  label: string
+  description?: string | null
+}
+
 export type AppAssistantPanelState = {
   messages: AppAssistantMessage[]
   runtime: AppAssistantRuntimeSnapshot | null
@@ -14,6 +20,7 @@ export type AppAssistantPanelState = {
   contextStale: boolean
   autoRefreshPending: boolean
   pendingApproval: Record<string, unknown> | null
+  clarificationOptions: AppAssistantClarificationOption[]
   busy: boolean
 }
 
@@ -26,6 +33,7 @@ export const initialAppAssistantState = (runtime: AppAssistantRuntimeSnapshot | 
   contextStale: false,
   autoRefreshPending: false,
   pendingApproval: null,
+  clarificationOptions: [],
   busy: false,
 })
 
@@ -47,6 +55,8 @@ export const isConsequentialRuntimeChange = (
   next: AppAssistantRuntimeSnapshot,
 ): boolean => {
   if (!previous) return false
+  if (previous.focus.worktreeId !== next.focus.worktreeId
+    || previous.focus.deviceId !== next.focus.deviceId) return true
   if (JSON.stringify(worktreeProjection(previous)) !== JSON.stringify(worktreeProjection(next))) return true
   const completedStatuses = new Set(['succeeded', 'failed', 'cancelled'])
   return previous.operation.operationId !== next.operation.operationId
@@ -80,6 +90,14 @@ export const applyAssistantEvents = (
       next = { ...next, messages: [...next.messages, { role: 'assistant', content: event.data.answer }] }
     } else if (event.kind === 'state' && event.data.runtimeSnapshot) {
       const snapshot = event.data.runtimeSnapshot as AppAssistantRuntimeSnapshot
+      const decision = event.data.decision as { options?: unknown } | undefined
+      const clarificationOptions = Array.isArray(decision?.options)
+        ? decision.options.filter((option): option is AppAssistantClarificationOption => {
+          if (!option || typeof option !== 'object') return false
+          const value = option as Record<string, unknown>
+          return typeof value.value === 'string' && typeof value.label === 'string'
+        })
+        : []
       const currentRuntime = next.runtime
       const runtime = !currentRuntime || snapshot.workbenchRevision >= currentRuntime.workbenchRevision
         ? snapshot
@@ -92,6 +110,7 @@ export const applyAssistantEvents = (
           ? (event.data.runMetadata as { runId: string }).runId
           : next.lastRunId,
         feedbackSubmitted: false,
+        clarificationOptions,
         contextStale: runtime.workbenchRevision > snapshot.workbenchRevision,
         autoRefreshPending: false,
       }

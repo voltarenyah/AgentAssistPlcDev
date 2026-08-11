@@ -148,9 +148,13 @@ describe('WorktreeLandingPage', () => {
 
     expect(host.textContent).toContain('Worktree version control')
     const sections = [...host.querySelectorAll('section')]
+    const contextIndex = sections.findIndex(section => section.getAttribute('data-testid') === 'worktree-context')
     const metadataIndex = sections.findIndex(section => section.textContent?.includes('Worktree metadata'))
     const timelineIndex = sections.findIndex(section => section.getAttribute('aria-label') === 'Worktree version control')
     const tasksIndex = sections.findIndex(section => section.textContent?.includes('Open task list'))
+    expect(contextIndex).toBe(metadataIndex)
+    expect(sections[contextIndex]?.querySelector('[aria-label="Worktree purpose"]')).not.toBeNull()
+    expect(sections[contextIndex]?.querySelector('[aria-label="Worktree owner"]')).not.toBeNull()
     expect(metadataIndex).toBeLessThan(timelineIndex)
     expect(timelineIndex).toBeLessThan(tasksIndex)
 

@@ -50,7 +50,7 @@ class FakeGateway:
                 "workbenchRevision": 4,
                 "focus": {"worktreeId": "wt-1", "deviceId": None},
                 "availableActions": [{"id": "read_worktree_todos", "enabled": True}],
-                "worktrees": [{"worktreeId": "wt-1", "name": "Feature A", "todoCount": 2}],
+                "worktrees": [{"worktreeId": "wt-1", "name": "Feature A", "branch": "master", "todoCount": 2}],
             },
             "availableActions": [{"id": "read_worktree_todos", "enabled": True}],
             "observedAt": "2026-08-09T00:00:00Z",
@@ -404,6 +404,109 @@ async def test_command_model_mutation_waits_for_approval():
     assert gateway.detail_calls == []
 
 
+async def test_create_worktree_uses_focused_worktree_as_default_start_point():
+    gateway = FakeGateway()
+    model = StructuredFakeModel(json.dumps({
+        "kind": "mutation_proposal",
+        "mutation": {
+            "kind": "create_worktree",
+            "name": "test",
+            "branch": "test",
+        },
+    }))
+    graph = build_graph(gateway, model=model, checkpointer=MemorySaver())
+
+    result = await graph.ainvoke(
+        {
+            "workbench_id": "wb-1",
+            "request_mode": "command",
+            "messages": [{"role": "user", "content": "Create a new worktree named test."}],
+        },
+        config={"configurable": {"thread_id": thread_id_for("wb-1")}},
+    )
+
+    assert result["__interrupt__"][0].value["startPoint"] == "master"
+
+
+async def test_create_worktree_uses_ui_focus_when_runtime_projection_lags():
+    gateway = FakeGateway()
+
+    async def get_context(workbench_id):
+        context = _multi_worktree_context(workbench_id)
+        context["runtime"]["focus"] = {"worktreeId": None, "deviceId": None}
+        context["uiFocus"] = {"worktreeId": "wt-1", "deviceId": None}
+        return context
+
+    gateway.get_context = get_context
+    model = StructuredFakeModel(json.dumps({
+        "kind": "mutation_proposal",
+        "mutation": {
+            "kind": "create_worktree",
+            "name": "test",
+            "branch": "test",
+        },
+    }))
+    graph = build_graph(gateway, model=model, checkpointer=MemorySaver())
+
+    result = await graph.ainvoke(
+        {
+            "workbench_id": "wb-1",
+            "request_mode": "command",
+            "messages": [{"role": "user", "content": "Create a new worktree named test."}],
+        },
+        config={"configurable": {"thread_id": thread_id_for("wb-1")}},
+    )
+
+    assert result["__interrupt__"][0].value["startPoint"] == "master"
+
+
+async def test_orientation_uses_ui_focus_when_runtime_projection_lags():
+    gateway = FakeGateway()
+
+    async def get_context(workbench_id):
+        context = _multi_worktree_context(workbench_id)
+        context["runtime"]["focus"] = {"worktreeId": None, "deviceId": None}
+        context["uiFocus"] = {"worktreeId": "wt-1", "deviceId": None}
+        return context
+
+    gateway.get_context = get_context
+    graph = build_graph(gateway, model=None)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "request_mode": "orientation",
+    })
+
+    assert "selected worktree 'master'" in result["answer"]
+
+
+async def test_create_worktree_asks_with_available_baseline_options_when_focus_is_missing():
+    gateway = FakeGateway()
+    async def get_context(workbench_id):
+        return _multi_worktree_context(workbench_id)
+
+    gateway.get_context = get_context
+    model = StructuredFakeModel(json.dumps({
+        "kind": "mutation_proposal",
+        "mutation": {
+            "kind": "create_worktree",
+            "name": "test",
+            "branch": "test",
+        },
+    }))
+    graph = build_graph(gateway, model=model)
+
+    result = await graph.ainvoke({
+        "workbench_id": "wb-1",
+        "request_mode": "command",
+        "messages": [{"role": "user", "content": "Create a new worktree named test."}],
+    })
+
+    assert result["decision"]["kind"] == "clarification"
+    assert [item["value"] for item in result["decision"]["options"]] == ["master", "feature/a"]
+    assert "base" in result["answer"].lower()
+
+
 def _status_context(workbench_id: str):
     return {
         "workbenchId": workbench_id,
@@ -414,6 +517,23 @@ def _status_context(workbench_id: str):
             "worktrees": [
                 {"worktreeId": "wt-1", "name": "Feature A", "todoCount": 2},
                 {"worktreeId": "wt-2", "name": "Feature B", "todoCount": 0},
+            ],
+        },
+        "availableActions": [],
+        "observedAt": "2026-08-09T00:00:00Z",
+    }
+
+
+def _multi_worktree_context(workbench_id: str):
+    return {
+        "workbenchId": workbench_id,
+        "runtime": {
+            "workbenchRevision": 4,
+            "focus": {"worktreeId": None, "deviceId": None},
+            "availableActions": [],
+            "worktrees": [
+                {"worktreeId": "wt-1", "name": "master", "branch": "master", "todoCount": 0},
+                {"worktreeId": "wt-2", "name": "feature/a", "branch": "feature/a", "todoCount": 0},
             ],
         },
         "availableActions": [],

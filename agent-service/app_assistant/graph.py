@@ -8,7 +8,7 @@ from langgraph.types import interrupt
 
 from . import __version__
 from .contracts import HistoryDepth
-from .decisions import AssistantDecision, AssistantRequestMode, OrientationProposal
+from .decisions import AssistantDecision, AssistantRequestMode, ClarificationOption, OrientationProposal
 from .gateway import GatewayStaleError, WorkbenchGateway
 from .model import DEFAULT_MODEL, build_model_from_env
 from .prompts import (
@@ -143,14 +143,18 @@ def _runtime(state: AppAssistantState) -> dict[str, Any]:
 
 def _detail_worktree(state: AppAssistantState) -> str | None:
     focus = _runtime(state).get("focus", {})
-    return focus.get("worktreeId") or focus.get("worktree_id")
+    worktree_id = focus.get("worktreeId") or focus.get("worktree_id")
+    if worktree_id:
+        return worktree_id
+    context = state.get("runtime_snapshot", {})
+    ui_focus = context.get("uiFocus") or context.get("ui_focus") or {}
+    return ui_focus.get("worktreeId") or ui_focus.get("worktree_id")
 
 
 def _fallback_orientation(state: AppAssistantState) -> OrientationProposal:
     runtime = _runtime(state)
     worktrees = runtime.get("worktrees", [])
-    focus = runtime.get("focus", {})
-    focused_id = focus.get("worktreeId") or focus.get("worktree_id")
+    focused_id = _detail_worktree(state)
     focused = next((item for item in worktrees if item.get("worktreeId") == focused_id), None)
     observations = [
         f"The workbench has {len(worktrees)} registered worktree(s).",
@@ -231,6 +235,48 @@ async def _decide_async(
 def _decision_answer(state: AppAssistantState) -> str:
     decision = state.get("decision") or {}
     return str(decision.get("answer") or decision.get("question") or "Please tell me what you would like to do next.")
+
+
+def _baseline_options(state: AppAssistantState) -> list[ClarificationOption]:
+    options: list[ClarificationOption] = []
+    for worktree in _runtime(state).get("worktrees", []):
+        value = worktree.get("branch") or worktree.get("name") or worktree.get("worktreeId")
+        if not value:
+            continue
+        label = worktree.get("name") or value
+        branch = worktree.get("branch")
+        options.append(ClarificationOption(
+            value=str(value),
+            label=str(label),
+            description=f"branch {branch}" if branch and branch != label else None,
+        ))
+    return options
+
+
+def _default_start_point(state: AppAssistantState) -> str | None:
+    runtime = _runtime(state)
+    focused_id = _detail_worktree(state)
+    worktrees = runtime.get("worktrees", [])
+    focused = next(
+        (item for item in worktrees if item.get("worktreeId") == focused_id),
+        None,
+    )
+    if focused:
+        return focused.get("branch") or focused.get("name") or focused.get("worktreeId")
+    if len(worktrees) == 1:
+        only = worktrees[0]
+        return only.get("branch") or only.get("name") or only.get("worktreeId")
+    return None
+
+
+def _missing_baseline_decision(state: AppAssistantState, name: str) -> AssistantDecision:
+    options = _baseline_options(state)
+    question = f"Which worktree should be used as the base for '{name}'?"
+    return AssistantDecision(
+        kind="clarification",
+        question=question,
+        options=options or None,
+    )
 
 
 async def _read_detail(state: AppAssistantState, gateway: Gateway) -> dict[str, Any]:
@@ -316,6 +362,11 @@ async def _propose_mutation(state: AppAssistantState, gateway: Gateway) -> dict[
     mutation = decision.mutation
     if mutation is None:
         return {"answer": "I need a complete worktree proposal before asking for approval."}
+    start_point = mutation.start_point or _default_start_point(state)
+    if not start_point:
+        decision = _missing_baseline_decision(state, mutation.name)
+        serialized = decision.model_dump(by_alias=True, exclude_none=True)
+        return {"decision": serialized, "answer": decision.question}
     revision = int(state.get("context_revision", _runtime(state).get("workbenchRevision", 0)))
     workbench_id = state["workbench_id"]
     proposal = {
@@ -323,7 +374,7 @@ async def _propose_mutation(state: AppAssistantState, gateway: Gateway) -> dict[
         "workbenchId": workbench_id,
         "name": mutation.name,
         "branch": mutation.branch,
-        "startPoint": mutation.start_point,
+        "startPoint": start_point,
         "expectedWorkbenchRevision": revision,
         "requestId": f"app-assistant:{workbench_id}:create:{revision}",
     }

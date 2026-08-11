@@ -32,6 +32,46 @@ public sealed class RuntimeStateEndpointsTests
     }
 
     [Fact]
+    public async Task RuntimeStateEndpointRefreshesPersistedWorktreeFactsBeforeReturningSnapshot()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+        var catalog = factory.Services.GetRequiredService<WorkbenchCatalog>();
+        var store = factory.Services.GetRequiredService<AtomicJsonStore>();
+        var state = factory.Services.GetRequiredService<WorkbenchApiState>();
+        var root = Path.Combine(Path.GetTempPath(), "runtime-state-refresh-" + Guid.NewGuid().ToString("N"));
+        var workbench = catalog.Create("Runtime State Refresh", root);
+        workbench = catalog.RegisterWorktree(
+            workbench,
+            new WorkbenchWorktreeRegistration("wt-1", "master", "master", "master"));
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(root, "master");
+        store.Write(
+            Path.Combine(worktreeRoot, "worktree.json"),
+            new WorktreeMetadata(
+                WorkbenchSchema.CurrentVersion,
+                "wt-1",
+                workbench.WorkbenchId,
+                "master",
+                "master",
+                DateTimeOffset.UtcNow.ToString("O"),
+                "abc123",
+                null,
+                null,
+                Array.Empty<string>(),
+                null));
+        state.Open(root);
+
+        var response = await client.GetAsync($"/api/workbenches/{workbench.WorkbenchId}/runtime-state");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<WorkbenchRuntimeSnapshot>();
+        var summary = Assert.Single(payload!.Worktrees);
+        Assert.Equal("master", summary.Branch);
+        Assert.Equal("abc123", summary.Head);
+    }
+
+    [Fact]
     public async Task WorkbenchSelectionUpdatesRuntimeFocus()
     {
         await using var factory = new WebApplicationFactory<Program>()

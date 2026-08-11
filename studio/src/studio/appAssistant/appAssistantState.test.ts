@@ -19,7 +19,7 @@ const snapshot = (overrides: Partial<AppAssistantRuntimeSnapshot> = {}): AppAssi
 })
 
 describe('app assistant runtime state', () => {
-  it('marks focus-only revisions stale without scheduling a new suggestion', () => {
+  it('schedules a refresh when the focused worktree changes', () => {
     const state = initialAppAssistantState(snapshot())
     const next = applyAssistantRuntimeSnapshot(state, snapshot({
       workbenchRevision: 4,
@@ -27,7 +27,7 @@ describe('app assistant runtime state', () => {
     }), state.runtime)
 
     expect(next.contextStale).toBe(true)
-    expect(next.autoRefreshPending).toBe(false)
+    expect(next.autoRefreshPending).toBe(true)
     expect(next.runtime?.focus.worktreeId).toBe('wt2')
   })
 

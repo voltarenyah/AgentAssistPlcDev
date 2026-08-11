@@ -247,7 +247,23 @@ export type AppAssistantRuntimeSnapshot = {
   workbenchId: string
   workbenchRevision: number
   focus: { worktreeId: string | null; deviceId: string | null }
-  worktrees: Array<{ worktreeId: string; name: string; branch: string; todoCount: number; gitStatus: string }>
+  worktrees: Array<{
+    worktreeId: string
+    name: string
+    branch: string
+    gitStatus: string
+    head: string | null
+    todoCount: number
+    svnBaseRevision: number | null
+    svnCurrentRevision: number | null
+    validationState: string
+    devices: Array<{
+      deviceId: string
+      plcName: string | null
+      tiaState: string
+      knowledgeFreshness: string
+    }>
+  }>
   availableActions: Array<{ id: string; label: string; enabled: boolean; requiresApproval: boolean; blockedBy: string[] }>
   operation: { operationId: string | null; kind: string | null; status: string | number; message: string | null }
   observedAt: string
@@ -297,6 +313,7 @@ export const submitAppAssistantFeedback = (category: AppAssistantFeedbackCategor
 export const getAppAssistantRuntimeState = (workbenchId: string) =>
   workbenchRequest<AppAssistantRuntimeSnapshot>(`/workbenches/${encodeURIComponent(workbenchId)}/runtime-state`)
 export const subscribeAppAssistantRuntime = (workbenchId: string, onSnapshot: (snapshot: AppAssistantRuntimeSnapshot) => void) => {
+  if (typeof EventSource === 'undefined') return () => {}
   const source = new EventSource(`${BASE}/workbenches/${encodeURIComponent(workbenchId)}/runtime-events`)
   const handler = (event: Event) => {
     try {

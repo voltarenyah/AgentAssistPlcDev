@@ -15,22 +15,21 @@ public sealed class AppAssistantGateway(
 {
     private readonly ConcurrentDictionary<string, Lazy<Task<CreateWorktreeAssistantResult>>> mutationRequests = new(StringComparer.Ordinal);
 
-    public async Task<AppAssistantWorkbenchContext> GetContextAsync(string workbenchId)
+    public Task<AppAssistantWorkbenchContext> GetContextAsync(string workbenchId)
     {
         var workbench = state.RefreshRuntimeIfChanged(workbenchId);
         var snapshot = runtime.GetSnapshot(workbenchId);
 
         var focus = state.Selection?.WorkbenchId == workbenchId ? state.Selection : null;
         var actions = snapshot.AvailableActions;
-        var history = await GetFocusedHistoryAsync(workbenchId, focus).ConfigureAwait(false);
-        return new AppAssistantWorkbenchContext(
+        return Task.FromResult(new AppAssistantWorkbenchContext(
             workbench.WorkbenchId,
             workbench.Name,
             snapshot,
             focus,
             actions,
             snapshot.ObservedAt,
-            history);
+            null));
     }
 
     public Task<WorktreeTodosResponse> GetTodosAsync(
@@ -183,62 +182,6 @@ public sealed class AppAssistantGateway(
         return string.IsNullOrWhiteSpace(worktree.SvnUrl)
             ? worktreeRoot
             : worktree.SvnUrl;
-    }
-
-    private async Task<AppAssistantHistoryContext> GetFocusedHistoryAsync(
-        string workbenchId,
-        WorkbenchSelection? focus)
-    {
-        if (string.IsNullOrWhiteSpace(focus?.WorktreeId))
-            return new AppAssistantHistoryContext(null, null, null, "NO_FOCUSED_WORKTREE");
-
-        var worktreeId = focus.WorktreeId!;
-        WorktreeHistoryResponse? git = null;
-        WorktreeSvnHistoryResponse? svn = null;
-        try
-        {
-            git = await GetHistoryAsync(
-                workbenchId,
-                worktreeId,
-                new HistoryRequest(10, false),
-                CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (AppAssistantGatewayException exception)
-        {
-            var snapshot = runtime.GetSnapshot(workbenchId);
-            git = new WorktreeHistoryResponse(
-                workbenchId,
-                worktreeId,
-                snapshot.WorkbenchRevision,
-                snapshot.ObservedAt,
-                Array.Empty<WorktreeHistoryEntry>(),
-                false,
-                exception.Code);
-        }
-
-        try
-        {
-            svn = await GetSvnHistoryAsync(
-                workbenchId,
-                worktreeId,
-                new HistoryRequest(10, false),
-                CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (AppAssistantGatewayException exception)
-        {
-            var snapshot = runtime.GetSnapshot(workbenchId);
-            svn = new WorktreeSvnHistoryResponse(
-                workbenchId,
-                worktreeId,
-                snapshot.WorkbenchRevision,
-                snapshot.ObservedAt,
-                null,
-                Array.Empty<WorktreeSvnHistoryEntry>(),
-                false,
-                exception.Code);
-        }
-
-        return new AppAssistantHistoryContext(worktreeId, git, svn, null);
     }
 
     public Task<WorktreeSvnResponse> GetSvnAsync(string workbenchId, string worktreeId)

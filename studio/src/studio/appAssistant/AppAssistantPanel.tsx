@@ -26,11 +26,15 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
   useEffect(() => {
     let cancelled = false
     latestRuntime.current = runtime
-    setState(initialAppAssistantState(runtime))
+    setState({ ...initialAppAssistantState(runtime), busy: true })
     void api.bootstrapAppAssistant().then(events => {
-      if (!cancelled) setState(current => applyAssistantEvents(current, events))
+      if (!cancelled) setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
     }).catch(error => {
-      if (!cancelled) setState(current => ({ ...current, messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Assistant unavailable' }] }))
+      if (!cancelled) setState(current => ({
+        ...current,
+        busy: false,
+        messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Assistant unavailable' }],
+      }))
     })
     return () => { cancelled = true }
   }, [workbenchId])
@@ -98,6 +102,10 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
     }
   }
 
+  const chooseClarification = (option: string) => {
+    void send(`Use '${option}' as the selected base worktree.`)
+  }
+
   const submitFeedback = async (category: api.AppAssistantFeedbackCategory) => {
     if (!state.lastRunId || feedbackBusy) return
     setFeedbackBusy(true)
@@ -152,6 +160,26 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
             {message.content}
           </div>
         ))}
+        {state.clarificationOptions.length > 0 && (
+          <div className="rounded-md border px-2.5 py-2 text-[9px]" data-assistant-clarification-options>
+            <div className="mb-1 text-muted-foreground">Choose an option:</div>
+            <div className="flex flex-wrap gap-1">
+              {state.clarificationOptions.map(option => (
+                <button
+                  key={option.value}
+                  className="secondary-button h-6 px-2 text-[9px]"
+                  data-assistant-option={option.value}
+                  disabled={state.busy}
+                  title={option.description ?? undefined}
+                  onClick={() => chooseClarification(option.value)}
+                >
+                  {option.label}
+                  {option.description && <span className="ml-1 text-muted-foreground">({option.description})</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {state.lastRunId && state.messages.some(message => message.role === 'assistant') && !state.feedbackSubmitted && (
           <div className="rounded-md border px-2.5 py-2 text-[9px]" data-assistant-feedback>
             <div className="mb-1 text-muted-foreground">Was this useful?</div>

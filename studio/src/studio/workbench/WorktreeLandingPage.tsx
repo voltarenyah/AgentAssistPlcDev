@@ -188,43 +188,49 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
 
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-5 p-5">
-          <section className="flex flex-wrap items-start gap-4 rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-            <div className="grid h-12 w-12 place-items-center rounded-xl bg-chart-4/10">
-              <GitBranch className="h-5 w-5 text-chart-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-lg font-semibold">{detail.name}</h1>
-                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{detail.branch}</span>
-                <StatusBadge status={detail.status} onChange={changeStatus} />
+          <section
+            data-testid="worktree-context"
+            className={`rounded-xl border bg-card p-5 ${tab === 'overview' ? 'grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]' : ''}`}
+            style={{ borderColor: 'var(--border)' }}
+          >
+            <div className="min-w-0">
+              <div className="flex items-start gap-4">
+                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-chart-4/10">
+                  <GitBranch className="h-5 w-5 text-chart-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h1 className="text-lg font-semibold">{detail.name}</h1>
+                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{detail.branch}</span>
+                    <StatusBadge status={detail.status} onChange={changeStatus} />
+                  </div>
+                  <p className="mt-1 text-[9px] text-muted-foreground">
+                    Created {formatDate(detail.createdAt)}
+                    {detail.status === 'finished' && detail.finishedUtc ? ` · Finished ${formatDate(detail.finishedUtc)}` : ''}
+                  </p>
+                </div>
               </div>
-              <p className="mt-1 text-[9px] text-muted-foreground">
-                Created {formatDate(detail.createdAt)}
-                {detail.status === 'finished' && detail.finishedUtc ? ` · Finished ${formatDate(detail.finishedUtc)}` : ''}
-              </p>
+              <div className="mt-4 grid grid-cols-[64px_1fr] items-start gap-x-3 gap-y-2">
+                <span className="pt-1.5 text-[9px] uppercase tracking-wide text-muted-foreground">Purpose</span>
+                <InlineEdit
+                  ariaLabel="Worktree purpose"
+                  placeholder="What is this worktree for?"
+                  multiline
+                  value={detail.purpose ?? ''}
+                  onSave={purpose => saveDetailField({ purpose })}
+                />
+                <span className="self-center text-[9px] uppercase tracking-wide text-muted-foreground">Owner</span>
+                <InlineEdit
+                  ariaLabel="Worktree owner"
+                  placeholder="Responsible person"
+                  value={detail.owner ?? ''}
+                  onSave={owner => saveDetailField({ owner })}
+                />
+              </div>
             </div>
-            <div className="grid w-full max-w-md grid-cols-[64px_1fr] items-start gap-x-3 gap-y-2">
-              <span className="pt-1.5 text-[9px] uppercase tracking-wide text-muted-foreground">Purpose</span>
-              <InlineEdit
-                ariaLabel="Worktree purpose"
-                placeholder="What is this worktree for?"
-                multiline
-                value={detail.purpose ?? ''}
-                onSave={purpose => saveDetailField({ purpose })}
-              />
-              <span className="self-center text-[9px] uppercase tracking-wide text-muted-foreground">Owner</span>
-              <InlineEdit
-                ariaLabel="Worktree owner"
-                placeholder="Responsible person"
-                value={detail.owner ?? ''}
-                onSave={owner => saveDetailField({ owner })}
-              />
-            </div>
-          </section>
 
-          {tab === 'overview' && (
-            <>
-              <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
+            {tab === 'overview' && (
+              <div data-testid="worktree-metadata" className="border-t pt-4 sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
                 <h2 className="text-sm font-semibold">Worktree metadata</h2>
                 <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-[10px] sm:grid-cols-2">
                   <div className="flex justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
@@ -252,8 +258,12 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                     <dd>{detail.deviceIds.length}</dd>
                   </div>
                 </dl>
-              </section>
+              </div>
+            )}
+          </section>
 
+          {tab === 'overview' && (
+            <>
               <WorktreeVersionControlTimeline workbenchId={workbenchId} worktreeId={worktreeId} />
 
               <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>

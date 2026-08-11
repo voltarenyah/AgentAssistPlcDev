@@ -29,6 +29,14 @@ class MutationProposal(BaseModel):
     start_point: str | None = Field(default=None, alias="startPoint")
 
 
+class ClarificationOption(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    value: str
+    label: str
+    description: str | None = None
+
+
 class AssistantDecision(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -44,3 +52,4 @@ class AssistantDecision(BaseModel):
     tool_reason: str | None = Field(default=None, alias="toolReason")
     history_depth: HistoryDepth | None = Field(default=None, alias="historyDepth")
     mutation: MutationProposal | None = None
+    options: list[ClarificationOption] | None = None

@@ -337,6 +337,46 @@
     @apply rounded-full border px-2 py-0.5 transition-colors hover:bg-accent/50;
     border-color: var(--border);
   }
+
+  .runtime-state-popover {
+    @apply relative;
+  }
+
+  .runtime-state-summary {
+    @apply inline-flex cursor-pointer list-none items-center gap-1.5 rounded-full border px-2 py-0.5 transition-colors hover:bg-accent/50;
+    border-color: var(--border);
+  }
+
+  .runtime-state-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .runtime-state-panel {
+    @apply absolute bottom-7 left-0 z-50 w-[360px] rounded-md border bg-card p-2.5 text-[9px] text-foreground shadow-xl;
+    border-color: var(--border);
+  }
+
+  .runtime-state-heading {
+    @apply mb-2 flex items-center gap-1.5 border-b pb-1.5 font-semibold uppercase tracking-[0.12em] text-muted-foreground;
+    border-color: var(--border);
+  }
+
+  .runtime-state-grid {
+    @apply grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1;
+  }
+
+  .runtime-state-grid span {
+    @apply text-muted-foreground;
+  }
+
+  .runtime-state-grid strong {
+    @apply truncate text-right font-mono font-normal;
+  }
+
+  .runtime-state-panel time {
+    @apply mt-2 block border-t pt-1.5 text-muted-foreground;
+    border-color: var(--border);
+  }
 }
 
 #root {

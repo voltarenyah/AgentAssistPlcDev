@@ -52,15 +52,52 @@ afterEach(() => {
 })
 
 describe('WorktreeVersionControlTimeline', () => {
+  it('shows a seven-character Git hash and device-free checksum in the metadata lane', async () => {
+    const fullSha = 'abcdef1234567890abcdef1234567890abcdef12'
+    const fullChecksum = 'PLC_1:0123456789abcdef0123456789abcdef'
+    vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue({
+      ...firstPage,
+      gitCommits: [gitCommit(0, {
+        sha: fullSha,
+        tiaChecksum: fullChecksum,
+        timestamp: '2026-08-07T10:44:00',
+      })],
+      svnRevisions: [{
+        ...firstPage.svnRevisions[0],
+        gitCommitSha: fullSha,
+        tiaChecksum: fullChecksum,
+      }],
+      hasMore: false,
+    })
+    const { host } = await render()
+
+    expect(host.textContent).toContain('Git hash')
+    expect(host.textContent).toContain('TIA checksum')
+    expect(host.textContent).toContain('abcdef1')
+    expect(host.textContent).toContain('0123456789abcdef0123456789abcdef')
+    expect(host.textContent).not.toContain(fullSha)
+    expect(host.textContent).not.toContain(fullChecksum)
+    expect(host.querySelector('[data-timeline-git-hash]')?.textContent).toBe('abcdef1')
+    expect(host.querySelector('[data-timeline-tia-checksum]')?.textContent).toBe('0123456789abcdef0123456789abcdef')
+    expect(host.querySelector('[data-timeline-timestamp]')?.textContent).toBe('2026/8/7 10:44')
+  })
+
   it('loads ten commits initially and shows linked Git/SVN labels', async () => {
     const load = vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue(firstPage)
     const { host } = await render()
 
     expect(load).toHaveBeenCalledWith('wb-1', 'wt-1', 0, 10)
-    expect(host.textContent).toContain('commit-0')
+    expect(host.textContent).toContain('commit-')
     expect(host.textContent).toContain('r184')
-    expect(host.textContent).toContain('TIA PLC_1:checks…')
-    expect(host.querySelector('[data-timeline-link="commit-0-r184"]')).not.toBeNull()
+    expect(host.textContent).toContain('Timestamp')
+    expect(host.textContent).toContain('checksum-1')
+    expect(host.textContent).not.toContain('PLC_1:checksum-1')
+    expect(host.querySelectorAll('[data-timeline-column]').length).toBe(10)
+    expect(host.querySelectorAll('[data-timeline-timestamp]').length).toBe(10)
+    expect(host.querySelector('[data-testid="timeline-labels"]')?.className).toContain('shrink-0')
+    expect(host.querySelector('[data-testid="timeline-scroll"]')?.className).toContain('overflow-x-auto')
+    expect(host.querySelector('[data-timeline-column]')?.className).toContain('min-w-[176px]')
+    expect(host.querySelector('[data-timeline-link="commit-0-r184"]')).toBeNull()
   })
 
   it('loads the next page without duplicating prior commits', async () => {
@@ -97,5 +134,43 @@ describe('WorktreeVersionControlTimeline', () => {
     expect(host.textContent).toContain('Time:')
     expect(host.textContent).toContain('abcdef1234567890')
     expect(host.textContent).toContain('PLC_1:checksum-1')
+  })
+
+  it('positions event details beside the pointer when a Git shape is hovered', async () => {
+    vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue({
+      ...firstPage,
+      gitCommits: [gitCommit(0, { sha: 'abcdef1234567890' })],
+      svnRevisions: [],
+      hasMore: false,
+    })
+    const { host } = await render()
+    const shape = host.querySelector<HTMLButtonElement>('[data-timeline-git="abcdef1234567890"]')!
+
+    await act(async () => shape.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: 120, clientY: 240 })))
+
+    const details = host.querySelector<HTMLElement>('[data-testid="timeline-event-details"]')
+    expect(details).not.toBeNull()
+    expect(details?.className).toContain('fixed')
+    expect(details?.style.left).toBe('136px')
+    expect(details?.style.top).toBe('256px')
+  })
+
+  it('shortens the linked Git hash in SVN hover details', async () => {
+    const fullSha = 'abcdef1234567890abcdef1234567890abcdef12'
+    vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue({
+      ...firstPage,
+      gitCommits: [gitCommit(0, { sha: fullSha })],
+      svnRevisions: [{ ...firstPage.svnRevisions[0], gitCommitSha: fullSha }],
+      hasMore: false,
+    })
+    const { host } = await render()
+
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-timeline-svn="184"]')?.focus())
+
+    const details = host.querySelector<HTMLElement>('[data-testid="timeline-event-details"]')
+    const gitCommitDetail = [...(details?.querySelectorAll('span') ?? [])]
+      .find(span => span.textContent?.startsWith('Git commit:'))
+    expect(gitCommitDetail?.textContent).toBe('Git commit: abcdef1')
+    expect(gitCommitDetail?.getAttribute('title')).toBe(fullSha)
   })
 })

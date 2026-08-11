@@ -84,6 +84,7 @@ def _response(result: dict[str, Any], workbench_id: str, run_id: str) -> dict[st
         "contextRevision": result.get("context_revision", 0),
         "runtimeSnapshot": result.get("runtime_snapshot"),
         "intent": result.get("intent"),
+        "decision": result.get("decision"),
         "proposedAction": result.get("proposed_action"),
         "assistantMetadata": result.get("assistant_metadata"),
         "answer": result.get("answer"),

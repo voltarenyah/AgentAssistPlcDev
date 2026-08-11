@@ -49,6 +49,21 @@ afterEach(() => {
 })
 
 describe('AppAssistantPanel', () => {
+  it('keeps the first command disabled until orientation has completed', async () => {
+    let resolveBootstrap: ((events: api.AppAssistantEvent[]) => void) | undefined
+    vi.mocked(api.bootstrapAppAssistant).mockReturnValueOnce(new Promise(resolve => {
+      resolveBootstrap = resolve
+    }))
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')?.disabled).toBe(true)
+
+    await act(async () => resolveBootstrap?.([{ kind: 'answer', data: { answer: 'Ready.' } }]))
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')?.disabled).toBe(false)
+  })
+
   it('shows orientation and waits for an explicit user command', async () => {
     vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
       { kind: 'answer', data: { answer: 'Likely intention: review the worktree. Would you like me to read the focused todo list?' } },
@@ -94,6 +109,38 @@ describe('AppAssistantPanel', () => {
     expect(host.textContent).toContain('The worktree remains user-selected.')
   })
 
+  it('renders concrete baseline choices returned by the assistant', async () => {
+    vi.mocked(api.chatAppAssistant).mockResolvedValueOnce([
+      {
+        kind: 'state',
+        data: {
+          runtimeSnapshot: runtime,
+          decision: {
+            kind: 'clarification',
+            question: 'Which worktree should be used as the base?',
+            options: [{ value: 'master', label: 'master', description: 'branch master' }],
+          },
+        },
+      },
+      { kind: 'answer', data: { answer: 'Choose a base worktree.' } },
+    ])
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Create a new worktree named test.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')?.click())
+
+    expect(host.textContent).toContain('Choose a base worktree.')
+    expect(host.querySelector('[data-assistant-option="master"]')).not.toBeNull()
+    expect(host.textContent).toContain('branch master')
+  })
+
   it('automatically re-bootstraps after a consequential runtime change', async () => {
     const { host } = render(
       <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
@@ -110,6 +157,24 @@ describe('AppAssistantPanel', () => {
 
     expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.')
     expect(host.textContent).toContain('feature')
+  })
+
+  it('refreshes the assistant when the focused worktree changes', async () => {
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+    vi.mocked(api.chatAppAssistant).mockClear()
+
+    act(() => runtimeHarness.listener?.({
+      ...runtime,
+      workbenchRevision: 4,
+      focus: { worktreeId: 'wt2', deviceId: null },
+    }))
+    await act(async () => {})
+
+    expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.')
+    expect(host.textContent).toContain('context changed')
   })
 
   it('offers an explicit selection action for an unselected worktree', async () => {

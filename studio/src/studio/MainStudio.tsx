@@ -47,6 +47,7 @@ import WorkbenchNavigator, {
 } from '@/studio/workbench/WorkbenchNavigator'
 import CreateWorkbenchDialog from '@/studio/workbench/CreateWorkbenchDialog'
 import OperationStatusLine from '@/studio/workbench/OperationStatusLine'
+import RuntimeStateStatusBar from '@/studio/workbench/RuntimeStateStatusBar'
 import RefreshDialog from '@/studio/workbench/RefreshDialog'
 import SandboxDeniedDialog from '@/studio/workbench/SandboxDeniedDialog'
 import {
@@ -499,7 +500,7 @@ export default function MainStudio() {
 
   useEffect(() => {
     setAppAssistantRuntime(null)
-    if (!appAssistantOpen || !selection.workbenchId) return
+    if (!selection.workbenchId || typeof EventSource === 'undefined') return
     let cancelled = false
     void api.getAppAssistantRuntimeState(selection.workbenchId).then(snapshot => {
       if (!cancelled) setAppAssistantRuntime(snapshot)
@@ -511,7 +512,7 @@ export default function MainStudio() {
       cancelled = true
       unsubscribe()
     }
-  }, [appAssistantOpen, selection.workbenchId])
+  }, [selection.workbenchId])
 
   useEffect(() => {
     try { writeShellLayout(window.localStorage, shellLayout) } catch { /* storage is optional */ }
@@ -2186,6 +2187,7 @@ export default function MainStudio() {
 
       <footer data-status-bar className="studio-status-bar">
         <span className="studio-status-indicator">● Ready</span>
+        <RuntimeStateStatusBar runtime={appAssistantRuntime} />
         <span className="studio-status-context">
           <span>{activeWorkbench?.name ?? 'No workbench'}</span>
           <span>/</span>
