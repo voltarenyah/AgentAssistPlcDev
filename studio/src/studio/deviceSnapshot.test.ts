@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { DeviceSnapshot, OfflineBlockInfo } from '@/api/client'
 import {
   applyDeviceSnapshot,
   beginDeviceSelection,
+  clearDeviceMetadataMemory,
   completeDeviceSelection,
   failDeviceSelection,
+  readDeviceMetadata,
   retainSnapshotOnError,
+  rememberDeviceSnapshot,
+  rememberDeviceSummary,
 } from './deviceSnapshot'
 
 const block = (name: string, blockType: string, number: number): OfflineBlockInfo => ({
@@ -36,6 +40,51 @@ const snapshot = (overrides: Partial<DeviceSnapshot> = {}): DeviceSnapshot => ({
 })
 
 describe('device snapshot state', () => {
+  afterEach(() => {
+    clearDeviceMetadataMemory()
+  })
+
+  it('remembers device names and source counts by workbench, worktree, and device', () => {
+    rememberDeviceSummary('wb-1', 'wt-1', { deviceId: 'plc-a', plcName: 'PLC_A' })
+
+    expect(readDeviceMetadata({ workbenchId: 'wb-1', worktreeId: 'wt-1', deviceId: 'plc-a' })).toEqual({
+      deviceId: 'plc-a',
+      plcName: 'PLC_A',
+      sourceObjectCount: null,
+    })
+
+    rememberDeviceSnapshot(snapshot({
+      workbenchId: 'wb-1',
+      worktreeId: 'wt-1',
+      deviceId: 'plc-a',
+      plcName: 'PLC_A',
+      sourceObjectCount: 7,
+    }))
+
+    expect(readDeviceMetadata({ workbenchId: 'wb-1', worktreeId: 'wt-1', deviceId: 'plc-a' })).toEqual({
+      deviceId: 'plc-a',
+      plcName: 'PLC_A',
+      sourceObjectCount: 7,
+    })
+    expect(readDeviceMetadata({ workbenchId: 'wb-1', worktreeId: 'wt-2', deviceId: 'plc-a' })).toBeNull()
+  })
+
+  it('starts a pending selection with cached metadata while the full snapshot loads', () => {
+    const pending = beginDeviceSelection(null, 'plc-a', 1, {
+      deviceId: 'plc-a',
+      plcName: 'PLC_A',
+      sourceObjectCount: 7,
+    })
+
+    expect(pending.cachedMetadata).toEqual({
+      deviceId: 'plc-a',
+      plcName: 'PLC_A',
+      sourceObjectCount: 7,
+    })
+    expect(pending.selecting).toBe(true)
+    expect(pending.view).toBeNull()
+  })
+
   it('hydrates blocks and persisted knowledge from a selected-device snapshot', () => {
     const next = applyDeviceSnapshot(null, snapshot({
       knowledge: { state: 'current', updatedAt: '2026-07-29T08:00:00Z' },

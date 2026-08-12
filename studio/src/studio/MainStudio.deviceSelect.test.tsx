@@ -3,6 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/api/client'
+import { clearDeviceMetadataMemory } from './deviceSnapshot'
 import MainStudio from './MainStudio'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -74,6 +75,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  clearDeviceMetadataMemory()
 })
 
 describe('MainStudio device selection resilience', () => {
@@ -124,7 +126,7 @@ describe('MainStudio device selection resilience', () => {
     clickText(host, 'PLC_Demo')
     await act(async () => {})
 
-    expect(host.querySelector('footer')?.textContent).toContain('dev1')
+    expect(host.querySelector('footer')?.textContent).toContain('PLC_Demo')
     expect(host.querySelector('footer')?.textContent).not.toContain('no device')
     // While the snapshot is still loading, the brand-new bootstrap panel must not flash.
     expect(host.textContent).not.toContain('Generate PLC context')
@@ -155,6 +157,31 @@ describe('MainStudio device selection resilience', () => {
     expect(host.textContent).not.toContain('Touched overlays')
     // Established device (snapshot has blocks): no bootstrap panel.
     expect(host.textContent).not.toContain('Generate PLC context')
+  })
+
+  it('shows remembered device metadata immediately while a repeated snapshot loads', async () => {
+    vi.mocked(api.getSessions).mockResolvedValue([])
+    vi.mocked(api.getDeviceInfo).mockResolvedValue(snapshot)
+    vi.mocked(api.listDeviceSessions).mockResolvedValue([])
+
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+    clickText(host, 'DemoWB')
+    await act(async () => {})
+    clickText(host, 'master')
+    await act(async () => {})
+    clickText(host, 'PLC_Demo')
+    await act(async () => {})
+    await act(async () => {})
+
+    vi.mocked(api.getDeviceInfo).mockImplementation(() => new Promise<api.DeviceSnapshot>(() => {}))
+    clickText(host, 'PLC_Demo')
+    await act(async () => {})
+
+    expect(host.querySelector('h1')?.textContent).toBe('PLC_Demo')
+    const sourceObjectsMetric = Array.from(host.querySelectorAll('div'))
+      .find(element => element.textContent === 'Source objects')
+    expect(sourceObjectsMetric?.previousElementSibling?.textContent).toBe('7')
   })
 
   it('describes source editing without a modified overlay model', async () => {

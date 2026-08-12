@@ -55,7 +55,10 @@ import {
   beginDeviceSelection,
   completeDeviceSelection,
   failDeviceSelection,
+  readDeviceMetadata,
   retainSnapshotOnError,
+  rememberDeviceSnapshot,
+  rememberDeviceSummary,
   type DeviceSelectionState,
 } from '@/studio/deviceSnapshot'
 import * as api from '@/api/client'
@@ -500,12 +503,12 @@ export default function MainStudio() {
 
   useEffect(() => {
     setAppAssistantRuntime(null)
-    if (!selection.workbenchId || typeof EventSource === 'undefined') return
+    if (!selection.workbenchId) return
     let cancelled = false
     void api.getAppAssistantRuntimeState(selection.workbenchId).then(snapshot => {
       if (!cancelled) setAppAssistantRuntime(snapshot)
     }).catch(() => { /* The panel reports service/API availability independently. */ })
-    const unsubscribe = api.subscribeAppAssistantRuntime(selection.workbenchId, snapshot => {
+    const unsubscribe = typeof EventSource === 'undefined' ? () => {} : api.subscribeAppAssistantRuntime(selection.workbenchId, snapshot => {
       if (!cancelled) setAppAssistantRuntime(snapshot)
     })
     return () => {
@@ -569,6 +572,7 @@ export default function MainStudio() {
   const deviceView = deviceSelection?.view ?? null
   const deviceSessions = deviceSelection?.sessions ?? []
   const deviceInfo = deviceView?.snapshot ?? null
+  const deviceName = deviceInfo?.plcName ?? deviceSelection?.cachedMetadata?.plcName ?? selection.deviceId
   const deviceMeta = deviceInfo?.device ?? null
   const hardwareSelectedNode = useMemo(
     () => hardwareView && (hardwareInspectedNodeId ?? hardwareSelectedNodeId)
@@ -578,6 +582,9 @@ export default function MainStudio() {
   )
   const blocks = useMemo(() => deviceView?.blocks ?? [], [deviceView])
   const sourceObjectCount = deviceView?.sourceObjectCount ?? 0
+  const displayedSourceObjectCount = deviceView
+    ? sourceObjectCount
+    : deviceSelection?.cachedMetadata?.sourceObjectCount ?? 0
   const filteredBlocks = useMemo(() => {
     const query = blockFilter.trim().toLowerCase()
     if (!query) return blocks
@@ -824,6 +831,7 @@ export default function MainStudio() {
         || snapshot.deviceId !== context.deviceId) {
         throw new Error('Device snapshot identity does not match the requested context')
       }
+      rememberDeviceSnapshot(snapshot)
       setDeviceSelection(previous => {
         const current = previous?.view?.snapshot
         if (!previous || !current
@@ -860,6 +868,7 @@ export default function MainStudio() {
     try {
       await api.selectWorktree(workbench.workbenchId, worktree.worktreeId)
       const devices = await api.listDevices(workbench.workbenchId, worktree.worktreeId)
+      devices.forEach(device => rememberDeviceSummary(workbench.workbenchId, worktree.worktreeId, device))
       setDevicesByWorktree(previous => ({
         ...previous,
         [worktreeKey(workbench.workbenchId, worktree.worktreeId)]: devices,
@@ -885,7 +894,16 @@ export default function MainStudio() {
     // (per-block manifest work) loads in the background and fills the view.
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
     setMainView({ kind: 'device' })
-    setDeviceSelection(previous => beginDeviceSelection(previous, deviceId, requestId))
+    const cachedContext = {
+      workbenchId: workbench.workbenchId,
+      worktreeId: worktree.worktreeId,
+      deviceId,
+    }
+    const cachedSummary = devicesByWorktree[worktreeKey(workbench.workbenchId, worktree.worktreeId)]
+      ?.find(device => device.deviceId === deviceId)
+    const cachedMetadata = readDeviceMetadata(cachedContext)
+      ?? (cachedSummary ? rememberDeviceSummary(workbench.workbenchId, worktree.worktreeId, cachedSummary) : null)
+    setDeviceSelection(previous => beginDeviceSelection(previous, deviceId, requestId, cachedMetadata))
     setChatTabs(emptyChatTabs())
     setOperation('select-device')
     try {
@@ -1821,7 +1839,7 @@ export default function MainStudio() {
                         <Cpu className="h-5 w-5 text-chart-2" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <h1 className="text-lg font-semibold">{deviceInfo?.plcName ?? selection.deviceId}</h1>
+                        <h1 className="text-lg font-semibold">{deviceName}</h1>
                         <p className="mt-0.5 font-mono text-[9px] text-muted-foreground">{deviceInfo?.engineeringIdentity ?? selection.deviceId}</p>
                         {(deviceMeta?.typeIdentifier || deviceMeta?.deviceName) && (
                           <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
@@ -1910,7 +1928,7 @@ export default function MainStudio() {
 
                     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                       <Metric label="PLC blocks" value={blocks.length} />
-                      <Metric label="Source objects" value={sourceObjectCount} />
+                      <Metric label="Source objects" value={displayedSourceObjectCount} />
                       <Metric label="Saved sessions" value={deviceSessions.length} />
                       <Metric label="Knowledge state" value={activeKnowledge} tone={activeKnowledge === 'current' ? 'good' : activeKnowledge === 'failed' ? 'danger' : 'warning'} />
                     </div>
@@ -2087,7 +2105,7 @@ export default function MainStudio() {
                       {knowledgeContext && (
                         <NodeEdgesView
                           context={knowledgeContext}
-                          projectName={deviceInfo?.plcName ?? selection.deviceId ?? ''}
+                          projectName={deviceName ?? ''}
                           onNodeSelect={node => setKnowledgeSelection(previous => ({ ...previous, node }))}
                           onEdgeSelect={edge => setKnowledgeSelection(previous => ({ ...previous, edge }))}
                         />
@@ -2193,7 +2211,7 @@ export default function MainStudio() {
           <span>/</span>
           <span className="font-mono">{activeWorktree?.branch ?? 'no worktree'}</span>
           <span>/</span>
-          <span className="font-mono text-foreground">{deviceInfo?.plcName ?? (selection.worktreeId && !selection.deviceId ? (mainView.kind === 'hardware' ? 'hardware' : 'worktree') : selection.deviceId ?? 'no device')}</span>
+          <span className="font-mono text-foreground">{deviceName ?? (selection.worktreeId && !selection.deviceId ? (mainView.kind === 'hardware' ? 'hardware' : 'worktree') : selection.deviceId ?? 'no device')}</span>
         </span>
         <button
           className="studio-status-item studio-status-api"

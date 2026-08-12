@@ -6,6 +6,7 @@ import InlineEdit from './InlineEdit'
 import StatusBadge from './StatusBadge'
 import WorktreeTasksPanel from './WorktreeTasksPanel'
 import WorktreeVersionControlTimeline from './WorktreeVersionControlTimeline'
+import { rememberDeviceSnapshot } from '@/studio/deviceSnapshot'
 
 export type WorktreeLandingTab = 'overview' | 'tasks'
 
@@ -102,6 +103,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
       .then(devices => Promise.all(devices.map(async device => {
         try {
           const snapshot = await api.getDeviceInfo(workbenchId, worktreeId, device.deviceId)
+          rememberDeviceSnapshot(snapshot)
           return {
             deviceId: device.deviceId,
             plcName: snapshot.plcName || device.plcName,
