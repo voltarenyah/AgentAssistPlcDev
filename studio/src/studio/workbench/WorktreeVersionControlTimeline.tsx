@@ -41,14 +41,20 @@ const formatTimestamp = (value: string) => {
 
 const formatTimelineTimestamp = formatTimestamp
 
+const clampPosition = (position: number, viewport: number, reserved: number) =>
+  Math.min(Math.max(8, position), Math.max(8, viewport - reserved))
+
 const pointerPosition = (event: MouseEvent<HTMLButtonElement>): DetailPosition => ({
-  left: event.clientX + 16,
-  top: event.clientY + 16,
+  left: clampPosition(event.clientX + 16, window.innerWidth, 368),
+  top: clampPosition(event.clientY + 16, window.innerHeight, 180),
 })
 
 const focusPosition = (event: FocusEvent<HTMLButtonElement>): DetailPosition => {
   const bounds = event.currentTarget.getBoundingClientRect()
-  return { left: bounds.right + 12, top: bounds.top }
+  return {
+    left: clampPosition(bounds.right + 12, window.innerWidth, 368),
+    top: clampPosition(bounds.top, window.innerHeight, 180),
+  }
 }
 
 function GitShape({

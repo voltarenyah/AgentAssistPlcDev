@@ -8,7 +8,7 @@ from langgraph.types import interrupt
 
 from . import __version__
 from .contracts import HistoryDepth
-from .decisions import AssistantDecision, AssistantRequestMode, ClarificationOption, OrientationProposal
+from .decisions import AssistantDecision, AssistantRequestMode, ClarificationOption, CreateWorkbenchMutation, OrientationProposal
 from .gateway import GatewayStaleError, WorkbenchGateway
 from .model import DEFAULT_MODEL, build_model_from_env
 from .prompts import (
@@ -42,6 +42,17 @@ class Gateway(Protocol):
         name: str,
         branch: str,
         start_point: str | None,
+        expected_revision: int,
+        request_id: str,
+    ) -> dict[str, Any]: ...
+
+    async def create_workbench(
+        self,
+        workbench_id: str,
+        *,
+        name: str,
+        engineering_project_path: str,
+        root_path: str | None,
         expected_revision: int,
         request_id: str,
     ) -> dict[str, Any]: ...
@@ -362,6 +373,8 @@ async def _propose_mutation(state: AppAssistantState, gateway: Gateway) -> dict[
     mutation = decision.mutation
     if mutation is None:
         return {"answer": "I need a complete worktree proposal before asking for approval."}
+    if isinstance(mutation, CreateWorkbenchMutation):
+        return await _propose_workbench_mutation(state, gateway, mutation)
     start_point = mutation.start_point or _default_start_point(state)
     if not start_point:
         decision = _missing_baseline_decision(state, mutation.name)
@@ -386,7 +399,7 @@ async def _propose_mutation(state: AppAssistantState, gateway: Gateway) -> dict[
             workbench_id,
             name=mutation.name,
             branch=mutation.branch,
-            start_point=mutation.start_point,
+            start_point=start_point,
             expected_revision=revision,
             request_id=proposal["requestId"],
         )
@@ -413,6 +426,48 @@ async def _propose_mutation(state: AppAssistantState, gateway: Gateway) -> dict[
             return {"proposed_action": proposal, "answer": f"The workbench changed before approval and refresh failed: {exception}"}
     except Exception as exception:
         return {"proposed_action": proposal, "answer": f"Worktree creation was not completed: {exception}"}
+
+
+async def _propose_workbench_mutation(
+    state: AppAssistantState,
+    gateway: Gateway,
+    mutation: CreateWorkbenchMutation,
+) -> dict[str, Any]:
+    revision = int(state.get("context_revision", _runtime(state).get("workbenchRevision", 0)))
+    workbench_id = state["workbench_id"]
+    proposal = {
+        "kind": "create_workbench",
+        "workbenchId": workbench_id,
+        "name": mutation.name,
+        "engineeringProjectPath": mutation.engineering_project_path,
+        "rootPath": mutation.root_path,
+        "expectedWorkbenchRevision": revision,
+        "requestId": f"app-assistant:{workbench_id}:create-workbench:{revision}",
+    }
+    approval = interrupt(proposal)
+    if not isinstance(approval, dict) or approval.get("decision") != "approve":
+        return {"proposed_action": proposal, "answer": "The workbench creation proposal was cancelled."}
+    try:
+        result = await gateway.create_workbench(
+            workbench_id,
+            name=mutation.name,
+            engineering_project_path=mutation.engineering_project_path,
+            root_path=mutation.root_path,
+            expected_revision=revision,
+            request_id=proposal["requestId"],
+        )
+        return {
+            "proposed_action": proposal,
+            "detail": {"mutation": result},
+            "answer": f"Created workbench '{mutation.name}' from '{mutation.engineering_project_path}'.",
+        }
+    except GatewayStaleError:
+        return {
+            "proposed_action": proposal,
+            "answer": "The workbench changed before approval. Please review the current state and request the project creation again.",
+        }
+    except Exception as exception:
+        return {"proposed_action": proposal, "answer": f"Workbench creation was not completed: {exception}"}
 
 
 def _route_request(state: AppAssistantState) -> str:

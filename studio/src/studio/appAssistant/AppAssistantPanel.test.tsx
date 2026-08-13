@@ -15,7 +15,6 @@ vi.mock('@/api/client', async importOriginal => {
     ...actual,
     bootstrapAppAssistant: vi.fn(async () => [{ kind: 'answer', data: { answer: 'Start by reviewing the open worktree todos.' } }]),
     chatAppAssistant: vi.fn(async () => [{ kind: 'answer', data: { answer: 'The worktree remains user-selected.' } }]),
-    submitAppAssistantFeedback: vi.fn(async () => {}),
     subscribeAppAssistantRuntime: vi.fn((_workbenchId: string, listener: (snapshot: api.AppAssistantRuntimeSnapshot) => void) => {
       runtimeHarness.listener = listener
       return () => { runtimeHarness.listener = null }
@@ -141,6 +140,178 @@ describe('AppAssistantPanel', () => {
     expect(host.textContent).toContain('branch master')
   })
 
+  it('normalizes the runtime context envelope returned by the sidecar', async () => {
+    vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
+      {
+        kind: 'state',
+        data: {
+          runtimeSnapshot: {
+            workbenchId: 'wb1',
+            name: 'Demo',
+            runtime,
+            availableActions: [],
+            observedAt: runtime.observedAt,
+          },
+        },
+      },
+      { kind: 'answer', data: { answer: 'Ready.' } },
+    ])
+
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={null} onSelectWorktree={vi.fn()} />,
+    )
+    await vi.waitFor(() => expect(host.textContent).toContain('master'))
+
+    expect(host.querySelector('[data-app-assistant-panel]')).not.toBeNull()
+  })
+
+  it('keeps a mutation proposal visible until the user approves or rejects it', async () => {
+    vi.mocked(api.chatAppAssistant).mockResolvedValueOnce([
+      {
+        kind: 'interrupt',
+        data: { kind: 'create_worktree', name: 'langgraph-test', branch: 'assistant/langgraph-test' },
+      },
+      { kind: 'answer', data: { answer: 'Please approve the proposed worktree creation.' } },
+    ])
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Create a new worktree named langgraph-test.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')?.click())
+
+    expect(host.textContent).toContain('Approve worktree creation?')
+    expect(host.querySelector<HTMLButtonElement>('.primary-button')?.textContent).toContain('Approve')
+  })
+
+  it('shows visible progress while an approved worktree is being created', async () => {
+    vi.mocked(api.chatAppAssistant).mockResolvedValueOnce([
+      {
+        kind: 'interrupt',
+        data: { kind: 'create_worktree', name: 'slow-test', branch: 'assistant/slow-test' },
+      },
+      { kind: 'answer', data: { answer: 'Please approve the proposed worktree creation.' } },
+    ])
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Create a new worktree named slow-test.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')?.click())
+
+    let resolveApproval!: (events: api.AppAssistantEvent[]) => void
+    vi.mocked(api.chatAppAssistant).mockReturnValueOnce(new Promise(resolve => { resolveApproval = resolve }))
+    await act(async () => host.querySelector<HTMLButtonElement>('button')?.click())
+
+    expect(host.querySelector('[data-assistant-progress]')?.textContent).toContain('Creating linked worktree')
+    resolveApproval([{ kind: 'answer', data: { answer: 'Created.' } }])
+    await act(async () => {})
+  })
+
+  it('shows visible progress while an approved workbench is being created', async () => {
+    vi.mocked(api.chatAppAssistant).mockResolvedValueOnce([
+      {
+        kind: 'interrupt',
+        data: { kind: 'create_workbench', name: 'slow-project', engineeringProjectPath: 'C:\\Projects\\Line.ap17' },
+      },
+      { kind: 'answer', data: { answer: 'Please approve the proposed workbench creation.' } },
+    ])
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Create a new project from C:\\Projects\\Line.ap17.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')?.click())
+
+    let resolveApproval!: (events: api.AppAssistantEvent[]) => void
+    vi.mocked(api.chatAppAssistant).mockReturnValueOnce(new Promise(resolve => { resolveApproval = resolve }))
+    await act(async () => host.querySelector<HTMLButtonElement>('button')?.click())
+
+    expect(host.querySelector('[data-assistant-progress]')?.textContent).toContain('Creating workbench project')
+    resolveApproval([{ kind: 'answer', data: { answer: 'Created.' } }])
+    await act(async () => {})
+  })
+
+  it('does not auto-refresh a paused mutation thread while approval is pending', async () => {
+    vi.mocked(api.chatAppAssistant).mockResolvedValueOnce([
+      {
+        kind: 'interrupt',
+        data: { kind: 'create_worktree', name: 'paused-test', branch: 'assistant/paused-test' },
+      },
+      { kind: 'answer', data: { answer: 'Please approve the proposed worktree creation.' } },
+    ])
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Create a new worktree named paused-test.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')?.click())
+    vi.mocked(api.chatAppAssistant).mockClear()
+
+    act(() => runtimeHarness.listener?.({
+      ...runtime,
+      workbenchRevision: 4,
+      worktrees: [...runtime.worktrees, { worktreeId: 'wt2', name: 'feature', branch: 'feature', todoCount: 0, gitStatus: 'clean' }],
+    }))
+    await act(async () => {})
+
+    expect(api.chatAppAssistant).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('Approve worktree creation?')
+  })
+
+  it('shows the TIA source path for a new workbench proposal', async () => {
+    vi.mocked(api.chatAppAssistant).mockResolvedValueOnce([
+      {
+        kind: 'interrupt',
+        data: {
+          kind: 'create_workbench',
+          name: 'Assistant Project',
+          engineeringProjectPath: 'C:\\Projects\\Line.ap17',
+        },
+      },
+      { kind: 'answer', data: { answer: 'A workbench creation proposal is ready.' } },
+    ])
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
+    )
+    await act(async () => {})
+
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Create a new project from C:\\Projects\\Line.ap17.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')?.click())
+
+    expect(host.textContent).toContain('Approve workbench creation?')
+    expect(host.textContent).toContain('C:\\Projects\\Line.ap17')
+  })
+
   it('automatically re-bootstraps after a consequential runtime change', async () => {
     const { host } = render(
       <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} />,
@@ -199,7 +370,7 @@ describe('AppAssistantPanel', () => {
     expect(selectWorktree).toHaveBeenCalledWith('wt2')
   })
 
-  it('records a categorized outcome for the latest assistant run', async () => {
+  it('does not show an optional feedback card in the normal assistant conversation', async () => {
     vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
       { kind: 'state', data: { runtimeSnapshot: runtime, runMetadata: { runId: 'run-1' } } },
       { kind: 'answer', data: { answer: 'Review the current todo list.' } },
@@ -209,10 +380,6 @@ describe('AppAssistantPanel', () => {
     )
     await act(async () => {})
 
-    const button = host.querySelector<HTMLButtonElement>('[data-assistant-feedback="successful_completion"]')
-    expect(button).not.toBeNull()
-    await act(async () => button!.click())
-
-    expect(api.submitAppAssistantFeedback).toHaveBeenCalledWith('successful_completion', 'run-1')
+    expect(host.querySelector('[data-assistant-feedback]')).toBeNull()
   })
 })

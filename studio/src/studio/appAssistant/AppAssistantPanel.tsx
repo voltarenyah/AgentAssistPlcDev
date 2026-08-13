@@ -14,27 +14,35 @@ type Props = {
   runtime: api.AppAssistantRuntimeSnapshot | null
   onClose?: () => void
   onSelectWorktree?: (worktreeId: string) => Promise<void> | void
+  onWorkbenchCreated?: (workbenchId: string) => Promise<void> | void
 }
 
-export default function AppAssistantPanel({ workbenchId, workbenchName, runtime, onClose, onSelectWorktree }: Props) {
+export default function AppAssistantPanel({ workbenchId, workbenchName, runtime, onClose, onSelectWorktree, onWorkbenchCreated }: Props) {
   const [state, setState] = useState<AppAssistantPanelState>(() => initialAppAssistantState(runtime))
   const [draft, setDraft] = useState('')
   const [selectingWorktree, setSelectingWorktree] = useState<string | null>(null)
-  const [feedbackBusy, setFeedbackBusy] = useState(false)
+  const [busyLabel, setBusyLabel] = useState<string | null>(null)
   const latestRuntime = useRef<api.AppAssistantRuntimeSnapshot | null>(runtime)
 
   useEffect(() => {
     let cancelled = false
     latestRuntime.current = runtime
+    setBusyLabel('Loading workbench context…')
     setState({ ...initialAppAssistantState(runtime), busy: true })
     void api.bootstrapAppAssistant().then(events => {
-      if (!cancelled) setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
+      if (!cancelled) {
+        setBusyLabel(null)
+        setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
+      }
     }).catch(error => {
-      if (!cancelled) setState(current => ({
-        ...current,
-        busy: false,
-        messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Assistant unavailable' }],
-      }))
+      if (!cancelled) {
+        setBusyLabel(null)
+        setState(current => ({
+          ...current,
+          busy: false,
+          messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Assistant unavailable' }],
+        }))
+      }
     })
     return () => { cancelled = true }
   }, [workbenchId])
@@ -46,20 +54,27 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
   }), [workbenchId])
 
   useEffect(() => {
-    if (!state.autoRefreshPending || state.busy) return
+    if (!state.autoRefreshPending || state.busy || state.pendingApproval) return
+    setBusyLabel('Refreshing workbench context…')
     let cancelled = false
     setState(current => ({ ...current, busy: true, autoRefreshPending: false }))
     void api.chatAppAssistant('The workbench changed. Re-read the current state and suggest the next useful move.')
       .then(events => {
-        if (!cancelled) setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
+        if (!cancelled) {
+          setBusyLabel(null)
+          setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
+        }
       })
       .catch(error => {
-        if (!cancelled) setState(current => ({
-          ...current,
-          busy: false,
-          contextStale: true,
-          messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Assistant refresh unavailable' }],
-        }))
+        if (!cancelled) {
+          setBusyLabel(null)
+          setState(current => ({
+            ...current,
+            busy: false,
+            contextStale: true,
+            messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Assistant refresh unavailable' }],
+          }))
+        }
       })
     return () => { cancelled = true }
   }, [state.autoRefreshPending, state.busy, workbenchId])
@@ -67,6 +82,10 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
   const send = async (message: string, approval?: Record<string, unknown>) => {
     const trimmed = message.trim()
     if (!trimmed && !approval) return
+    const approvalKind = state.pendingApproval?.kind
+    setBusyLabel(approval
+      ? approvalKind === 'create_workbench' ? 'Creating workbench project…' : 'Creating linked worktree…'
+      : 'Assistant is working…')
     setState(current => ({
       ...current,
       busy: true,
@@ -76,9 +95,21 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
       const events = approval
         ? await api.chatAppAssistant(trimmed || 'Approve the proposed worktree creation.', approval)
         : await api.chatAppAssistant(trimmed)
-      setState(current => ({ ...applyAssistantEvents(current, events), busy: false, pendingApproval: null }))
+      setState(current => {
+        const next = applyAssistantEvents(current, events)
+        return { ...next, busy: false, pendingApproval: approval ? null : next.pendingApproval }
+      })
+      if (approval && onWorkbenchCreated) {
+        const workbenchId = events
+          .find(event => event.kind === 'state' && event.data.detail && typeof event.data.detail === 'object')
+          ?.data.detail as { mutation?: { workbench?: { workbenchId?: unknown } } } | undefined
+        const createdId = workbenchId?.mutation?.workbench?.workbenchId
+        if (typeof createdId === 'string') await onWorkbenchCreated(createdId)
+      }
       setDraft('')
+      setBusyLabel(null)
     } catch (error) {
+      setBusyLabel(null)
       setState(current => ({
         ...current,
         busy: false,
@@ -106,23 +137,10 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
     void send(`Use '${option}' as the selected base worktree.`)
   }
 
-  const submitFeedback = async (category: api.AppAssistantFeedbackCategory) => {
-    if (!state.lastRunId || feedbackBusy) return
-    setFeedbackBusy(true)
-    try {
-      await api.submitAppAssistantFeedback(category, state.lastRunId)
-      setState(current => ({ ...current, feedbackSubmitted: true }))
-    } catch (error) {
-      setState(current => ({
-        ...current,
-        messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Feedback unavailable' }],
-      }))
-    } finally {
-      setFeedbackBusy(false)
-    }
-  }
-
   const worktrees = useMemo(() => state.runtime?.worktrees ?? runtime?.worktrees ?? [], [runtime?.worktrees, state.runtime?.worktrees])
+  const focusedWorktreeId = state.runtime?.focus?.worktreeId ?? runtime?.focus?.worktreeId ?? null
+  const pendingApprovalKind = state.pendingApproval?.kind
+  const isWorkbenchCreation = pendingApprovalKind === 'create_workbench'
 
   return (
     <aside className="flex h-full w-[320px] shrink-0 flex-col border-l bg-card" data-app-assistant-panel>
@@ -137,13 +155,14 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
       <div className="border-b px-3 py-2 text-[9px] text-muted-foreground">
         Runtime revision {state.runtime?.workbenchRevision ?? runtime?.workbenchRevision ?? '—'} · selection stays with you
         {state.contextStale && <span data-assistant-context-stale> · {state.autoRefreshPending ? 'refreshing suggestion…' : 'context changed; refreshes before next request'}</span>}
+        {state.busy && <div className="mt-1 flex items-center gap-1.5 text-chart-4" data-assistant-progress aria-live="polite"><Loader2 className="h-3 w-3 animate-spin" /> {busyLabel ?? 'Working…'}</div>}
       </div>
       <div className="scrollbar-sleek min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         {worktrees.map(worktree => (
           <div key={worktree.worktreeId} className="rounded-md border px-2 py-1.5 text-[9px]" style={{ borderColor: 'var(--border)' }}>
             <div className="font-medium">{worktree.name}</div>
             <div className="text-muted-foreground">{worktree.branch} · {worktree.todoCount} todo{worktree.todoCount === 1 ? '' : 's'} · {worktree.gitStatus}</div>
-            {onSelectWorktree && state.runtime?.focus.worktreeId !== worktree.worktreeId && (
+            {onSelectWorktree && focusedWorktreeId !== worktree.worktreeId && (
               <button
                 className="secondary-button mt-1 h-6 px-2 text-[9px]"
                 data-assistant-select-worktree={worktree.worktreeId}
@@ -180,22 +199,14 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
             </div>
           </div>
         )}
-        {state.lastRunId && state.messages.some(message => message.role === 'assistant') && !state.feedbackSubmitted && (
-          <div className="rounded-md border px-2.5 py-2 text-[9px]" data-assistant-feedback>
-            <div className="mb-1 text-muted-foreground">Was this useful?</div>
-            <div className="flex flex-wrap gap-1">
-              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="successful_completion" disabled={feedbackBusy} onClick={() => void submitFeedback('successful_completion')}>Success</button>
-              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="wrong_recommendation" disabled={feedbackBusy} onClick={() => void submitFeedback('wrong_recommendation')}>Wrong suggestion</button>
-              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="stale_status" disabled={feedbackBusy} onClick={() => void submitFeedback('stale_status')}>Stale status</button>
-              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="wrong_worktree" disabled={feedbackBusy} onClick={() => void submitFeedback('wrong_worktree')}>Wrong worktree</button>
-              <button className="secondary-button h-6 px-2 text-[9px]" data-assistant-feedback="unavailable_action" disabled={feedbackBusy} onClick={() => void submitFeedback('unavailable_action')}>Unavailable action</button>
-            </div>
-          </div>
-        )}
         {state.pendingApproval && (
           <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-[10px]">
-            <div className="font-medium">Approve worktree creation?</div>
-            <div className="mt-1 text-muted-foreground">{String(state.pendingApproval.name ?? 'new worktree')} · {String(state.pendingApproval.branch ?? 'new branch')}</div>
+            <div className="font-medium">{isWorkbenchCreation ? 'Approve workbench creation?' : 'Approve worktree creation?'}</div>
+            <div className="mt-1 break-all text-muted-foreground">
+              {isWorkbenchCreation
+                ? `${String(state.pendingApproval.name ?? 'new project')} · ${String(state.pendingApproval.engineeringProjectPath ?? 'TIA project file')}`
+                : `${String(state.pendingApproval.name ?? 'new worktree')} · ${String(state.pendingApproval.branch ?? 'new branch')}`}
+            </div>
             <div className="mt-2 flex gap-2">
               <button className="primary-button h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => void send('', { decision: 'approve' })}>Approve</button>
               <button className="secondary-button h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => void send('', { decision: 'reject' })}>Reject</button>

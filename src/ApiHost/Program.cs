@@ -151,7 +151,9 @@ builder.Services.AddSingleton<WorkbenchApiState>(services =>
 });
 builder.Services.AddSingleton<CompatibilityRuntimeState>();
 builder.Services.AddSingleton(_ => new CompatibilityConfigStore());
-builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
+// LangGraph may need longer than the normal API request window while the
+// configured model is generating an answer or waiting on a tool call.
+builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(600) });
 builder.Services.AddSingleton<DeepSeekBalanceClient>();
 builder.Services.AddSingleton<ApiChatService>();
 builder.Services.AddSingleton<SandboxPolicy>();

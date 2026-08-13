@@ -154,6 +154,7 @@ public sealed class WorkbenchApiState
 
         var summaries = BuildRuntimeSummaries(workbench);
         var current = runtimeStateCoordinator.GetSnapshot(id);
+        summaries = MergeRuntimeObservations(current.Worktrees, summaries);
         if (!string.Equals(
                 JsonSerializer.Serialize(current.Worktrees),
                 JsonSerializer.Serialize(summaries),
@@ -164,6 +165,20 @@ public sealed class WorkbenchApiState
 
         return workbench;
     }
+
+    private static IReadOnlyList<WorktreeRuntimeSummary> MergeRuntimeObservations(
+        IReadOnlyList<WorktreeRuntimeSummary> current,
+        IReadOnlyList<WorktreeRuntimeSummary> refreshed) =>
+        refreshed.Select(next =>
+        {
+            var previous = current.FirstOrDefault(item => item.WorktreeId == next.WorktreeId);
+            if (previous is null) return next;
+            return next with
+            {
+                GitStatus = next.GitStatus == "unknown" ? previous.GitStatus : next.GitStatus,
+                Head = next.GitStatus == "unknown" && previous.Head is not null ? previous.Head : next.Head,
+            };
+        }).ToArray();
     public WorkbenchMetadata Open(string root) => Add(catalog.Load(root));
 
     private IReadOnlyList<WorktreeRuntimeSummary> BuildRuntimeSummaries(WorkbenchMetadata workbench) =>

@@ -124,8 +124,8 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
             <h1 className="text-lg font-semibold">{overview.name}</h1>
             <p className="mt-0.5 text-[9px] text-muted-foreground">Created {formatDate(overview.createdAt)}</p>
             <div className="mt-2 space-y-1 font-mono text-[9px] text-muted-foreground">
-              <p className="break-all">Root: {overview.rootPath}</p>
-              <p className="break-all">Source project: {overview.sourceProjectPath ?? '—'}</p>
+              <p className="truncate" title={overview.rootPath}>Root: {overview.rootPath}</p>
+              <p className="truncate" title={overview.sourceProjectPath ?? undefined}>Source project: {overview.sourceProjectPath ?? '—'}</p>
             </div>
           </div>
           {onOpenAssistant && (

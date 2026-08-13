@@ -29,6 +29,15 @@ class MutationProposal(BaseModel):
     start_point: str | None = Field(default=None, alias="startPoint")
 
 
+class CreateWorkbenchMutation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["create_workbench"]
+    name: str
+    engineering_project_path: str = Field(alias="engineeringProjectPath")
+    root_path: str | None = Field(default=None, alias="rootPath")
+
+
 class ClarificationOption(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -51,5 +60,5 @@ class AssistantDecision(BaseModel):
     ] | None = Field(default=None, alias="toolName")
     tool_reason: str | None = Field(default=None, alias="toolReason")
     history_depth: HistoryDepth | None = Field(default=None, alias="historyDepth")
-    mutation: MutationProposal | None = None
+    mutation: MutationProposal | CreateWorkbenchMutation | None = None
     options: list[ClarificationOption] | None = None

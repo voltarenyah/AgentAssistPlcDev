@@ -16,8 +16,7 @@ Options:
   -NoBuild    Skip the dotnet build step (start faster when code is already compiled)
   -NoKill     Don't kill existing ApiHost / node processes before starting
 
-The optional LangGraph App Assistant is started when
-AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED=true (or 1).
+The LangGraph App Assistant is always started for development launches.
 "@
     return
 }
@@ -84,32 +83,37 @@ Start-Process `
     -FilePath "dotnet" `
     -ArgumentList @("run", "--project", $apiProject, "--", "Application:OpenBrowserOnStart=false")
 
-# 4. Start the optional LangGraph App Assistant. The desktop host owns this
-#    lifecycle in packaged mode; the development launcher must do the same
-#    when the documented opt-in flag is enabled.
-$assistantEnabled = $env:AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED -in @("1", "true")
-if ($assistantEnabled) {
-    $assistantRoot = Join-Path $root "agent-service"
-    $assistantLogRoot = Join-Path $root ".assistant-logs"
-    $assistantStdout = Join-Path $assistantLogRoot "stdout.log"
-    $assistantStderr = Join-Path $assistantLogRoot "stderr.log"
-    $assistantDataDir = $env:AUTOMATION_WORKBENCH_APP_ASSISTANT_DATA_DIR
-    if ([string]::IsNullOrWhiteSpace($assistantDataDir)) {
-        $assistantDataDir = Join-Path $env:LOCALAPPDATA "AutomationWorkbench\AppAssistant"
-    }
+# 4. Start the LangGraph App Assistant. The desktop host owns this lifecycle
+#    in packaged mode; development launches always start the local sidecar.
+$assistantRoot = Join-Path $root "agent-service"
+$assistantLogRoot = Join-Path $root ".assistant-logs"
+$assistantStdout = Join-Path $assistantLogRoot "stdout.log"
+$assistantStderr = Join-Path $assistantLogRoot "stderr.log"
+$assistantDataDir = $env:AUTOMATION_WORKBENCH_APP_ASSISTANT_DATA_DIR
+if ([string]::IsNullOrWhiteSpace($assistantDataDir)) {
+    $assistantDataDir = Join-Path $env:LOCALAPPDATA "AutomationWorkbench\AppAssistant"
+}
 
-    if (-not (Test-Path (Join-Path $assistantRoot "pyproject.toml"))) {
-        Write-Host "!!! LangGraph service was not found at $assistantRoot." -ForegroundColor Red
-        exit 1
-    }
-    if (-not (Get-Command py.exe -ErrorAction SilentlyContinue)) {
-        Write-Host "!!! Python launcher py.exe is required for the LangGraph App Assistant." -ForegroundColor Red
-        exit 1
-    }
+if (-not (Test-Path (Join-Path $assistantRoot "pyproject.toml"))) {
+    Write-Host "!!! LangGraph service was not found at $assistantRoot." -ForegroundColor Red
+    exit 1
+}
 
-    New-Item -ItemType Directory -Force -Path $assistantLogRoot, $assistantDataDir | Out-Null
-    $env:APP_ASSISTANT_APIHOST_URL = "http://127.0.0.1:5239"
-    $env:APP_ASSISTANT_DATA_DIR = $assistantDataDir
+$assistantVenvPython = Join-Path $assistantRoot ".venv\Scripts\python.exe"
+if (Test-Path $assistantVenvPython) {
+    $assistantExecutable = $assistantVenvPython
+    $assistantArguments = @("-m", "uvicorn", "app_assistant.server:app", "--host", "127.0.0.1", "--port", "8787")
+} elseif (Get-Command py.exe -ErrorAction SilentlyContinue) {
+    $assistantExecutable = "py.exe"
+    $assistantArguments = @("-3.13", "-m", "uvicorn", "app_assistant.server:app", "--host", "127.0.0.1", "--port", "8787")
+} else {
+    Write-Host "!!! No Python runtime was found for the LangGraph App Assistant. Create agent-service\.venv or install py.exe." -ForegroundColor Red
+    exit 1
+}
+
+New-Item -ItemType Directory -Force -Path $assistantLogRoot, $assistantDataDir | Out-Null
+$env:APP_ASSISTANT_APIHOST_URL = "http://127.0.0.1:5239"
+$env:APP_ASSISTANT_DATA_DIR = $assistantDataDir
 
     # Match the packaged desktop host: forward the existing local DeepSeek
     # configuration to the sidecar without ever printing the credential.
@@ -181,8 +185,8 @@ if ($assistantEnabled) {
     $assistantProcess = Start-Process `
         -WindowStyle Hidden `
         -WorkingDirectory $assistantRoot `
-        -FilePath "py.exe" `
-        -ArgumentList @("-3.13", "-m", "uvicorn", "app_assistant.server:app", "--host", "127.0.0.1", "--port", "8787") `
+        -FilePath $assistantExecutable `
+        -ArgumentList $assistantArguments `
         -RedirectStandardOutput $assistantStdout `
         -RedirectStandardError $assistantStderr `
         -PassThru
@@ -207,7 +211,6 @@ if ($assistantEnabled) {
         exit 1
     }
     Write-Host "    LangGraph App Assistant is ready." -ForegroundColor Green
-}
 
 # 5. Launch Studio Vite dev server in a new window
 Write-Host ">>> Starting Studio (port 5173)..." -ForegroundColor Cyan

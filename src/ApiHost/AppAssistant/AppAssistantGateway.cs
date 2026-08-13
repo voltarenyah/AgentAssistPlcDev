@@ -246,6 +246,42 @@ public sealed class AppAssistantGateway(
         return operation.Value;
     }
 
+    public async Task<CreateWorkbenchAssistantResult> CreateWorkbenchAsync(
+        string workbenchId,
+        CreateWorkbenchAssistantRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!string.Equals(workbenchId, request.WorkbenchId, StringComparison.Ordinal))
+            throw new AppAssistantGatewayException("WORKBENCH_SCOPE_MISMATCH", "The mutation workbench does not match the route scope.");
+        if (string.IsNullOrWhiteSpace(request.RequestId))
+            throw new AppAssistantGatewayException("REQUEST_ID_REQUIRED", "A deterministic request ID is required.");
+        if (string.IsNullOrWhiteSpace(request.Name))
+            throw new AppAssistantGatewayException("INVALID_WORKBENCH_NAME", "The workbench name is required.");
+        if (string.IsNullOrWhiteSpace(request.EngineeringProjectPath)
+            || !request.EngineeringProjectPath.EndsWith(".ap17", StringComparison.OrdinalIgnoreCase))
+            throw new AppAssistantGatewayException(
+                "INVALID_ENGINEERING_PROJECT_PATH",
+                "The engineering project path must point to a TIA .ap17 project file.");
+
+        var current = runtime.GetSnapshot(workbenchId);
+        if (current.WorkbenchRevision != request.ExpectedWorkbenchRevision)
+            throw new RuntimeStateConflictException(request.ExpectedWorkbenchRevision, current.WorkbenchRevision);
+        if (state.List().Any(item => string.Equals(item.Name, request.Name.Trim(), StringComparison.OrdinalIgnoreCase)))
+            throw new WorkbenchLifecycleException("WORKBENCH_CONFLICT", "A workbench with the same name already exists.");
+
+        var created = await coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest(
+                request.Name.Trim(),
+                request.RootPath?.Trim(),
+                null,
+                request.EngineeringProjectPath.Trim()),
+            cancellationToken).ConfigureAwait(false);
+        state.Add(created.Workbench);
+        coordinator.RegisterWorkbench(created.Workbench);
+        return new CreateWorkbenchAssistantResult(created.Workbench, created.Worktree, created.Devices);
+    }
+
     private async Task<CreateWorktreeAssistantResult> ExecuteCreateWorktreeAsync(
         CreateWorktreeAssistantRequest request,
         CancellationToken cancellationToken)

@@ -74,6 +74,14 @@ public sealed record CreateWorktreeAssistantRequest(
     long ExpectedWorkbenchRevision,
     string RequestId);
 
+public sealed record CreateWorkbenchAssistantRequest(
+    string WorkbenchId,
+    string Name,
+    string? RootPath,
+    string EngineeringProjectPath,
+    long ExpectedWorkbenchRevision,
+    string RequestId);
+
 public sealed record CreateWorktreeAssistantResult(
     string WorkbenchId,
     string WorktreeId,
@@ -81,6 +89,11 @@ public sealed record CreateWorktreeAssistantResult(
     string Branch,
     long WorkbenchRevision,
     bool Selected);
+
+public sealed record CreateWorkbenchAssistantResult(
+    WorkbenchMetadata Workbench,
+    WorktreeMetadata Worktree,
+    IReadOnlyList<DeviceMetadata> Devices);
 
 public sealed class AppAssistantGatewayException(
     string code,

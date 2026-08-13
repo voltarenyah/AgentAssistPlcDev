@@ -98,10 +98,19 @@ export default function CreateWorkbenchDialog({
             <h2 className="text-sm font-semibold">Create workbench project</h2>
             <p className="text-[10px] text-muted-foreground">One shared repository, complete linked worktrees, device-owned knowledge.</p>
           </div>
-          <button className="icon-button" onClick={onClose}><X className="h-4 w-4" /></button>
+          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
         </div>
 
         <div className="space-y-4 p-5">
+          {busy && (
+            <div className="flex items-start gap-2 rounded-lg border border-chart-2/30 bg-chart-2/10 p-3 text-[10px]" data-creation-progress aria-live="polite">
+              <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-chart-2" />
+              <div className="min-w-0">
+                <div className="font-medium">Creating workbench project…</div>
+                <div className="mt-0.5 text-muted-foreground">Preparing the repository, linked worktree, and device context. This may take a little while.</div>
+              </div>
+            </div>
+          )}
           <label className="field-label">
             <span>Workbench name</span>
             <input className="field-input" value={name} onChange={event => setName(event.target.value)} placeholder="Line-7 commissioning" autoFocus />

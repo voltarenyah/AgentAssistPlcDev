@@ -154,11 +154,15 @@ const findHardwareNode = (
 function NewWorktreeDialog({
   workbench,
   busy,
+  operationStatus,
+  onDismissOperation,
   onClose,
   onCreate,
 }: {
   workbench: api.Workbench
   busy: boolean
+  operationStatus: api.OperationStatus | null
+  onDismissOperation: () => void
   onClose: () => void
   onCreate: (name: string, branch: string, startPoint?: string) => Promise<void>
 }) {
@@ -175,9 +179,18 @@ function NewWorktreeDialog({
             <h2 className="text-sm font-semibold">New linked worktree</h2>
             <p className="text-[10px] text-muted-foreground">{workbench.name} · complete editable checkout</p>
           </div>
-          <button className="icon-button" onClick={onClose}><X className="h-4 w-4" /></button>
+          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
         </div>
         <div className="space-y-4 p-5">
+          {busy && (
+            <div className="flex items-start gap-2 rounded-lg border border-chart-2/30 bg-chart-2/10 p-3 text-[10px]" data-creation-progress aria-live="polite">
+              <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-chart-2" />
+              <div className="min-w-0">
+                <div className="font-medium">Creating linked worktree…</div>
+                <div className="mt-0.5 text-muted-foreground">Preparing the checkout and Git branch. This may take a little while.</div>
+              </div>
+            </div>
+          )}
           <label className="field-label">
             <span>Worktree name</span>
             <input className="field-input" value={name} onChange={event => setName(event.target.value)} placeholder="Commissioning changes" autoFocus />
@@ -191,12 +204,15 @@ function NewWorktreeDialog({
             <input className="field-input font-mono" value={startPoint} onChange={event => setStartPoint(event.target.value)} placeholder="master" />
           </label>
         </div>
-        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <button className="secondary-button" onClick={onClose}>Cancel</button>
-          <button className="primary-button" disabled={!valid || busy} onClick={() => onCreate(name.trim(), branch.trim(), startPoint.trim() || undefined)}>
-            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Create worktree
-          </button>
+        <div className="flex items-center justify-between gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <OperationStatusLine status={operationStatus} fallback={busy ? 'Creating linked worktree…' : undefined} onDismiss={onDismissOperation} />
+          <div className="flex gap-2">
+            <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
+            <button className="primary-button" disabled={!valid || busy} onClick={() => onCreate(name.trim(), branch.trim(), startPoint.trim() || undefined)}>
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Create worktree
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -669,6 +685,10 @@ export default function MainStudio() {
       const loadedWorkbenches = await reloadWorkbenches()
       if (loadedWorkbenches.length > 0) {
         const first = loadedWorkbenches[0]
+        // Keep the API selection in sync with the local project selection so
+        // workbench-scoped features (including App Assistant) can resolve the
+        // active workbench immediately after startup.
+        await api.selectWorkbench(first.workbenchId)
         setSelection({ workbenchId: first.workbenchId, worktreeId: null, deviceId: null })
       }
     } catch (error) {
@@ -854,6 +874,9 @@ export default function MainStudio() {
     try {
       await api.selectWorkbench(workbench.workbenchId)
       setAppAssistantRuntime(null)
+      void api.getAppAssistantRuntimeState(workbench.workbenchId)
+        .then(runtimeSnapshot => setAppAssistantRuntime(runtimeSnapshot))
+        .catch(() => { /* Runtime refresh is best-effort; selection remains usable. */ })
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
       setMainView({ kind: 'project' })
       setDeviceSelection(null)
@@ -868,6 +891,9 @@ export default function MainStudio() {
     try {
       await api.selectWorktree(workbench.workbenchId, worktree.worktreeId)
       const devices = await api.listDevices(workbench.workbenchId, worktree.worktreeId)
+      void api.getAppAssistantRuntimeState(workbench.workbenchId)
+        .then(runtimeSnapshot => setAppAssistantRuntime(runtimeSnapshot))
+        .catch(() => { /* Runtime refresh is best-effort; selection remains usable. */ })
       devices.forEach(device => rememberDeviceSummary(workbench.workbenchId, worktree.worktreeId, device))
       setDevicesByWorktree(previous => ({
         ...previous,
@@ -907,11 +933,17 @@ export default function MainStudio() {
     setChatTabs(emptyChatTabs())
     setOperation('select-device')
     try {
-      const [snapshot, savedSessions] = await Promise.all([
+      const [, snapshot, savedSessions] = await Promise.all([
+        // Keep the shared runtime focus in sync with the instant local
+        // selection so the status popover and App Assistant see the device.
+        api.selectDevice(workbench.workbenchId, worktree.worktreeId, deviceId),
         api.getDeviceInfo(workbench.workbenchId, worktree.worktreeId, deviceId),
         api.listDeviceSessions(workbench.workbenchId, worktree.worktreeId, deviceId).catch(() => []),
       ])
       if (selectionRequestId.current !== requestId) return
+      const runtimeSnapshot = await api.getAppAssistantRuntimeState(workbench.workbenchId).catch(() => null)
+      if (selectionRequestId.current !== requestId) return
+      if (runtimeSnapshot) setAppAssistantRuntime(runtimeSnapshot)
       if (snapshot.workbenchId !== workbench.workbenchId
         || snapshot.worktreeId !== worktree.worktreeId
         || snapshot.deviceId !== deviceId) {
@@ -1510,6 +1542,16 @@ export default function MainStudio() {
     } finally {
       setOperation(null)
     }
+  }
+
+  const handleAppAssistantWorkbenchCreated = async (workbenchId: string) => {
+    const refreshed = await reloadWorkbenches()
+    const workbench = refreshed.find(value => value.workbenchId === workbenchId)
+    if (!workbench) throw new Error('The new workbench was created but is not visible in the project list yet.')
+    await selectWorkbench(workbench)
+    const master = workbench.worktrees.find(value => value.branch === 'master') ?? workbench.worktrees[0]
+    if (master) await selectWorktree(workbench, master)
+    toast.success(`Workbench “${workbench.name}” created by Workbench Assistant`)
   }
 
   const deleteWorktree = async () => {
@@ -2199,6 +2241,7 @@ export default function MainStudio() {
               const worktree = activeWorkbench?.worktrees.find(item => item.worktreeId === worktreeId)
               if (activeWorkbench && worktree) return selectWorktree(activeWorkbench, worktree)
             }}
+            onWorkbenchCreated={handleAppAssistantWorkbenchCreated}
           />
         )}
       </div>}
@@ -2276,6 +2319,8 @@ export default function MainStudio() {
         <NewWorktreeDialog
           workbench={createWorktreeFor}
           busy={operation === 'create-worktree'}
+          operationStatus={activeOperation?.kind === 'create-worktree' ? activeOperation.status : null}
+          onDismissOperation={dismissActiveOperation}
           onClose={() => setCreateWorktreeFor(null)}
           onCreate={createWorktree}
         />

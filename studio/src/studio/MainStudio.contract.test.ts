@@ -17,9 +17,19 @@ describe('MainStudio offline snapshot contract', () => {
     expect(body).toContain('await api.selectWorkbench(workbench.workbenchId)')
   })
 
+  it('refreshes the shared runtime snapshot after the selected workbench is synchronized', () => {
+    const body = functionBody('selectWorkbench', 'selectWorktree')
+    expect(body).toContain('api.getAppAssistantRuntimeState(workbench.workbenchId)')
+  })
+
   it('synchronizes the ApiHost worktree selection before loading worktree context', () => {
     const body = functionBody('selectWorktree', 'selectDevice')
     expect(body).toContain('await api.selectWorktree(workbench.workbenchId, worktree.worktreeId)')
+  })
+
+  it('refreshes the shared runtime snapshot after the selected worktree is synchronized', () => {
+    const body = functionBody('selectWorktree', 'selectDevice')
+    expect(body).toContain('api.getAppAssistantRuntimeState(workbench.workbenchId)')
   })
 
   it('remounts the assistant when the selected project changes', () => {
@@ -27,11 +37,16 @@ describe('MainStudio offline snapshot contract', () => {
     expect(source).toContain('key={selection.workbenchId}')
   })
 
-  it('does not request live blocks while selecting a device', () => {
+  it('refreshes the shared runtime snapshot after the selected device is synchronized', () => {
+    const body = functionBody('selectDevice', 'createWorkbench')
+    expect(body).toContain('api.getAppAssistantRuntimeState(workbench.workbenchId)')
+  })
+
+  it('synchronizes the ApiHost device focus before loading device context', () => {
     const body = functionBody('selectDevice', 'createWorkbench')
     expect(body).toContain('api.getDeviceInfo(workbench.workbenchId, worktree.worktreeId, deviceId)')
+    expect(body).toContain('api.selectDevice(workbench.workbenchId, worktree.worktreeId, deviceId)')
     expect(body).not.toContain('api.getBlocks')
-    expect(body).not.toContain('api.selectDevice')
     expect(body).not.toContain('api.getVcStatus')
   })
 
@@ -66,5 +81,11 @@ describe('MainStudio offline snapshot contract', () => {
     expect(body).toContain('allowCompile')
     expect(body).toContain('PLC_COMPILE_REQUIRED')
     expect(body).toContain('setCompilePrompt')
+  })
+
+  it('shows progress and operation details while creating a linked worktree', () => {
+    expect(source).toContain('Creating linked worktree…')
+    expect(source).toContain('data-creation-progress')
+    expect(source).toContain('operationStatus={activeOperation?.kind === \'create-worktree\' ? activeOperation.status : null}')
   })
 })

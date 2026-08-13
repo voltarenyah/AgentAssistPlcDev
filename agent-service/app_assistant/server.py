@@ -78,6 +78,20 @@ async def _setup_checkpointer(checkpointer: AsyncSqliteSaver) -> None:
 def _response(result: dict[str, Any], workbench_id: str, run_id: str) -> dict[str, Any]:
     interrupts = result.get("__interrupt__") or []
     interrupt_values = [item.value if hasattr(item, "value") else item for item in interrupts]
+    answer = result.get("answer")
+    pending_approval = interrupt_values[0] if interrupt_values else result.get("proposed_action")
+    if isinstance(pending_approval, dict) and pending_approval.get("kind") == "create_worktree":
+        answer = (
+            "A worktree creation proposal is ready for "
+            f"'{pending_approval.get('name', 'the new worktree')}' on branch "
+            f"'{pending_approval.get('branch', 'the proposed branch')}'. Please approve or reject it."
+        )
+    elif isinstance(pending_approval, dict) and pending_approval.get("kind") == "create_workbench":
+        answer = (
+            "A workbench creation proposal is ready for "
+            f"'{pending_approval.get('name', 'the new project')}' from "
+            f"'{pending_approval.get('engineeringProjectPath', 'the proposed TIA project')}'. Please approve or reject it."
+        )
     response = {
         "threadId": thread_id_for(workbench_id),
         "workbenchId": workbench_id,
@@ -87,9 +101,10 @@ def _response(result: dict[str, Any], workbench_id: str, run_id: str) -> dict[st
         "decision": result.get("decision"),
         "proposedAction": result.get("proposed_action"),
         "assistantMetadata": result.get("assistant_metadata"),
-        "answer": result.get("answer"),
+        "detail": result.get("detail"),
+        "answer": answer,
         "interrupt": interrupt_values or None,
-        "pendingApproval": interrupt_values[0] if interrupt_values else result.get("proposed_action"),
+        "pendingApproval": pending_approval,
     }
     response["runMetadata"] = build_run_metadata(result, workbench_id=workbench_id, run_id=run_id)
     return response

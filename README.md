@@ -81,14 +81,14 @@ log. Tool arguments and model output cannot grant themselves new filesystem acce
 - .NET Framework 4.8 and .NET 8 SDKs
 - Node.js for the studio UI
 - A DeepSeek API key for the AI agent
-- Python 3.13 and the `agent-service` dependencies when the optional Workbench
-  App Assistant is enabled
+- Python 3.13 and the `agent-service` dependencies for the development launcher
 
-The Workbench App Assistant is opt-in. Start it in a development environment by
-installing `agent-service` dependencies and setting
-`AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED=true`. The desktop shell starts it
-automatically when enabled, passes the shared `DEEPSEEK_API_KEY`, and stores its
-checkpoint/feedback data under the user-local Automation Workbench data folder.
+The development launcher starts the Workbench App Assistant on every run. Install
+the `agent-service` dependencies into `agent-service\.venv` before running
+`launch.ps1`; the launcher passes the shared `DEEPSEEK_API_KEY`, waits for the
+sidecar health check on port 8787, and stores checkpoint/feedback data under the
+user-local Automation Workbench data folder. The packaged desktop shell remains
+opt-in through `AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED`.
 
 ## Status
 

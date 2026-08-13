@@ -58,6 +58,12 @@ describe('CreateWorkbenchDialog', () => {
     expect(onRefreshSessions).toHaveBeenCalledTimes(1)
   })
 
+  it('shows visible progress while workbench creation is running', () => {
+    const { host } = renderDialog({ busy: true })
+
+    expect(host.querySelector('[data-creation-progress]')?.textContent).toContain('Creating workbench project')
+  })
+
   it('submits only the session id in attach mode', async () => {
     const onCreate = vi.fn(() => Promise.resolve())
     const { host } = renderDialog({ onCreate })

@@ -66,6 +66,38 @@ public static class AppAssistantEndpoints
                 return Results.Ok(result);
             });
 
+        app.MapPost(
+            "/internal/app-assistant/workbenches/{workbenchId}/mutations/create-workbench",
+            async (HttpContext http, string workbenchId, CreateWorkbenchAssistantRequest request,
+                AppAssistantGateway gateway, AppAssistantAccessPolicy access, CancellationToken cancellationToken) =>
+            {
+                if (!access.Allowed(http))
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                try
+                {
+                    return Results.Ok(await gateway.CreateWorkbenchAsync(workbenchId, request, cancellationToken)
+                        .ConfigureAwait(false));
+                }
+                catch (AppAssistantGatewayException exception)
+                {
+                    return Results.Json(
+                        new { error = exception.Code, message = exception.Message },
+                        statusCode: exception.StatusCode);
+                }
+                catch (RuntimeStateConflictException exception)
+                {
+                    return Results.Conflict(new
+                    {
+                        error = "CONTEXT_STALE",
+                        message = exception.Message,
+                    });
+                }
+                catch (WorkbenchLifecycleException exception)
+                {
+                    return Results.BadRequest(new { error = exception.Code, message = exception.Message });
+                }
+            });
+
         return app;
     }
 }

@@ -11,6 +11,33 @@ using Xunit;
 public sealed class AppAssistantWorktreeMutationTests
 {
     [Fact]
+    public async Task InvalidWorkbenchProjectPathIsRejectedBeforeTiaCreation()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
+        using var client = factory.CreateClient();
+        var catalog = factory.Services.GetRequiredService<WorkbenchCatalog>();
+        var state = factory.Services.GetRequiredService<WorkbenchApiState>();
+        var root = Path.Combine(Path.GetTempPath(), "assistant-project-invalid-" + Guid.NewGuid().ToString("N"));
+        var workbench = catalog.Create("Project Invalid", root);
+        state.Open(root);
+
+        var response = await client.PostAsJsonAsync(
+            $"/internal/app-assistant/workbenches/{workbench.WorkbenchId}/mutations/create-workbench",
+            new CreateWorkbenchAssistantRequest(
+                workbench.WorkbenchId,
+                "Assistant Project",
+                null,
+                "C:\\Projects\\Line.txt",
+                0,
+                "request-project-invalid"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+        Assert.Equal("INVALID_ENGINEERING_PROJECT_PATH", body!["error"]);
+    }
+
+    [Fact]
     public async Task StaleRevisionIsRejectedBeforeWorktreeCreation()
     {
         await using var factory = new WebApplicationFactory<Program>()

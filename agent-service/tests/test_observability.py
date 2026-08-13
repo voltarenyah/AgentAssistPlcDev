@@ -7,6 +7,7 @@ from app_assistant.observability import (
     RunRecorder,
     build_run_metadata,
 )
+from app_assistant.server import _response
 
 
 def test_run_metadata_contains_trace_fields_without_user_content():
@@ -103,3 +104,50 @@ def test_feedback_categories_are_explicit():
 
     with pytest.raises(ValueError):
         RunRecorder.validate_feedback_category("free-form-comment")
+
+
+def test_response_replaces_stale_answer_when_mutation_approval_is_pending():
+    response = _response(
+        {
+            "context_revision": 4,
+            "runtime_snapshot": {"runtime": {"workbenchRevision": 4}},
+            "answer": "The workbench is ready for orientation.",
+            "__interrupt__": [
+                {
+                    "kind": "create_worktree",
+                    "name": "langgraph-test",
+                    "branch": "assistant/langgraph-test",
+                }
+            ],
+        },
+        workbench_id="wb-1",
+        run_id="run-3",
+    )
+
+    assert response["pendingApproval"]["kind"] == "create_worktree"
+    assert response["answer"] == (
+        "A worktree creation proposal is ready for 'langgraph-test' on branch "
+        "'assistant/langgraph-test'. Please approve or reject it."
+    )
+
+
+def test_response_describes_pending_workbench_creation():
+    response = _response(
+        {
+            "answer": "The workbench is ready for orientation.",
+            "__interrupt__": [
+                {
+                    "kind": "create_workbench",
+                    "name": "Assistant Project",
+                    "engineeringProjectPath": "C:\\Projects\\Line.ap17",
+                }
+            ],
+        },
+        workbench_id="wb-1",
+        run_id="run-4",
+    )
+
+    assert response["answer"] == (
+        "A workbench creation proposal is ready for 'Assistant Project' from "
+        "'C:\\Projects\\Line.ap17'. Please approve or reject it."
+    )
