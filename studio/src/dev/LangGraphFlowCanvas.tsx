@@ -32,7 +32,7 @@ export default function LangGraphFlowCanvas({
           </section>
         ))}
       </div>
-      <svg className="flow-connectors" viewBox="0 0 1000 1240" preserveAspectRatio="none" aria-hidden="true">
+      <svg className="flow-connectors" viewBox="0 0 1000 1340" preserveAspectRatio="none" aria-hidden="true">
         <defs>
           <marker id="flow-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
@@ -44,7 +44,7 @@ export default function LangGraphFlowCanvas({
           if (!from || !to) return null
           const x1 = from.position.x + 78
           const y1 = from.position.y + 36
-          const x2 = to.position.x + 78
+          const x2 = to.position.x - 78
           const y2 = to.position.y + 36
           const midX = (x1 + x2) / 2
           const active = activePath === 'all' || activeEdgeIds.includes(edge.id)
