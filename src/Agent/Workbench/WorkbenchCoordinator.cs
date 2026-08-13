@@ -153,7 +153,9 @@ public sealed class WorkbenchCoordinator
         DeviceContext device,
         CancellationToken cancellationToken = default,
         IOperationProgress? progress = null,
-        bool withUI = true)
+        bool withUI = true,
+        bool upgrade = false,
+        string? authenticationMode = null)
     {
         ArgumentNullException.ThrowIfNull(device);
         var worktree = store.Read<WorktreeMetadata>(
@@ -166,14 +168,105 @@ public sealed class WorkbenchCoordinator
                 $"No engineering project path is registered for worktree '{device.WorktreeId}'.");
         }
 
+        await OpenProjectPathInTiaAsync(projectPath, cancellationToken, progress, withUI, upgrade, authenticationMode)
+            .ConfigureAwait(false);
+    }
+
+    public Task OpenWorkbenchProjectInTiaAsync(
+        WorkbenchMetadata workbench,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null,
+        bool withUI = true,
+        bool upgrade = false,
+        string? authenticationMode = null)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        var master = workbench.Worktrees.SingleOrDefault(item =>
+            string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
+            ?? throw new WorkbenchCatalogException(
+                "MASTER_WORKTREE_MISSING",
+                $"Workbench '{workbench.WorkbenchId}' has no master worktree.");
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, master.RelativePath);
+        var worktree = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
+        return OpenWorktreeProjectInTiaAsync(
+            workbench,
+            worktree,
+            cancellationToken,
+            progress,
+            withUI,
+            upgrade,
+            authenticationMode);
+    }
+
+    public Task OpenWorktreeProjectInTiaAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null,
+        bool withUI = true,
+        bool upgrade = false,
+        string? authenticationMode = null)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        ArgumentNullException.ThrowIfNull(worktree);
+        var projectPath = OperationalProjectPath(worktree);
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            throw new WorkbenchCatalogException(
+                "ENGINEERING_PROJECT_PATH_MISSING",
+                $"No engineering project path is registered for worktree '{worktree.WorktreeId}'.");
+        }
+
+        return OpenProjectPathInTiaAsync(
+            projectPath,
+            cancellationToken,
+            progress,
+            withUI,
+            upgrade,
+            authenticationMode);
+    }
+
+    private async Task OpenProjectPathInTiaAsync(
+        string projectPath,
+        CancellationToken cancellationToken,
+        IOperationProgress? progress,
+        bool withUI,
+        bool upgrade,
+        string? authenticationMode)
+    {
         progress?.Report("Opening registered project in TIA Portal...");
         await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await engineering.CallAsync<object>(
-                "connect",
-                new { projectPath, withUI },
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await engineering.CallAsync<object>(
+                    "connect",
+                    new { projectPath, withUI, upgrade, authenticationMode },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (ToolCallException exception) when (exception.Code == "ALREADY_CONNECTED")
+            {
+                var activeProject = await engineering.CallAsync<ProjectInfo>(
+                    "get_project_info",
+                    new { },
+                    cancellationToken).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(activeProject.Path)
+                    && ProjectPathsEqual(projectPath, activeProject.Path))
+                {
+                    progress?.Report("The selected TIA project is already connected.");
+                    return;
+                }
+
+                await engineering.CallAsync<object>(
+                    "disconnect",
+                    new { },
+                    cancellationToken).ConfigureAwait(false);
+                await engineering.CallAsync<object>(
+                    "connect",
+                    new { projectPath, withUI, upgrade, authenticationMode },
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
         finally
         {

@@ -15,6 +15,19 @@ public sealed class ConnectOptions
     /// <summary>Open mode only: show the TIA UI. Ignored in attach mode (inherits the running session's mode).</summary>
     public bool WithUI { get; set; }
 
+    /// <summary>Open an older project with TIA's upgrade workflow.</summary>
+    public bool Upgrade { get; set; }
+
+    /// <summary>Primary or secondary project open mode. Defaults to primary.</summary>
+    public string OpenMode { get; set; } = "primary";
+
+    /// <summary>
+    /// Protected-project authentication mode: desktop_sso, anonymous, interactive, or credentials.
+    /// Credentials deliberately requires an external secure provider and is rejected by the MCP
+    /// boundary when no provider is configured.
+    /// </summary>
+    public string? AuthenticationMode { get; set; }
+
     /// <summary>Max wait for Openness startup. Headless portal start takes ~10–30s.</summary>
     public int TimeoutSeconds { get; set; } = 60;
 }

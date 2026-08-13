@@ -35,6 +35,7 @@ public sealed class SandboxPolicy
             ["check_environment"] = SandboxTier.Read,
             ["list_sessions"] = SandboxTier.Read,
             ["get_project_info"] = SandboxTier.Read,
+            ["get_project_capabilities"] = SandboxTier.Read,
             ["list_blocks"] = SandboxTier.Read,
             ["get_plc_checksums"] = SandboxTier.Read,
             ["export_block"] = SandboxTier.Read,
@@ -56,6 +57,9 @@ public sealed class SandboxPolicy
             // Engineering — persist/overwrite user work.
             ["save_project"] = SandboxTier.Destructive,
             ["save_project_as"] = SandboxTier.Destructive,
+            ["create_project"] = SandboxTier.Write,
+            ["archive_project"] = SandboxTier.Write,
+            ["retrieve_project"] = SandboxTier.Write,
             ["import_block"] = SandboxTier.Destructive,
             ["import_hardware_configuration"] = SandboxTier.Destructive,
             ["create_block"] = SandboxTier.Write,

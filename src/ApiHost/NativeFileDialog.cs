@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
+using System.Text;
 
 internal static class NativeFileDialog
 {
@@ -8,6 +9,11 @@ internal static class NativeFileDialog
     private const int OfnHideReadOnly = 0x00000004;
     private const int OfnNoChangeDir = 0x00000008;
     private const int OfnPathMustExist = 0x00000800;
+    private const uint BifReturnOnlyFsDirs = 0x0001;
+    private const uint BifEditBox = 0x0010;
+    private const uint BifNewDialogStyle = 0x0040;
+    private const uint BffmInitialized = 1;
+    private const uint BffmSetSelectionW = 0x467;
 
     public static string? SelectTiaProject()
     {
@@ -21,6 +27,34 @@ internal static class NativeFileDialog
             try
             {
                 selectedPath = ShowDialog();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        if (failure is not null)
+            ExceptionDispatchInfo.Capture(failure).Throw();
+
+        return selectedPath;
+    }
+
+    public static string? SelectFolder(string? initialDirectory = null)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("The export directory picker is only available on Windows.");
+
+        string? selectedPath = null;
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                selectedPath = ShowFolderDialog(initialDirectory);
             }
             catch (Exception exception)
             {
@@ -70,8 +104,89 @@ internal static class NativeFileDialog
         }
     }
 
+    private static string? ShowFolderDialog(string? initialDirectory)
+    {
+        var displayName = Marshal.AllocHGlobal(260 * sizeof(char));
+        var title = Marshal.StringToHGlobalUni("Select the TIA archive export folder");
+        BrowseCallbackProc? callback = null;
+        try
+        {
+            callback = (window, message, _, _) =>
+            {
+                if (message == BffmInitialized && !string.IsNullOrWhiteSpace(initialDirectory))
+                {
+                    var initialPath = Marshal.StringToHGlobalUni(initialDirectory);
+                    try
+                    {
+                        SendMessage(window, BffmSetSelectionW, new IntPtr(1), initialPath);
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(initialPath);
+                    }
+                }
+
+                return IntPtr.Zero;
+            };
+
+            var dialog = new BrowseInfo
+            {
+                Title = title,
+                DisplayName = displayName,
+                Flags = BifReturnOnlyFsDirs | BifEditBox | BifNewDialogStyle,
+                Callback = callback,
+            };
+            var itemList = SHBrowseForFolder(ref dialog);
+            if (itemList == IntPtr.Zero)
+                return null;
+
+            try
+            {
+                var path = new StringBuilder(32_768);
+                return SHGetPathFromIDList(itemList, path) ? path.ToString() : null;
+            }
+            finally
+            {
+                CoTaskMemFree(itemList);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(displayName);
+            Marshal.FreeHGlobal(title);
+        }
+    }
+
     [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool GetOpenFileName(ref OpenFileName dialog);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SHBrowseForFolder(ref BrowseInfo dialog);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SHGetPathFromIDList(IntPtr itemList, StringBuilder path);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("ole32.dll")]
+    private static extern void CoTaskMemFree(IntPtr itemList);
+
+    private delegate IntPtr BrowseCallbackProc(IntPtr window, uint message, IntPtr lParam, IntPtr data);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct BrowseInfo
+    {
+        public IntPtr Owner;
+        public IntPtr Root;
+        public IntPtr DisplayName;
+        public IntPtr Title;
+        public uint Flags;
+        public BrowseCallbackProc? Callback;
+        public IntPtr LParam;
+        public int Image;
+    }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct OpenFileName

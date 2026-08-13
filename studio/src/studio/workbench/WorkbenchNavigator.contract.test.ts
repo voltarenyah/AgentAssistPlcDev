@@ -16,4 +16,17 @@ describe('hardware worktree tree item', () => {
     expect(source).toContain('Reload hardware configuration')
     expect(source).toContain('Compare hardware with TIA')
   })
+
+  it('exposes project, worktree, and device TIA access actions at their owning nodes', () => {
+    expect(source).toContain('Open TIA with UI')
+    expect(source).toContain('Open TIA with upgrade')
+    expect(source).toContain('onOpenWorkbench')
+    expect(source).toContain('onOpenWorktree')
+    expect(source).toContain('onOpenDevice')
+  })
+
+  it('exposes archive from the worktree context menu', () => {
+    expect(source).toContain('onArchiveWorktree')
+    expect(source).toContain('Archive TIA project')
+  })
 })

@@ -115,6 +115,25 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.True(Property<bool>(args, "withUI"));
     }
 
+    [Fact]
+    public async Task OpenProjectInTiaReusesAlreadyConnectedMatchingProject()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller()
+            .Fail("connect", "ALREADY_CONNECTED", "Already connected.")
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        await coordinator.OpenProjectInTiaAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal(["connect", "get_project_info"], engineering.Calls);
+        Assert.DoesNotContain("disconnect", engineering.Calls);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
