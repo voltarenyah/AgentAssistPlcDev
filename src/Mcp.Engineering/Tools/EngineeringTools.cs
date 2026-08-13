@@ -44,12 +44,18 @@ public sealed class EngineeringTools
         [Description("TIA process id from list_sessions → attach mode.")] int? sessionId = null,
         [Description("Path to the .ap17 project file → open mode.")] string? projectPath = null,
         [Description("Open mode only: show the TIA UI. Default false (headless).")] bool withUI = false,
+        [Description("Open an older project with TIA's upgrade workflow. Default false.")] bool upgrade = false,
+        [Description("Project open mode: primary or secondary. Default primary.")] string openMode = "primary",
+        [Description("Protected-project authentication: desktop_sso, anonymous, interactive, or credentials.")] string? authenticationMode = null,
         [Description("Max seconds to wait for Openness startup. Default 60.")] int timeoutSeconds = 60)
         => Invoke("connect", () => _adapter.Connect(new ConnectOptions
         {
             SessionId = sessionId,
             ProjectPath = projectPath,
             WithUI = withUI,
+            Upgrade = upgrade,
+            OpenMode = openMode,
+            AuthenticationMode = authenticationMode,
             TimeoutSeconds = timeoutSeconds,
         }), ("projectPath", projectPath));
 
@@ -67,6 +73,40 @@ public sealed class EngineeringTools
     [Description("Explicitly save the open TIA project in place (save_project_as saves a copy to a new directory).")]
     public CallToolResult SaveProject() => Invoke("save_project", () => { _adapter.SaveProject(); return new { }; });
 
+    [McpServerTool(Name = "create_project")]
+    [Description("Create a new TIA project through the connected Openness portal and return the actual project path.")]
+    public CallToolResult CreateProject(
+        [Description("Directory that will contain the new project folder.")] string targetDirectory,
+        [Description("Project name.")] string projectName)
+        => Invoke(
+            "create_project",
+            () => _adapter.CreateProject(new DirectoryInfo(targetDirectory), projectName),
+            ("targetDirectory", targetDirectory));
+
+    [McpServerTool(Name = "archive_project")]
+    [Description("Archive the currently open TIA project to a file in the target directory.")]
+    public CallToolResult ArchiveProject(
+        [Description("Directory where the archive file will be written.")] string targetDirectory,
+        [Description("Archive file name, without a directory path.")] string archiveName,
+        [Description("Archive mode: compressed, none, discard_restorable_data, or discard_restorable_data_and_compressed.")] string archivationMode = "compressed")
+        => Invoke(
+            "archive_project",
+            () => _adapter.ArchiveProject(new DirectoryInfo(targetDirectory), archiveName, archivationMode),
+            ("targetDirectory", targetDirectory));
+
+    [McpServerTool(Name = "retrieve_project")]
+    [Description("Retrieve a TIA project archive into a target directory and report the actual project path. Use openMode=secondary to avoid replacing the primary project in the connected portal.")]
+    public CallToolResult RetrieveProject(
+        [Description("Path to the TIA project archive file.")] string archivePath,
+        [Description("Directory where the project folder will be retrieved.")] string targetDirectory,
+        [Description("Upgrade the retrieved project while opening it. Default false.")] bool upgrade = false,
+        [Description("Open mode: primary or secondary. Default primary.")] string openMode = "primary")
+        => Invoke(
+            "retrieve_project",
+            () => _adapter.RetrieveProject(new FileInfo(archivePath), new DirectoryInfo(targetDirectory), upgrade, openMode),
+            ("archivePath", archivePath),
+            ("targetDirectory", targetDirectory));
+
     [McpServerTool(Name = "save_project_as")]
     [Description("Save the open TIA project to a new directory (TIA Save As) and switch the session to the managed copy. Returns the actual managed project path reported by TIA — never a constructed path.")]
     public CallToolResult SaveProjectAs(
@@ -79,6 +119,11 @@ public sealed class EngineeringTools
     [McpServerTool(Name = "get_project_info")]
     [Description("Project name, path, PLC devices, block count, last modified (read-only).")]
     public CallToolResult GetProjectInfo() => Invoke("get_project_info", () => _adapter.GetProjectInfo());
+
+    [McpServerTool(Name = "get_project_capabilities")]
+    [Description("Read project access state, primary/secondary status, unsaved state, and protected-project authentication modes.")]
+    public CallToolResult GetProjectCapabilities() =>
+        Invoke("get_project_capabilities", () => _adapter.GetProjectCapabilities());
 
     [McpServerTool(Name = "list_blocks")]
     [Description("Enumerate all blocks (OB/FB/FC/DB) incl. nested block groups (read-only).")]

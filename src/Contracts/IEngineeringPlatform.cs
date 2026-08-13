@@ -18,6 +18,17 @@ public interface IEngineeringPlatform : IDisposable
     /// persist the project (locked decision §1.1, amended by the vc-restructure plan to add SaveAs).</summary>
     void SaveProject();
 
+    ProjectCreateResult CreateProject(DirectoryInfo targetDirectory, string projectName);
+    ProjectArchiveResult ArchiveProject(
+        DirectoryInfo targetDirectory,
+        string archiveName,
+        string archivationMode = "compressed");
+    ProjectRetrieveResult RetrieveProject(
+        FileInfo archivePath,
+        DirectoryInfo targetDirectory,
+        bool upgrade = false,
+        string openMode = "primary");
+
     /// <summary>Save the open project to a new directory (TIA Openness
     /// <c>Project.SaveAs(DirectoryInfo)</c> contract) and switch the session to the managed copy.
     /// Returns the ACTUAL managed project path reported by the adapter after SaveAs — callers must
@@ -25,6 +36,7 @@ public interface IEngineeringPlatform : IDisposable
     string SaveProjectAs(DirectoryInfo targetDirectory);
 
     ProjectInfo GetProjectInfo();
+    ProjectCapabilities GetProjectCapabilities();
     BlockInfo[] ListBlocks(string? plcName);
     PlcChecksumInfo[] GetPlcChecksums(string? plcName = null);
 

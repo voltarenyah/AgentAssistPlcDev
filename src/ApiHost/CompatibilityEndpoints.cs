@@ -10,6 +10,9 @@ using Microsoft.AspNetCore.Http.Features;
 
 public sealed record CompatibilityToolCallRequest(string Tool, Dictionary<string, object?>? Arguments);
 public sealed record CompatibilityPathRequest(string? FilePath, string? Message, string[]? Paths);
+public sealed record CompatibilityCreateProjectRequest(string TargetDirectory, string ProjectName);
+public sealed record CompatibilityArchiveProjectRequest(string TargetDirectory, string ArchiveName, string ArchivationMode = "compressed");
+public sealed record CompatibilityRetrieveProjectRequest(string ArchivePath, string TargetDirectory, bool Upgrade = false, string OpenMode = "primary");
 
 public sealed class ApiMcpGateway(
     IMcpToolCaller engineering,
@@ -421,6 +424,31 @@ public static class CompatibilityEndpoints
             var selected = state.Device(Device(state).DeviceId);
             return Results.Ok(snapshots.Read(selected.Context, selected.Metadata));
         });
+        app.MapGet("/api/tia/project-info", async (ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("connect").CallAsync<JsonElement>("get_project_info", new { }, ct));
+        app.MapGet("/api/tia/project-capabilities", async (ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("connect").CallAsync<JsonElement>("get_project_capabilities", new { }, ct));
+        app.MapPost("/api/tia/project/create", async (CompatibilityCreateProjectRequest request, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("create_project").CallAsync<JsonElement>("create_project", new
+            {
+                targetDirectory = request.TargetDirectory,
+                projectName = request.ProjectName,
+            }, ct));
+        app.MapPost("/api/tia/project/archive", async (CompatibilityArchiveProjectRequest request, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("archive_project").CallAsync<JsonElement>("archive_project", new
+            {
+                targetDirectory = request.TargetDirectory,
+                archiveName = request.ArchiveName,
+                archivationMode = request.ArchivationMode,
+            }, ct));
+        app.MapPost("/api/tia/project/retrieve", async (CompatibilityRetrieveProjectRequest request, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("retrieve_project").CallAsync<JsonElement>("retrieve_project", new
+            {
+                archivePath = request.ArchivePath,
+                targetDirectory = request.TargetDirectory,
+                upgrade = request.Upgrade,
+                openMode = request.OpenMode,
+            }, ct));
         app.MapGet("/api/blocks", (WorkbenchApiState state, DeviceSnapshotReader snapshots) =>
         {
             var selected = state.Device(Device(state).DeviceId);
@@ -448,6 +476,11 @@ public static class CompatibilityEndpoints
         app.MapGet("/api/dialogs/tia-project", () =>
         {
             var path = NativeFileDialog.SelectTiaProject();
+            return Results.Ok(new { path });
+        });
+        app.MapGet("/api/dialogs/folder", (string? initialDirectory) =>
+        {
+            var path = NativeFileDialog.SelectFolder(initialDirectory);
             return Results.Ok(new { path });
         });
         app.MapGet("/api/browse", (string? path, WorkbenchApiState state) =>

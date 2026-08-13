@@ -39,11 +39,56 @@ export type BlockInfo = {
 }
 
 export type ProjectInfo = {
-  name: string
-  path: string
-  lastModified: string
+  name: string | null
+  path: string | null
   blockCount: number
   plcDevices: string[]
+  author: string | null
+  comment: string | null
+  copyright: string | null
+  family: string | null
+  version: string | null
+  lastModifiedBy: string | null
+  creationTime: string | null
+  size: number | null
+  isModified: boolean
+  isReadOnly: boolean
+  isPrimary: boolean
+  languages: string[]
+  lastModified: string | null
+}
+
+export type ProjectCapabilities = {
+  projectName: string | null
+  projectPath: string | null
+  isReadOnly: boolean
+  isPrimary: boolean
+  isModified: boolean
+  canRead: boolean
+  canAttemptWrite: boolean
+  authenticationModes: string[]
+  notes: string[]
+}
+
+export type ProjectCreateResult = {
+  name: string | null
+  path: string | null
+  projectFilePath: string | null
+}
+
+export type ProjectArchiveResult = {
+  projectName: string | null
+  archivePath: string | null
+  archivationMode: string
+}
+
+export type ProjectRetrieveResult = {
+  name: string | null
+  path: string | null
+  projectFilePath: string | null
+  isPrimary: boolean
+  isReadOnly: boolean
+  upgraded: boolean
 }
 
 export type ServerStatus = {
@@ -738,6 +783,13 @@ export const browseTiaProjectFile = async (): Promise<string | null> => {
   const body = await res.json() as { path?: string | null }
   return body.path ?? null
 }
+export const browseExportDirectory = async (initialDirectory?: string): Promise<string | null> => {
+  const query = initialDirectory?.trim() ? `?initialDirectory=${encodeURIComponent(initialDirectory.trim())}` : ''
+  const res = await fetch(`${BASE}/dialogs/folder${query}`)
+  if (!res.ok) throw new Error(`Export directory picker failed: ${res.status}`)
+  const body = await res.json() as { path?: string | null }
+  return body.path ?? null
+}
 export const selectWorkbench = (workbenchId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/select`, jsonRequest('POST'))
 export const listWorktrees = (workbenchId: string) =>
@@ -878,10 +930,35 @@ export const openDeviceProject = (
   deviceId: string,
   operationId?: string,
   withUI = true,
+  upgrade = false,
+  authenticationMode?: string,
 ) =>
   workbenchRequest<{ opened: boolean }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}/tia/open`,
-    withOperation(jsonRequest('POST', { withUI }), operationId),
+    withOperation(jsonRequest('POST', { withUI, upgrade, authenticationMode: authenticationMode ?? null }), operationId),
+  )
+export const openWorkbenchProject = (
+  workbenchId: string,
+  operationId?: string,
+  withUI = true,
+  upgrade = false,
+  authenticationMode?: string,
+) =>
+  workbenchRequest<{ opened: boolean }>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/tia/open`,
+    withOperation(jsonRequest('POST', { withUI, upgrade, authenticationMode: authenticationMode ?? null }), operationId),
+  )
+export const openWorktreeProject = (
+  workbenchId: string,
+  worktreeId: string,
+  operationId?: string,
+  withUI = true,
+  upgrade = false,
+  authenticationMode?: string,
+) =>
+  workbenchRequest<{ opened: boolean }>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/tia/open`,
+    withOperation(jsonRequest('POST', { withUI, upgrade, authenticationMode: authenticationMode ?? null }), operationId),
   )
 export const attachDeviceProject = (
   workbenchId: string,
@@ -1252,6 +1329,44 @@ export async function disconnect(): Promise<void> {
 export async function getProjectInfo(): Promise<ProjectInfo> {
   const res = await fetch(`${BASE}/project/info`)
   if (!res.ok) throw new Error(`Project info failed: ${res.status}`)
+  return res.json()
+}
+
+export async function getTiaProjectInfo(): Promise<ProjectInfo> {
+  const res = await fetch(`${BASE}/tia/project-info`)
+  if (!res.ok) throw new Error(`TIA project info failed: ${res.status}`)
+  return res.json()
+}
+
+export async function getProjectCapabilities(): Promise<ProjectCapabilities> {
+  const res = await fetch(`${BASE}/tia/project-capabilities`)
+  if (!res.ok) throw new Error(`TIA project capabilities failed: ${res.status}`)
+  return res.json()
+}
+
+export async function createTiaProject(targetDirectory: string, projectName: string): Promise<ProjectCreateResult> {
+  const res = await fetch(`${BASE}/tia/project/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ targetDirectory, projectName }),
+  })
+  if (!res.ok) throw new Error(`TIA project creation failed: ${res.status}`)
+  return res.json()
+}
+
+export async function archiveTiaProject(targetDirectory: string, archiveName: string, archivationMode = 'compressed', operationId?: string): Promise<ProjectArchiveResult> {
+  const res = await fetch(`${BASE}/tia/project/archive`, withOperation(jsonRequest('POST', { targetDirectory, archiveName, archivationMode }), operationId))
+  if (!res.ok) throw new Error(`TIA project archive failed: ${res.status}`)
+  return res.json()
+}
+
+export async function retrieveTiaProject(archivePath: string, targetDirectory: string, upgrade = false, openMode = 'primary'): Promise<ProjectRetrieveResult> {
+  const res = await fetch(`${BASE}/tia/project/retrieve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archivePath, targetDirectory, upgrade, openMode }),
+  })
+  if (!res.ok) throw new Error(`TIA project retrieval failed: ${res.status}`)
   return res.json()
 }
 

@@ -1,4 +1,5 @@
 import {
+  Archive,
   Boxes,
   CircuitBoard,
   ChevronDown,
@@ -12,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   RotateCw,
+  ShieldCheck,
   Trash2,
 } from 'lucide-react'
 import type { DeviceSummary, Workbench, WorkbenchRegistration } from '@/api/client'
@@ -40,6 +42,11 @@ type Props = {
   loading: boolean
   onCreateWorkbench: () => void
   onCreateWorktree: (workbench: Workbench) => void
+  onOpenWorkbench: (workbench: Workbench, upgrade: boolean) => void
+  onOpenWorktree: (workbench: Workbench, worktree: WorkbenchRegistration, upgrade: boolean) => void
+  onInspectWorkbench: (workbench: Workbench) => void
+  onInspectWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
+  onArchiveWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onRefresh: () => void
   onSelectWorkbench: (workbench: Workbench) => void
   onSelectWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
@@ -51,6 +58,8 @@ type Props = {
   onDeleteWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onMergeWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onOpenDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string, withUI: boolean) => void
+  onUpgradeDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
+  onInspectDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
   onCompareDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
   onRebuildDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
   onUpdateKnowledge: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
@@ -68,6 +77,11 @@ export default function WorkbenchNavigator({
   loading,
   onCreateWorkbench,
   onCreateWorktree,
+  onOpenWorkbench,
+  onOpenWorktree,
+  onInspectWorkbench,
+  onInspectWorktree,
+  onArchiveWorktree,
   onRefresh,
   onSelectWorkbench,
   onSelectWorktree,
@@ -79,6 +93,8 @@ export default function WorkbenchNavigator({
   onDeleteWorktree,
   onMergeWorktree,
   onOpenDevice,
+  onUpgradeDevice,
+  onInspectDevice,
   onCompareDevice,
   onRebuildDevice,
   onUpdateKnowledge,
@@ -140,6 +156,18 @@ export default function WorkbenchNavigator({
                     <Plus className="h-3.5 w-3.5" />
                     New linked worktree
                   </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onOpenWorkbench(workbench, false)}>
+                    <Monitor className="h-3.5 w-3.5" />
+                    Open TIA with UI
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onOpenWorkbench(workbench, true)}>
+                    <RotateCw className="h-3.5 w-3.5" />
+                    Open TIA with upgrade
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onInspectWorkbench(workbench)}>
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Inspect TIA access
+                  </ContextMenuItem>
                   <ContextMenuItem onSelect={onRefresh}>
                     <RefreshCw className="h-3.5 w-3.5" />
                     Refresh project tree
@@ -192,6 +220,22 @@ export default function WorkbenchNavigator({
                             <ContextMenuItem onSelect={() => onCreateWorktree(workbench)}>
                               <Plus className="h-3.5 w-3.5" />
                               New linked worktree
+                            </ContextMenuItem>
+                            <ContextMenuItem onSelect={() => onOpenWorktree(workbench, worktree, false)}>
+                              <Monitor className="h-3.5 w-3.5" />
+                              Open TIA with UI
+                            </ContextMenuItem>
+                            <ContextMenuItem onSelect={() => onOpenWorktree(workbench, worktree, true)}>
+                              <RotateCw className="h-3.5 w-3.5" />
+                              Open TIA with upgrade
+                            </ContextMenuItem>
+                            <ContextMenuItem onSelect={() => onInspectWorktree(workbench, worktree)}>
+                              <ShieldCheck className="h-3.5 w-3.5" />
+                              Inspect TIA access
+                            </ContextMenuItem>
+                            <ContextMenuItem onSelect={() => onArchiveWorktree(workbench, worktree)}>
+                              <Archive className="h-3.5 w-3.5" />
+                              Archive TIA project
                             </ContextMenuItem>
                             <ContextMenuItem
                               disabled={worktree.branch === 'master'}
@@ -281,6 +325,14 @@ export default function WorkbenchNavigator({
                                     <ContextMenuItem onSelect={() => onOpenDevice(workbench, worktree, device.deviceId, false)}>
                                       <MonitorOff className="h-3.5 w-3.5" />
                                       Open TIA headless
+                                    </ContextMenuItem>
+                                    <ContextMenuItem onSelect={() => onUpgradeDevice(workbench, worktree, device.deviceId)}>
+                                      <RotateCw className="h-3.5 w-3.5" />
+                                      Open TIA with upgrade
+                                    </ContextMenuItem>
+                                    <ContextMenuItem onSelect={() => onInspectDevice(workbench, worktree, device.deviceId)}>
+                                      <ShieldCheck className="h-3.5 w-3.5" />
+                                      Inspect TIA access
                                     </ContextMenuItem>
                                     <ContextMenuItem onSelect={() => onCompareDevice(workbench, worktree, device.deviceId)}>
                                       <RefreshCw className="h-3.5 w-3.5" />

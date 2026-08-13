@@ -31,6 +31,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
     /// <summary>True when we started the portal process (open mode); false when attached to a user's session.</summary>
     private bool _ownsPortal;
+    private string? _authenticationMode;
 
     /// <summary>OS process id of the connected portal, used to detect a portal that exited on its own.</summary>
     private int? _portalProcessId;
@@ -66,7 +67,12 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
             return options.SessionId is not null
                 ? Attach(options.SessionId.Value, options.TimeoutSeconds)
-                : Open(options.ProjectPath!, options.WithUI);
+                : Open(
+                    options.ProjectPath!,
+                    options.WithUI,
+                    options.Upgrade,
+                    options.OpenMode,
+                    options.AuthenticationMode);
         }
     }
 
@@ -104,6 +110,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         _project = null;
         _ownsPortal = false;
         _portalProcessId = null;
+        _authenticationMode = null;
     }
 
     private ConnectionInfo Attach(int processId, int timeoutSeconds)
@@ -191,12 +198,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         };
     }
 
-    private ConnectionInfo Open(string projectPath, bool withUI)
+    private ConnectionInfo Open(string projectPath, bool withUI, bool upgrade, string openMode, string? authenticationMode)
     {
         if (!File.Exists(projectPath))
             throw new AdapterException("PROJECT_NOT_FOUND", $"Project file not found: {projectPath}");
 
         var mode = withUI ? TiaPortalMode.WithUserInterface : TiaPortalMode.WithoutUserInterface;
+        var projectOpenMode = ParseProjectOpenMode(openMode);
         try
         {
             // Snapshot running TIA pids so we can identify the process we are about to start.
@@ -210,7 +218,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
             _portal = new TiaPortal(mode);
             _ownsPortal = true;
-            _project = _portal.Projects.Open(new FileInfo(projectPath));
+            ConfigureAuthentication(authenticationMode);
+            _project = upgrade
+                ? _portal.Projects.OpenWithUpgrade(new FileInfo(projectPath), null, projectOpenMode)
+                : _portal.Projects.Open(new FileInfo(projectPath), null, projectOpenMode);
 
             try
             {
@@ -228,9 +239,14 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             _portal = null;
             _project = null;
             _portalProcessId = null;
+            _authenticationMode = null;
+            if (ex is AdapterException adapterException)
+                throw adapterException;
             throw new AdapterException("PROJECT_NOT_FOUND",
                 $"Could not open project '{projectPath}': {ex.Message}",
-                "Check the project exists, is a V17 project, and is not open in another TIA instance.");
+                upgrade
+                    ? "Check the project version, upgrade compatibility, and whether it is open in another TIA instance."
+                    : "Check the project exists, is a V17 project, and is not open in another TIA instance.");
         }
 
         return new ConnectionInfo
@@ -262,6 +278,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             _portal = null;
             _ownsPortal = false;
             _portalProcessId = null;
+            _authenticationMode = null;
             return result;
         }
     }
@@ -312,6 +329,90 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
+    public ProjectCreateResult CreateProject(DirectoryInfo targetDirectory, string projectName)
+    {
+        lock (_gate)
+        {
+            var portal = RequirePortal();
+            if (string.IsNullOrWhiteSpace(projectName))
+                throw new AdapterException("PROJECT_NAME_REQUIRED", "A project name is required.");
+
+            var created = portal.Projects.Create(targetDirectory, projectName.Trim());
+            try
+            {
+                return new ProjectCreateResult
+                {
+                    Name = created.Name,
+                    Path = created.Path?.FullName,
+                    ProjectFilePath = created.Path?.FullName,
+                };
+            }
+            finally
+            {
+                try { created.Close(); } catch { }
+            }
+        }
+    }
+
+    public ProjectArchiveResult ArchiveProject(
+        DirectoryInfo targetDirectory,
+        string archiveName,
+        string archivationMode = "compressed")
+    {
+        lock (_gate)
+        {
+            if (string.IsNullOrWhiteSpace(archiveName))
+                throw new AdapterException("ARCHIVE_NAME_REQUIRED", "An archive file name is required.");
+            if (!string.Equals(Path.GetFileName(archiveName), archiveName, StringComparison.Ordinal))
+                throw new AdapterException(
+                    "ARCHIVE_NAME_INVALID",
+                    "The archive name must be a file name, not a path.",
+                    "Pass a file name and provide the destination directory separately.");
+
+            var project = RequireProject();
+            var mode = ParseProjectArchivationMode(archivationMode);
+            project.Archive(targetDirectory, archiveName, mode);
+            return new ProjectArchiveResult
+            {
+                ProjectName = project.Name,
+                ArchivePath = Path.Combine(targetDirectory.FullName, archiveName),
+                ArchivationMode = NormalizeProjectArchivationMode(mode),
+            };
+        }
+    }
+
+    public ProjectRetrieveResult RetrieveProject(
+        FileInfo archivePath,
+        DirectoryInfo targetDirectory,
+        bool upgrade = false,
+        string openMode = "primary")
+    {
+        lock (_gate)
+        {
+            var portal = RequirePortal();
+            var projectOpenMode = ParseProjectOpenMode(openMode);
+            var retrieved = upgrade
+                ? portal.Projects.RetrieveWithUpgrade(archivePath, targetDirectory, null, projectOpenMode)
+                : portal.Projects.Retrieve(archivePath, targetDirectory, null, projectOpenMode);
+            try
+            {
+                return new ProjectRetrieveResult
+                {
+                    Name = retrieved.Name,
+                    Path = retrieved.Path?.FullName,
+                    ProjectFilePath = retrieved.Path?.FullName,
+                    IsPrimary = retrieved.IsPrimary,
+                    IsReadOnly = projectOpenMode == ProjectOpenMode.Secondary || portal.Projects.IsReadOnly,
+                    Upgraded = upgrade,
+                };
+            }
+            finally
+            {
+                try { retrieved.Close(); } catch { }
+            }
+        }
+    }
+
     public string SaveProjectAs(DirectoryInfo targetDirectory)
     {
         lock (_gate)
@@ -339,8 +440,45 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 Name = project.Name,
                 Path = project.Path?.FullName,
                 PlcDevices = plcs.Select(p => p.Name).ToArray(),
+                Author = project.Author,
+                Comment = ReadProjectComment(project),
+                Copyright = project.Copyright,
+                Family = project.Family,
+                Version = project.Version,
+                LastModifiedBy = project.LastModifiedBy,
+                CreationTime = project.CreationTime,
+                Size = project.Size,
+                IsModified = project.IsModified,
+                IsReadOnly = _portal!.Projects.IsReadOnly,
+                IsPrimary = project.IsPrimary,
+                Languages = ReadProjectLanguages(project),
                 BlockCount = plcs.Sum(p => BlockEnumerator.Enumerate(p.BlockGroup).Count()),
                 LastModified = project.LastModified,
+            };
+        }
+    }
+
+    public ProjectCapabilities GetProjectCapabilities()
+    {
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var isReadOnly = _portal!.Projects.IsReadOnly;
+            return new ProjectCapabilities
+            {
+                ProjectName = project.Name,
+                ProjectPath = project.Path?.FullName,
+                IsReadOnly = isReadOnly,
+                IsPrimary = project.IsPrimary,
+                IsModified = project.IsModified,
+                CanRead = true,
+                CanAttemptWrite = !isReadOnly,
+                AuthenticationModes = new[] { "desktop_sso", "anonymous", "interactive", "credentials" },
+                Notes = new[]
+                {
+                    "TIA UMAC may still reject project mutations when the user lacks the 'Modify project via Openness API' function right.",
+                    "Secondary projects are read-only even when the authenticated user has project write access.",
+                },
             };
         }
     }
@@ -2328,6 +2466,116 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
+    private TiaPortal RequirePortal() =>
+        _portal ?? throw new AdapterException("NOT_CONNECTED", "No TIA Portal session connected. Call connect first.");
+
     private Project RequireProject() =>
         _project ?? throw new AdapterException("NOT_CONNECTED", "No project connected. Call connect first.");
+
+    private static ProjectArchivationMode ParseProjectArchivationMode(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            null or "" or "compressed" => ProjectArchivationMode.Compressed,
+            "none" => ProjectArchivationMode.None,
+            "discard_restorable_data" or "discardrestorabledata" => ProjectArchivationMode.DiscardRestorableData,
+            "discard_restorable_data_and_compressed" or "discardrestorabledataandcompressed" => ProjectArchivationMode.DiscardRestorableDataAndCompressed,
+            _ => throw new AdapterException(
+                "PROJECT_ARCHIVATION_MODE_INVALID",
+                $"Unsupported project archivation mode '{value}'.",
+                "Use compressed, none, discard_restorable_data, or discard_restorable_data_and_compressed."),
+        };
+
+    private static string NormalizeProjectArchivationMode(ProjectArchivationMode mode) => mode switch
+    {
+        ProjectArchivationMode.None => "none",
+        ProjectArchivationMode.Compressed => "compressed",
+        ProjectArchivationMode.DiscardRestorableData => "discard_restorable_data",
+        ProjectArchivationMode.DiscardRestorableDataAndCompressed => "discard_restorable_data_and_compressed",
+        _ => mode.ToString().ToLowerInvariant(),
+    };
+
+    private void ConfigureAuthentication(string? authenticationMode)
+    {
+        _authenticationMode = string.IsNullOrWhiteSpace(authenticationMode)
+            ? null
+            : NormalizeAuthenticationMode(authenticationMode!);
+        if (_authenticationMode is not null)
+            _portal!.Authentication += OnAuthentication;
+    }
+
+    private void OnAuthentication(object? sender, AuthenticationEventArgs e)
+    {
+        e.AuthenticationTypeProvider = _authenticationMode switch
+        {
+            "desktop_sso" => AuthenticationTypeProvider.DesktopSso,
+            "anonymous" => AuthenticationTypeProvider.Anonymous,
+            "interactive" => AuthenticationTypeProvider.Interactive,
+            "credentials" => throw new AdapterException(
+                "AUTH_CREDENTIALS_REQUIRED",
+                "Credential authentication requires a secure credential provider and cannot accept plaintext credentials through MCP.",
+                "Use authenticationMode=interactive, desktop_sso, or anonymous."),
+            _ => throw new AdapterException(
+                "AUTHENTICATION_MODE_INVALID",
+                $"Unsupported authentication mode '{_authenticationMode}'.",
+                "Use desktop_sso, anonymous, interactive, or credentials."),
+        };
+    }
+
+    private static string NormalizeAuthenticationMode(string value) =>
+        value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_') switch
+        {
+            "desktop_sso" or "sso" => "desktop_sso",
+            "anonymous" => "anonymous",
+            "interactive" => "interactive",
+            "credentials" or "credential" => "credentials",
+            _ => throw new AdapterException(
+                "AUTHENTICATION_MODE_INVALID",
+                $"Unsupported authentication mode '{value}'.",
+                "Use desktop_sso, anonymous, interactive, or credentials."),
+        };
+
+    private static ProjectOpenMode ParseProjectOpenMode(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            null or "" or "primary" => ProjectOpenMode.Primary,
+            "secondary" => ProjectOpenMode.Secondary,
+            _ => throw new AdapterException(
+                "PROJECT_OPEN_MODE_INVALID",
+                $"Unsupported project open mode '{value}'.",
+                "Use primary or secondary."),
+        };
+
+    private static string? ReadProjectComment(Project project)
+    {
+        try
+        {
+            foreach (var item in project.Comment.Items)
+            {
+                if (!string.IsNullOrWhiteSpace(item.Text))
+                    return item.Text;
+            }
+        }
+        catch
+        {
+            // Project comments are optional and may not be readable for every project variant.
+        }
+
+        return null;
+    }
+
+    private static string[] ReadProjectLanguages(Project project)
+    {
+        try
+        {
+            return project.LanguageSettings.Languages
+                .Select(language => language.Culture.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
 }

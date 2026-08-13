@@ -13,7 +13,10 @@ public sealed record CreateWorkbenchApiRequest(
     int? EngineeringSessionId,
     string? EngineeringProjectPath);
 public sealed record AttachTiaInstanceApiRequest(int SessionId);
-public sealed record OpenTiaProjectApiRequest(bool WithUI = true);
+public sealed record OpenTiaProjectApiRequest(
+    bool WithUI = true,
+    bool Upgrade = false,
+    string? AuthenticationMode = null);
 public sealed record OpenWorkbenchApiRequest(string RootPath);
 public sealed record CreateWorktreeApiRequest(string Name, string Branch, string? StartPoint);
 public sealed record RefreshApplyApiRequest(
@@ -1024,7 +1027,63 @@ public static class WorkbenchEndpoints
                             s.Device(workbenchId, worktreeId, device).Context,
                             ct,
                             progress,
-                            request?.WithUI ?? true)
+                            request?.WithUI ?? true,
+                            request?.Upgrade ?? false,
+                            request?.AuthenticationMode)
+                        .ConfigureAwait(false);
+                    return new { opened = true };
+                },
+                "TIA project opened.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/tia/open", async (
+            string workbenchId,
+            OpenTiaProjectApiRequest? request,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "open-tia-project",
+                "Opening workbench project in TIA Portal...",
+                async progress =>
+                {
+                    await c.OpenWorkbenchProjectInTiaAsync(
+                            s.Workbench(workbenchId),
+                            ct,
+                            progress,
+                            request?.WithUI ?? true,
+                            request?.Upgrade ?? false,
+                            request?.AuthenticationMode)
+                        .ConfigureAwait(false);
+                    return new { opened = true };
+                },
+                "TIA project opened.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/tia/open", async (
+            string workbenchId,
+            string worktreeId,
+            OpenTiaProjectApiRequest? request,
+            WorkbenchApiState s,
+            WorkbenchCoordinator c,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct) =>
+            await RunOperationAsync(
+                http,
+                operations,
+                "open-tia-project",
+                "Opening worktree project in TIA Portal...",
+                async progress =>
+                {
+                    await c.OpenWorktreeProjectInTiaAsync(
+                            s.Workbench(workbenchId),
+                            s.Worktree(workbenchId, worktreeId),
+                            ct,
+                            progress,
+                            request?.WithUI ?? true,
+                            request?.Upgrade ?? false,
+                            request?.AuthenticationMode)
                         .ConfigureAwait(false);
                     return new { opened = true };
                 },

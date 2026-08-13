@@ -74,6 +74,7 @@ import HardwareNetworkView from '@/studio/HardwareNetworkView'
 import HardwarePropertiesDock from '@/studio/HardwarePropertiesDock'
 import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
 import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
+import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import {
   clampDockWidth,
@@ -442,6 +443,70 @@ function ApiKeyDialog({
   )
 }
 
+function ProjectAccessDialog({
+  project,
+  capabilities,
+  onClose,
+}: {
+  project: api.ProjectInfo
+  capabilities: api.ProjectCapabilities
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-5 backdrop-blur-[2px]">
+      <div className="w-full max-w-[620px] overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+          <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
+            <ShieldCheck className="h-4 w-4 text-chart-2" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-sm font-semibold">TIA project access</h2>
+            <p className="truncate text-[10px] text-muted-foreground">{project.name ?? capabilities.projectName ?? 'Connected project'}</p>
+          </div>
+          <button className="icon-button" onClick={onClose}><X className="h-4 w-4" /></button>
+        </div>
+        <div className="grid gap-4 p-5 text-[10px] sm:grid-cols-2">
+          <div className="space-y-2">
+            <div className="font-semibold">Project</div>
+            <div className="break-all rounded-lg border bg-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
+              {project.path ?? capabilities.projectPath ?? '—'}
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-muted-foreground">
+              <span>Version: <b className="text-foreground">{project.version ?? '—'}</b></span>
+              <span>PLC devices: <b className="text-foreground">{project.plcDevices.length}</b></span>
+              <span>Primary: <b className="text-foreground">{capabilities.isPrimary ? 'yes' : 'no'}</b></span>
+              <span>Unsaved: <b className="text-foreground">{capabilities.isModified ? 'yes' : 'no'}</b></span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="font-semibold">Access</div>
+            <div className={capabilities.isReadOnly ? 'rounded-lg border border-amber-500/30 bg-amber-500/10 p-3' : 'rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3'}>
+              <div className="font-medium">{capabilities.isReadOnly ? 'Read-only project' : 'Write access can be attempted'}</div>
+              <div className="mt-1 text-muted-foreground">
+                TIA UMAC may still require the “Modify project via Openness API” function right.
+              </div>
+            </div>
+            <div className="text-muted-foreground">
+              Authentication: {capabilities.authenticationModes.join(', ')}
+            </div>
+          </div>
+          {capabilities.notes.length > 0 && (
+            <div className="sm:col-span-2">
+              <div className="mb-1 font-semibold">Notes</div>
+              <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
+                {capabilities.notes.map(note => <li key={note}>{note}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <button className="secondary-button" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function MainStudio() {
   const [workbenches, setWorkbenches] = useState<api.Workbench[]>([])
   const [sessions, setSessions] = useState<api.SessionInfo[]>([])
@@ -498,6 +563,11 @@ export default function MainStudio() {
     workbench: api.Workbench
     worktree: api.WorkbenchRegistration
   } | null>(null)
+  const [archiveProjectFor, setArchiveProjectFor] = useState<{
+    workbench: api.Workbench
+    worktree: api.WorkbenchRegistration
+  } | null>(null)
+  const [archiveProjectError, setArchiveProjectError] = useState<string | null>(null)
   const [preview, setPreview] = useState<api.ReconciliationPreview | null>(null)
   const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null)
@@ -511,6 +581,10 @@ export default function MainStudio() {
   const [versionControlSelection, setVersionControlSelection] = useState<unknown>(null)
   const [appAssistantOpen, setAppAssistantOpen] = useState(false)
   const [appAssistantRuntime, setAppAssistantRuntime] = useState<api.AppAssistantRuntimeSnapshot | null>(null)
+  const [projectAccess, setProjectAccess] = useState<{
+    project: api.ProjectInfo
+    capabilities: api.ProjectCapabilities
+  } | null>(null)
 
   useEffect(() => {
     setVersionControlSelection(null)
@@ -1355,7 +1429,7 @@ export default function MainStudio() {
     }
   }
 
-  const openProjectInTia = async (contextOverride?: DeviceContextRef, withUI = true) => {
+  const openProjectInTia = async (contextOverride?: DeviceContextRef, withUI = true, upgrade = false) => {
     const context = contextOverride ?? (activeWorkbench && activeWorktree && selection.deviceId
       ? {
         workbenchId: activeWorkbench.workbenchId,
@@ -1365,10 +1439,15 @@ export default function MainStudio() {
       : null)
     if (!context) return
     setOperation('open-tia-project')
-    const op = beginOperation('open-tia-project', 'Opening registered project in TIA Portal...')
+    const op = beginOperation(
+      'open-tia-project',
+      upgrade ? 'Opening registered project with upgrade in TIA Portal...' : 'Opening registered project in TIA Portal...',
+    )
     try {
-      await api.openDeviceProject(context.workbenchId, context.worktreeId, context.deviceId, op.id, withUI)
-      toast.success(withUI ? 'Registered project opened in TIA Portal' : 'Registered project opened headless')
+      await api.openDeviceProject(context.workbenchId, context.worktreeId, context.deviceId, op.id, withUI, upgrade)
+      toast.success(upgrade
+        ? 'Registered project upgraded and opened in TIA Portal'
+        : withUI ? 'Registered project opened in TIA Portal' : 'Registered project opened headless')
     } catch (error) {
       // A live session query is only warranted now: if the project is already
       // open in a running TIA instance, surface the re-attach option instead of
@@ -1537,6 +1616,86 @@ export default function MainStudio() {
       }
       await reloadWorkbenches()
       toast.success(`Workbench “${workbench.name}” deleted`)
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const openWorkbenchInTia = async (workbench: api.Workbench, upgrade = false) => {
+    setOperation('open-tia-project')
+    const op = beginOperation('open-tia-project', upgrade
+      ? 'Opening workbench project with upgrade in TIA Portal...'
+      : 'Opening workbench project in TIA Portal...')
+    try {
+      await api.openWorkbenchProject(workbench.workbenchId, op.id, true, upgrade)
+      toast.success(upgrade ? 'Workbench project upgraded and opened in TIA Portal' : 'Workbench project opened in TIA Portal')
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const openWorktreeInTia = async (
+    workbench: api.Workbench,
+    worktree: api.WorkbenchRegistration,
+    upgrade = false,
+  ) => {
+    setOperation('open-tia-project')
+    const op = beginOperation('open-tia-project', upgrade
+      ? 'Opening worktree project with upgrade in TIA Portal...'
+      : 'Opening worktree project in TIA Portal...')
+    try {
+      await api.openWorktreeProject(workbench.workbenchId, worktree.worktreeId, op.id, true, upgrade)
+      toast.success(upgrade ? 'Worktree project upgraded and opened in TIA Portal' : 'Worktree project opened in TIA Portal')
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const archiveWorktreeProject = async (values: {
+    targetDirectory: string
+    archiveName: string
+    archivationMode: string
+  }) => {
+    if (!archiveProjectFor) return
+    const target = archiveProjectFor
+    setArchiveProjectError(null)
+    setOperation('archive-project')
+    const op = beginOperation('archive-project', 'Opening worktree project for archive...')
+    try {
+      await api.openWorktreeProject(target.workbench.workbenchId, target.worktree.worktreeId, op.id, true, false)
+      const result = await api.archiveTiaProject(
+        values.targetDirectory,
+        values.archiveName,
+        values.archivationMode,
+        op.id,
+      )
+      setArchiveProjectFor(null)
+      toast.success(`TIA project archived to ${result.archivePath ?? values.targetDirectory}`)
+    } catch (error) {
+      const message = displayError(error)
+      setArchiveProjectError(message)
+      showErrorToast(message)
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const inspectProjectAccess = async (open: (operationId: string) => Promise<unknown>) => {
+    setOperation('inspect-tia-access')
+    const op = beginOperation('inspect-tia-access', 'Reading TIA project access...')
+    try {
+      await open(op.id)
+      const [project, capabilities] = await Promise.all([
+        api.getTiaProjectInfo(),
+        api.getProjectCapabilities(),
+      ])
+      setProjectAccess({ project, capabilities })
     } catch (error) {
       showErrorToast(displayError(error))
     } finally {
@@ -1715,6 +1874,16 @@ export default function MainStudio() {
             loading={loading}
             onCreateWorkbench={openCreateWorkbench}
             onCreateWorktree={setCreateWorktreeFor}
+            onOpenWorkbench={(workbench, upgrade) => void openWorkbenchInTia(workbench, upgrade)}
+            onOpenWorktree={(workbench, worktree, upgrade) => void openWorktreeInTia(workbench, worktree, upgrade)}
+            onInspectWorkbench={workbench => void inspectProjectAccess(operationId =>
+              api.openWorkbenchProject(workbench.workbenchId, operationId, false))}
+            onInspectWorktree={(workbench, worktree) => void inspectProjectAccess(operationId =>
+              api.openWorktreeProject(workbench.workbenchId, worktree.worktreeId, operationId, false))}
+            onArchiveWorktree={(workbench, worktree) => {
+              setArchiveProjectError(null)
+              setArchiveProjectFor({ workbench, worktree })
+            }}
             onRefresh={() => void loadStartup()}
             onSelectWorkbench={workbench => void selectWorkbench(workbench)}
             onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
@@ -1730,6 +1899,19 @@ export default function MainStudio() {
               worktree,
               deviceId,
               context => openProjectInTia(context, withUI),
+            )}
+            onUpgradeDevice={(workbench, worktree, deviceId) => void runNavigatorDeviceAction(
+              workbench,
+              worktree,
+              deviceId,
+              context => openProjectInTia(context, true, true),
+            )}
+            onInspectDevice={(workbench, worktree, deviceId) => void runNavigatorDeviceAction(
+              workbench,
+              worktree,
+              deviceId,
+              context => inspectProjectAccess(operationId =>
+                api.openDeviceProject(context.workbenchId, context.worktreeId, context.deviceId, operationId, false)),
             )}
             onCompareDevice={(workbench, worktree, deviceId) => void runNavigatorDeviceAction(
               workbench,
@@ -2342,6 +2524,22 @@ export default function MainStudio() {
           onDelete={() => void deleteWorktree()}
         />
       )}
+      {archiveProjectFor && (
+        <ArchiveProjectDialog
+          workbench={archiveProjectFor.workbench}
+          worktree={archiveProjectFor.worktree}
+          busy={operation === 'archive-project'}
+          error={archiveProjectError}
+          onBrowseExportDirectory={api.browseExportDirectory}
+          onClose={() => {
+            if (operation !== 'archive-project') {
+              setArchiveProjectError(null)
+              setArchiveProjectFor(null)
+            }
+          }}
+          onArchive={archiveWorktreeProject}
+        />
+      )}
       {preview && (
         <RefreshDialog
           preview={preview}
@@ -2363,6 +2561,13 @@ export default function MainStudio() {
         <ApiKeyDialog
           onClose={() => setApiKeyDialogOpen(false)}
           onSave={saveApiKey}
+        />
+      )}
+      {projectAccess && (
+        <ProjectAccessDialog
+          project={projectAccess.project}
+          capabilities={projectAccess.capabilities}
+          onClose={() => setProjectAccess(null)}
         />
       )}
     </div>
