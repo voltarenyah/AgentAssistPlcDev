@@ -12,7 +12,12 @@ import {
 } from './langgraphFlowData'
 import './langgraph-flow.css'
 
-export const isLangGraphFlowDevRoute = (url: string, isDev: boolean) => isDev && new URL(url, 'http://localhost').searchParams.get('dev') === 'langgraph-flow'
+export const isLangGraphFlowDevRoute = (url: string, isDev: boolean) => {
+  if (!isDev) return false
+  const parsed = new URL(url, 'http://localhost')
+  return parsed.pathname === '/__dev/langgraph-flow'
+    || parsed.searchParams.get('dev') === 'langgraph-flow'
+}
 
 export default function LangGraphFlowPage() {
   const [activePath, setActivePath] = useState<FlowPathId>('all')

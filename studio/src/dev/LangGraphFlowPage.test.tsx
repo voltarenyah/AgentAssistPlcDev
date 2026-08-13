@@ -19,6 +19,7 @@ afterEach(() => { document.body.innerHTML = '' })
 describe('LangGraphFlowPage', () => {
   it('only enables the direct page in development with the exact query', () => {
     expect(isLangGraphFlowDevRoute('http://localhost/?dev=langgraph-flow', true)).toBe(true)
+    expect(isLangGraphFlowDevRoute('http://localhost/__dev/langgraph-flow', true)).toBe(true)
     expect(isLangGraphFlowDevRoute('http://localhost/?dev=langgraph-flow', false)).toBe(false)
     expect(isLangGraphFlowDevRoute('http://localhost/', true)).toBe(false)
   })
