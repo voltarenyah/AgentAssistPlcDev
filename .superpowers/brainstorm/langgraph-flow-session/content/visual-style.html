@@ -1,0 +1,44 @@
+<style>
+  .style-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; margin-top:22px; }
+  .style-card { cursor:pointer; border:1px solid rgba(255,255,255,.13); border-radius:18px; padding:14px; background:#14171b; transition:transform .2s ease, border-color .2s ease; }
+  .style-card:hover { transform:translateY(-4px); border-color:#f0b35f; }
+  .style-card h3 { margin:12px 0 5px; }
+  .style-card p { margin:0; color:#a9b0b8; font-size:14px; line-height:1.45; }
+  .preview { height:190px; border-radius:12px; padding:12px; overflow:hidden; position:relative; }
+  .preview .bar { height:7px; border-radius:4px; margin-bottom:10px; width:66%; }
+  .preview .node { position:absolute; width:88px; height:38px; border-radius:8px; border:1px solid; font:11px ui-monospace,monospace; display:flex; align-items:center; justify-content:center; }
+  .preview .line { position:absolute; height:1px; transform-origin:left; }
+  .graphite { background:#0d1012; color:#f5eee4; }
+  .graphite .bar { background:#f0b35f; }
+  .graphite .node { background:#20262b; border-color:#65727d; color:#f5eee4; }
+  .graphite .node.hot { border-color:#ef8d4b; box-shadow:0 0 0 3px rgba(239,141,75,.12); }
+  .graphite .line { background:#ef8d4b; width:82px; top:63px; left:78px; transform:rotate(18deg); }
+  .blueprint { background:#e5eef2; color:#17323c; }
+  .blueprint .bar { background:#2e7083; }
+  .blueprint .node { background:#f7fbfb; border-color:#5c8996; color:#205064; }
+  .blueprint .node.hot { border-color:#d17b35; }
+  .blueprint .line { background:#5c8996; width:82px; top:63px; left:78px; transform:rotate(18deg); }
+  .terminal { background:#0a0c0b; color:#b7f7c8; font-family:ui-monospace,monospace; }
+  .terminal .bar { background:#b7f7c8; }
+  .terminal .node { background:#07130b; border-color:#4d9c5b; color:#b7f7c8; }
+  .terminal .node.hot { border-color:#f4d35e; }
+  .terminal .line { background:#4d9c5b; width:82px; top:63px; left:78px; transform:rotate(18deg); }
+  @media(max-width:850px){ .style-grid{grid-template-columns:1fr;} }
+</style>
+<h2>Pick a visual direction for the explainer</h2>
+<p class="subtitle">The page will be developer-facing, interactive, and grounded in the real graph. Which visual language should it use?</p>
+<div class="style-grid">
+  <div class="style-card" data-choice="graphite" onclick="toggleSelect(this)">
+    <div class="preview graphite"><div class="bar"></div><div class="node hot" style="left:15px;top:45px">START</div><div class="line"></div><div class="node" style="left:140px;top:86px">decision</div><div class="node" style="left:15px;top:135px">interrupt</div><div class="node" style="left:140px;top:135px">END</div></div>
+    <h3>Graphite / signal orange</h3><p>Dark technical canvas with warm highlights for routing, approval gates, and hover focus.</p>
+  </div>
+  <div class="style-card" data-choice="blueprint" onclick="toggleSelect(this)">
+    <div class="preview blueprint"><div class="bar"></div><div class="node hot" style="left:15px;top:45px">START</div><div class="line"></div><div class="node" style="left:140px;top:86px">decision</div><div class="node" style="left:15px;top:135px">interrupt</div><div class="node" style="left:140px;top:135px">END</div></div>
+    <h3>Blueprint / annotated</h3><p>Light engineering diagram with documentation-like callouts and a calmer reading surface.</p>
+  </div>
+  <div class="style-card" data-choice="terminal" onclick="toggleSelect(this)">
+    <div class="preview terminal"><div class="bar"></div><div class="node hot" style="left:15px;top:45px">START</div><div class="line"></div><div class="node" style="left:140px;top:86px">decision</div><div class="node" style="left:15px;top:135px">interrupt</div><div class="node" style="left:140px;top:135px">END</div></div>
+    <h3>Terminal / runtime</h3><p>Monospace-first, observability-inspired styling with an especially strong code-adjacent feel.</p>
+  </div>
+</div>
+<p class="subtitle" style="margin-top:22px">Click a card to record a preference, then tell me what you want to keep or change.</p>
