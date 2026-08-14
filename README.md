@@ -87,7 +87,9 @@ The development launcher starts the Workbench App Assistant on every run. Instal
 the `agent-service` dependencies into `agent-service\.venv` before running
 `launch.ps1`; the launcher passes the shared `DEEPSEEK_API_KEY`, waits for the
 sidecar health check on port 8787, and stores checkpoint/feedback data under the
-user-local Automation Workbench data folder. The packaged desktop shell remains
+user-local Automation Workbench data folder. Each normal development launch
+starts a fresh App Assistant session by clearing old LangGraph checkpoints;
+`-NoKill` preserves the existing assistant session. The packaged desktop shell remains
 opt-in through `AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED`.
 
 ## Status

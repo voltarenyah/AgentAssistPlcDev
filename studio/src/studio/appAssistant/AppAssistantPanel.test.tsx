@@ -72,7 +72,7 @@ describe('AppAssistantPanel', () => {
     )
     await act(async () => {})
 
-    expect(api.bootstrapAppAssistant).toHaveBeenCalledWith()
+    expect(api.bootstrapAppAssistant).toHaveBeenCalledWith(expect.any(String))
     expect(api.chatAppAssistant).not.toHaveBeenCalled()
     expect(host.textContent).toContain('Would you like me to read the focused todo list?')
   })
@@ -104,7 +104,7 @@ describe('AppAssistantPanel', () => {
     const button = host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')!
     await act(async () => button.click())
 
-    expect(api.chatAppAssistant).toHaveBeenCalledWith('What should I do next?')
+    expect(api.chatAppAssistant).toHaveBeenCalledWith('What should I do next?', undefined, expect.any(String))
     expect(host.textContent).toContain('The worktree remains user-selected.')
   })
 
@@ -326,7 +326,7 @@ describe('AppAssistantPanel', () => {
     }))
     await act(async () => {})
 
-    expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.')
+    expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.', undefined, expect.any(String))
     expect(host.textContent).toContain('feature')
   })
 
@@ -344,7 +344,7 @@ describe('AppAssistantPanel', () => {
     }))
     await act(async () => {})
 
-    expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.')
+    expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.', undefined, expect.any(String))
     expect(host.textContent).toContain('context changed')
   })
 

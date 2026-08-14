@@ -329,11 +329,11 @@ const parseAssistantEvents = (body: string): AppAssistantEvent[] => body
   })
   .filter((value): value is AppAssistantEvent => value !== null)
 
-const postAppAssistant = async (path: string, message: string, approval?: Record<string, unknown>) => {
+const postAppAssistant = async (path: string, message: string, approval?: Record<string, unknown>, sessionId?: string) => {
   const response = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, ...(approval ? { approval } : {}) }),
+    body: JSON.stringify({ message, ...(approval ? { approval } : {}), ...(sessionId ? { sessionId } : {}) }),
   })
   if (!response.ok) {
     let body: { error?: string; message?: string } = {}
@@ -343,10 +343,10 @@ const postAppAssistant = async (path: string, message: string, approval?: Record
   return parseAssistantEvents(await response.text())
 }
 
-export const bootstrapAppAssistant = () =>
-  postAppAssistant('/app-assistant/bootstrap', '')
-export const chatAppAssistant = (message: string, approval?: Record<string, unknown>) =>
-  postAppAssistant('/app-assistant/chat', message, approval)
+export const bootstrapAppAssistant = (sessionId?: string) =>
+  postAppAssistant('/app-assistant/bootstrap', '', undefined, sessionId)
+export const chatAppAssistant = (message: string, approval?: Record<string, unknown>, sessionId?: string) =>
+  postAppAssistant('/app-assistant/chat', message, approval, sessionId)
 export type AppAssistantFeedbackCategory =
   | 'wrong_worktree'
   | 'stale_status'

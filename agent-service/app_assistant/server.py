@@ -26,6 +26,7 @@ class AssistantRequest(BaseModel):
         alias="requestMode",
     )
     approval: dict[str, Any] | None = None
+    session_id: str | None = Field(default=None, alias="sessionId")
 
 
 class FeedbackRequest(BaseModel):
@@ -75,7 +76,12 @@ async def _setup_checkpointer(checkpointer: AsyncSqliteSaver) -> None:
         checkpointer.is_setup = True
 
 
-def _response(result: dict[str, Any], workbench_id: str, run_id: str) -> dict[str, Any]:
+def _response(
+    result: dict[str, Any],
+    workbench_id: str,
+    run_id: str,
+    session_id: str | None = None,
+) -> dict[str, Any]:
     interrupts = result.get("__interrupt__") or []
     interrupt_values = [item.value if hasattr(item, "value") else item for item in interrupts]
     answer = result.get("answer")
@@ -93,7 +99,7 @@ def _response(result: dict[str, Any], workbench_id: str, run_id: str) -> dict[st
             f"'{pending_approval.get('engineeringProjectPath', 'the proposed TIA project')}'. Please approve or reject it."
         )
     response = {
-        "threadId": thread_id_for(workbench_id),
+        "threadId": thread_id_for(workbench_id, session_id),
         "workbenchId": workbench_id,
         "contextRevision": result.get("context_revision", 0),
         "runtimeSnapshot": result.get("runtime_snapshot"),
@@ -106,7 +112,12 @@ def _response(result: dict[str, Any], workbench_id: str, run_id: str) -> dict[st
         "interrupt": interrupt_values or None,
         "pendingApproval": pending_approval,
     }
-    response["runMetadata"] = build_run_metadata(result, workbench_id=workbench_id, run_id=run_id)
+    response["runMetadata"] = build_run_metadata(
+        result,
+        workbench_id=workbench_id,
+        run_id=run_id,
+        session_id=session_id,
+    )
     return response
 
 
@@ -163,9 +174,9 @@ async def bootstrap(workbench_id: str, request: AssistantRequest) -> dict[str, A
         input_value = Command(resume=request.approval)
     result = await app.state.graph.ainvoke(
         input_value,
-        config={"configurable": {"thread_id": thread_id_for(workbench_id)}},
+        config={"configurable": {"thread_id": thread_id_for(workbench_id, request.session_id)}},
     )
-    response = _response(result, workbench_id, run_id)
+    response = _response(result, workbench_id, run_id, request.session_id)
     app.state.recorder.record_run(response["runMetadata"])
     return response
 
@@ -182,9 +193,9 @@ async def chat(workbench_id: str, request: AssistantRequest) -> dict[str, Any]:
         input_value = Command(resume=request.approval)
     result = await app.state.graph.ainvoke(
         input_value,
-        config={"configurable": {"thread_id": thread_id_for(workbench_id)}},
+        config={"configurable": {"thread_id": thread_id_for(workbench_id, request.session_id)}},
     )
-    response = _response(result, workbench_id, run_id)
+    response = _response(result, workbench_id, run_id, request.session_id)
     app.state.recorder.record_run(response["runMetadata"])
     return response
 

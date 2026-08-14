@@ -26,6 +26,12 @@ def test_chat_request_uses_command_mode():
     assert request.request_mode == AssistantRequestMode.COMMAND
 
 
+def test_assistant_request_preserves_session_id():
+    request = AssistantRequest.model_validate({"sessionId": "session-1", "message": ""})
+
+    assert request.session_id == "session-1"
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))

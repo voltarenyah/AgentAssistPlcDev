@@ -10,6 +10,7 @@ public sealed class AppAssistantClient(HttpClient httpClient, IConfiguration con
         string workbenchId,
         string message,
         JsonElement? approval = null,
+        string? sessionId = null,
         CancellationToken cancellationToken = default)
     {
         var baseUrl = configuration["AppAssistant:ServiceUrl"] ?? "http://127.0.0.1:8787";
@@ -23,6 +24,7 @@ public sealed class AppAssistantClient(HttpClient httpClient, IConfiguration con
                 requestMode = operation == "bootstrap" ? "orientation" : "command",
                 message = operation == "bootstrap" ? string.Empty : message,
                 approval,
+                sessionId,
             }),
         };
         var token = configuration["AppAssistant:InternalToken"];

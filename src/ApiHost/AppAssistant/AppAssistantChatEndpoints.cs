@@ -63,7 +63,7 @@ public static class AppAssistantChatEndpoints
             .ConfigureAwait(false);
         try
         {
-            var payload = await client.SendAsync(operation, workbenchId, request.Message, request.Approval, cancellationToken)
+            var payload = await client.SendAsync(operation, workbenchId, request.Message, request.Approval, request.SessionId, cancellationToken)
                 .ConfigureAwait(false);
             await WriteEventAsync(http, "state", payload).ConfigureAwait(false);
             if (payload.ValueKind == JsonValueKind.Object
@@ -95,6 +95,6 @@ public static class AppAssistantChatEndpoints
     }
 }
 
-public sealed record AppAssistantChatRequest(string Message, JsonElement? Approval = null);
+public sealed record AppAssistantChatRequest(string Message, JsonElement? Approval = null, string? SessionId = null);
 
 public sealed record AppAssistantFeedbackRequest(string Category, string? RunId = null);

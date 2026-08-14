@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyAssistantEvents,
   applyAssistantRuntimeSnapshot,
   initialAppAssistantState,
   type AppAssistantPanelState,
@@ -61,5 +62,17 @@ describe('app assistant runtime state', () => {
     }), state.runtime)
 
     expect(next.autoRefreshPending).toBe(true)
+  })
+
+  it('does not render the same assistant answer twice when events are duplicated', () => {
+    const state = initialAppAssistantState(snapshot())
+    const next = applyAssistantEvents(state, [
+      { kind: 'answer', data: { answer: 'A workbench creation proposal is ready.' } },
+      { kind: 'answer', data: { answer: 'A workbench creation proposal is ready.' } },
+    ])
+
+    expect(next.messages).toEqual([
+      { role: 'assistant', content: 'A workbench creation proposal is ready.' },
+    ])
   })
 })

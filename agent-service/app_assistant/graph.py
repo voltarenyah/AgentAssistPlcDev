@@ -58,8 +58,10 @@ class Gateway(Protocol):
     ) -> dict[str, Any]: ...
 
 
-def thread_id_for(workbench_id: str) -> str:
-    return f"app-assistant:{workbench_id}"
+def thread_id_for(workbench_id: str, session_id: str | None = None) -> str:
+    base = f"app-assistant:{workbench_id}"
+    normalized_session_id = session_id.strip() if isinstance(session_id, str) else ""
+    return f"{base}:{normalized_session_id}" if normalized_session_id else base
 
 
 def _message_text(messages: list[Any]) -> str:
@@ -235,6 +237,7 @@ async def _decide_async(
                     _message_text(state.get("messages", [])),
                 )
             )
+            decision = _enforce_request_intent(_message_text(state.get("messages", [])), decision)
         except Exception:
             decision = AssistantDecision(
                 kind="clarification",
@@ -246,6 +249,34 @@ async def _decide_async(
 def _decision_answer(state: AppAssistantState) -> str:
     decision = state.get("decision") or {}
     return str(decision.get("answer") or decision.get("question") or "Please tell me what you would like to do next.")
+
+
+def _is_workbench_project_request(message: str) -> bool:
+    normalized = " ".join(message.lower().split())
+    return any(marker in normalized for marker in (
+        "workbench project",
+        "new workbench",
+        "another workbench",
+        "new project",
+        "another project",
+        "create a project",
+    ))
+
+
+def _enforce_request_intent(message: str, decision: AssistantDecision) -> AssistantDecision:
+    if not _is_workbench_project_request(message):
+        return decision
+    if decision.kind == "clarification":
+        return decision
+    if isinstance(decision.mutation, CreateWorkbenchMutation):
+        return decision
+    return AssistantDecision(
+        kind="clarification",
+        question=(
+            "To create a new workbench project, I need a project name and the path "
+            "to an existing TIA .ap17 engineering project. What should I use?"
+        ),
+    )
 
 
 def _baseline_options(state: AppAssistantState) -> list[ClarificationOption]:

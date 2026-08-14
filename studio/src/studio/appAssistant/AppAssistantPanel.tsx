@@ -23,13 +23,14 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
   const [selectingWorktree, setSelectingWorktree] = useState<string | null>(null)
   const [busyLabel, setBusyLabel] = useState<string | null>(null)
   const latestRuntime = useRef<api.AppAssistantRuntimeSnapshot | null>(runtime)
+  const assistantSessionId = useRef(`assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`).current
 
   useEffect(() => {
     let cancelled = false
     latestRuntime.current = runtime
     setBusyLabel('Loading workbench context…')
     setState({ ...initialAppAssistantState(runtime), busy: true })
-    void api.bootstrapAppAssistant().then(events => {
+    void api.bootstrapAppAssistant(assistantSessionId).then(events => {
       if (!cancelled) {
         setBusyLabel(null)
         setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
@@ -45,7 +46,7 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
       }
     })
     return () => { cancelled = true }
-  }, [workbenchId])
+  }, [assistantSessionId, workbenchId])
 
   useEffect(() => api.subscribeAppAssistantRuntime(workbenchId, snapshot => {
     const previous = latestRuntime.current
@@ -58,7 +59,7 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
     setBusyLabel('Refreshing workbench context…')
     let cancelled = false
     setState(current => ({ ...current, busy: true, autoRefreshPending: false }))
-    void api.chatAppAssistant('The workbench changed. Re-read the current state and suggest the next useful move.')
+    void api.chatAppAssistant('The workbench changed. Re-read the current state and suggest the next useful move.', undefined, assistantSessionId)
       .then(events => {
         if (!cancelled) {
           setBusyLabel(null)
@@ -77,7 +78,7 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
         }
       })
     return () => { cancelled = true }
-  }, [state.autoRefreshPending, state.busy, workbenchId])
+  }, [assistantSessionId, state.autoRefreshPending, state.busy, workbenchId])
 
   const send = async (message: string, approval?: Record<string, unknown>) => {
     const trimmed = message.trim()
@@ -93,8 +94,8 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
     }))
     try {
       const events = approval
-        ? await api.chatAppAssistant(trimmed || 'Approve the proposed worktree creation.', approval)
-        : await api.chatAppAssistant(trimmed)
+        ? await api.chatAppAssistant(trimmed || 'Approve the proposed worktree creation.', approval, assistantSessionId)
+        : await api.chatAppAssistant(trimmed, undefined, assistantSessionId)
       setState(current => {
         const next = applyAssistantEvents(current, events)
         return { ...next, busy: false, pendingApproval: approval ? null : next.pendingApproval }

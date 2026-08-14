@@ -37,6 +37,11 @@ def test_history_evidence_preserves_api_aliases():
     assert evidence.svn.complete is True
 
 
+def test_thread_id_can_be_scoped_to_a_new_assistant_session():
+    assert thread_id_for("wb-1") == "app-assistant:wb-1"
+    assert thread_id_for("wb-1", "session-1") == "app-assistant:wb-1:session-1"
+
+
 class FakeGateway:
     def __init__(self):
         self.context_calls = 0
@@ -402,6 +407,33 @@ async def test_command_model_mutation_waits_for_approval():
 
     assert result["__interrupt__"]
     assert gateway.detail_calls == []
+
+
+async def test_project_request_cannot_be_misclassified_as_worktree_mutation():
+    gateway = FakeGateway()
+    model = StructuredFakeModel(json.dumps({
+        "kind": "mutation_proposal",
+        "mutation": {
+            "kind": "create_worktree",
+            "name": "NewProject",
+            "branch": "NewProject",
+            "startPoint": "master",
+        },
+    }))
+    graph = build_graph(gateway, model=model, checkpointer=MemorySaver())
+
+    result = await graph.ainvoke(
+        {
+            "workbench_id": "wb-1",
+            "request_mode": "command",
+            "messages": [{"role": "user", "content": "Create a new project for me."}],
+        },
+        config={"configurable": {"thread_id": thread_id_for("wb-project-intent")}},
+    )
+
+    assert "__interrupt__" not in result
+    assert result["decision"]["kind"] == "clarification"
+    assert "TIA .ap17" in result["answer"]
 
 
 async def test_create_worktree_uses_focused_worktree_as_default_start_point():

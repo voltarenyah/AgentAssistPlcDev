@@ -39,7 +39,13 @@ def _operation_id(result: dict[str, Any]) -> str | None:
     return operation.get("operationId") or operation.get("operation_id")
 
 
-def build_run_metadata(result: dict[str, Any], *, workbench_id: str, run_id: str) -> dict[str, Any]:
+def build_run_metadata(
+    result: dict[str, Any],
+    *,
+    workbench_id: str,
+    run_id: str,
+    session_id: str | None = None,
+) -> dict[str, Any]:
     assistant_metadata = result.get("assistant_metadata") or {}
     interrupts = result.get("__interrupt__") or []
     proposed_action = result.get("proposed_action")
@@ -55,7 +61,7 @@ def build_run_metadata(result: dict[str, Any], *, workbench_id: str, run_id: str
         outcome = "no_answer"
     return {
         "runId": run_id,
-        "threadId": thread_id_for(workbench_id),
+        "threadId": thread_id_for(workbench_id, session_id),
         "workbenchId": workbench_id,
         "contextRevision": result.get("context_revision", 0),
         "requestMode": request_mode,

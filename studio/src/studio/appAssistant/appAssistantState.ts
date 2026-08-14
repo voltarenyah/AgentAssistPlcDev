@@ -120,6 +120,15 @@ export const applyAssistantRuntimeSnapshot = (
   }
 }
 
+const appendAssistantMessage = (
+  state: AppAssistantPanelState,
+  content: string,
+): AppAssistantPanelState => {
+  const last = state.messages[state.messages.length - 1]
+  if (last?.role === 'assistant' && last.content === content) return state
+  return { ...state, messages: [...state.messages, { role: 'assistant', content }] }
+}
+
 export const applyAssistantEvents = (
   state: AppAssistantPanelState,
   events: AppAssistantEvent[],
@@ -127,7 +136,7 @@ export const applyAssistantEvents = (
   let next = state
   for (const event of events) {
     if (event.kind === 'answer' && typeof event.data.answer === 'string') {
-      next = { ...next, messages: [...next.messages, { role: 'assistant', content: event.data.answer }] }
+      next = appendAssistantMessage(next, event.data.answer)
     } else if (event.kind === 'state' && event.data.runtimeSnapshot) {
       const snapshot = normalizeAssistantRuntimeSnapshot(event.data.runtimeSnapshot)
       if (!snapshot) continue

@@ -16,6 +16,9 @@ Options:
   -NoBuild    Skip the dotnet build step (start faster when code is already compiled)
   -NoKill     Don't kill existing ApiHost / node processes before starting
 
+Default launches start a fresh App Assistant session and discard prior pending
+approvals. -NoKill preserves the existing assistant checkpoint state.
+
 The LangGraph App Assistant is always started for development launches.
 "@
     return
@@ -112,6 +115,15 @@ if (Test-Path $assistantVenvPython) {
 }
 
 New-Item -ItemType Directory -Force -Path $assistantLogRoot, $assistantDataDir | Out-Null
+
+# A development launch is a new App Assistant session. Clear only LangGraph's
+# checkpoint files so an interrupted approval from a previous run cannot be
+# resumed accidentally. Keep the redacted event log for diagnostics. When
+# -NoKill is used, the existing sidecar owns this state and must be preserved.
+if (-not $NoKill) {
+    & (Join-Path $root "scripts\Reset-AppAssistantState.ps1") -DataDirectory $assistantDataDir
+}
+
 $env:APP_ASSISTANT_APIHOST_URL = "http://127.0.0.1:5239"
 $env:APP_ASSISTANT_DATA_DIR = $assistantDataDir
 
