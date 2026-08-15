@@ -76,6 +76,7 @@ import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
+import TiaSessionsPanel from '@/studio/workbench/TiaSessionsPanel'
 import {
   clampDockWidth,
   DEFAULT_SHELL_LAYOUT,
@@ -446,6 +447,9 @@ function ProjectAccessDialog({
 export default function MainStudio() {
   const [workbenches, setWorkbenches] = useState<api.Workbench[]>([])
   const [sessions, setSessions] = useState<api.SessionInfo[]>([])
+  const [currentSession, setCurrentSession] = useState<api.CurrentTiaSession | null>(null)
+  const [tiaPanelOpen, setTiaPanelOpen] = useState(false)
+  const [sessionActionBusy, setSessionActionBusy] = useState<string | null>(null)
   const [devicesByWorktree, setDevicesByWorktree] = useState<Record<string, api.DeviceSummary[]>>({})
   const [selection, setSelection] = useState<WorkbenchSelection>({
     workbenchId: null,
@@ -684,13 +688,42 @@ export default function MainStudio() {
     return loadedSessions
   }, [])
 
+  const reloadCurrentSession = useCallback(async () => {
+    try {
+      setCurrentSession(await api.getCurrentTiaSession())
+    } catch {
+      setCurrentSession(null)
+    }
+  }, [])
+
+  const reloadTiaState = useCallback(async () => {
+    setSessionActionBusy('refresh')
+    try {
+      await reloadSessions().catch(() => {})
+      await reloadCurrentSession()
+    } finally {
+      setSessionActionBusy(null)
+    }
+  }, [reloadSessions, reloadCurrentSession])
+
+  // Keep the TIA instance count in the status bar in sync: sessions used to load
+  // only at startup, so a TIA Portal opened later showed as "0 TIA sessions".
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void reloadSessions().catch(() => {})
+      void reloadCurrentSession()
+    }, 10000)
+    return () => window.clearInterval(timer)
+  }, [reloadSessions, reloadCurrentSession])
+
   const loadStartup = useCallback(async () => {
     setLoading(true)
     setFatalError(null)
     try {
       // TIA sessions come from the engineering server and may hang while TIA is
-      // busy; refresh them in the background instead of blocking startup.
+          // busy; refresh them in the background instead of blocking startup.
       void reloadSessions().catch(() => {})
+      void reloadCurrentSession()
       const loadedWorkbenches = await reloadWorkbenches()
       if (loadedWorkbenches.length > 0) {
         const first = loadedWorkbenches[0]
@@ -708,7 +741,7 @@ export default function MainStudio() {
     void reloadKeyStatus().then(status => {
       if (status?.configured) void reloadBalance()
     })
-  }, [reloadWorkbenches, reloadSessions, reloadKeyStatus, reloadBalance])
+  }, [reloadWorkbenches, reloadSessions, reloadCurrentSession, reloadKeyStatus, reloadBalance])
 
   useEffect(() => { void loadStartup() }, [loadStartup])
 
@@ -1425,6 +1458,55 @@ export default function MainStudio() {
       showErrorToast(displayError(error))
     } finally {
       setOperation(null)
+    }
+  }
+
+  const attachSessionFromPanel = async (sessionId: number) => {
+    setSessionActionBusy(`attach:${sessionId}`)
+    try {
+      // With a device selected, attach through the workbench flow so the device
+      // context binds too; otherwise attach the engineering server directly.
+      if (selection.workbenchId && selection.worktreeId && selection.deviceId) {
+        await api.attachDeviceProject(selection.workbenchId, selection.worktreeId, selection.deviceId, sessionId)
+      } else {
+        await api.connect({ sessionId })
+      }
+      toast.success(`Attached to TIA Portal instance (PID ${sessionId})`)
+      await reloadSessions().catch(() => {})
+      await reloadCurrentSession()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setSessionActionBusy(null)
+    }
+  }
+
+  const detachSession = async () => {
+    setSessionActionBusy('detach')
+    try {
+      await api.disconnect()
+      toast.success('Detached from the TIA Portal instance')
+      await reloadCurrentSession()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setSessionActionBusy(null)
+    }
+  }
+
+  const closeSession = async (sessionId: number) => {
+    setSessionActionBusy(`close:${sessionId}`)
+    try {
+      await api.closeTiaSession(sessionId)
+      toast.success(`Close signal sent to TIA Portal instance (PID ${sessionId})`)
+      // TIA takes a moment to process WM_CLOSE and may show a save dialog first.
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      await reloadSessions().catch(() => {})
+      await reloadCurrentSession()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setSessionActionBusy(null)
     }
   }
 
@@ -2404,15 +2486,48 @@ export default function MainStudio() {
             </button>
           </span>
         )}
-        <span className="studio-status-item">
+        <button
+          className={`studio-status-item transition-colors hover:text-foreground ${tiaPanelOpen ? 'text-foreground' : ''}`}
+          data-tia-sessions
+          aria-label="TIA Portal instances"
+          title="Detected TIA Portal instances — click to manage"
+          aria-pressed={tiaPanelOpen}
+          onClick={() => {
+            const next = !tiaPanelOpen
+            setTiaPanelOpen(next)
+            if (next) void reloadTiaState()
+          }}
+        >
           <Server className="h-3 w-3 text-chart-3" />
           {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
-        </span>
+        </button>
+        <button
+          className="icon-button h-4 w-4"
+          aria-label="Refresh TIA sessions"
+          title="Re-detect running TIA Portal instances"
+          disabled={sessionActionBusy === 'refresh'}
+          onClick={() => void reloadTiaState()}
+        >
+          <RefreshCw className={`h-3 w-3 ${sessionActionBusy === 'refresh' ? 'animate-spin' : ''}`} />
+        </button>
         <span className="flex-1" />
         <button className="icon-button" aria-label="Refresh status" title="Refresh status" onClick={() => void loadStartup()}>
           <RefreshCw className="h-3 w-3" />
         </button>
       </footer>
+
+      {tiaPanelOpen && (
+        <TiaSessionsPanel
+          sessions={sessions}
+          current={currentSession}
+          busy={sessionActionBusy}
+          onRefresh={() => void reloadTiaState()}
+          onAttach={sessionId => void attachSessionFromPanel(sessionId)}
+          onDetach={() => void detachSession()}
+          onCloseSession={sessionId => void closeSession(sessionId)}
+          onClose={() => setTiaPanelOpen(false)}
+        />
+      )}
 
       {createWorkbenchOpen && (
         <CreateWorkbenchDialog

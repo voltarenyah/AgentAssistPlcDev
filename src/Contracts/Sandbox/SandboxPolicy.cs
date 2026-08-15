@@ -34,6 +34,7 @@ public sealed class SandboxPolicy
             // Engineering — read-only w.r.t. the TIA project (exports write only under outputDir, path-jailed).
             ["check_environment"] = SandboxTier.Read,
             ["list_sessions"] = SandboxTier.Read,
+            ["get_current_session"] = SandboxTier.Read,
             ["get_project_info"] = SandboxTier.Read,
             ["get_project_capabilities"] = SandboxTier.Read,
             ["list_blocks"] = SandboxTier.Read,

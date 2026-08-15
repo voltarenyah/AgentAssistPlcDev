@@ -38,6 +38,10 @@ public sealed class EngineeringTools
     [Description("Enumerate running TIA Portal processes that can be attached to (read-only).")]
     public CallToolResult ListSessions() => Invoke("list_sessions", () => _adapter.ListSessions());
 
+    [McpServerTool(Name = "get_current_session")]
+    [Description("Report the TIA Portal session this server is currently attached to, if any (read-only).")]
+    public CallToolResult GetCurrentSession() => Invoke("get_current_session", () => _adapter.GetCurrentSession());
+
     [McpServerTool(Name = "connect")]
     [Description("Attach to a running TIA session (sessionId) or open a project (projectPath; headless unless withUI=true). Provide exactly one.")]
     public CallToolResult Connect(

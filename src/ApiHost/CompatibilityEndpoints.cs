@@ -174,6 +174,15 @@ public static class CompatibilityEndpoints
         app.MapGet("/api/sessions", async (ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("list_sessions").CallAsync<JsonElement>("list_sessions", new { }, ct));
 
+        app.MapGet("/api/sessions/current", async (ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("get_current_session").CallAsync<JsonElement>("get_current_session", new { }, ct));
+
+        app.MapPost("/api/sessions/close", async (JsonElement body, ApiMcpGateway gateway, CancellationToken ct) =>
+        {
+            var sessionId = body.GetProperty("sessionId").GetInt32();
+            return await gateway.For("close_session").CallAsync<JsonElement>("close_session", new { sessionId }, ct);
+        });
+
         app.MapPost("/api/tools/call", async (CompatibilityToolCallRequest request, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
         {
             var device = Device(state);

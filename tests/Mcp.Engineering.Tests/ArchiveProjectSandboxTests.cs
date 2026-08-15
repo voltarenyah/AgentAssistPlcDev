@@ -56,6 +56,7 @@ public sealed class ArchiveProjectSandboxTests : IDisposable
 
         public EnvCheckResult CheckEnvironment() => new();
         public SessionInfo[] ListSessions() => Array.Empty<SessionInfo>();
+        public CurrentSessionInfo GetCurrentSession() => new();
         public ConnectionInfo Connect(ConnectOptions options) => new();
         public DisconnectResult Disconnect() => new();
         public void SaveProject() { }

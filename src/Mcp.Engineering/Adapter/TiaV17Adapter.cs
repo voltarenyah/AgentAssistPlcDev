@@ -45,6 +45,31 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
     public SessionInfo[] ListSessions() => TiaSessionEnumerator.ListSessions().ToArray();
 
+    public CurrentSessionInfo GetCurrentSession()
+    {
+        lock (_gate)
+        {
+            // A dead process leaves stale handles; report detached rather than a ghost pid.
+            if (_portal is null || !IsPortalProcessAlive())
+                return new CurrentSessionInfo { Attached = false };
+            string? projectName = null;
+            string? projectPath = null;
+            try
+            {
+                projectName = _project?.Name;
+                projectPath = _project?.Path?.FullName;
+            }
+            catch { /* project handle may round-trip to a busy portal; identity is enough */ }
+            return new CurrentSessionInfo
+            {
+                Attached = true,
+                SessionId = _portalProcessId,
+                ProjectName = projectName,
+                ProjectPath = projectPath,
+            };
+        }
+    }
+
     public ConnectionInfo Connect(ConnectOptions options)
     {
         lock (_gate)
