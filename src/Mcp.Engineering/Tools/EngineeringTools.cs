@@ -64,7 +64,7 @@ public sealed class EngineeringTools
         }), ("projectPath", projectPath));
 
     [McpServerTool(Name = "disconnect")]
-    [Description("Release project and portal handles. Never saves; never closes a project owned by an attached session. Reports unsaved changes.")]
+    [Description("Release project and portal handles without closing the project or the TIA instance, so it can be re-attached later. Never saves; reports unsaved changes.")]
     public CallToolResult Disconnect() => Invoke("disconnect", () => _adapter.Disconnect());
 
     [McpServerTool(Name = "close_session")]

@@ -76,7 +76,7 @@ import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
-import TiaSessionsPanel from '@/studio/workbench/TiaSessionsPanel'
+import TiaSessionsPanel, { type SessionLabel } from '@/studio/workbench/TiaSessionsPanel'
 import {
   clampDockWidth,
   DEFAULT_SHELL_LAYOUT,
@@ -141,6 +141,26 @@ const newOperationId = () =>
 
 const normalizeProjectPath = (path: string) =>
   path.trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
+
+/** Map a TIA session to "Project / worktree" using the registered workbenches. */
+const sessionLabelFor = (workbenches: api.Workbench[], session: api.SessionInfo): SessionLabel | null => {
+  const path = session.projectPath
+  if (!path) return null
+  const file = path.split(/[\\/]/).pop() ?? path
+  const project = file.replace(/\.ap\d+$/i, '')
+  const normalized = normalizeProjectPath(path)
+  for (const workbench of workbenches) {
+    for (const worktree of workbench.worktrees) {
+      if (worktree.relativePath && normalized.includes(normalizeProjectPath(worktree.relativePath))) {
+        return { project, worktree: worktree.name || worktree.branch }
+      }
+    }
+    if (workbench.sourceProjectPath && normalizeProjectPath(workbench.sourceProjectPath) === normalized) {
+      return { project, worktree: `${workbench.name} (source)` }
+    }
+  }
+  return { project, worktree: null }
+}
 
 const findHardwareNode = (
   nodes: api.HardwareConfigurationNode[],
@@ -2486,6 +2506,7 @@ export default function MainStudio() {
             </button>
           </span>
         )}
+        <span className="relative flex items-center gap-1">
         <button
           className={`studio-status-item transition-colors hover:text-foreground ${tiaPanelOpen ? 'text-foreground' : ''}`}
           data-tia-sessions
@@ -2510,24 +2531,25 @@ export default function MainStudio() {
         >
           <RefreshCw className={`h-3 w-3 ${sessionActionBusy === 'refresh' ? 'animate-spin' : ''}`} />
         </button>
+          {tiaPanelOpen && (
+            <TiaSessionsPanel
+              sessions={sessions}
+              current={currentSession}
+              busy={sessionActionBusy}
+              resolveLabel={session => sessionLabelFor(workbenches, session)}
+              onRefresh={() => void reloadTiaState()}
+              onAttach={sessionId => void attachSessionFromPanel(sessionId)}
+              onDetach={() => void detachSession()}
+              onCloseSession={sessionId => void closeSession(sessionId)}
+              onClose={() => setTiaPanelOpen(false)}
+            />
+          )}
+        </span>
         <span className="flex-1" />
         <button className="icon-button" aria-label="Refresh status" title="Refresh status" onClick={() => void loadStartup()}>
           <RefreshCw className="h-3 w-3" />
         </button>
       </footer>
-
-      {tiaPanelOpen && (
-        <TiaSessionsPanel
-          sessions={sessions}
-          current={currentSession}
-          busy={sessionActionBusy}
-          onRefresh={() => void reloadTiaState()}
-          onAttach={sessionId => void attachSessionFromPanel(sessionId)}
-          onDetach={() => void detachSession()}
-          onCloseSession={sessionId => void closeSession(sessionId)}
-          onClose={() => setTiaPanelOpen(false)}
-        />
-      )}
 
       {createWorkbenchOpen && (
         <CreateWorkbenchDialog

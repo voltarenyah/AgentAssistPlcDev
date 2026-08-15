@@ -291,12 +291,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             if (result.WasConnected)
             {
                 try { result.HadUnsavedChanges = _project?.IsModified ?? false; } catch { }
-                if (_ownsPortal)
-                {
-                    // We own this portal: close the project we opened. Never saves (§1.1).
-                    try { _project?.Close(); } catch { }
-                }
-                // Attached mode: release our handles only — never close the user's project.
+                // Never close the project on disconnect — not for attached sessions and not for
+                // portals we opened ourselves. The project stays open in TIA Portal so the user
+                // can keep working there or re-attach later; only close_session closes the
+                // project and the instance.
                 try { _portal?.Dispose(); } catch { }
             }
             _project = null;

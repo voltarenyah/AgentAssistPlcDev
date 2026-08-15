@@ -3,13 +3,13 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as api from '@/api/client'
-import TiaSessionsPanel from './TiaSessionsPanel'
+import TiaSessionsPanel, { formatSessionLabel, sessionModeLabel } from './TiaSessionsPanel'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const sessions: api.SessionInfo[] = [
-  { id: 17, mode: 'WithUI', projectPath: 'C:\\orca\\workspaces\\Demo\\app\\tia\\Demo.ap17', portalPath: 'C:\\Program Files\\Siemens\\Portal.exe' },
-  { id: 23, mode: 'WithoutUI', projectPath: null, portalPath: null },
+  { id: 17, mode: 'WithUserInterface', projectPath: 'C:\\orca\\workspaces\\Demo\\app\\tia\\Demo.ap17', portalPath: 'C:\\Program Files\\Siemens\\Portal.exe' },
+  { id: 23, mode: 'WithoutUserInterface', projectPath: null, portalPath: null },
 ]
 
 const attachedCurrent: api.CurrentTiaSession = {
@@ -26,6 +26,9 @@ const detachedCurrent: api.CurrentTiaSession = {
   projectPath: null,
 }
 
+const resolveLabel = (session: api.SessionInfo) =>
+  session.id === 17 ? { project: 'Demo', worktree: 'feature-x' } : null
+
 const render = (props: Partial<Parameters<typeof TiaSessionsPanel>[0]> = {}) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -34,6 +37,7 @@ const render = (props: Partial<Parameters<typeof TiaSessionsPanel>[0]> = {}) => 
     sessions,
     current: detachedCurrent,
     busy: null,
+    resolveLabel,
     onRefresh: vi.fn(),
     onAttach: vi.fn(),
     onDetach: vi.fn(),
@@ -55,27 +59,33 @@ afterEach(() => {
 })
 
 describe('TiaSessionsPanel', () => {
-  it('lists detected instances with pid, mode, and project path', () => {
+  it('lists each instance once with pid, short mode label, and Project / worktree', () => {
     const { host, root } = render()
 
     expect(host.querySelector('[data-tia-sessions-panel]')).not.toBeNull()
-    expect(host.querySelector('[data-tia-session="17"]')?.textContent).toContain('PID 17')
-    expect(host.querySelector('[data-tia-session="17"]')?.textContent).toContain('Demo.ap17')
-    expect(host.querySelector('[data-tia-session="23"]')?.textContent).toContain('WithoutUI')
-    expect(host.textContent).toContain('Not attached')
+    expect(host.querySelectorAll('[data-tia-session]')).toHaveLength(2)
+    const row = host.querySelector('[data-tia-session="17"]')
+    expect(row?.textContent).toContain('PID 17')
+    expect(row?.textContent).toContain('UI')
+    expect(row?.textContent).toContain('Demo / feature-x')
+    expect(row?.textContent).not.toContain('C:\\orca')
+    expect(host.querySelector('[data-tia-session="23"]')?.textContent).toContain('Headless')
+    expect(host.querySelector('[data-tia-session="23"]')?.textContent).toContain('No project open')
 
     act(() => root.unmount())
   })
 
-  it('shows the attached instance with a badge and a detach button', () => {
+  it('marks the attached row with a badge and a filled detach button, no duplicate entry', () => {
     const { host, root, props } = render({ current: attachedCurrent })
 
-    expect(host.querySelector('[data-tia-current]')?.textContent).toContain('Attached to PID 17')
-    expect(host.querySelector('[data-tia-session="17"]')?.textContent).toContain('Attached')
+    expect(host.querySelectorAll('[data-tia-session]')).toHaveLength(2)
+    const attachedRow = host.querySelector('[data-tia-session="17"]')
+    expect(attachedRow?.textContent).toContain('Attached')
+    expect(attachedRow?.querySelector('[data-tia-detach]')).not.toBeNull()
     expect(host.querySelector('[data-tia-attach="17"]')).toBeNull()
     expect(host.querySelector('[data-tia-attach="23"]')).not.toBeNull()
 
-    click(host.querySelector('[data-tia-detach]'))
+    click(attachedRow?.querySelector('[data-tia-detach]') ?? null)
     expect(props.onDetach).toHaveBeenCalledTimes(1)
 
     act(() => root.unmount())
@@ -124,5 +134,24 @@ describe('TiaSessionsPanel', () => {
     expect(props.onClose).toHaveBeenCalledTimes(1)
 
     act(() => root.unmount())
+  })
+})
+
+describe('sessionModeLabel', () => {
+  it('maps verbose TIA modes to short labels', () => {
+    expect(sessionModeLabel('WithUserInterface')).toBe('UI')
+    expect(sessionModeLabel('WithoutUserInterface')).toBe('Headless')
+    expect(sessionModeLabel('WithUI')).toBe('UI')
+    expect(sessionModeLabel('WithoutUI')).toBe('Headless')
+    expect(sessionModeLabel('Unknown')).toBe('Unknown')
+  })
+})
+
+describe('formatSessionLabel', () => {
+  it('formats Project / worktree with fallbacks', () => {
+    expect(formatSessionLabel({ project: 'Demo', worktree: 'feature-x' })).toBe('Demo / feature-x')
+    expect(formatSessionLabel({ project: 'Demo', worktree: null })).toBe('Demo')
+    expect(formatSessionLabel({ project: null, worktree: null })).toBe('No project open')
+    expect(formatSessionLabel(null)).toBe('No project open')
   })
 })
