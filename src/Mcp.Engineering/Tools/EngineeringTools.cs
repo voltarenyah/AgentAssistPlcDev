@@ -144,6 +144,15 @@ public sealed class EngineeringTools
         [Description("Export root directory.")] string outputDir)
         => Invoke("export_block", () => _adapter.ExportBlock(blockName, outputDir), ("outputDir", outputDir));
 
+    [McpServerTool(Name = "export_source_object")]
+    [Description("Export exactly one block (OB/FB/FC/DB), tag table (Tags), or UDT to XML under outputDir and upsert its record in outputDir/metadata.json (read-only w.r.t. the project).")]
+    public CallToolResult ExportSourceObject(
+        [Description("Object name as listed by list_blocks / compare_context.")] string name,
+        [Description("Category: OB, FB, FC, DB, Tags, or UDT.")] string category,
+        [Description("Export root directory.")] string outputDir,
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
+        => Invoke("export_source_object", () => _adapter.ExportSourceObject(name, category, outputDir, plcName), ("outputDir", outputDir));
+
     [McpServerTool(Name = "export_all_blocks")]
     [Description("Export every PLC block to XML under outputDir (Blocks/ and DB/ subfolders; per-PLC subfolder when multiple PLCs) and write a metadata.json manifest per export root.")]
     public CallToolResult ExportAllBlocks(
@@ -298,6 +307,14 @@ public sealed class EngineeringTools
     public CallToolResult OpenBlockInEditor(
         [Description("Block name to open.")] string blockName)
         => Invoke("open_block_in_editor", () => { _adapter.OpenBlockInEditor(blockName); return true; });
+
+    [McpServerTool(Name = "open_source_object_in_editor")]
+    [Description("Open a block (OB/FB/FC/DB), tag table (Tags), or UDT in the TIA Portal editor window. Requires a UI-connected TIA session.")]
+    public CallToolResult OpenSourceObjectInEditor(
+        [Description("Object name to open.")] string name,
+        [Description("Category: OB, FB, FC, DB, Tags, or UDT.")] string category,
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
+        => Invoke("open_source_object_in_editor", () => _adapter.OpenSourceObjectInEditor(name, category, plcName));
 
     private CallToolResult Invoke(string tool, Func<object> action, params (string Name, string? Value)[] pathArguments)
     {

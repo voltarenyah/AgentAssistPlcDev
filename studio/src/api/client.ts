@@ -532,6 +532,20 @@ export type DeviceExportMetadata = {
   projectLastModifiedBy: string | null
 }
 
+export type SourceObjectInfo = {
+  id: string
+  name: string
+  number: number | null
+  category: string
+  programmingLanguage: string | null
+  groupPath: string | null
+  relativePath: string
+  contentHash: string | null
+  isKnowHowProtected: boolean | null
+  modifiedDate: string | null
+  status: string | null
+}
+
 export type DeviceSnapshot = DeviceInfo & {
   device: DeviceExportMetadata | null
   knowledge: {
@@ -539,6 +553,7 @@ export type DeviceSnapshot = DeviceInfo & {
     updatedAt: string | null
   }
   blocks: OfflineBlockInfo[]
+  sourceObjects: SourceObjectInfo[]
   sourceObjectCount: number
   diagnostics: string[]
 }
@@ -1029,6 +1044,35 @@ export const prepareDeviceEdit = (workbenchId: string, worktreeId: string, devic
   workbenchRequest<string>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/prepare-edit`, jsonRequest('POST', { relativePath }))
 export const importDeviceSource = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string, operationId?: string) =>
   workbenchRequest<ImportModifiedResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/import`, withOperation(jsonRequest('POST', { relativePath }), operationId))
+export type DiffLine = {
+  kind: 'same' | 'added' | 'removed'
+  text: string
+}
+export type SourceObjectComparison = {
+  comparisonId: string
+  relativePath: string
+  name: string
+  category: string
+  same: boolean
+  diffLines: DiffLine[]
+  localHash: string | null
+  tiaHash: string | null
+  diagnostics: string[]
+}
+export type SourceObjectSyncResult = {
+  comparisonId: string
+  relativePath: string
+  success: boolean
+  message: string | null
+}
+export const openSourceInTia = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string, operationId?: string) =>
+  workbenchRequest<unknown>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/open-in-tia`, withOperation(jsonRequest('POST', { relativePath }), operationId))
+export const compareSourceWithTia = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string, operationId?: string) =>
+  workbenchRequest<SourceObjectComparison>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/compare-tia`, withOperation(jsonRequest('POST', { relativePath }), operationId))
+export const acceptTiaSourceObject = (workbenchId: string, worktreeId: string, deviceId: string, comparisonId: string, operationId?: string) =>
+  workbenchRequest<SourceObjectSyncResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/comparisons/${encodeURIComponent(comparisonId)}/accept`, withOperation(jsonRequest('POST'), operationId))
+export const pushSourceObjectToTia = (workbenchId: string, worktreeId: string, deviceId: string, comparisonId: string, operationId?: string) =>
+  workbenchRequest<SourceObjectSyncResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/comparisons/${encodeURIComponent(comparisonId)}/push-to-tia`, withOperation(jsonRequest('POST'), operationId))
 export const mergeWorktree = (workbenchId: string, sourceWorktreeId: string, targetWorktreeId: string, operationId?: string) =>
   workbenchRequest<unknown>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(sourceWorktreeId)}/merge`, withOperation(jsonRequest('POST', { targetWorktreeId }), operationId))
 export const listDeviceSessions = (workbenchId: string, worktreeId: string, deviceId: string) =>

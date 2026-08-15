@@ -529,41 +529,46 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     {
         lock (_gate)
         {
-            var plc = PlcSoftwareResolver.Resolve(RequireProject(), null);
-            var (block, groupPath) = BlockEnumerator.FindWithPath(plc.BlockGroup, blockName);
-            var device = CaptureDeviceMetadata(RequireProject(), plc);
-            Directory.CreateDirectory(outputDir);
-            try
+            return ExportBlock(PlcSoftwareResolver.Resolve(RequireProject(), null), blockName, outputDir);
+        }
+    }
+
+    /// <summary>Per-PLC body of <see cref="ExportBlock"/>; also used by <see cref="ExportSourceObject"/>.</summary>
+    private ExportResult ExportBlock(PlcSoftware plc, string blockName, string outputDir)
+    {
+        var (block, groupPath) = BlockEnumerator.FindWithPath(plc.BlockGroup, blockName);
+        var device = CaptureDeviceMetadata(RequireProject(), plc);
+        Directory.CreateDirectory(outputDir);
+        try
+        {
+            if (FailSafeBlocks.IsFailSafe(block))
             {
-                if (FailSafeBlocks.IsFailSafe(block))
-                {
-                    throw new AdapterException("BLOCK_EXPORT_NOT_PERMITTED",
-                        $"Block '{blockName}' is a fail-safe block ({block.ProgrammingLanguage}); TIA Openness does not permit exporting F-blocks.");
-                }
-                if (!block.IsConsistent)
-                {
-                    throw new AdapterException("BLOCK_INCONSISTENT",
-                        $"Block '{blockName}' is inconsistent. Compile it first before export.");
-                }
-                var result = ExportCore(block, outputDir, groupPath);
-                ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, result), device);
-                return result;
+                throw new AdapterException("BLOCK_EXPORT_NOT_PERMITTED",
+                    $"Block '{blockName}' is a fail-safe block ({block.ProgrammingLanguage}); TIA Openness does not permit exporting F-blocks.");
             }
-            catch (Exception ex)
+            if (!block.IsConsistent)
             {
-                // Even a failed single export leaves a Failed record in the manifest (§5.2 evidence).
-                // Never mask the original error with a manifest-write failure.
-                var failed = new ExportResult
-                {
-                    BlockName = block.Name,
-                    Success = false,
-                    Error = ex.Message,
-                    ExportedAt = DateTime.Now,
-                };
-                try { ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, failed), device); }
-                catch { }
-                throw;
+                throw new AdapterException("BLOCK_INCONSISTENT",
+                    $"Block '{blockName}' is inconsistent. Compile it first before export.");
             }
+            var result = ExportCore(block, outputDir, groupPath);
+            ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, result), device);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            // Even a failed single export leaves a Failed record in the manifest (§5.2 evidence).
+            // Never mask the original error with a manifest-write failure.
+            var failed = new ExportResult
+            {
+                BlockName = block.Name,
+                Success = false,
+                Error = ex.Message,
+                ExportedAt = DateTime.Now,
+            };
+            try { ExportManifest.Upsert(outputDir, ExportManifest.CreateRecord(block, groupPath, outputDir, failed), device); }
+            catch { }
+            throw;
         }
     }
 
@@ -1668,6 +1673,80 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
+    public ExportResult ExportSourceObject(string name, string category, string outputDir, string? plcName = null)
+    {
+        // Validate the category before any TIA call so an unknown category is a deterministic
+        // argument error even when no project is connected.
+        var normalized = NormalizeSourceObjectCategory(category);
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var plc = PlcSoftwareResolver.Resolve(project, plcName);
+            if (SourceObjectCategory.IsBlockKind(normalized))
+            {
+                return ExportBlock(plc, name, outputDir);
+            }
+
+            Directory.CreateDirectory(outputDir);
+            var device = CaptureDeviceMetadata(project, plc);
+            if (normalized == SourceObjectCategory.Tags)
+            {
+                var (table, groupPath) = FindTagTable(plc, name);
+                var result = ExportTagTableCore(table, outputDir, groupPath);
+                ExportManifest.Upsert(outputDir, CreateTagTableRecord(table, groupPath, outputDir, result), device);
+                return result;
+            }
+
+            var (type, udtGroupPath) = FindUdt(plc, name);
+            var udtResult = ExportUdtCore(type, outputDir, udtGroupPath);
+            ExportManifest.Upsert(outputDir, CreateUdtRecord(type, udtGroupPath, outputDir, udtResult), device);
+            return udtResult;
+        }
+    }
+
+    /// <summary>Single tag table by name, recursing user groups like export_tag_tables does.</summary>
+    private static (PlcTagTable Table, string? GroupPath) FindTagTable(PlcSoftware plc, string name)
+    {
+        var matches = TagTableEnumerator.Enumerate(plc.TagTableGroup)
+            .Where(x => string.Equals(x.Table.Name, name, StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+
+        return matches.Count switch
+        {
+            1 => matches[0],
+            0 => throw new AdapterException("TAG_TABLE_NOT_FOUND",
+                $"Tag table '{name}' not found."),
+            _ => throw new AdapterException("AMBIGUOUS_TAG_TABLE",
+                $"Multiple tag tables named '{name}' exist in different tag groups."),
+        };
+    }
+
+    /// <summary>Single UDT by name, recursing user groups like export_udts does.</summary>
+    private static (PlcType Type, string? GroupPath) FindUdt(PlcSoftware plc, string name)
+    {
+        var matches = PlcTypeEnumerator.Enumerate(plc.TypeGroup)
+            .Where(x => string.Equals(x.Type.Name, name, StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToList();
+
+        return matches.Count switch
+        {
+            1 => matches[0],
+            0 => throw new AdapterException("UDT_NOT_FOUND",
+                $"UDT '{name}' not found."),
+            _ => throw new AdapterException("AMBIGUOUS_UDT",
+                $"Multiple UDTs named '{name}' exist in different type groups."),
+        };
+    }
+
+    /// <summary>Unknown categories fail before any TIA call (deterministic argument error).</summary>
+    private static string NormalizeSourceObjectCategory(string category) =>
+        SourceObjectCategory.Normalize(category) ?? throw new AdapterException(
+            "UNKNOWN_SOURCE_CATEGORY",
+            $"Unknown source object category '{category}'.",
+            "Use OB, FB, FC, DB, Tags, or UDT.");
+
     private static ExportMetadataRecord CreateTagTableRecord(PlcTagTable table, string? groupPath, string root, ExportResult result) =>
         ExportManifest.CreateRecord(
             table.Name, "Tags", table.GetType().Name, groupPath, root, result,
@@ -2463,6 +2542,48 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     $"Cannot open block '{blockName}' in editor — {ex.Message}",
                     "TIA Portal must be in UI mode (withUI=true on connect).");
             }
+        }
+    }
+
+    public OpenInEditorResult OpenSourceObjectInEditor(string name, string category, string? plcName = null)
+    {
+        // Validate the category before any TIA call so an unknown category is a deterministic
+        // argument error even when no project is connected.
+        var normalized = NormalizeSourceObjectCategory(category);
+        lock (_gate)
+        {
+            var plc = PlcSoftwareResolver.Resolve(RequireProject(), plcName);
+            object target = normalized switch
+            {
+                SourceObjectCategory.Tags => FindTagTable(plc, name).Table,
+                SourceObjectCategory.Udt => FindUdt(plc, name).Type,
+                _ => BlockEnumerator.Find(plc.BlockGroup, name),
+            };
+            try
+            {
+                // PlcBlock, PlcTagTable, and PlcType all implement IShowable in V17
+                // (openness-v17-api-surface.md §3/§9).
+                var showable = target as Siemens.Engineering.IShowable;
+                if (showable == null)
+                    throw new AdapterException("EDITOR_NOT_AVAILABLE",
+                        $"Cannot open {normalized} '{name}' in editor — object does not support the editor interface.",
+                        "This Siemens Openness API feature may not be available in this version.");
+                showable.ShowInEditor();
+            }
+            catch (AdapterException) { throw; }
+            catch (Exception ex)
+            {
+                throw new AdapterException("EDITOR_NOT_AVAILABLE",
+                    $"Cannot open {normalized} '{name}' in editor — {ex.Message}",
+                    "TIA Portal must be in UI mode (withUI=true on connect).");
+            }
+            return new OpenInEditorResult
+            {
+                Name = name,
+                Category = normalized,
+                PlcName = plc.Name,
+                Opened = true,
+            };
         }
     }
 

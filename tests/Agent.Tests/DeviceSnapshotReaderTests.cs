@@ -369,6 +369,79 @@ public sealed class DeviceSnapshotReaderTests
             && message.Contains("Document root", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void ReadSurfacesManifestComponentsAsSourceObjects()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest(
+            Component("ob", "Main", "OB", "Blocks/Area/Main [OB1].xml", 1, "LAD", "Area/Main"),
+            Component("tags", "Inputs", "Tags", "Tags/LineA/Inputs.xml", null, null, "LineA/Inputs"),
+            Component("udt", "Motor", "UDT", "UDT/Models/Motor.xml", null, null, "Models/Motor"));
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.Equal(
+            new[] { "OB:Main", "Tags:Inputs", "UDT:Motor" },
+            snapshot.SourceObjects.Select(item => $"{item.Category}:{item.Name}"));
+        var main = snapshot.SourceObjects[0];
+        Assert.Equal(1, main.Number);
+        Assert.Equal("LAD", main.ProgrammingLanguage);
+        Assert.Equal("Area", main.GroupPath);
+        Assert.Equal("Blocks/Area/Main [OB1].xml", main.RelativePath);
+        Assert.Equal("Exported", main.Status);
+        var inputs = snapshot.SourceObjects[1];
+        Assert.Null(inputs.Number);
+        Assert.Equal("LineA", inputs.GroupPath);
+    }
+
+    [Fact]
+    public void ReadSourceObjectsFallsBackToTheBlockCrawlWithoutAManifest()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteSource("Blocks/Area/Main [OB1].xml", BlockXml("SW.Blocks.OB", "Main", 1, "LAD"));
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        var item = Assert.Single(snapshot.SourceObjects);
+        Assert.Equal("Main", item.Name);
+        Assert.Equal("OB", item.Category);
+        Assert.Equal(1, item.Number);
+        Assert.Equal("Blocks/Area/Main [OB1].xml", item.RelativePath);
+        Assert.Null(item.ContentHash);
+        Assert.Null(item.ModifiedDate);
+        Assert.Null(item.Status);
+    }
+
+    [Fact]
+    public void ReadSourceObjectsSkipsFailedComponentsWithoutAnExportedFile()
+    {
+        using var fixture = SnapshotFixture.Create();
+        File.WriteAllText(
+            Path.Combine(fixture.Context.SourceRoot, "metadata.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                components = new object[]
+                {
+                    new
+                    {
+                        id = "failed",
+                        name = "Broken",
+                        sourcePath = "Broken",
+                        category = "FB",
+                        status = "Failed",
+                        exportedFile = (string?)null,
+                        number = (int?)5,
+                        programmingLanguage = (string?)"SCL",
+                    },
+                },
+            }));
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.Empty(snapshot.SourceObjects);
+    }
+
     private static object Component(
         string id,
         string name,

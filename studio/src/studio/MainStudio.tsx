@@ -3,9 +3,6 @@ import {
   AlertCircle,
   ArrowDownToLine,
   Boxes,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
   CircleDot,
   CircuitBoard,
   ClipboardList,
@@ -13,7 +10,6 @@ import {
   Code2,
   Cpu,
   Database,
-  FileCode2,
   GitBranch,
   GitMerge,
   KeyRound,
@@ -27,13 +23,11 @@ import {
   Plus,
   RefreshCw,
   RotateCw,
-  Search,
   Server,
   Settings2,
   ShieldCheck,
   Sparkles,
   Trash2,
-  UploadCloud,
   Wrench,
   X,
 } from 'lucide-react'
@@ -63,6 +57,8 @@ import {
 } from '@/studio/deviceSnapshot'
 import * as api from '@/api/client'
 import ChatWorkspace from '@/studio/chat/ChatWorkspace'
+import PlcSourcePanel from '@/studio/PlcSourcePanel'
+import type { SourceChatContext } from '@/studio/plcSourceState'
 import AppAssistantPanel from '@/studio/appAssistant/AppAssistantPanel'
 import SessionDock from '@/studio/chat/SessionDock'
 import NodeEdgesView from '@/studio/NodeEdgesView'
@@ -574,10 +570,7 @@ export default function MainStudio() {
   const [apiBalance, setApiBalance] = useState<api.DeepSeekBalance | null>(null)
   const [apiBalanceBusy, setApiBalanceBusy] = useState(false)
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
-  const [relativePath, setRelativePath] = useState('')
-  const [lastImport, setLastImport] = useState<api.ImportModifiedResult | null>(null)
-  const [blockIndexExpanded, setBlockIndexExpanded] = useState(false)
-  const [blockFilter, setBlockFilter] = useState('')
+  const [chatSourceContext, setChatSourceContext] = useState<SourceChatContext | null>(null)
   const [versionControlSelection, setVersionControlSelection] = useState<unknown>(null)
   const [appAssistantOpen, setAppAssistantOpen] = useState(false)
   const [appAssistantRuntime, setAppAssistantRuntime] = useState<api.AppAssistantRuntimeSnapshot | null>(null)
@@ -588,7 +581,6 @@ export default function MainStudio() {
 
   useEffect(() => {
     setVersionControlSelection(null)
-    setLastImport(null)
   }, [selection.workbenchId, selection.worktreeId, selection.deviceId])
 
   useEffect(() => {
@@ -675,14 +667,6 @@ export default function MainStudio() {
   const displayedSourceObjectCount = deviceView
     ? sourceObjectCount
     : deviceSelection?.cachedMetadata?.sourceObjectCount ?? 0
-  const filteredBlocks = useMemo(() => {
-    const query = blockFilter.trim().toLowerCase()
-    if (!query) return blocks
-    return blocks.filter(block =>
-      block.name.toLowerCase().includes(query)
-      || block.relativePath.toLowerCase().includes(query)
-      || `${block.blockType}${block.number ?? ''}`.toLowerCase().includes(query))
-  }, [blocks, blockFilter])
   const activeKnowledge = deviceView?.knowledgeState ?? 'missing'
   const isBrandNewDevice = Boolean(selection.deviceId)
     && deviceView?.snapshot.deviceId === selection.deviceId
@@ -1545,42 +1529,6 @@ export default function MainStudio() {
     }
   }
 
-  const prepareEdit = async () => {
-    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !relativePath.trim()) return
-    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
-    setOperation('prepare-edit')
-    try {
-      await api.prepareDeviceEdit(context.workbenchId, context.worktreeId, context.deviceId, relativePath.trim())
-      await reloadDeviceSnapshot(context)
-      toast.success('PLC source prepared for editing in this worktree.')
-    } catch (error) {
-      showErrorToast(displayError(error))
-    } finally {
-      setOperation(null)
-    }
-  }
-
-  const importSource = async () => {
-    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !relativePath.trim()) return
-    const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
-    setOperation('import-source')
-    const op = beginOperation('import-source', 'Importing PLC source...')
-    try {
-      const result = await api.importDeviceSource(context.workbenchId, context.worktreeId, context.deviceId, relativePath.trim(), op.id)
-      setLastImport(result)
-      await reloadDeviceSnapshot(context)
-      if (result.importSucceeded && result.compileState.toLowerCase().includes('success')) {
-        toast.success('PLC source imported and compiled; source file retained')
-      } else {
-        toast.warning(result.error || `Compile state: ${result.compileState}`)
-      }
-    } catch (error) {
-      showErrorToast(displayError(error))
-    } finally {
-      setOperation(null)
-    }
-  }
-
   const mergeIntoMaster = async (targetContext?: {
     workbench: api.Workbench
     worktree: api.WorkbenchRegistration
@@ -2205,15 +2153,6 @@ export default function MainStudio() {
                       </section>
                     </div>
 
-                    {lastImport && (
-                      <section className={`rounded-lg border p-4 ${lastImport.importSucceeded ? 'bg-emerald-500/5' : 'bg-red-500/5'}`} style={{ borderColor: 'var(--border)' }}>
-                        <div className="flex items-center gap-2 text-[10px] font-medium">
-                          {lastImport.importSucceeded ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <AlertCircle className="h-4 w-4 text-red-500" />}
-                          Latest import · {lastImport.relativePath}
-                        </div>
-                        <div className="mt-1 text-[9px] text-muted-foreground">Compile: {lastImport.compileState}. Source retained in this worktree.</div>
-                      </section>
-                    )}
                   </div>
                 )}
 
@@ -2229,98 +2168,34 @@ export default function MainStudio() {
                       onDraftChange={(sessionId, draft) => setChatTabs(previous => setDraft(previous, sessionId, draft))}
                       onStop={stopChatGeneration}
                       onContinue={sessionId => void continueChat(sessionId)}
+                      sourceContext={chatSourceContext}
+                      onClearSourceContext={() => setChatSourceContext(null)}
                     />
                   </div>
                 )}
 
-                {activeTab === 'source' && (
-                  <div className="mx-auto max-w-6xl space-y-4 p-5">
-                    <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-                      <div className="flex items-start gap-3">
-                        <FileCode2 className="mt-0.5 h-5 w-5 text-chart-3" />
-                        <div className="flex-1">
-                          <h2 className="text-sm font-semibold">PLC source object</h2>
-                          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                            Enter a device-relative XML path. Preparing validates the source object for editing in this worktree. Import sends the selected source to TIA and retains it afterward.
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-4 flex gap-2">
-                        <input
-                          className="field-input flex-1 font-mono"
-                          value={relativePath}
-                          onChange={event => setRelativePath(event.target.value)}
-                          placeholder="Blocks/Main [OB1].xml"
-                        />
-                        <button className="secondary-button" disabled={!relativePath.trim() || Boolean(operation)} onClick={() => void prepareEdit()}>
-                          <Code2 className="h-3.5 w-3.5" /> Prepare source
-                        </button>
-                        <button className="primary-button" disabled={!relativePath.trim() || Boolean(operation)} onClick={() => void importSource()}>
-                          <UploadCloud className="h-3.5 w-3.5" /> Import & compile
-                        </button>
-                      </div>
-                    </section>
-
-                    <section className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
-                      <button
-                        className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-accent/40"
-                        onClick={() => setBlockIndexExpanded(previous => !previous)}
-                      >
-                        {blockIndexExpanded
-                          ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                          : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
-                        <span className="text-[10px] font-semibold">Persisted PLC block index</span>
-                        <span className="ml-auto text-[9px] text-muted-foreground">{blocks.length} blocks</span>
-                      </button>
-                      {deviceView?.diagnostics.map(diagnostic => (
-                        <div
-                          key={diagnostic}
-                          className="flex items-start gap-2 border-b bg-amber-500/8 px-4 py-2 text-[9px] text-amber-700 dark:text-amber-300"
-                          style={{ borderColor: 'var(--border)' }}
-                        >
-                          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                          <span className="break-all">{diagnostic}</span>
-                        </div>
-                      ))}
-                      {blockIndexExpanded && (
-                        blocks.length === 0 ? (
-                          <div className="p-8 text-center text-[10px] text-muted-foreground">No persisted block index.</div>
-                        ) : (
-                          <>
-                            <div className="border-b px-4 py-2" style={{ borderColor: 'var(--border)' }}>
-                              <div className="relative">
-                                <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                                <input
-                                  className="field-input w-full pl-7"
-                                  value={blockFilter}
-                                  onChange={event => setBlockFilter(event.target.value)}
-                                  placeholder="Filter by name, path, or type…"
-                                />
-                              </div>
-                            </div>
-                            <div className="max-h-[420px] divide-y overflow-y-auto" style={{ borderColor: 'var(--border)' }}>
-                              {filteredBlocks.length === 0 ? (
-                                <div className="p-8 text-center text-[10px] text-muted-foreground">No blocks match this filter.</div>
-                              ) : (
-                                filteredBlocks.map(block => (
-                                  <button
-                                    key={`${block.blockType}:${block.name}:${block.number}`}
-                                    className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
-                                    onClick={() => setRelativePath(block.relativePath)}
-                                  >
-                                    <FileCode2 className="h-3.5 w-3.5 text-muted-foreground" />
-                                    <span className="min-w-0 flex-1 truncate text-[10px]">{block.name}</span>
-                                    <span className="font-mono text-[9px] text-muted-foreground">{block.blockType}{block.number}</span>
-                                    <span className="text-[9px] text-muted-foreground">{block.programmingLanguage}</span>
-                                  </button>
-                                ))
-                              )}
-                            </div>
-                          </>
-                        )
-                      )}
-                    </section>
-                  </div>
+                {activeTab === 'source' && selection.workbenchId && selection.worktreeId && selection.deviceId && (
+                  <PlcSourcePanel
+                    workbenchId={selection.workbenchId}
+                    worktreeId={selection.worktreeId}
+                    deviceId={selection.deviceId}
+                    deviceView={deviceView}
+                    onChatWithAgent={item => {
+                      setChatSourceContext({
+                        name: item.name,
+                        category: item.category,
+                        number: item.number,
+                        relativePath: item.relativePath,
+                        plcName: deviceName ?? '',
+                      })
+                      setActiveTab('chat')
+                    }}
+                    onSnapshotReload={() => void reloadDeviceSnapshot({
+                      workbenchId: selection.workbenchId!,
+                      worktreeId: selection.worktreeId!,
+                      deviceId: selection.deviceId!,
+                    })}
+                  />
                 )}
 
                 {activeTab === 'knowledge' && (

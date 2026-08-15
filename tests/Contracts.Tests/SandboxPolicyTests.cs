@@ -76,7 +76,8 @@ public sealed class SandboxPolicyTests
         string[] currentTools =
         {
             "check_environment", "list_sessions", "connect", "disconnect", "save_project", "get_project_info",
-            "list_blocks", "export_block", "export_all_blocks", "export_hardware_configuration", "export_tag_tables", "export_udts",
+            "list_blocks", "export_block", "export_source_object", "export_all_blocks", "export_hardware_configuration", "export_tag_tables", "export_udts",
+            "open_block_in_editor", "open_source_object_in_editor",
             "import_block", "compile_block", "compile_plc",
             "import_hardware_configuration", "create_block", "delete_block",
             "ingest_source", "update_components", "query", "get_schema", "get_block", "get_network",

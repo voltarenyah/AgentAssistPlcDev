@@ -120,6 +120,8 @@ public sealed class WorkbenchCoordinator
         new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, WorktreeMetadata> knownWorktrees =
         new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SourceObjectComparisonEntry> sourceObjectComparisons =
+        new(StringComparer.Ordinal);
 
     public WorkbenchCoordinator(
         IMcpToolCaller engineering,
@@ -3159,6 +3161,255 @@ public sealed class WorkbenchCoordinator
             ?? throw new WorkbenchLifecycleException("MASTER_HEAD_UNAVAILABLE", "The master worktree has no Git HEAD.");
     }
 
+    /// <summary>
+    /// Open one PLC source object (block, tag table, or UDT) in the TIA Portal editor window.
+    /// Ensures the worktree's project is the active session first (opening it with UI when
+    /// needed), then shows the object's editor.
+    /// </summary>
+    public async Task<OpenInEditorResult> OpenSourceObjectInTiaAsync(
+        DeviceContext device,
+        string relativePath,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var identity = ResolveSourceObjectIdentity(device, relativePath);
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await EnsureActiveProjectMatchesWorktreeAsync(device, token, progress).ConfigureAwait(false);
+            progress?.Report($"Opening {identity.Category} '{identity.Name}' in the TIA editor...");
+            return await engineering.CallAsync<OpenInEditorResult>(
+                "open_source_object_in_editor",
+                new { name = identity.Name, category = identity.Category, plcName = identity.PlcName },
+                token).ConfigureAwait(false);
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+    }
+
+    /// <summary>
+    /// Device-scoped Compare with TIA for one source object: ensures the worktree project is
+    /// active (opening it when needed), exports only that object into the device staging root,
+    /// and computes a normalized line diff (XmlCompare rules — Created timestamps and CR
+    /// stripped) against the local source file. The comparison stays in memory so
+    /// <see cref="AcceptTiaSourceObjectAsync"/> / <see cref="PushSourceObjectToTiaAsync"/> can
+    /// act on the staged file afterwards.
+    /// </summary>
+    public async Task<SourceObjectComparison> CompareSourceObjectWithTiaAsync(
+        DeviceContext device,
+        string relativePath,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var identity = ResolveSourceObjectIdentity(device, relativePath);
+        var normalized = relativePath.Replace('\\', '/');
+        var localFile = WorkbenchPaths.ResolveRelative(device.SourceRoot, normalized);
+        if (!File.Exists(localFile))
+        {
+            throw new WorkbenchLifecycleException(
+                "LOCAL_SOURCE_MISSING",
+                $"The local source '{normalized}' is missing.");
+        }
+
+        string stagedRelative;
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await EnsureActiveProjectMatchesWorktreeAsync(device, token, progress).ConfigureAwait(false);
+            progress?.Report($"Exporting {identity.Category} '{identity.Name}' from TIA...");
+            var export = await engineering.CallAsync<ExportResult>(
+                "export_source_object",
+                new
+                {
+                    name = identity.Name,
+                    category = identity.Category,
+                    outputDir = device.StagingRoot,
+                    plcName = identity.PlcName,
+                },
+                token).ConfigureAwait(false);
+            if (!export.Success)
+            {
+                throw new WorkbenchLifecycleException(
+                    "TIA_SOURCE_EXPORT_FAILED",
+                    export.Error ?? $"TIA could not export {identity.Category} '{identity.Name}'.");
+            }
+
+            // The staged file lands where TIA's current identity puts it — usually the same
+            // relative path, but a renamed/renumbered object differs; the staging manifest is
+            // the authoritative record of where the export actually went.
+            stagedRelative = DeviceSnapshotReader.ReadManifestSourceObjects(device.StagingRoot)
+                .FirstOrDefault(item =>
+                    string.Equals(item.Name, identity.Name, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(item.Category, identity.Category, StringComparison.OrdinalIgnoreCase))
+                ?.RelativePath ?? normalized;
+            if (!File.Exists(WorkbenchPaths.ResolveRelative(device.StagingRoot, stagedRelative)))
+            {
+                throw new WorkbenchLifecycleException(
+                    "TIA_SOURCE_MISSING",
+                    $"The staged TIA export of '{normalized}' is missing.");
+            }
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+
+        var stagedFile = WorkbenchPaths.ResolveRelative(device.StagingRoot, stagedRelative);
+        var localText = XmlCompare.Normalize(File.ReadAllText(localFile));
+        var tiaText = XmlCompare.Normalize(File.ReadAllText(stagedFile));
+        var comparisonId = Guid.NewGuid().ToString("N");
+        sourceObjectComparisons[comparisonId] = new SourceObjectComparisonEntry(
+            device, normalized, stagedRelative, identity.Name, identity.Category, identity.PlcName);
+        return new SourceObjectComparison(
+            comparisonId,
+            normalized,
+            identity.Name,
+            identity.Category,
+            string.Equals(localText, tiaText, StringComparison.Ordinal),
+            TextDiffer.Diff(localText, tiaText),
+            HashText(localText),
+            HashText(tiaText),
+            []);
+    }
+
+    /// <summary>
+    /// Overwrite the local source file with the staged TIA version of a comparison
+    /// (TIA → local). Marks the device knowledge stale. Nothing is committed — the change is
+    /// reviewed and committed from Version control.
+    /// </summary>
+    public Task<SourceObjectSyncResult> AcceptTiaSourceObjectAsync(
+        DeviceContext device,
+        string comparisonId,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var entry = RequireSourceObjectComparison(device, comparisonId);
+        var staged = WorkbenchPaths.ResolveRelative(device.StagingRoot, entry.StagedRelativePath);
+        if (!File.Exists(staged))
+        {
+            throw new WorkbenchLifecycleException(
+                "TIA_SOURCE_MISSING",
+                $"The staged TIA source '{entry.StagedRelativePath}' is missing. Run the comparison again.");
+        }
+
+        var destination = WorkbenchPaths.ResolveRelative(device.SourceRoot, entry.RelativePath);
+        CopyFileAtomically(staged, destination);
+        var metadata = ReadDevice(device);
+        WriteDevice(device, metadata with
+        {
+            Knowledge = metadata.Knowledge with { Stale = true, BaselineStale = true },
+        });
+        progress?.Report($"Accepted TIA source {entry.RelativePath}.");
+        return Task.FromResult(new SourceObjectSyncResult(comparisonId, entry.RelativePath, true, null));
+    }
+
+    /// <summary>
+    /// Import the local source file of a comparison into TIA (local → TIA overwrite) via
+    /// import_source_object. A failure (for example the object is open in a TIA editor) is
+    /// reported as an unsuccessful result, not an exception.
+    /// </summary>
+    public async Task<SourceObjectSyncResult> PushSourceObjectToTiaAsync(
+        DeviceContext device,
+        string comparisonId,
+        CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var entry = RequireSourceObjectComparison(device, comparisonId);
+        var file = WorkbenchPaths.ResolveRelative(device.SourceRoot, entry.RelativePath);
+        if (!File.Exists(file))
+        {
+            return new SourceObjectSyncResult(comparisonId, entry.RelativePath, false, "The local source file is missing.");
+        }
+
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await EnsureActiveProjectMatchesWorktreeAsync(device, token, progress).ConfigureAwait(false);
+            progress?.Report($"Importing {entry.RelativePath} into TIA...");
+            try
+            {
+                await engineering.CallAsync<object>(
+                    "import_source_object",
+                    new { relativePath = entry.RelativePath, xmlFilePath = file, plcName = entry.PlcName },
+                    token).ConfigureAwait(false);
+                return new SourceObjectSyncResult(comparisonId, entry.RelativePath, true, null);
+            }
+            catch (ToolCallException exception)
+            {
+                return new SourceObjectSyncResult(comparisonId, entry.RelativePath, false, exception.Message);
+            }
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+    }
+
+    private SourceObjectComparisonEntry RequireSourceObjectComparison(DeviceContext device, string comparisonId) =>
+        sourceObjectComparisons.TryGetValue(comparisonId, out var entry)
+        && entry.Device.WorkbenchId == device.WorkbenchId
+        && entry.Device.WorktreeId == device.WorktreeId
+        && entry.Device.DeviceId == device.DeviceId
+            ? entry
+            : throw new WorkbenchLifecycleException(
+                "COMPARISON_NOT_FOUND",
+                $"Source comparison '{comparisonId}' was not found for this device. Run the comparison again.");
+
+    /// <summary>Name/category/plcName of one source object: from the device export manifest when
+    /// present, else derived from the path ("Tags/..." and "UDT/..." by folder, blocks by the
+    /// "Name [OB1]" filename suffix).</summary>
+    private SourceObjectIdentity ResolveSourceObjectIdentity(DeviceContext device, string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        var plcName = ReadDevice(device).PlcName;
+        var manifestItem = DeviceSnapshotReader.ReadManifestSourceObjects(device.SourceRoot)
+            .FirstOrDefault(item =>
+                string.Equals(item.RelativePath, normalized, StringComparison.OrdinalIgnoreCase));
+        if (manifestItem is not null)
+        {
+            return new SourceObjectIdentity(manifestItem.Name, manifestItem.Category, plcName);
+        }
+
+        var fileName = Path.GetFileNameWithoutExtension(normalized);
+        var firstSegment = normalized.Split('/')[0];
+        if (firstSegment.Equals("Tags", StringComparison.OrdinalIgnoreCase))
+        {
+            return new SourceObjectIdentity(fileName, "Tags", plcName);
+        }
+
+        if (firstSegment.Equals("UDT", StringComparison.OrdinalIgnoreCase))
+        {
+            return new SourceObjectIdentity(fileName, "UDT", plcName);
+        }
+
+        var suffixStart = fileName.LastIndexOf(" [", StringComparison.Ordinal);
+        if (suffixStart >= 0 && fileName.EndsWith(']'))
+        {
+            var suffix = fileName[(suffixStart + 2)..^1];
+            var letters = new string(suffix.TakeWhile(char.IsLetter).ToArray());
+            if (SourceObjectCategory.Normalize(letters) is { } category)
+            {
+                return new SourceObjectIdentity(fileName[..suffixStart], category, plcName);
+            }
+        }
+
+        throw new WorkbenchLifecycleException(
+            "SOURCE_OBJECT_UNKNOWN",
+            $"The source '{relativePath}' is not in the export manifest and its category cannot be derived from the path.");
+    }
+
+    private sealed record SourceObjectIdentity(string Name, string Category, string? PlcName);
+
+    private sealed record SourceObjectComparisonEntry(
+        DeviceContext Device,
+        string RelativePath,
+        string StagedRelativePath,
+        string Name,
+        string Category,
+        string? PlcName);
+
     private static string ExtractSourceRelativePath(string repositoryPath)
     {
         var normalized = repositoryPath.Replace('\\', '/');
@@ -3267,6 +3518,11 @@ public sealed class WorkbenchCoordinator
 
     private static string HashFile(string path) =>
         Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+    /// <summary>Hash of an already-normalized compare text — matches the Same verdict, unlike a
+    /// raw file hash (raw files differ by the stripped &lt;Created&gt; export timestamp).</summary>
+    private static string HashText(string text) =>
+        Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
 
     private IReadOnlyList<DeviceMetadata> LoadInheritedDevices(
         string worktreePath,

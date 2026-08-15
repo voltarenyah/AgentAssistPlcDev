@@ -41,6 +41,12 @@ public interface IEngineeringPlatform : IDisposable
     PlcChecksumInfo[] GetPlcChecksums(string? plcName = null);
 
     ExportResult ExportBlock(string blockName, string outputDir);
+
+    /// <summary>Export exactly one block (category OB/FB/FC/DB), tag table (Tags), or UDT —
+    /// same delete-before-export rule and single-record metadata.json upsert as the per-kind
+    /// exports. Category values are canonicalized by <see cref="SourceObjectCategory"/>.</summary>
+    ExportResult ExportSourceObject(string name, string category, string outputDir, string? plcName = null);
+
     ExportResult[] ExportAllBlocks(string outputDir, IProgress<EngineeringProgress>? progress = null);
 
     /// <summary>Tag tables / UDTs export into Tags/ and UDT/ subfolders and upsert one metadata.json record per object (§13 step 2).</summary>
@@ -105,4 +111,8 @@ public interface IEngineeringPlatform : IDisposable
 
     /// <summary>Open a block in the TIA Portal editor window. Requires a UI-connected session.</summary>
     void OpenBlockInEditor(string blockName);
+
+    /// <summary>Open a block (category OB/FB/FC/DB), tag table (Tags), or UDT in the TIA Portal
+    /// editor window. Requires a UI-connected session.</summary>
+    OpenInEditorResult OpenSourceObjectInEditor(string name, string category, string? plcName = null);
 }

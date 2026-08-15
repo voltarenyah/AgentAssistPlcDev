@@ -79,6 +79,7 @@ public sealed class ArchiveProjectSandboxTests : IDisposable
         public BlockInfo[] ListBlocks(string? plcName) => Array.Empty<BlockInfo>();
         public PlcChecksumInfo[] GetPlcChecksums(string? plcName = null) => Array.Empty<PlcChecksumInfo>();
         public ExportResult ExportBlock(string blockName, string outputDir) => new();
+        public ExportResult ExportSourceObject(string name, string category, string outputDir, string? plcName = null) => new();
         public ExportResult[] ExportAllBlocks(string outputDir, IProgress<EngineeringProgress>? progress = null) => Array.Empty<ExportResult>();
         public ExportResult[] ExportTagTables(string outputDir, string? plcName, IProgress<EngineeringProgress>? progress = null) => Array.Empty<ExportResult>();
         public ExportResult[] ExportUdts(string outputDir, string? plcName, IProgress<EngineeringProgress>? progress = null) => Array.Empty<ExportResult>();
@@ -96,6 +97,7 @@ public sealed class ArchiveProjectSandboxTests : IDisposable
         public CompileResult CompileBlock(string blockName, string? plcName = null) => new();
         public CompileResult CompilePlc(string? plcName = null) => new();
         public void OpenBlockInEditor(string blockName) { }
+        public OpenInEditorResult OpenSourceObjectInEditor(string name, string category, string? plcName = null) => new();
         public void Dispose() { }
     }
 }

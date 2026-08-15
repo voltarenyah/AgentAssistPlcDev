@@ -39,6 +39,7 @@ public sealed class SandboxPolicy
             ["list_blocks"] = SandboxTier.Read,
             ["get_plc_checksums"] = SandboxTier.Read,
             ["export_block"] = SandboxTier.Read,
+            ["export_source_object"] = SandboxTier.Read,
             ["export_all_blocks"] = SandboxTier.Read,
             ["export_tag_tables"] = SandboxTier.Read,
             ["export_udts"] = SandboxTier.Read,
@@ -54,6 +55,7 @@ public sealed class SandboxPolicy
             ["compile_block"] = SandboxTier.Write,
             ["compile_plc"] = SandboxTier.Write,
             ["open_block_in_editor"] = SandboxTier.Write,
+            ["open_source_object_in_editor"] = SandboxTier.Write,
             // Engineering — persist/overwrite user work.
             ["save_project"] = SandboxTier.Destructive,
             ["save_project_as"] = SandboxTier.Destructive,

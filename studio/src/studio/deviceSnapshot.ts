@@ -4,6 +4,7 @@ import type {
   DeviceSnapshot,
   KnowledgeVisualState,
   OfflineBlockInfo,
+  SourceObjectInfo,
 } from '@/api/client'
 
 export type DeviceMetadata = {
@@ -63,6 +64,7 @@ export type DeviceViewState = {
   knowledgeState: KnowledgeVisualState
   knowledgeUpdatedAt: string | null
   blocks: OfflineBlockInfo[]
+  sourceObjects: SourceObjectInfo[]
   sourceObjectCount: number
   diagnostics: string[]
 }
@@ -85,6 +87,7 @@ export const applyDeviceSnapshot = (
   knowledgeState: snapshot.knowledge.state,
   knowledgeUpdatedAt: snapshot.knowledge.updatedAt,
   blocks: snapshot.blocks,
+  sourceObjects: snapshot.sourceObjects ?? [],
   sourceObjectCount: snapshot.sourceObjectCount,
   diagnostics: snapshot.diagnostics,
 })

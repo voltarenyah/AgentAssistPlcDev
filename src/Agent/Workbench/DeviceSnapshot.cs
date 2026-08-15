@@ -32,6 +32,22 @@ public sealed record OfflineBlockInfo(
     string RelativePath,
     bool Modified);
 
+/// <summary>One exported PLC source object (block OB/FB/FC/DB, tag table, or UDT) from the
+/// device manifest's "components" section. Falls back to block-crawl data (null metadata fields)
+/// when the manifest is missing or legacy.</summary>
+public sealed record SourceObjectInfo(
+    string Id,
+    string Name,
+    int? Number,
+    string Category,
+    string? ProgrammingLanguage,
+    string? GroupPath,
+    string RelativePath,
+    string? ContentHash,
+    bool? IsKnowHowProtected,
+    DateTimeOffset? ModifiedDate,
+    string? Status);
+
 public sealed record DeviceSnapshot(
     string WorkbenchId,
     string WorktreeId,
@@ -43,6 +59,7 @@ public sealed record DeviceSnapshot(
     string? SourceProjectPath,
     DeviceKnowledgeSnapshot Knowledge,
     IReadOnlyList<OfflineBlockInfo> Blocks,
+    IReadOnlyList<SourceObjectInfo> SourceObjects,
     int SourceObjectCount,
     IReadOnlyList<string> Diagnostics,
     DeviceExportMetadata? Device);
@@ -53,6 +70,25 @@ public sealed class DeviceSnapshotReader
     {
         var diagnostics = new List<string>();
         var blocks = ReadBlocks(context, diagnostics);
+        var sourceObjects = ReadManifestSourceObjects(context.SourceRoot);
+        if (sourceObjects.Count == 0)
+        {
+            // No (or legacy) manifest: degrade to the block crawl so the source browser still
+            // lists blocks — without manifest-only metadata (hashes, timestamps).
+            sourceObjects = blocks.Select(block => new SourceObjectInfo(
+                block.Id,
+                block.Name,
+                block.Number,
+                block.BlockType,
+                block.ProgrammingLanguage,
+                block.GroupPath,
+                block.RelativePath,
+                null,
+                null,
+                null,
+                null)).ToArray();
+        }
+
         var state = !File.Exists(context.KnowledgeDbPath)
             ? "missing"
             : metadata.Knowledge.Stale || metadata.Knowledge.BaselineStale
@@ -70,6 +106,7 @@ public sealed class DeviceSnapshotReader
             ReadSourceProjectPath(context),
             new DeviceKnowledgeSnapshot(state, metadata.Knowledge.UpdatedAt),
             blocks,
+            sourceObjects,
             blocks.Count,
             diagnostics,
             ReadDeviceExportMetadata(context));
@@ -120,6 +157,96 @@ public sealed class DeviceSnapshotReader
             && DateTimeOffset.TryParse(value.GetString(), out var date)
             ? date
             : null;
+
+    /// <summary>Manifest "components" section — tolerant read like the device section: a missing
+    /// or legacy manifest, missing property, or unparseable JSON all degrade to an empty list and
+    /// callers fall back to the block crawl. Public so the workbench coordinator resolves
+    /// source-object identities (name/category per relativePath) from the same data.</summary>
+    public static IReadOnlyList<SourceObjectInfo> ReadManifestSourceObjects(string sourceRoot)
+    {
+        var manifestPath = Path.Combine(sourceRoot, "metadata.json");
+        if (!File.Exists(manifestPath))
+        {
+            return [];
+        }
+
+        try
+        {
+            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (manifest.RootElement.ValueKind != JsonValueKind.Object
+                || !manifest.RootElement.TryGetProperty("components", out var components)
+                || components.ValueKind != JsonValueKind.Array)
+            {
+                return [];
+            }
+
+            var objects = new List<SourceObjectInfo>();
+            foreach (var component in components.EnumerateArray())
+            {
+                if (component.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var exportedFile = ReadString(component, "exportedFile");
+                var name = ReadString(component, "name");
+                var category = ReadString(component, "category");
+                if (string.IsNullOrWhiteSpace(exportedFile)
+                    || string.IsNullOrWhiteSpace(name)
+                    || string.IsNullOrWhiteSpace(category))
+                {
+                    // Failed exports carry no file and are not openable/comparable objects.
+                    continue;
+                }
+
+                var relativePath = exportedFile.Replace('\\', '/');
+                objects.Add(new SourceObjectInfo(
+                    ReadString(component, "id") ?? $"source:{relativePath}",
+                    name,
+                    ReadInt(component, "number"),
+                    category,
+                    ReadString(component, "programmingLanguage"),
+                    SourceGroupPath(relativePath),
+                    relativePath,
+                    ReadString(component, "contentHash"),
+                    ReadBool(component, "isKnowHowProtected"),
+                    ReadDate(component, "modifiedDate"),
+                    ReadString(component, "status")));
+            }
+
+            return objects
+                .OrderBy(item => item.Category, StringComparer.Ordinal)
+                .ThenBy(item => item.Number ?? int.MaxValue)
+                .ThenBy(item => item.Name, StringComparer.Ordinal)
+                .ThenBy(item => item.RelativePath, StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is JsonException or IOException)
+        {
+            return [];
+        }
+    }
+
+    private static int? ReadInt(JsonElement owner, string property) =>
+        owner.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt32(out var number)
+            ? number
+            : null;
+
+    private static bool? ReadBool(JsonElement owner, string property)
+    {
+        if (!owner.TryGetProperty(property, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => null,
+        };
+    }
 
     private static string? ReadSourceProjectPath(DeviceContext context)
     {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Ban, Loader2, MessageSquare, Send, Square, Wrench, XCircle } from 'lucide-react'
+import { Ban, FileCode2, Loader2, MessageSquare, Send, Square, Wrench, X, XCircle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import * as api from '@/api/client'
@@ -7,6 +7,7 @@ import type { ChatMessage, ChatToolStats, ChatUsage } from '@/api/client'
 import type { ChatTabsState } from './chatTabState'
 import { parseProgressContent, progressTitle } from './progressDisplay'
 import { contextLabel, contextPercentage, toolCallStats } from './usageDisplay'
+import { sourceContextPrefix, type SourceChatContext } from '../plcSourceState'
 
 type Props = {
   tabs: ChatTabsState
@@ -18,6 +19,9 @@ type Props = {
   onDraftChange?: (sessionId: string, draft: string) => void
   onStop: () => void
   onContinue: (sessionId: string) => void
+  /** Source object carried over from the PLC source browser's "Chat with Agent". */
+  sourceContext?: SourceChatContext | null
+  onClearSourceContext?: () => void
 }
 
 const roleLabel = (message: ChatMessage) =>
@@ -54,6 +58,8 @@ function ChatComposer({
   draft,
   onDraftChange,
   onStop,
+  sourceContext,
+  onClearSourceContext,
 }: {
   sessionId: string
   disabled: boolean
@@ -68,6 +74,8 @@ function ChatComposer({
   draft?: string
   onDraftChange?: (sessionId: string, draft: string) => void
   onStop: () => void
+  sourceContext?: SourceChatContext | null
+  onClearSourceContext?: () => void
 }) {
   const [localDraft, setLocalDraft] = useState(draft ?? '')
   const knownModel = Boolean(settings && MODEL_OPTIONS.some(option => option.value === settings.model))
@@ -89,10 +97,33 @@ function ChatComposer({
         const data = new FormData(event.currentTarget)
         const message = data.get('message')?.toString().trim() ?? ''
         if (!message) return
-        onSend(sessionId, message)
+        onSend(sessionId, sourceContext ? `${sourceContextPrefix(sourceContext)}\n\n${message}` : message)
         updateDraft('')
+        if (sourceContext) onClearSourceContext?.()
       }}
     >
+      {sourceContext && (
+        <div
+          className="mb-2 flex items-center gap-2 rounded-md border bg-accent/40 px-2 py-1 text-[9px]"
+          style={{ borderColor: 'var(--border)' }}
+          data-chat-source-context
+        >
+          <FileCode2 className="h-3 w-3 shrink-0 text-chart-3" />
+          <span className="min-w-0 flex-1 truncate">
+            Context: {sourceContext.category} &quot;{sourceContext.name}&quot;
+            {sourceContext.number != null ? ` (${sourceContext.category}${sourceContext.number})` : ''}
+            {' · '}{sourceContext.relativePath}
+          </span>
+          <button
+            type="button"
+            className="icon-button shrink-0"
+            aria-label="Clear source context"
+            onClick={onClearSourceContext}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       <div className="flex gap-2">
         <textarea
           name="message"
@@ -328,7 +359,7 @@ function MessageList({ messages, busy }: { messages: ChatMessage[], busy: boolea
   )
 }
 
-export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onFocus, onSend, onDraftChange, onStop, onContinue }: Props) {
+export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onFocus, onSend, onDraftChange, onStop, onContinue, sourceContext, onClearSourceContext }: Props) {
   const [settings, setSettings] = useState<api.ChatSettings | null>(null)
   const [settingsState, setSettingsState] = useState<SettingsSaveState>('idle')
   const settingsRef = useRef<api.ChatSettings | null>(null)
@@ -458,6 +489,8 @@ export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onF
                 draft={tab.draft}
                 onDraftChange={onDraftChange}
                 onStop={onStop}
+                sourceContext={sourceContext}
+                onClearSourceContext={onClearSourceContext}
               />
             </div>
           </section>

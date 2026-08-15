@@ -1280,6 +1280,38 @@ public static class WorkbenchEndpoints
                 progress => c.ImportModifiedAsync(
                     s.Device(workbenchId, worktreeId, device).Context, r.RelativePath, ct, progress),
                 "Source imported.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/open-in-tia", async (
+            string workbenchId, string worktreeId, string device, SourcePathApiRequest r,
+            WorkbenchApiState s, WorkbenchCoordinator c, OperationStatusRegistry operations,
+            HttpContext http, CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "open-source-in-tia", "Opening source in TIA Portal...",
+                progress => c.OpenSourceObjectInTiaAsync(
+                    s.Device(workbenchId, worktreeId, device).Context, r.RelativePath, ct, progress),
+                "Source opened in TIA Portal.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/compare-tia", async (
+            string workbenchId, string worktreeId, string device, SourcePathApiRequest r,
+            WorkbenchApiState s, WorkbenchCoordinator c, OperationStatusRegistry operations,
+            HttpContext http, CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "compare-source-tia", "Comparing source with TIA...",
+                progress => c.CompareSourceObjectWithTiaAsync(
+                    s.Device(workbenchId, worktreeId, device).Context, r.RelativePath, ct, progress),
+                "Source comparison completed.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/comparisons/{comparisonId}/accept", async (
+            string workbenchId, string worktreeId, string device, string comparisonId,
+            WorkbenchApiState s, WorkbenchCoordinator c, OperationStatusRegistry operations,
+            HttpContext http, CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "accept-tia-source", "Applying TIA source to local file...",
+                progress => c.AcceptTiaSourceObjectAsync(
+                    s.Device(workbenchId, worktreeId, device).Context, comparisonId, ct, progress),
+                "TIA source applied locally.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/comparisons/{comparisonId}/push-to-tia", async (
+            string workbenchId, string worktreeId, string device, string comparisonId,
+            WorkbenchApiState s, WorkbenchCoordinator c, OperationStatusRegistry operations,
+            HttpContext http, CancellationToken ct) =>
+            await RunOperationAsync(http, operations, "push-source-to-tia", "Importing local source into TIA...",
+                progress => c.PushSourceObjectToTiaAsync(
+                    s.Device(workbenchId, worktreeId, device).Context, comparisonId, ct, progress),
+                "Local source imported into TIA.").ConfigureAwait(false));
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions", (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s) =>
             SessionManager.ListSessions(s.Device(workbenchId, worktreeId, device).Context));

@@ -188,6 +188,27 @@ public sealed record PushToTiaObjectOutcome(string Path, bool Success, string? M
 /// <summary>Result of pushing selected local master sources into TIA.</summary>
 public sealed record PushToTiaResult(string ComparisonId, IReadOnlyList<PushToTiaObjectOutcome> Outcomes);
 
+/// <summary>Device-scoped per-object compare result: the local source file vs its live TIA
+/// version (exported to the device staging root). DiffLines direction is local → TIA:
+/// "removed" lines exist only locally, "added" lines only in TIA.</summary>
+public sealed record SourceObjectComparison(
+    string ComparisonId,
+    string RelativePath,
+    string Name,
+    string Category,
+    bool Same,
+    IReadOnlyList<DiffLine> DiffLines,
+    string? LocalHash,
+    string? TiaHash,
+    IReadOnlyList<string> Diagnostics);
+
+/// <summary>Outcome of a device-scoped accept-TIA / push-to-TIA sync of one source object.</summary>
+public sealed record SourceObjectSyncResult(
+    string ComparisonId,
+    string RelativePath,
+    bool Success,
+    string? Message);
+
 public sealed record DeviceContext(
     string WorkbenchId,
     string WorktreeId,
