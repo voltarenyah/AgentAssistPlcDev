@@ -72,17 +72,6 @@ describe('MainStudio API key entrance', () => {
     expect(host.querySelector('[data-api-balance]')?.textContent).toContain('$10.42')
   })
 
-  it('refreshes the DeepSeek balance when the status-bar refresh button is clicked', async () => {
-    keyState.configured = true
-    const { host } = render(<MainStudio />)
-    await act(async () => {})
-
-    act(() => host.querySelector<HTMLButtonElement>('[data-api-balance-refresh]')?.click())
-    await act(async () => {})
-
-    expect(balanceRequest).toHaveBeenCalledTimes(2)
-  })
-
   it('keeps the status bar and settings entry point available with both docks collapsed', async () => {
     const { host } = render(<MainStudio />)
     await act(async () => {})

@@ -321,10 +321,6 @@
     border-color: var(--border);
   }
 
-  .studio-status-indicator {
-    @apply text-emerald-500;
-  }
-
   .studio-status-item {
     @apply inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap;
   }
@@ -333,9 +329,14 @@
     @apply inline-flex min-w-0 items-center gap-1.5 truncate;
   }
 
-  .studio-status-api {
-    @apply rounded-full border px-2 py-0.5 transition-colors hover:bg-accent/50;
+  /* Shared pill unit for every status-bar module (runtime-state-summary look). */
+  .status-pill {
+    @apply inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 transition-colors;
     border-color: var(--border);
+  }
+
+  button.status-pill {
+    @apply cursor-pointer hover:bg-accent/50;
   }
 
   .runtime-state-popover {

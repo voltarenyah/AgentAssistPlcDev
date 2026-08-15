@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   ArrowDownToLine,
+  Banknote,
   Boxes,
   CheckCircle2,
   ChevronDown,
@@ -532,7 +533,6 @@ export default function MainStudio() {
   const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null)
   const [apiBalance, setApiBalance] = useState<api.DeepSeekBalance | null>(null)
-  const [apiBalanceBusy, setApiBalanceBusy] = useState(false)
   const [relativePath, setRelativePath] = useState('')
   const [lastImport, setLastImport] = useState<api.ImportModifiedResult | null>(null)
   const [blockIndexExpanded, setBlockIndexExpanded] = useState(false)
@@ -689,7 +689,6 @@ export default function MainStudio() {
   }, [])
 
   const reloadBalance = useCallback(async () => {
-    setApiBalanceBusy(true)
     try {
       const balance = await api.getDeepSeekBalance()
       setApiBalance(balance)
@@ -697,8 +696,6 @@ export default function MainStudio() {
     } catch {
       setApiBalance(null)
       return null
-    } finally {
-      setApiBalanceBusy(false)
     }
   }, [])
 
@@ -2472,17 +2469,18 @@ export default function MainStudio() {
       </div>}
 
       <footer data-status-bar className="studio-status-bar">
-        <span className="studio-status-indicator">● Ready</span>
-        <RuntimeStateStatusBar runtime={appAssistantRuntime} />
-        <span className="studio-status-context">
+        <span className="studio-status-context status-pill" title="Active workbench / worktree / device">
+          <Boxes className="h-3 w-3 text-chart-2" />
           <span>{activeWorkbench?.name ?? 'No workbench'}</span>
           <span>/</span>
           <span className="font-mono">{activeWorktree?.branch ?? 'no worktree'}</span>
           <span>/</span>
           <span className="font-mono text-foreground">{deviceName ?? (selection.worktreeId && !selection.deviceId ? (mainView.kind === 'hardware' ? 'hardware' : 'worktree') : selection.deviceId ?? 'no device')}</span>
         </span>
+        <span className="flex-1" />
+        <RuntimeStateStatusBar runtime={appAssistantRuntime} />
         <span
-          className="studio-status-item studio-status-api"
+          className="status-pill"
           data-api-status
           title="DeepSeek API status — manage the key in Settings → Assistant"
         >
@@ -2490,47 +2488,27 @@ export default function MainStudio() {
           {fatalError ? 'API error' : apiKeyConfigured === false ? 'No valid API key' : 'API online'}
         </span>
         {apiKeyConfigured && (
-          <span className="studio-status-item" data-api-balance title={apiBalance?.fetchedAt ? `Fetched ${new Date(apiBalance.fetchedAt).toLocaleString()}` : 'DeepSeek account balance'}>
-            <span>
-              Balance {apiBalance?.balances.map(balance => `${balance.currency === 'USD' ? '$' : `${balance.currency} `}${balance.totalBalance}`).join(' · ') ?? '—'}
-            </span>
-            <button
-              className="icon-button h-4 w-4"
-              aria-label="Refresh DeepSeek balance"
-              data-api-balance-refresh
-              title="Refresh DeepSeek balance"
-              disabled={apiBalanceBusy}
-              onClick={() => void reloadBalance()}
-            >
-              <RefreshCw className={`h-3 w-3 ${apiBalanceBusy ? 'animate-spin' : ''}`} />
-            </button>
+          <span className="status-pill" data-api-balance title={apiBalance?.fetchedAt ? `Fetched ${new Date(apiBalance.fetchedAt).toLocaleString()} · refresh in Settings → Assistant` : 'DeepSeek account balance — refresh in Settings → Assistant'}>
+            <Banknote className="h-3 w-3 text-chart-4" />
+            {apiBalance?.balances.map(balance => `${balance.currency === 'USD' ? '$' : `${balance.currency} `}${balance.totalBalance}`).join(' · ') ?? '—'}
           </span>
         )}
-        <span className="relative flex items-center gap-1">
-        <button
-          className={`studio-status-item transition-colors hover:text-foreground ${tiaPanelOpen ? 'text-foreground' : ''}`}
-          data-tia-sessions
-          aria-label="TIA Portal instances"
-          title="Detected TIA Portal instances — click to manage"
-          aria-pressed={tiaPanelOpen}
-          onClick={() => {
-            const next = !tiaPanelOpen
-            setTiaPanelOpen(next)
-            if (next) void reloadTiaState()
-          }}
-        >
-          <Server className="h-3 w-3 text-chart-3" />
-          {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
-        </button>
-        <button
-          className="icon-button h-4 w-4"
-          aria-label="Refresh TIA sessions"
-          title="Re-detect running TIA Portal instances"
-          disabled={sessionActionBusy === 'refresh'}
-          onClick={() => void reloadTiaState()}
-        >
-          <RefreshCw className={`h-3 w-3 ${sessionActionBusy === 'refresh' ? 'animate-spin' : ''}`} />
-        </button>
+        <span className="relative flex items-center">
+          <button
+            className={`status-pill cursor-pointer hover:bg-accent/50 ${tiaPanelOpen ? 'bg-accent/50 text-foreground' : ''}`}
+            data-tia-sessions
+            aria-label="TIA Portal instances"
+            title="Detected TIA Portal instances — click to manage or refresh"
+            aria-pressed={tiaPanelOpen}
+            onClick={() => {
+              const next = !tiaPanelOpen
+              setTiaPanelOpen(next)
+              if (next) void reloadTiaState()
+            }}
+          >
+            <Server className="h-3 w-3 text-chart-3" />
+            {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
+          </button>
           {tiaPanelOpen && (
             <TiaSessionsPanel
               sessions={sessions}
@@ -2545,10 +2523,10 @@ export default function MainStudio() {
             />
           )}
         </span>
-        <span className="flex-1" />
-        <button className="icon-button" aria-label="Refresh status" title="Refresh status" onClick={() => void loadStartup()}>
-          <RefreshCw className="h-3 w-3" />
-        </button>
+        <span className="status-pill" data-ready-state title="Workbench status">
+          <CircleDot className="h-3 w-3 text-emerald-500" />
+          Ready
+        </span>
       </footer>
 
       {createWorkbenchOpen && (
