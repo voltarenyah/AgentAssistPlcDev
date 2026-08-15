@@ -95,4 +95,22 @@ public sealed class AppAssistantChatEndpointTests
         var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
         Assert.Equal("WORKBENCH_SELECTION_REQUIRED", body!["error"]);
     }
+
+    [Fact]
+    public async Task HealthReportsUnavailableWhenTheSidecarIsDown()
+    {
+        await using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Testing");
+                builder.UseSetting("AppAssistant:ServiceUrl", "http://127.0.0.1:1");
+            });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/app-assistant/health");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+        Assert.Equal("APP_ASSISTANT_UNAVAILABLE", body!["error"]);
+    }
 }

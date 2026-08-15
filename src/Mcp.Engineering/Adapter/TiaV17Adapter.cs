@@ -45,6 +45,31 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
     public SessionInfo[] ListSessions() => TiaSessionEnumerator.ListSessions().ToArray();
 
+    public CurrentSessionInfo GetCurrentSession()
+    {
+        lock (_gate)
+        {
+            // A dead process leaves stale handles; report detached rather than a ghost pid.
+            if (_portal is null || !IsPortalProcessAlive())
+                return new CurrentSessionInfo { Attached = false };
+            string? projectName = null;
+            string? projectPath = null;
+            try
+            {
+                projectName = _project?.Name;
+                projectPath = _project?.Path?.FullName;
+            }
+            catch { /* project handle may round-trip to a busy portal; identity is enough */ }
+            return new CurrentSessionInfo
+            {
+                Attached = true,
+                SessionId = _portalProcessId,
+                ProjectName = projectName,
+                ProjectPath = projectPath,
+            };
+        }
+    }
+
     public ConnectionInfo Connect(ConnectOptions options)
     {
         lock (_gate)
@@ -266,12 +291,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             if (result.WasConnected)
             {
                 try { result.HadUnsavedChanges = _project?.IsModified ?? false; } catch { }
-                if (_ownsPortal)
-                {
-                    // We own this portal: close the project we opened. Never saves (§1.1).
-                    try { _project?.Close(); } catch { }
-                }
-                // Attached mode: release our handles only — never close the user's project.
+                // Never close the project on disconnect — not for attached sessions and not for
+                // portals we opened ourselves. The project stays open in TIA Portal so the user
+                // can keep working there or re-attach later; only close_session closes the
+                // project and the instance.
                 try { _portal?.Dispose(); } catch { }
             }
             _project = null;

@@ -6,6 +6,21 @@ public static class AppAssistantChatEndpoints
 {
     public static IEndpointRouteBuilder MapAppAssistantChatEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet(
+            "/api/app-assistant/health",
+            async (AppAssistantClient client, CancellationToken cancellationToken) =>
+            {
+                try
+                {
+                    return Results.Ok(await client.GetHealthAsync(cancellationToken).ConfigureAwait(false));
+                }
+                catch (AppAssistantClientException exception)
+                {
+                    return Results.Json(
+                        new { error = exception.Code, message = exception.Message },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            });
         app.MapPost(
             "/api/app-assistant/bootstrap",
             (HttpContext http, AppAssistantChatRequest request, WorkbenchApiState state,

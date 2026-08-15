@@ -194,6 +194,58 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task CurrentSessionReportsAttachedPortal()
+    {
+        var engineering = new RecordingToolCaller("{\"attached\":true,\"sessionId\":17,\"projectName\":\"Demo\",\"projectPath\":\"C:\\\\Demo\\\\demo.ap17\"}");
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<ApiMcpGateway>();
+                services.AddSingleton(new ApiMcpGateway(
+                    engineering,
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller()));
+            });
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/sessions/current");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("\"sessionId\":17", await response.Content.ReadAsStringAsync());
+        Assert.Equal(["get_current_session"], engineering.Calls);
+    }
+
+    [Fact]
+    public async Task CloseSessionForwardsProcessId()
+    {
+        var engineering = new RecordingToolCaller("true");
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<ApiMcpGateway>();
+                services.AddSingleton(new ApiMcpGateway(
+                    engineering,
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller()));
+            });
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/sessions/close", new { sessionId = 17 });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(["close_session"], engineering.Calls);
+        Assert.Equal(17, engineering.Arguments.Single().GetProperty("sessionId").GetInt32());
+    }
+
+    [Fact]
     public async Task OpenProjectInTiaSwitchesToVisibleProjectPathAndCompletesOperation()
     {
         var engineering = new RecordingToolCaller();

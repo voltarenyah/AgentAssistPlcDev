@@ -6,6 +6,16 @@ export type SessionInfo = {
   id: number
   mode: string
   projectPath: string | null
+  portalPath?: string | null
+  acquisitionTime?: string
+}
+
+/** The TIA Portal session the engineering server is currently attached to. */
+export type CurrentTiaSession = {
+  attached: boolean
+  sessionId: number | null
+  projectName: string | null
+  projectPath: string | null
 }
 
 export type ConnectionInfo = {
@@ -92,12 +102,9 @@ export type ProjectRetrieveResult = {
 }
 
 export type ServerStatus = {
-  servers: 'running' | 'starting'
-  connected: string | null
-  selectedProject: string | null
-  connections: number
-  chatReady: boolean
-  tools: number
+  storage: string
+  legacyProjects: boolean
+  version: string
 }
 
 export type ChatMessage = {
@@ -1339,6 +1346,12 @@ export async function getStatus(): Promise<ServerStatus> {
   return res.json()
 }
 
+export async function getAppAssistantHealth(): Promise<unknown> {
+  const res = await fetch(`${BASE}/app-assistant/health`)
+  if (!res.ok) throw new Error(`App assistant health failed: ${res.status}`)
+  return res.json()
+}
+
 export async function getTools(): Promise<ToolInfo[]> {
   const res = await fetch(`${BASE}/tools`)
   if (!res.ok) throw new Error(`Tools failed: ${res.status}`)
@@ -1368,6 +1381,21 @@ export async function connect(opts: {
 
 export async function disconnect(): Promise<void> {
   await fetch(`${BASE}/disconnect`, { method: 'POST' })
+}
+
+export async function getCurrentTiaSession(): Promise<CurrentTiaSession> {
+  const res = await fetch(`${BASE}/sessions/current`)
+  if (!res.ok) throw new Error(`Current session failed: ${res.status}`)
+  return res.json()
+}
+
+export async function closeTiaSession(sessionId: number): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/close`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  })
+  if (!res.ok) throw new Error(`Close session failed: ${res.status}`)
 }
 
 export async function getProjectInfo(): Promise<ProjectInfo> {

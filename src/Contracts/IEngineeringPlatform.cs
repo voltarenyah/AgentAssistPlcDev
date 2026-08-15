@@ -11,6 +11,10 @@ public interface IEngineeringPlatform : IDisposable
 {
     EnvCheckResult CheckEnvironment();
     SessionInfo[] ListSessions();
+
+    /// <summary>Report the currently attached TIA Portal session, if any (read-only).</summary>
+    CurrentSessionInfo GetCurrentSession();
+
     ConnectionInfo Connect(ConnectOptions options);
     DisconnectResult Disconnect();
 

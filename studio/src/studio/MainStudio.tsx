@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   ArrowDownToLine,
+  Banknote,
   Boxes,
   CircleDot,
+  CircleHelp,
   CircuitBoard,
   ClipboardList,
   CloudCog,
@@ -12,7 +14,6 @@ import {
   Database,
   GitBranch,
   GitMerge,
-  KeyRound,
   Loader2,
   MessageSquare,
   Network,
@@ -24,11 +25,10 @@ import {
   RefreshCw,
   RotateCw,
   Server,
-  Settings2,
+  Settings,
   ShieldCheck,
   Sparkles,
   Trash2,
-  Wrench,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -72,8 +72,11 @@ import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
 import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
+import SettingsPage from '@/studio/settings/SettingsPage'
+import TiaSessionsPanel, { type SessionLabel } from '@/studio/workbench/TiaSessionsPanel'
 import {
   clampDockWidth,
+  DEFAULT_SHELL_LAYOUT,
   readShellLayout,
   writeShellLayout,
   type DockSide,
@@ -135,6 +138,26 @@ const newOperationId = () =>
 
 const normalizeProjectPath = (path: string) =>
   path.trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
+
+/** Map a TIA session to "Project / worktree" using the registered workbenches. */
+const sessionLabelFor = (workbenches: api.Workbench[], session: api.SessionInfo): SessionLabel | null => {
+  const path = session.projectPath
+  if (!path) return null
+  const file = path.split(/[\\/]/).pop() ?? path
+  const project = file.replace(/\.ap\d+$/i, '')
+  const normalized = normalizeProjectPath(path)
+  for (const workbench of workbenches) {
+    for (const worktree of workbench.worktrees) {
+      if (worktree.relativePath && normalized.includes(normalizeProjectPath(worktree.relativePath))) {
+        return { project, worktree: worktree.name || worktree.branch }
+      }
+    }
+    if (workbench.sourceProjectPath && normalizeProjectPath(workbench.sourceProjectPath) === normalized) {
+      return { project, worktree: `${workbench.name} (source)` }
+    }
+  }
+  return { project, worktree: null }
+}
 
 const findHardwareNode = (
   nodes: api.HardwareConfigurationNode[],
@@ -374,71 +397,6 @@ function CompileApprovalDialog({
   )
 }
 
-function ApiKeyDialog({
-  onClose,
-  onSave,
-}: {
-  onClose: () => void
-  onSave: (apiKey: string) => Promise<void>
-}) {
-  const [apiKey, setApiKey] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const valid = Boolean(apiKey.trim())
-  const save = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      await onSave(apiKey.trim())
-    } catch (saveError) {
-      setError(displayError(saveError))
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-5 backdrop-blur-[2px]">
-      <div className="w-full max-w-[500px] overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
-        <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
-          <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
-            <KeyRound className="h-4 w-4 text-chart-2" />
-          </div>
-          <div className="flex-1">
-            <h2 className="text-sm font-semibold">DeepSeek API key</h2>
-            <p className="text-[10px] text-muted-foreground">Stored locally in the workbench config; live chats reset on save.</p>
-          </div>
-          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
-        </div>
-        <div className="space-y-3 p-5">
-          <label className="field-label">
-            <span>API key</span>
-            <input
-              className="field-input font-mono"
-              type="password"
-              value={apiKey}
-              onChange={event => setApiKey(event.target.value)}
-              placeholder="sk-..."
-              autoFocus
-            />
-          </label>
-          {error && (
-            <div className="flex items-start gap-2 rounded-lg bg-red-500/8 p-3 text-[9px] leading-relaxed text-red-700 dark:text-red-300">
-              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              {error}
-            </div>
-          )}
-        </div>
-        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="primary-button" disabled={!valid || busy} onClick={() => void save()}>
-            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Save key
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function ProjectAccessDialog({
   project,
   capabilities,
@@ -506,6 +464,9 @@ function ProjectAccessDialog({
 export default function MainStudio() {
   const [workbenches, setWorkbenches] = useState<api.Workbench[]>([])
   const [sessions, setSessions] = useState<api.SessionInfo[]>([])
+  const [currentSession, setCurrentSession] = useState<api.CurrentTiaSession | null>(null)
+  const [tiaPanelOpen, setTiaPanelOpen] = useState(false)
+  const [sessionActionBusy, setSessionActionBusy] = useState<string | null>(null)
   const [devicesByWorktree, setDevicesByWorktree] = useState<Record<string, api.DeviceSummary[]>>({})
   const [selection, setSelection] = useState<WorkbenchSelection>({
     workbenchId: null,
@@ -525,7 +486,7 @@ export default function MainStudio() {
   const hardwareNetworkRequestId = useRef(0)
   const chatAbortRef = useRef<AbortController | null>(null)
   const [activeTab, setActiveTab] = useState<StudioTab>('overview')
-  const [activePage, setActivePage] = useState<'studio' | 'tools'>('studio')
+  const [activePage, setActivePage] = useState<'studio' | 'tools' | 'settings'>('studio')
   const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
   const [shellLayout, setShellLayout] = useState<ShellLayout>(() => {
     try {
@@ -568,8 +529,6 @@ export default function MainStudio() {
   const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null)
   const [apiBalance, setApiBalance] = useState<api.DeepSeekBalance | null>(null)
-  const [apiBalanceBusy, setApiBalanceBusy] = useState(false)
-  const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
   const [chatSourceContext, setChatSourceContext] = useState<SourceChatContext | null>(null)
   const [versionControlSelection, setVersionControlSelection] = useState<unknown>(null)
   const [appAssistantOpen, setAppAssistantOpen] = useState(false)
@@ -714,7 +673,6 @@ export default function MainStudio() {
   }, [])
 
   const reloadBalance = useCallback(async () => {
-    setApiBalanceBusy(true)
     try {
       const balance = await api.getDeepSeekBalance()
       setApiBalance(balance)
@@ -722,8 +680,6 @@ export default function MainStudio() {
     } catch {
       setApiBalance(null)
       return null
-    } finally {
-      setApiBalanceBusy(false)
     }
   }, [])
 
@@ -733,13 +689,42 @@ export default function MainStudio() {
     return loadedSessions
   }, [])
 
+  const reloadCurrentSession = useCallback(async () => {
+    try {
+      setCurrentSession(await api.getCurrentTiaSession())
+    } catch {
+      setCurrentSession(null)
+    }
+  }, [])
+
+  const reloadTiaState = useCallback(async () => {
+    setSessionActionBusy('refresh')
+    try {
+      await reloadSessions().catch(() => {})
+      await reloadCurrentSession()
+    } finally {
+      setSessionActionBusy(null)
+    }
+  }, [reloadSessions, reloadCurrentSession])
+
+  // Keep the TIA instance count in the status bar in sync: sessions used to load
+  // only at startup, so a TIA Portal opened later showed as "0 TIA sessions".
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void reloadSessions().catch(() => {})
+      void reloadCurrentSession()
+    }, 10000)
+    return () => window.clearInterval(timer)
+  }, [reloadSessions, reloadCurrentSession])
+
   const loadStartup = useCallback(async () => {
     setLoading(true)
     setFatalError(null)
     try {
       // TIA sessions come from the engineering server and may hang while TIA is
-      // busy; refresh them in the background instead of blocking startup.
+          // busy; refresh them in the background instead of blocking startup.
       void reloadSessions().catch(() => {})
+      void reloadCurrentSession()
       const loadedWorkbenches = await reloadWorkbenches()
       if (loadedWorkbenches.length > 0) {
         const first = loadedWorkbenches[0]
@@ -757,7 +742,7 @@ export default function MainStudio() {
     void reloadKeyStatus().then(status => {
       if (status?.configured) void reloadBalance()
     })
-  }, [reloadWorkbenches, reloadSessions, reloadKeyStatus, reloadBalance])
+  }, [reloadWorkbenches, reloadSessions, reloadCurrentSession, reloadKeyStatus, reloadBalance])
 
   useEffect(() => { void loadStartup() }, [loadStartup])
 
@@ -1477,6 +1462,55 @@ export default function MainStudio() {
     }
   }
 
+  const attachSessionFromPanel = async (sessionId: number) => {
+    setSessionActionBusy(`attach:${sessionId}`)
+    try {
+      // With a device selected, attach through the workbench flow so the device
+      // context binds too; otherwise attach the engineering server directly.
+      if (selection.workbenchId && selection.worktreeId && selection.deviceId) {
+        await api.attachDeviceProject(selection.workbenchId, selection.worktreeId, selection.deviceId, sessionId)
+      } else {
+        await api.connect({ sessionId })
+      }
+      toast.success(`Attached to TIA Portal instance (PID ${sessionId})`)
+      await reloadSessions().catch(() => {})
+      await reloadCurrentSession()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setSessionActionBusy(null)
+    }
+  }
+
+  const detachSession = async () => {
+    setSessionActionBusy('detach')
+    try {
+      await api.disconnect()
+      toast.success('Detached from the TIA Portal instance')
+      await reloadCurrentSession()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setSessionActionBusy(null)
+    }
+  }
+
+  const closeSession = async (sessionId: number) => {
+    setSessionActionBusy(`close:${sessionId}`)
+    try {
+      await api.closeTiaSession(sessionId)
+      toast.success(`Close signal sent to TIA Portal instance (PID ${sessionId})`)
+      // TIA takes a moment to process WM_CLOSE and may show a save dialog first.
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      await reloadSessions().catch(() => {})
+      await reloadCurrentSession()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setSessionActionBusy(null)
+    }
+  }
+
   const applyRefresh = async (approvedPaths: string[], commitTitle?: string) => {
     if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId || !preview) return
     const context = { workbenchId: selection.workbenchId, worktreeId: selection.worktreeId, deviceId: selection.deviceId }
@@ -1538,14 +1572,6 @@ export default function MainStudio() {
     if (!workbench || !worktree || worktree.branch === 'master') return
     setActiveTab('git')
     toast.info(`Validate and merge ${worktree.branch} from the Version control workspace.`)
-  }
-
-  const saveApiKey = async (apiKey: string) => {
-    await api.saveApiKey(apiKey)
-    const status = await reloadKeyStatus()
-    if (status?.configured) await reloadBalance()
-    setApiKeyDialogOpen(false)
-    toast.success('DeepSeek API key saved; live chats reset')
   }
 
   const deleteWorkbench = async () => {
@@ -1759,6 +1785,15 @@ export default function MainStudio() {
         >
           {shellLayout.leftOpen ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelLeftOpen className="h-3.5 w-3.5" />}
         </button>
+        <button
+          className={`icon-button ${activePage === 'settings' ? 'bg-accent text-foreground' : ''}`}
+          aria-label="Settings"
+          title="Settings"
+          aria-pressed={activePage === 'settings'}
+          onClick={() => setActivePage(previous => previous === 'settings' ? 'studio' : 'settings')}
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </button>
         <div className="flex-1" />
           <div className="flex items-center gap-2">
           {activeOperation && (
@@ -1777,7 +1812,7 @@ export default function MainStudio() {
             aria-pressed={activePage === 'tools'}
             onClick={() => setActivePage(previous => previous === 'tools' ? 'studio' : 'tools')}
           >
-            <Wrench className="h-3.5 w-3.5" />
+            <CircleHelp className="h-3.5 w-3.5" />
           </button>
           {selection.workbenchId && (
             <button
@@ -1805,6 +1840,11 @@ export default function MainStudio() {
 
       {activePage === 'tools' ? (
         <McpToolsHelper onClose={() => setActivePage('studio')} />
+      ) : activePage === 'settings' ? (
+        <SettingsPage
+          onClose={() => setActivePage('studio')}
+          onResetLayout={() => setShellLayout(DEFAULT_SHELL_LAYOUT)}
+        />
       ) : <div className="flex min-h-0 flex-1">
         <div
           data-dock="left"
@@ -2304,52 +2344,64 @@ export default function MainStudio() {
       </div>}
 
       <footer data-status-bar className="studio-status-bar">
-        <span className="studio-status-indicator">● Ready</span>
-        <RuntimeStateStatusBar runtime={appAssistantRuntime} />
-        <span className="studio-status-context">
+        <span className="studio-status-context status-pill" title="Active workbench / worktree / device">
+          <Boxes className="h-3 w-3 text-chart-2" />
           <span>{activeWorkbench?.name ?? 'No workbench'}</span>
           <span>/</span>
           <span className="font-mono">{activeWorktree?.branch ?? 'no worktree'}</span>
           <span>/</span>
           <span className="font-mono text-foreground">{deviceName ?? (selection.worktreeId && !selection.deviceId ? (mainView.kind === 'hardware' ? 'hardware' : 'worktree') : selection.deviceId ?? 'no device')}</span>
         </span>
-        <button
-          className="studio-status-item studio-status-api"
+        <span className="flex-1" />
+        <RuntimeStateStatusBar runtime={appAssistantRuntime} />
+        <span
+          className="status-pill"
           data-api-status
-          title="Manage DeepSeek API key"
-          onClick={() => setApiKeyDialogOpen(true)}
+          title="DeepSeek API status — manage the key in Settings → Assistant"
         >
           <CircleDot className={`h-3 w-3 ${fatalError ? 'text-red-500' : apiKeyConfigured === false ? 'text-amber-500' : 'text-emerald-500'}`} />
           {fatalError ? 'API error' : apiKeyConfigured === false ? 'No valid API key' : 'API online'}
-        </button>
+        </span>
         {apiKeyConfigured && (
-          <span className="studio-status-item" data-api-balance title={apiBalance?.fetchedAt ? `Fetched ${new Date(apiBalance.fetchedAt).toLocaleString()}` : 'DeepSeek account balance'}>
-            <span>
-              Balance {apiBalance?.balances.map(balance => `${balance.currency === 'USD' ? '$' : `${balance.currency} `}${balance.totalBalance}`).join(' · ') ?? '—'}
-            </span>
-            <button
-              className="icon-button h-4 w-4"
-              aria-label="Refresh DeepSeek balance"
-              data-api-balance-refresh
-              title="Refresh DeepSeek balance"
-              disabled={apiBalanceBusy}
-              onClick={() => void reloadBalance()}
-            >
-              <RefreshCw className={`h-3 w-3 ${apiBalanceBusy ? 'animate-spin' : ''}`} />
-            </button>
+          <span className="status-pill" data-api-balance title={apiBalance?.fetchedAt ? `Fetched ${new Date(apiBalance.fetchedAt).toLocaleString()} · refresh in Settings → Assistant` : 'DeepSeek account balance — refresh in Settings → Assistant'}>
+            <Banknote className="h-3 w-3 text-chart-4" />
+            {apiBalance?.balances.map(balance => `${balance.currency === 'USD' ? '$' : `${balance.currency} `}${balance.totalBalance}`).join(' · ') ?? '—'}
           </span>
         )}
-        <span className="studio-status-item">
-          <Server className="h-3 w-3 text-chart-3" />
-          {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
+        <span className="relative flex items-center">
+          <button
+            className={`status-pill cursor-pointer hover:bg-accent/50 ${tiaPanelOpen ? 'bg-accent/50 text-foreground' : ''}`}
+            data-tia-sessions
+            aria-label="TIA Portal instances"
+            title="Detected TIA Portal instances — click to manage or refresh"
+            aria-pressed={tiaPanelOpen}
+            onClick={() => {
+              const next = !tiaPanelOpen
+              setTiaPanelOpen(next)
+              if (next) void reloadTiaState()
+            }}
+          >
+            <Server className="h-3 w-3 text-chart-3" />
+            {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
+          </button>
+          {tiaPanelOpen && (
+            <TiaSessionsPanel
+              sessions={sessions}
+              current={currentSession}
+              busy={sessionActionBusy}
+              resolveLabel={session => sessionLabelFor(workbenches, session)}
+              onRefresh={() => void reloadTiaState()}
+              onAttach={sessionId => void attachSessionFromPanel(sessionId)}
+              onDetach={() => void detachSession()}
+              onCloseSession={sessionId => void closeSession(sessionId)}
+              onClose={() => setTiaPanelOpen(false)}
+            />
+          )}
         </span>
-        <span className="flex-1" />
-        <button className="icon-button" aria-label="Refresh status" title="Refresh status" onClick={() => void loadStartup()}>
-          <RefreshCw className="h-3 w-3" />
-        </button>
-        <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setApiKeyDialogOpen(true)}>
-          <Settings2 className="h-3.5 w-3.5" />
-        </button>
+        <span className="status-pill" data-ready-state title="Workbench status">
+          <CircleDot className="h-3 w-3 text-emerald-500" />
+          Ready
+        </span>
       </footer>
 
       {createWorkbenchOpen && (
@@ -2430,12 +2482,6 @@ export default function MainStudio() {
           busy={operation === 'stage-refresh' || operation === 'bootstrap-device'}
           onCancel={() => setCompilePrompt(null)}
           onApprove={() => void (compilePrompt.flow === 'rebuild' ? rebuildProject(true) : stageRefresh(true))}
-        />
-      )}
-      {apiKeyDialogOpen && (
-        <ApiKeyDialog
-          onClose={() => setApiKeyDialogOpen(false)}
-          onSave={saveApiKey}
         />
       )}
       {projectAccess && (

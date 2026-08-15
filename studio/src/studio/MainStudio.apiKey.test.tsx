@@ -2,7 +2,6 @@
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import * as api from '@/api/client'
 import MainStudio from './MainStudio'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -22,7 +21,6 @@ vi.mock('@/api/client', async importOriginal => {
     getSessions: vi.fn(async () => []),
     getKeyStatus: vi.fn(async () => ({ configured: keyState.configured })),
     getDeepSeekBalance: balanceRequest,
-    saveApiKey: vi.fn(async () => { keyState.configured = true }),
   }
 })
 
@@ -50,7 +48,7 @@ describe('MainStudio API key entrance', () => {
     const { host } = render(<MainStudio />)
     await act(async () => {})
 
-    const indicator = host.querySelector<HTMLButtonElement>('[data-api-status]')
+    const indicator = host.querySelector<HTMLElement>('[data-api-status]')
     expect(indicator?.textContent).toContain('No valid API key')
     expect(host.querySelector('header')?.textContent).not.toContain('No valid API key')
     expect(host.querySelector('footer')?.textContent).toContain('0 TIA sessions')
@@ -61,7 +59,7 @@ describe('MainStudio API key entrance', () => {
     const { host } = render(<MainStudio />)
     await act(async () => {})
 
-    const indicator = host.querySelector<HTMLButtonElement>('[data-api-status]')
+    const indicator = host.querySelector<HTMLElement>('[data-api-status]')
     expect(indicator?.textContent).toContain('API online')
   })
 
@@ -72,45 +70,6 @@ describe('MainStudio API key entrance', () => {
 
     expect(balanceRequest).toHaveBeenCalledTimes(1)
     expect(host.querySelector('[data-api-balance]')?.textContent).toContain('$10.42')
-  })
-
-  it('refreshes the DeepSeek balance when the status-bar refresh button is clicked', async () => {
-    keyState.configured = true
-    const { host } = render(<MainStudio />)
-    await act(async () => {})
-
-    act(() => host.querySelector<HTMLButtonElement>('[data-api-balance-refresh]')?.click())
-    await act(async () => {})
-
-    expect(balanceRequest).toHaveBeenCalledTimes(2)
-  })
-
-  it('saves a key from the dialog and refreshes the indicator', async () => {
-    const { host } = render(<MainStudio />)
-    await act(async () => {})
-
-    act(() => {
-      host.querySelector<HTMLButtonElement>('[data-api-status]')
-        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-    const keyInput = host.querySelector<HTMLInputElement>('input[type="password"]')
-    expect(keyInput).not.toBeNull()
-
-    act(() => {
-      const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
-      setValue.call(keyInput, 'sk-test-key')
-      keyInput!.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    const saveButton = Array.from(host.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('Save key'))
-    act(() => {
-      saveButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-    await act(async () => {})
-
-    expect(api.saveApiKey).toHaveBeenCalledWith('sk-test-key')
-    expect(host.querySelector('input[type="password"]')).toBeNull()
-    expect(host.querySelector<HTMLButtonElement>('[data-api-status]')?.textContent).toContain('API online')
   })
 
   it('keeps the status bar and settings entry point available with both docks collapsed', async () => {
@@ -125,6 +84,7 @@ describe('MainStudio API key entrance', () => {
     expect(host.querySelector('[data-status-bar]')).not.toBeNull()
 
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click())
-    expect(host.querySelector('input[type="password"]')).not.toBeNull()
+    await act(async () => {})
+    expect(host.querySelector('[data-settings-page]')).not.toBeNull()
   })
 })
