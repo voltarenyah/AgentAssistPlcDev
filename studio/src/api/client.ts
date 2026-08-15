@@ -1398,6 +1398,11 @@ export async function closeTiaSession(sessionId: number): Promise<void> {
   if (!res.ok) throw new Error(`Close session failed: ${res.status}`)
 }
 
+export async function saveTiaProject(): Promise<void> {
+  const res = await fetch(`${BASE}/tia/project/save`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Save TIA project failed: ${res.status}`)
+}
+
 export async function getProjectInfo(): Promise<ProjectInfo> {
   const res = await fetch(`${BASE}/project/info`)
   if (!res.ok) throw new Error(`Project info failed: ${res.status}`)

@@ -619,7 +619,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         string dir,
         bool writeProjectMetadata = true,
         IProgress<EngineeringProgress>? progress = null,
-        List<UnsupportedSourceObject>? unsupported = null)
+        List<UnsupportedSourceObject>? unsupported = null,
+        ExportProgressCounter? exportedSourceFiles = null)
     {
         Directory.CreateDirectory(dir);
         var exportStartedUtc = DateTimeOffset.UtcNow;
@@ -696,6 +697,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
             results.Add(result);
             records.Add(ExportManifest.CreateRecord(block, groupPath, dir, result));
+            if (result.Success && exportedSourceFiles is not null)
+            {
+                Report(progress, exportedSourceFiles.NextMessage());
+            }
         }
 
         ExportManifest.WriteAll(
@@ -926,6 +931,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var results = new List<SyncResult>();
             var allDeviceNames = new List<string>();
             var allChecksums = new Dictionary<string, string>();
+            var exportedSourceFiles = progress is null ? null : new ExportProgressCounter();
 
             foreach (var plc in plcs)
             {
@@ -947,11 +953,14 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     dir,
                     writeProjectMetadata: plcName is null,
                     progress: progress,
-                    unsupported: unsupported));
+                    unsupported: unsupported,
+                    exportedSourceFiles: exportedSourceFiles));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_tag_tables",
-                    p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord, progress));
+                    p => TagTableEnumerator.Enumerate(p.TagTableGroup), ExportTagTableCore, CreateTagTableRecord,
+                    progress, exportedSourceFiles));
                 full.AddRange(ExportObjectsForPlc(plc, dir, "export_udts",
-                    p => PlcTypeEnumerator.Enumerate(p.TypeGroup), ExportUdtCore, CreateUdtRecord, progress));
+                    p => PlcTypeEnumerator.Enumerate(p.TypeGroup), ExportUdtCore, CreateUdtRecord,
+                    progress, exportedSourceFiles));
 
                 results.Add(new SyncResult
                 {
@@ -1822,7 +1831,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         Func<PlcSoftware, IEnumerable<(TObject Item, string? GroupPath)>> enumerate,
         Func<TObject, string, string?, ExportResult> exportCore,
         Func<TObject, string?, string, ExportResult, ExportMetadataRecord> createRecord,
-        IProgress<EngineeringProgress>? progress = null)
+        IProgress<EngineeringProgress>? progress = null,
+        ExportProgressCounter? exportedSourceFiles = null)
     {
         Directory.CreateDirectory(dir);
         var device = CaptureDeviceMetadata(RequireProject(), plc);
@@ -1846,6 +1856,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
             results.Add(result);
             ExportManifest.Upsert(dir, createRecord(item, groupPath, dir, result), device);
+            if (result.Success && exportedSourceFiles is not null)
+            {
+                Report(progress, exportedSourceFiles.NextMessage());
+            }
         }
         return results.ToArray();
     }

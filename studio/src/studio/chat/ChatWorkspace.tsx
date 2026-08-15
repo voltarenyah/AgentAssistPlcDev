@@ -12,6 +12,7 @@ import { sourceContextPrefix, type SourceChatContext } from '../plcSourceState'
 type Props = {
   tabs: ChatTabsState
   busy: boolean
+  onCreateSession?: () => void
   confirmation?: api.PendingConfirmation | null
   onConfirm?: (decision: 'allowOnce' | 'deny') => void
   onFocus: (sessionId: string) => void
@@ -94,6 +95,7 @@ function ChatComposer({
       style={{ borderColor: 'var(--border)' }}
       onSubmit={event => {
         event.preventDefault()
+        if (disabled || busy) return
         const data = new FormData(event.currentTarget)
         const message = data.get('message')?.toString().trim() ?? ''
         if (!message) return
@@ -132,6 +134,11 @@ function ChatComposer({
           placeholder="Ask about this PLC device..."
           value={composerDraft}
           onChange={event => updateDraft(event.target.value)}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' || event.shiftKey || disabled || busy) return
+            event.preventDefault()
+            event.currentTarget.form?.requestSubmit()
+          }}
         />
         {busy ? (
           <button
@@ -359,7 +366,7 @@ function MessageList({ messages, busy }: { messages: ChatMessage[], busy: boolea
   )
 }
 
-export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onFocus, onSend, onDraftChange, onStop, onContinue, sourceContext, onClearSourceContext }: Props) {
+export default function ChatWorkspace({ tabs, busy, onCreateSession, confirmation, onConfirm, onFocus, onSend, onDraftChange, onStop, onContinue, sourceContext, onClearSourceContext }: Props) {
   const [settings, setSettings] = useState<api.ChatSettings | null>(null)
   const [settingsState, setSettingsState] = useState<SettingsSaveState>('idle')
   const settingsRef = useRef<api.ChatSettings | null>(null)
@@ -395,7 +402,7 @@ export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onF
     }, 400)
   }, [])
 
-  if (tabs.tabs.length === 0) {
+  if (tabs.tabs.length === 0 || !tabs.activeId) {
     return (
       <div className="grid h-full place-items-center p-8 text-center">
         <div className="max-w-sm">
@@ -404,6 +411,15 @@ export default function ChatWorkspace({ tabs, busy, confirmation, onConfirm, onF
           <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
             Use the session dock to start a new chat or resume a saved one.
           </p>
+          <button
+            type="button"
+            className="primary-button mt-4"
+            disabled={busy}
+            aria-label="Create new chat session"
+            onClick={() => onCreateSession?.()}
+          >
+            Create new chat session
+          </button>
         </div>
       </div>
     )

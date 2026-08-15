@@ -183,6 +183,9 @@ public static class CompatibilityEndpoints
             return await gateway.For("close_session").CallAsync<JsonElement>("close_session", new { sessionId }, ct);
         });
 
+        app.MapPost("/api/tia/project/save", async (ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("save_project").CallAsync<JsonElement>("save_project", new { }, ct));
+
         app.MapPost("/api/tools/call", async (CompatibilityToolCallRequest request, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
         {
             var device = Device(state);

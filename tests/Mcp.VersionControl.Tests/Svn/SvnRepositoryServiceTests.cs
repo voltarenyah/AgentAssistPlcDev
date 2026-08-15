@@ -31,6 +31,18 @@ public sealed class SvnRepositoryServiceTests : IDisposable
         }
     }
 
+    [Fact]
+    public void FormatSvnFailure_PreservesNestedExceptionDetails()
+    {
+        var nested = new IOException("The failing file is tia\\FOB_SAFETY.xml.");
+        var failure = new InvalidOperationException("Commit failed (details follow):", nested);
+
+        var details = SvnRepositoryService.FormatSvnFailure(failure);
+
+        Assert.Contains("Commit failed (details follow):", details);
+        Assert.Contains("The failing file is tia\\FOB_SAFETY.xml.", details);
+    }
+
     private SvnSharedInitResult CreateShared()
     {
         var result = _svn.CreateShared(Path.Combine(_root, "workbench"));
@@ -129,6 +141,32 @@ public sealed class SvnRepositoryServiceTests : IDisposable
         Assert.Equal(
             new byte[] { 0x00, 0x01, 0xFE, 0xFF },
             File.ReadAllBytes(Path.Combine(roundTrip, "project.bin")));
+    }
+
+    [Fact]
+    public void Commit_ReadOnlyWorkingCopyMetadata_StillReturnsCommittedRevision()
+    {
+        var shared = CreateShared();
+        var workingCopy = Path.Combine(_root, "tia-read-only");
+        _svn.Checkout(MainUrl(shared), workingCopy);
+
+        var projectFile = Path.Combine(workingCopy, "project.txt");
+        File.WriteAllText(projectFile, "v1");
+        _svn.AddRecursive(workingCopy);
+        SetReadOnlyRecursively(workingCopy);
+
+        var commit = _svn.Commit(workingCopy, "commit read-only working copy");
+
+        Assert.True(commit.Committed);
+        Assert.True(commit.Revision > 0);
+    }
+
+    private static void SetReadOnlyRecursively(string root)
+    {
+        foreach (var path in Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories).Append(root))
+        {
+            File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
+        }
     }
 
     [Fact]

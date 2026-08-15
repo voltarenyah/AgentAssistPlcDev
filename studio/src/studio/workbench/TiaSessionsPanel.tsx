@@ -46,7 +46,7 @@ export default function TiaSessionsPanel({
 
   return (
     <div
-      className="absolute bottom-7 right-0 z-50 w-[360px] overflow-hidden rounded-md border bg-card text-foreground shadow-xl"
+      className="absolute bottom-7 left-0 z-50 w-[360px] overflow-hidden rounded-md border bg-card text-foreground shadow-xl"
       style={{ borderColor: 'var(--border)' }}
       data-tia-sessions-panel
     >

@@ -1,21 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
-  ArrowDownToLine,
-  Banknote,
   Boxes,
   CircleDot,
   CircleHelp,
   CircuitBoard,
   ClipboardList,
   CloudCog,
-  Code2,
   Cpu,
-  Database,
   GitBranch,
-  GitMerge,
   Loader2,
-  MessageSquare,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
@@ -23,7 +17,6 @@ import {
   PanelRightOpen,
   Plus,
   RefreshCw,
-  RotateCw,
   Server,
   Settings,
   ShieldCheck,
@@ -34,7 +27,7 @@ import {
 import { toast } from 'sonner'
 import { ThemeToggle } from '@/catalog/ThemeToggle'
 import { showErrorToast } from '@/components/ui/toast'
-import VersionControlPanel from '@/studio/version-control/VersionControlPanel'
+import WorkspaceHost, { type StudioTab } from '@/studio/workspace/WorkspaceHost'
 import VersionControlDetailsDock from '@/studio/version-control/VersionControlDetailsDock'
 import WorkbenchNavigator, {
   type WorkbenchSelection,
@@ -56,12 +49,9 @@ import {
   type DeviceSelectionState,
 } from '@/studio/deviceSnapshot'
 import * as api from '@/api/client'
-import ChatWorkspace from '@/studio/chat/ChatWorkspace'
-import PlcSourcePanel from '@/studio/PlcSourcePanel'
 import type { SourceChatContext } from '@/studio/plcSourceState'
 import AppAssistantPanel from '@/studio/appAssistant/AppAssistantPanel'
 import SessionDock from '@/studio/chat/SessionDock'
-import NodeEdgesView from '@/studio/NodeEdgesView'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
 import DevicePropertiesDock from '@/studio/DevicePropertiesDock'
 import HardwareConfigurationView from '@/studio/HardwareConfigurationView'
@@ -74,6 +64,8 @@ import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
 import TiaSessionsPanel, { type SessionLabel } from '@/studio/workbench/TiaSessionsPanel'
+import TiaCloseConfirmationDialog from '@/studio/workbench/TiaCloseConfirmationDialog'
+import DeepSeekBalanceStatus, { type DeepSeekBalanceRefreshState } from '@/studio/DeepSeekBalanceStatus'
 import {
   clampDockWidth,
   DEFAULT_SHELL_LAYOUT,
@@ -95,7 +87,6 @@ import {
   type ChatTabsState,
 } from '@/studio/chat/chatTabState'
 
-type StudioTab = 'overview' | 'chat' | 'source' | 'knowledge' | 'git'
 // What <main> renders for the current selection. Replaces the old hardwarePage
 // ternary: project and worktree selections now have their own landing pages.
 export type MainView =
@@ -122,6 +113,17 @@ type DeviceContextRef = {
   workbenchId: string
   worktreeId: string
   deviceId: string
+}
+
+type PendingWorkbenchCreation = {
+  values: {
+    name: string
+    rootPath?: string
+    engineeringSessionId?: number
+    engineeringProjectPath?: string
+  }
+  sessionId: number
+  projectPath: string | null
 }
 
 const worktreeKey = (workbenchId: string, worktreeId: string) => `${workbenchId}:${worktreeId}`
@@ -331,27 +333,6 @@ function DeleteWorktreeDialog({
   )
 }
 
-function Metric({
-  label,
-  value,
-  tone = 'neutral',
-}: {
-  label: string
-  value: string | number
-  tone?: 'neutral' | 'good' | 'warning' | 'danger'
-}) {
-  const color = tone === 'good' ? 'text-emerald-500'
-    : tone === 'warning' ? 'text-amber-500'
-      : tone === 'danger' ? 'text-red-500'
-        : 'text-foreground'
-  return (
-    <div className="rounded-lg border bg-card p-3" style={{ borderColor: 'var(--border)' }}>
-      <div className={`text-xl font-semibold tabular-nums ${color}`}>{value}</div>
-      <div className="mt-1 text-[9px] uppercase tracking-[0.15em] text-muted-foreground">{label}</div>
-    </div>
-  )
-}
-
 function CompileApprovalDialog({
   prompt,
   busy,
@@ -465,7 +446,7 @@ export default function MainStudio() {
   const [workbenches, setWorkbenches] = useState<api.Workbench[]>([])
   const [sessions, setSessions] = useState<api.SessionInfo[]>([])
   const [currentSession, setCurrentSession] = useState<api.CurrentTiaSession | null>(null)
-  const [tiaPanelOpen, setTiaPanelOpen] = useState(false)
+  const [statusPopover, setStatusPopover] = useState<'runtime' | 'tia' | null>(null)
   const [sessionActionBusy, setSessionActionBusy] = useState<string | null>(null)
   const [devicesByWorktree, setDevicesByWorktree] = useState<Record<string, api.DeviceSummary[]>>({})
   const [selection, setSelection] = useState<WorkbenchSelection>({
@@ -512,6 +493,7 @@ export default function MainStudio() {
   const [activeOperation, setActiveOperation] = useState<ActiveOperation | null>(null)
   const [fatalError, setFatalError] = useState<string | null>(null)
   const [createWorkbenchOpen, setCreateWorkbenchOpen] = useState(false)
+  const [pendingWorkbenchCreation, setPendingWorkbenchCreation] = useState<PendingWorkbenchCreation | null>(null)
   const [sandboxRoots, setSandboxRoots] = useState<string[]>([])
   const [sandboxDenial, setSandboxDenial] = useState<{ message: string; roots: string[] } | null>(null)
   const [createWorktreeFor, setCreateWorktreeFor] = useState<api.Workbench | null>(null)
@@ -529,6 +511,7 @@ export default function MainStudio() {
   const [compilePrompt, setCompilePrompt] = useState<CompilePrompt | null>(null)
   const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null)
   const [apiBalance, setApiBalance] = useState<api.DeepSeekBalance | null>(null)
+  const [balanceRefreshState, setBalanceRefreshState] = useState<DeepSeekBalanceRefreshState>('idle')
   const [chatSourceContext, setChatSourceContext] = useState<SourceChatContext | null>(null)
   const [versionControlSelection, setVersionControlSelection] = useState<unknown>(null)
   const [appAssistantOpen, setAppAssistantOpen] = useState(false)
@@ -673,12 +656,15 @@ export default function MainStudio() {
   }, [])
 
   const reloadBalance = useCallback(async () => {
+    setBalanceRefreshState('refreshing')
     try {
       const balance = await api.getDeepSeekBalance()
       setApiBalance(balance)
+      setBalanceRefreshState('success')
       return balance
     } catch {
       setApiBalance(null)
+      setBalanceRefreshState('error')
       return null
     }
   }, [])
@@ -1103,7 +1089,7 @@ export default function MainStudio() {
     }
   }
 
-  const createWorkbench = async (values: {
+  const createWorkbenchNow = async (values: {
     name: string
     rootPath?: string
     engineeringSessionId?: number
@@ -1174,6 +1160,11 @@ export default function MainStudio() {
     } finally {
       setChatBusy(false)
     }
+  }
+
+  const createChatSessionFromEmptyState = () => {
+    setShellLayout(previous => previous.rightOpen ? previous : { ...previous, rightOpen: true })
+    void createChatSession()
   }
 
   const activateChatSession = async (sessionId: string) => {
@@ -1482,6 +1473,52 @@ export default function MainStudio() {
     }
   }
 
+  const createWorkbench = async (values: {
+    name: string
+    rootPath?: string
+    engineeringSessionId?: number
+    engineeringProjectPath?: string
+  }) => {
+    const attachedSession = currentSession?.attached
+      ? currentSession
+      : await api.getCurrentTiaSession().catch(() => null)
+    if (attachedSession?.attached && attachedSession.sessionId !== null) {
+      setPendingWorkbenchCreation({
+        values,
+        sessionId: attachedSession.sessionId,
+        projectPath: attachedSession.projectPath,
+      })
+      return
+    }
+    await createWorkbenchNow(values)
+  }
+
+  const continueWorkbenchCreationAfterTiaClose = async (save: boolean) => {
+    if (!pendingWorkbenchCreation) return
+    const pending = pendingWorkbenchCreation
+    setSessionActionBusy('create-workbench-close')
+    try {
+      if (save) await api.saveTiaProject()
+      await api.disconnect()
+      await api.closeTiaSession(pending.sessionId)
+      setPendingWorkbenchCreation(null)
+      await reloadSessions().catch(() => {})
+      await reloadCurrentSession()
+      const values = pending.values.engineeringSessionId === pending.sessionId && pending.projectPath
+        ? {
+            ...pending.values,
+            engineeringSessionId: undefined,
+            engineeringProjectPath: pending.projectPath,
+          }
+        : pending.values
+      await createWorkbenchNow(values)
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setSessionActionBusy(null)
+    }
+  }
+
   const detachSession = async () => {
     setSessionActionBusy('detach')
     try {
@@ -1759,14 +1796,6 @@ export default function MainStudio() {
     }
   }
 
-  const tabs: Array<{ id: StudioTab; label: string; icon: typeof Boxes }> = [
-    { id: 'overview', label: 'Device overview', icon: Cpu },
-    { id: 'chat', label: 'AI chat', icon: MessageSquare },
-    { id: 'source', label: 'PLC source', icon: Code2 },
-    { id: 'knowledge', label: 'Knowledge', icon: Database },
-    { id: 'git', label: 'Version control', icon: GitBranch },
-  ]
-
   const hardwareTabs: Array<{ id: 'tree' | 'bom' | 'network'; label: string; icon: typeof Boxes }> = [
     { id: 'tree', label: 'Hardware configuration', icon: CircuitBoard },
     { id: 'bom', label: 'BOM list', icon: ClipboardList },
@@ -2026,244 +2055,80 @@ export default function MainStudio() {
               </div>
             </div>
           ) : (
-            <>
-              <div className="flex h-10 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
-                {tabs.map(tab => {
-                  const Icon = tab.icon
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
-                      className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[9px] transition-colors ${activeTab === tab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
-                    >
-                      <Icon className="h-3 w-3" /> {tab.label}
-                    </button>
-                  )
-                })}
-                <div className="flex-1" />
-              </div>
-
-              <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
-                {activeTab === 'overview' && (
-                  <div className="mx-auto max-w-6xl space-y-5 p-5">
-                    <section className="flex flex-wrap items-start gap-4 rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-                      <div className="grid h-12 w-12 place-items-center rounded-xl bg-chart-2/10">
-                        <Cpu className="h-5 w-5 text-chart-2" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <h1 className="text-lg font-semibold">{deviceName}</h1>
-                        <p className="mt-0.5 font-mono text-[9px] text-muted-foreground">{deviceInfo?.engineeringIdentity ?? selection.deviceId}</p>
-                        {(deviceMeta?.typeIdentifier || deviceMeta?.deviceName) && (
-                          <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
-                            <Cpu className="h-3 w-3" />
-                            {deviceMeta.typeIdentifier?.replace(/^OrderNumber:/, '') ?? ''}
-                            {deviceMeta.typeIdentifier && deviceMeta.deviceName ? ' · ' : ''}
-                            {deviceMeta.deviceName ?? ''}
-                          </p>
-                        )}
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void openProjectInTia()}>
-                            <Server className="h-3.5 w-3.5" /> Open project in TIA
-                          </button>
-                          {matchingTiaSession && (
-                            <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void attachTiaInstance(matchingTiaSession.id)}>
-                              <Server className="h-3.5 w-3.5" /> Re-attach TIA instance (PID {matchingTiaSession.id})
-                            </button>
-                          )}
-                          <button className="primary-button" disabled={Boolean(operation)} onClick={() => void stageRefresh()}>
-                            <RefreshCw className="h-3.5 w-3.5" /> Compare with TIA
-                          </button>
-                          {!isBrandNewDevice && (
-                            <button
-                              className={rebuildArmed ? 'primary-button' : 'secondary-button'}
-                              disabled={Boolean(operation)}
-                              onClick={() => {
-                                if (!rebuildArmed) {
-                                  setRebuildArmed(true)
-                                  setTimeout(() => setRebuildArmed(false), 4000)
-                                  return
-                                }
-                                setRebuildArmed(false)
-                                void rebuildProject()
-                              }}
-                            >
-                              <RotateCw className="h-3.5 w-3.5" /> {rebuildArmed ? 'Confirm full rebuild?' : 'Rebuild project'}
-                            </button>
-                          )}
-                          <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void updateKnowledge(false)}>
-                            <Database className="h-3.5 w-3.5" /> Update knowledge
-                          </button>
-                          {activeWorktree?.branch !== 'master' && (
-                            <button className="secondary-button" disabled={Boolean(operation)} onClick={() => void mergeIntoMaster()}>
-                              <GitMerge className="h-3.5 w-3.5" /> Merge to master
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border)' }}>
-                        <div className="flex items-center gap-2 text-[8px] uppercase tracking-[0.16em] text-muted-foreground">
-                          <span>Knowledge</span>
-                          <span className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-400">Offline ready</span>
-                        </div>
-                        <div className={`mt-1 flex items-center gap-1.5 text-[10px] font-medium ${
-                          activeKnowledge === 'current' ? 'text-emerald-500'
-                            : activeKnowledge === 'stale' ? 'text-amber-500'
-                              : activeKnowledge === 'failed' ? 'text-red-500'
-                                : 'text-muted-foreground'
-                        }`}>
-                          <Database className="h-3.5 w-3.5" /> {activeKnowledge}
-                        </div>
-                        <div className="mt-1 text-[8px] text-muted-foreground">
-                          Updated {deviceView?.knowledgeUpdatedAt
-                            ? new Date(deviceView.knowledgeUpdatedAt).toLocaleString()
-                            : 'never'}
-                        </div>
-                      </div>
-                    </section>
-
-                    {isBrandNewDevice && (
-                      <section className="flex flex-wrap items-center gap-4 rounded-xl border border-chart-2/40 bg-chart-2/5 p-5">
-                        <div className="grid h-10 w-10 place-items-center rounded-lg bg-chart-2/10">
-                          <Sparkles className="h-5 w-5 text-chart-2" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <h2 className="text-sm font-semibold">Start by generating the PLC context</h2>
-                          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                            Exports the full PLC from TIA, commits it as the initial baseline, and builds the offline knowledge database — no confirmations needed.
-                          </p>
-                        </div>
-                        <button className="primary-button" disabled={Boolean(operation)} onClick={() => void bootstrapDevice()}>
-                          <Sparkles className="h-3.5 w-3.5" /> Generate PLC context
-                        </button>
-                      </section>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                      <Metric label="PLC blocks" value={blocks.length} />
-                      <Metric label="Source objects" value={displayedSourceObjectCount} />
-                      <Metric label="Saved sessions" value={deviceSessions.length} />
-                      <Metric label="Knowledge state" value={activeKnowledge} tone={activeKnowledge === 'current' ? 'good' : activeKnowledge === 'failed' ? 'danger' : 'warning'} />
-                    </div>
-
-                    <div className="grid gap-4 lg:grid-cols-2">
-                      <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-                        <div className="flex items-center gap-3">
-                          <Database className="h-5 w-5 text-chart-2" />
-                          <div>
-                            <h2 className="text-sm font-semibold">Device-owned knowledge</h2>
-                            <p className="text-[9px] text-muted-foreground">No cross-device lifecycle coupling</p>
-                          </div>
-                        </div>
-                        <div className="mt-5 rounded-lg border bg-muted/30 p-4" style={{ borderColor: 'var(--border)' }}>
-                          <div className="text-[8px] uppercase tracking-[0.16em] text-muted-foreground">State</div>
-                          <div className="mt-2 flex items-center gap-2 text-lg font-semibold capitalize">
-                            <CircleDot className={`h-4 w-4 ${activeKnowledge === 'current' ? 'text-emerald-500' : activeKnowledge === 'failed' ? 'text-red-500' : 'text-amber-500'}`} />
-                            {activeKnowledge}
-                          </div>
-                          <div className="mt-2 text-[9px] text-muted-foreground">
-                            Last updated: {deviceView?.knowledgeUpdatedAt
-                              ? new Date(deviceView.knowledgeUpdatedAt).toLocaleString()
-                              : 'Never'}
-                          </div>
-                        </div>
-                        {activeKnowledge !== 'current' && (
-                          <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-500/8 p-3 text-[9px] leading-relaxed text-amber-600 dark:text-amber-400">
-                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                            Update once after your edit batch and before relying on graph or block context.
-                          </div>
-                        )}
-                      </section>
-                      <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-                        <h2 className="text-sm font-semibold">Maintenance actions</h2>
-                        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                          Normal update batches stale source objects. Rebuild ingests the full PLC source tree.
-                        </p>
-                        <div className="mt-5 space-y-2">
-                          <button className="primary-button w-full" disabled={Boolean(operation)} onClick={() => void updateKnowledge(false)}>
-                            <ArrowDownToLine className="h-3.5 w-3.5" /> Update changed components
-                          </button>
-                          <button className="secondary-button w-full" disabled={Boolean(operation)} onClick={() => void updateKnowledge(true)}>
-                            <RefreshCw className="h-3.5 w-3.5" /> Full device rebuild
-                          </button>
-                        </div>
-                        <div className="mt-5 flex items-center gap-2 text-[9px] text-muted-foreground">
-                          <ShieldCheck className="h-4 w-4 text-emerald-500" />
-                          Applied hashes are checked before stale state clears.
-                        </div>
-                      </section>
-                    </div>
-
-                  </div>
-                )}
-
-                {activeTab === 'chat' && (
-                  <div className="h-full min-h-[520px]">
-                    <ChatWorkspace
-                      tabs={chatTabs}
-                      busy={chatBusy}
-                      confirmation={pendingConfirmation}
-                      onConfirm={decision => void decideConfirmation(decision)}
-                      onFocus={sessionId => void activateChatSession(sessionId)}
-                      onSend={(sessionId, message) => void sendChatMessage(sessionId, message)}
-                      onDraftChange={(sessionId, draft) => setChatTabs(previous => setDraft(previous, sessionId, draft))}
-                      onStop={stopChatGeneration}
-                      onContinue={sessionId => void continueChat(sessionId)}
-                      sourceContext={chatSourceContext}
-                      onClearSourceContext={() => setChatSourceContext(null)}
-                    />
-                  </div>
-                )}
-
-                {activeTab === 'source' && selection.workbenchId && selection.worktreeId && selection.deviceId && (
-                  <PlcSourcePanel
-                    workbenchId={selection.workbenchId}
-                    worktreeId={selection.worktreeId}
-                    deviceId={selection.deviceId}
-                    deviceView={deviceView}
-                    onChatWithAgent={item => {
-                      setChatSourceContext({
-                        name: item.name,
-                        category: item.category,
-                        number: item.number,
-                        relativePath: item.relativePath,
-                        plcName: deviceName ?? '',
-                      })
-                      setActiveTab('chat')
-                    }}
-                    onSnapshotReload={() => void reloadDeviceSnapshot({
-                      workbenchId: selection.workbenchId!,
-                      worktreeId: selection.worktreeId!,
-                      deviceId: selection.deviceId!,
-                    })}
-                  />
-                )}
-
-                {activeTab === 'knowledge' && (
-                  <div className="flex h-full min-h-[560px] flex-col p-5">
-                    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
-                      {knowledgeContext && (
-                        <NodeEdgesView
-                          context={knowledgeContext}
-                          projectName={deviceName ?? ''}
-                          onNodeSelect={node => setKnowledgeSelection(previous => ({ ...previous, node }))}
-                          onEdgeSelect={edge => setKnowledgeSelection(previous => ({ ...previous, edge }))}
-                        />
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {activeTab === 'git' && (
-                  <div className="h-full min-h-[520px]">
-                    <VersionControlPanel
-                      workbenchId={selection.workbenchId!}
-                      worktreeId={selection.worktreeId!}
-                      onSelectionChange={setVersionControlSelection}
-                    />
-                  </div>
-                )}
-              </div>
-            </>
+            <WorkspaceHost
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              overview={{
+                deviceName,
+                deviceId: selection.deviceId,
+                deviceInfo,
+                deviceMeta,
+                deviceView,
+                blocks,
+                displayedSourceObjectCount,
+                deviceSessions,
+                activeKnowledge,
+                isBrandNewDevice,
+                matchingTiaSession,
+                operation,
+                rebuildArmed,
+                setRebuildArmed,
+                activeWorktree,
+                onOpenProjectInTia: () => void openProjectInTia(),
+                onAttachTiaInstance: sessionId => void attachTiaInstance(sessionId),
+                onStageRefresh: () => void stageRefresh(),
+                onRebuildProject: () => void rebuildProject(),
+                onUpdateKnowledge: rebuild => void updateKnowledge(rebuild),
+                onMergeIntoMaster: () => void mergeIntoMaster(),
+                onBootstrapDevice: () => void bootstrapDevice(),
+              }}
+              chat={{
+                tabs: chatTabs,
+                busy: chatBusy,
+                onCreateSession: createChatSessionFromEmptyState,
+                confirmation: pendingConfirmation,
+                onConfirm: decision => void decideConfirmation(decision),
+                onFocus: sessionId => void activateChatSession(sessionId),
+                onSend: (sessionId, message) => void sendChatMessage(sessionId, message),
+                onDraftChange: (sessionId, draft) => setChatTabs(previous => setDraft(previous, sessionId, draft)),
+                onStop: stopChatGeneration,
+                onContinue: sessionId => void continueChat(sessionId),
+                sourceContext: chatSourceContext,
+                onClearSourceContext: () => setChatSourceContext(null),
+              }}
+              source={{
+                workbenchId: selection.workbenchId,
+                worktreeId: selection.worktreeId,
+                deviceId: selection.deviceId,
+                deviceView,
+                onChatWithAgent: item => {
+                  setChatSourceContext({
+                    name: item.name,
+                    category: item.category,
+                    number: item.number,
+                    relativePath: item.relativePath,
+                    plcName: deviceName ?? '',
+                  })
+                  setActiveTab('chat')
+                },
+                onSnapshotReload: () => void reloadDeviceSnapshot({
+                  workbenchId: selection.workbenchId!,
+                  worktreeId: selection.worktreeId!,
+                  deviceId: selection.deviceId!,
+                }),
+              }}
+              knowledge={{
+                context: knowledgeContext,
+                projectName: deviceName ?? '',
+                onNodeSelect: node => setKnowledgeSelection(previous => ({ ...previous, node })),
+                onEdgeSelect: edge => setKnowledgeSelection(previous => ({ ...previous, edge })),
+              }}
+              git={{
+                workbenchId: selection.workbenchId!,
+                worktreeId: selection.worktreeId!,
+                onSelectionChange: setVersionControlSelection,
+              }}
+            />
           )}
         </main>
         {selection.worktreeId && (selection.deviceId !== null || mainView.kind === 'hardware' || activeTab === 'git') && (
@@ -2352,39 +2217,28 @@ export default function MainStudio() {
           <span>/</span>
           <span className="font-mono text-foreground">{deviceName ?? (selection.worktreeId && !selection.deviceId ? (mainView.kind === 'hardware' ? 'hardware' : 'worktree') : selection.deviceId ?? 'no device')}</span>
         </span>
-        <span className="flex-1" />
-        <RuntimeStateStatusBar runtime={appAssistantRuntime} />
-        <span
-          className="status-pill"
-          data-api-status
-          title="DeepSeek API status — manage the key in Settings → Assistant"
-        >
-          <CircleDot className={`h-3 w-3 ${fatalError ? 'text-red-500' : apiKeyConfigured === false ? 'text-amber-500' : 'text-emerald-500'}`} />
-          {fatalError ? 'API error' : apiKeyConfigured === false ? 'No valid API key' : 'API online'}
-        </span>
-        {apiKeyConfigured && (
-          <span className="status-pill" data-api-balance title={apiBalance?.fetchedAt ? `Fetched ${new Date(apiBalance.fetchedAt).toLocaleString()} · refresh in Settings → Assistant` : 'DeepSeek account balance — refresh in Settings → Assistant'}>
-            <Banknote className="h-3 w-3 text-chart-4" />
-            {apiBalance?.balances.map(balance => `${balance.currency === 'USD' ? '$' : `${balance.currency} `}${balance.totalBalance}`).join(' · ') ?? '—'}
-          </span>
-        )}
+        <RuntimeStateStatusBar
+          runtime={appAssistantRuntime}
+          open={statusPopover === 'runtime'}
+          onToggle={open => setStatusPopover(open ? 'runtime' : null)}
+        />
         <span className="relative flex items-center">
           <button
-            className={`status-pill cursor-pointer hover:bg-accent/50 ${tiaPanelOpen ? 'bg-accent/50 text-foreground' : ''}`}
+            className={`status-pill cursor-pointer hover:bg-accent/50 ${statusPopover === 'tia' ? 'bg-accent/50 text-foreground' : ''}`}
             data-tia-sessions
             aria-label="TIA Portal instances"
             title="Detected TIA Portal instances — click to manage or refresh"
-            aria-pressed={tiaPanelOpen}
+            aria-pressed={statusPopover === 'tia'}
             onClick={() => {
-              const next = !tiaPanelOpen
-              setTiaPanelOpen(next)
-              if (next) void reloadTiaState()
+              const next = statusPopover === 'tia' ? null : 'tia'
+              setStatusPopover(next)
+              if (next === 'tia') void reloadTiaState()
             }}
           >
             <Server className="h-3 w-3 text-chart-3" />
             {sessions.length} TIA session{sessions.length === 1 ? '' : 's'}
           </button>
-          {tiaPanelOpen && (
+          {statusPopover === 'tia' && (
             <TiaSessionsPanel
               sessions={sessions}
               current={currentSession}
@@ -2394,15 +2248,44 @@ export default function MainStudio() {
               onAttach={sessionId => void attachSessionFromPanel(sessionId)}
               onDetach={() => void detachSession()}
               onCloseSession={sessionId => void closeSession(sessionId)}
-              onClose={() => setTiaPanelOpen(false)}
+              onClose={() => setStatusPopover(null)}
             />
           )}
         </span>
+        <span className="flex-1" />
+        <span
+          className="status-pill"
+          data-api-status
+          title="DeepSeek API status — manage the key in Settings → Assistant"
+        >
+          <CircleDot className={`h-3 w-3 ${fatalError ? 'text-red-500' : apiKeyConfigured === false ? 'text-amber-500' : 'text-emerald-500'}`} />
+          {fatalError ? 'API error' : apiKeyConfigured === false ? 'No valid API key' : 'API online'}
+        </span>
+        {apiKeyConfigured && (
+          <DeepSeekBalanceStatus
+            balance={apiBalance}
+            state={balanceRefreshState}
+            onRefresh={() => {
+              setStatusPopover(null)
+              void reloadBalance()
+            }}
+          />
+        )}
         <span className="status-pill" data-ready-state title="Workbench status">
           <CircleDot className="h-3 w-3 text-emerald-500" />
           Ready
         </span>
       </footer>
+
+      {pendingWorkbenchCreation && (
+        <TiaCloseConfirmationDialog
+          operationLabel="Create workbench project"
+          busy={sessionActionBusy === 'create-workbench-close'}
+          onSaveAndClose={() => void continueWorkbenchCreationAfterTiaClose(true)}
+          onCloseWithoutSaving={() => void continueWorkbenchCreationAfterTiaClose(false)}
+          onCancel={() => setPendingWorkbenchCreation(null)}
+        />
+      )}
 
       {createWorkbenchOpen && (
         <CreateWorkbenchDialog

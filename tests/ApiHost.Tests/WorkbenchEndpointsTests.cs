@@ -246,6 +246,31 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveProjectForwardsToTheAttachedEngineeringSession()
+    {
+        var engineering = new RecordingToolCaller("{}");
+        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<ApiMcpGateway>();
+                services.AddSingleton(new ApiMcpGateway(
+                    engineering,
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller(),
+                    new RecordingToolCaller()));
+            });
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync("/api/tia/project/save", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(["save_project"], engineering.Calls);
+    }
+
+    [Fact]
     public async Task OpenProjectInTiaSwitchesToVisibleProjectPathAndCompletesOperation()
     {
         var engineering = new RecordingToolCaller();

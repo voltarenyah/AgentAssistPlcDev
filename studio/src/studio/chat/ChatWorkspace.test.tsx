@@ -52,6 +52,31 @@ beforeEach(() => {
 })
 
 describe('ChatWorkspace', () => {
+  it('offers to create a chat session when no session is open', () => {
+    const onCreateSession = vi.fn()
+    const empty: ChatTabsState = { activeId: null, mru: [], tabs: [] }
+    const { host } = render(
+      <ChatWorkspace
+        tabs={empty}
+        busy={false}
+        onCreateSession={onCreateSession}
+        onFocus={vi.fn()}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        onContinue={vi.fn()}
+      />,
+    )
+
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Create new chat session"]')
+    expect(button?.textContent).toContain('Create new chat session')
+
+    act(() => {
+      button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(onCreateSession).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps inactive panes mounted while hiding them', async () => {
     const { host } = render(
       <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={vi.fn()} onStop={vi.fn()} onContinue={vi.fn()} />,
@@ -82,6 +107,45 @@ describe('ChatWorkspace', () => {
     })
 
     expect(onSend).toHaveBeenCalledWith('s2', 'resume this')
+  })
+
+  it('submits the composer with Enter but keeps Shift+Enter available for a newline', () => {
+    const onSend = vi.fn()
+    const { host } = render(
+      <ChatWorkspace tabs={state} busy={false} onFocus={vi.fn()} onSend={onSend} onStop={vi.fn()} onContinue={vi.fn()} />,
+    )
+
+    const input = host.querySelector<HTMLTextAreaElement>('[data-session-pane="s2"] textarea')!
+    act(() => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      setValue?.call(input, 'send this')
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }))
+    })
+
+    const shiftEnter = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', shiftKey: true })
+    act(() => input.dispatchEvent(shiftEnter))
+    expect(shiftEnter.defaultPrevented).toBe(false)
+    expect(onSend).not.toHaveBeenCalled()
+
+    const enter = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter' })
+    act(() => input.dispatchEvent(enter))
+    expect(enter.defaultPrevented).toBe(true)
+    expect(onSend).toHaveBeenCalledWith('s2', 'send this')
+  })
+
+  it('does not submit the composer while busy', () => {
+    const onSend = vi.fn()
+    const { host } = render(
+      <ChatWorkspace tabs={state} busy={true} onFocus={vi.fn()} onSend={onSend} onStop={vi.fn()} onContinue={vi.fn()} />,
+    )
+
+    const input = host.querySelector<HTMLTextAreaElement>('[data-session-pane="s2"] textarea')!
+    const enter = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter' })
+    act(() => input.dispatchEvent(enter))
+
+    expect(input.disabled).toBe(true)
+    expect(enter.defaultPrevented).toBe(false)
+    expect(onSend).not.toHaveBeenCalled()
   })
 
   it('reports unsent composer text to the parent tab state', () => {

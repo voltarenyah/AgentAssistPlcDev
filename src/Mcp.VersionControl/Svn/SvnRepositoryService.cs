@@ -148,6 +148,9 @@ internal sealed class SvnRepositoryService
         SharpSvn.SvnCommitResult? result = null;
         Run("SVN_COMMIT_FAILED", $"Failed to commit '{localPath}'.", () =>
         {
+            // SharpSvn updates the working-copy bookkeeping after the repository commit;
+            // read-only TIA/SVN files make that post-commit step surface as a commit error.
+            ClearReadOnlyAttributes(path);
             using var client = CreateClient();
             client.Commit(path, new SvnCommitArgs { LogMessage = message }, out result);
         });
@@ -381,6 +384,78 @@ internal sealed class SvnRepositoryService
         return relative == "." ? string.Empty : relative;
     }
 
+    private static void ClearReadOnlyAttributes(string root)
+    {
+        if (File.Exists(root))
+        {
+            ClearReadOnlyAttribute(root);
+            return;
+        }
+
+        if (!Directory.Exists(root))
+            return;
+
+        foreach (var path in Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories).Append(root))
+            ClearReadOnlyAttribute(path);
+    }
+
+    private static void ClearReadOnlyAttribute(string path)
+    {
+        var attributes = File.GetAttributes(path);
+        if (!attributes.HasFlag(FileAttributes.ReparsePoint) && attributes.HasFlag(FileAttributes.ReadOnly))
+        {
+            File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
+        }
+    }
+
+    /// <summary>
+    /// Keep the complete native exception chain in the structured tool error. SharpSvn's
+    /// top-level message is often only "... (details follow):"; ToString() includes the
+    /// nested causes, while the additional fields preserve the native diagnostic context.
+    /// </summary>
+    internal static string FormatSvnFailure(Exception exception)
+    {
+        var details = new List<string> { exception.ToString() };
+        if (exception is SvnException svn)
+        {
+            if (svn.RootCause is { } rootCause
+                && !ReferenceEquals(rootCause, exception)
+                && !string.Equals(rootCause.ToString(), exception.ToString(), StringComparison.Ordinal))
+            {
+                details.Add($"Root cause:\n{rootCause}");
+            }
+
+            if (svn.Targets is not null)
+            {
+                details.Add($"Targets: {FormatSvnTargets(svn.Targets)}");
+            }
+
+            details.Add($"SVN error code: {svn.SvnErrorCode}");
+            details.Add($"Subversion error code: {svn.SubversionErrorCode}");
+            details.Add($"Windows error code: {svn.WindowsErrorCode}");
+            details.Add($"Operating system error code: {svn.OperatingSystemErrorCode}");
+        }
+
+        return string.Join(Environment.NewLine, details.Where(detail => !string.IsNullOrWhiteSpace(detail)));
+    }
+
+    private static string FormatSvnTargets(object targets)
+    {
+        if (targets is string or Uri)
+        {
+            return targets.ToString() ?? string.Empty;
+        }
+
+        if (targets is System.Collections.IEnumerable enumerable)
+        {
+            return string.Join(", ", enumerable.Cast<object?>()
+                .Select(target => target?.ToString())
+                .Where(target => !string.IsNullOrWhiteSpace(target)));
+        }
+
+        return targets.ToString() ?? string.Empty;
+    }
+
     private static void Run(string code, string message, Action action)
     {
         try
@@ -395,7 +470,7 @@ internal sealed class SvnRepositoryService
         {
             throw new VcInternalException(
                 code,
-                $"{message} {ex.Message}",
+                $"{message}{Environment.NewLine}SVN exception details:{Environment.NewLine}{FormatSvnFailure(ex)}",
                 RemediationFor(ex.SvnErrorCode));
         }
     }

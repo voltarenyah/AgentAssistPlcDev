@@ -1196,6 +1196,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         {
             "Exporting block Main_OB1...",
             "Exporting tag table MachineTags...",
+            "Exported PLC source files: 1",
+            "Exported PLC source files: 2",
         });
         var coordinator = Create(fixture, engineering: engineering);
         var progress = new RecordingProgress();
@@ -1204,6 +1206,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Contains("Exporting block Main_OB1...", progress.Messages);
         Assert.Contains("Exporting tag table MachineTags...", progress.Messages);
+        Assert.Contains("Exported PLC source files: 1", progress.Messages);
+        Assert.Contains("Exported PLC source files: 2", progress.Messages);
     }
 
     [Fact]

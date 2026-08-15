@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { CircleDot, Eye } from 'lucide-react'
 import type { AppAssistantRuntimeSnapshot } from '@/api/client'
 
 type Props = {
   runtime: AppAssistantRuntimeSnapshot | null
+  open?: boolean
+  onToggle?: (open: boolean) => void
 }
 
 const operationStatus = (status: string | number) => {
@@ -14,15 +17,22 @@ const operationStatus = (status: string | number) => {
 
 const value = (item: string | number | null | undefined) => item === null || item === undefined || item === '' ? 'unknown' : String(item)
 
-export default function RuntimeStateStatusBar({ runtime }: Props) {
+export default function RuntimeStateStatusBar({ runtime, open, onToggle }: Props) {
+  const [internalOpen, setInternalOpen] = useState(true)
+  const isOpen = open ?? internalOpen
+  const toggle = () => {
+    const next = !isOpen
+    if (open === undefined) setInternalOpen(next)
+    onToggle?.(next)
+  }
   if (!runtime) {
     return (
-      <details className="studio-status-item runtime-state-popover" data-runtime-state>
-        <summary className="runtime-state-summary" title="The shared runtime state has not been loaded">
+      <span className="studio-status-item runtime-state-popover" data-runtime-state>
+        <button className="runtime-state-summary" type="button" title="The shared runtime state has not been loaded" aria-label="Shared runtime state" aria-expanded={isOpen} onClick={toggle}>
           <CircleDot className="h-3 w-3 text-amber-500" /> Runtime state unavailable
-        </summary>
-        <div className="runtime-state-panel">Waiting for the shared runtime snapshot.</div>
-      </details>
+        </button>
+        {isOpen && <div className="runtime-state-panel">Waiting for the shared runtime snapshot.</div>}
+      </span>
     )
   }
 
@@ -33,14 +43,14 @@ export default function RuntimeStateStatusBar({ runtime }: Props) {
   const operation = operationStatus(operationState.status)
 
   return (
-    <details className="studio-status-item runtime-state-popover" data-runtime-state>
-      <summary className="runtime-state-summary" title="Inspect the shared runtime state">
+    <span className="studio-status-item runtime-state-popover" data-runtime-state>
+      <button className="runtime-state-summary" type="button" title="Inspect the shared runtime state" aria-label="Shared runtime state" aria-expanded={isOpen} onClick={toggle}>
         <CircleDot className="h-3 w-3 text-chart-4" />
         Runtime rev {runtime.workbenchRevision}
         <span className="text-muted-foreground">· {operation}</span>
         {worktree && <span className="text-muted-foreground">· Git {value(worktree.gitStatus)}</span>}
-      </summary>
-      <div className="runtime-state-panel" aria-label="Shared runtime state details">
+      </button>
+      {isOpen && <div className="runtime-state-panel" aria-label="Shared runtime state details">
         <div className="runtime-state-heading"><Eye className="h-3 w-3" /> Shared runtime state</div>
         <div className="runtime-state-grid">
           <span>Revision</span><strong>{runtime.workbenchRevision}</strong>
@@ -53,7 +63,7 @@ export default function RuntimeStateStatusBar({ runtime }: Props) {
           <span>Device</span><strong>{device ? `${value(device.plcName ?? device.deviceId)} · TIA ${value(device.tiaState)} · Knowledge ${value(device.knowledgeFreshness)}` : 'unknown'}</strong>
         </div>
         <time dateTime={runtime.observedAt}>Observed {new Date(runtime.observedAt).toLocaleString()}</time>
-      </div>
-    </details>
+      </div>}
+    </span>
   )
 }

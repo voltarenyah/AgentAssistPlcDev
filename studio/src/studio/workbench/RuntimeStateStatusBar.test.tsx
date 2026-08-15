@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import RuntimeStateStatusBar from './RuntimeStateStatusBar'
 import type { AppAssistantRuntimeSnapshot } from '@/api/client'
 
@@ -53,6 +53,19 @@ describe('RuntimeStateStatusBar', () => {
     expect(host.textContent).toContain('PLC_1 · TIA connected · Knowledge fresh')
     expect(host.textContent).toContain('abc1234')
     expect(host.querySelector('time')?.getAttribute('datetime')).toBe(runtime.observedAt)
+
+    act(() => root.unmount())
+  })
+
+  it('lets the shell control the open module so another status module can close it', () => {
+    const onToggle = vi.fn()
+    const { host, root } = render(
+      <RuntimeStateStatusBar runtime={runtime} open={false} onToggle={onToggle} />,
+    )
+
+    expect(host.querySelector('[aria-label="Shared runtime state details"]')).toBeNull()
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Shared runtime state"]')!.click())
+    expect(onToggle).toHaveBeenCalledWith(true)
 
     act(() => root.unmount())
   })

@@ -72,6 +72,33 @@ describe('MainStudio API key entrance', () => {
     expect(host.querySelector('[data-api-balance]')?.textContent).toContain('$10.42')
   })
 
+  it('shows refresh progress and completion feedback in the status bar', async () => {
+    keyState.configured = true
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    const nextBalance = {
+      isAvailable: true,
+      balances: [{ currency: 'USD', totalBalance: '9.87', grantedBalance: '0.00', toppedUpBalance: '9.87' }],
+      fetchedAt: '2026-08-15T08:31:00.000Z',
+    }
+    let resolvePending: ((value: typeof nextBalance) => void) | undefined
+    const pending = new Promise<typeof nextBalance>(resolve => { resolvePending = resolve })
+    balanceRequest.mockImplementationOnce(() => pending)
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Refresh DeepSeek balance"]')?.click())
+    expect(host.querySelector('[data-balance-refresh-status]')?.textContent).toContain('Refreshing')
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Refresh DeepSeek balance"]')?.disabled).toBe(true)
+
+    await act(async () => {
+      resolvePending?.(nextBalance)
+      await pending
+    })
+    expect(host.querySelector('[data-balance-refresh-status]')?.textContent).not.toContain('Updated')
+    expect(host.querySelector('[data-api-balance]')?.getAttribute('title')).toContain('Fetched')
+    expect(host.querySelector('[data-api-balance]')?.textContent).toContain('$9.87')
+  })
+
   it('keeps the status bar and settings entry point available with both docks collapsed', async () => {
     const { host } = render(<MainStudio />)
     await act(async () => {})
