@@ -125,6 +125,7 @@ describe('MainStudio API key entrance', () => {
     expect(host.querySelector('[data-status-bar]')).not.toBeNull()
 
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click())
-    expect(host.querySelector('input[type="password"]')).not.toBeNull()
+    await act(async () => {})
+    expect(host.querySelector('[data-settings-page]')).not.toBeNull()
   })
 })

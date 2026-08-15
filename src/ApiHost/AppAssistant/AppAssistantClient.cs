@@ -5,6 +5,29 @@ namespace ApiHost.AppAssistant;
 
 public sealed class AppAssistantClient(HttpClient httpClient, IConfiguration configuration)
 {
+    public async Task<JsonElement> GetHealthAsync(CancellationToken cancellationToken = default)
+    {
+        var baseUrl = configuration["AppAssistant:ServiceUrl"] ?? "http://127.0.0.1:8787";
+        try
+        {
+            using var response = await httpClient
+                .GetAsync($"{baseUrl.TrimEnd('/')}/health", cancellationToken)
+                .ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            return await response.Content
+                .ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            throw new AppAssistantClientException(
+                "APP_ASSISTANT_UNAVAILABLE",
+                "The LangGraph app assistant is currently unavailable.",
+                exception);
+        }
+    }
+
     public async Task<JsonElement> SendAsync(
         string operation,
         string workbenchId,

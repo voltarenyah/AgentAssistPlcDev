@@ -76,8 +76,10 @@ import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
 import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
+import SettingsPage from '@/studio/settings/SettingsPage'
 import {
   clampDockWidth,
+  DEFAULT_SHELL_LAYOUT,
   readShellLayout,
   writeShellLayout,
   type DockSide,
@@ -529,7 +531,7 @@ export default function MainStudio() {
   const hardwareNetworkRequestId = useRef(0)
   const chatAbortRef = useRef<AbortController | null>(null)
   const [activeTab, setActiveTab] = useState<StudioTab>('overview')
-  const [activePage, setActivePage] = useState<'studio' | 'tools'>('studio')
+  const [activePage, setActivePage] = useState<'studio' | 'tools' | 'settings'>('studio')
   const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
   const [shellLayout, setShellLayout] = useState<ShellLayout>(() => {
     try {
@@ -1857,6 +1859,11 @@ export default function MainStudio() {
 
       {activePage === 'tools' ? (
         <McpToolsHelper onClose={() => setActivePage('studio')} />
+      ) : activePage === 'settings' ? (
+        <SettingsPage
+          onClose={() => setActivePage('studio')}
+          onResetLayout={() => setShellLayout(DEFAULT_SHELL_LAYOUT)}
+        />
       ) : <div className="flex min-h-0 flex-1">
         <div
           data-dock="left"
@@ -2472,7 +2479,7 @@ export default function MainStudio() {
         <button className="icon-button" aria-label="Refresh status" title="Refresh status" onClick={() => void loadStartup()}>
           <RefreshCw className="h-3 w-3" />
         </button>
-        <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setApiKeyDialogOpen(true)}>
+        <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setActivePage(previous => previous === 'settings' ? 'studio' : 'settings')}>
           <Settings2 className="h-3.5 w-3.5" />
         </button>
       </footer>

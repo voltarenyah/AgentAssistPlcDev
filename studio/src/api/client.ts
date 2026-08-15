@@ -92,12 +92,9 @@ export type ProjectRetrieveResult = {
 }
 
 export type ServerStatus = {
-  servers: 'running' | 'starting'
-  connected: string | null
-  selectedProject: string | null
-  connections: number
-  chatReady: boolean
-  tools: number
+  storage: string
+  legacyProjects: boolean
+  version: string
 }
 
 export type ChatMessage = {
@@ -1292,6 +1289,12 @@ export type GraphProperty = {
 export async function getStatus(): Promise<ServerStatus> {
   const res = await fetch(`${BASE}/status`)
   if (!res.ok) throw new Error(`Status failed: ${res.status}`)
+  return res.json()
+}
+
+export async function getAppAssistantHealth(): Promise<unknown> {
+  const res = await fetch(`${BASE}/app-assistant/health`)
+  if (!res.ok) throw new Error(`App assistant health failed: ${res.status}`)
   return res.json()
 }
 
