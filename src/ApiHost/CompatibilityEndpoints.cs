@@ -505,12 +505,12 @@ public static class CompatibilityEndpoints
             await gateway.For("query_node_kinds").CallAsync<JsonElement>("query_node_kinds", new { dbPath = Device(state).KnowledgeDbPath }, ct));
         app.MapGet("/api/knowledge/block-interface", (string blockName, WorkbenchApiState state) =>
             Results.Ok(BlockInterfaceReader.Read(Device(state).KnowledgeDbPath, blockName)));
-        app.MapGet("/api/knowledge/nodes", async (string? kind, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("query_nodes").CallAsync<JsonElement>("query_nodes", new { dbPath = Device(state).KnowledgeDbPath, kind }, ct));
+        app.MapGet("/api/knowledge/nodes", async (string? kind, string? search, int? maxRows, int? offset, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("query_nodes").CallAsync<JsonElement>("query_nodes", new { dbPath = Device(state).KnowledgeDbPath, kind, search, maxRows, offset }, ct));
         app.MapGet("/api/knowledge/edge-types", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("query_edge_types").CallAsync<JsonElement>("query_edge_types", new { dbPath = Device(state).KnowledgeDbPath }, ct));
-        app.MapGet("/api/knowledge/edges", async (string? nodeId, string? type, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("query_edges").CallAsync<JsonElement>("query_edges", new { dbPath = Device(state).KnowledgeDbPath, nodeId, type }, ct));
+        app.MapGet("/api/knowledge/edges", async (string? nodeId, string? type, string? search, int? maxRows, int? offset, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
+            await gateway.For("query_edges").CallAsync<JsonElement>("query_edges", new { dbPath = Device(state).KnowledgeDbPath, nodeId, type, search, maxRows, offset }, ct));
         app.MapGet("/api/knowledge/node-properties", async (string nodeId, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("query_node_properties").CallAsync<JsonElement>("query_node_properties", new { dbPath = Device(state).KnowledgeDbPath, nodeId }, ct));
         app.MapGet("/api/knowledge/edge-properties", async (string edgeId, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>

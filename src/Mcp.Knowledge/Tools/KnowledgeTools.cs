@@ -140,12 +140,14 @@ public sealed class KnowledgeTools
         => Invoke(() => NodeKinds(dbPath));
 
     [McpServerTool(Name = "query_nodes")]
-    [Description("List graph nodes (id, kind, name), optionally filtered by one kind (read-only).")]
+    [Description("List graph nodes (id, kind, name), optionally filtered by one kind and/or a case-insensitive substring over id/name/kind; supports offset paging (read-only).")]
     public CallToolResult QueryNodes(
         [Description("Path to the plc-knowledge.db file.")] string dbPath,
         [Description("Optional node-kind filter, e.g. 'Network', 'OB', 'Variable'.")] string? kind = null,
-        [Description("Maximum rows to return (default 1000, hard cap 10000).")] int? maxRows = null)
-        => Invoke(() => BrowseNodes(dbPath, kind, maxRows));
+        [Description("Maximum rows to return (default 1000, hard cap 10000).")] int? maxRows = null,
+        [Description("Optional case-insensitive substring matched against node id, name and kind.")] string? search = null,
+        [Description("Optional zero-based row offset for paging through large result sets (default 0).")] int? offset = null)
+        => Invoke(() => BrowseNodes(dbPath, kind, maxRows, search, offset));
 
     [McpServerTool(Name = "query_edge_types")]
     [Description("List the distinct edge types present in a PLC knowledge base (read-only).")]
@@ -154,13 +156,15 @@ public sealed class KnowledgeTools
         => Invoke(() => EdgeTypes(dbPath));
 
     [McpServerTool(Name = "query_edges")]
-    [Description("List graph edges (id, from_node_id, to_node_id, type). The optional nodeId matches edges where the node is either endpoint (from OR to); the optional type filters by edge type (read-only).")]
+    [Description("List graph edges (id, from_node_id, to_node_id, type). The optional nodeId matches edges where the node is either endpoint (from OR to); the optional type filters by edge type; the optional search is a case-insensitive substring over id/type/endpoints; supports offset paging (read-only).")]
     public CallToolResult QueryEdges(
         [Description("Path to the plc-knowledge.db file.")] string dbPath,
         [Description("Optional node id; matches edges where the node is the from- or to-endpoint.")] string? nodeId = null,
         [Description("Optional edge-type filter, e.g. 'CONTAINS', 'CALLS'.")] string? type = null,
-        [Description("Maximum rows to return (default 1000, hard cap 10000).")] int? maxRows = null)
-        => Invoke(() => BrowseEdges(dbPath, nodeId, type, maxRows));
+        [Description("Maximum rows to return (default 1000, hard cap 10000).")] int? maxRows = null,
+        [Description("Optional case-insensitive substring matched against edge id, type and endpoint node ids.")] string? search = null,
+        [Description("Optional zero-based row offset for paging through large result sets (default 0).")] int? offset = null)
+        => Invoke(() => BrowseEdges(dbPath, nodeId, type, maxRows, search, offset));
 
     [McpServerTool(Name = "query_node_properties")]
     [Description("List the name/value properties of one graph node (read-only).")]
@@ -822,27 +826,45 @@ public sealed class KnowledgeTools
         return new { kinds };
     }
 
-    private static object BrowseNodes(string dbPath, string? kind, int? maxRows)
+    private static object BrowseNodes(string dbPath, string? kind, int? maxRows, string? search = null, int? offset = null)
     {
         var limit = maxRows is null ? DefaultBrowseMaxRows : Math.Clamp(maxRows.Value, 1, HardBrowseMaxRows);
+        var skip = offset is null ? 0 : Math.Max(0, offset.Value);
         var hasKind = !string.IsNullOrWhiteSpace(kind);
+        var hasSearch = !string.IsNullOrWhiteSpace(search);
+        var whereClause = $"""
+            WHERE 1 = 1
+              {(hasKind ? "AND kind = @kind" : string.Empty)}
+              {(hasSearch ? "AND (id LIKE @search OR name LIKE @search OR kind LIKE @search)" : string.Empty)}
+            """;
         using var connection = OpenReadOnly(dbPath);
         using var command = connection.CreateCommand();
-        command.CommandText = hasKind
-            ? "SELECT id, kind, name FROM graph_nodes WHERE kind = @kind ORDER BY name COLLATE NOCASE, id LIMIT @limit;"
-            : "SELECT id, kind, name FROM graph_nodes ORDER BY kind, name COLLATE NOCASE, id LIMIT @limit;";
+        command.CommandText = $"""
+            SELECT id, kind, name FROM graph_nodes
+            {whereClause}
+            ORDER BY {(hasKind ? "name COLLATE NOCASE, id" : "kind, name COLLATE NOCASE, id")}
+            LIMIT @limit OFFSET @offset;
+            """;
         if (hasKind)
         {
             command.Parameters.AddWithValue("@kind", kind);
         }
 
+        if (hasSearch)
+        {
+            command.Parameters.AddWithValue("@search", $"%{search!.Trim()}%");
+        }
+
         command.Parameters.AddWithValue("@limit", limit + 1);
+        command.Parameters.AddWithValue("@offset", skip);
 
         var nodes = new List<object>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        using (var reader = command.ExecuteReader())
         {
-            nodes.Add(new { id = reader.GetString(0), kind = reader.GetString(1), name = reader.GetString(2) });
+            while (reader.Read())
+            {
+                nodes.Add(new { id = reader.GetString(0), kind = reader.GetString(1), name = reader.GetString(2) });
+            }
         }
 
         var truncated = nodes.Count > limit;
@@ -851,7 +873,20 @@ public sealed class KnowledgeTools
             nodes.RemoveAt(nodes.Count - 1);
         }
 
-        return new { nodes, truncated };
+        using var countCommand = connection.CreateCommand();
+        countCommand.CommandText = $"SELECT COUNT(*) FROM graph_nodes {whereClause};";
+        if (hasKind)
+        {
+            countCommand.Parameters.AddWithValue("@kind", kind);
+        }
+
+        if (hasSearch)
+        {
+            countCommand.Parameters.AddWithValue("@search", $"%{search!.Trim()}%");
+        }
+
+        var totalCount = Convert.ToInt64(countCommand.ExecuteScalar());
+        return new { nodes, truncated, totalCount };
     }
 
     private static object EdgeTypes(string dbPath)
@@ -869,21 +904,27 @@ public sealed class KnowledgeTools
         return new { types };
     }
 
-    private static object BrowseEdges(string dbPath, string? nodeId, string? type, int? maxRows)
+    private static object BrowseEdges(string dbPath, string? nodeId, string? type, int? maxRows, string? search = null, int? offset = null)
     {
         var limit = maxRows is null ? DefaultBrowseMaxRows : Math.Clamp(maxRows.Value, 1, HardBrowseMaxRows);
+        var skip = offset is null ? 0 : Math.Max(0, offset.Value);
         var hasNode = !string.IsNullOrWhiteSpace(nodeId);
         var hasType = !string.IsNullOrWhiteSpace(type);
+        var hasSearch = !string.IsNullOrWhiteSpace(search);
+        var whereClause = $"""
+            WHERE 1 = 1
+              {(hasNode ? "AND (from_node_id = @nodeId OR to_node_id = @nodeId)" : string.Empty)}
+              {(hasType ? "AND type = @type" : string.Empty)}
+              {(hasSearch ? "AND (id LIKE @search OR type LIKE @search OR from_node_id LIKE @search OR to_node_id LIKE @search)" : string.Empty)}
+            """;
         using var connection = OpenReadOnly(dbPath);
         using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT id, from_node_id, to_node_id, type
             FROM graph_edges
-            WHERE 1 = 1
-              {(hasNode ? "AND (from_node_id = @nodeId OR to_node_id = @nodeId)" : string.Empty)}
-              {(hasType ? "AND type = @type" : string.Empty)}
+            {whereClause}
             ORDER BY id
-            LIMIT @limit;
+            LIMIT @limit OFFSET @offset;
             """;
         if (hasNode)
         {
@@ -895,19 +936,27 @@ public sealed class KnowledgeTools
             command.Parameters.AddWithValue("@type", type);
         }
 
+        if (hasSearch)
+        {
+            command.Parameters.AddWithValue("@search", $"%{search!.Trim()}%");
+        }
+
         command.Parameters.AddWithValue("@limit", limit + 1);
+        command.Parameters.AddWithValue("@offset", skip);
 
         var edges = new List<object>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        using (var reader = command.ExecuteReader())
         {
-            edges.Add(new
+            while (reader.Read())
             {
-                id = reader.GetString(0),
-                from_node_id = reader.GetString(1),
-                to_node_id = reader.GetString(2),
-                type = reader.GetString(3),
-            });
+                edges.Add(new
+                {
+                    id = reader.GetString(0),
+                    from_node_id = reader.GetString(1),
+                    to_node_id = reader.GetString(2),
+                    type = reader.GetString(3),
+                });
+            }
         }
 
         var truncated = edges.Count > limit;
@@ -916,7 +965,25 @@ public sealed class KnowledgeTools
             edges.RemoveAt(edges.Count - 1);
         }
 
-        return new { edges, truncated };
+        using var countCommand = connection.CreateCommand();
+        countCommand.CommandText = $"SELECT COUNT(*) FROM graph_edges {whereClause};";
+        if (hasNode)
+        {
+            countCommand.Parameters.AddWithValue("@nodeId", nodeId);
+        }
+
+        if (hasType)
+        {
+            countCommand.Parameters.AddWithValue("@type", type);
+        }
+
+        if (hasSearch)
+        {
+            countCommand.Parameters.AddWithValue("@search", $"%{search!.Trim()}%");
+        }
+
+        var totalCount = Convert.ToInt64(countCommand.ExecuteScalar());
+        return new { edges, truncated, totalCount };
     }
 
     private static object BrowseProperties(string dbPath, string table, string keyColumn, string key, string keyArgumentName)

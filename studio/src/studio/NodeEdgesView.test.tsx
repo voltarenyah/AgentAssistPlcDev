@@ -58,9 +58,9 @@ const typeInto = (input: HTMLInputElement, value: string) => {
 
 beforeEach(() => {
   mocked.getKnowledgeNodeKinds.mockResolvedValue({ kinds: ['OB', 'FB'] })
-  mocked.getKnowledgeNodes.mockResolvedValue({ nodes })
+  mocked.getKnowledgeNodes.mockResolvedValue({ nodes, truncated: false, totalCount: nodes.length })
   mocked.getKnowledgeEdgeTypes.mockResolvedValue({ types: ['CALLS', 'CONTAINS'] })
-  mocked.getKnowledgeEdges.mockResolvedValue({ edges, truncated: false })
+  mocked.getKnowledgeEdges.mockResolvedValue({ edges, truncated: false, totalCount: edges.length })
 })
 
 afterEach(() => {
@@ -72,7 +72,7 @@ describe('NodeEdgesView', () => {
   it('loads nodes and all edges on mount', async () => {
     const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" />)
 
-    expect(mocked.getKnowledgeEdges).toHaveBeenCalledWith(context, undefined, undefined)
+    expect(mocked.getKnowledgeEdges).toHaveBeenCalledWith(context, undefined, undefined, undefined, undefined, undefined)
     expect(rowByText(host, 'Main')).toBeTruthy()
     expect(rowByText(host, 'edge:CALLS:Main->Motor')).toBeTruthy()
     expect(rowByText(host, 'edge:CONTAINS:Motor->Var')).toBeTruthy()
@@ -88,7 +88,7 @@ describe('NodeEdgesView', () => {
 
     await act(async () => rowByText(host, 'Motor', 0)?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
-    expect(mocked.getKnowledgeEdges).toHaveBeenCalledWith(context, 'node:FB:Motor', undefined)
+    expect(mocked.getKnowledgeEdges).toHaveBeenCalledWith(context, 'node:FB:Motor', undefined, undefined, undefined, undefined)
     expect(onNodeSelect).toHaveBeenCalledWith(nodes[1])
     expect(onEdgeSelect).toHaveBeenCalledWith(null)
   })
@@ -102,24 +102,63 @@ describe('NodeEdgesView', () => {
     expect(onEdgeSelect).toHaveBeenCalledWith(edges[0])
   })
 
-  it('filters node rows by the node search box', async () => {
+  it('searches nodes on the server after a debounce', async () => {
     const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" />)
+    mocked.getKnowledgeNodes.mockClear()
+    mocked.getKnowledgeNodes.mockResolvedValue({ nodes: [nodes[1]], truncated: false, totalCount: 1 })
     const input = host.querySelector<HTMLInputElement>('input[placeholder="Search nodes..."]')!
 
     await act(async () => typeInto(input, 'motor'))
 
+    // no request before the debounce elapses
+    expect(mocked.getKnowledgeNodes).not.toHaveBeenCalled()
+
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)) })
+
+    expect(mocked.getKnowledgeNodes).toHaveBeenCalledWith(context, undefined, 'motor', undefined, undefined)
     expect(rowByText(host, 'Main', 0)).toBeUndefined()
     expect(rowByText(host, 'Motor', 0)).toBeTruthy()
   })
 
-  it('filters edge rows by the edge search box', async () => {
+  it('searches edges on the server after a debounce', async () => {
     const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" />)
+    mocked.getKnowledgeEdges.mockClear()
+    mocked.getKnowledgeEdges.mockResolvedValue({ edges: [edges[1]], truncated: false, totalCount: 1 })
     const input = host.querySelector<HTMLInputElement>('input[placeholder="Search edges..."]')!
 
     await act(async () => typeInto(input, 'contains'))
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)) })
 
+    expect(mocked.getKnowledgeEdges).toHaveBeenCalledWith(context, undefined, undefined, 'contains', undefined, undefined)
     expect(rowByText(host, 'edge:CALLS:Main->Motor')).toBeUndefined()
     expect(rowByText(host, 'edge:CONTAINS:Motor->Var')).toBeTruthy()
+  })
+
+  it('shows the truncated indicator and total count for nodes', async () => {
+    mocked.getKnowledgeNodes.mockReset()
+    mocked.getKnowledgeNodes.mockResolvedValue({ nodes, truncated: true, totalCount: 5 })
+
+    const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" />)
+
+    expect(host.textContent).toContain('2 of 5 nodes')
+    expect(host.textContent).toContain('(truncated)')
+  })
+
+  it('appends the next page when Load more is clicked', async () => {
+    mocked.getKnowledgeNodes.mockReset()
+    mocked.getKnowledgeNodes.mockResolvedValueOnce({ nodes: [nodes[0]], truncated: true, totalCount: 2 })
+    mocked.getKnowledgeNodes.mockResolvedValue({ nodes: [nodes[1]], truncated: false, totalCount: 2 })
+    const { host } = await render(<NodeEdgesView context={context} projectName="PLC_1" />)
+    const button = Array.from(host.querySelectorAll('button')).find(b => b.textContent === 'Load more')!
+    expect(button).toBeTruthy()
+
+    await act(async () => button.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(mocked.getKnowledgeNodes).toHaveBeenLastCalledWith(context, undefined, undefined, undefined, 1)
+    expect(rowByText(host, 'Main', 0)).toBeTruthy()
+    expect(rowByText(host, 'Motor', 0)).toBeTruthy()
+    expect(host.textContent).toContain('2 of 2 nodes')
+    expect(Array.from(host.querySelectorAll('button')).some(b => b.textContent === 'Load more')).toBe(false)
   })
 
   it('refetches nodes when the kind filter changes', async () => {
@@ -133,6 +172,6 @@ describe('NodeEdgesView', () => {
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })
 
-    expect(mocked.getKnowledgeNodes).toHaveBeenCalledWith(context, 'FB')
+    expect(mocked.getKnowledgeNodes).toHaveBeenCalledWith(context, 'FB', undefined, undefined, undefined)
   })
 })
