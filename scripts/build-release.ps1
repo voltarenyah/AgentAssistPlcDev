@@ -54,14 +54,24 @@ function Require-File {
 function Copy-DirectoryContents {
     param(
         [Parameter(Mandatory = $true)] [string] $Source,
-        [Parameter(Mandatory = $true)] [string] $Destination
+        [Parameter(Mandatory = $true)] [string] $Destination,
+        [string[]] $ExcludeDirectoryNames = @()
     )
 
     if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
         throw "Build output directory was not produced: $Source"
     }
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-    Get-ChildItem -LiteralPath $Source -Force | Copy-Item -Destination $Destination -Recurse -Force
+    Get-ChildItem -LiteralPath $Source -Force |
+        Where-Object { -not ($_.PSIsContainer -and $ExcludeDirectoryNames -contains $_.Name) } |
+        Copy-Item -Destination $Destination -Recurse -Force
+
+    if ($ExcludeDirectoryNames.Count -gt 0) {
+        Get-ChildItem -LiteralPath $Destination -Directory -Recurse -Force |
+            Where-Object { $ExcludeDirectoryNames -contains $_.Name } |
+            Sort-Object FullName -Descending |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+    }
 }
 
 if (-not (Test-Path -LiteralPath $solution -PathType Leaf)) {
@@ -174,7 +184,12 @@ Copy-DirectoryContents $versionControlStage $versionControlDestination
 Copy-DirectoryContents $engineeringStage $engineeringDestination
 Copy-DirectoryContents $whitelistStage $toolsDestination
 Copy-DirectoryContents $desktopStage $releaseRootFull
-Copy-DirectoryContents $assistantServiceSource $assistantServiceDestination
+Copy-DirectoryContents $assistantServiceSource $assistantServiceDestination @(
+    '.assistant-data',
+    '.pytest_cache',
+    '.venv',
+    '__pycache__'
+)
 
 $engineeringConfig = Join-Path $engineeringDestination 'Mcp.Engineering.exe.config'
 Require-File (Join-Path $engineeringDestination 'Mcp.Engineering.exe')

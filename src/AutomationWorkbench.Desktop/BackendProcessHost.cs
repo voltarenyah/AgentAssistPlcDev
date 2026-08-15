@@ -13,6 +13,7 @@ public sealed class BackendStartupException(string message, string logPath, Exce
 public sealed class BackendProcessHost : IAsyncDisposable
 {
     private const int StartupTimeoutSeconds = 30;
+    private const int AppAssistantStartupTimeoutSeconds = 30;
     private const int ShutdownTimeoutSeconds = 5;
     private readonly RuntimePaths paths;
     private readonly HttpClient http;
@@ -225,7 +226,7 @@ public sealed class BackendProcessHost : IAsyncDisposable
     private async Task WaitForAppAssistantReadyAsync(CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        timeout.CancelAfter(TimeSpan.FromSeconds(AppAssistantStartupTimeoutSeconds));
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();
