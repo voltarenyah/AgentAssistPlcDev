@@ -107,8 +107,8 @@ export default function PlcSourcePanel({
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 p-5">
-      <section className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col gap-4 p-5">
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
         <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
           <div className="flex items-center gap-2">
             <Code2 className="h-4 w-4 text-chart-3" />
@@ -156,7 +156,7 @@ export default function PlcSourcePanel({
         ) : visible.length === 0 ? (
           <div className="p-8 text-center text-[10px] text-muted-foreground">No source objects match this filter.</div>
         ) : (
-          <div className="max-h-[520px] divide-y overflow-y-auto" style={{ borderColor: 'var(--border)' }}>
+          <div className="scrollbar-sleek min-h-0 flex-1 divide-y overflow-y-auto" style={{ borderColor: 'var(--border)' }}>
             {visible.map(item => {
               const Icon = categoryIcon(item.category)
               const expanded = expandedId === item.id

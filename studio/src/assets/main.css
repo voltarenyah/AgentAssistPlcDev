@@ -593,3 +593,35 @@ select option {
   border: 0;
   border-top: 1px solid var(--border);
 }
+
+/* ── FlexLayout workspace docking mapped onto the app palette ── */
+/* The stock dark.css is driven entirely by --flexlayout-* variables on
+   .flexlayout__layout, so remapping them makes tabsets/tabs/splitters
+   follow the active (dark default) theme instead of the stock colors. */
+.flexlayout__layout {
+  --flexlayout-color-text: var(--foreground);
+  --flexlayout-color-background: var(--background);
+  --flexlayout-color-base: var(--background);
+  --flexlayout-color-1: var(--card);
+  --flexlayout-color-2: var(--muted);
+  --flexlayout-color-3: var(--accent);
+  --flexlayout-color-4: var(--border);
+  --flexlayout-font-family: inherit;
+  --flexlayout-font-size: 10px;
+  --flexlayout-color-icon: var(--muted-foreground);
+  --flexlayout-color-focus: var(--ring);
+  --flexlayout-color-tabset-background: var(--card);
+  --flexlayout-color-tabset-background-selected: var(--card);
+  --flexlayout-color-tabset-divider-line: var(--border);
+  --flexlayout-color-tab-content: var(--background);
+  --flexlayout-color-tab-selected: var(--foreground);
+  --flexlayout-color-tab-selected-background: var(--accent);
+  --flexlayout-color-tab-unselected: var(--muted-foreground);
+  --flexlayout-color-tab-unselected-background: transparent;
+  --flexlayout-color-splitter: var(--border);
+  --flexlayout-color-splitter-hover: var(--accent);
+  --flexlayout-color-splitter-drag: var(--muted);
+  --flexlayout-splitter-size: 6px;
+  --flexlayout-color-edge-marker: var(--muted-foreground);
+  --flexlayout-color-drag-rect: var(--foreground);
+}

@@ -80,6 +80,9 @@ vi.mock('@/api/client', async importOriginal => {
   }
 })
 
+// happy-dom has no layout engine; swap in the lightweight FlexLayout stand-in.
+vi.mock('flexlayout-react', async () => await import('@/test/flexLayoutMock'))
+
 const render = (element: React.ReactNode) => {
   const host = document.createElement('div')
   document.body.appendChild(host)

@@ -27,7 +27,10 @@ import {
 import { toast } from 'sonner'
 import { ThemeToggle } from '@/catalog/ThemeToggle'
 import { showErrorToast } from '@/components/ui/toast'
-import WorkspaceHost, { type StudioTab } from '@/studio/workspace/WorkspaceHost'
+import WorkspaceHost, { type WorkspaceViewKind } from '@/studio/workspace/WorkspaceHost'
+import { WorkspaceService } from '@/studio/workspace/WorkspaceService'
+import { resolveContextDock } from '@/studio/workspace/contextDock'
+import { readWorkspaceLayout, writeWorkspaceLayout } from '@/studio/workspace/workspaceLayoutStorage'
 import VersionControlDetailsDock from '@/studio/version-control/VersionControlDetailsDock'
 import WorkbenchNavigator, {
   type WorkbenchSelection,
@@ -466,7 +469,20 @@ export default function MainStudio() {
   const hardwareBomRequestId = useRef(0)
   const hardwareNetworkRequestId = useRef(0)
   const chatAbortRef = useRef<AbortController | null>(null)
-  const [activeTab, setActiveTab] = useState<StudioTab>('overview')
+  const [workspaceService] = useState(() => {
+    let storage: Storage | null = null
+    try {
+      storage = window.localStorage
+    } catch {
+      storage = null
+    }
+    return new WorkspaceService(
+      readWorkspaceLayout(storage),
+      layout => writeWorkspaceLayout(storage, layout),
+    )
+  })
+  const [focusedView, setFocusedView] = useState<WorkspaceViewKind | null>(() => workspaceService.getFocusedViewKind())
+  useEffect(() => workspaceService.subscribe(setFocusedView), [workspaceService])
   const [activePage, setActivePage] = useState<'studio' | 'tools' | 'settings'>('studio')
   const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
   const [shellLayout, setShellLayout] = useState<ShellLayout>(() => {
@@ -1012,7 +1028,7 @@ export default function MainStudio() {
     setMainView({ kind: 'hardware', page })
     setDeviceSelection(null)
     setChatTabs(emptyChatTabs())
-    setActiveTab('overview')
+    workspaceService.focusView('overview')
   }
 
   const selectHardware = (workbench: api.Workbench, worktree: api.WorkbenchRegistration) =>
@@ -1153,7 +1169,7 @@ export default function MainStudio() {
       await ensureChatContext()
       const session = await api.newChatSession()
       setChatTabs(previous => openTab(previous, session))
-      setActiveTab('chat')
+      workspaceService.focusView('chat')
       await refreshChatSessions()
     } catch (error) {
       showErrorToast(displayError(error))
@@ -1169,7 +1185,7 @@ export default function MainStudio() {
 
   const activateChatSession = async (sessionId: string) => {
     if (chatTabs.activeId === sessionId) {
-      setActiveTab('chat')
+      workspaceService.focusView('chat')
       return
     }
     setChatBusy(true)
@@ -1177,7 +1193,7 @@ export default function MainStudio() {
       await ensureChatContext()
       const session = await api.loadChatSession(sessionId)
       setChatTabs(previous => openTab(previous, session))
-      setActiveTab('chat')
+      workspaceService.focusView('chat')
     } catch (error) {
       showErrorToast(displayError(error))
       await refreshChatSessions().catch(() => undefined)
@@ -1607,7 +1623,7 @@ export default function MainStudio() {
     const workbench = targetContext?.workbench ?? activeWorkbench
     const worktree = targetContext?.worktree ?? activeWorktree
     if (!workbench || !worktree || worktree.branch === 'master') return
-    setActiveTab('git')
+    workspaceService.showDiff()
     toast.info(`Validate and merge ${worktree.branch} from the Version control workspace.`)
   }
 
@@ -1755,7 +1771,7 @@ export default function MainStudio() {
     try {
       await api.bootstrapWorktree(context.workbenchId, context.worktreeId, context.deviceId, op.id)
       await reloadDeviceSnapshot(context)
-      setActiveTab('chat')
+      workspaceService.focusView('chat')
       toast.success('PLC context ready — start chatting to explore your project.')
     } catch (error) {
       showErrorToast(displayError(error))
@@ -1801,6 +1817,17 @@ export default function MainStudio() {
     { id: 'bom', label: 'BOM list', icon: ClipboardList },
     { id: 'network', label: 'Network list', icon: Network },
   ]
+
+  // Right context dock content derives from the focused workspace view (and
+  // selection/main-view gate); see workspace/contextDock.ts for the matrix.
+  const contextDock = resolveContextDock({
+    worktreeId: selection.worktreeId,
+    deviceId: selection.deviceId,
+    mainViewKind: mainView.kind,
+    hardwarePage,
+    focusedView,
+    hasKnowledgeContext: knowledgeContext !== null,
+  })
 
   return (
     <div className="flex h-screen min-h-[620px] flex-col overflow-hidden bg-background text-foreground">
@@ -1872,7 +1899,10 @@ export default function MainStudio() {
       ) : activePage === 'settings' ? (
         <SettingsPage
           onClose={() => setActivePage('studio')}
-          onResetLayout={() => setShellLayout(DEFAULT_SHELL_LAYOUT)}
+          onResetLayout={() => {
+            setShellLayout(DEFAULT_SHELL_LAYOUT)
+            workspaceService.resetLayout()
+          }}
         />
       ) : <div className="flex min-h-0 flex-1">
         <div
@@ -2056,8 +2086,7 @@ export default function MainStudio() {
             </div>
           ) : (
             <WorkspaceHost
-              activeTab={activeTab}
-              onTabChange={setActiveTab}
+              workspace={workspaceService}
               overview={{
                 deviceName,
                 deviceId: selection.deviceId,
@@ -2109,7 +2138,7 @@ export default function MainStudio() {
                     relativePath: item.relativePath,
                     plcName: deviceName ?? '',
                   })
-                  setActiveTab('chat')
+                  workspaceService.focusView('chat')
                 },
                 onSnapshotReload: () => void reloadDeviceSnapshot({
                   workbenchId: selection.workbenchId!,
@@ -2131,7 +2160,7 @@ export default function MainStudio() {
             />
           )}
         </main>
-        {selection.worktreeId && (selection.deviceId !== null || mainView.kind === 'hardware' || activeTab === 'git') && (
+        {contextDock.visible && (
           <>
             <div
               role="separator"
@@ -2148,21 +2177,21 @@ export default function MainStudio() {
               className="dock-shell dock-shell-right min-h-0 shrink-0"
               style={{ width: shellLayout.rightOpen ? shellLayout.rightWidth : 0 }}
             >
-              {!selection.deviceId && hardwarePage === 'tree' && (
+              {contextDock.content.kind === 'hardware' && (
                 <HardwarePropertiesDock
                   node={hardwareSelectedNode}
                   tags={hardwareView?.tags ?? []}
                   hidden={false}
                 />
               )}
-              {selection.deviceId && activeTab === 'overview' && (
+              {contextDock.content.kind === 'device' && (
                 <DevicePropertiesDock
                   meta={deviceMeta}
                   info={deviceInfo}
                   hidden={false}
                 />
               )}
-              {selection.deviceId && activeTab === 'knowledge' && knowledgeContext && (
+              {contextDock.content.kind === 'knowledge' && knowledgeContext && (
                 <KnowledgePropertiesDock
                   context={knowledgeContext}
                   node={knowledgeSelection.node}
@@ -2170,13 +2199,14 @@ export default function MainStudio() {
                   hidden={false}
                 />
               )}
-              {activeTab === 'git' ? (
+              {contextDock.content.kind === 'version-control' && (
                 <VersionControlDetailsDock
                   context={{ workbenchId: selection.workbenchId!, worktreeId: selection.worktreeId! }}
                   selection={versionControlSelection}
                   hidden={false}
                 />
-              ) : selection.deviceId && activeTab !== 'overview' && activeTab !== 'knowledge' && (
+              )}
+              {contextDock.content.kind === 'sessions' && (
                 <SessionDock
                   sessions={deviceSessions}
                   activeSessionId={chatTabs.activeId}
