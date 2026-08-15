@@ -1481,9 +1481,18 @@ export async function getKnowledgeNodeKinds(ctx: KnowledgeGraphContext): Promise
   return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'node-kinds')}`, 'Node kinds')
 }
 
-export async function getKnowledgeNodes(ctx: KnowledgeGraphContext, kind?: string): Promise<{ nodes: GraphNode[] }> {
+export async function getKnowledgeNodes(
+  ctx: KnowledgeGraphContext,
+  kind?: string,
+  search?: string,
+  maxRows?: number,
+  offset?: number,
+): Promise<{ nodes: GraphNode[]; truncated?: boolean; totalCount?: number }> {
   const params = new URLSearchParams()
   if (kind) params.set('kind', kind)
+  if (search) params.set('search', search)
+  if (maxRows !== undefined) params.set('maxRows', String(maxRows))
+  if (offset !== undefined) params.set('offset', String(offset))
   const query = params.size > 0 ? `?${params}` : ''
   return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'nodes')}${query}`, 'Nodes')
 }
@@ -1492,10 +1501,20 @@ export async function getKnowledgeEdgeTypes(ctx: KnowledgeGraphContext): Promise
   return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'edge-types')}`, 'Edge types')
 }
 
-export async function getKnowledgeEdges(ctx: KnowledgeGraphContext, nodeId?: string, type?: string): Promise<{ edges: GraphEdge[]; truncated?: boolean }> {
+export async function getKnowledgeEdges(
+  ctx: KnowledgeGraphContext,
+  nodeId?: string,
+  type?: string,
+  search?: string,
+  maxRows?: number,
+  offset?: number,
+): Promise<{ edges: GraphEdge[]; truncated?: boolean; totalCount?: number }> {
   const params = new URLSearchParams()
   if (nodeId) params.set('nodeId', nodeId)
   if (type) params.set('type', type)
+  if (search) params.set('search', search)
+  if (maxRows !== undefined) params.set('maxRows', String(maxRows))
+  if (offset !== undefined) params.set('offset', String(offset))
   const query = params.size > 0 ? `?${params}` : ''
   return knowledgeRequest(`${BASE}${knowledgePath(ctx, 'edges')}${query}`, 'Edges')
 }

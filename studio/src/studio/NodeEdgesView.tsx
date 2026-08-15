@@ -24,19 +24,26 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
   const [nodeKinds, setNodeKinds] = useState<string[]>([])
   const [selectedKind, setSelectedKind] = useState<string>('')
   const [nodeSearch, setNodeSearch] = useState('')
+  const [debouncedNodeSearch, setDebouncedNodeSearch] = useState('')
   const [selectedNode, setSelectedNode] = useState<api.GraphNode | null>(null)
   const [nodesLoading, setNodesLoading] = useState(true)
+  const [nodesLoadingMore, setNodesLoadingMore] = useState(false)
   const [nodesError, setNodesError] = useState<string | null>(null)
+  const [nodesTruncated, setNodesTruncated] = useState(false)
+  const [nodesTotalCount, setNodesTotalCount] = useState<number | undefined>(undefined)
 
   /* ── Edge state ───────────────────────────────────── */
   const [edges, setEdges] = useState<api.GraphEdge[]>([])
   const [edgeTypes, setEdgeTypes] = useState<string[]>([])
   const [selectedEdgeType, setSelectedEdgeType] = useState<string>('')
   const [edgeSearch, setEdgeSearch] = useState('')
+  const [debouncedEdgeSearch, setDebouncedEdgeSearch] = useState('')
   const [selectedEdge, setSelectedEdge] = useState<api.GraphEdge | null>(null)
   const [edgesLoading, setEdgesLoading] = useState(false)
+  const [edgesLoadingMore, setEdgesLoadingMore] = useState(false)
   const [edgesError, setEdgesError] = useState<string | null>(null)
   const [edgesTruncated, setEdgesTruncated] = useState(false)
+  const [edgesTotalCount, setEdgesTotalCount] = useState<number | undefined>(undefined)
 
   /* ── Split-panel drag state ───────────────────────── */
   const [splitRatio, setSplitRatio] = useState(50)
@@ -88,19 +95,38 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
       .finally(() => setNodesLoading(false))
   }, [context])
 
-  /* ── Fetch nodes when kind filter changes ──────────── */
-  const fetchNodes = useCallback(async () => {
-    setNodesLoading(true)
-    setNodesError(null)
-    try {
-      const data = await api.getKnowledgeNodes(context, selectedKind || undefined)
-      setNodes(data.nodes)
-    } catch (e) {
-      setNodesError(e instanceof Error ? e.message : 'Failed to load nodes')
-    } finally {
-      setNodesLoading(false)
+  /* ── Fetch nodes when kind filter or search changes ── */
+  const fetchNodes = useCallback(async (offset = 0, append = false) => {
+    if (append) {
+      setNodesLoadingMore(true)
+    } else {
+      setNodesLoading(true)
+      setNodesError(null)
     }
-  }, [context, selectedKind])
+    try {
+      const data = await api.getKnowledgeNodes(
+        context,
+        selectedKind || undefined,
+        debouncedNodeSearch || undefined,
+        undefined,
+        offset > 0 ? offset : undefined)
+      setNodes(prev => append ? [...prev, ...data.nodes] : data.nodes)
+      setNodesTruncated(data.truncated ?? false)
+      setNodesTotalCount(data.totalCount)
+    } catch (e) {
+      if (append) {
+        setNodesTruncated(false)
+      } else {
+        setNodesError(e instanceof Error ? e.message : 'Failed to load nodes')
+      }
+    } finally {
+      if (append) {
+        setNodesLoadingMore(false)
+      } else {
+        setNodesLoading(false)
+      }
+    }
+  }, [context, selectedKind, debouncedNodeSearch])
 
   useEffect(() => {
     if (initialCheckDone && dbExists) {
@@ -116,25 +142,55 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
   }, [context])
 
   /* ── Fetch edges; a selected node filters to its related edges (from OR to) ── */
-  const fetchEdges = useCallback(async (nodeId?: string) => {
-    setEdgesLoading(true)
-    setEdgesError(null)
-    try {
-      const data = await api.getKnowledgeEdges(context, nodeId, selectedEdgeType || undefined)
-      setEdges(data.edges)
-      setEdgesTruncated(data.truncated ?? false)
-    } catch (e) {
-      setEdgesError(e instanceof Error ? e.message : 'Failed to load edges')
-    } finally {
-      setEdgesLoading(false)
+  const fetchEdges = useCallback(async (nodeId?: string, offset = 0, append = false) => {
+    if (append) {
+      setEdgesLoadingMore(true)
+    } else {
+      setEdgesLoading(true)
+      setEdgesError(null)
     }
-  }, [context, selectedEdgeType])
+    try {
+      const data = await api.getKnowledgeEdges(
+        context,
+        nodeId,
+        selectedEdgeType || undefined,
+        debouncedEdgeSearch || undefined,
+        undefined,
+        offset > 0 ? offset : undefined)
+      setEdges(prev => append ? [...prev, ...data.edges] : data.edges)
+      setEdgesTruncated(data.truncated ?? false)
+      setEdgesTotalCount(data.totalCount)
+    } catch (e) {
+      if (append) {
+        setEdgesTruncated(false)
+      } else {
+        setEdgesError(e instanceof Error ? e.message : 'Failed to load edges')
+      }
+    } finally {
+      if (append) {
+        setEdgesLoadingMore(false)
+      } else {
+        setEdgesLoading(false)
+      }
+    }
+  }, [context, selectedEdgeType, debouncedEdgeSearch])
 
   useEffect(() => {
     if (initialCheckDone && dbExists) {
       fetchEdges(selectedNode?.id)
     }
   }, [selectedNode, fetchEdges, initialCheckDone, dbExists])
+
+  /* ── Debounce search boxes before hitting the server ── */
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedNodeSearch(nodeSearch.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [nodeSearch])
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedEdgeSearch(edgeSearch.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [edgeSearch])
 
   /* ── Handlers ──────────────────────────────────────── */
 
@@ -154,25 +210,6 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
     fetchNodes()
     fetchEdges(selectedNode?.id)
   }
-
-  /* ── Client-side search filtering ──────────────────── */
-
-  const nodeQuery = nodeSearch.trim().toLowerCase()
-  const filteredNodes = nodeQuery
-    ? nodes.filter(node =>
-        node.id.toLowerCase().includes(nodeQuery)
-        || node.name.toLowerCase().includes(nodeQuery)
-        || node.kind.toLowerCase().includes(nodeQuery))
-    : nodes
-
-  const edgeQuery = edgeSearch.trim().toLowerCase()
-  const filteredEdges = edgeQuery
-    ? edges.filter(edge =>
-        edge.id.toLowerCase().includes(edgeQuery)
-        || edge.type.toLowerCase().includes(edgeQuery)
-        || edge.from_node_id.toLowerCase().includes(edgeQuery)
-        || edge.to_node_id.toLowerCase().includes(edgeQuery))
-    : edges
 
   /* ── Split-panel drag logic ────────────────────────── */
   useEffect(() => {
@@ -311,7 +348,8 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
             <Search className="h-3 w-3" style={{ color: 'var(--muted-foreground)' }} />
             <span className="font-medium" style={{ color: 'var(--foreground)' }}>Nodes</span>
             <span className="text-[9px]" style={{ color: 'var(--muted-foreground)' }}>
-              {filteredNodes.length}{filteredNodes.length !== nodes.length ? ` / ${nodes.length}` : ''} node{nodes.length !== 1 ? 's' : ''}
+              {nodesTotalCount !== undefined ? `${nodes.length} of ${nodesTotalCount}` : nodes.length} node{(nodesTotalCount ?? nodes.length) !== 1 ? 's' : ''}
+              {nodesTruncated ? ' (truncated)' : ''}
             </span>
             <div className="flex-1" />
             {/* Search box */}
@@ -345,41 +383,42 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
               <div className="flex h-full flex-col items-center justify-center gap-2 px-4">
                 <span className="text-[10px]" style={{ color: 'var(--destructive)' }}>{nodesError}</span>
                 <button
-                  onClick={fetchNodes}
+                  onClick={() => fetchNodes()}
                   className="rounded px-3 py-1 text-[9px] font-medium hover:bg-accent"
                   style={{ background: 'var(--card)', color: 'var(--foreground)' }}
                 >
                   Retry
                 </button>
               </div>
-            ) : filteredNodes.length === 0 ? (
+            ) : nodes.length === 0 ? (
               <div className="flex h-full items-center justify-center">
                 <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
-                  {nodeQuery
-                    ? `No nodes matching "${nodeSearch.trim()}"`
+                  {debouncedNodeSearch
+                    ? `No nodes matching "${debouncedNodeSearch}"`
                     : selectedKind ? `No nodes of kind "${selectedKind}"` : 'No nodes found'}
                 </span>
               </div>
             ) : (
-              <table className="w-full text-[10px] border-collapse table-fixed">
-                <thead>
-                  <tr className="sticky top-0" style={{ background: 'var(--card)' }}>
-                    <th className="px-2 py-1.5 text-left font-medium text-[9px] relative select-none" style={{ color: 'var(--muted-foreground)', borderBottom: '1px solid var(--border)', width: nodeColWidths.id, minWidth: 40 }}>
-                      ID
-                      <div onMouseDown={e => { e.preventDefault(); e.stopPropagation(); colResizeRef.current = { column: 'id', startX: e.clientX, startWidth: nodeColWidths.id, commit: setNodeColWidths }; document.body.style.userSelect = 'none'; document.body.style.cursor = 'col-resize' }} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 z-10 rounded-sm" />
-                    </th>
-                    <th className="px-2 py-1.5 text-left font-medium text-[9px] relative select-none" style={{ color: 'var(--muted-foreground)', borderBottom: '1px solid var(--border)', width: nodeColWidths.kind, minWidth: 40 }}>
-                      Kind
-                      <div onMouseDown={e => { e.preventDefault(); e.stopPropagation(); colResizeRef.current = { column: 'kind', startX: e.clientX, startWidth: nodeColWidths.kind, commit: setNodeColWidths }; document.body.style.userSelect = 'none'; document.body.style.cursor = 'col-resize' }} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 z-10 rounded-sm" />
-                    </th>
-                    <th className="px-2 py-1.5 text-left font-medium text-[9px] relative select-none" style={{ color: 'var(--muted-foreground)', borderBottom: '1px solid var(--border)', width: nodeColWidths.name, minWidth: 40 }}>
-                      Name
-                      <div onMouseDown={e => { e.preventDefault(); e.stopPropagation(); colResizeRef.current = { column: 'name', startX: e.clientX, startWidth: nodeColWidths.name, commit: setNodeColWidths }; document.body.style.userSelect = 'none'; document.body.style.cursor = 'col-resize' }} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 z-10 rounded-sm" />
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredNodes.map(node => (
+              <>
+                <table className="w-full text-[10px] border-collapse table-fixed">
+                  <thead>
+                    <tr className="sticky top-0" style={{ background: 'var(--card)' }}>
+                      <th className="px-2 py-1.5 text-left font-medium text-[9px] relative select-none" style={{ color: 'var(--muted-foreground)', borderBottom: '1px solid var(--border)', width: nodeColWidths.id, minWidth: 40 }}>
+                        ID
+                        <div onMouseDown={e => { e.preventDefault(); e.stopPropagation(); colResizeRef.current = { column: 'id', startX: e.clientX, startWidth: nodeColWidths.id, commit: setNodeColWidths }; document.body.style.userSelect = 'none'; document.body.style.cursor = 'col-resize' }} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 z-10 rounded-sm" />
+                      </th>
+                      <th className="px-2 py-1.5 text-left font-medium text-[9px] relative select-none" style={{ color: 'var(--muted-foreground)', borderBottom: '1px solid var(--border)', width: nodeColWidths.kind, minWidth: 40 }}>
+                        Kind
+                        <div onMouseDown={e => { e.preventDefault(); e.stopPropagation(); colResizeRef.current = { column: 'kind', startX: e.clientX, startWidth: nodeColWidths.kind, commit: setNodeColWidths }; document.body.style.userSelect = 'none'; document.body.style.cursor = 'col-resize' }} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 z-10 rounded-sm" />
+                      </th>
+                      <th className="px-2 py-1.5 text-left font-medium text-[9px] relative select-none" style={{ color: 'var(--muted-foreground)', borderBottom: '1px solid var(--border)', width: nodeColWidths.name, minWidth: 40 }}>
+                        Name
+                        <div onMouseDown={e => { e.preventDefault(); e.stopPropagation(); colResizeRef.current = { column: 'name', startX: e.clientX, startWidth: nodeColWidths.name, commit: setNodeColWidths }; document.body.style.userSelect = 'none'; document.body.style.cursor = 'col-resize' }} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 z-10 rounded-sm" />
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nodes.map(node => (
                     <tr
                       key={node.id}
                       onClick={() => handleNodeClick(node)}
@@ -401,6 +440,19 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
                   ))}
                 </tbody>
               </table>
+                {nodesTruncated && (
+                  <div className="flex justify-center py-1.5" style={{ borderTop: '1px solid var(--border)' }}>
+                    <button
+                      onClick={() => fetchNodes(nodes.length, true)}
+                      disabled={nodesLoadingMore}
+                      className="rounded px-3 py-1 text-[9px] font-medium hover:bg-accent"
+                      style={{ background: 'var(--card)', color: 'var(--foreground)' }}
+                    >
+                      {nodesLoadingMore ? 'Loading...' : 'Load more'}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -424,7 +476,7 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
             <Blocks className="h-3 w-3" style={{ color: 'var(--muted-foreground)' }} />
             <span className="font-medium" style={{ color: 'var(--foreground)' }}>Edges</span>
             <span className="text-[9px]" style={{ color: 'var(--muted-foreground)' }}>
-              {filteredEdges.length}{filteredEdges.length !== edges.length ? ` / ${edges.length}` : ''} edge{edges.length !== 1 ? 's' : ''}
+              {edgesTotalCount !== undefined ? `${edges.length} of ${edgesTotalCount}` : edges.length} edge{(edgesTotalCount ?? edges.length) !== 1 ? 's' : ''}
               {edgesTruncated ? ' (truncated)' : ''}
               {selectedNode ? ` · related to ${selectedNode.name}` : ''}
             </span>
@@ -467,11 +519,11 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
                   Retry
                 </button>
               </div>
-            ) : filteredEdges.length === 0 ? (
+            ) : edges.length === 0 ? (
               <div className="flex h-full items-center justify-center">
                 <span className="text-[10px]" style={{ color: 'var(--muted-foreground)' }}>
-                  {edgeQuery
-                    ? `No edges matching "${edgeSearch.trim()}"`
+                  {debouncedEdgeSearch
+                    ? `No edges matching "${debouncedEdgeSearch}"`
                     : selectedNode
                       ? 'No edges related to this node'
                       : selectedEdgeType
@@ -480,7 +532,8 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
                 </span>
               </div>
             ) : (
-              <table className="w-full text-[10px] border-collapse table-fixed">
+              <>
+                <table className="w-full text-[10px] border-collapse table-fixed">
                 <thead>
                   <tr className="sticky top-0" style={{ background: 'var(--card)' }}>
                     <th className="px-2 py-1.5 text-left font-medium text-[9px] relative select-none" style={{ color: 'var(--muted-foreground)', borderBottom: '1px solid var(--border)', width: edgeColWidths.id, minWidth: 40 }}>
@@ -502,7 +555,7 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredEdges.map(edge => (
+                  {edges.map(edge => (
                     <tr
                       key={edge.id}
                       onClick={() => handleEdgeClick(edge)}
@@ -525,6 +578,19 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
                   ))}
                 </tbody>
               </table>
+                {edgesTruncated && (
+                  <div className="flex justify-center py-1.5" style={{ borderTop: '1px solid var(--border)' }}>
+                    <button
+                      onClick={() => fetchEdges(selectedNode?.id, edges.length, true)}
+                      disabled={edgesLoadingMore}
+                      className="rounded px-3 py-1 text-[9px] font-medium hover:bg-accent"
+                      style={{ background: 'var(--card)', color: 'var(--foreground)' }}
+                    >
+                      {edgesLoadingMore ? 'Loading...' : 'Load more'}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

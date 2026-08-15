@@ -122,6 +122,135 @@ public sealed class GraphBrowseToolTests : IDisposable
     }
 
     [Fact]
+    public void QueryNodesFiltersByCaseInsensitiveSearch()
+    {
+        var search = _graph.Nodes.First().Name[..3];
+        var expected = _graph.Nodes
+            .Where(node =>
+                node.Id.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || node.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || node.Kind.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        Assert.NotEmpty(expected);
+
+        var result = ToolResults.OkJson(new KnowledgeTools().QueryNodes(_dbPath, null, null, search.ToUpperInvariant()));
+
+        var ids = result.GetProperty("nodes").EnumerateArray()
+            .Select(node => node.GetProperty("id").GetString()).ToArray();
+        Assert.Equal(
+            expected.Select(node => node.Id).OrderBy(id => id, StringComparer.Ordinal).ToArray(),
+            ids.OrderBy(id => id, StringComparer.Ordinal).ToArray());
+        Assert.Equal(expected.Length, result.GetProperty("totalCount").GetInt64());
+    }
+
+    [Fact]
+    public void QueryNodesCombinesSearchWithKindFilter()
+    {
+        var ob = _graph.Nodes.First(node => node.Kind == "OB");
+        var search = ob.Name[..3];
+
+        var result = ToolResults.OkJson(new KnowledgeTools().QueryNodes(_dbPath, "OB", null, search));
+
+        var nodes = result.GetProperty("nodes").EnumerateArray().ToArray();
+        Assert.NotEmpty(nodes);
+        Assert.All(nodes, node => Assert.Equal("OB", node.GetProperty("kind").GetString()));
+        Assert.All(nodes, node =>
+        {
+            var text = $"{node.GetProperty("id").GetString()}\n{node.GetProperty("name").GetString()}\n{node.GetProperty("kind").GetString()}";
+            Assert.Contains(search, text, StringComparison.OrdinalIgnoreCase);
+        });
+        Assert.Equal(nodes.Length, result.GetProperty("totalCount").GetInt64());
+    }
+
+    [Fact]
+    public void QueryNodesOffsetReturnsNextPage()
+    {
+        var all = ToolResults.OkJson(new KnowledgeTools().QueryNodes(_dbPath, null, null))
+            .GetProperty("nodes").EnumerateArray()
+            .Select(node => node.GetProperty("id").GetString()).ToArray();
+
+        var firstPage = ToolResults.OkJson(new KnowledgeTools().QueryNodes(_dbPath, null, 2, null, 0));
+        var secondPage = ToolResults.OkJson(new KnowledgeTools().QueryNodes(_dbPath, null, 2, null, 2));
+
+        Assert.True(firstPage.GetProperty("truncated").GetBoolean());
+        Assert.Equal(
+            all.Skip(2).Take(2).ToArray(),
+            secondPage.GetProperty("nodes").EnumerateArray().Select(node => node.GetProperty("id").GetString()).ToArray());
+        Assert.Equal(all.Length, secondPage.GetProperty("totalCount").GetInt64());
+    }
+
+    [Fact]
+    public void QueryEdgesFiltersByCaseInsensitiveSearch()
+    {
+        var search = _graph.Edges.First().Type[..3];
+        var expected = _graph.Edges
+            .Where(edge =>
+                edge.Id.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || edge.Type.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || edge.FromNodeId.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || edge.ToNodeId.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        Assert.NotEmpty(expected);
+
+        var result = ToolResults.OkJson(new KnowledgeTools().QueryEdges(_dbPath, null, null, null, search.ToUpperInvariant()));
+
+        var ids = result.GetProperty("edges").EnumerateArray()
+            .Select(edge => edge.GetProperty("id").GetString()).ToArray();
+        Assert.Equal(
+            expected.Select(edge => edge.Id).OrderBy(id => id, StringComparer.Ordinal).ToArray(),
+            ids.OrderBy(id => id, StringComparer.Ordinal).ToArray());
+        Assert.Equal(expected.Length, result.GetProperty("totalCount").GetInt64());
+    }
+
+    [Fact]
+    public void QueryEdgesCombinesSearchWithTypeFilter()
+    {
+        var edge = _graph.Edges.First();
+        var search = edge.FromNodeId[..Math.Min(5, edge.FromNodeId.Length)];
+        var expected = _graph.Edges
+            .Where(item => item.Type == edge.Type)
+            .Where(item =>
+                item.Id.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || item.Type.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || item.FromNodeId.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || item.ToNodeId.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        Assert.NotEmpty(expected);
+
+        var result = ToolResults.OkJson(new KnowledgeTools().QueryEdges(_dbPath, null, edge.Type, null, search));
+
+        var edges = result.GetProperty("edges").EnumerateArray().ToArray();
+        Assert.Equal(expected.Length, edges.Length);
+        Assert.All(edges, item => Assert.Equal(edge.Type, item.GetProperty("type").GetString()));
+        Assert.Equal(expected.Length, result.GetProperty("totalCount").GetInt64());
+    }
+
+    [Fact]
+    public void QueryEdgesOffsetReturnsNextPage()
+    {
+        var all = ToolResults.OkJson(new KnowledgeTools().QueryEdges(_dbPath, null, null, null))
+            .GetProperty("edges").EnumerateArray()
+            .Select(edge => edge.GetProperty("id").GetString()).ToArray();
+
+        var firstPage = ToolResults.OkJson(new KnowledgeTools().QueryEdges(_dbPath, null, null, 2, null, 0));
+        var secondPage = ToolResults.OkJson(new KnowledgeTools().QueryEdges(_dbPath, null, null, 2, null, 2));
+
+        Assert.True(firstPage.GetProperty("truncated").GetBoolean());
+        Assert.Equal(
+            all.Skip(2).Take(2).ToArray(),
+            secondPage.GetProperty("edges").EnumerateArray().Select(edge => edge.GetProperty("id").GetString()).ToArray());
+        Assert.Equal(all.Length, secondPage.GetProperty("totalCount").GetInt64());
+    }
+
+    [Fact]
+    public void QueryNodesReportsTotalCountWithoutFilters()
+    {
+        var result = ToolResults.OkJson(new KnowledgeTools().QueryNodes(_dbPath, null, null));
+
+        Assert.Equal(_graph.Nodes.Count, result.GetProperty("totalCount").GetInt64());
+    }
+
+    [Fact]
     public void NodePropertiesReturnsFixtureProperties()
     {
         var node = _graph.Nodes.First(item => item.Properties.Count > 0);

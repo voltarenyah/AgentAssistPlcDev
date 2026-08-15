@@ -992,14 +992,14 @@ public static class WorkbenchEndpoints
             async (string id, string wt, string device, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
                 await KnowledgeQuery(s, gateway, id, wt, device, "query_node_kinds", new Dictionary<string, object?>(), ct));
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/nodes",
-            async (string id, string wt, string device, string? kind, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
-                await KnowledgeQuery(s, gateway, id, wt, device, "query_nodes", new Dictionary<string, object?> { ["kind"] = kind }, ct));
+            async (string id, string wt, string device, string? kind, string? search, int? maxRows, int? offset, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+                await KnowledgeQuery(s, gateway, id, wt, device, "query_nodes", new Dictionary<string, object?> { ["kind"] = kind, ["search"] = search, ["maxRows"] = maxRows, ["offset"] = offset }, ct));
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/edge-types",
             async (string id, string wt, string device, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
                 await KnowledgeQuery(s, gateway, id, wt, device, "query_edge_types", new Dictionary<string, object?>(), ct));
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/edges",
-            async (string id, string wt, string device, string? nodeId, string? type, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
-                await KnowledgeQuery(s, gateway, id, wt, device, "query_edges", new Dictionary<string, object?> { ["nodeId"] = nodeId, ["type"] = type }, ct));
+            async (string id, string wt, string device, string? nodeId, string? type, string? search, int? maxRows, int? offset, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+                await KnowledgeQuery(s, gateway, id, wt, device, "query_edges", new Dictionary<string, object?> { ["nodeId"] = nodeId, ["type"] = type, ["search"] = search, ["maxRows"] = maxRows, ["offset"] = offset }, ct));
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/node-properties",
             async (string id, string wt, string device, string nodeId, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
                 await KnowledgeQuery(s, gateway, id, wt, device, "query_node_properties", new Dictionary<string, object?> { ["nodeId"] = nodeId }, ct));
