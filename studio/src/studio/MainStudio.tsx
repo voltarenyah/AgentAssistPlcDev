@@ -37,6 +37,7 @@ import WorkbenchNavigator, {
 } from '@/studio/workbench/WorkbenchNavigator'
 import CreateWorkbenchDialog from '@/studio/workbench/CreateWorkbenchDialog'
 import OperationStatusLine from '@/studio/workbench/OperationStatusLine'
+import { shouldRetryOperationStatus } from '@/studio/operationStatus'
 import RuntimeStateStatusBar from '@/studio/workbench/RuntimeStateStatusBar'
 import RefreshDialog from '@/studio/workbench/RefreshDialog'
 import SandboxDeniedDialog from '@/studio/workbench/SandboxDeniedDialog'
@@ -850,9 +851,7 @@ export default function MainStudio() {
         }
       } catch (error) {
         if (cancelled) return
-        if (error instanceof api.WorkbenchApiError && error.status === 404) {
-          setActiveOperation(previous => previous?.id === id ? null : previous)
-        }
+        if (shouldRetryOperationStatus(error)) return
       }
     }
 
