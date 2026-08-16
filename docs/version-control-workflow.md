@@ -204,15 +204,19 @@ hardware exports under a Hardware group. Select individual objects and enter a
 commit message; there is no staging concept in the UI. Direct master edits are
 committable from this screen (unlabeled).
 
-Compare with TIA first checks the saved checksum evidence. A checksum match is
-shown immediately. A mismatch runs a full source scan and presents individual
-block, DB, UDT, and tag-table differences. Both directions are offered:
+Compare with TIA first checks the saved checksum evidence for each PLC, then
+also exports and compares the project-level hardware AML. A checksum match is
+not sufficient to declare the project clean when hardware differs. A mismatch
+runs a full source scan and presents individual block, DB, UDT, and tag-table
+differences. Hardware differences are shown separately with the staged AML;
+accepting them requires an explanatory commit message and creates a hardware
+commit. Both source directions are offered:
 accepting selected TIA changes into the local repo (with a commit title), or
 pushing selected local objects back into TIA (per-object import outcomes;
 compile and snapshot afterwards). When no source differences exist but the TIA
 checksum differs from the last savepoint, the view offers creating an SVN
-savepoint to record the untrackable change; when checksums match and nothing
-differs, it reports that no commit is needed.
+savepoint to record the remaining untrackable change; when source and hardware
+match, it reports that no commit is needed.
 
 For a feature worktree, Prepare feature import creates a three-way import plan.
 Objects changed in both TIA and the feature are disabled individually; unrelated

@@ -4,9 +4,6 @@ using Contracts.Knowledge;
 using Contracts.Sandbox;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
-using System.Text.Json;
-using System.Xml;
-using System.Xml.Linq;
 
 namespace Agent.Workbench;
 
@@ -542,7 +539,7 @@ public sealed class WorkbenchCoordinator
                     "export_hardware_configuration",
                     new { outputDir = hardwareRoot, includeDeviceExports = false },
                     cancellationToken).ConfigureAwait(false);
-                _ = EnsureHardwareExportSucceeded(hardwareResults, hardwareRoot);
+                _ = HardwareConfigurationExport.EnsureSucceeded(hardwareResults, hardwareRoot);
                 RemoveLegacyHardwareLayout(hardwareRoot);
                 initialHardwarePaths.AddRange(
                     Directory.EnumerateFiles(hardwareRoot, "*", SearchOption.AllDirectories)
@@ -1485,7 +1482,7 @@ public sealed class WorkbenchCoordinator
                         "export_hardware_configuration",
                         new { outputDir = root, includeDeviceExports = false },
                         cancellationToken).ConfigureAwait(false);
-                    var warnings = EnsureHardwareExportSucceeded(results, root);
+                    var warnings = HardwareConfigurationExport.EnsureSucceeded(results, root);
                     RemoveLegacyHardwareLayout(root);
 
                     var paths = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
@@ -1538,11 +1535,11 @@ public sealed class WorkbenchCoordinator
                         "export_hardware_configuration",
                         new { outputDir = stagingRoot, includeDeviceExports = false },
                         cancellationToken).ConfigureAwait(false);
-                    var warnings = EnsureHardwareExportSucceeded(liveResults, stagingRoot);
+                    var warnings = HardwareConfigurationExport.EnsureSucceeded(liveResults, stagingRoot);
 
-                    var local = ReadHardwareSnapshot(root);
-                    var live = HardwareSnapshot.FromResults(liveResults, stagingRoot);
-                    var artifacts = HardwareSnapshot.Compare(local, live);
+                    var local = HardwareConfigurationSnapshot.Read(root);
+                    var live = HardwareConfigurationSnapshot.FromResults(liveResults, stagingRoot);
+                    var artifacts = HardwareConfigurationSnapshot.Compare(local, live);
                     var state = artifacts.All(artifact => artifact.State == "same")
                         ? "in-sync"
                         : local is null
@@ -1579,7 +1576,8 @@ public sealed class WorkbenchCoordinator
         DeviceContext device,
         bool confirmOverwrite,
         CancellationToken token,
-        IOperationProgress? progress = null) =>
+        IOperationProgress? progress = null,
+        string? commitMessage = null) =>
         operationLock.RunAsync(
             device,
             async cancellationToken =>
@@ -1594,7 +1592,7 @@ public sealed class WorkbenchCoordinator
                 var root = WorkbenchPaths.ResolveHardwareRoot(device.WorktreeRoot);
                 var stagingRoot = WorkbenchPaths.ResolveHardwareStagingRoot(device.WorktreeRoot);
                 var stagedProjectAml = Path.Combine(stagingRoot, "project.aml");
-                if (!IsUsableProjectAml(stagedProjectAml))
+                if (!HardwareConfigurationExport.IsUsableProjectAml(stagedProjectAml))
                 {
                     throw new WorkbenchLifecycleException(
                         "HARDWARE_STAGING_MISSING",
@@ -1619,7 +1617,14 @@ public sealed class WorkbenchCoordinator
                     .ToArray();
                 var commit = await versionControl.CallAsync<CoordinatorGitCommitResult>(
                     "vc_commit_hardware",
-                    new { repoPath = device.WorktreeRoot, paths, message = "hardware: accept TIA configuration" },
+                    new
+                    {
+                        repoPath = device.WorktreeRoot,
+                        paths,
+                        message = string.IsNullOrWhiteSpace(commitMessage)
+                            ? "hardware: accept TIA configuration"
+                            : commitMessage.Trim(),
+                    },
                     cancellationToken).ConfigureAwait(false);
 
                 return new HardwareConfigurationOverwriteResult(root, stagedFiles.Length, commit.Sha);
@@ -1698,67 +1703,6 @@ public sealed class WorkbenchCoordinator
         return string.Equals(normalizedLeft, normalizedRight, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static IReadOnlyList<string> EnsureHardwareExportSucceeded(
-        HardwareExportResult[] results,
-        string outputRoot)
-    {
-        var failures = results.Where(result => !result.Success).ToArray();
-        var projectAmlPath = ResolveHardwareArtifactPath(outputRoot, "project.aml");
-        var projectAmlUsable = IsUsableProjectAml(projectAmlPath);
-        if (!projectAmlUsable)
-        {
-            throw new WorkbenchLifecycleException(
-                "HARDWARE_EXPORT_INCOMPLETE",
-                "Hardware configuration export failed: "
-                + string.Join("; ", failures.Select(result =>
-                    $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")));
-        }
-
-        if (!results.Any(result => result.Scope == "project"))
-        {
-            throw new WorkbenchLifecycleException(
-                "HARDWARE_EXPORT_INCOMPLETE",
-                "Hardware configuration export did not produce a project-level AML artifact.");
-        }
-
-        return failures.Select(result =>
-            $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")
-            .ToArray();
-    }
-
-    private static bool IsUsableProjectAml(string path)
-    {
-        if (!File.Exists(path) || new FileInfo(path).Length == 0)
-        {
-            return false;
-        }
-
-        try
-        {
-            XDocument.Load(path, LoadOptions.PreserveWhitespace);
-            return true;
-        }
-        catch (Exception exception) when (
-            exception is XmlException
-            or IOException
-            or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private static string ResolveHardwareArtifactPath(string hardwareRoot, string fileName)
-    {
-        var canonicalPath = Path.Combine(hardwareRoot, fileName);
-        if (File.Exists(canonicalPath))
-        {
-            return canonicalPath;
-        }
-
-        var legacyPath = Path.Combine(hardwareRoot, "Hardware", fileName);
-        return File.Exists(legacyPath) ? legacyPath : canonicalPath;
-    }
-
     private static bool IsUnderHardwareStaging(string hardwareRoot, string path)
     {
         var relative = Path.GetRelativePath(hardwareRoot, path);
@@ -1780,55 +1724,6 @@ public sealed class WorkbenchCoordinator
         }
     }
 
-    private static HardwareSnapshot? ReadHardwareSnapshot(string root)
-    {
-        var manifestPath = ResolveHardwareArtifactPath(root, "manifest.json");
-        if (!File.Exists(manifestPath))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
-            var json = document.RootElement;
-            var artifacts = new Dictionary<string, string?>(StringComparer.Ordinal)
-            {
-                ["project"] = OptionalString(json, "projectContentHash"),
-            };
-            if (json.TryGetProperty("devices", out var devices)
-                && devices.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var device in devices.EnumerateArray())
-                {
-                    var name = OptionalString(device, "deviceName");
-                    if (!string.IsNullOrWhiteSpace(name))
-                    {
-                        artifacts[HardwareSnapshot.DeviceKey(name)] =
-                            OptionalString(device, "contentHash");
-                    }
-                }
-            }
-
-            return new HardwareSnapshot(artifacts);
-        }
-        catch (Exception exception) when (
-            exception is JsonException
-            or IOException
-            or UnauthorizedAccessException)
-        {
-            throw new WorkbenchLifecycleException(
-                "HARDWARE_MANIFEST_INVALID",
-                $"The saved hardware manifest could not be read: {exception.Message}");
-        }
-    }
-
-    private static string? OptionalString(JsonElement element, string name) =>
-        element.TryGetProperty(name, out var value)
-        && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
     private static void TryDeleteDirectory(string path)
     {
         try
@@ -1840,71 +1735,6 @@ public sealed class WorkbenchCoordinator
         {
             // A failed comparison must not mask the primary result.
         }
-    }
-
-    private sealed record HardwareSnapshot(
-        IReadOnlyDictionary<string, string?> Artifacts)
-    {
-        public static HardwareSnapshot FromResults(
-            IEnumerable<HardwareExportResult> results,
-            string? exportRoot = null)
-        {
-            var exported = results.ToArray();
-            var artifacts = exported
-                .Where(result => result.Success)
-                .ToDictionary(
-                    result => result.Scope == "project"
-                        ? "project"
-                        : DeviceKey(result.DeviceName ?? "(unnamed device)"),
-                    result => result.ContentHash,
-                    StringComparer.Ordinal);
-            if (exportRoot is not null
-                && exported.Any(result => result.Scope == "project")
-                && !artifacts.ContainsKey("project"))
-            {
-                var projectAmlPath = ResolveHardwareArtifactPath(exportRoot, "project.aml");
-                if (IsUsableProjectAml(projectAmlPath))
-                {
-                    artifacts["project"] = HashFile(projectAmlPath);
-                }
-            }
-
-            return new HardwareSnapshot(artifacts);
-        }
-
-        public static IReadOnlyList<HardwareConfigurationCompareArtifact> Compare(
-            HardwareSnapshot? local,
-            HardwareSnapshot live)
-        {
-            var localArtifacts = local?.Artifacts
-                ?? new Dictionary<string, string?>(StringComparer.Ordinal);
-            var keys = localArtifacts.Keys
-                .Concat(live.Artifacts.Keys)
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(key => key, StringComparer.Ordinal)
-                .ToArray();
-            return keys.Select(key =>
-            {
-                var localExists = localArtifacts.ContainsKey(key);
-                var liveExists = live.Artifacts.ContainsKey(key);
-                var state = !localExists
-                    ? "new"
-                    : !liveExists
-                        ? "missing"
-                        : localArtifacts[key] is null || live.Artifacts[key] is null
-                            ? "unknown"
-                            : string.Equals(localArtifacts[key], live.Artifacts[key], StringComparison.Ordinal)
-                                ? "same"
-                                : "changed";
-                var isDevice = key.StartsWith("device:", StringComparison.Ordinal);
-                return new HardwareConfigurationCompareArtifact(
-                    isDevice ? "device" : "project",
-                    isDevice ? key["device:".Length..] : null,
-                    state);
-            }).ToArray();
-        }
-
-        public static string DeviceKey(string name) => "device:" + name;
     }
 
     public Task<RefreshApplyResult> ApplyRefreshAsync(

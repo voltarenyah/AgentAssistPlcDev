@@ -37,7 +37,7 @@ public sealed record RollbackFeatureApiRequest(string HistoricalSha, string[] Pa
 
 /// <summary>Optional bootstrap body. CommitMessage customizes the first baseline commit title.</summary>
 public sealed record BootstrapApiRequest(string? CommitMessage);
-public sealed record HardwareOverwriteApiRequest(bool ConfirmOverwrite);
+public sealed record HardwareOverwriteApiRequest(bool ConfirmOverwrite, string? Message = null);
 
 /// <summary>Project landing page payload: workbench metadata plus a per-worktree summary
 /// with task counts, aggregated server-side in one call.</summary>
@@ -1176,7 +1176,8 @@ public static class WorkbenchEndpoints
                     s.Device(workbenchId, worktreeId, device.DeviceId).Context,
                     request.ConfirmOverwrite,
                     ct,
-                    progress),
+                    progress,
+                    request.Message),
                 "Saved hardware configuration updated.").ConfigureAwait(false);
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}", (

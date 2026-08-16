@@ -1,6 +1,7 @@
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Engineering;
+using System.Text.Json;
 using Xunit;
 
 namespace Agent.Tests;
@@ -50,6 +51,32 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
 
         Assert.False(result.FastGatePassed);
         Assert.Equal(2, engineering.Calls.Count(call => call == "rebuild_export"));
+    }
+
+    [Fact]
+    public async Task ProjectHardwareDifferenceIsReportedByFullComparison()
+    {
+        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(fixture.Root + "\\worktrees\\master");
+        Directory.CreateDirectory(hardwareRoot);
+        var savedXml = "<CAEXFile><Device Name=\"PLC_1\" /></CAEXFile>";
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), savedXml);
+        File.WriteAllText(
+            Path.Combine(hardwareRoot, "manifest.json"),
+            JsonSerializer.Serialize(new { projectContentHash = XmlContentHash.Compute(savedXml) }));
+
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"))
+        {
+            ProjectXml = "<CAEXFile><Device Name=\"PLC_2\" /></CAEXFile>",
+        };
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.NotNull(result.Hardware);
+        Assert.Equal("changed", result.Hardware!.State);
+        Assert.Equal(ConsistencyState.Different, result.State);
+        Assert.Contains("export_hardware_configuration", engineering.Calls);
     }
 
     [Fact]
@@ -128,6 +155,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         }
 
         public List<string> Calls { get; } = new();
+        public string ProjectXml { get; init; } = "<CAEXFile><Device Name=\"PLC_1\" /></CAEXFile>";
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
@@ -157,6 +185,23 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                 return Task.FromResult((T)(object)new[]
                 {
                     new SyncResult { PlcName = plcName, ExportRoot = outputDir, Status = "updated" },
+                });
+            }
+
+            if (tool == "export_hardware_configuration")
+            {
+                var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
+                Directory.CreateDirectory(outputDir);
+                var projectAml = Path.Combine(outputDir, "project.aml");
+                File.WriteAllText(projectAml, ProjectXml);
+                return Task.FromResult((T)(object)new[]
+                {
+                    new HardwareExportResult
+                    {
+                        Scope = "project",
+                        Success = true,
+                        AmlFilePath = projectAml,
+                    },
                 });
             }
 
@@ -199,6 +244,13 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                 store.Write(Path.Combine(context.DeviceRoot, "device.json"), new DeviceMetadata("1.0", id, "master-1", plcName, "project-1", null, null, null,
                     new KnowledgeState(false, new Dictionary<string, string>(), null), Array.Empty<DeviceImportRecord>()));
             }
+            var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(masterRoot);
+            Directory.CreateDirectory(hardwareRoot);
+            var hardwareXml = "<CAEXFile><Device Name=\"PLC_1\" /></CAEXFile>";
+            File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), hardwareXml);
+            File.WriteAllText(
+                Path.Combine(hardwareRoot, "manifest.json"),
+                JsonSerializer.Serialize(new { projectContentHash = XmlContentHash.Compute(hardwareXml) }));
             return new ConsistencyFixture(root, workbench, master);
         }
 

@@ -139,6 +139,22 @@ public sealed class FeatureImportServiceTests : IDisposable
                     ProjectIdentity = "project-1",
                     SoftwareChecksum = "checksum-1",
                 },
+            })
+            .Respond("export_hardware_configuration", args =>
+            {
+                var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
+                Directory.CreateDirectory(outputDir);
+                var projectAml = Path.Combine(outputDir, "project.aml");
+                File.WriteAllText(projectAml, "<CAEXFile />");
+                return new[]
+                {
+                    new HardwareExportResult
+                    {
+                        Scope = "project",
+                        Success = true,
+                        AmlFilePath = projectAml,
+                    },
+                };
             });
         var service = new FeatureImportService(
             engineering,
@@ -268,6 +284,13 @@ public sealed class FeatureImportServiceTests : IDisposable
                 null,
                 new KnowledgeState(false, new Dictionary<string, string>(), null),
                 Array.Empty<DeviceImportRecord>()));
+        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(context.WorktreeRoot);
+        Directory.CreateDirectory(hardwareRoot);
+        var hardwareXml = "<CAEXFile />";
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), hardwareXml);
+        File.WriteAllText(
+            Path.Combine(hardwareRoot, "manifest.json"),
+            JsonSerializer.Serialize(new { projectContentHash = XmlContentHash.Compute(hardwareXml) }));
     }
 
     private sealed class FeaturePlanVersionControlCaller : FakeToolCaller

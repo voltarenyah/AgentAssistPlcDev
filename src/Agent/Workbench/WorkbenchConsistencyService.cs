@@ -104,6 +104,7 @@ public sealed class WorkbenchConsistencyService
 
         var masterRoot = ResolveMasterRoot(workbench, master);
         var head = await ReadHeadAsync(masterRoot, cancellationToken).ConfigureAwait(false);
+        var hardware = await CompareHardwareAsync(masterRoot, cancellationToken, progress).ConfigureAwait(false);
         var evidence = await versionControl.CallAsync<ConsistencyValidationEvidence?>(
                 "vc_validation_get",
                 new { repoPath = masterRoot, commitSha = head.Sha },
@@ -145,9 +146,10 @@ public sealed class WorkbenchConsistencyService
                 Guid.NewGuid().ToString("N"),
                 head.Sha,
                 true,
-                ConsistencyState.Consistent,
+                hardware.State == "in-sync" ? ConsistencyState.Consistent : ConsistencyState.Different,
                 liveChecksums,
-                Array.Empty<SourceDifference>()));
+                Array.Empty<SourceDifference>(),
+                hardware));
         }
 
         var evidenceSourceCanNarrow = evidenceCurrent && sourceClean;
@@ -186,7 +188,7 @@ public sealed class WorkbenchConsistencyService
 
         var state = scans.Values.Any(scan => scan.UnsupportedObjects.Count > 0)
             ? ConsistencyState.ScanRequired
-            : differences.Count == 0
+            : differences.Count == 0 && hardware.State == "in-sync"
                 ? ConsistencyState.Consistent
                 : ConsistencyState.Different;
         return Persist(workbench, new WorkbenchConsistencyResult(
@@ -195,7 +197,66 @@ public sealed class WorkbenchConsistencyService
             false,
             state,
             liveChecksums,
-            differences));
+            differences,
+            hardware));
+    }
+
+    private async Task<HardwareConfigurationCompareResult> CompareHardwareAsync(
+        string masterRoot,
+        CancellationToken cancellationToken,
+        IOperationProgress? progress)
+    {
+        var root = WorkbenchPaths.ResolveHardwareRoot(masterRoot);
+        var stagingRoot = WorkbenchPaths.ResolveHardwareStagingRoot(masterRoot);
+        TryDeleteDirectory(stagingRoot);
+        Directory.CreateDirectory(stagingRoot);
+        progress?.Report("Comparing project hardware configuration with TIA...");
+        var liveResults = await engineering.CallAsync<HardwareExportResult[]>(
+                "export_hardware_configuration",
+                new { outputDir = stagingRoot, includeDeviceExports = false },
+                cancellationToken)
+            .ConfigureAwait(false);
+        var warnings = HardwareConfigurationExport.EnsureSucceeded(liveResults, stagingRoot);
+        var local = HardwareConfigurationSnapshot.Read(root);
+        var live = HardwareConfigurationSnapshot.FromResults(liveResults, stagingRoot);
+        var artifacts = HardwareConfigurationSnapshot.Compare(local, live);
+        var state = artifacts.All(artifact => artifact.State == "same")
+            ? "in-sync"
+            : local is null
+                ? "missing"
+                : "changed";
+        var changed = artifacts.Count(artifact => artifact.State != "same");
+        var message = state switch
+        {
+            "in-sync" => $"Project hardware configuration matches TIA ({artifacts.Count} artifact(s)).",
+            "missing" => "No saved project-level hardware configuration exists yet. Review the staged TIA export before overwriting the baseline.",
+            _ => $"Project hardware configuration differs from TIA ({changed} artifact(s) changed or missing). Review the staged TIA export before overwriting the baseline.",
+        };
+        if (warnings.Count > 0)
+        {
+            message += $" CAx export warnings: {string.Join("; ", warnings)}";
+        }
+
+        return new HardwareConfigurationCompareResult(
+            state,
+            root,
+            artifacts,
+            message,
+            warnings,
+            stagingRoot);
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+            // A failed comparison must not mask the primary result.
+        }
     }
 
     public async Task<TiaSyncEvidence> ValidateSynchronizedMasterAsync(
