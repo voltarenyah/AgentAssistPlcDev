@@ -65,6 +65,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         foreach (var metadata in created.Devices)
         {
             var device = catalog.ResolveDevice(created.Workbench, created.Worktree, metadata);
+            SqliteConnection.ClearAllPools();
             File.WriteAllText(device.KnowledgeDbPath, "runtime database");
             Assert.True(File.Exists(Path.Combine(device.WorktreeRoot, "worktree.json")));
             Assert.True(File.Exists(Path.Combine(device.DeviceRoot, "device.json")));
@@ -1221,6 +1222,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                 "compile_plc" => new CompileResult { State = compileState },
                 "get_plc_checksums" => Checksums(),
                 "rebuild_export" => Export(args),
+                "export_hardware_configuration" => ExportHardware(args),
                 "import_block" => Import(args),
                 "compile_block" => Compile(args),
                 _ => throw new InvalidOperationException(tool),
@@ -1316,6 +1318,24 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         {
             ImportCalls.Add("compile_block");
             return new CompileResult { BlockName = "Main", State = "success" };
+        }
+
+        private static HardwareExportResult[] ExportHardware(object args)
+        {
+            var output = Property<string>(args, "outputDir");
+            Directory.CreateDirectory(output);
+            var projectAml = Path.Combine(output, "project.aml");
+            File.WriteAllText(projectAml, "<CAEXFile />");
+            return
+            [
+                new HardwareExportResult
+                {
+                    Scope = "project",
+                    Success = true,
+                    AmlFilePath = projectAml,
+                    ContentHash = "hardware-hash",
+                },
+            ];
         }
     }
 

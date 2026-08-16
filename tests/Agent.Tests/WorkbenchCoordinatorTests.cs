@@ -414,7 +414,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             engineering.Calls.Take(6).ToArray());
         // The engineering session is released between the managed-copy phase and the export,
         // so the waiting OpenProjectInTia connect interleaves with the bootstrap tail.
-        Assert.Equal(9, engineering.Calls.Count);
+        Assert.Equal(10, engineering.Calls.Count);
         Assert.Equal(2, engineering.Calls.Count(call => call == "connect"));
         Assert.True(
             engineering.Calls.IndexOf("rebuild_export") < engineering.Calls.IndexOf("disconnect"));
@@ -479,12 +479,13 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var calls = new List<string>();
         var versionControl = ScriptCreateVersionControl(Caller(calls));
         var engineering = ScriptCreateEngineering(Caller(calls), new[] { "PLC_1", "PLC_2" });
+        var knowledge = ScriptCreateKnowledge(Caller(calls), 2);
         var catalog = new WorkbenchCatalog(
             new AtomicJsonStore(),
             Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
             engineering,
-            new FakeToolCaller(),
+            knowledge,
             versionControl,
             catalog,
             new AtomicJsonStore(),
@@ -515,6 +516,9 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "engineering:get_plc_checksums",
                 "engineering:rebuild_export",
                 "engineering:rebuild_export",
+                "engineering:export_hardware_configuration",
+                "knowledge:ingest_source",
+                "knowledge:ingest_source",
                 "engineering:disconnect",
                 "version:svn_checkout",
                 "version:svn_commit",
@@ -538,6 +542,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Contains("Closing the TIA session...", progress.Messages);
         Assert.Contains("Committing the native TIA baseline to SVN...", progress.Messages);
         Assert.Contains("Creating the initial PLC source baseline commit...", progress.Messages);
+        Assert.Contains("Exporting hardware configuration...", progress.Messages);
+        Assert.Contains("Rebuilding full device knowledge...", progress.Messages);
         Assert.Equal(
             42,
             Property<int>(engineering.CallArgs["connect"].Single(), "sessionId"));
@@ -574,6 +580,16 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Contains(EngineeringStateWriter.RelativePath, committedPaths);
         Assert.Contains("devices/PLC_1/source/Blocks/Main.xml", committedPaths);
         Assert.Contains("devices/PLC_2/source/Blocks/Main.xml", committedPaths);
+        Assert.Contains("hardware/project.aml", committedPaths);
+        Assert.True(File.Exists(Path.Combine(result.Workbench.RootPath, "worktrees", "master", "hardware", "project.aml")));
+        Assert.All(result.Devices, device =>
+        {
+            var context = catalog.ResolveDevice(result.Workbench, result.Worktree, device);
+            Assert.True(File.Exists(context.KnowledgeDbPath));
+            var metadata = new AtomicJsonStore().Read<DeviceMetadata>(
+                Path.Combine(context.DeviceRoot, "device.json"));
+            Assert.False(metadata.Knowledge.BaselineStale);
+        });
     }
 
     [Fact]
@@ -582,12 +598,13 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var versionControl = ScriptCreateVersionControl(new FakeToolCaller());
         var engineering = ScriptCreateEngineering(
             new FakeToolCaller(), new[] { "PLC_1" }, compileState: "error");
+        var knowledge = ScriptCreateKnowledge(new FakeToolCaller(), 1);
         var catalog = new WorkbenchCatalog(
             new AtomicJsonStore(),
             Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
             engineering,
-            new FakeToolCaller(),
+            knowledge,
             versionControl,
             catalog,
             new AtomicJsonStore(),
@@ -609,12 +626,13 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         var versionControl = ScriptCreateVersionControl(new FakeToolCaller());
         var engineering = ScriptCreateEngineering(new FakeToolCaller(), new[] { "PLC_1" });
+        var knowledge = ScriptCreateKnowledge(new FakeToolCaller(), 1);
         var catalog = new WorkbenchCatalog(
             new AtomicJsonStore(),
             Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
             engineering,
-            new FakeToolCaller(),
+            knowledge,
             versionControl,
             catalog,
             new AtomicJsonStore(),
@@ -654,11 +672,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             "device.json");
         var versionControl = new MetadataRemovingWorktreeCaller(masterDevicePath);
         var engineering = ScriptCreateEngineering(new FakeToolCaller(), new[] { "PLC_1" });
+        var knowledge = ScriptCreateKnowledge(new FakeToolCaller(), 1);
         var store = new AtomicJsonStore();
         var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
             engineering,
-            new FakeToolCaller(),
+            knowledge,
             versionControl,
             catalog,
             store,
@@ -730,10 +749,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             .Respond("vc_add_worktree", new object())
             .Respond("vc_remove_worktree", new object());
         var engineering = ScriptCreateEngineering(new FakeToolCaller(), new[] { "PLC_1" });
+        var knowledge = ScriptCreateKnowledge(new FakeToolCaller(), 1);
         var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
             engineering,
-            new FakeToolCaller(),
+            knowledge,
             versionControl,
             catalog,
             store,
@@ -774,10 +794,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var store = new AtomicJsonStore();
         var versionControl = new PartialWorktreeCreationCaller();
         var engineering = ScriptCreateEngineering(new FakeToolCaller(), new[] { "PLC_1" });
+        var knowledge = ScriptCreateKnowledge(new FakeToolCaller(), 1);
         var catalog = new WorkbenchCatalog(store, Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
             engineering,
-            new FakeToolCaller(),
+            knowledge,
             versionControl,
             catalog,
             store,
@@ -922,6 +943,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         File.WriteAllText(originPath, "origin project placeholder");
         var versionControl = ScriptCreateVersionControl(Caller(calls));
         var engineering = ScriptCreateEngineering(Caller(calls), new[] { "PLC_1" }, originPath);
+        var knowledge = ScriptCreateKnowledge(Caller(calls), 1);
         engineering.Respond("get_current_session", new CurrentSessionInfo
         {
             Attached = true,
@@ -933,7 +955,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             Path.Combine(root, "catalog"));
         var coordinator = new WorkbenchCoordinator(
             engineering,
-            new FakeToolCaller(),
+            knowledge,
             versionControl,
             catalog,
             new AtomicJsonStore(),
@@ -965,6 +987,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "engineering:compile_plc",
                 "engineering:get_plc_checksums",
                 "engineering:rebuild_export",
+                "engineering:export_hardware_configuration",
+                "knowledge:ingest_source",
                 "engineering:close_session",
                 "engineering:disconnect",
                 "version:svn_checkout",
@@ -1937,12 +1961,21 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         FakeToolCaller? versionControl = null) =>
         new(
             engineering ?? new FakeToolCaller(),
-            knowledge ?? new FakeToolCaller(),
+            knowledge ?? CreateDefaultKnowledgeCaller(),
             versionControl ?? new FakeToolCaller(),
             new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "catalog")),
             new AtomicJsonStore(),
             new DeviceReconciler(),
             new DeviceSourceResolver(_ => { }));
+
+    private static FakeToolCaller CreateDefaultKnowledgeCaller() =>
+        new FakeToolCaller().Respond("ingest_source", args =>
+        {
+            var dbPath = Property<string>(args, "dbPath");
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+            File.WriteAllText(dbPath, "knowledge");
+            return new IngestResult { DbPath = dbPath };
+        });
 
     private static WorkbenchMetadata RegisterTimelineWorkbench(Fixture fixture)
     {
@@ -2007,7 +2040,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
     /// <summary>Scripts the 1.2 create flow on an engineering caller: connect, origin
     /// get_project_info, save_project_as into the tia/ store, managed verify, per-PLC
-    /// compile_plc + get_plc_checksums, rebuild_export per PLC, disconnect.</summary>
+    /// compile_plc + get_plc_checksums, rebuild_export per PLC, project hardware export, disconnect.</summary>
     private static FakeToolCaller ScriptCreateEngineering(
         FakeToolCaller caller,
         string[] plcs,
@@ -2050,7 +2083,24 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             caller.Respond("rebuild_export", (Func<object, object>)WriteCreateExport);
         }
 
+        caller.Respond("export_hardware_configuration", (Func<object, object>)WriteCreateHardwareExport);
         return caller.Respond("disconnect", new object());
+    }
+
+    private static FakeToolCaller ScriptCreateKnowledge(FakeToolCaller caller, int deviceCount)
+    {
+        for (var index = 0; index < deviceCount; index++)
+        {
+            caller.Respond("ingest_source", args =>
+            {
+                var dbPath = Property<string>(args, "dbPath");
+                Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+                File.WriteAllText(dbPath, "knowledge");
+                return new IngestResult { DbPath = dbPath };
+            });
+        }
+
+        return caller;
     }
 
     /// <summary>Scripts the version-control side of the 1.2 create flow.</summary>
@@ -2096,6 +2146,24 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 },
             }));
         return new[] { new SyncResult { PlcName = plc, ExportRoot = output } };
+    }
+
+    private static object WriteCreateHardwareExport(object args)
+    {
+        var output = Property<string>(args, "outputDir");
+        Directory.CreateDirectory(output);
+        var projectAml = Path.Combine(output, "project.aml");
+        File.WriteAllText(projectAml, "<CAEXFile />");
+        return new[]
+        {
+            new HardwareExportResult
+            {
+                Scope = "project",
+                Success = true,
+                AmlFilePath = projectAml,
+                ContentHash = "hardware-hash",
+            },
+        };
     }
 
     private sealed class MetadataRemovingWorktreeCaller(string masterDevicePath) : FakeToolCaller
@@ -2593,6 +2661,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     };
                 case "rebuild_export":
                     return (T)WriteCreateExport(args);
+                case "export_hardware_configuration":
+                    return (T)WriteCreateHardwareExport(args);
                 default:
                     throw new InvalidOperationException(tool);
             }

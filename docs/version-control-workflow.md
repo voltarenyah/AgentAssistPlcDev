@@ -69,19 +69,22 @@ Creating a workbench from an existing `.ap17` imports it into managed storage:
    a compile failure never fails the import.
 6. Export the semantic PLC source into `devices/<plc>/source` (staging → preview →
    apply, same reconciliation path as a refresh).
-7. Disconnect TIA, so no TIA process can still write the managed tree while it is
+7. Export the project-level hardware configuration into `hardware/project.aml`
+   and rebuild each device's ignored `plc-knowledge.db` from the initial source.
+   The project is not returned to the caller until both derived artifacts exist.
+8. Disconnect TIA, so no TIA process can still write the managed tree while it is
    committed (the freeze rule).
-8. Strip legacy app export caches: TIA Save As copies the whole origin project
+9. Strip legacy app export caches: TIA Save As copies the whole origin project
    folder, which may contain `export/`/`Exports/` directories written by older app
    versions. A candidate is removed only when its `metadata.json` is recognizably
    ours (schemaVersion plus exportRoot/components); anything unrecognized is kept
    and a removal failure never aborts the import. Everything TIA-native (`System`,
    `IM`, `UserFiles`, `Vci`, `XRef`, `TMP`, `Logs`, `AdditionalFiles`, …) stays.
-9. Bring the saved project under SVN control: `native/main` is still empty, so an
+10. Bring the saved project under SVN control: `native/main` is still empty, so an
    obstruction-allowing checkout into the now non-empty `tia/` directory is safe
    and only adds the `.svn` metadata. Then commit the native baseline, write
-   `revision.json`, and create the Git baseline commit containing the source XML
-   and `revision.json`.
+   `revision.json`, and create the Git baseline commit containing the source XML,
+   `hardware/project.aml`, and `revision.json`.
 
 Any failure rolls the workbench back completely (Git repo, SVN store, worktrees).
 The origin path and import time are kept as provenance (`originProjectPath`,
