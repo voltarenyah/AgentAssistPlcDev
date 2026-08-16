@@ -341,6 +341,8 @@ public sealed class WorkbenchCoordinator
         var workbench = catalog.Create(request.Name, request.RootPath);
         var masterPath = Path.Combine(workbench.RootPath, "worktrees", "master");
         var tiaStore = WorkbenchPaths.ResolveTiaStore(masterPath);
+        int? ownedPortalSessionId = null;
+        var ownedPortalSessionClosed = false;
 
         try
         {
@@ -377,6 +379,21 @@ public sealed class WorkbenchCoordinator
                         ? (object)new { sessionId = request.EngineeringSessionId!.Value }
                         : new { projectPath = validatedProjectPath, withUI = false },
                     cancellationToken).ConfigureAwait(false);
+                if (hasProjectPath)
+                {
+                    var currentSession = await engineering.CallAsync<CurrentSessionInfo>(
+                        "get_current_session",
+                        new { },
+                        cancellationToken).ConfigureAwait(false);
+                    if (currentSession.SessionId is not int currentSessionId)
+                    {
+                        throw new WorkbenchLifecycleException(
+                            "TIA_SESSION_NOT_IDENTIFIED",
+                            "TIA Portal opened the origin project, but its process ID could not be identified safely.");
+                    }
+
+                    ownedPortalSessionId = currentSessionId;
+                }
                 var originProject = await engineering.CallAsync<ProjectInfo>(
                     "get_project_info",
                     new { },
@@ -517,6 +534,15 @@ public sealed class WorkbenchCoordinator
             // Rule 8: close/quiesce the TIA session before the native baseline commit, so no
             // TIA process can still write the managed tree while SVN snapshots it.
             progress?.Report("Closing the TIA session...");
+            if (ownedPortalSessionId is int ownedSessionId)
+            {
+                await engineering.CallAsync<object>(
+                    "close_session",
+                    new { sessionId = ownedSessionId },
+                    cancellationToken).ConfigureAwait(false);
+                ownedPortalSessionClosed = true;
+            }
+
             await engineering.CallAsync<object>(
                 "disconnect",
                 new { },
@@ -572,6 +598,21 @@ public sealed class WorkbenchCoordinator
         catch
         {
             // Best effort: release any TIA hold on the managed tree before deleting it.
+            if (ownedPortalSessionId is int ownedSessionId && !ownedPortalSessionClosed)
+            {
+                try
+                {
+                    await engineering.CallAsync<object>(
+                        "close_session",
+                        new { sessionId = ownedSessionId },
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    // Session closure is cleanup only; the original failure decides the outcome.
+                }
+            }
+
             try
             {
                 await engineering.CallAsync<object>(

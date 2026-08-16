@@ -922,6 +922,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         File.WriteAllText(originPath, "origin project placeholder");
         var versionControl = ScriptCreateVersionControl(Caller(calls));
         var engineering = ScriptCreateEngineering(Caller(calls), new[] { "PLC_1" }, originPath);
+        engineering.Respond("get_current_session", new CurrentSessionInfo
+        {
+            Attached = true,
+            SessionId = 4242,
+        });
+        engineering.Respond("close_session", new object());
         var catalog = new WorkbenchCatalog(
             new AtomicJsonStore(),
             Path.Combine(root, "catalog"));
@@ -945,18 +951,21 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal(originPath, Property<string>(args, "projectPath"));
         Assert.False(Property<bool>(args, "withUI"));
         Assert.Null(args.GetType().GetProperty("sessionId"));
+        Assert.Equal(4242, Property<int>(engineering.CallArgs["close_session"].Single(), "sessionId"));
         Assert.Equal(
             new[]
             {
                 "version:vc_init_shared",
                 "version:svn_init_shared",
                 "engineering:connect",
+                "engineering:get_current_session",
                 "engineering:get_project_info",
                 "engineering:save_project_as",
                 "engineering:get_project_info",
                 "engineering:compile_plc",
                 "engineering:get_plc_checksums",
                 "engineering:rebuild_export",
+                "engineering:close_session",
                 "engineering:disconnect",
                 "version:svn_checkout",
                 "version:svn_commit",
