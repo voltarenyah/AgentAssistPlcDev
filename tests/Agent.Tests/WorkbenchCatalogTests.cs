@@ -179,6 +179,39 @@ public sealed class WorkbenchCatalogTests : IDisposable
         Assert.True(File.Exists(Path.Combine(root, "workbench.json")));
     }
 
+    [Fact]
+    public async Task RollbackCreateWaitsForTiaWriteLockToBeReleased()
+    {
+        var root = Path.Combine(_testRoot, "Line1");
+        var catalog = CreateCatalog();
+        var created = catalog.Create("Line 1", root);
+        var writeLockPath = Path.Combine(root, "worktrees", "master", "tia", "write.lock");
+        Directory.CreateDirectory(Path.GetDirectoryName(writeLockPath)!);
+        var writeLock = new FileStream(
+            writeLockPath,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        var release = Task.Run(async () =>
+        {
+            await Task.Delay(200);
+            writeLock.Dispose();
+        });
+
+        try
+        {
+            catalog.RollbackCreate(created);
+            await release;
+        }
+        finally
+        {
+            writeLock.Dispose();
+        }
+
+        Assert.False(File.Exists(Path.Combine(root, "workbench.json")));
+        Assert.False(Directory.Exists(Path.Combine(root, "worktrees")));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_testRoot))
