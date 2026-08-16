@@ -11,6 +11,9 @@ interface NodeEdgesViewProps {
   onEdgeSelect?: (edge: api.GraphEdge | null) => void
 }
 
+const KNOWLEDGE_PAGE_SIZE = 100
+const MAX_RENDERED_KNOWLEDGE_ROWS = 200
+
 /* ── Component ────────────────────────────────────────── */
 
 export default function NodeEdgesView({ context, projectName, onNodeSelect, onEdgeSelect }: NodeEdgesViewProps) {
@@ -31,6 +34,7 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
   const [nodesError, setNodesError] = useState<string | null>(null)
   const [nodesTruncated, setNodesTruncated] = useState(false)
   const [nodesTotalCount, setNodesTotalCount] = useState<number | undefined>(undefined)
+  const nodesRequestRef = useRef(0)
 
   /* ── Edge state ───────────────────────────────────── */
   const [edges, setEdges] = useState<api.GraphEdge[]>([])
@@ -44,6 +48,7 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
   const [edgesError, setEdgesError] = useState<string | null>(null)
   const [edgesTruncated, setEdgesTruncated] = useState(false)
   const [edgesTotalCount, setEdgesTotalCount] = useState<number | undefined>(undefined)
+  const edgesRequestRef = useRef(0)
 
   /* ── Split-panel drag state ───────────────────────── */
   const [splitRatio, setSplitRatio] = useState(50)
@@ -97,10 +102,12 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
 
   /* ── Fetch nodes when kind filter or search changes ── */
   const fetchNodes = useCallback(async (offset = 0, append = false) => {
+    const requestId = ++nodesRequestRef.current
     if (append) {
       setNodesLoadingMore(true)
     } else {
       setNodesLoading(true)
+      setNodesLoadingMore(false)
       setNodesError(null)
     }
     try {
@@ -108,22 +115,26 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
         context,
         selectedKind || undefined,
         debouncedNodeSearch || undefined,
-        undefined,
+        KNOWLEDGE_PAGE_SIZE,
         offset > 0 ? offset : undefined)
-      setNodes(prev => append ? [...prev, ...data.nodes] : data.nodes)
-      setNodesTruncated(data.truncated ?? false)
+      if (requestId !== nodesRequestRef.current) return
+      setNodes(prev => (append ? [...prev, ...data.nodes] : data.nodes).slice(0, MAX_RENDERED_KNOWLEDGE_ROWS))
+      setNodesTruncated((data.truncated ?? false) || (data.totalCount ?? data.nodes.length) > MAX_RENDERED_KNOWLEDGE_ROWS)
       setNodesTotalCount(data.totalCount)
     } catch (e) {
+      if (requestId !== nodesRequestRef.current) return
       if (append) {
         setNodesTruncated(false)
       } else {
         setNodesError(e instanceof Error ? e.message : 'Failed to load nodes')
       }
     } finally {
-      if (append) {
-        setNodesLoadingMore(false)
-      } else {
-        setNodesLoading(false)
+      if (requestId === nodesRequestRef.current) {
+        if (append) {
+          setNodesLoadingMore(false)
+        } else {
+          setNodesLoading(false)
+        }
       }
     }
   }, [context, selectedKind, debouncedNodeSearch])
@@ -143,10 +154,12 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
 
   /* ── Fetch edges; a selected node filters to its related edges (from OR to) ── */
   const fetchEdges = useCallback(async (nodeId?: string, offset = 0, append = false) => {
+    const requestId = ++edgesRequestRef.current
     if (append) {
       setEdgesLoadingMore(true)
     } else {
       setEdgesLoading(true)
+      setEdgesLoadingMore(false)
       setEdgesError(null)
     }
     try {
@@ -155,22 +168,26 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
         nodeId,
         selectedEdgeType || undefined,
         debouncedEdgeSearch || undefined,
-        undefined,
+        KNOWLEDGE_PAGE_SIZE,
         offset > 0 ? offset : undefined)
-      setEdges(prev => append ? [...prev, ...data.edges] : data.edges)
-      setEdgesTruncated(data.truncated ?? false)
+      if (requestId !== edgesRequestRef.current) return
+      setEdges(prev => (append ? [...prev, ...data.edges] : data.edges).slice(0, MAX_RENDERED_KNOWLEDGE_ROWS))
+      setEdgesTruncated((data.truncated ?? false) || (data.totalCount ?? data.edges.length) > MAX_RENDERED_KNOWLEDGE_ROWS)
       setEdgesTotalCount(data.totalCount)
     } catch (e) {
+      if (requestId !== edgesRequestRef.current) return
       if (append) {
         setEdgesTruncated(false)
       } else {
         setEdgesError(e instanceof Error ? e.message : 'Failed to load edges')
       }
     } finally {
-      if (append) {
-        setEdgesLoadingMore(false)
-      } else {
-        setEdgesLoading(false)
+      if (requestId === edgesRequestRef.current) {
+        if (append) {
+          setEdgesLoadingMore(false)
+        } else {
+          setEdgesLoading(false)
+        }
       }
     }
   }, [context, selectedEdgeType, debouncedEdgeSearch])
@@ -440,7 +457,11 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
                   ))}
                 </tbody>
               </table>
-                {nodesTruncated && (
+                {nodesTruncated && nodes.length >= MAX_RENDERED_KNOWLEDGE_ROWS ? (
+                  <div className="px-3 py-2 text-center text-[9px]" style={{ borderTop: '1px solid var(--border)', color: 'var(--muted-foreground)' }}>
+                    Showing the first {MAX_RENDERED_KNOWLEDGE_ROWS} nodes. Use search or filters to view more.
+                  </div>
+                ) : nodesTruncated && (
                   <div className="flex justify-center py-1.5" style={{ borderTop: '1px solid var(--border)' }}>
                     <button
                       onClick={() => fetchNodes(nodes.length, true)}
@@ -578,7 +599,11 @@ export default function NodeEdgesView({ context, projectName, onNodeSelect, onEd
                   ))}
                 </tbody>
               </table>
-                {edgesTruncated && (
+                {edgesTruncated && edges.length >= MAX_RENDERED_KNOWLEDGE_ROWS ? (
+                  <div className="px-3 py-2 text-center text-[9px]" style={{ borderTop: '1px solid var(--border)', color: 'var(--muted-foreground)' }}>
+                    Showing the first {MAX_RENDERED_KNOWLEDGE_ROWS} edges. Use search or filters to view more.
+                  </div>
+                ) : edgesTruncated && (
                   <div className="flex justify-center py-1.5" style={{ borderTop: '1px solid var(--border)' }}>
                     <button
                       onClick={() => fetchEdges(selectedNode?.id, edges.length, true)}
