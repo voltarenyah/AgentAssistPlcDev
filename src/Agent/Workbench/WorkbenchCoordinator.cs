@@ -343,6 +343,7 @@ public sealed class WorkbenchCoordinator
         var tiaStore = WorkbenchPaths.ResolveTiaStore(masterPath);
         int? ownedPortalSessionId = null;
         var ownedPortalSessionClosed = false;
+        string? managedProjectPath = null;
 
         try
         {
@@ -362,7 +363,6 @@ public sealed class WorkbenchCoordinator
             // non-empty directory, so the SVN checkout happens only after the freeze below.
             Directory.CreateDirectory(tiaStore);
 
-            string managedProjectPath;
             string? projectChecksum;
             string compileStatus;
             ProjectInfo managedProject;
@@ -636,13 +636,21 @@ public sealed class WorkbenchCoordinator
         catch
         {
             // Best effort: release any TIA hold on the managed tree before deleting it.
-            if (ownedPortalSessionId is int ownedSessionId && !ownedPortalSessionClosed)
+            // A session-based create temporarily switches the user's attached portal to
+            // the managed copy during Save As. Once that copy exists, a failed create must
+            // close that portal too; disconnect only releases Openness handles and leaves
+            // TIA holding write.lock on the directory.
+            var rollbackSessionId = ownedPortalSessionId
+                ?? (managedProjectPath is not null && hasSession
+                    ? request.EngineeringSessionId
+                    : null);
+            if (rollbackSessionId is int sessionId && !ownedPortalSessionClosed)
             {
                 try
                 {
                     await engineering.CallAsync<object>(
                         "close_session",
-                        new { sessionId = ownedSessionId },
+                        new { sessionId },
                         CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)

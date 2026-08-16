@@ -1003,6 +1003,63 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task FailedSessionCreateClosesAttachedTiaAfterSavingManagedCopy()
+    {
+        var workbenchRoot = Path.Combine(root, "failed-session-create");
+        var managedPath = (string?)null;
+        var engineering = new FakeToolCaller()
+            .Respond("connect", new object())
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+                PlcDevices = Array.Empty<string>(),
+            })
+            .Respond("save_project_as", args =>
+            {
+                var target = Property<string>(args, "targetDirectory");
+                Directory.CreateDirectory(target);
+                managedPath = Path.Combine(target, "Line.ap17");
+                File.WriteAllText(managedPath, "managed project placeholder");
+                return new CoordinatorSaveProjectAsResult { ManagedProjectPath = managedPath };
+            })
+            .Respond("get_project_info", _ => new ProjectInfo
+            {
+                Name = "Line",
+                Path = managedPath,
+                PlcDevices = Array.Empty<string>(),
+            })
+            .Fail("export_hardware_configuration", "TIA_EXPORT_FAILED", "simulated export failure")
+            .Respond("close_session", new object())
+            .Respond("disconnect", new object());
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_init_shared", new object())
+            .Respond("svn_init_shared", new CoordinatorSvnInitResult
+            {
+                RepositoryPath = "repository.svn",
+                RepositoryUri = "file:///repository.svn/",
+            });
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "catalog")),
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        var error = await Assert.ThrowsAsync<ToolCallException>(() =>
+            coordinator.CreateWorkbenchAsync(
+                new CreateWorkbenchRequest("Line", workbenchRoot, 4242, null)));
+
+        Assert.Equal("TIA_EXPORT_FAILED", error.Code);
+        Assert.Equal(4242, Property<int>(engineering.CallArgs["close_session"].Single(), "sessionId"));
+        Assert.Equal(new[] { "close_session", "disconnect" }, engineering.Calls.TakeLast(2));
+        Assert.False(File.Exists(Path.Combine(workbenchRoot, "workbench.json")));
+        Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "worktrees")));
+    }
+
+    [Fact]
     public async Task CreateWithMissingOriginProjectFailsBeforeCreatingAnything()
     {
         var engineering = new FakeToolCaller();

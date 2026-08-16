@@ -13,6 +13,9 @@ public sealed class WorkbenchCatalogException : Exception
 
 public sealed class WorkbenchCatalog
 {
+    private const int DeleteRetryCount = 50;
+    private const int DeleteRetryDelayMilliseconds = 100;
+
     private readonly AtomicJsonStore _store;
     private readonly string _defaultRoot;
 
@@ -390,6 +393,29 @@ public sealed class WorkbenchCatalog
         }
 
         var attributes = File.GetAttributes(path);
-        Directory.Delete(path, recursive: !attributes.HasFlag(FileAttributes.ReparsePoint));
+        var recursive = !attributes.HasFlag(FileAttributes.ReparsePoint);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive);
+                return;
+            }
+            catch (IOException exception) when (
+                attempt < DeleteRetryCount
+                && IsTransientDeleteFailure(exception))
+            {
+                Thread.Sleep(DeleteRetryDelayMilliseconds);
+            }
+        }
+    }
+
+    private static bool IsTransientDeleteFailure(IOException exception)
+    {
+        // TIA can keep write.lock open briefly while a portal process is shutting down.
+        // Restrict retries to the Win32 sharing/lock violations so genuine I/O failures
+        // still surface immediately.
+        var win32Error = exception.HResult & 0xFFFF;
+        return win32Error is 0x20 or 0x21;
     }
 }
