@@ -26,6 +26,8 @@ public sealed class KnowledgeTools
     private const int DefaultBrowseMaxRows = 1000;
     private const int HardBrowseMaxRows = 10000;
     private const int SearchSnippetMaxLength = 300;
+    private const int DefaultNetworkLogicChunkChars = 6000;
+    private const int HardNetworkLogicChunkChars = 6000;
 
     private readonly ILogger<KnowledgeTools>? _logger;
 
@@ -99,7 +101,7 @@ public sealed class KnowledgeTools
         => Invoke(() => SingleNetworkDetail(dbPath, block, networkIndex, compact, null));
 
     [McpServerTool(Name = "get_single_network")]
-    [Description("Inspect exactly one PLC network. Use this when the block name and 1-based network index are already known. The response contains only that network plus its reads, writes and calls.")]
+    [Description("Inspect exactly one PLC network. Use this when the block name and 1-based network index are already known. The response contains only that network plus its reads, writes and calls. If the logic is too large for the response, use get_network_logic to read it in chunks.")]
     public CallToolResult GetSingleNetwork(
         [Description("Path to the plc-knowledge.db file.")] string dbPath,
         [Description("Program block name, e.g. 'Main'.")] string block,
@@ -107,8 +109,18 @@ public sealed class KnowledgeTools
         [Description("Optional fields: logic, access, calls. Defaults to all fields.")] string[]? include = null)
         => Invoke(() => SingleNetworkDetail(dbPath, block, networkIndex, false, include));
 
+    [McpServerTool(Name = "get_network_logic")]
+    [Description("Read one PLC network's translated logic in bounded chunks. Use offset=0, then repeat with the returned nextOffset until hasMore is false when get_single_network or get_all_networks reports truncated logic.")]
+    public CallToolResult GetNetworkLogic(
+        [Description("Path to the plc-knowledge.db file.")] string dbPath,
+        [Description("Program block name, e.g. 'Main'.")] string block,
+        [Description("1-based network index.")] int networkIndex,
+        [Description("Zero-based character offset into the translated logic.")] int offset = 0,
+        [Description("Maximum characters to return; defaults to 6000 and is capped at 6000 so the result fits the agent tool-result budget.")] int? maxChars = null)
+        => Invoke(() => NetworkLogicChunk(dbPath, block, networkIndex, offset, maxChars));
+
     [McpServerTool(Name = "get_all_networks")]
-    [Description("List networks in one PLC block. Defaults to compact summaries; request include=['logic'] only when full translated logic is needed. Use get_single_network for one known network.")]
+    [Description("List networks in one PLC block. Defaults to compact summaries; request include=['logic'] only when broad logic text is genuinely needed. Logic is capped per network; use get_network_logic for the complete text of one known network.")]
     public CallToolResult GetAllNetworks(
         [Description("Path to the plc-knowledge.db file.")] string dbPath,
         [Description("Program block name, e.g. 'Main'.")] string block,
@@ -652,6 +664,65 @@ public sealed class KnowledgeTools
             reads = fields.Contains("access") ? ReadAccessNames(connection, network.Id, "READS") : Array.Empty<string>(),
             writes = fields.Contains("access") ? ReadAccessNames(connection, network.Id, "WRITES") : Array.Empty<string>(),
             calls = fields.Contains("calls") ? ReadCalls(connection, network.Id) : Array.Empty<CallInfo>(),
+        };
+    }
+
+    private static object NetworkLogicChunk(
+        string dbPath,
+        string block,
+        int networkIndex,
+        int offset,
+        int? maxChars)
+    {
+        if (offset < 0)
+        {
+            throw new KnowledgeToolException(
+                "NETWORK_LOGIC_OFFSET_INVALID",
+                "The logic offset must be zero or greater.",
+                "Start at offset 0 or use the nextOffset returned by the previous chunk.");
+        }
+
+        using var connection = OpenReadOnly(dbPath);
+        var blockNode = FindBlockNode(connection, block);
+        var network = ReadNetwork(connection, blockNode.Id, networkIndex);
+        if (network == null)
+        {
+            var networks = ReadNetworks(connection, blockNode.Id);
+            var available = string.Join(", ", networks.Select(item => item.Index?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?"));
+            throw new KnowledgeToolException(
+                "NETWORK_NOT_FOUND",
+                $"Block '{blockNode.Name}' has no network with index {networkIndex} (available: {available}).",
+                "Pass a 1-based network index as listed by get_block.");
+        }
+
+        var logic = network.LogicStatements ?? string.Empty;
+        if (offset > logic.Length)
+        {
+            throw new KnowledgeToolException(
+                "NETWORK_LOGIC_OFFSET_INVALID",
+                $"The logic offset {offset} is past the end of the network ({logic.Length} characters).",
+                "Use offset 0 or the nextOffset returned by the previous chunk.");
+        }
+
+        var chunkSize = Math.Clamp(maxChars ?? DefaultNetworkLogicChunkChars, 1, HardNetworkLogicChunkChars);
+        var length = Math.Min(chunkSize, logic.Length - offset);
+        var hasMore = offset + length < logic.Length;
+        return new
+        {
+            block = new { id = blockNode.Id, name = blockNode.Name },
+            network = new
+            {
+                id = network.Id,
+                index = network.Index,
+                compileUnitId = network.CompileUnitId,
+                title = network.Title,
+                language = network.Language,
+            },
+            offset,
+            totalChars = logic.Length,
+            logicStatements = logic.Substring(offset, length),
+            hasMore,
+            nextOffset = hasMore ? offset + length : (int?)null,
         };
     }
 

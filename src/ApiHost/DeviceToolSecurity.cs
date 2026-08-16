@@ -30,7 +30,7 @@ public sealed class DeviceToolArgumentBinder(
         if (tool is "get_context_status" or "compare_context")
             Force(args, "outputDir", device.SourceRoot);
         if (tool is "ingest_source" or "update_components" or "get_schema" or "query"
-            or "get_block" or "get_network" or "get_single_network" or "get_all_networks"
+            or "get_block" or "get_network" or "get_single_network" or "get_network_logic" or "get_all_networks"
             or "get_variable_usage" or "search"
             || tool.StartsWith("query_", StringComparison.Ordinal))
         {

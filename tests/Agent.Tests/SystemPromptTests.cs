@@ -42,6 +42,18 @@ public sealed class SystemPromptTests
     }
 
     [Fact]
+    public void PromptExplainsHowToRecoverTruncatedNetworkLogic()
+    {
+        var prompt = SystemPrompt.Build();
+
+        Assert.Contains("get_network_logic", prompt);
+        Assert.Contains("nextOffset", prompt);
+        Assert.Contains("hasMore", prompt);
+        Assert.Contains("_truncated", prompt);
+        Assert.Contains("logicTruncated", prompt);
+    }
+
+    [Fact]
     public void PromptRequiresKnowledgeSourceFileLookupForSourceEdits()
     {
         var prompt = SystemPrompt.Build();

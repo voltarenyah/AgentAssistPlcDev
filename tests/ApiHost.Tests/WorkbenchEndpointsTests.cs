@@ -1264,6 +1264,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     [InlineData("get_schema", "knowledge")]
     [InlineData("query", "knowledge")]
     [InlineData("get_block", "knowledge")]
+    [InlineData("get_network_logic", "knowledge")]
     [InlineData("search", "knowledge")]
     [InlineData("vc_status", "vc")]
     [InlineData("list_blocks", "engineering")]

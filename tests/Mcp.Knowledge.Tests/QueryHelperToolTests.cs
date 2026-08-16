@@ -1,9 +1,10 @@
-// Tool tests for the stage-5 query helpers get_block / get_single_network / get_all_networks / search (buildnote/plan/mcp-knowledge.md §6).
+// Tool tests for the stage-5 query helpers get_block / get_single_network / get_network_logic / get_all_networks / search (buildnote/plan/mcp-knowledge.md §6).
 // Runs against a temp SQLite DB ingested from the committed fixtures, via the real MCP tool surface.
 using System;
 using System.IO;
 using System.Linq;
 using Mcp.Knowledge.Tools;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Mcp.Knowledge.Tests;
@@ -125,6 +126,40 @@ public sealed class QueryHelperToolTests
     }
 
     [Fact]
+    public void GetNetworkLogicReturnsReassemblableChunksForLongLogic()
+    {
+        using var db = new FixtureDb();
+        var logic = string.Concat(Enumerable.Range(0, 80).Select(index => $"statement_{index:D2};"));
+        db.ReplaceNetworkLogic(logic);
+        var tools = new KnowledgeTools();
+
+        var chunks = new System.Collections.Generic.List<System.Text.Json.JsonElement>();
+        var offset = 0;
+        do
+        {
+            var chunk = ToolResults.OkJson(tools.GetNetworkLogic(db.Path, "Main", 1, offset, 37));
+            chunks.Add(chunk);
+            offset = chunk.TryGetProperty("nextOffset", out var nextOffset)
+                ? nextOffset.GetInt32()
+                : logic.Length;
+        }
+        while (chunks[^1].GetProperty("hasMore").GetBoolean());
+
+        Assert.All(chunks, chunk => Assert.Equal(logic.Length, chunk.GetProperty("totalChars").GetInt32()));
+        Assert.Equal(logic, string.Concat(chunks.Select(chunk => chunk.GetProperty("logicStatements").GetString())));
+        Assert.True(chunks.Count > 3);
+        Assert.True(chunks[0].GetProperty("hasMore").GetBoolean());
+        Assert.Equal(37, chunks[0].GetProperty("nextOffset").GetInt32());
+        Assert.False(chunks[^1].GetProperty("hasMore").GetBoolean());
+        Assert.False(chunks[^1].TryGetProperty("nextOffset", out _));
+
+        db.ReplaceNetworkLogic(new string('x', 12_000));
+        var bounded = ToolResults.OkJson(tools.GetNetworkLogic(db.Path, "Main", 1));
+        Assert.Equal(6_000, bounded.GetProperty("logicStatements").GetString()!.Length);
+        Assert.True(bounded.GetRawText().Length < 8_000);
+    }
+
+    [Fact]
     public void GetNetworkRejectsUnknownIndex()
     {
         using var db = new FixtureDb();
@@ -207,6 +242,16 @@ public sealed class QueryHelperToolTests
         }
 
         public string Path { get; }
+
+        public void ReplaceNetworkLogic(string logic)
+        {
+            using var connection = new SqliteConnection($"Data Source={Path}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE knowledge_networks SET logic_statements = $logic WHERE network_id = 'network:Main:1';";
+            command.Parameters.AddWithValue("$logic", logic);
+            command.ExecuteNonQuery();
+        }
 
         public void Dispose() => tree.Dispose();
     }
