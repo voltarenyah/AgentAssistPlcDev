@@ -20,6 +20,7 @@ public sealed class SandboxPolicyTests
     [InlineData("query_edge_properties")]
     [InlineData("search")]
     [InlineData("get_variable_usage")]
+    [InlineData("get_network_logic")]
     [InlineData("vc_status")]
     [InlineData("vc_log")]
     [InlineData("vc_diff")]
@@ -81,7 +82,7 @@ public sealed class SandboxPolicyTests
             "import_block", "compile_block", "compile_plc",
             "import_hardware_configuration", "create_block", "delete_block",
             "ingest_source", "update_components", "query", "get_schema", "get_block", "get_network",
-            "get_single_network", "get_all_networks", "get_variable_usage", "search",
+            "get_single_network", "get_network_logic", "get_all_networks", "get_variable_usage", "search",
             "query_node_kinds", "query_nodes", "query_edge_types", "query_edges",
             "query_node_properties", "query_edge_properties",
             "vc_init", "vc_status", "vc_add", "vc_commit", "vc_log",
