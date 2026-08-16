@@ -277,6 +277,29 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task CompareHardwareIgnoresExportTimestampWhenLiveHashIsMissing()
+    {
+        var fixture = Fixture.Create(root);
+        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(fixture.Context.WorktreeRoot);
+        Directory.CreateDirectory(hardwareRoot);
+        var savedXml = "<CAEXFile>\n  <Created>saved</Created>\n  <Device Name=\"PLC_1\" />\n</CAEXFile>";
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), savedXml);
+        File.WriteAllText(
+            Path.Combine(hardwareRoot, "manifest.json"),
+            JsonSerializer.Serialize(new { projectContentHash = XmlContentHash.Compute(savedXml) }));
+
+        var engineering = new HardwareExportCaller
+        {
+            ProjectXml = "<CAEXFile>\n  <Created>live</Created>\n  <Device Name=\"PLC_1\" />\n</CAEXFile>",
+        };
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var result = await coordinator.CompareHardwareAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal("in-sync", result.State);
+    }
+
+    [Fact]
     public async Task HardwareOverwriteRequiresExplicitConfirmation()
     {
         var fixture = Fixture.Create(root);
@@ -316,6 +339,28 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Contains(
             "hardware/project.aml",
             Property<string[]>(versionControl.CallArgs["vc_commit_hardware"].Single(), "paths"));
+    }
+
+    [Fact]
+    public async Task HardwareOverwriteUsesTheRequestedCommitMessage()
+    {
+        var fixture = Fixture.Create(root);
+        var stagingRoot = WorkbenchPaths.ResolveHardwareStagingRoot(fixture.Context.WorktreeRoot);
+        Directory.CreateDirectory(stagingRoot);
+        File.WriteAllText(Path.Combine(stagingRoot, "project.aml"), "<new />");
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_commit_hardware", new CoordinatorGitCommitResult { Sha = "hardware-commit" });
+        var coordinator = Create(fixture, versionControl: versionControl);
+
+        await coordinator.OverwriteHardwareFromStagingAsync(
+            fixture.Context,
+            confirmOverwrite: true,
+            CancellationToken.None,
+            commitMessage: "hardware: add safety relay");
+
+        Assert.Equal(
+            "hardware: add safety relay",
+            Property<string>(versionControl.CallArgs["vc_commit_hardware"].Single(), "message"));
     }
 
     [Fact]
@@ -2275,6 +2320,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
     private sealed class HardwareExportCaller : FakeToolCaller
     {
+        public string ProjectXml { get; init; } = "<CAEXFile />";
+
         public override Task<T> CallAsync<T>(
             string tool,
             object args,
@@ -2302,7 +2349,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 var output = Property<string>(args, "outputDir");
                 Directory.CreateDirectory(output);
                 var projectAml = Path.Combine(output, "project.aml");
-                File.WriteAllText(projectAml, "<CAEXFile />");
+                File.WriteAllText(projectAml, ProjectXml);
                 return Task.FromResult((T)(object)new[]
                 {
                     new HardwareExportResult

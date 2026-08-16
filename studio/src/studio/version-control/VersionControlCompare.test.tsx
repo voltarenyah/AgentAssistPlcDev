@@ -174,4 +174,36 @@ describe('VersionControlCompare', () => {
     expect(host.textContent).toContain('no need to commit')
     expect(host.textContent).not.toContain('TIA changed outside the tracked source')
   })
+
+  it('requires a message before accepting project hardware changes', async () => {
+    const hardware = {
+      state: 'changed' as const,
+      rootPath: 'C:/wb/worktrees/master/hardware',
+      stagingPath: 'C:/wb/worktrees/master/hardware/staging',
+      artifacts: [{ scope: 'project' as const, deviceName: null, state: 'changed' as const }],
+      message: 'Project hardware configuration differs from TIA.',
+    }
+    vi.spyOn(api, 'compareMasterWithTia')
+      .mockResolvedValueOnce(comparison({ differences: [], state: 'Different', hardware }))
+      .mockResolvedValueOnce(comparison({ differences: [], state: 'Consistent', hardware: { ...hardware, state: 'in-sync', artifacts: [{ ...hardware.artifacts[0], state: 'same' }] } }))
+    const overwrite = vi.spyOn(api, 'overwriteHardwareConfiguration').mockResolvedValue({
+      rootPath: hardware.rootPath,
+      artifactCount: 1,
+      commitSha: 'hardware-commit',
+    })
+    const { host } = await render()
+
+    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
+
+    expect(host.textContent).toContain('Project hardware differs from TIA')
+    expect(host.textContent).not.toContain('TIA matches master')
+    const acceptButton = host.querySelector('button[aria-label="Accept TIA hardware configuration"]') as HTMLButtonElement
+    expect(acceptButton.disabled).toBe(true)
+    await input(host.querySelector('input[aria-label="Hardware commit message"]')!, 'Add safety relay')
+    expect(acceptButton.disabled).toBe(false)
+    await click(acceptButton)
+
+    expect(overwrite).toHaveBeenCalledWith('wb-1', 'wt-1', true, undefined, 'Add safety relay')
+    expect(host.textContent).toContain('Hardware committed hardware')
+  })
 })

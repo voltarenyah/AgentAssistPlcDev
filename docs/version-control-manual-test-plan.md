@@ -26,6 +26,17 @@ Use this checklist in order. Mark each item only after the expected result is co
 - [ ] Confirm the changed block is identified.
 - [ ] Select that block only and confirm the source update.
 - [ ] Enter a commit message and commit manually.
+
+## 3a. Detect and accept a project hardware modification
+
+- [ ] Compare TIA with master without changing the PLC source.
+- [ ] Confirm the project-level hardware AML is exported and compared.
+- [ ] Confirm a timestamp-only AML change is reported as unchanged.
+- [ ] Modify the TIA project hardware configuration and compare again.
+- [ ] Confirm the hardware difference is shown even when all PLC checksums match.
+- [ ] Confirm the hardware acceptance action requires a non-empty commit message.
+- [ ] Accept the staged hardware export and confirm a hardware commit is created with that message.
+- [ ] Compare again and confirm the hardware state is in sync.
 - [ ] Confirm the new commit appears in history.
 
 ## 4. Create and modify a feature worktree

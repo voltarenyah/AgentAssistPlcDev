@@ -47,4 +47,5 @@ public sealed record WorkbenchConsistencyResult(
     bool FastGatePassed,
     ConsistencyState State,
     IReadOnlyDictionary<string, string?> LiveChecksums,
-    IReadOnlyList<SourceDifference> Differences);
+    IReadOnlyList<SourceDifference> Differences,
+    HardwareConfigurationCompareResult? Hardware = null);

@@ -468,6 +468,7 @@ export type WorkbenchConsistencyResult = {
   state: ConsistencyState | number
   liveChecksums: Record<string, string | null>
   differences: SourceDifference[]
+  hardware?: HardwareConfigurationCompareResult | null
 }
 
 export type PendingSynchronizationResult = {
@@ -1020,10 +1021,11 @@ export const overwriteHardwareConfiguration = (
   worktreeId: string,
   confirmOverwrite: boolean,
   operationId?: string,
+  message?: string,
 ) =>
   workbenchRequest<HardwareConfigurationOverwriteResult>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/hardware/overwrite`,
-    withOperation(jsonRequest('POST', { confirmOverwrite }), operationId),
+    withOperation(jsonRequest('POST', { confirmOverwrite, message }), operationId),
   )
 export const previewDeviceRefresh = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<ReconciliationPreview>(`${devicePath(workbenchId, worktreeId, deviceId)}/refresh/preview`)
