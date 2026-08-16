@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/api/client'
 import HardwareConfigurationView from './HardwareConfigurationView'
 
@@ -70,13 +70,15 @@ afterEach(() => {
 
 describe('HardwareConfigurationView', () => {
   it('shows project devices and child modules in separate panes', async () => {
-    const { host, root } = await render(
+    const { host } = await render(
       <HardwareConfigurationView
         view={view}
         selectedNodeId="plc-1"
         inspectedNodeId="plc-1"
         onSelectNode={() => undefined}
         onInspectNode={() => undefined}
+        onReload={() => undefined}
+        reloadBusy={false}
       />,
     )
 
@@ -96,6 +98,8 @@ describe('HardwareConfigurationView', () => {
         inspectedNodeId="rack-1"
         onSelectNode={node => selected.push(node.id)}
         onInspectNode={node => inspected.push(node.id)}
+        onReload={() => undefined}
+        reloadBusy={false}
       />,
     )
 
@@ -122,5 +126,34 @@ describe('HardwareConfigurationView', () => {
 
     expect(host.textContent).toContain('I460.0 to I466.7')
     expect(host.textContent).toContain('DI_1_Tag')
+  })
+
+  it('offers a TIA generation action when the saved configuration is missing', async () => {
+    const onReload = vi.fn()
+    const { host } = await render(
+      <HardwareConfigurationView
+        view={{
+          state: 'missing',
+          projectAmlPath: null,
+          exportedAt: null,
+          message: 'No saved project-level hardware configuration is available. Reload it from TIA.',
+          devices: [],
+          tags: [],
+        }}
+        selectedNodeId={null}
+        inspectedNodeId={null}
+        onSelectNode={() => undefined}
+        onInspectNode={() => undefined}
+        onReload={onReload}
+        reloadBusy={false}
+      />,
+    )
+
+    const button = host.querySelector<HTMLButtonElement>('[aria-label="Generate hardware configuration from TIA"]')
+    expect(button).not.toBeNull()
+    expect(button?.textContent).toContain('Generate hardware configuration')
+
+    await act(async () => button?.click())
+    expect(onReload).toHaveBeenCalledTimes(1)
   })
 })

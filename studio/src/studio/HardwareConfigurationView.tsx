@@ -4,6 +4,8 @@ import {
   ChevronRight,
   Cpu,
   Layers3,
+  Loader2,
+  RotateCw,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { HardwareConfigurationNode, HardwareConfigurationView as HardwareView } from '@/api/client'
@@ -15,6 +17,8 @@ type Props = {
   inspectedNodeId: string | null
   onSelectNode: (node: HardwareConfigurationNode) => void
   onInspectNode: (node: HardwareConfigurationNode) => void
+  onReload: () => void
+  reloadBusy: boolean
 }
 
 const containsNode = (node: HardwareConfigurationNode, id: string): boolean =>
@@ -23,7 +27,17 @@ const containsNode = (node: HardwareConfigurationNode, id: string): boolean =>
 const typeLabel = (node: HardwareConfigurationNode) =>
   node.typeIdentifier?.split('/').pop() || (node.kind === 'device' ? 'Device' : 'Module')
 
-function EmptyHardware({ message }: { message: string }) {
+function EmptyHardware({
+  message,
+  canReload,
+  onReload,
+  reloadBusy,
+}: {
+  message: string
+  canReload: boolean
+  onReload: () => void
+  reloadBusy: boolean
+}) {
   return (
     <div className="grid h-full min-h-[520px] place-items-center p-8">
       <div className="max-w-md text-center">
@@ -32,6 +46,18 @@ function EmptyHardware({ message }: { message: string }) {
         </div>
         <h2 className="text-base font-semibold">Hardware configuration</h2>
         <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">{message}</p>
+        {canReload && (
+          <button
+            type="button"
+            className="primary-button mt-5"
+            aria-label="Generate hardware configuration from TIA"
+            disabled={reloadBusy}
+            onClick={onReload}
+          >
+            {reloadBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
+            {reloadBusy ? 'Generating hardware configuration...' : 'Generate hardware configuration'}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -43,6 +69,8 @@ export default function HardwareConfigurationView({
   inspectedNodeId,
   onSelectNode,
   onInspectNode,
+  onReload,
+  reloadBusy,
 }: Props) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set())
 
@@ -51,7 +79,14 @@ export default function HardwareConfigurationView({
   }, [view?.projectAmlPath])
 
   if (!view || view.state !== 'available') {
-    return <EmptyHardware message={view?.message ?? 'Loading project-level hardware configuration...'} />
+    return (
+      <EmptyHardware
+        message={view?.message ?? 'Loading project-level hardware configuration...'}
+        canReload={view?.state === 'missing'}
+        onReload={onReload}
+        reloadBusy={reloadBusy}
+      />
+    )
   }
 
   const selectedDevice = view.devices.find(device =>

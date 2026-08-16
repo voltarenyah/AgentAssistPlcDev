@@ -37,6 +37,7 @@ import WorkbenchNavigator, {
 } from '@/studio/workbench/WorkbenchNavigator'
 import CreateWorkbenchDialog from '@/studio/workbench/CreateWorkbenchDialog'
 import OperationStatusLine from '@/studio/workbench/OperationStatusLine'
+import { shouldRetryOperationStatus } from '@/studio/operationStatus'
 import RuntimeStateStatusBar from '@/studio/workbench/RuntimeStateStatusBar'
 import RefreshDialog from '@/studio/workbench/RefreshDialog'
 import SandboxDeniedDialog from '@/studio/workbench/SandboxDeniedDialog'
@@ -850,9 +851,7 @@ export default function MainStudio() {
         }
       } catch (error) {
         if (cancelled) return
-        if (error instanceof api.WorkbenchApiError && error.status === 404) {
-          setActiveOperation(previous => previous?.id === id ? null : previous)
-        }
+        if (shouldRetryOperationStatus(error)) return
       }
     }
 
@@ -1048,6 +1047,20 @@ export default function MainStudio() {
         )
       } else {
         toast.success(`Hardware configuration reloaded (${result.deviceCount} device(s)).`)
+      }
+      if (
+        selection.workbenchId === workbench.workbenchId
+        && selection.worktreeId === worktree.worktreeId
+        && selection.deviceId === null
+        && hardwarePage === 'tree'
+      ) {
+        const refreshed = await api.getHardwareConfiguration(
+          workbench.workbenchId,
+          worktree.worktreeId,
+        )
+        setHardwareView(refreshed)
+        setHardwareSelectedNodeId(refreshed.devices[0]?.id ?? null)
+        setHardwareInspectedNodeId(refreshed.devices[0]?.id ?? null)
       }
     } catch (error) {
       showErrorToast(displayError(error))
@@ -2034,6 +2047,10 @@ export default function MainStudio() {
                     view={hardwareView}
                     selectedNodeId={hardwareSelectedNodeId}
                     inspectedNodeId={hardwareInspectedNodeId}
+                    onReload={() => {
+                      if (activeWorkbench && activeWorktree) void reloadHardware(activeWorkbench, activeWorktree)
+                    }}
+                    reloadBusy={operation === 'reload-hardware'}
                     onSelectNode={node => {
                       setHardwareSelectedNodeId(node.id)
                       setHardwareInspectedNodeId(node.id)
