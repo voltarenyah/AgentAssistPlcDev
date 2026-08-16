@@ -16,7 +16,7 @@ const isPathWithin = (path: string, root: string) =>
 const projectNameFromPath = (path: string, fallback: string) => {
   const lastSegment = path.split(/[\\/]/).filter(Boolean).pop() ?? ''
   const projectFile = lastSegment.match(/^(.*)\.ap\d+$/i)
-  if (projectFile?.[1]) return projectFile[1]
+  if (projectFile?.[1]) return /^tia$/i.test(projectFile[1]) ? fallback : projectFile[1]
   return /^tia$/i.test(lastSegment) ? fallback : lastSegment || fallback
 }
 

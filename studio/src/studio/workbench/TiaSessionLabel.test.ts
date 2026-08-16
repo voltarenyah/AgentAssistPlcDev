@@ -43,4 +43,14 @@ describe('sessionLabelFor', () => {
 
     expect(label).toEqual({ project: 'ActualProject', worktree: 'master' })
   })
+
+  it('uses the workbench name for managed projects stored as tia.ap17', () => {
+    const label = sessionLabelFor(
+      [workbench('wb-a', 'Line A', 'C:/projects/line-a')],
+      session('C:/projects/line-a/worktrees/master/tia/tia.ap17'),
+    )
+
+    expect(label).toEqual({ project: 'Line A', worktree: 'master' })
+    expect(formatSessionLabel(label)).toBe('Line A / master')
+  })
 })
