@@ -30,6 +30,7 @@ import type { DeviceViewState } from './deviceSnapshot'
 import {
   countSourceObjectsByType,
   filterSourceObjects,
+  limitSourceObjects,
   resolveSourceObjects,
   SOURCE_TYPE_FILTERS,
   type SourceTypeFilter,
@@ -81,7 +82,9 @@ export default function PlcSourcePanel({
     [deviceView],
   )
   const counts = useMemo(() => countSourceObjectsByType(items), [items])
-  const visible = useMemo(() => filterSourceObjects(items, typeFilter, query), [items, typeFilter, query])
+  const matching = useMemo(() => filterSourceObjects(items, typeFilter, query), [items, typeFilter, query])
+  const limited = useMemo(() => limitSourceObjects(matching), [matching])
+  const visible = limited.items
 
   const openInTia = async (item: SourceObjectInfo) => {
     setPendingAction(`open:${item.id}`)
@@ -149,6 +152,15 @@ export default function PlcSourcePanel({
             <span className="break-all">{diagnostic}</span>
           </div>
         ))}
+        {limited.truncated && (
+          <div
+            className="flex items-start gap-2 border-b bg-amber-500/8 px-4 py-2 text-[9px] text-amber-700 dark:text-amber-300"
+            style={{ borderColor: 'var(--border)' }}
+          >
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>Showing the first {visible.length} of {limited.totalCount} matching source objects. Refine the filter to view more.</span>
+          </div>
+        )}
         {items.length === 0 ? (
           <div className="p-8 text-center text-[10px] text-muted-foreground">
             No PLC source objects. Export or refresh the device first.
@@ -162,7 +174,7 @@ export default function PlcSourcePanel({
               const expanded = expandedId === item.id
               const busyAction = pendingAction?.endsWith(`:${item.id}`) ? pendingAction : null
               return (
-                <div key={item.id}>
+                <div key={item.id} data-testid="plc-source-row">
                   <ContextMenu>
                     <ContextMenuTrigger asChild>
                       <div

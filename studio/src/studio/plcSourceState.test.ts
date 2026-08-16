@@ -4,6 +4,7 @@ import {
   blocksToSourceObjects,
   countSourceObjectsByType,
   filterSourceObjects,
+  limitSourceObjects,
   resolveSourceObjects,
   sourceContextPrefix,
 } from './plcSourceState'
@@ -61,6 +62,24 @@ describe('filterSourceObjects', () => {
 
   it('ignores surrounding whitespace in the query', () => {
     expect(filterSourceObjects(items, 'all', '  axisdata  ')).toHaveLength(1)
+  })
+})
+
+describe('limitSourceObjects', () => {
+  it('keeps the first renderable rows and reports the omitted rows', () => {
+    const result = limitSourceObjects(Array.from({ length: 201 }, (_, index) => item({ id: String(index) })))
+
+    expect(result.items).toHaveLength(200)
+    expect(result.items[0].id).toBe('0')
+    expect(result.items.at(-1)?.id).toBe('199')
+    expect(result.totalCount).toBe(201)
+    expect(result.truncated).toBe(true)
+  })
+
+  it('does not mark a complete result as truncated', () => {
+    const result = limitSourceObjects(items)
+
+    expect(result).toEqual({ items, totalCount: items.length, truncated: false })
   })
 })
 

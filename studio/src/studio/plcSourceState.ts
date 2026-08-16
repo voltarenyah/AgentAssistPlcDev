@@ -4,6 +4,8 @@ import type { OfflineBlockInfo, SourceObjectInfo } from '@/api/client'
 
 export type SourceTypeFilter = 'all' | 'OB' | 'FB' | 'FC' | 'DB' | 'Tags' | 'UDT'
 
+export const MAX_RENDERED_SOURCE_OBJECTS = 200
+
 export const SOURCE_TYPE_FILTERS: { id: SourceTypeFilter; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'OB', label: 'OB' },
@@ -73,6 +75,15 @@ export const filterSourceObjects = (
       || `${item.category}${item.number ?? ''}`.toLowerCase().includes(normalized)
   })
 }
+
+export const limitSourceObjects = (
+  items: SourceObjectInfo[],
+  limit = MAX_RENDERED_SOURCE_OBJECTS,
+): { items: SourceObjectInfo[]; totalCount: number; truncated: boolean } => ({
+  items: items.slice(0, limit),
+  totalCount: items.length,
+  truncated: items.length > limit,
+})
 
 /** Source object handed from the PLC source browser to the AI chat composer. */
 export type SourceChatContext = {
