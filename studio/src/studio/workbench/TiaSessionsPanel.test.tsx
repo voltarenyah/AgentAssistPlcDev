@@ -3,7 +3,8 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as api from '@/api/client'
-import TiaSessionsPanel, { formatSessionLabel, sessionModeLabel } from './TiaSessionsPanel'
+import TiaSessionsPanel, { sessionModeLabel } from './TiaSessionsPanel'
+import { formatSessionLabel } from './TiaSessionLabel'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 

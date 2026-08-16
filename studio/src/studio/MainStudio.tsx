@@ -67,7 +67,8 @@ import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
-import TiaSessionsPanel, { type SessionLabel } from '@/studio/workbench/TiaSessionsPanel'
+import TiaSessionsPanel from '@/studio/workbench/TiaSessionsPanel'
+import { normalizeProjectPath, sessionLabelFor } from '@/studio/workbench/TiaSessionLabel'
 import TiaCloseConfirmationDialog from '@/studio/workbench/TiaCloseConfirmationDialog'
 import DeepSeekBalanceStatus, { type DeepSeekBalanceRefreshState } from '@/studio/DeepSeekBalanceStatus'
 import {
@@ -141,29 +142,6 @@ const newOperationId = () =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `op-${Date.now()}-${Math.random().toString(16).slice(2)}`
-
-const normalizeProjectPath = (path: string) =>
-  path.trim().replaceAll('/', '\\').replace(/\\+$/, '').toLowerCase()
-
-/** Map a TIA session to "Project / worktree" using the registered workbenches. */
-const sessionLabelFor = (workbenches: api.Workbench[], session: api.SessionInfo): SessionLabel | null => {
-  const path = session.projectPath
-  if (!path) return null
-  const file = path.split(/[\\/]/).pop() ?? path
-  const project = file.replace(/\.ap\d+$/i, '')
-  const normalized = normalizeProjectPath(path)
-  for (const workbench of workbenches) {
-    for (const worktree of workbench.worktrees) {
-      if (worktree.relativePath && normalized.includes(normalizeProjectPath(worktree.relativePath))) {
-        return { project, worktree: worktree.name || worktree.branch }
-      }
-    }
-    if (workbench.sourceProjectPath && normalizeProjectPath(workbench.sourceProjectPath) === normalized) {
-      return { project, worktree: `${workbench.name} (source)` }
-    }
-  }
-  return { project, worktree: null }
-}
 
 const findHardwareNode = (
   nodes: api.HardwareConfigurationNode[],

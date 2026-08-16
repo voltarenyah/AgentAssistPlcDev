@@ -1,23 +1,13 @@
 import { useState } from 'react'
 import { Link2, Link2Off, Loader2, RefreshCw, Server, X, XCircle } from 'lucide-react'
 import type * as api from '@/api/client'
+import { formatSessionLabel, type SessionLabel } from './TiaSessionLabel'
 
 /** Compact mode chip: TIA's enum names are verbose ("WithUserInterface"). */
 export const sessionModeLabel = (mode: string): string => {
   if (/^without|headless/i.test(mode)) return 'Headless'
   if (/^with/i.test(mode)) return 'UI'
   return mode
-}
-
-/** "Demo / feature-x" from the resolved label, with graceful fallbacks. */
-export type SessionLabel = {
-  project: string | null
-  worktree: string | null
-}
-
-export const formatSessionLabel = (label: SessionLabel | null): string => {
-  if (!label || !label.project) return 'No project open'
-  return label.worktree ? `${label.project} / ${label.worktree}` : label.project
 }
 
 export default function TiaSessionsPanel({
