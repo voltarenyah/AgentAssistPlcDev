@@ -117,6 +117,7 @@ internal static class ExportManifest
             InterfaceModifiedDate = interfaceModifiedDate,
             ContentHash = result.Success && result.Path is not null ? ContentHasher.TryCompute(result.Path) : null,
             Fingerprints = fingerprints,
+            FingerprintComponents = FingerprintSet.Parse(fingerprints),
         };
     }
 

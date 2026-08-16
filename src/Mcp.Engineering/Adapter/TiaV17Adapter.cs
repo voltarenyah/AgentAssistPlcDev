@@ -1248,6 +1248,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var sourcePath = ExportManifest.SourcePathOf(block.Name, groupPath);
             var id = StableId.Create(category, sourcePath);
             var (modified, codeModified, interfaceModified) = ReadBlockTimestamps(block);
+            var fingerprints = FingerprintReader.TryRead(block);
             snapshot.Live.Add(new SyncLiveComponent
             {
                 Id = id,
@@ -1255,7 +1256,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 Category = category,
                 SourcePath = sourcePath,
                 SiemensTypeName = block.GetType().Name,
-                Fingerprints = FingerprintReader.TryRead(block),
+                Fingerprints = fingerprints,
+                FingerprintComponents = FingerprintSet.Parse(fingerprints),
                 ModifiedDate = modified,
                 CodeModifiedDate = codeModified,
                 InterfaceModifiedDate = interfaceModified,
@@ -1283,13 +1285,15 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var sourcePath = ExportManifest.SourcePathOf(type.Name, groupPath);
             var id = StableId.Create("UDT", sourcePath);
             var (_, _, modified, interfaceModified) = ReadTypeMetadata(type);
+            var fingerprints = FingerprintReader.TryRead(type);
             snapshot.Live.Add(new SyncLiveComponent
             {
                 Id = id,
                 Name = type.Name,
                 Category = "UDT",
                 SourcePath = sourcePath,
-                Fingerprints = FingerprintReader.TryRead(type),
+                Fingerprints = fingerprints,
+                FingerprintComponents = FingerprintSet.Parse(fingerprints),
                 ModifiedDate = modified,
                 InterfaceModifiedDate = interfaceModified,
             });
@@ -1330,6 +1334,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                         FingerprintsMatch = item.Live?.Fingerprints is null || item.Record?.Fingerprints is null
                             ? null
                             : string.Equals(item.Live.Fingerprints, item.Record.Fingerprints, StringComparison.Ordinal),
+                        FingerprintComponents = FingerprintComparison.Compare(
+                            item.Record?.FingerprintComponents ?? FingerprintSet.Parse(item.Record?.Fingerprints),
+                            item.Live?.FingerprintComponents ?? FingerprintSet.Parse(item.Live?.Fingerprints)),
                         LiveModifiedDate = item.Live?.ModifiedDate,
                         StoredModifiedDate = item.Record?.ModifiedDate,
                         State = CompareStateFor(item),

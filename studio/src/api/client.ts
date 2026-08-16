@@ -653,6 +653,7 @@ export type ReconciliationEntry = {
   storedFingerprints: string | null
   liveFingerprints: string | null
   fingerprintsMatch: boolean | null
+  fingerprintComponents?: Record<string, FingerprintComponentComparison> | null
 }
 
 export type ReconciliationPreview = {
@@ -1278,9 +1279,16 @@ export type ContextCompareEntry = {
   liveFingerprints: string | null
   storedFingerprints: string | null
   fingerprintsMatch: boolean | null
+  fingerprintComponents?: Record<string, FingerprintComponentComparison> | null
   liveModifiedDate: string | null
   storedModifiedDate: string | null
   state: 'same' | 'different' | 'new' | 'missing' | 'unverifiable' | 'unknown'
+}
+
+export type FingerprintComponentComparison = {
+  stored: string | null
+  live: string | null
+  matches: boolean | null
 }
 
 export type ContextCompareResult = {

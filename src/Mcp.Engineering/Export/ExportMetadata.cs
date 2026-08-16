@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Contracts.Engineering;
 
 namespace Mcp.Engineering.Export;
 
@@ -94,6 +95,10 @@ public sealed class ExportMetadataRecord
     /// FingerprintProvider). sync_export compares these in-memory to detect changes without
     /// exporting; null on legacy manifests, tag tables, and unreadable providers.</summary>
     public string? Fingerprints { get; set; }
+
+    /// <summary>Named fingerprint values written as the structured <c>fingerprints</c> JSON
+    /// object. Legacy string manifests are parsed into this property on read.</summary>
+    public FingerprintSet? FingerprintComponents { get; set; }
 }
 
 internal static class ExportMetadataJsonSerializer
@@ -136,6 +141,9 @@ internal static class ExportMetadataJsonSerializer
         {
             foreach (var element in components.EnumerateArray())
             {
+                var fingerprints = GetString(element, "fingerprints");
+                var fingerprintComponents = GetFingerprintSet(element, "fingerprints")
+                    ?? FingerprintSet.Parse(fingerprints);
                 document.Components.Add(new ExportMetadataRecord
                 {
                     Id = GetString(element, "id") ?? string.Empty,
@@ -156,7 +164,8 @@ internal static class ExportMetadataJsonSerializer
                     CodeModifiedDate = GetDate(element, "codeModifiedDate"),
                     InterfaceModifiedDate = GetDate(element, "interfaceModifiedDate"),
                     ContentHash = GetString(element, "contentHash"),
-                    Fingerprints = GetString(element, "fingerprints"),
+                    Fingerprints = fingerprintComponents?.ToCanonicalString() ?? fingerprints,
+                    FingerprintComponents = fingerprintComponents,
                 });
             }
         }
@@ -167,6 +176,25 @@ internal static class ExportMetadataJsonSerializer
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static FingerprintSet? GetFingerprintSet(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var result = new FingerprintSet();
+        foreach (var property in value.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.String && property.Value.GetString() is { } fingerprint)
+            {
+                result[property.Name] = fingerprint;
+            }
+        }
+
+        return result.Count == 0 ? null : result;
+    }
 
     private static int? GetInt(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
@@ -259,7 +287,7 @@ internal static class ExportMetadataJsonSerializer
         WriteProperty(builder, 3, "codeModifiedDate", record.CodeModifiedDate?.ToString("O"), appendComma: true);
         WriteProperty(builder, 3, "interfaceModifiedDate", record.InterfaceModifiedDate?.ToString("O"), appendComma: true);
         WriteProperty(builder, 3, "contentHash", record.ContentHash, appendComma: true);
-        WriteProperty(builder, 3, "fingerprints", record.Fingerprints, appendComma: false);
+        WriteFingerprints(builder, record.FingerprintComponents ?? FingerprintSet.Parse(record.Fingerprints), record.Fingerprints);
         Indent(builder, 2).Append('}');
         if (appendComma)
         {
@@ -282,6 +310,28 @@ internal static class ExportMetadataJsonSerializer
         }
 
         AppendCommaAndNewLine(builder, appendComma);
+    }
+
+    private static void WriteFingerprints(
+        StringBuilder builder,
+        FingerprintSet? fingerprints,
+        string? legacyValue)
+    {
+        if (fingerprints is null)
+        {
+            WriteProperty(builder, 3, "fingerprints", legacyValue, appendComma: false);
+            return;
+        }
+
+        Indent(builder, 3).AppendLine("\"fingerprints\": {");
+        var entries = fingerprints.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray();
+        for (var index = 0; index < entries.Length; index++)
+        {
+            WriteProperty(builder, 4, entries[index].Key, entries[index].Value, index < entries.Length - 1);
+        }
+
+        Indent(builder, 3).Append('}');
+        AppendCommaAndNewLine(builder, appendComma: false);
     }
 
     private static void WriteProperty(StringBuilder builder, int indentLevel, string name, int? value, bool appendComma)

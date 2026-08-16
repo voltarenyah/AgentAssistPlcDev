@@ -102,13 +102,33 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
                     {entry.componentIdentity && <span className="max-w-36 truncate text-[8px] text-muted-foreground">{entry.componentIdentity}</span>}
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-3 border-t pt-2 font-mono text-[8px]" style={{ borderColor: 'var(--border)' }}>
-                    <div className="min-w-0">
-                      <div className="mb-0.5 font-sans uppercase tracking-wide text-muted-foreground">Stored fingerprint</div>
-                      <div className="break-all">{entry.storedFingerprints ?? 'Unavailable'}</div>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="mb-0.5 font-sans uppercase tracking-wide text-muted-foreground">Live fingerprint</div>
-                      <div className="break-all">{entry.liveFingerprints ?? 'Unavailable'}</div>
+                    <div className="col-span-2 min-w-0">
+                      <div className="mb-1 font-sans uppercase tracking-wide text-muted-foreground">Fingerprint components</div>
+                      {entry.fingerprintComponents ? (
+                        <div className="flex flex-wrap gap-1">
+                          {Object.entries(entry.fingerprintComponents).map(([name, component]) => {
+                            const state = component.matches === false
+                              ? 'Changed'
+                              : component.matches === true
+                                ? 'Same'
+                                : 'Unavailable'
+                            const tone = component.matches === false
+                              ? 'border-amber-500/40 text-amber-500'
+                              : component.matches === true
+                                ? 'border-emerald-500/40 text-emerald-500'
+                                : 'border-border text-muted-foreground'
+                            return (
+                              <span
+                                key={name}
+                                title={`Stored: ${component.stored ?? 'Unavailable'}\nLive: ${component.live ?? 'Unavailable'}`}
+                                className={`rounded border px-1.5 py-0.5 font-sans text-[8px] ${tone}`}
+                              >
+                                {name}: {state}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      ) : <span className="font-sans text-muted-foreground">Unavailable</span>}
                     </div>
                   </div>
                 </div>

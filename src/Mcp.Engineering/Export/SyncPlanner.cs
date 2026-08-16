@@ -1,3 +1,5 @@
+using Contracts.Engineering;
+
 namespace Mcp.Engineering.Export;
 
 /// <summary>
@@ -44,6 +46,8 @@ internal sealed class SyncLiveComponent
     /// <summary>Canonical "Id=Value;…" fingerprint string (blocks/UDTs); null for tag tables and
     /// when the provider is missing/throws (e.g. inconsistent block) → timestamp path applies.</summary>
     public string? Fingerprints { get; set; }
+
+    public FingerprintSet? FingerprintComponents { get; set; }
 
     public DateTimeOffset? ModifiedDate { get; set; }
     public DateTimeOffset? CodeModifiedDate { get; set; }
