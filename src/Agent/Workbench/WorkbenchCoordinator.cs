@@ -531,6 +531,36 @@ public sealed class WorkbenchCoordinator
                 initialSourcePaths.AddRange(baseline.ChangedPaths.Where(IsManagedSourceXml));
             }
 
+            var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(masterPath);
+            Directory.CreateDirectory(hardwareRoot);
+            var initialHardwarePaths = new List<string>();
+            await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                progress?.Report("Exporting hardware configuration...");
+                var hardwareResults = await engineering.CallAsync<HardwareExportResult[]>(
+                    "export_hardware_configuration",
+                    new { outputDir = hardwareRoot, includeDeviceExports = false },
+                    cancellationToken).ConfigureAwait(false);
+                _ = EnsureHardwareExportSucceeded(hardwareResults, hardwareRoot);
+                RemoveLegacyHardwareLayout(hardwareRoot);
+                initialHardwarePaths.AddRange(
+                    Directory.EnumerateFiles(hardwareRoot, "*", SearchOption.AllDirectories)
+                        .Where(path => !IsUnderHardwareStaging(hardwareRoot, path))
+                        .Select(path => Path.GetRelativePath(masterPath, path).Replace('\\', '/'))
+                        .OrderBy(path => path, StringComparer.Ordinal));
+            }
+            finally
+            {
+                engineeringSession.Release();
+            }
+
+            foreach (var device in devices)
+            {
+                var context = catalog.ResolveDevice(workbench, worktree, device);
+                await RebuildKnowledgeAsync(context, cancellationToken, progress).ConfigureAwait(false);
+            }
+
             // Rule 8: close/quiesce the TIA session before the native baseline commit, so no
             // TIA process can still write the managed tree while SVN snapshots it.
             progress?.Report("Closing the TIA session...");
@@ -581,6 +611,7 @@ public sealed class WorkbenchCoordinator
 
             progress?.Report("Creating the initial PLC source baseline commit...");
             var baselinePaths = initialSourcePaths
+                .Concat(initialHardwarePaths)
                 .Append(EngineeringStateWriter.RelativePath)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(path => path, StringComparer.Ordinal)
@@ -593,7 +624,14 @@ public sealed class WorkbenchCoordinator
                 .ConfigureAwait(false);
 
             RegisterWorkbench(workbench);
-            return new CreateWorkbenchResult(workbench, worktree, devices);
+            var initializedDevices = devices
+                .Select(device =>
+                {
+                    var context = catalog.ResolveDevice(workbench, worktree, device);
+                    return store.Read<DeviceMetadata>(Path.Combine(context.DeviceRoot, "device.json"));
+                })
+                .ToArray();
+            return new CreateWorkbenchResult(workbench, worktree, initializedDevices);
         }
         catch
         {

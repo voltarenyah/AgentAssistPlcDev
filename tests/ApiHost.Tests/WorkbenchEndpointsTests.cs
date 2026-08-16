@@ -12,6 +12,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Net;
 using Contracts.Engineering;
+using Contracts.Knowledge;
 using Xunit;
 
 public sealed class WorkbenchEndpointsTests : IDisposable
@@ -1122,8 +1123,9 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(
             new[]
             {
-                "connect", "get_project_info", "save_project_as", "get_project_info",
-                "compile_plc", "get_plc_checksums", "rebuild_export", "disconnect",
+                "connect", "get_current_session", "get_project_info", "save_project_as", "get_project_info",
+                "compile_plc", "get_plc_checksums", "rebuild_export",
+                "export_hardware_configuration", "close_session", "disconnect",
             },
             engineering.Calls);
         Assert.Equal(projectPath, engineering.Arguments[0].GetProperty("projectPath").GetString());
@@ -1151,6 +1153,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.True(File.Exists(Path.Combine(deviceRoot, "device.json")));
         Assert.True(Directory.Exists(Path.Combine(deviceRoot, "source")));
         Assert.True(Directory.Exists(Path.Combine(deviceRoot, "staging")));
+        Assert.True(File.Exists(Path.Combine(worktreeRoot, "hardware", "project.aml")));
+        Assert.True(File.Exists(Path.Combine(deviceRoot, "plc-knowledge.db")));
         Assert.False(Directory.Exists(Path.Combine(deviceRoot, "exported-source")));
         Assert.False(Directory.Exists(Path.Combine(deviceRoot, "modified-source")));
     }
@@ -2021,6 +2025,14 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                     (T)(object)JsonDocument.Parse(json).RootElement.Clone());
             }
 
+            if (tool == "ingest_source")
+            {
+                var dbPath = JsonSerializer.SerializeToElement(args).GetProperty("dbPath").GetString()!;
+                Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+                File.WriteAllText(dbPath, "knowledge");
+                return Task.FromResult((T)(object)new IngestResult { DbPath = dbPath });
+            }
+
             return Task.FromResult(JsonSerializer.Deserialize<T>(json)!);
         }
     }
@@ -2042,6 +2054,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             object result = tool switch
             {
                 "connect" => new object(),
+                "get_current_session" => new CurrentSessionInfo { Attached = true, SessionId = 4242 },
+                "close_session" => new object(),
                 "disconnect" => new object(),
                 "get_project_info" => NextProjectInfo(),
                 "save_project_as" => SaveProjectAs(args),
@@ -2051,6 +2065,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                     new PlcChecksumInfo { PlcName = "PLC_1", SoftwareChecksum = "checksum-PLC_1" },
                 },
                 "rebuild_export" => Export(args),
+                "export_hardware_configuration" => ExportHardware(args),
                 _ => throw new InvalidOperationException(tool),
             };
             return Task.FromResult((T)result);
@@ -2099,6 +2114,24 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                     },
                 }));
             return [new SyncResult { PlcName = "PLC_1", ExportRoot = output! }];
+        }
+
+        private static HardwareExportResult[] ExportHardware(object args)
+        {
+            var output = args.GetType().GetProperty("outputDir")!.GetValue(args) as string;
+            Directory.CreateDirectory(output!);
+            var projectAml = Path.Combine(output!, "project.aml");
+            File.WriteAllText(projectAml, "<CAEXFile />");
+            return
+            [
+                new HardwareExportResult
+                {
+                    Scope = "project",
+                    Success = true,
+                    AmlFilePath = projectAml,
+                    ContentHash = "hardware-hash",
+                },
+            ];
         }
     }
 
