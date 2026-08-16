@@ -1048,6 +1048,20 @@ export default function MainStudio() {
       } else {
         toast.success(`Hardware configuration reloaded (${result.deviceCount} device(s)).`)
       }
+      if (
+        selection.workbenchId === workbench.workbenchId
+        && selection.worktreeId === worktree.worktreeId
+        && selection.deviceId === null
+        && hardwarePage === 'tree'
+      ) {
+        const refreshed = await api.getHardwareConfiguration(
+          workbench.workbenchId,
+          worktree.worktreeId,
+        )
+        setHardwareView(refreshed)
+        setHardwareSelectedNodeId(refreshed.devices[0]?.id ?? null)
+        setHardwareInspectedNodeId(refreshed.devices[0]?.id ?? null)
+      }
     } catch (error) {
       showErrorToast(displayError(error))
     } finally {
@@ -2033,6 +2047,10 @@ export default function MainStudio() {
                     view={hardwareView}
                     selectedNodeId={hardwareSelectedNodeId}
                     inspectedNodeId={hardwareInspectedNodeId}
+                    onReload={() => {
+                      if (activeWorkbench && activeWorktree) void reloadHardware(activeWorkbench, activeWorktree)
+                    }}
+                    reloadBusy={operation === 'reload-hardware'}
                     onSelectNode={node => {
                       setHardwareSelectedNodeId(node.id)
                       setHardwareInspectedNodeId(node.id)
