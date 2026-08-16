@@ -215,7 +215,7 @@ public sealed class EngineeringTools
         => Invoke("get_context_status", () => _adapter.GetContextStatus(outputDir, plcName), ("outputDir", outputDir));
 
     [McpServerTool(Name = "compare_context")]
-    [Description("Per-component read-only diff between the live project and an export root's manifest: for every block/tag table/UDT, live vs stored fingerprints and modified dates with a verdict (same / different / new / missing / unknown). No exports, no writes — the data behind a compare view before deciding to sync.")]
+    [Description("Per-component read-only diff between the live project and an export root's manifest: for every block/tag table/UDT, per-fingerprint component matches with stored/live hashes, modified dates, and a verdict (same / different / new / missing / unknown). No exports, no writes — the data behind a compare view before deciding to sync.")]
     public CallToolResult CompareContext(
         [Description("Export root directory to compare against.")] string outputDir,
         [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)

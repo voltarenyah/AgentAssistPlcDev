@@ -1305,6 +1305,45 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public void PreviewRefreshReadsStructuredFingerprintComponents()
+    {
+        var fixture = Fixture.Create(root);
+        fixture.WriteBaseline("Blocks/A.xml", "<old />");
+        fixture.WriteStaging("Blocks/A.xml", "<new />");
+        WriteStructuredManifest(fixture.Context.SourceRoot, "old-code");
+        WriteStructuredManifest(fixture.Context.StagingRoot, "new-code");
+
+        var preview = Create(fixture).PreviewRefresh(fixture.Context);
+        var comparison = Assert.Single(preview.Entries).FingerprintComponents!;
+
+        Assert.False(comparison["Code"].Matches);
+        Assert.Equal("old-code", comparison["Code"].Stored);
+        Assert.Equal("new-code", comparison["Code"].Live);
+        Assert.True(comparison["Comments"].Matches);
+
+        static void WriteStructuredManifest(string root, string code)
+        {
+            File.WriteAllText(
+                Path.Combine(root, "metadata.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    components = new[]
+                    {
+                        new
+                        {
+                            id = "component-a",
+                            sourcePath = "Program blocks/A",
+                            status = "Exported",
+                            exportedFile = "Blocks/A.xml",
+                            fingerprints = new { Code = code, Comments = "same-comments" },
+                        },
+                    },
+                }));
+        }
+    }
+
+    [Fact]
     public async Task ApprovedMasterRefreshAutoCommitsSelectedSourceWithTheProvidedTitle()
     {
         var fixture = Fixture.Create(root);

@@ -1,3 +1,5 @@
+using Contracts.Engineering;
+
 namespace Agent.Workbench;
 
 public enum ReconciliationChangeKind
@@ -16,7 +18,8 @@ public sealed record ReconciliationEntry(
     string? ComponentIdentity,
     string? StoredFingerprints = null,
     string? LiveFingerprints = null,
-    bool? FingerprintsMatch = null);
+    bool? FingerprintsMatch = null,
+    Dictionary<string, FingerprintComponentComparison>? FingerprintComponents = null);
 
 public sealed record ReconciliationPreview(
     string PreviewId,

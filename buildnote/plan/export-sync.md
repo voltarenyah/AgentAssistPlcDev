@@ -51,7 +51,9 @@ Three-tier change detection, cheapest first:
   WriteAll/Upsert preserve the stored section when a write has no fresh capture. Not part of the
   reference add-in schema — additive-only, tolerated by the mcp-knowledge reader.
 - Record: `contentHash` (SHA-256 base64url of `XmlCompare.Normalize`'d XML — `<Created>` and CR
-  stripped) and `fingerprints` (canonical `Id=Value;…`, sorted). The mcp-knowledge reader DTO
+  stripped) and `fingerprints` (a JSON object keyed by the canonical TIA fingerprint id, such as
+  `Code`, `Comments`, `Events`, `Interface`, and `Properties`). Readers accept the legacy sorted
+  `Id=Value;…` string and normalize it when rewriting metadata. The mcp-knowledge reader DTO
   ignores unknown fields (guarded by `ManifestWithSyncExportFieldsStillImports`).
 - Legacy manifests (pre-feature): first sync backfills fingerprints without export when timestamps
   match (`touched: fingerprint-backfill`); tag tables re-export once to backfill `contentHash`.
@@ -105,9 +107,10 @@ Hard rule: **attaching/opening a project never regenerates context data.** Three
 
 **Compare tab** (`compare_context` tool, tier Read; App tab after Warnings): per-component
 read-only diff — name/category/state (`same`/`different`/`new`/`missing`/`unverifiable` for
-instance DBs/`unknown`), live vs stored fingerprints and modified dates, plus the project
-checksums. Runs the same capture + planner as sync but executes nothing; on demand and after each
-sync, never automatic on attach (full-PLC enumeration cost).
+instance DBs/`unknown`), per-fingerprint component matches with stored/live hashes available for
+detail views, modified dates, and project checksums. Runs the same capture + planner as sync but
+executes nothing; on demand and after each sync, never automatic on attach (full-PLC enumeration
+cost).
 
 **Bug fix (2026-07-21, user-reported "only 1 changed"):** a failed re-export during sync used to
 replace the last-known-good manifest record with a Failed stub (losing `exportedFile`,
@@ -121,7 +124,7 @@ instance DB) are now all detected (verified live: 3 changed, compile ripple as t
 ## 6. Out of scope / follow-ups
 
 - Per-component incremental ingest into SQLite (see §1 tier 2 rationale).
-- Detailed per-component preview in the confirmation dialog (state + checksums today; the
-  per-file lists land in the log/result).
+- Detailed raw hashes in the normal confirmation view (the dialog shows per-component state and
+  keeps stored/live hashes in hover details).
 - Comment-only changes: invisible to the station checksum (gate) but **covered by the `Comments`
   fingerprint** whenever a diff runs; the gate only skips when *nothing* changed.

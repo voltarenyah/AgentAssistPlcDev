@@ -22,6 +22,10 @@ const preview: ReconciliationPreview = {
     storedFingerprints: 'old-fingerprint',
     liveFingerprints: 'new-fingerprint',
     fingerprintsMatch: false,
+    fingerprintComponents: {
+      Code: { stored: 'old-code', live: 'new-code', matches: false },
+      Comments: { stored: 'same-comments', live: 'same-comments', matches: true },
+    },
   }],
 }
 
@@ -75,5 +79,17 @@ describe('RefreshDialog', () => {
       ['devices/PLC_1/source/Blocks/Main.xml'],
       'Accept Main from TIA',
     )
+  })
+
+  it('shows changed fingerprint components with full hashes on hover', async () => {
+    const { host } = await render(vi.fn(async () => undefined))
+
+    expect(host.textContent).toContain('Code')
+    expect(host.textContent).toContain('Changed')
+    expect(host.textContent).not.toContain('old-code')
+    expect(host.textContent).not.toContain('new-code')
+    const changedBadge = Array.from(host.querySelectorAll('[title]'))
+      .find(element => element.getAttribute('title') === 'Stored: old-code\nLive: new-code')
+    expect(changedBadge).not.toBeUndefined()
   })
 })

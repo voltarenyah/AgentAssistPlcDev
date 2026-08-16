@@ -28,6 +28,10 @@ public sealed class ContextCompareEntry
     /// <summary>Null when either side has no fingerprints; otherwise the exact comparison.</summary>
     public bool? FingerprintsMatch { get; set; }
 
+    /// <summary>Per-fingerprint evidence keyed by TIA fingerprint id. Hashes are retained for
+    /// hover/detail views while the normal comparison surface can show only same/different.</summary>
+    public Dictionary<string, FingerprintComponentComparison>? FingerprintComponents { get; set; }
+
     public DateTimeOffset? LiveModifiedDate { get; set; }
     public DateTimeOffset? StoredModifiedDate { get; set; }
 

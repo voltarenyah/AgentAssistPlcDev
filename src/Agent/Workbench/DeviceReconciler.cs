@@ -109,7 +109,10 @@ public sealed class DeviceReconciler
                 stagingComponent?.Fingerprints,
                 MatchFingerprints(
                     baselineComponent?.Fingerprints,
-                    stagingComponent?.Fingerprints));
+                    stagingComponent?.Fingerprints),
+                FingerprintComparison.Compare(
+                    baselineComponent?.FingerprintComponents ?? FingerprintSet.Parse(baselineComponent?.Fingerprints),
+                    stagingComponent?.FingerprintComponents ?? FingerprintSet.Parse(stagingComponent?.Fingerprints)));
         }
 
         var baselineTreeHash = ComputeTreeHash(baselineTree);
@@ -624,10 +627,15 @@ public sealed class DeviceReconciler
 
                 var identity = ReadOptionalString(component, "id")
                     ?? ReadOptionalString(component, "sourcePath");
-                var fingerprints = ReadOptionalString(component, "fingerprints");
+                var fingerprints = component.TryGetProperty("fingerprints", out var fingerprintValue)
+                    && fingerprintValue.ValueKind == JsonValueKind.String
+                    ? fingerprintValue.GetString()
+                    : null;
+                var fingerprintComponents = ReadFingerprintSet(component);
+                fingerprints ??= fingerprintComponents?.ToCanonicalString();
                 if (!controlled.TryAdd(
                         relativePath,
-                        new ManifestComponent(relativePath, identity, fingerprints)))
+                        new ManifestComponent(relativePath, identity, fingerprints, fingerprintComponents)))
                 {
                     throw new ReconciliationException(
                         ManifestInvalidCode,
@@ -663,6 +671,46 @@ public sealed class DeviceReconciler
         }
 
         return value.GetString();
+    }
+
+    private static FingerprintSet? ReadFingerprintSet(JsonElement element)
+    {
+        if (!element.TryGetProperty("fingerprints", out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            return FingerprintSet.Parse(value.GetString());
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new ReconciliationException(
+                ManifestInvalidCode,
+                "The manifest contains an invalid fingerprints value.");
+        }
+
+        var result = new FingerprintSet();
+        foreach (var property in value.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.String || property.Value.GetString() is not { } fingerprint)
+            {
+                throw new ReconciliationException(
+                    ManifestInvalidCode,
+                    "The manifest contains a non-string fingerprint component.");
+            }
+
+            result[property.Name] = fingerprint;
+        }
+
+        return result.Count == 0 ? null : result;
     }
 
     private static HashSet<string> NormalizeApprovedPaths(
@@ -848,7 +896,8 @@ public sealed class DeviceReconciler
     private sealed record ManifestComponent(
         string RelativePath,
         string? Identity,
-        string? Fingerprints);
+        string? Fingerprints,
+        FingerprintSet? FingerprintComponents);
 
     private sealed record Manifest(
         IReadOnlyDictionary<string, ManifestComponent> Components)
