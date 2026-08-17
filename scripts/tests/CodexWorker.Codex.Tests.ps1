@@ -105,25 +105,42 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3
 $Arguments = $args
 $summaryPath = $Arguments[($Arguments.IndexOf('--output-last-message') + 1)]
 [IO.File]::WriteAllText($summaryPath, '{"status":"completed","rootCauseOrApproach":"fake","changedComponents":[],"decisions":[],"validation":[],"warnings":[],"remainingRisks":[],"commitMessage":"fix: fake","prTitle":"fix: fake","requiresHumanInput":false,"humanQuestion":null}')
-if ([string]::IsNullOrEmpty($env:OPENAI_API_KEY)) { Write-Output '{"type":"agent_message","text":"env-absent ghp_child_secret123"}' }
-else { Write-Output ('{"type":"agent_message","text":"env-present ' + $env:OPENAI_API_KEY + ' ghp_child_secret123"}') }
+$event = [ordered]@{
+    type = 'agent_message'
+    item = [ordered]@{ text = 'ghp_child_secret123 sk-proj-child-secret'; nested = [ordered]@{ value = 'sk-child-secret' } }
+    environment = [ordered]@{
+        GITHUB_TOKEN = [string]::IsNullOrEmpty($env:GITHUB_TOKEN)
+        GH_TOKEN = [string]::IsNullOrEmpty($env:GH_TOKEN)
+        OPENAI_API_KEY = [string]::IsNullOrEmpty($env:OPENAI_API_KEY)
+        CODEX_API_KEY = [string]::IsNullOrEmpty($env:CODEX_API_KEY)
+        DEEPSEEK_API_KEY = [string]::IsNullOrEmpty($env:DEEPSEEK_API_KEY)
+    }
+}
+$event | ConvertTo-Json -Compress -Depth 5 | Write-Output
 '@ | Set-Content -LiteralPath $fakePs
         @'
 @echo off
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3 %4 %5 %6 %7 %8 < nul
 '@ | Set-Content -LiteralPath $fakeCmd
-        $oldOpenAi = $env:OPENAI_API_KEY; $oldGh = $env:GH_TOKEN
+        $oldSecrets = @{}
+        foreach ($name in @('GITHUB_TOKEN','GH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY','DEEPSEEK_API_KEY')) { $oldSecrets[$name] = [Environment]::GetEnvironmentVariable($name) }
         try {
-            $env:OPENAI_API_KEY = 'openai-parent-secret'; $env:GH_TOKEN = 'gh-parent-secret'
+            $env:GITHUB_TOKEN = 'github-parent-secret'; $env:GH_TOKEN = 'gh-parent-secret'; $env:OPENAI_API_KEY = 'openai-parent-secret'; $env:CODEX_API_KEY = 'codex-parent-secret'; $env:DEEPSEEK_API_KEY = 'deepseek-parent-secret'
             $run = Join-Path $TestDrive 'secret-run'; $state = Join-Path $TestDrive 'secret-state.json'
             [IO.File]::WriteAllText($state, '{"schemaVersion":1,"issues":{"42":{}}}')
             $result = Invoke-CodexRun -IssueWorktree $TestDrive -IssueContext ([pscustomobject]@{ number = 42; title = 'Example' }) -Config ([pscustomobject]@{ codexCommand = $fakeCmd; codexTimeoutMinutes = 1 }) -RunDirectory $run -StatePath $state
             $events = Get-Content -Raw (Join-Path $run 'events.jsonl'); $activity = Get-Content -Raw (Join-Path $run 'activity.log')
-            $events | Should Match 'env-absent'
-            $activity | Should Match 'env-absent'
-            $events | Should Not Match 'openai-parent-secret|gh-parent-secret|ghp_child_secret123'
-            $activity | Should Not Match 'openai-parent-secret|gh-parent-secret|ghp_child_secret123'
-        } finally { $env:OPENAI_API_KEY = $oldOpenAi; $env:GH_TOKEN = $oldGh }
+            $eventObject = $events | ConvertFrom-Json
+            $eventObject.environment.GITHUB_TOKEN | Should Be $true
+            $eventObject.environment.GH_TOKEN | Should Be $true
+            $eventObject.environment.OPENAI_API_KEY | Should Be $true
+            $eventObject.environment.CODEX_API_KEY | Should Be $true
+            $eventObject.environment.DEEPSEEK_API_KEY | Should Be $true
+            $eventObject.item.text | Should Be '[REDACTED] [REDACTED]'
+            $eventObject.item.nested.value | Should Be '[REDACTED]'
+            $events | Should Not Match 'github-parent-secret|gh-parent-secret|openai-parent-secret|codex-parent-secret|deepseek-parent-secret|ghp_child_secret123|sk-proj-child-secret|sk-child-secret'
+            $activity | Should Not Match 'github-parent-secret|gh-parent-secret|openai-parent-secret|codex-parent-secret|deepseek-parent-secret|ghp_child_secret123|sk-proj-child-secret|sk-child-secret'
+        } finally { foreach ($name in $oldSecrets.Keys) { [Environment]::SetEnvironmentVariable($name, $oldSecrets[$name], 'Process') } }
     }
 
     It 'streams an activity line before a child exits' {
@@ -150,6 +167,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3
         $fakeRoot = Join-Path $TestDrive 'timeout-fake'; New-Item -ItemType Directory -Path $fakeRoot -Force | Out-Null
         $fakePs = Join-Path $fakeRoot 'fake.ps1'; $fakeCmd = Join-Path $fakeRoot 'codex.cmd'
         @'
+$Arguments = $args
+$summaryPath = $Arguments[($Arguments.IndexOf('--output-last-message') + 1)]
+[IO.File]::WriteAllText($summaryPath, '{"status":"completed","rootCauseOrApproach":"fake","changedComponents":[],"decisions":[],"validation":[],"warnings":[],"remainingRisks":[],"commitMessage":"fix: fake","prTitle":"fix: fake","requiresHumanInput":false,"humanQuestion":null}')
 Start-Sleep -Seconds 30
 '@ | Set-Content -LiteralPath $fakePs
         @'
@@ -157,8 +177,26 @@ Start-Sleep -Seconds 30
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3 %4 %5 %6 %7 %8 < nul
 '@ | Set-Content -LiteralPath $fakeCmd
         $run = Join-Path $TestDrive 'timeout-run'; $state = Join-Path $TestDrive 'timeout-state.json'; [IO.File]::WriteAllText($state, '{"schemaVersion":1,"issues":{"42":{}}}')
-        $watch = [Diagnostics.Stopwatch]::StartNew(); $result = Invoke-CodexRun -IssueWorktree $TestDrive -IssueContext ([pscustomobject]@{ number = 42; title = 'Example' }) -Config ([pscustomobject]@{ codexCommand = $fakeCmd; codexTimeoutMinutes = 0.01 }) -RunDirectory $run -StatePath $state; $watch.Stop()
-        $result.Classification | Should Be 'timeout'; $watch.Elapsed.TotalSeconds | Should BeLessThan 8
+        $watch = [Diagnostics.Stopwatch]::StartNew(); $result = Invoke-CodexRun -IssueWorktree (Get-Location).Path -IssueContext ([pscustomobject]@{ number = 42; title = 'Example' }) -Config ([pscustomobject]@{ codexCommand = $fakeCmd; codexTimeoutMinutes = 0.01 }) -RunDirectory $run -StatePath $state; $watch.Stop()
+        $result.Classification | Should Be 'timeout'; $result.Status | Should Be 'failed'; $watch.Elapsed.TotalSeconds | Should BeLessThan 8
+    }
+
+    It 'closes stdin after writing so an EOF-reading child completes normally' {
+        $fakeRoot = Join-Path $TestDrive 'stdin-eof-fake'; New-Item -ItemType Directory -Path $fakeRoot -Force | Out-Null
+        $fakePs = Join-Path $fakeRoot 'fake.ps1'; $fakeCmd = Join-Path $fakeRoot 'codex.cmd'
+        @'
+$Arguments = $args
+$summaryPath = $Arguments[($Arguments.IndexOf('--output-last-message') + 1)]
+[Console]::In.ReadToEnd() | Out-Null
+[IO.File]::WriteAllText($summaryPath, '{"status":"completed","rootCauseOrApproach":"fake","changedComponents":[],"decisions":[],"validation":[],"warnings":[],"remainingRisks":[],"commitMessage":"fix: fake","prTitle":"fix: fake","requiresHumanInput":false,"humanQuestion":null}')
+'@ | Set-Content -LiteralPath $fakePs
+        @'
+@echo off
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3 %4 %5 %6 %7 %8
+'@ | Set-Content -LiteralPath $fakeCmd
+        $run = Join-Path $TestDrive 'stdin-eof-run'; $state = Join-Path $TestDrive 'stdin-eof-state.json'; [IO.File]::WriteAllText($state, '{"schemaVersion":1,"issues":{"42":{}}}')
+        $watch = [Diagnostics.Stopwatch]::StartNew(); $result = Invoke-CodexRun -IssueWorktree (Get-Location).Path -IssueContext ([pscustomobject]@{ number = 42 }) -Config ([pscustomobject]@{ codexCommand = $fakeCmd; codexTimeoutMinutes = 0.1 }) -RunDirectory $run -StatePath $state; $watch.Stop()
+        $result.Classification | Should Be 'completed'; $result.Status | Should Be 'completed'; $watch.Elapsed.TotalSeconds | Should BeLessThan 8
     }
 
     It 'uses resume output controls when the installation capability is available' {
@@ -254,9 +292,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3
         foreach ($mode in @('auth','network','ordinary','malformed')) {
             Set-Content -LiteralPath $modePath -Value $mode
             $result = Invoke-CodexRun -IssueWorktree $TestDrive -IssueContext ([pscustomobject]@{ number = 42 }) -Config ([pscustomobject]@{ codexCommand = $fakeCmd; codexTimeoutMinutes = 1 }) -RunDirectory (Join-Path $TestDrive "classify-$mode") -StatePath $state
-            if ($mode -eq 'auth') { $result.Classification | Should Be 'authentication' }
-            elseif ($mode -eq 'network') { $result.Classification | Should Be 'transient_service_unavailable' }
-            elseif ($mode -eq 'ordinary') { $result.Classification | Should Be 'process_failed' }
+            if ($mode -eq 'auth') { $result.Classification | Should Be 'authentication'; $result.Status | Should Be 'failed' }
+            elseif ($mode -eq 'network') { $result.Classification | Should Be 'transient_service_unavailable'; $result.Status | Should Be 'failed' }
+            elseif ($mode -eq 'ordinary') { $result.Classification | Should Be 'process_failed'; $result.Status | Should Be 'failed' }
             else { $result.Classification | Should Be 'malformed_summary' }
         }
     }

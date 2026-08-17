@@ -67,16 +67,46 @@ function Test-CodexSummary {
     return $true
 }
 
-function Redact-CodexText {
+function Redact-CodexString {
     param([AllowNull()][string] $Text, [string[]] $SecretValues)
     if ($null -eq $Text) { return '' }
     $redacted = $Text
     foreach ($secret in @($SecretValues | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })) {
         $redacted = $redacted.Replace([string]$secret, '[REDACTED]')
     }
-    $redacted = [regex]::Replace($redacted, '(?i)(github_token|gh_token|openai_api_key|codex_api_key|deepseek_api_key)\s*[=:]\s*[^\s,;]+', '$1=[REDACTED]')
     $redacted = [regex]::Replace($redacted, '(?i)\bgh[pousr]_[A-Za-z0-9_\-]+\b', '[REDACTED]')
+    $redacted = [regex]::Replace($redacted, '(?i)\bsk-(?:proj-)?[A-Za-z0-9_\-]{8,}\b', '[REDACTED]')
     return $redacted
+}
+
+function Redact-CodexValue {
+    param([object] $Value, [string[]] $SecretValues)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) { return (Redact-CodexString -Text ([string]$Value) -SecretValues $SecretValues) }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [System.Collections.IDictionary]) {
+        $items = @()
+        foreach ($item in $Value) { $items += ,(Redact-CodexValue -Value $item -SecretValues $SecretValues) }
+        return ,$items
+    }
+    $properties = @($Value.PSObject.Properties)
+    if ($properties.Count -gt 0) {
+        $result = [ordered]@{}
+        foreach ($property in $properties) { $result[[string]$property.Name] = Redact-CodexValue -Value $property.Value -SecretValues $SecretValues }
+        return $result
+    }
+    return $Value
+}
+
+function Redact-CodexText {
+    param([AllowNull()][string] $Text, [string[]] $SecretValues)
+    if ($null -eq $Text) { return '' }
+    try {
+        $parsed = $Text | ConvertFrom-Json -ErrorAction Stop
+        $sanitized = Redact-CodexValue -Value $parsed -SecretValues $SecretValues
+        return ($sanitized | ConvertTo-Json -Compress -Depth 100)
+    } catch {
+        return (Redact-CodexString -Text $Text -SecretValues $SecretValues)
+    }
 }
 
 function Write-CodexReadableLine {
@@ -131,11 +161,30 @@ function Get-CodexBlockedSecretValues {
 function Stop-CodexProcessTree {
     param([System.Diagnostics.Process] $Process)
     if ($null -eq $Process) { return }
+    $processId = $null
+    try { if (-not $Process.HasExited) { $processId = $Process.Id } } catch { return }
+    if ($null -eq $processId) { return }
+    $killWithTree = $null
+    try { $killWithTree = $Process.GetType().GetMethod('Kill', [type[]] @([bool])) } catch {}
+    if ($null -ne $killWithTree) {
+        try { $Process.Kill($true); return } catch {}
+    }
+    $killer = $null
     try {
-        $killWithTree = $Process.GetType().GetMethod('Kill', [type[]] @([bool]))
-        if ($null -ne $killWithTree) { $Process.Kill($true) }
-        else { try { & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null } catch {}; if (-not $Process.HasExited) { $Process.Kill() } }
-    } catch { try { & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null } catch {} }
+        $killerInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $killerInfo.FileName = 'taskkill.exe'
+        $killerInfo.Arguments = "/PID $processId /T /F"
+        $killerInfo.UseShellExecute = $false
+        $killerInfo.CreateNoWindow = $true
+        $killerInfo.RedirectStandardOutput = $true
+        $killerInfo.RedirectStandardError = $true
+        $killer = New-Object System.Diagnostics.Process
+        $killer.StartInfo = $killerInfo
+        if ($killer.Start()) { $killer.WaitForExit(750) | Out-Null }
+    } catch {} finally {
+        if ($null -ne $killer) { try { $killer.Dispose() } catch {} }
+    }
+    try { if (-not $Process.HasExited) { $Process.Kill(); $Process.WaitForExit(750) | Out-Null } } catch {}
 }
 
 function Invoke-CodexProcess {
@@ -146,16 +195,20 @@ function Invoke-CodexProcess {
     $process.StartInfo = $startInfo
     $stdoutLines = [System.Collections.Generic.List[string]]::new()
     $stderrTask = $null
+    $inputTask = $null
+    $stdoutReader = $null
     try {
         if (-not $process.Start()) { throw 'Codex process did not start.' }
+        $started = [Diagnostics.Stopwatch]::StartNew()
         $inputTask = $process.StandardInput.WriteAsync($Prompt)
         $stderrTask = $process.StandardError.ReadToEndAsync()
         $stdoutReader = $process.StandardOutput
-        $started = [Diagnostics.Stopwatch]::StartNew(); $timedOut = $false
+        $timedOut = $false; $inputClosed = $false
         $stdoutDone = $false
         while (-not $stdoutDone) {
             $lineTask = $stdoutReader.ReadLineAsync()
             while (-not $lineTask.Wait(20)) {
+                if (-not $inputClosed -and $inputTask.IsCompleted) { try { $process.StandardInput.Close() } catch {}; $inputClosed = $true }
                 if ($started.ElapsedMilliseconds -ge $TimeoutMilliseconds) { $timedOut = $true; Stop-CodexProcessTree $process; break }
                 if ($process.HasExited -and $started.ElapsedMilliseconds -ge 1000) { $stdoutDone = $true; break }
             }
@@ -164,25 +217,33 @@ function Invoke-CodexProcess {
             if ($null -eq $line) { $stdoutDone = $true; break }
             $stdoutLines.Add([string]$line)
             if ($null -ne $OutputLineCallback) { & $OutputLineCallback ([string]$line) }
+            if (-not $inputClosed -and $inputTask.IsCompleted) { try { $process.StandardInput.Close() } catch {}; $inputClosed = $true }
             if ($started.ElapsedMilliseconds -ge $TimeoutMilliseconds -and -not $process.HasExited) { $timedOut = $true; Stop-CodexProcessTree $process; break }
         }
         while (-not $timedOut -and -not $process.HasExited) {
+            if (-not $inputClosed -and $inputTask.IsCompleted) { try { $process.StandardInput.Close() } catch {}; $inputClosed = $true }
             if ($started.ElapsedMilliseconds -ge $TimeoutMilliseconds) { $timedOut = $true; Stop-CodexProcessTree $process; break }
             Start-Sleep -Milliseconds 20
         }
-        if ($timedOut) { try { $process.StandardInput.Close() } catch {} }
-        try { $inputTask.Wait(1000) | Out-Null } catch {}
+        if (-not $inputClosed) { try { $process.StandardInput.Close() } catch {}; $inputClosed = $true }
+        try { if ($null -ne $inputTask) { $inputTask.Wait(250) | Out-Null } } catch {}
         try { $process.StandardInput.Close() } catch {}
-        try { $process.WaitForExit(2000) | Out-Null } catch {}
-        $stderrReady = try { $stderrTask.Wait(1000) } catch { $false }
+        try { $process.WaitForExit(750) | Out-Null } catch {}
+        $stderrReady = try { $stderrTask.Wait(250) } catch { $false }
         $stderr = if ($stderrReady) { try { $stderrTask.Result } catch { '' } } else { '' }
         if (-not [string]::IsNullOrWhiteSpace($stderr) -and $null -ne $ErrorLineCallback) { foreach ($errorLine in @($stderr -split "`r?`n")) { if (-not [string]::IsNullOrWhiteSpace($errorLine)) { & $ErrorLineCallback ([string]$errorLine) } } }
         try { $stdoutReader.Close() } catch {}
         try { $process.StandardError.Close() } catch {}
-        return [pscustomobject]@{ ExitCode = if ($process.HasExited) { $process.ExitCode } else { -1 }; Stdout = ($stdoutLines -join [Environment]::NewLine); Stderr = $stderr; TimedOut = $timedOut; Arguments = $Arguments; SecretValues = $secretValues }
+        $exitCode = -1; try { if ($process.HasExited) { $exitCode = $process.ExitCode } } catch {}
+        return [pscustomobject]@{ ExitCode = $exitCode; Stdout = ($stdoutLines -join [Environment]::NewLine); Stderr = $stderr; TimedOut = $timedOut; Arguments = $Arguments; SecretValues = $secretValues }
     } finally {
-        if ($null -ne $process -and -not $process.HasExited) { Stop-CodexProcessTree $process }
-        $process.Dispose()
+        $hasExited = $true
+        try { $hasExited = $process.HasExited } catch {}
+        if (-not $hasExited) { Stop-CodexProcessTree $process; try { $process.WaitForExit(750) | Out-Null } catch {} }
+        try { $process.StandardInput.Close() } catch {}
+        try { if ($null -ne $stdoutReader) { $stdoutReader.Close() } } catch {}
+        try { $process.StandardError.Close() } catch {}
+        try { $process.Dispose() } catch {}
     }
 }
 
@@ -275,18 +336,31 @@ function Invoke-CodexRun {
     $supportsResume = Get-CodexValue $Config 'supportsResumeOutputControls'
     $probeError = $null
     $revisionFallback = $false
+    $secretValues = Get-CodexBlockedSecretValues
     if ($Revision -and [bool]$supportsResume -and -not [string]::IsNullOrWhiteSpace($ThreadId)) {
         $arguments = @('exec','--json','--sandbox','workspace-write','--output-schema',$schemaPath,'--output-last-message',[IO.Path]::GetFullPath($SummaryPath),'resume',$ThreadId,'-')
     } elseif ($Revision) {
         $revisionFallback = $true
-        Write-CodexReadableLine -Text 'resume output controls unavailable; started fresh revision thread' -ActivityLogPath $ActivityLogPath -ConsoleWriter $ConsoleWriter
+        Write-CodexReadableLine -Text 'resume output controls unavailable; started fresh revision thread' -ActivityLogPath $ActivityLogPath -ConsoleWriter $ConsoleWriter -SecretValues $secretValues
     }
     $promptText = Get-CodexPrompt -IssueContext $IssueContext -Revision ([bool]$Revision) -ReviewComments $ReviewComments -PromptOverride $Prompt
     $timeoutMinutes = [double](Get-CodexValue $Config 'codexTimeoutMinutes' 120)
     $threadHolder = [pscustomobject]@{ Value = $null }
-    $secretValues = Get-CodexBlockedSecretValues
     $localGetValue = { param([object]$object, [string]$name, [object]$default) if ($null -ne $object -and $null -ne $object.PSObject.Properties[$name]) { return $object.PSObject.Properties[$name].Value }; return $default }.GetNewClosure()
-    $localRedact = { param([string]$text) $result = $text; foreach ($secret in @($secretValues | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })) { $result = $result.Replace([string]$secret, '[REDACTED]') }; $result = [regex]::Replace($result, '(?i)\bgh[pousr]_[A-Za-z0-9_\-]+\b', '[REDACTED]'); return $result }.GetNewClosure()
+    $localSanitizeString = { param([AllowNull()][string]$text) if ($null -eq $text) { return '' }; $result = $text; foreach ($secret in @($secretValues | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })) { $result = $result.Replace([string]$secret, '[REDACTED]') }; $result = [regex]::Replace($result, '(?i)\bgh[pousr]_[A-Za-z0-9_\-]+\b', '[REDACTED]'); $result = [regex]::Replace($result, '(?i)\bsk-(?:proj-)?[A-Za-z0-9_\-]{8,}\b', '[REDACTED]'); return $result }.GetNewClosure()
+    $localSanitizeValue = $null
+    $localSanitizeValue = {
+        param([object]$value)
+        if ($null -eq $value) { return $null }
+        if ($value -is [string]) { return (& $localSanitizeString ([string]$value)) }
+        if ($value -is [System.Collections.IEnumerable] -and $value -isnot [System.Collections.IDictionary]) {
+            $items = @(); foreach ($item in $value) { $items += ,(& $localSanitizeValue $item) }; return ,$items
+        }
+        $properties = @($value.PSObject.Properties)
+        if ($properties.Count -gt 0) { $result = [ordered]@{}; foreach ($property in $properties) { $result[[string]$property.Name] = & $localSanitizeValue $property.Value }; return $result }
+        return $value
+    }.GetNewClosure()
+    $localRedact = { param([AllowNull()][string]$text) if ($null -eq $text) { return '' }; try { $parsed = $text | ConvertFrom-Json -ErrorAction Stop; $sanitized = & $localSanitizeValue $parsed; return ($sanitized | ConvertTo-Json -Compress -Depth 100) } catch { return (& $localSanitizeString $text) } }.GetNewClosure()
     $localWrite = { param([string]$text) $line = '[{0}] {1}' -f [DateTime]::UtcNow.ToString('o'), (& $localRedact $text); [IO.File]::AppendAllText($ActivityLogPath, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false))); if ($null -ne $ConsoleWriter) { & $ConsoleWriter $line } else { Write-Host $line } }.GetNewClosure()
     $handleOutput = {
         param([string] $line)
@@ -316,7 +390,7 @@ function Invoke-CodexRun {
     catch {
         $message = $_.Exception.Message
         $classification = if ($message -match '(?i)not found|cannot find|does not exist') { 'missing_executable' } else { 'process_start_failed' }
-        Write-CodexReadableLine -Text "Codex process failed to start: $message" -ActivityLogPath $ActivityLogPath -ConsoleWriter $ConsoleWriter
+        Write-CodexReadableLine -Text "Codex process failed to start: $message" -ActivityLogPath $ActivityLogPath -ConsoleWriter $ConsoleWriter -SecretValues $secretValues
         return [pscustomobject]@{ Status = 'failed'; Classification = $classification; ThreadId = $null; Summary = $null; Arguments = $arguments; SummaryPath = $SummaryPath; EventsPath = $EventsPath; ActivityLogPath = $ActivityLogPath }
     }
     $thread = $threadHolder.Value
@@ -331,5 +405,6 @@ function Invoke-CodexRun {
     elseif ($run.ExitCode -ne 0) { $classification = 'process_failed' }
     elseif (-not $validSummary) { $classification = 'malformed_summary' }
     else { $classification = 'completed' }
-    [pscustomobject]@{ Status = if ($validSummary) { [string]$summary.status } else { 'failed' }; Classification = $classification; ThreadId = $thread; Summary = $summary; Arguments = $arguments; SummaryPath = $SummaryPath; EventsPath = $EventsPath; ActivityLogPath = $ActivityLogPath; RevisionFallback = $revisionFallback; ProbeError = $probeError }
+    $status = if ($classification -eq 'completed' -and $validSummary) { [string]$summary.status } else { 'failed' }
+    [pscustomobject]@{ Status = $status; Classification = $classification; ThreadId = $thread; Summary = $summary; Arguments = $arguments; SummaryPath = $SummaryPath; EventsPath = $EventsPath; ActivityLogPath = $ActivityLogPath; RevisionFallback = $revisionFallback; ProbeError = $probeError }
 }
