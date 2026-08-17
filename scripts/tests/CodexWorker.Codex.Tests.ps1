@@ -105,7 +105,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3
 $Arguments = $args
 $summaryPath = $Arguments[($Arguments.IndexOf('--output-last-message') + 1)]
 [IO.File]::WriteAllText($summaryPath, '{"status":"completed","rootCauseOrApproach":"fake","changedComponents":[],"decisions":[],"validation":[],"warnings":[],"remainingRisks":[],"commitMessage":"fix: fake","prTitle":"fix: fake","requiresHumanInput":false,"humanQuestion":null}')
-Write-Output ('{"type":"agent_message","text":"' + $env:OPENAI_API_KEY + ' ghp_child_secret123"}')
+if ([string]::IsNullOrEmpty($env:OPENAI_API_KEY)) { Write-Output '{"type":"agent_message","text":"env-absent ghp_child_secret123"}' }
+else { Write-Output ('{"type":"agent_message","text":"env-present ' + $env:OPENAI_API_KEY + ' ghp_child_secret123"}') }
 '@ | Set-Content -LiteralPath $fakePs
         @'
 @echo off
@@ -118,6 +119,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3
             [IO.File]::WriteAllText($state, '{"schemaVersion":1,"issues":{"42":{}}}')
             $result = Invoke-CodexRun -IssueWorktree $TestDrive -IssueContext ([pscustomobject]@{ number = 42; title = 'Example' }) -Config ([pscustomobject]@{ codexCommand = $fakeCmd; codexTimeoutMinutes = 1 }) -RunDirectory $run -StatePath $state
             $events = Get-Content -Raw (Join-Path $run 'events.jsonl'); $activity = Get-Content -Raw (Join-Path $run 'activity.log')
+            $events | Should Match 'env-absent'
+            $activity | Should Match 'env-absent'
             $events | Should Not Match 'openai-parent-secret|gh-parent-secret|ghp_child_secret123'
             $activity | Should Not Match 'openai-parent-secret|gh-parent-secret|ghp_child_secret123'
         } finally { $env:OPENAI_API_KEY = $oldOpenAi; $env:GH_TOKEN = $oldGh }
@@ -256,5 +259,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3
             elseif ($mode -eq 'ordinary') { $result.Classification | Should Be 'process_failed' }
             else { $result.Classification | Should Be 'malformed_summary' }
         }
+    }
+
+    It 'classifies a missing Codex executable as missing_executable' {
+        $state = Join-Path $TestDrive 'missing-executable-state.json'
+        [IO.File]::WriteAllText($state, '{"schemaVersion":1,"issues":{"42":{}}}')
+        $result = Invoke-CodexRun -IssueWorktree $TestDrive -IssueContext ([pscustomobject]@{ number = 42 }) -Config ([pscustomobject]@{ codexCommand = (Join-Path $TestDrive 'does-not-exist.cmd'); codexTimeoutMinutes = 1 }) -RunDirectory (Join-Path $TestDrive 'missing-executable-run') -StatePath $state
+        $result.Classification | Should Be 'missing_executable'
     }
 }
