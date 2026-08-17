@@ -14,7 +14,14 @@
         'Get-CodexIssueDevelopment',
         'Set-CodexIssueStatus',
         'Add-CodexIssueComment',
-        'Get-CodexPullRequestContext'
+        'Get-CodexPullRequestContext',
+        'Get-CodexIssueBranchName',
+        'Get-RegisteredWorktrees',
+        'Get-OrCreateCodexIssueWorktree',
+        'Assert-PathUnderRoot',
+        'Initialize-CodexIssueWorktree',
+        'Test-CodexWorktreeCleanup',
+        'Remove-CodexWorktree'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
