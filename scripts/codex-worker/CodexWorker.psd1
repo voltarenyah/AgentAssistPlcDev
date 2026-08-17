@@ -7,6 +7,10 @@
         'Resolve-CodexWorkerPaths',
         'Read-CodexWorkerState',
         'Write-CodexWorkerState',
+        'New-CodexIssueAttemptState',
+        'Get-CodexIssueAttemptState',
+        'Set-CodexIssueAttemptState',
+        'Write-CodexIssueAttemptState',
         'Enter-CodexWorkerLock',
         'Exit-CodexWorkerLock',
         'Assert-TrustedGitHubActor',
@@ -14,6 +18,8 @@
         'Get-CodexIssueDevelopment',
         'Set-CodexIssueStatus',
         'Add-CodexIssueComment',
+        'Get-CodexWorkflowRunUrl',
+        'Add-CodexIssueMilestone',
         'Get-CodexPullRequestContext',
         'Get-CodexIssueBranchName',
         'Get-RegisteredWorktrees',
@@ -25,6 +31,7 @@
         ,'Invoke-CodexRun'
         ,'Test-CodexSummary'
         ,'Initialize-CodexResumeCapability'
+        ,'Invoke-CodexIssueRun'
     )
     CmdletsToExport = @()
     VariablesToExport = @()

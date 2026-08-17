@@ -213,4 +213,28 @@ Describe 'Codex worker GitHub adapter' {
         $jsonFields | Should Match 'reviews'
         $jsonFields | Should Match 'files'
     }
+
+    It 'builds a workflow run URL only when all workflow coordinates are present' {
+        $oldServer = $env:GITHUB_SERVER_URL; $oldRepo = $env:GITHUB_REPOSITORY; $oldRun = $env:GITHUB_RUN_ID
+        try {
+            $env:GITHUB_SERVER_URL = 'https://github.example.test/'
+            $env:GITHUB_REPOSITORY = 'owner/repo'
+            $env:GITHUB_RUN_ID = '1234'
+            (Get-CodexWorkflowRunUrl) | Should Be 'https://github.example.test/owner/repo/actions/runs/1234'
+            Remove-Item Env:GITHUB_RUN_ID
+            (Get-CodexWorkflowRunUrl) | Should Be $null
+        } finally {
+            if ($null -eq $oldServer) { Remove-Item Env:GITHUB_SERVER_URL -ErrorAction SilentlyContinue } else { $env:GITHUB_SERVER_URL = $oldServer }
+            if ($null -eq $oldRepo) { Remove-Item Env:GITHUB_REPOSITORY -ErrorAction SilentlyContinue } else { $env:GITHUB_REPOSITORY = $oldRepo }
+            if ($null -eq $oldRun) { Remove-Item Env:GITHUB_RUN_ID -ErrorAction SilentlyContinue } else { $env:GITHUB_RUN_ID = $oldRun }
+        }
+    }
+
+    It 'does not flood bounded milestone comments' {
+        $calls = New-Object 'System.Collections.Generic.List[object]'
+        $runner = { param([string[]] $Arguments) $calls.Add(@($Arguments)) | Out-Null; '' }.GetNewClosure()
+        Add-CodexIssueMilestone -Repository 'owner/repo' -IssueNumber 42 -Milestone 'claimed' -Details 'branch codex/42-fix' -CommandRunner $runner | Out-Null
+        Add-CodexIssueMilestone -Repository 'owner/repo' -IssueNumber 42 -Milestone 'claimed' -Details 'branch codex/42-fix' -CommandRunner $runner | Out-Null
+        $calls.Count | Should Be 1
+    }
 }

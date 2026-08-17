@@ -2,6 +2,54 @@ $script:CodexStatusLabels = @(
     'codex:queued', 'codex:running', 'codex:pr-ready',
     'codex:blocked', 'codex:retry', 'codex:revise', 'codex:done'
 )
+$script:CodexMilestoneKeys = @{}
+
+function Get-CodexWorkflowRunUrl {
+    [CmdletBinding()]
+    param(
+        [string] $ServerUrl = $env:GITHUB_SERVER_URL,
+        [string] $Repository = $env:GITHUB_REPOSITORY,
+        [string] $RunId = $env:GITHUB_RUN_ID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ServerUrl) -or
+        [string]::IsNullOrWhiteSpace($Repository) -or
+        [string]::IsNullOrWhiteSpace($RunId)) {
+        return $null
+    }
+    return ('{0}/{1}/actions/runs/{2}' -f $ServerUrl.TrimEnd('/'), $Repository.Trim('/'), $RunId)
+}
+
+function Add-CodexIssueMilestone {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)] [string] $Repository,
+        [Parameter(Mandatory = $true)] [int] $IssueNumber,
+        [Parameter(Mandatory = $true)] [ValidateSet('claimed', 'approach', 'validation', 'blocked', 'pr-ready')] [string] $Milestone,
+        [string] $Details,
+        [scriptblock] $CommandRunner
+    )
+
+    $key = '{0}#{1}:{2}' -f $Repository, $IssueNumber, $Milestone
+    if ($script:CodexMilestoneKeys.ContainsKey($key)) { return $null }
+
+    $heading = switch ($Milestone) {
+        'claimed' { 'Codex work claimed.' }
+        'approach' { 'Codex approach established.' }
+        'validation' { 'Codex validation result.' }
+        'blocked' { 'Codex work is blocked.' }
+        'pr-ready' { 'Codex implementation is ready for publication.' }
+    }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $parts.Add($heading) | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($Details)) { $parts.Add($Details.Trim()) | Out-Null }
+    $workflowUrl = Get-CodexWorkflowRunUrl
+    if (-not [string]::IsNullOrWhiteSpace($workflowUrl)) { $parts.Add("Workflow run: $workflowUrl") | Out-Null }
+    $body = $parts -join "`n`n"
+    $result = Add-CodexIssueComment -Repository $Repository -IssueNumber $IssueNumber -Body $body -CommandRunner $CommandRunner
+    $script:CodexMilestoneKeys[$key] = $true
+    return $result
+}
 
 function Invoke-GhCommand {
     [CmdletBinding()]
