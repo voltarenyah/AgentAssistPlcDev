@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "rootCauseOrApproach",
+    "changedComponents",
+    "decisions",
+    "validation",
+    "warnings",
+    "remainingRisks",
+    "commitMessage",
+    "prTitle",
+    "requiresHumanInput",
+    "humanQuestion"
+  ],
+  "properties": {
+    "status": { "type": "string", "enum": ["completed", "blocked", "failed"] },
+    "rootCauseOrApproach": { "type": "string" },
+    "changedComponents": { "type": "array", "items": { "type": "string" } },
+    "decisions": { "type": "array", "items": { "type": "string" } },
+    "validation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "outcome", "details"],
+        "properties": {
+          "command": { "type": "string" },
+          "outcome": { "type": "string", "enum": ["passed", "failed", "skipped"] },
+          "details": { "type": "string" }
+        }
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "remainingRisks": { "type": "array", "items": { "type": "string" } },
+    "commitMessage": { "type": "string" },
+    "prTitle": { "type": "string" },
+    "requiresHumanInput": { "type": "boolean" },
+    "humanQuestion": { "type": ["string", "null"] }
+  }
+}

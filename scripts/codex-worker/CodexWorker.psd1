@@ -22,6 +22,8 @@
         'Initialize-CodexIssueWorktree',
         'Test-CodexWorktreeCleanup',
         'Remove-CodexWorktree'
+        ,'Invoke-CodexRun'
+        ,'Test-CodexSummary'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
