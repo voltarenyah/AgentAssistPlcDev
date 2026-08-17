@@ -82,7 +82,8 @@ Describe 'Codex worker paths' {
     It 'persists a queued issue through running to pr-ready with bounded milestones' {
         $statePath = Join-Path $TestDrive 'lifecycle-state.json'
         $events = New-Object 'System.Collections.Generic.List[string]'
-        $stateWriter = { param($Path, $Number, $Attempt) $events.Add('save:' + $Attempt.status) | Out-Null; Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null }.GetNewClosure()
+        $saveSequence = 0
+        $stateWriter = { param($Path, $Number, $Attempt) $saveSequence++; $events.Add(('save#{0}:{1}:{2}' -f $saveSequence, $Attempt.status, $Attempt.publicationStage)) | Out-Null; $events.Add('save:' + $Attempt.status) | Out-Null; Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null }.GetNewClosure()
         $issueJson = ([ordered]@{
                 number = 42; title = 'Fix the station'; body = 'Issue body';
                 author = @{ login = 'reporter' }; comments = @(); labels = @(@{ name = 'codex' }, @{ name = 'codex:queued' });
@@ -95,12 +96,17 @@ Describe 'Codex worker paths' {
             if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
             if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
             if ($Arguments -contains '--add-label') {
-                $events.Add('status:' + $Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null
+                $statusLabel = $Arguments[$Arguments.IndexOf('--add-label') + 1]
+                $events.Add('status:' + $statusLabel) | Out-Null
+                if ($statusLabel -eq 'codex:pr-ready') { $events.Add('label:codex:pr-ready') | Out-Null }
                 return ''
             }
             if ($Arguments -contains '--body') {
                 $body = $Arguments[$Arguments.IndexOf('--body') + 1]
-                if ($body -like 'Codex implementation is ready for publication.*') { $events.Add('ready-comment') | Out-Null }
+                if ($body -like 'Codex work claimed.*') { $events.Add('claimed-comment') | Out-Null }
+                elseif ($body -like 'Codex approach established.*') { $events.Add('approach-comment') | Out-Null }
+                elseif ($body -like 'Codex validation result.*') { $events.Add('validation-comment') | Out-Null }
+                elseif ($body -like 'Codex implementation is ready for publication.*') { $events.Add('ready-comment') | Out-Null }
                 else { $events.Add('comment:' + $body) | Out-Null }
                 return ''
             }
@@ -148,9 +154,18 @@ Describe 'Codex worker paths' {
         $events.IndexOf('save:running') | Should BeLessThan $events.IndexOf('codex')
         $events.IndexOf('save:running') | Should BeLessThan $events.IndexOf('status:codex:running')
         $events.IndexOf('save:pr-ready') | Should BeLessThan $events.IndexOf('ready-comment')
+        foreach ($milestone in @('claimed-comment', 'approach-comment', 'validation-comment', 'ready-comment')) {
+            $milestoneIndex = $events.IndexOf($milestone)
+            $milestoneIndex | Should BeGreaterThan -1
+            ($events[$milestoneIndex + 1] -like 'save#*') | Should Be $true
+        }
+        $readyLabelIndex = $events.IndexOf('label:codex:pr-ready')
+        $readyCommentIndex = $events.IndexOf('ready-comment')
+        $readyLabelIndex | Should BeLessThan $readyCommentIndex
+        ($events[$readyCommentIndex + 1] -like 'save#*') | Should Be $true
         @($events | Where-Object { $_ -eq 'save:pr-ready' }).Count | Should BeGreaterThan 0
-        @($events | Where-Object { $_ -like 'comment:*' -or $_ -eq 'ready-comment' }).Count | Should Be 4
-        @($events | Where-Object { $_ -eq 'comment:' -or $_ -like 'comment:*claimed*' }).Count | Should BeGreaterThan 0
+        @($events | Where-Object { $_ -in @('claimed-comment', 'approach-comment', 'validation-comment', 'ready-comment') }).Count | Should Be 4
+        @($events | Where-Object { $_ -eq 'claimed-comment' }).Count | Should BeGreaterThan 0
     }
 
     It 'turns a human-input summary into a blocked durable state' {
@@ -181,6 +196,7 @@ Describe 'Codex worker paths' {
     It 'retries one transient Codex failure and blocks after the second' {
         $statePath = Join-Path $TestDrive 'retry-state.json'
         $statuses = New-Object 'System.Collections.Generic.List[string]'
+        $events = New-Object 'System.Collections.Generic.List[string]'
         $attempts = New-Object 'System.Collections.Generic.List[int]'
         $worktreeCalls = New-Object 'System.Collections.Generic.List[string]'
         $setupCalls = New-Object 'System.Collections.Generic.List[string]'
@@ -191,12 +207,22 @@ Describe 'Codex worker paths' {
             if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return '{"number":42,"title":"Retry me","body":"body","author":{"login":"reporter"},"comments":[],"labels":[{"name":"codex"}],"state":"OPEN","url":"https://github.com/owner/repo/issues/42"}' }
             if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
             if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
-            if ($Arguments -contains '--add-label') { $statuses.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null; return '' }
-            if ($Arguments -contains '--body') { return '' }
+            if ($Arguments -contains '--add-label') {
+                $label = $Arguments[$Arguments.IndexOf('--add-label') + 1]
+                $statuses.Add($label) | Out-Null
+                if ($label -in @('codex:retry', 'codex:blocked')) { $events.Add('label:' + $label) | Out-Null }
+                return ''
+            }
+            if ($Arguments -contains '--body') {
+                if ($Arguments[$Arguments.IndexOf('--body') + 1] -like 'Codex work is blocked.*') { $events.Add('blocked-comment') | Out-Null }
+                return ''
+            }
             throw 'Unexpected GitHub call.'
         }.GetNewClosure()
         $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) $worktreeCalls.Add($BranchName) | Out-Null; [pscustomobject]@{ Path = (Join-Path $TestDrive 'issue'); BranchName = 'codex/42-retry-me' } }.GetNewClosure()
         $setup = { param($Worktree, $Config, $ActivityLogPath) $setupCalls.Add($Worktree) | Out-Null }.GetNewClosure()
+        $saveSequence = 0
+        $stateWriter = { param($Path, $Number, $Attempt) $saveSequence++; $events.Add(('save#{0}:{1}:{2}' -f $saveSequence, $Attempt.status, $Attempt.publicationStage)) | Out-Null; Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null }.GetNewClosure()
         $codex = {
             param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath)
             $attempts.Add(1) | Out-Null
@@ -205,7 +231,7 @@ Describe 'Codex worker paths' {
         }.GetNewClosure()
 
         $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive `
-            -Config ([pscustomobject]@{ defaultBranch = 'master' }) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
+            -Config ([pscustomobject]@{ defaultBranch = 'master' }) -StatePath $statePath -StateWriter $stateWriter -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
 
         $result.Status | Should Be 'blocked'
         $attempts.Count | Should Be 2
@@ -219,6 +245,13 @@ Describe 'Codex worker paths' {
         $codexWorktreePaths.Count | Should Be 2
         $codexWorktreePaths[0] | Should Be $saved.issues.'42'.worktree
         $codexWorktreePaths[1] | Should Be $saved.issues.'42'.worktree
+        $retryLabelIndex = $events.IndexOf('label:codex:retry')
+        $retryLabelIndex | Should BeGreaterThan -1
+        ($events[$retryLabelIndex + 1] -like 'save#*') | Should Be $true
+        $blockedLabelIndex = $events.IndexOf('label:codex:blocked')
+        $blockedCommentIndex = $events.IndexOf('blocked-comment')
+        $blockedLabelIndex | Should BeLessThan $blockedCommentIndex
+        ($events[$blockedCommentIndex + 1] -like 'save#*') | Should Be $true
         @($statuses | Where-Object { $_ -eq 'codex:retry' }).Count | Should Be 1
         @($statuses | Where-Object { $_ -eq 'codex:blocked' }).Count | Should Be 1
     }
