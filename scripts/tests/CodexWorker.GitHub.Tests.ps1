@@ -237,4 +237,22 @@ Describe 'Codex worker GitHub adapter' {
         Add-CodexIssueMilestone -Repository 'owner/repo' -IssueNumber 42 -Milestone 'claimed' -Details 'branch codex/42-fix' -CommandRunner $runner | Out-Null
         $calls.Count | Should Be 1
     }
+
+    It 'includes the Actions workflow URL in the posted milestone body' {
+        $oldServer = $env:GITHUB_SERVER_URL; $oldRepo = $env:GITHUB_REPOSITORY; $oldRun = $env:GITHUB_RUN_ID
+        $body = New-Object 'System.Collections.Generic.List[string]'
+        try {
+            $env:GITHUB_SERVER_URL = 'https://github.example.test'
+            $env:GITHUB_REPOSITORY = 'owner/repo'
+            $env:GITHUB_RUN_ID = '777'
+            $runner = { param([string[]] $Arguments) $body.Add($Arguments[$Arguments.IndexOf('--body') + 1]) | Out-Null; '' }.GetNewClosure()
+            Add-CodexIssueMilestone -Repository 'owner/repo' -IssueNumber 777 -Milestone 'validation' -Details 'test passed' -CommandRunner $runner | Out-Null
+            $body.Count | Should Be 1
+            $body[0] | Should Match 'https://github.example.test/owner/repo/actions/runs/777'
+        } finally {
+            if ($null -eq $oldServer) { Remove-Item Env:GITHUB_SERVER_URL -ErrorAction SilentlyContinue } else { $env:GITHUB_SERVER_URL = $oldServer }
+            if ($null -eq $oldRepo) { Remove-Item Env:GITHUB_REPOSITORY -ErrorAction SilentlyContinue } else { $env:GITHUB_REPOSITORY = $oldRepo }
+            if ($null -eq $oldRun) { Remove-Item Env:GITHUB_RUN_ID -ErrorAction SilentlyContinue } else { $env:GITHUB_RUN_ID = $oldRun }
+        }
+    }
 }

@@ -243,7 +243,8 @@ function Invoke-CodexIssueRun {
         [scriptblock] $CodexProvider,
         [scriptblock] $LockProvider,
         [scriptblock] $UnlockProvider,
-        [scriptblock] $PublicationProvider
+        [scriptblock] $PublicationProvider,
+        [scriptblock] $StateWriter
     )
 
     if ($null -eq $Config) { $Config = [pscustomobject]@{} }
@@ -258,12 +259,11 @@ function Invoke-CodexIssueRun {
     if ([string]::IsNullOrWhiteSpace($effectiveDataRoot)) { $effectiveDataRoot = Split-Path -Parent $StatePath }
     $paths = Resolve-CodexWorkerPaths -RepositoryRoot $RepositoryRoot -DataRoot $effectiveDataRoot
 
-    Assert-TrustedGitHubActor -Repository $Repository -Actor $Actor -CommandRunner $GitHubCommandRunner | Out-Null
-    $issue = Get-CodexIssueContext -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
-    $development = Get-CodexIssueDevelopment -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
-
-    $branchName = Get-CodexIssueBranchName -IssueNumber $IssueNumber -Title ([string](Get-CodexOrchestrationField $issue 'title' "Issue $IssueNumber"))
     if ($DryRun) {
+        Assert-TrustedGitHubActor -Repository $Repository -Actor $Actor -CommandRunner $GitHubCommandRunner | Out-Null
+        $issue = Get-CodexIssueContext -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
+        $development = Get-CodexIssueDevelopment -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
+        $branchName = Get-CodexIssueBranchName -IssueNumber $IssueNumber -Title ([string](Get-CodexOrchestrationField $issue 'title' "Issue $IssueNumber"))
         return [pscustomobject][ordered]@{
             DryRun = $true
             IssueNumber = $IssueNumber
@@ -275,43 +275,13 @@ function Invoke-CodexIssueRun {
         }
     }
 
-    $state = Read-CodexWorkerState -Path $StatePath
-    $attemptState = Get-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber
-    $existingStatus = [string](Get-CodexOrchestrationField $attemptState 'status' '')
-    $resumeEvent = $EventName -match '(?i)(retry|revise)'
-    $publicationStage = [string](Get-CodexOrchestrationField $attemptState 'publicationStage' 'none')
-    $publicationCommand = Get-Command Publish-CodexIssue -ErrorAction SilentlyContinue
-    if ($null -ne $attemptState -and $existingStatus -eq 'pr-ready' -and $publicationStage -ne 'pr-created' -and ($null -ne $PublicationProvider -or $null -ne $publicationCommand)) {
-        $lockHandle = $null
-        try {
-            $lockPath = $paths.LockPath
-            if ($null -ne $LockProvider) { $lockHandle = & $LockProvider $lockPath }
-            else {
-                $timeout = [int](Get-CodexOrchestrationField $Config 'workerLockTimeoutSeconds' 30)
-                $lockHandle = Enter-CodexWorkerLock -Path $lockPath -TimeoutSeconds $timeout
-            }
-            if ($null -ne $PublicationProvider) { $publicationResult = & $PublicationProvider $attemptState $issue $Config $StatePath }
-            else { $publicationResult = & $publicationCommand $attemptState $issue $Config $StatePath }
-            $newStage = [string](Get-CodexOrchestrationField $publicationResult 'publicationStage' $publicationStage)
-            Set-CodexOrchestrationField $attemptState 'publicationStage' $newStage
-            $newPrUrl = [string](Get-CodexOrchestrationField $publicationResult 'prUrl' '')
-            if (-not [string]::IsNullOrWhiteSpace($newPrUrl)) { Set-CodexOrchestrationField $attemptState 'prUrl' $newPrUrl }
-            Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attemptState | Out-Null
-            return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = $attemptState.status; PublicationStage = $attemptState.publicationStage; PrUrl = $attemptState.prUrl; RecoveredPublication = $true }
-        } finally {
-            if ($null -ne $lockHandle) {
-                if ($null -ne $UnlockProvider) { & $UnlockProvider $lockHandle }
-                else { Exit-CodexWorkerLock -Handle $lockHandle }
-            }
-        }
-    }
-    if ($existingStatus -in @('running', 'pr-ready') -and -not ($resumeEvent -and $existingStatus -eq 'pr-ready')) {
-        return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = $existingStatus; NoOp = $true; State = $attemptState }
-    }
-    if ($existingStatus -eq 'blocked' -and -not $resumeEvent) {
-        return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = $existingStatus; NoOp = $true; State = $attemptState }
-    }
-
+    $state = $null
+    $attemptState = $null
+    $issue = $null
+    $development = $null
+    $branchName = $null
+    $existingStatus = ''
+    $resumeEvent = $false
     $lockHandle = $null
     $lockPath = $paths.LockPath
     try {
@@ -319,6 +289,38 @@ function Invoke-CodexIssueRun {
         else {
             $timeout = [int](Get-CodexOrchestrationField $Config 'workerLockTimeoutSeconds' 30)
             $lockHandle = Enter-CodexWorkerLock -Path $lockPath -TimeoutSeconds $timeout
+        }
+
+        # Re-read every mutable external context after taking the lock. This
+        # prevents a queued duplicate or publication recovery from using data
+        # observed before another worker released the lock.
+        Assert-TrustedGitHubActor -Repository $Repository -Actor $Actor -CommandRunner $GitHubCommandRunner | Out-Null
+        $issue = Get-CodexIssueContext -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
+        $development = Get-CodexIssueDevelopment -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
+        $branchName = Get-CodexIssueBranchName -IssueNumber $IssueNumber -Title ([string](Get-CodexOrchestrationField $issue 'title' "Issue $IssueNumber"))
+        $state = Read-CodexWorkerState -Path $StatePath
+        $attemptState = Get-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber
+        $existingStatus = [string](Get-CodexOrchestrationField $attemptState 'status' '')
+        $resumeEvent = $EventName -match '(?i)(retry|revise)'
+
+        $publicationStage = [string](Get-CodexOrchestrationField $attemptState 'publicationStage' 'none')
+        $publicationCommand = Get-Command Publish-CodexIssue -ErrorAction SilentlyContinue
+        if ($null -ne $attemptState -and $existingStatus -eq 'pr-ready' -and $publicationStage -ne 'pr-created' -and ($null -ne $PublicationProvider -or $null -ne $publicationCommand)) {
+            if ($null -ne $PublicationProvider) { $publicationResult = & $PublicationProvider $attemptState $issue $Config $StatePath }
+            else { $publicationResult = & $publicationCommand $attemptState $issue $Config $StatePath }
+            $newStage = [string](Get-CodexOrchestrationField $publicationResult 'publicationStage' $publicationStage)
+            Set-CodexOrchestrationField $attemptState 'publicationStage' $newStage
+            $newPrUrl = [string](Get-CodexOrchestrationField $publicationResult 'prUrl' '')
+            if (-not [string]::IsNullOrWhiteSpace($newPrUrl)) { Set-CodexOrchestrationField $attemptState 'prUrl' $newPrUrl }
+            if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attemptState }
+            else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attemptState | Out-Null }
+            return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = $attemptState.status; PublicationStage = $attemptState.publicationStage; PrUrl = $attemptState.prUrl; RecoveredPublication = $true }
+        }
+        if ($existingStatus -in @('running', 'pr-ready') -and -not ($resumeEvent -and $existingStatus -eq 'pr-ready')) {
+            return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = $existingStatus; NoOp = $true; State = $attemptState }
+        }
+        if ($existingStatus -eq 'blocked' -and -not $resumeEvent) {
+            return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = $existingStatus; NoOp = $true; State = $attemptState }
         }
 
         if ($null -eq $attemptState) {
@@ -333,17 +335,19 @@ function Invoke-CodexIssueRun {
                     Set-CodexOrchestrationField $attemptState $name $defaultValue
                 }
             }
-            if ($resumeEvent -and $existingStatus -eq 'blocked') {
+            if ($resumeEvent -and $existingStatus -in @('blocked', 'pr-ready')) {
                 Set-CodexOrchestrationField $attemptState 'status' 'queued'
                 Set-CodexOrchestrationField $attemptState 'lastError' $null
                 Set-CodexOrchestrationField $attemptState 'attempt' ([int](Get-CodexOrchestrationField $attemptState 'attempt' 0) + 1)
+                Set-CodexOrchestrationField $attemptState 'retryCount' 0
             }
         }
 
         $save = {
             param([object] $Current)
             Set-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber -AttemptState $Current | Out-Null
-            Write-CodexWorkerState -Path $StatePath -State $state
+            if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $Current }
+            else { Write-CodexWorkerState -Path $StatePath -State $state }
         }.GetNewClosure()
         Set-CodexOrchestrationField $attemptState 'issueNumber' $IssueNumber
         Set-CodexOrchestrationField $attemptState 'branch' ([string](Get-CodexOrchestrationField $attemptState 'branch' $branchName))
@@ -429,6 +433,23 @@ function Invoke-CodexIssueRun {
                 return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'blocked'; State = $attemptState; Classification = $classification }
             }
 
+            $codexStatus = [string](Get-CodexOrchestrationField $codexResult 'Status' '')
+            $summaryRequiresInput = [bool](Get-CodexOrchestrationField $summary 'requiresHumanInput' $false)
+            $summaryStatusValue = [string](Get-CodexOrchestrationField $summary 'status' '')
+            $statusBlockedForHumanInput = $codexStatus -eq 'blocked' -and ($summaryRequiresInput -or $summaryStatusValue -eq 'blocked')
+            if ($classification -ne 'completed' -or ($codexStatus -ne 'completed' -and -not $statusBlockedForHumanInput)) {
+                $nonSuccessError = [string](Get-CodexOrchestrationField $codexResult 'LastError' '')
+                if ([string]::IsNullOrWhiteSpace($nonSuccessError)) { $nonSuccessError = "Codex run did not complete successfully (classification=$classification; status=$codexStatus)." }
+                Set-CodexOrchestrationField $attemptState 'lastError' $nonSuccessError
+                Set-CodexOrchestrationField $attemptState 'status' 'blocked'
+                Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'blocked' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
+                $labels = @($labels) + @('codex:blocked')
+                & $save $attemptState
+                Add-CodexIssueMilestone -Repository $Repository -IssueNumber $IssueNumber -Milestone 'blocked' -Details $nonSuccessError -CommandRunner $GitHubCommandRunner | Out-Null
+                & $save $attemptState
+                return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'blocked'; State = $attemptState; Classification = $classification }
+            }
+
             $errorText = [string](Get-CodexOrchestrationField $codexResult 'LastError' '')
             if ([string]::IsNullOrWhiteSpace($errorText) -and $classification -notin @('', 'completed')) { $errorText = "Codex run classified as $classification." }
             if ($null -eq $summary -or -not (Test-CodexSummary -Summary $summary)) {
@@ -485,15 +506,30 @@ function Invoke-CodexIssueRun {
             return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'pr-ready'; State = $attemptState; Summary = $summary }
         }
     } catch {
+        $originalException = $_.Exception
         if ($null -ne $attemptState) {
             Set-CodexOrchestrationField $attemptState 'status' 'blocked'
-            Set-CodexOrchestrationField $attemptState 'lastError' $_.Exception.Message
+            Set-CodexOrchestrationField $attemptState 'lastError' $originalException.Message
             try {
                 Set-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber -AttemptState $attemptState | Out-Null
-                Write-CodexWorkerState -Path $StatePath -State $state
+                if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attemptState }
+                else { Write-CodexWorkerState -Path $StatePath -State $state }
+            } catch {}
+            $safeError = [string]$originalException.Message
+            try { $safeError = Redact-CodexString -Text $safeError -SecretValues (Get-CodexBlockedSecretValues) } catch {}
+            try {
+                $notificationLabels = @(Get-CodexOrchestrationField $issue 'labels' @())
+                Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'blocked' -CurrentLabels $notificationLabels -CommandRunner $GitHubCommandRunner | Out-Null
+            } catch {}
+            try {
+                Add-CodexIssueMilestone -Repository $Repository -IssueNumber $IssueNumber -Milestone 'blocked' -Details $safeError -CommandRunner $GitHubCommandRunner | Out-Null
+            } catch {}
+            try {
+                if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attemptState }
+                else { Write-CodexWorkerState -Path $StatePath -State $state }
             } catch {}
         }
-        throw
+        throw $originalException
     } finally {
         if ($null -ne $lockHandle) {
             if ($null -ne $UnlockProvider) { & $UnlockProvider $lockHandle }
