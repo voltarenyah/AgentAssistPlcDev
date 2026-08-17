@@ -27,6 +27,16 @@ public class XmlCompareTests
     }
 
     [Fact]
+    public void Normalize_IgnoresCaxLastWritingDateTime()
+    {
+        var a = "<CAEXFile>\n  <WriterHeader>\n    <LastWritingDateTime>2026-08-16T15:00:00Z</LastWritingDateTime>\n  </WriterHeader>\n  <InstanceHierarchy />\n</CAEXFile>";
+        var b = "<CAEXFile>\n  <WriterHeader>\n    <LastWritingDateTime>2026-08-17T15:00:00Z</LastWritingDateTime>\n  </WriterHeader>\n  <InstanceHierarchy />\n</CAEXFile>";
+
+        Assert.Equal(XmlCompare.Normalize(a), XmlCompare.Normalize(b));
+        Assert.Equal(XmlContentHash.Compute(a), XmlContentHash.Compute(b));
+    }
+
+    [Fact]
     public void Normalize_DifferentContent_ComparesUnequal()
     {
         var a = "<Document>\n  <Text>hi</Text>\n</Document>";

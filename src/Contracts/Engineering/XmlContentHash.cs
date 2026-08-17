@@ -5,12 +5,12 @@ namespace Contracts.Engineering;
 
 /// <summary>
 /// Content hash of an exported PLC XML file: SHA-256 over the normalized text
-/// (<see cref="XmlCompare.Normalize"/> — &lt;Created&gt; lines and CR stripped, so only real
+/// (<see cref="XmlCompare.Normalize"/> — export timestamp lines and CR stripped, so only real
 /// content changes move it), base64url-encoded without padding. This is the shared "did the
 /// content actually change" verdict: mcp-engineering stamps it as the manifest contentHash at
 /// export time, and the workbench reconciler uses the same normalization when comparing the
 /// baseline against a staged refresh. Without the shared normalization the raw bytes always
-/// differ — every TIA export stamps a fresh &lt;Created&gt; timestamp — and a refresh would
+/// differ — every TIA export stamps fresh export timestamps — and a refresh would
 /// report every component as changed even when nothing was edited.
 /// </summary>
 public static class XmlContentHash
