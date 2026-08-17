@@ -8,7 +8,13 @@
         'Read-CodexWorkerState',
         'Write-CodexWorkerState',
         'Enter-CodexWorkerLock',
-        'Exit-CodexWorkerLock'
+        'Exit-CodexWorkerLock',
+        'Assert-TrustedGitHubActor',
+        'Get-CodexIssueContext',
+        'Get-CodexIssueDevelopment',
+        'Set-CodexIssueStatus',
+        'Add-CodexIssueComment',
+        'Get-CodexPullRequestContext'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
