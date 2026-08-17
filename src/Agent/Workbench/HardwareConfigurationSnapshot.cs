@@ -20,9 +20,18 @@ internal sealed record HardwareConfigurationSnapshot(
         {
             using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
             var json = document.RootElement;
+            var projectHash = OptionalString(json, "projectContentHash");
+            var projectAmlPath = HardwareConfigurationExport.ResolveArtifactPath(root, "project.aml");
+            // Recompute from the artifact so manifests written before the export-normalization
+            // fix do not keep a timestamp-sensitive project hash alive forever.
+            if (HardwareConfigurationExport.IsUsableProjectAml(projectAmlPath))
+            {
+                projectHash = XmlContentHash.TryComputeFile(projectAmlPath) ?? projectHash;
+            }
+
             var artifacts = new Dictionary<string, string?>(StringComparer.Ordinal)
             {
-                ["project"] = OptionalString(json, "projectContentHash"),
+                ["project"] = projectHash,
             };
             if (json.TryGetProperty("devices", out var devices)
                 && devices.ValueKind == JsonValueKind.Array)
