@@ -244,7 +244,8 @@ function Invoke-CodexIssueRun {
         [scriptblock] $LockProvider,
         [scriptblock] $UnlockProvider,
         [scriptblock] $PublicationProvider,
-        [scriptblock] $StateWriter
+        [scriptblock] $StateWriter,
+        [scriptblock] $StateReader
     )
 
     if ($null -eq $Config) { $Config = [pscustomobject]@{} }
@@ -298,7 +299,8 @@ function Invoke-CodexIssueRun {
         $issue = Get-CodexIssueContext -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
         $development = Get-CodexIssueDevelopment -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
         $branchName = Get-CodexIssueBranchName -IssueNumber $IssueNumber -Title ([string](Get-CodexOrchestrationField $issue 'title' "Issue $IssueNumber"))
-        $state = Read-CodexWorkerState -Path $StatePath
+        if ($null -ne $StateReader) { $state = & $StateReader $StatePath }
+        else { $state = Read-CodexWorkerState -Path $StatePath }
         $attemptState = Get-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber
         $existingStatus = [string](Get-CodexOrchestrationField $attemptState 'status' '')
         $resumeEvent = $EventName -match '(?i)(retry|revise)'
@@ -355,16 +357,16 @@ function Invoke-CodexIssueRun {
 
         $labels = @(Get-CodexOrchestrationField $issue 'labels' @())
         if ($existingStatus -eq '') {
-            Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'queued' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
             Set-CodexOrchestrationField $attemptState 'status' 'queued'
             & $save $attemptState
+            Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'queued' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
             $labels = @($labels) + @('codex:queued')
         }
-        Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'running' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
-        $labels = @($labels) + @('codex:running')
         Set-CodexOrchestrationField $attemptState 'status' 'running'
         Set-CodexOrchestrationField $attemptState 'lastError' $null
         & $save $attemptState
+        Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'running' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
+        $labels = @($labels) + @('codex:running')
 
         $worktreeResult = $null
         if (-not [string]::IsNullOrWhiteSpace([string](Get-CodexOrchestrationField $attemptState 'worktree' ''))) {
@@ -413,21 +415,21 @@ function Invoke-CodexIssueRun {
                 if ($retryCount -lt 1) {
                     Set-CodexOrchestrationField $attemptState 'retryCount' ($retryCount + 1)
                     Set-CodexOrchestrationField $attemptState 'status' 'retry'
+                    & $save $attemptState
                     Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'retry' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
                     $labels = @($labels) + @('codex:retry')
-                    & $save $attemptState
                     Set-CodexOrchestrationField $attemptState 'attempt' ([int](Get-CodexOrchestrationField $attemptState 'attempt' 1) + 1)
                     Set-CodexOrchestrationField $attemptState 'status' 'running'
+                    & $save $attemptState
                     Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'running' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
                     $labels = @($labels) + @('codex:running')
-                    & $save $attemptState
                     $retryLoop = $true
                     continue
                 }
                 Set-CodexOrchestrationField $attemptState 'status' 'blocked'
+                & $save $attemptState
                 Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'blocked' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
                 $labels = @($labels) + @('codex:blocked')
-                & $save $attemptState
                 Add-CodexIssueMilestone -Repository $Repository -IssueNumber $IssueNumber -Milestone 'blocked' -Details $errorText -CommandRunner $GitHubCommandRunner | Out-Null
                 & $save $attemptState
                 return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'blocked'; State = $attemptState; Classification = $classification }
@@ -442,9 +444,9 @@ function Invoke-CodexIssueRun {
                 if ([string]::IsNullOrWhiteSpace($nonSuccessError)) { $nonSuccessError = "Codex run did not complete successfully (classification=$classification; status=$codexStatus)." }
                 Set-CodexOrchestrationField $attemptState 'lastError' $nonSuccessError
                 Set-CodexOrchestrationField $attemptState 'status' 'blocked'
+                & $save $attemptState
                 Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'blocked' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
                 $labels = @($labels) + @('codex:blocked')
-                & $save $attemptState
                 Add-CodexIssueMilestone -Repository $Repository -IssueNumber $IssueNumber -Milestone 'blocked' -Details $nonSuccessError -CommandRunner $GitHubCommandRunner | Out-Null
                 & $save $attemptState
                 return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'blocked'; State = $attemptState; Classification = $classification }
@@ -456,9 +458,9 @@ function Invoke-CodexIssueRun {
                 if ([string]::IsNullOrWhiteSpace($errorText)) { $errorText = 'Codex did not return a valid final summary.' }
                 Set-CodexOrchestrationField $attemptState 'lastError' $errorText
                 Set-CodexOrchestrationField $attemptState 'status' 'blocked'
+                & $save $attemptState
                 Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'blocked' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
                 $labels = @($labels) + @('codex:blocked')
-                & $save $attemptState
                 Add-CodexIssueMilestone -Repository $Repository -IssueNumber $IssueNumber -Milestone 'blocked' -Details $errorText -CommandRunner $GitHubCommandRunner | Out-Null
                 & $save $attemptState
                 return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'blocked'; State = $attemptState; Classification = $classification }
@@ -471,9 +473,9 @@ function Invoke-CodexIssueRun {
                 if ([string]::IsNullOrWhiteSpace($humanQuestion)) { $humanQuestion = [string](Get-CodexOrchestrationField $summary 'rootCauseOrApproach' 'Codex requires human input.') }
                 Set-CodexOrchestrationField $attemptState 'lastError' $humanQuestion
                 Set-CodexOrchestrationField $attemptState 'status' 'blocked'
+                & $save $attemptState
                 Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'blocked' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
                 $labels = @($labels) + @('codex:blocked')
-                & $save $attemptState
                 Add-CodexIssueMilestone -Repository $Repository -IssueNumber $IssueNumber -Milestone 'blocked' -Details $humanQuestion -CommandRunner $GitHubCommandRunner | Out-Null
                 & $save $attemptState
                 return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'blocked'; State = $attemptState; Summary = $summary }
@@ -498,9 +500,9 @@ function Invoke-CodexIssueRun {
             Set-CodexOrchestrationField $attemptState 'status' 'pr-ready'
             Set-CodexOrchestrationField $attemptState 'publicationStage' 'ready'
             Set-CodexOrchestrationField $attemptState 'lastError' $null
+            & $save $attemptState
             Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'pr-ready' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
             $labels = @($labels) + @('codex:pr-ready')
-            & $save $attemptState
             Add-CodexIssueMilestone -Repository $Repository -IssueNumber $IssueNumber -Milestone 'pr-ready' -Details ("Branch: {0}`nWorktree: {1}" -f $attemptState.branch, $attemptState.worktree) -CommandRunner $GitHubCommandRunner | Out-Null
             & $save $attemptState
             return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'pr-ready'; State = $attemptState; Summary = $summary }
