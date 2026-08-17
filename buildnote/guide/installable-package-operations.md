@@ -63,14 +63,16 @@ Do not reuse an older package version for a new codebase state.
 
 ## 3. Generate the release and installer
 
-Run both scripts from the repository root, in this order:
+Run both scripts from the repository root, in this order. Use PowerShell 7 (`pwsh`), not Windows PowerShell 5.1 — the release script uses .NET APIs such as `Path.GetRelativePath` that do not exist on the .NET Framework runtime:
 
 ```powershell
 Set-Location 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev'
 
-.\scripts\build-release.ps1 -Version 0.1.0-dev.3
-.\scripts\build-installer.ps1 -Version 0.1.0-dev.3
+pwsh -NoProfile -File .\scripts\build-release.ps1 -Version 0.1.0-dev.3
+pwsh -NoProfile -File .\scripts\build-installer.ps1 -Version 0.1.0-dev.3
 ```
+
+If the machine routes traffic through a local HTTP proxy (for example `HTTP_PROXY` environment variables or a system proxy on `127.0.0.1`), clear those variables and set `DOTNET_SYSTEM_NET_HTTP_USEPROXY=false` for the build session. Otherwise the loopback health checks in the release test run (such as the live app-assistant sidecar test) are routed to the proxy and fail even though the services are healthy.
 
 `build-release.ps1` performs the release build and verification, including solution tests and the Studio frontend checks. It rebuilds:
 
@@ -195,7 +197,7 @@ $status
 }
 ```
 
-Expected result: a native Automation Workbench window displays the Studio UI, the API reports the requested version, no console window is visible, and Chrome is not opened. Close the window and confirm the shell-owned `ApiHost.exe` and MCP child processes exit.
+Expected result: an Automation Workbench window displays the Studio UI, the API reports the requested version, no console window is visible, and Chrome is not opened. The window has no native Windows title bar; the Studio header acts as the caption — dragging empty header space moves the window, double-clicking it toggles maximize, and the minimize, maximize/restore, and close buttons sit at the right end of the header, immediately right of the theme (dark mode) toggle. The taskbar entry reads "Automation Workbench". Exercise the three in-app window buttons and confirm minimize, maximize/restore, and close all work. Closing the window must stop the shell-owned `ApiHost.exe` and MCP child processes.
 
 ## 6. Upgrade test
 
@@ -327,10 +329,26 @@ C:\Program Files\Inno Setup 6\ISCC.exe
 If required, provide the compiler explicitly:
 
 ```powershell
-.\scripts\build-installer.ps1 `
+pwsh -NoProfile -File .\scripts\build-installer.ps1 `
     -Version 0.1.0-dev.3 `
     -InnoSetupPath 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
 ```
+
+### Release script fails with `Path.GetRelativePath` not found
+
+The script was started with Windows PowerShell 5.1 (`powershell.exe`). Rerun it with PowerShell 7 (`pwsh.exe`).
+
+### Release tests fail on loopback health checks while the services are healthy
+
+A local HTTP proxy (`HTTP_PROXY` environment variables or an enabled system proxy) is intercepting the test runner's `127.0.0.1` requests. Clear the proxy variables and set `DOTNET_SYSTEM_NET_HTTP_USEPROXY=false`, then rerun the release build.
+
+### Silent install exits with code 2 and installs nothing
+
+The installer requires elevation (`PrivilegesRequired=admin`). Run the setup from an elevated session; a non-elevated `/VERYSILENT` run aborts before copying files.
+
+### `npm ci` fails with `EPERM: operation not permitted, unlink ... .node`
+
+A leftover Vite/Node process from a previous dev run still holds `studio\node_modules` open. Stop processes whose command line references the checkout (ApiHost, `Mcp.*`, `node`, and their wrappers), wait a few seconds, and rerun the release build.
 
 ### `AutomationWorkbench.exe` cannot start
 
@@ -365,7 +383,7 @@ For each package intended for distribution or pre-production testing, record:
 - release test result;
 - installer SHA-256;
 - clean-install API status;
-- desktop shell window, hidden-process, and WebView2 result;
+- desktop shell window, hidden-process, WebView2, and in-app window-controls (minimize, maximize/restore, close, header drag) result;
 - upgrade result, if performed;
 - repair result, if performed;
 - uninstall result and user-data preservation result;
