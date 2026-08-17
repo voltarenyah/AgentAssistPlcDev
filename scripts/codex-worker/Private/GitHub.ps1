@@ -3,7 +3,7 @@ $script:CodexStatusLabels = @(
     'codex:blocked', 'codex:retry', 'codex:revise', 'codex:done'
 )
 
-function Invoke-GhJson {
+function Invoke-GhCommand {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -28,14 +28,27 @@ function Invoke-GhJson {
     }
 
     if ($null -eq $raw) {
-        return $null
+        return ''
     }
 
     if ($raw -is [string]) {
-        $json = $raw.Trim()
-    } else {
-        $json = ($raw | Out-String).Trim()
+        return $raw
     }
+
+    return (($raw | ForEach-Object { [string] $_ }) -join [Environment]::NewLine)
+}
+
+function Invoke-GhJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]] $Arguments,
+
+        [scriptblock] $CommandRunner
+    )
+
+    $raw = Invoke-GhCommand -Arguments $Arguments -CommandRunner $CommandRunner
+    $json = $raw.Trim()
 
     if ([string]::IsNullOrWhiteSpace($json)) {
         return $null
@@ -123,7 +136,7 @@ function Get-CodexIssueDevelopment {
         [scriptblock] $CommandRunner
     )
 
-    $development = Invoke-GhJson -Arguments @(
+    $developmentRaw = Invoke-GhCommand -Arguments @(
         'issue', 'develop', '--list', [string] $IssueNumber,
         '--repo', $Repository
     ) -CommandRunner $CommandRunner
@@ -134,9 +147,21 @@ function Get-CodexIssueDevelopment {
         '--json', 'number,title,body,author,comments,reviews,files,state,url,headRefName,baseRefName'
     ) -CommandRunner $CommandRunner
 
+    $developmentLines = @()
+    if (-not [string]::IsNullOrWhiteSpace($developmentRaw)) {
+        $developmentLines = @(
+            $developmentRaw -split "`r?`n" |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+    }
+
     return [pscustomobject][ordered]@{
         IssueNumber = $IssueNumber
-        Development = @($development)
+        Development = [pscustomobject][ordered]@{
+            Raw = $developmentRaw
+            Lines = $developmentLines
+        }
         PullRequests = @($pullRequests)
     }
 }
@@ -217,7 +242,7 @@ function Set-CodexIssueStatus {
     $arguments.Add('--add-label')
     $arguments.Add($normalizedStatus)
 
-    return Invoke-GhJson -Arguments ([string[]] $arguments.ToArray()) -CommandRunner $CommandRunner
+    return (Invoke-GhCommand -Arguments ([string[]] $arguments.ToArray()) -CommandRunner $CommandRunner).Trim()
 }
 
 function Add-CodexIssueComment {
@@ -237,11 +262,11 @@ function Add-CodexIssueComment {
         [scriptblock] $CommandRunner
     )
 
-    return Invoke-GhJson -Arguments @(
+    return (Invoke-GhCommand -Arguments @(
         'issue', 'comment', [string] $IssueNumber,
         '--repo', $Repository,
         '--body', $Body
-    ) -CommandRunner $CommandRunner
+    ) -CommandRunner $CommandRunner).Trim()
 }
 
 function Get-CodexPullRequestContext {

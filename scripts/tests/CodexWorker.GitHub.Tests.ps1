@@ -120,7 +120,7 @@ Describe 'Codex worker GitHub adapter' {
             param($Arguments)
             $calls.Add(@($Arguments))
             if (@($Arguments) -contains 'develop') {
-                return '[{"number":42,"branch":"codex/42-fix-the-station"}]'
+                return "BRANCH`tTITLE`tSTATUS`r`ncodex/42-fix-the-station`tFix the station`tOPEN"
             }
 
             return '[{"number":101,"title":"Fix the station","state":"OPEN","url":"https://github.com/owner/repo/pull/101"}]'
@@ -128,7 +128,9 @@ Describe 'Codex worker GitHub adapter' {
 
         $development = Get-CodexIssueDevelopment -Repository 'owner/repo' -IssueNumber 42 -CommandRunner $runner
 
-        $development.Development.Count | Should Be 1
+        $development.Development.Lines.Count | Should Be 2
+        $development.Development.Lines[1] | Should Be "codex/42-fix-the-station`tFix the station`tOPEN"
+        $development.Development.Raw | Should Match 'BRANCH'
         $development.PullRequests.Count | Should Be 1
         $calls.Count | Should Be 2
         (@($calls[0]) -contains 'issue') | Should Be $true
@@ -146,12 +148,12 @@ Describe 'Codex worker GitHub adapter' {
         $runner = {
             param($Arguments)
             $calls.Add(@($Arguments))
-            '{}'
+            'https://github.com/owner/repo/issues/42'
         }
         $labels = @('codex', 'codex:queued', 'codex:retry', 'customer-impact')
 
-        Set-CodexIssueStatus -Repository 'owner/repo' -IssueNumber 42 -Status 'running' -CurrentLabels $labels -CommandRunner $runner |
-            Out-Null
+        $result = Set-CodexIssueStatus -Repository 'owner/repo' -IssueNumber 42 -Status 'running' -CurrentLabels $labels -CommandRunner $runner
+        $result | Should Be 'https://github.com/owner/repo/issues/42'
 
         $arguments = @($calls[0])
         ($arguments -contains '--remove-label') | Should Be $true
@@ -168,12 +170,12 @@ Describe 'Codex worker GitHub adapter' {
         $runner = {
             param($Arguments)
             $calls.Add(@($Arguments))
-            '{}'
+            'https://github.com/owner/repo/issues/42#issuecomment-123'
         }
         $body = 'Status: blocked; $(Remove-Item -Recurse)'
 
-        Add-CodexIssueComment -Repository 'owner/repo' -IssueNumber 42 -Body $body -CommandRunner $runner |
-            Out-Null
+        $result = Add-CodexIssueComment -Repository 'owner/repo' -IssueNumber 42 -Body $body -CommandRunner $runner
+        $result | Should Be 'https://github.com/owner/repo/issues/42#issuecomment-123'
 
         $arguments = @($calls[0])
         ($arguments -contains '--body') | Should Be $true
