@@ -83,7 +83,14 @@ Describe 'Codex worker paths' {
         $statePath = Join-Path $TestDrive 'lifecycle-state.json'
         $events = New-Object 'System.Collections.Generic.List[string]'
         $saveSequence = 0
-        $stateWriter = { param($Path, $Number, $Attempt) $saveSequence++; $events.Add(('save#{0}:{1}:{2}' -f $saveSequence, $Attempt.status, $Attempt.publicationStage)) | Out-Null; $events.Add('save:' + $Attempt.status) | Out-Null; Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null }.GetNewClosure()
+        $stateWriter = {
+            param($Path, $Number, $Attempt)
+            Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
+            $saveSequence++
+            $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
+            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveSequence, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
+            $events.Add('save:' + $snapshot.status) | Out-Null
+        }.GetNewClosure()
         $issueJson = ([ordered]@{
                 number = 42; title = 'Fix the station'; body = 'Issue body';
                 author = @{ login = 'reporter' }; comments = @(); labels = @(@{ name = 'codex' }, @{ name = 'codex:queued' });
@@ -154,15 +161,22 @@ Describe 'Codex worker paths' {
         $events.IndexOf('save:running') | Should BeLessThan $events.IndexOf('codex')
         $events.IndexOf('save:running') | Should BeLessThan $events.IndexOf('status:codex:running')
         $events.IndexOf('save:pr-ready') | Should BeLessThan $events.IndexOf('ready-comment')
+        $expectedMilestoneSnapshots = @{
+            'claimed-comment' = 'status=running;attempt=1;retry=0;run=;publication=none'
+            'approach-comment' = ('status=running;attempt=1;retry=0;run={0};publication=none' -f (Join-Path $TestDrive 'runs\issue-42\1'))
+            'validation-comment' = ('status=running;attempt=1;retry=0;run={0};publication=none' -f (Join-Path $TestDrive 'runs\issue-42\1'))
+            'ready-comment' = ('status=pr-ready;attempt=1;retry=0;run={0};publication=ready' -f (Join-Path $TestDrive 'runs\issue-42\1'))
+        }
         foreach ($milestone in @('claimed-comment', 'approach-comment', 'validation-comment', 'ready-comment')) {
             $milestoneIndex = $events.IndexOf($milestone)
             $milestoneIndex | Should BeGreaterThan -1
-            ($events[$milestoneIndex + 1] -like 'save#*') | Should Be $true
+            ($events[$milestoneIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedMilestoneSnapshots[$milestone]
         }
         $readyLabelIndex = $events.IndexOf('label:codex:pr-ready')
         $readyCommentIndex = $events.IndexOf('ready-comment')
         $readyLabelIndex | Should BeLessThan $readyCommentIndex
-        ($events[$readyCommentIndex + 1] -like 'save#*') | Should Be $true
+        ($events[$readyLabelIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedMilestoneSnapshots['ready-comment']
+        ($events[$readyCommentIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedMilestoneSnapshots['ready-comment']
         @($events | Where-Object { $_ -eq 'save:pr-ready' }).Count | Should BeGreaterThan 0
         @($events | Where-Object { $_ -in @('claimed-comment', 'approach-comment', 'validation-comment', 'ready-comment') }).Count | Should Be 4
         @($events | Where-Object { $_ -eq 'claimed-comment' }).Count | Should BeGreaterThan 0
@@ -222,7 +236,13 @@ Describe 'Codex worker paths' {
         $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) $worktreeCalls.Add($BranchName) | Out-Null; [pscustomobject]@{ Path = (Join-Path $TestDrive 'issue'); BranchName = 'codex/42-retry-me' } }.GetNewClosure()
         $setup = { param($Worktree, $Config, $ActivityLogPath) $setupCalls.Add($Worktree) | Out-Null }.GetNewClosure()
         $saveSequence = 0
-        $stateWriter = { param($Path, $Number, $Attempt) $saveSequence++; $events.Add(('save#{0}:{1}:{2}' -f $saveSequence, $Attempt.status, $Attempt.publicationStage)) | Out-Null; Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null }.GetNewClosure()
+        $stateWriter = {
+            param($Path, $Number, $Attempt)
+            Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
+            $saveSequence++
+            $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
+            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveSequence, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
+        }.GetNewClosure()
         $codex = {
             param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath)
             $attempts.Add(1) | Out-Null
@@ -247,11 +267,14 @@ Describe 'Codex worker paths' {
         $codexWorktreePaths[1] | Should Be $saved.issues.'42'.worktree
         $retryLabelIndex = $events.IndexOf('label:codex:retry')
         $retryLabelIndex | Should BeGreaterThan -1
-        ($events[$retryLabelIndex + 1] -like 'save#*') | Should Be $true
+        $firstRunDirectory = Join-Path $TestDrive 'runs\issue-42\1'
+        ($events[$retryLabelIndex + 1] -replace '^save#\d+:', '') | Should Be ('status=retry;attempt=1;retry=1;run={0};publication=none' -f $firstRunDirectory)
         $blockedLabelIndex = $events.IndexOf('label:codex:blocked')
         $blockedCommentIndex = $events.IndexOf('blocked-comment')
         $blockedLabelIndex | Should BeLessThan $blockedCommentIndex
-        ($events[$blockedCommentIndex + 1] -like 'save#*') | Should Be $true
+        $secondRunDirectory = Join-Path $TestDrive 'runs\issue-42\2'
+        ($events[$blockedLabelIndex + 1] -replace '^save#\d+:', '') | Should Be ('status=blocked;attempt=2;retry=1;run={0};publication=none' -f $secondRunDirectory)
+        ($events[$blockedCommentIndex + 1] -replace '^save#\d+:', '') | Should Be ('status=blocked;attempt=2;retry=1;run={0};publication=none' -f $secondRunDirectory)
         @($statuses | Where-Object { $_ -eq 'codex:retry' }).Count | Should Be 1
         @($statuses | Where-Object { $_ -eq 'codex:blocked' }).Count | Should Be 1
     }
@@ -434,7 +457,12 @@ Describe 'Codex worker paths' {
         $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = (Join-Path $TestDrive 'publication-worktree'); threadId = $null; runDirectory = $null; commit = 'abc'; prUrl = $null; retryCount = 0; publicationStage = 'committed'; lastError = $null } }; deployment = $null }
         Write-CodexWorkerState -Path $statePath -State $state
         $events = New-Object 'System.Collections.Generic.List[string]'
-        $stateWriter = { param($Path, $Number, $Attempt) $events.Add('save:' + $Attempt.publicationStage) | Out-Null; Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null }.GetNewClosure()
+        $stateWriter = {
+            param($Path, $Number, $Attempt)
+            Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
+            $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
+            $events.Add('save:' + $snapshot.publicationStage) | Out-Null
+        }.GetNewClosure()
         $github = {
             param([string[]] $Arguments)
             if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
