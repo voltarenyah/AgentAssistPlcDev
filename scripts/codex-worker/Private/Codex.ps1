@@ -75,6 +75,7 @@ function Redact-CodexString {
         $redacted = $redacted.Replace([string]$secret, '[REDACTED]')
     }
     $redacted = [regex]::Replace($redacted, '(?i)\bgh[pousr]_[A-Za-z0-9_\-]+\b', '[REDACTED]')
+    $redacted = [regex]::Replace($redacted, '(?i)\bgithub_pat_[A-Za-z0-9_\-]+\b', '[REDACTED]')
     $redacted = [regex]::Replace($redacted, '(?i)\bsk-(?:proj-)?[A-Za-z0-9_\-]{8,}\b', '[REDACTED]')
     return $redacted
 }
@@ -347,7 +348,7 @@ function Invoke-CodexRun {
     $timeoutMinutes = [double](Get-CodexValue $Config 'codexTimeoutMinutes' 120)
     $threadHolder = [pscustomobject]@{ Value = $null }
     $localGetValue = { param([object]$object, [string]$name, [object]$default) if ($null -ne $object -and $null -ne $object.PSObject.Properties[$name]) { return $object.PSObject.Properties[$name].Value }; return $default }.GetNewClosure()
-    $localSanitizeString = { param([AllowNull()][string]$text) if ($null -eq $text) { return '' }; $result = $text; foreach ($secret in @($secretValues | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })) { $result = $result.Replace([string]$secret, '[REDACTED]') }; $result = [regex]::Replace($result, '(?i)\bgh[pousr]_[A-Za-z0-9_\-]+\b', '[REDACTED]'); $result = [regex]::Replace($result, '(?i)\bsk-(?:proj-)?[A-Za-z0-9_\-]{8,}\b', '[REDACTED]'); return $result }.GetNewClosure()
+    $localSanitizeString = { param([AllowNull()][string]$text) if ($null -eq $text) { return '' }; $result = $text; foreach ($secret in @($secretValues | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })) { $result = $result.Replace([string]$secret, '[REDACTED]') }; $result = [regex]::Replace($result, '(?i)\bgh[pousr]_[A-Za-z0-9_\-]+\b', '[REDACTED]'); $result = [regex]::Replace($result, '(?i)\bgithub_pat_[A-Za-z0-9_\-]+\b', '[REDACTED]'); $result = [regex]::Replace($result, '(?i)\bsk-(?:proj-)?[A-Za-z0-9_\-]{8,}\b', '[REDACTED]'); return $result }.GetNewClosure()
     $localSanitizeValue = $null
     $localSanitizeValue = {
         param([object]$value)

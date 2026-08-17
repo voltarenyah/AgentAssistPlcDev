@@ -105,9 +105,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3
 $Arguments = $args
 $summaryPath = $Arguments[($Arguments.IndexOf('--output-last-message') + 1)]
 [IO.File]::WriteAllText($summaryPath, '{"status":"completed","rootCauseOrApproach":"fake","changedComponents":[],"decisions":[],"validation":[],"warnings":[],"remainingRisks":[],"commitMessage":"fix: fake","prTitle":"fix: fake","requiresHumanInput":false,"humanQuestion":null}')
+$prompt = [Console]::In.ReadToEnd()
+$inputValues = [ordered]@{}
+foreach ($name in @('GITHUB_TOKEN','GH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY','DEEPSEEK_API_KEY')) {
+    $match = [regex]::Match($prompt, ([regex]::Escape($name) + '=([A-Za-z0-9_-]+)'))
+    $inputValues[$name] = if ($match.Success) { $match.Groups[1].Value } else { '' }
+}
 $event = [ordered]@{
     type = 'agent_message'
-    item = [ordered]@{ text = 'ghp_child_secret123 sk-proj-child-secret'; nested = [ordered]@{ value = 'sk-child-secret' } }
+    item = [ordered]@{ text = (($inputValues.Values -join ' ') + ' github_pat_child_secret'); nested = [ordered]@{ value = 'sk-child-secret' } }
     environment = [ordered]@{
         GITHUB_TOKEN = [string]::IsNullOrEmpty($env:GITHUB_TOKEN)
         GH_TOKEN = [string]::IsNullOrEmpty($env:GH_TOKEN)
@@ -120,15 +126,17 @@ $event | ConvertTo-Json -Compress -Depth 5 | Write-Output
 '@ | Set-Content -LiteralPath $fakePs
         @'
 @echo off
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3 %4 %5 %6 %7 %8 < nul
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3 %4 %5 %6 %7 %8
 '@ | Set-Content -LiteralPath $fakeCmd
         $oldSecrets = @{}
         foreach ($name in @('GITHUB_TOKEN','GH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY','DEEPSEEK_API_KEY')) { $oldSecrets[$name] = [Environment]::GetEnvironmentVariable($name) }
+        $syntheticSecrets = [ordered]@{ GITHUB_TOKEN = 'github-parent-secret'; GH_TOKEN = 'gh-parent-secret'; OPENAI_API_KEY = 'openai-parent-secret'; CODEX_API_KEY = 'codex-parent-secret'; DEEPSEEK_API_KEY = 'deepseek-parent-secret' }
         try {
-            $env:GITHUB_TOKEN = 'github-parent-secret'; $env:GH_TOKEN = 'gh-parent-secret'; $env:OPENAI_API_KEY = 'openai-parent-secret'; $env:CODEX_API_KEY = 'codex-parent-secret'; $env:DEEPSEEK_API_KEY = 'deepseek-parent-secret'
+            foreach ($name in $syntheticSecrets.Keys) { [Environment]::SetEnvironmentVariable($name, $syntheticSecrets[$name], 'Process') }
             $run = Join-Path $TestDrive 'secret-run'; $state = Join-Path $TestDrive 'secret-state.json'
             [IO.File]::WriteAllText($state, '{"schemaVersion":1,"issues":{"42":{}}}')
-            $result = Invoke-CodexRun -IssueWorktree $TestDrive -IssueContext ([pscustomobject]@{ number = 42; title = 'Example' }) -Config ([pscustomobject]@{ codexCommand = $fakeCmd; codexTimeoutMinutes = 1 }) -RunDirectory $run -StatePath $state
+            $body = (($syntheticSecrets.Keys | ForEach-Object { '{0}={1}' -f $_, $syntheticSecrets[$_] }) -join ';')
+            $result = Invoke-CodexRun -IssueWorktree $TestDrive -IssueContext ([pscustomobject]@{ number = 42; title = 'Example'; body = $body }) -Config ([pscustomobject]@{ codexCommand = $fakeCmd; codexTimeoutMinutes = 1 }) -RunDirectory $run -StatePath $state
             $events = Get-Content -Raw (Join-Path $run 'events.jsonl'); $activity = Get-Content -Raw (Join-Path $run 'activity.log')
             $eventObject = $events | ConvertFrom-Json
             $eventObject.environment.GITHUB_TOKEN | Should Be $true
@@ -136,11 +144,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake.ps1" %1 %2 %3
             $eventObject.environment.OPENAI_API_KEY | Should Be $true
             $eventObject.environment.CODEX_API_KEY | Should Be $true
             $eventObject.environment.DEEPSEEK_API_KEY | Should Be $true
-            $eventObject.item.text | Should Be '[REDACTED] [REDACTED]'
+            $eventObject.item.text | Should Be '[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]'
             $eventObject.item.nested.value | Should Be '[REDACTED]'
-            $events | Should Not Match 'github-parent-secret|gh-parent-secret|openai-parent-secret|codex-parent-secret|deepseek-parent-secret|ghp_child_secret123|sk-proj-child-secret|sk-child-secret'
-            $activity | Should Not Match 'github-parent-secret|gh-parent-secret|openai-parent-secret|codex-parent-secret|deepseek-parent-secret|ghp_child_secret123|sk-proj-child-secret|sk-child-secret'
-        } finally { foreach ($name in $oldSecrets.Keys) { [Environment]::SetEnvironmentVariable($name, $oldSecrets[$name], 'Process') } }
+            foreach ($name in $syntheticSecrets.Keys) {
+                $events | Should Not Match ([regex]::Escape($syntheticSecrets[$name]))
+                $activity | Should Not Match ([regex]::Escape($syntheticSecrets[$name]))
+            }
+            $events | Should Not Match 'github_pat_child_secret|sk-child-secret'
+            $activity | Should Not Match 'github_pat_child_secret|sk-child-secret'
+        } finally { foreach ($name in $oldSecrets.Keys) { if ($null -eq $oldSecrets[$name]) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue } else { Set-Item -LiteralPath "Env:$name" -Value $oldSecrets[$name] } } }
     }
 
     It 'streams an activity line before a child exits' {
