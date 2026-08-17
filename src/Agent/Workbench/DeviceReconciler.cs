@@ -809,8 +809,8 @@ public sealed class DeviceReconciler
     }
 
     /// <summary>Normalized content hash (<see cref="XmlContentHash"/>) — never a raw byte hash.
-    /// Every staged refresh is a full rebuild_export, and each TIA export stamps a fresh
-    /// &lt;Created&gt; timestamp, so raw bytes always differ; comparing raw hashes reported every
+    /// Every staged refresh is a full rebuild_export, and each TIA export stamps fresh export
+    /// timestamps, so raw bytes always differ; comparing raw hashes reported every
     /// component as changed even when nothing was edited (found 2026-07-31).</summary>
     private static string HashFile(string path)
     {
