@@ -152,7 +152,15 @@ function Get-OrCreateCodexIssueWorktree {
         $hasRemoteBranch = -not [string]::IsNullOrWhiteSpace($remoteResult)
     } catch { $hasRemoteBranch = $false }
 
-    if ($hasRemoteBranch) {
+    $hasLocalBranch = $false
+    try {
+        $localResult = Invoke-CodexGit -RepositoryRoot $repository -Arguments @('show-ref', '--verify', "refs/heads/$BranchName") -CommandRunner $CommandRunner
+        $hasLocalBranch = -not [string]::IsNullOrWhiteSpace($localResult)
+    } catch { $hasLocalBranch = $false }
+
+    if ($hasLocalBranch) {
+        Invoke-CodexGit -RepositoryRoot $repository -Arguments @('worktree', 'add', $target, $BranchName) -CommandRunner $CommandRunner | Out-Null
+    } elseif ($hasRemoteBranch) {
         Invoke-CodexGit -RepositoryRoot $repository -Arguments @('worktree', 'add', '-b', $BranchName, $target, $remoteReference) -CommandRunner $CommandRunner | Out-Null
     } else {
         Invoke-CodexGit -RepositoryRoot $repository -Arguments @('worktree', 'add', '-b', $BranchName, $target, "origin/$DefaultBranch") -CommandRunner $CommandRunner | Out-Null
@@ -192,17 +200,16 @@ function Test-CodexNpmLockMetadata {
     $installed = Join-Path $StudioPath 'node_modules\.package-lock.json'
     if (-not (Test-Path -LiteralPath $checkedIn -PathType Leaf) -or -not (Test-Path -LiteralPath $installed -PathType Leaf)) { return $false }
     try {
-        $a = Get-Content -Raw -LiteralPath $checkedIn | ConvertFrom-Json
-        $b = Get-Content -Raw -LiteralPath $installed | ConvertFrom-Json
+        $a = [System.IO.File]::ReadAllText($checkedIn)
+        $b = [System.IO.File]::ReadAllText($installed)
         foreach ($name in @('name', 'version', 'lockfileVersion')) {
-            if ([string]$a.$name -ne [string]$b.$name) { return $false }
-        }
-        $aRoot = $a.packages.''
-        $bRoot = $b.packages.''
-        foreach ($name in @('dependencies', 'devDependencies', 'optionalDependencies')) {
-            $left = if ($null -eq $aRoot) { $null } else { $aRoot.$name | ConvertTo-Json -Compress -Depth 20 }
-            $right = if ($null -eq $bRoot) { $null } else { $bRoot.$name | ConvertTo-Json -Compress -Depth 20 }
-            if ($left -ne $right) { return $false }
+            $pattern = '"' + $name + '"\s*:\s*(?:"([^"]*)"|([^,}\s]+))'
+            $left = [regex]::Match($a, $pattern)
+            $right = [regex]::Match($b, $pattern)
+            if (-not $left.Success -or -not $right.Success) { return $false }
+            $leftValue = if ($left.Groups[1].Success) { $left.Groups[1].Value } else { $left.Groups[2].Value }
+            $rightValue = if ($right.Groups[1].Success) { $right.Groups[1].Value } else { $right.Groups[2].Value }
+            if ($leftValue -ne $rightValue) { return $false }
         }
         return $true
     } catch { return $false }
@@ -281,10 +288,16 @@ function Test-CodexWorktreeCleanup {
         if ($match.Count -eq 0) { $blockers.Add('Worktree is not registered for the expected branch.') | Out-Null }
     } catch { $blockers.Add("Unable to verify worktree registration: $($_.Exception.Message)") | Out-Null }
 
-    if ($null -eq $ProcessProvider) { $ProcessProvider = { @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) } }
+    if ($null -eq $ProcessProvider) { $ProcessProvider = { @(Get-CimInstance Win32_Process -ErrorAction Stop) } }
     try {
         $pathText = [System.IO.Path]::GetFullPath($WorktreePath)
         foreach ($process in @(& $ProcessProvider)) {
+            $processProperties = @($process.PSObject.Properties | ForEach-Object { $_.Name })
+            if (($processProperties -contains 'Succeeded' -and -not [bool]$process.Succeeded) -or ($processProperties -contains 'Failed' -and [bool]$process.Failed)) {
+                $errorText = if ($processProperties -contains 'Error') { [string]$process.Error } else { 'provider reported failure' }
+                $blockers.Add("Unable to inspect active processes: $errorText") | Out-Null
+                break
+            }
             $commandLine = if ($process -is [string]) { [string] $process } else { [string] $process.CommandLine }
             if (-not [string]::IsNullOrWhiteSpace($commandLine) -and $commandLine.IndexOf($pathText, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $blockers.Add('An active process references the worktree path.') | Out-Null; break }
         }
