@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import {
   AlertCircle,
   Boxes,
@@ -26,6 +26,8 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { ThemeToggle } from '@/catalog/ThemeToggle'
+import WindowControls from '@/studio/WindowControls'
+import { isWindowDragTarget, sendWindowCommand } from '@/studio/desktopWindowBridge'
 import { showErrorToast } from '@/components/ui/toast'
 import WorkspaceHost, { type WorkspaceViewKind } from '@/studio/workspace/WorkspaceHost'
 import { WorkspaceService } from '@/studio/workspace/WorkspaceService'
@@ -1820,9 +1822,26 @@ export default function MainStudio() {
     hasKnowledgeContext: knowledgeContext !== null,
   })
 
+  // In the desktop shell the header doubles as the window caption: dragging
+  // empty header space moves the borderless window, double-click toggles
+  // maximize. No-ops in a plain browser (see studio/desktopWindowBridge.ts).
+  const handleHeaderMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0 || !isWindowDragTarget(event.target)) return
+    sendWindowCommand('begin-drag')
+  }
+  const handleHeaderDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
+    if (!isWindowDragTarget(event.target)) return
+    sendWindowCommand('toggle-maximize')
+  }
+
   return (
     <div className="flex h-screen min-h-[620px] flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex h-12 shrink-0 items-center border-b bg-card px-3" style={{ borderColor: 'var(--border)' }}>
+      <header
+        className="flex h-12 shrink-0 select-none items-center border-b bg-card px-3"
+        style={{ borderColor: 'var(--border)' }}
+        onMouseDown={handleHeaderMouseDown}
+        onDoubleClick={handleHeaderDoubleClick}
+      >
         <button
           data-dock-toggle="left"
           className="icon-button mr-1"
@@ -1882,6 +1901,7 @@ export default function MainStudio() {
             {shellLayout.rightOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
           </button>
           <ThemeToggle />
+          <WindowControls />
         </div>
       </header>
 
