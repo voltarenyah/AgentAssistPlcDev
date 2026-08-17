@@ -309,7 +309,7 @@ function Invoke-CodexIssueRun {
         $publicationCommand = Get-Command Publish-CodexIssue -ErrorAction SilentlyContinue
         if ($null -ne $attemptState -and $existingStatus -eq 'pr-ready' -and $publicationStage -ne 'pr-created' -and ($null -ne $PublicationProvider -or $null -ne $publicationCommand)) {
             if ($null -ne $PublicationProvider) { $publicationResult = & $PublicationProvider $attemptState $issue $Config $StatePath }
-            else { $publicationResult = & $publicationCommand $attemptState $issue $Config $StatePath }
+            else { $publicationResult = & $publicationCommand -AttemptState $attemptState -IssueContext $issue -Config $Config -StatePath $StatePath -Repository $Repository -DataRoot $paths.DataRoot }
             $newStage = [string](Get-CodexOrchestrationField $publicationResult 'publicationStage' $publicationStage)
             Set-CodexOrchestrationField $attemptState 'publicationStage' $newStage
             $newPrUrl = [string](Get-CodexOrchestrationField $publicationResult 'prUrl' '')

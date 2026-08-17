@@ -338,3 +338,50 @@ function Get-CodexPullRequestContext {
         '--json', 'number,title,body,author,comments,reviews,files,state,url,headRefName,baseRefName'
     ) -CommandRunner $CommandRunner
 }
+
+function Get-CodexPullRequestForBranch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string] $Repository,
+        [Parameter(Mandatory = $true)][string] $BranchName,
+        [scriptblock] $CommandRunner
+    )
+    $items = @(Invoke-GhJson -Arguments @('pr', 'list', '--repo', $Repository, '--head', $BranchName, '--state', 'open', '--json', 'number,url,state,headRefName,baseRefName') -CommandRunner $CommandRunner)
+    if ($items.Count -eq 0) { return $null }
+    return $items[0]
+}
+
+function New-CodexDraftPullRequest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string] $Repository,
+        [Parameter(Mandatory = $true)][string] $BaseBranch,
+        [Parameter(Mandatory = $true)][string] $HeadBranch,
+        [Parameter(Mandatory = $true)][string] $BodyPath,
+        [scriptblock] $CommandRunner
+    )
+    $result = Invoke-GhCommand -Arguments @('pr', 'create', '--repo', $Repository, '--draft', '--base', $BaseBranch, '--head', $HeadBranch, '--body-file', ([IO.Path]::GetFullPath($BodyPath))) -CommandRunner $CommandRunner
+    return $result.Trim()
+}
+
+function Set-CodexPullRequestBody {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string] $Repository,
+        [Parameter(Mandatory = $true)][int] $PullRequestNumber,
+        [Parameter(Mandatory = $true)][string] $BodyPath,
+        [scriptblock] $CommandRunner
+    )
+    return (Invoke-GhCommand -Arguments @('pr', 'edit', [string]$PullRequestNumber, '--repo', $Repository, '--body-file', ([IO.Path]::GetFullPath($BodyPath))) -CommandRunner $CommandRunner).Trim()
+}
+
+function Add-CodexPullRequestComment {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string] $Repository,
+        [Parameter(Mandatory = $true)][int] $PullRequestNumber,
+        [Parameter(Mandatory = $true)][string] $Body,
+        [scriptblock] $CommandRunner
+    )
+    return (Invoke-GhCommand -Arguments @('pr', 'comment', [string]$PullRequestNumber, '--repo', $Repository, '--body', $Body) -CommandRunner $CommandRunner).Trim()
+}

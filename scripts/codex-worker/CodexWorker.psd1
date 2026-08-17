@@ -32,6 +32,14 @@
         ,'Test-CodexSummary'
         ,'Initialize-CodexResumeCapability'
         ,'Invoke-CodexIssueRun'
+        ,'Test-CodexPublication'
+        ,'ConvertTo-CodexPullRequestBody'
+        ,'Publish-CodexIssue'
+        ,'Get-CodexPullRequestForBranch'
+        ,'New-CodexDraftPullRequest'
+        ,'Set-CodexPullRequestBody'
+        ,'Add-CodexPullRequestComment'
+        ,'Invoke-CodexRevision'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
