@@ -1,6 +1,7 @@
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Engineering;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Xunit;
 
@@ -80,6 +81,57 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ProjectHardwareComparisonRehashesSavedAmlWithCurrentNormalization()
+    {
+        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(fixture.Root + "\\worktrees\\master");
+        Directory.CreateDirectory(hardwareRoot);
+        var savedXml = "<CAEXFile>\n  <LastWritingDateTime>2026-08-17T06:43:36Z</LastWritingDateTime>\n  <Device Ip=\"192.168.0.5\" />\n</CAEXFile>";
+        var liveXml = "<CAEXFile>\n  <LastWritingDateTime>2026-08-17T08:44:33Z</LastWritingDateTime>\n  <Device Ip=\"192.168.0.5\" />\n</CAEXFile>";
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), savedXml);
+        File.WriteAllText(
+            Path.Combine(hardwareRoot, "manifest.json"),
+            JsonSerializer.Serialize(new { projectContentHash = LegacyHardwareHash(savedXml) }));
+
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"))
+        {
+            ProjectXml = liveXml,
+        };
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.NotNull(result.Hardware);
+        Assert.Equal("in-sync", result.Hardware!.State);
+    }
+
+    [Fact]
+    public async Task ProjectHardwareComparisonReportsIpDifferenceAfterTimestampNormalization()
+    {
+        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(fixture.Root + "\\worktrees\\master");
+        Directory.CreateDirectory(hardwareRoot);
+        var savedXml = "<CAEXFile>\n  <LastWritingDateTime>2026-08-17T06:43:36Z</LastWritingDateTime>\n  <Device Ip=\"192.168.0.5\" />\n</CAEXFile>";
+        var liveXml = "<CAEXFile>\n  <LastWritingDateTime>2026-08-17T08:44:33Z</LastWritingDateTime>\n  <Device Ip=\"192.168.0.15\" />\n</CAEXFile>";
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), savedXml);
+        File.WriteAllText(
+            Path.Combine(hardwareRoot, "manifest.json"),
+            JsonSerializer.Serialize(new { projectContentHash = LegacyHardwareHash(savedXml) }));
+
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"))
+        {
+            ProjectXml = liveXml,
+        };
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.NotNull(result.Hardware);
+        Assert.Equal("changed", result.Hardware!.State);
+        Assert.Equal("changed", Assert.Single(result.Hardware.Artifacts).State);
+    }
+
+    [Fact]
     public async Task ValidateSyncCreatesPermanentTiaEvidenceOnlyAfterExactScan()
     {
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
@@ -99,6 +151,13 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     public void Dispose() => fixture.Dispose();
+
+    private static string LegacyHardwareHash(string xml)
+    {
+        using var sha256 = SHA256.Create();
+        var hash = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(xml.Replace("\r", "")));
+        return Convert.ToBase64String(hash).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+    }
 
     private sealed class ConsistencyVersionControlCaller : IMcpToolCaller
     {
