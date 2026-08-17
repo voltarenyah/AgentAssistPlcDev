@@ -82,13 +82,13 @@ Describe 'Codex worker paths' {
     It 'persists a queued issue through running to pr-ready with bounded milestones' {
         $statePath = Join-Path $TestDrive 'lifecycle-state.json'
         $events = New-Object 'System.Collections.Generic.List[string]'
-        $saveSequence = 0
+        $saveCounter = @{ Value = 0 }
         $stateWriter = {
             param($Path, $Number, $Attempt)
             Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
-            $saveSequence++
+            $saveCounter.Value++
             $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
-            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveSequence, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
+            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveCounter.Value, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
             $events.Add('save:' + $snapshot.status) | Out-Null
         }.GetNewClosure()
         $issueJson = ([ordered]@{
@@ -191,20 +191,46 @@ Describe 'Codex worker paths' {
             if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return '{"number":42,"title":"Need a decision","body":"body","author":{"login":"reporter"},"comments":[],"labels":[{"name":"codex"}],"state":"OPEN","url":"https://github.com/owner/repo/issues/42"}' }
             if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
             if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
-            if ($Arguments -contains '--add-label') { $events.Add('status:' + $Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null; return '' }
-            if ($Arguments -contains '--body') { $events.Add($Arguments[$Arguments.IndexOf('--body') + 1]) | Out-Null; return '' }
+            if ($Arguments -contains '--add-label') {
+                $label = $Arguments[$Arguments.IndexOf('--add-label') + 1]
+                $events.Add('status:' + $label) | Out-Null
+                if ($label -eq 'codex:blocked') { $events.Add('label:codex:blocked') | Out-Null }
+                return ''
+            }
+            if ($Arguments -contains '--body') {
+                $body = $Arguments[$Arguments.IndexOf('--body') + 1]
+                $events.Add($body) | Out-Null
+                if ($body -like '*Which baseline*') { $events.Add('blocked-comment') | Out-Null }
+                return ''
+            }
             throw 'Unexpected GitHub call.'
         }.GetNewClosure()
         $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive 'issue'); BranchName = 'codex/42-need-a-decision' } }.GetNewClosure()
         $setup = { param($Worktree, $Config, $ActivityLogPath) }.GetNewClosure()
+        $saveCounter = @{ Value = 0 }
+        $stateWriter = {
+            param($Path, $Number, $Attempt)
+            Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
+            $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
+            $saveCounter.Value++
+            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveCounter.Value, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
+        }.GetNewClosure()
         $codex = { param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath) [pscustomobject]@{ Status = 'blocked'; Classification = 'completed'; ThreadId = 'thread-blocked'; RunDirectory = $RunDirectory; Summary = [pscustomobject]@{ status = 'completed'; rootCauseOrApproach = 'Need a product choice.'; changedComponents = @(); decisions = @(); validation = @(); warnings = @(); remainingRisks = @(); commitMessage = 'fix: choice'; prTitle = 'fix: choice'; requiresHumanInput = $true; humanQuestion = 'Which baseline should be used?' } } }.GetNewClosure()
 
         $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive `
-            -Config ([pscustomobject]@{ defaultBranch = 'master' }) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
+            -Config ([pscustomobject]@{ defaultBranch = 'master' }) -StatePath $statePath -StateWriter $stateWriter -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
 
         $result.Status | Should Be 'blocked'
         (Read-CodexWorkerState -Path $statePath).issues.'42'.lastError | Should Match 'Which baseline'
         @($events | Where-Object { $_ -like '*Which baseline*' }).Count | Should Be 1
+        $blockedLabelIndex = $events.IndexOf('label:codex:blocked')
+        $blockedCommentIndex = $events.IndexOf('blocked-comment')
+        $blockedLabelIndex | Should BeGreaterThan -1
+        $blockedCommentIndex | Should BeGreaterThan $blockedLabelIndex
+        $expectedBlockedSnapshot = 'status=blocked;attempt=1;retry=0;run={0};publication=none' -f (Join-Path $TestDrive 'runs\issue-42\1')
+        ($events[$blockedLabelIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+        ($events[$blockedCommentIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+        $events[$blockedLabelIndex + 1] | Should Not Be $events[$blockedCommentIndex + 1]
     }
 
     It 'retries one transient Codex failure and blocks after the second' {
@@ -235,13 +261,13 @@ Describe 'Codex worker paths' {
         }.GetNewClosure()
         $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) $worktreeCalls.Add($BranchName) | Out-Null; [pscustomobject]@{ Path = (Join-Path $TestDrive 'issue'); BranchName = 'codex/42-retry-me' } }.GetNewClosure()
         $setup = { param($Worktree, $Config, $ActivityLogPath) $setupCalls.Add($Worktree) | Out-Null }.GetNewClosure()
-        $saveSequence = 0
+        $saveCounter = @{ Value = 0 }
         $stateWriter = {
             param($Path, $Number, $Attempt)
             Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
-            $saveSequence++
+            $saveCounter.Value++
             $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
-            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveSequence, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
+            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveCounter.Value, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
         }.GetNewClosure()
         $codex = {
             param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath)
@@ -381,46 +407,144 @@ Describe 'Codex worker paths' {
 
     It 'blocks a valid summary when Codex classification completed but status failed' {
         $statePath = Join-Path $TestDrive 'classification-status-failed.json'
+        $events = New-Object 'System.Collections.Generic.List[string]'
         $github = {
             param([string[]] $Arguments)
             if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
             if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return '{"number":59,"title":"Status failed","body":"body","author":{"login":"reporter"},"comments":[],"labels":[],"state":"OPEN","url":"https://github.com/owner/repo/issues/59"}' }
             if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
             if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
-            if ($Arguments -contains '--add-label' -or $Arguments -contains '--body') { return '' }
+            if ($Arguments -contains '--add-label') {
+                $label = $Arguments[$Arguments.IndexOf('--add-label') + 1]
+                if ($label -eq 'codex:blocked') { $events.Add('label:codex:blocked') | Out-Null }
+                return ''
+            }
+            if ($Arguments -contains '--body') {
+                $body = $Arguments[$Arguments.IndexOf('--body') + 1]
+                if ($body -like '*Codex work is blocked*') { $events.Add('blocked-comment') | Out-Null }
+                return ''
+            }
             throw 'Unexpected GitHub call.'
         }.GetNewClosure()
         $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive 'status-failed'); BranchName = 'codex/59-status-failed' } }.GetNewClosure()
         $setup = { param($Worktree, $Config, $ActivityLogPath) }.GetNewClosure()
+        $saveCounter = @{ Value = 0 }
+        $stateWriter = {
+            param($Path, $Number, $Attempt)
+            Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
+            $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
+            $saveCounter.Value++
+            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveCounter.Value, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
+        }.GetNewClosure()
         $summary = [pscustomobject]@{ status = 'completed'; rootCauseOrApproach = 'valid but failed'; changedComponents = @(); decisions = @(); validation = @(); warnings = @(); remainingRisks = @(); commitMessage = 'fix: failed'; prTitle = 'fix: failed'; requiresHumanInput = $false; humanQuestion = $null }
         $codex = { param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath) [pscustomobject]@{ Status = 'failed'; Classification = 'completed'; Summary = $summary; LastError = 'process failed' } }.GetNewClosure()
 
-        $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 59 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
+        $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 59 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -StateWriter $stateWriter -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
 
         $result.Status | Should Be 'blocked'
+        $blockedLabelIndex = $events.IndexOf('label:codex:blocked')
+        $blockedCommentIndex = $events.IndexOf('blocked-comment')
+        $blockedLabelIndex | Should BeGreaterThan -1
+        $blockedCommentIndex | Should BeGreaterThan $blockedLabelIndex
+        $expectedBlockedSnapshot = 'status=blocked;attempt=1;retry=0;run={0};publication=none' -f (Join-Path $TestDrive 'runs\issue-59\1')
+        ($events[$blockedLabelIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+        ($events[$blockedCommentIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+        $events[$blockedLabelIndex + 1] | Should Not Be $events[$blockedCommentIndex + 1]
     }
 
     It 'blocks a valid completed summary for each representative non-success classification' {
-        $classifications = @('authentication', 'timeout', 'process_failed')
+        $classifications = @('failed', 'authentication', 'timeout', 'process_failed')
         foreach ($classification in $classifications) {
             $number = 60 + [array]::IndexOf($classifications, $classification)
             $statePath = Join-Path $TestDrive "classification-$number.json"
+            $events = New-Object 'System.Collections.Generic.List[string]'
             $github = {
                 param([string[]] $Arguments)
                 if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
                 if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return ('{"number":' + $number + ',"title":"Classify","body":"body","author":{"login":"reporter"},"comments":[],"labels":[],"state":"OPEN","url":"https://github.com/owner/repo/issues/' + $number + '"}') }
                 if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
                 if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
-                if ($Arguments -contains '--add-label' -or $Arguments -contains '--body') { return '' }
+                if ($Arguments -contains '--add-label') {
+                    $label = $Arguments[$Arguments.IndexOf('--add-label') + 1]
+                    if ($label -eq 'codex:blocked') { $events.Add('label:codex:blocked') | Out-Null }
+                    return ''
+                }
+                if ($Arguments -contains '--body') {
+                    $body = $Arguments[$Arguments.IndexOf('--body') + 1]
+                    if ($body -like '*Codex work is blocked*') { $events.Add('blocked-comment') | Out-Null }
+                    return ''
+                }
                 throw 'Unexpected GitHub call.'
             }.GetNewClosure()
             $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive "classify-$number"); BranchName = "codex/$number-classify" } }.GetNewClosure()
             $setup = { param($Worktree, $Config, $ActivityLogPath) }.GetNewClosure()
+            $saveCounter = @{ Value = 0 }
+            $stateWriter = {
+                param($Path, $Number, $Attempt)
+                Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
+                $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
+                $saveCounter.Value++
+                $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveCounter.Value, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
+            }.GetNewClosure()
             $summary = [pscustomobject]@{ status = 'completed'; rootCauseOrApproach = 'valid but failed'; changedComponents = @(); decisions = @(); validation = @(); warnings = @(); remainingRisks = @(); commitMessage = 'fix: failed'; prTitle = 'fix: failed'; requiresHumanInput = $false; humanQuestion = $null }
             $codex = { param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath) [pscustomobject]@{ Status = 'completed'; Classification = $classification; Summary = $summary; LastError = $classification } }.GetNewClosure()
-            $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber $number -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
+            $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber $number -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -StateWriter $stateWriter -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
             $result.Status | Should Be 'blocked'
+            $blockedLabelIndex = $events.IndexOf('label:codex:blocked')
+            $blockedCommentIndex = $events.IndexOf('blocked-comment')
+            $blockedLabelIndex | Should BeGreaterThan -1
+            $blockedCommentIndex | Should BeGreaterThan $blockedLabelIndex
+            $expectedBlockedSnapshot = 'status=blocked;attempt=1;retry=0;run={0};publication=none' -f (Join-Path $TestDrive "runs\issue-$number\1")
+            ($events[$blockedLabelIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+            ($events[$blockedCommentIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+            $events[$blockedLabelIndex + 1] | Should Not Be $events[$blockedCommentIndex + 1]
         }
+    }
+
+    It 'persists blocked label and comment snapshots for an invalid summary' {
+        $statePath = Join-Path $TestDrive 'invalid-summary-state.json'
+        $events = New-Object 'System.Collections.Generic.List[string]'
+        $github = {
+            param([string[]] $Arguments)
+            if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return '{"number":63,"title":"Invalid summary","body":"body","author":{"login":"reporter"},"comments":[],"labels":[],"state":"OPEN","url":"https://github.com/owner/repo/issues/63"}' }
+            if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
+            if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
+            if ($Arguments -contains '--add-label') {
+                $label = $Arguments[$Arguments.IndexOf('--add-label') + 1]
+                if ($label -eq 'codex:blocked') { $events.Add('label:codex:blocked') | Out-Null }
+                return ''
+            }
+            if ($Arguments -contains '--body') {
+                $body = $Arguments[$Arguments.IndexOf('--body') + 1]
+                if ($body -like '*Codex work is blocked*') { $events.Add('blocked-comment') | Out-Null }
+                return ''
+            }
+            throw 'Unexpected GitHub call.'
+        }.GetNewClosure()
+        $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive 'invalid-summary'); BranchName = 'codex/63-invalid-summary' } }.GetNewClosure()
+        $setup = { param($Worktree, $Config, $ActivityLogPath) }.GetNewClosure()
+        $saveCounter = @{ Value = 0 }
+        $stateWriter = {
+            param($Path, $Number, $Attempt)
+            Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
+            $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
+            $saveCounter.Value++
+            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveCounter.Value, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
+        }.GetNewClosure()
+        $codex = { param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath) [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; Summary = $null; LastError = 'summary parse failed' } }.GetNewClosure()
+
+        $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 63 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -StateWriter $stateWriter -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
+
+        $result.Status | Should Be 'blocked'
+        $blockedLabelIndex = $events.IndexOf('label:codex:blocked')
+        $blockedCommentIndex = $events.IndexOf('blocked-comment')
+        $blockedLabelIndex | Should BeGreaterThan -1
+        $blockedCommentIndex | Should BeGreaterThan $blockedLabelIndex
+        $expectedBlockedSnapshot = 'status=blocked;attempt=1;retry=0;run={0};publication=none' -f (Join-Path $TestDrive 'runs\issue-63\1')
+        ($events[$blockedLabelIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+        ($events[$blockedCommentIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+        $events[$blockedLabelIndex + 1] | Should Not Be $events[$blockedCommentIndex + 1]
     }
 
     It 'attempts blocked notification while preserving the original exception' {
@@ -450,6 +574,53 @@ Describe 'Codex worker paths' {
         $saved.issues.'42'.lastError | Should Be 'setup failed with actionable detail'
         @($events | Where-Object { $_ -eq 'blocked-label-attempt' }).Count | Should Be 1
         @($events | Where-Object { $_ -eq 'blocked-comment-attempt' }).Count | Should Be 1
+    }
+
+    It 'persists distinct blocked snapshots around successful exception notifications' {
+        $statePath = Join-Path $TestDrive 'exception-success-state.json'
+        $events = New-Object 'System.Collections.Generic.List[string]'
+        $github = {
+            param([string[]] $Arguments)
+            if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return '{"number":64,"title":"Exception success","body":"body","author":{"login":"reporter"},"comments":[],"labels":[],"state":"OPEN","url":"https://github.com/owner/repo/issues/64"}' }
+            if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
+            if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
+            if ($Arguments -contains '--add-label') {
+                $label = $Arguments[$Arguments.IndexOf('--add-label') + 1]
+                if ($label -eq 'codex:blocked') { $events.Add('label:codex:blocked') | Out-Null }
+                return ''
+            }
+            if ($Arguments -contains '--body') {
+                $body = $Arguments[$Arguments.IndexOf('--body') + 1]
+                if ($body -like '*Codex work is blocked*') { $events.Add('blocked-comment') | Out-Null }
+                return ''
+            }
+            throw 'Unexpected GitHub call.'
+        }.GetNewClosure()
+        $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive 'exception-success'); BranchName = 'codex/64-exception-success' } }.GetNewClosure()
+        $saveCounter = @{ Value = 0 }
+        $stateWriter = {
+            param($Path, $Number, $Attempt)
+            Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Attempt | Out-Null
+            $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
+            $saveCounter.Value++
+            $events.Add(('save#{0}:status={1};attempt={2};retry={3};run={4};publication={5}' -f $saveCounter.Value, $snapshot.status, $snapshot.attempt, $snapshot.retryCount, $snapshot.runDirectory, $snapshot.publicationStage)) | Out-Null
+        }.GetNewClosure()
+        $setup = { param($Worktree, $Config, $ActivityLogPath) throw 'successful notification setup failure' }.GetNewClosure()
+
+        { Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 64 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -StateWriter $stateWriter -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup } | Should Throw 'successful notification setup failure'
+
+        $saved = Read-CodexWorkerState -Path $statePath
+        $saved.issues.'64'.status | Should Be 'blocked'
+        $saved.issues.'64'.lastError | Should Be 'successful notification setup failure'
+        $blockedLabelIndex = $events.IndexOf('label:codex:blocked')
+        $blockedCommentIndex = $events.IndexOf('blocked-comment')
+        $blockedLabelIndex | Should BeGreaterThan -1
+        $blockedCommentIndex | Should BeGreaterThan $blockedLabelIndex
+        $expectedBlockedSnapshot = 'status=blocked;attempt=1;retry=0;run=;publication=none'
+        ($events[$blockedLabelIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+        ($events[$blockedCommentIndex + 1] -replace '^save#\d+:', '') | Should Be $expectedBlockedSnapshot
+        $events[$blockedLabelIndex + 1] | Should Not Be $events[$blockedCommentIndex + 1]
     }
 
     It 'recovers publication through an injected boundary after the locked reread' {
