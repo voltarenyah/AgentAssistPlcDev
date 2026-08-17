@@ -42,6 +42,14 @@ public sealed class BackendProcessHostTests
     }
 
     [Fact]
+    public void LoopbackHttpHandlerBypassesConfiguredProxy()
+    {
+        using var handler = BackendProcessHost.CreateLoopbackHttpClientHandler();
+
+        Assert.False(handler.UseProxy);
+    }
+
+    [Fact]
     public void AppAssistantRuntimePathsAreOptInAndUseTheServicePort()
     {
         var paths = RuntimePaths.Create(

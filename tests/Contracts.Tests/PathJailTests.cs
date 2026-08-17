@@ -288,6 +288,62 @@ public sealed class PathJailTests : IDisposable
         }
     }
 
+    [Fact]
+    public void LongDirectoryLinkResolvesThroughExtendedNativePath()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var target = root;
+        for (var index = 0; index < 20; index++)
+        {
+            target = Path.Combine(target, new string('x', 50));
+        }
+
+        try
+        {
+            Directory.CreateDirectory(target);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PathTooLongException)
+        {
+            return; // This Windows environment does not permit long-path test fixtures.
+        }
+
+        Assert.True(target.Length >= 1024, $"Fixture target was only {target.Length} characters.");
+        var link = Path.Combine(Path.GetTempPath(), "awst-long-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c mklink /J \"{link}\" \"{target}\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit(10_000);
+            if (process.ExitCode != 0)
+            {
+                return; // This environment cannot create junctions.
+            }
+
+            var requested = Path.Combine(link, "Blocks", "A.xml");
+            Assert.Equal(requested, jail.Validate(requested, "outputDir"));
+        }
+        finally
+        {
+            if (Directory.Exists(link))
+            {
+                Directory.Delete(link);
+            }
+        }
+    }
+
     private static void WriteWorkbenchMetadata(string workbenchRoot, string workbenchId)
     {
         File.WriteAllText(

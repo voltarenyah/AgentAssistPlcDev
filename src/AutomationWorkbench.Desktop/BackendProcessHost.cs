@@ -29,9 +29,17 @@ public sealed class BackendProcessHost : IAsyncDisposable
         Func<ProcessStartInfo, Process>? processStarter = null)
     {
         this.paths = paths;
-        this.http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+        this.http = http ?? new HttpClient(CreateLoopbackHttpClientHandler())
+        {
+            Timeout = TimeSpan.FromSeconds(2),
+        };
         this.processStarter = processStarter ?? StartProcess;
     }
+
+    internal static HttpClientHandler CreateLoopbackHttpClientHandler() => new()
+    {
+        UseProxy = false,
+    };
 
     public string BaseUrl => paths.BaseUrl;
     public string BackendLogPath => paths.BackendLogPath;

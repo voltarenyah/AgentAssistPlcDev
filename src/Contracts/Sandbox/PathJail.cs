@@ -101,57 +101,107 @@ public sealed class PathJail
                 continue;
             }
 
-            var target = TryReadLinkTarget(current);
-            if (target is null)
+            var probe = TryReadLinkTarget(current);
+            if (probe.Target is null)
             {
                 throw new SandboxException(
                     "SANDBOX_PATH_DENIED",
-                    $"{parameterName}: path '{full}' traverses reparse point '{current}' whose target cannot be resolved.");
+                    $"{parameterName}: path '{full}' traverses reparse point '{current}' whose target cannot be resolved "
+                    + $"(probeFailure={probe.Failure}; win32Error={probe.Win32Error}; returnedLength={probe.ReturnedLength}).");
             }
 
-            current = Path.GetFullPath(target);
+            current = Path.GetFullPath(probe.Target);
         }
 
         return current;
     }
 
     // Junction target resolution for netstandard2.0/net48 (no FileSystemInfo.LinkTarget):
-    // open the reparse point itself and ask the kernel for its final path.
-    private static string? TryReadLinkTarget(string path)
+    // open the reparse point itself and read its target from the native reparse buffer. Opening
+    // the link normally would follow it and recreate the legacy MAX_PATH failure for long targets.
+    private static LinkTargetProbe TryReadLinkTarget(string path)
     {
         if (!OperatingSystemIsWindows())
         {
-            return null;
+            return LinkTargetProbe.Failed("not-windows");
         }
 
         var handle = CreateFile(
-            path,
+            ToExtendedWindowsPath(path),
             GenericRead,
             FileShareReadWriteDelete,
             IntPtr.Zero,
             OpenExisting,
-            // Follow the link: the kernel resolves the junction and the final path name is the
-            // real target. (Opening with FILE_FLAG_OPEN_REPARSE_POINT would return the link's
-            // own path instead.)
-            FileFlagBackupSemantics,
+            // Open the link itself. Following it would reintroduce the legacy MAX_PATH failure
+            // that this short alias is intended to avoid; the target is read from reparse data.
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint,
             IntPtr.Zero);
         if (handle == InvalidHandle)
         {
-            return null;
+            return LinkTargetProbe.Failed("open-failed", System.Runtime.InteropServices.Marshal.GetLastWin32Error());
         }
 
         try
         {
-            var buffer = new System.Text.StringBuilder(1024);
-            var length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, VolumeNameDos);
-            if (length == 0 || length >= buffer.Capacity)
+            var buffer = new byte[MaximumReparseDataBufferSize];
+            if (!DeviceIoControl(
+                    handle,
+                    FsctlGetReparsePoint,
+                    IntPtr.Zero,
+                    0,
+                    buffer,
+                    (uint)buffer.Length,
+                    out var returnedLength,
+                    IntPtr.Zero))
             {
-                return null;
+                return LinkTargetProbe.Failed(
+                    "reparse-data-read-failed",
+                    System.Runtime.InteropServices.Marshal.GetLastWin32Error());
             }
 
-            var resolved = buffer.ToString();
-            const string prefix = @"\\?\";
-            return resolved.StartsWith(prefix, StringComparison.Ordinal) ? resolved.Substring(prefix.Length) : resolved;
+            if (returnedLength < ReparseHeaderSize)
+            {
+                return LinkTargetProbe.Failed("reparse-data-too-short", returnedLength: returnedLength);
+            }
+
+            var tag = BitConverter.ToUInt32(buffer, 0);
+            var dataLength = BitConverter.ToUInt16(buffer, 4);
+            var pathBufferOffset = tag switch
+            {
+                ReparseTagMountPoint => ReparseHeaderSize + MountPointPathFieldsSize,
+                ReparseTagSymbolicLink => ReparseHeaderSize + SymbolicLinkPathFieldsSize,
+                _ => -1,
+            };
+            if (pathBufferOffset < 0)
+            {
+                return LinkTargetProbe.Failed("unsupported-reparse-tag", returnedLength: returnedLength);
+            }
+
+            var pathFieldsOffset = ReparseHeaderSize;
+            var substituteOffset = BitConverter.ToUInt16(buffer, pathFieldsOffset);
+            var substituteLength = BitConverter.ToUInt16(buffer, pathFieldsOffset + 2);
+            var printOffset = BitConverter.ToUInt16(buffer, pathFieldsOffset + 4);
+            var printLength = BitConverter.ToUInt16(buffer, pathFieldsOffset + 6);
+            var dataEnd = ReparseHeaderSize + dataLength;
+            if (pathBufferOffset + substituteOffset + substituteLength > dataEnd
+                || pathBufferOffset + printOffset + printLength > dataEnd)
+            {
+                return LinkTargetProbe.Failed("reparse-data-out-of-range", returnedLength: returnedLength);
+            }
+
+            var substitute = System.Text.Encoding.Unicode.GetString(
+                buffer,
+                pathBufferOffset + substituteOffset,
+                substituteLength);
+            var print = System.Text.Encoding.Unicode.GetString(
+                buffer,
+                pathBufferOffset + printOffset,
+                printLength);
+            var target = NormalizeReparseTarget(
+                string.IsNullOrWhiteSpace(print) ? substitute : print);
+            return target is null
+                ? LinkTargetProbe.Failed("reparse-target-format", returnedLength: returnedLength)
+                : LinkTargetProbe.Succeeded(target, returnedLength);
         }
         finally
         {
@@ -162,12 +212,74 @@ public sealed class PathJail
     private static bool OperatingSystemIsWindows() =>
         Environment.OSVersion.Platform == PlatformID.Win32NT;
 
+    private static string ToExtendedWindowsPath(string path) =>
+        path.StartsWith(@"\\?\", StringComparison.Ordinal)
+            ? path
+            : $@"\\?\{path}";
+
+    private static string? NormalizeReparseTarget(string target)
+    {
+        if (target.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+        {
+            return @"\\" + target.Substring(8);
+        }
+
+        if (target.StartsWith(@"\\?\", StringComparison.Ordinal))
+        {
+            return target.Substring(4);
+        }
+
+        if (target.StartsWith(@"\??\UNC\", StringComparison.OrdinalIgnoreCase))
+        {
+            return @"\\" + target.Substring(8);
+        }
+
+        if (target.StartsWith(@"\??\", StringComparison.Ordinal))
+        {
+            return target.Substring(4);
+        }
+
+        return Path.IsPathRooted(target) ? target : null;
+    }
+
     private const uint GenericRead = 0x80000000;
     private const uint FileShareReadWriteDelete = 0x00000007;
     private const uint OpenExisting = 3;
     private const uint FileFlagBackupSemantics = 0x02000000;
-    private const uint VolumeNameDos = 0x0;
+    private const uint FileFlagOpenReparsePoint = 0x00200000;
+    private const uint FsctlGetReparsePoint = 0x000900A8;
+    private const uint ReparseTagMountPoint = 0xA0000003;
+    private const uint ReparseTagSymbolicLink = 0xA000000C;
+    private const int MaximumReparseDataBufferSize = 16 * 1024;
+    private const int ReparseHeaderSize = 8;
+    private const int MountPointPathFieldsSize = 8;
+    private const int SymbolicLinkPathFieldsSize = 12;
     private static readonly IntPtr InvalidHandle = new(-1);
+
+    private sealed class LinkTargetProbe
+    {
+        private LinkTargetProbe(string? target, string failure, int win32Error, uint returnedLength)
+        {
+            Target = target;
+            Failure = failure;
+            Win32Error = win32Error;
+            ReturnedLength = returnedLength;
+        }
+
+        public string? Target { get; }
+        public string Failure { get; }
+        public int Win32Error { get; }
+        public uint ReturnedLength { get; }
+
+        public static LinkTargetProbe Succeeded(string target, uint returnedLength) =>
+            new(target, string.Empty, 0, returnedLength);
+
+        public static LinkTargetProbe Failed(
+            string failure,
+            int win32Error = 0,
+            uint returnedLength = 0) =>
+            new(null, failure, win32Error, returnedLength);
+    }
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateFile(
@@ -179,12 +291,16 @@ public sealed class PathJail
         uint dwFlagsAndAttributes,
         IntPtr hTemplateFile);
 
-    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
-    private static extern uint GetFinalPathNameByHandle(
-        IntPtr hFile,
-        System.Text.StringBuilder lpszFilePath,
-        uint cchFilePath,
-        uint dwFlags);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+        IntPtr hDevice,
+        uint dwIoControlCode,
+        IntPtr lpInBuffer,
+        uint nInBufferSize,
+        [System.Runtime.InteropServices.Out] byte[] lpOutBuffer,
+        uint nOutBufferSize,
+        out uint lpBytesReturned,
+        IntPtr lpOverlapped);
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
