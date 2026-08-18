@@ -1,4 +1,11 @@
 Describe 'Codex worker GitHub Actions workflows' {
+    It 'uses the installer-configured repository root for issue dispatch' {
+        $text = Get-Content -Raw (Join-Path $PSScriptRoot '..\codex-worker\Invoke-Issue.ps1')
+
+        $text | Should Match '\$configuredRepositoryRoot'
+        $text | Should Match 'RepositoryRoot = \$paths\.RepositoryRoot'
+    }
+
     $workflowRoot = Join-Path $PSScriptRoot '..\..\.github\workflows'
 
     function Get-WorkflowText {
