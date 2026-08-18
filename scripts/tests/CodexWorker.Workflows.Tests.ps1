@@ -126,6 +126,7 @@ Describe 'Codex worker GitHub Actions workflows' {
         $dispatch = Get-StepSection -Text $text -Name 'Dispatch issue to local worker'
         $dispatch | Should Match '(?m)^          CODEX_ISSUE_NUMBER:\s*\$\{\{\s*github\.event\.issue\.number\s*\|\|\s*inputs\.issue_number\s*\}\}\s*$'
         $dispatch | Should Match '(?m)^          \$issueNumber\s*=\s*\[int\]\$env:CODEX_ISSUE_NUMBER\s*$'
+        $dispatch | Should Match '(?m)^          CODEX_EVENT_NAME:\s*\$\{\{\s*github\.event\.label\.name\s*\|\|\s*github\.event_name\s*\}\}\s*$'
         $dispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Issue\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-IssueNumber\s+\$issueNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)\s*`?\s+-DryRun:\$dryRun'
         $dispatch | Should Not Match 'github\.event\.issue\.body|inputs\.body'
         Assert-TrustedCheckout $text

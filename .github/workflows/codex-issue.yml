@@ -35,7 +35,7 @@ jobs:
           CODEX_REPOSITORY: ${{ github.repository }}
           CODEX_ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
           CODEX_ACTOR: ${{ github.actor }}
-          CODEX_EVENT_NAME: ${{ github.event_name }}
+          CODEX_EVENT_NAME: ${{ github.event.label.name || github.event_name }}
           CODEX_DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           $issueNumber = [int]$env:CODEX_ISSUE_NUMBER
