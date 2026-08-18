@@ -133,6 +133,42 @@ function Set-CodexRepairedDeploymentMetadata {
     return $Deployment
 }
 
+function ConvertTo-CodexDeploymentDateTicks {
+    param([object] $Value, [string] $Name)
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
+    $parsed = [DateTime]::MinValue
+    if (-not [DateTime]::TryParse([string]$Value, [ref]$parsed)) { throw "The persisted deployment $Name is invalid." }
+    return $parsed.ToUniversalTime().Ticks
+}
+
+function Assert-CodexDurablePendingDeployment {
+    param([object] $State, [int] $IssueNumber, [object] $ExpectedDeployment, [string] $ExpectedTargetCommit, [int] $PullRequestNumber)
+    $attempt = Get-CodexIssueAttemptState -State $State -IssueNumber $IssueNumber
+    if ($null -eq $attempt) { throw "The persisted worker state does not contain issue #$IssueNumber." }
+    $actual = Get-CodexDeploymentValue -Object $State -Name 'deployment' -Default $null
+    if ($null -eq $actual) { throw 'The deployment state was not persisted.' }
+
+    $expectedTarget = ConvertTo-CodexFullCommit -Commit $ExpectedTargetCommit -Name 'expected deployment target'
+    $actualTarget = ConvertTo-CodexFullCommit -Commit ([string](Get-CodexDeploymentValue -Object $actual -Name 'targetCommit' '')) -Name 'persisted deployment target'
+    if ($actualTarget -ne $expectedTarget) { throw 'The persisted deployment target does not match the trusted merge commit.' }
+
+    $actualSourcePr = 0
+    if (-not [int]::TryParse([string](Get-CodexDeploymentValue -Object $actual -Name 'sourcePr' 0), [ref]$actualSourcePr) -or $actualSourcePr -ne $PullRequestNumber) { throw 'The persisted deployment source pull request does not match the trusted close event.' }
+    $expectedStatus = [string](Get-CodexDeploymentValue -Object $ExpectedDeployment -Name 'status' '')
+    $actualStatus = [string](Get-CodexDeploymentValue -Object $actual -Name 'status' '')
+    if ($expectedStatus -notin @('pending', 'snoozed') -or $actualStatus -ne $expectedStatus) { throw 'The persisted deployment status is not coherent.' }
+
+    $expectedRequestedAt = ConvertTo-CodexDeploymentDateTicks -Value (Get-CodexDeploymentValue -Object $ExpectedDeployment -Name 'requestedAt' $null) -Name 'requestedAt'
+    $actualRequestedAt = ConvertTo-CodexDeploymentDateTicks -Value (Get-CodexDeploymentValue -Object $actual -Name 'requestedAt' $null) -Name 'requestedAt'
+    if ($null -eq $expectedRequestedAt -or $null -eq $actualRequestedAt -or $expectedRequestedAt -ne $actualRequestedAt) { throw 'The persisted deployment request timestamp does not match the expected tuple.' }
+
+    $expectedSnooze = ConvertTo-CodexDeploymentDateTicks -Value (Get-CodexDeploymentValue -Object $ExpectedDeployment -Name 'snoozeUntil' $null) -Name 'snoozeUntil'
+    $actualSnooze = ConvertTo-CodexDeploymentDateTicks -Value (Get-CodexDeploymentValue -Object $actual -Name 'snoozeUntil' $null) -Name 'snoozeUntil'
+    if ($null -eq $expectedSnooze) { if ($null -ne $actualSnooze) { throw 'The persisted deployment snooze does not match the expected tuple.' } }
+    elseif ($null -eq $actualSnooze -or $expectedSnooze -ne $actualSnooze) { throw 'The persisted deployment snooze does not match the expected tuple.' }
+    return $actual
+}
+
 function Add-CodexCleanupBlockerComment {
     param([string] $Repository, [int] $PullRequestNumber, [int] $IssueNumber, [string[]] $Blockers, [scriptblock] $GitHubCommandRunner)
     if (@($Blockers).Count -eq 0) { return }
@@ -352,6 +388,10 @@ function Register-CodexPullRequestClosed {
                 else { Add-Member -InputObject $state -NotePropertyName deployment -NotePropertyValue $deployment -Force }
             }
             Write-CodexDeploymentState -StatePath $paths.StatePath -State $state -StateWriter $StateWriter
+            $durableState = if ($null -ne $StateReader) { & $StateReader $paths.StatePath } else { Read-CodexWorkerState -Path $paths.StatePath }
+            $durableDeployment = Assert-CodexDurablePendingDeployment -State $durableState -IssueNumber $IssueNumber -ExpectedDeployment $deployment -ExpectedTargetCommit $MergeCommitSha -PullRequestNumber $PullRequestNumber
+            $state = $durableState
+            $deployment = $durableDeployment
             $deploymentCreated = $true
             $currentStatus = [string](Get-CodexDeploymentValue -Object $attempt -Name 'status' 'pr-ready')
             $labels = if ($currentStatus -match '^codex:') { @($currentStatus) } else { @("codex:$currentStatus") }
