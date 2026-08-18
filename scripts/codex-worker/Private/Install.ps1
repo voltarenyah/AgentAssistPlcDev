@@ -359,6 +359,34 @@ function Get-CodexAclRuleSid {
     catch { throw "Could not resolve ACL identity '$($Rule.IdentityReference)'." }
 }
 
+function Get-CodexDirectorySecurity {
+    param(
+        [Parameter(Mandatory = $true)] [IO.DirectoryInfo] $Directory,
+        [Security.AccessControl.AccessControlSections] $Sections = [Security.AccessControl.AccessControlSections]::Access
+    )
+    # DirectoryInfo exposes these methods on Windows PowerShell/.NET
+    # Framework, but the instance methods were removed from the .NET 8
+    # surface used by pwsh. Use the cross-platform extension methods when
+    # available and retain the framework fallback for powershell.exe 5.1.
+    $extensions = [type]::GetType('System.IO.FileSystemAclExtensions, System.IO.FileSystem.AccessControl', $false)
+    if ($null -eq $extensions) { return $Directory.GetAccessControl($Sections) }
+    $method = $extensions.GetMethod('GetAccessControl', [Type[]]@([IO.DirectoryInfo], [Security.AccessControl.AccessControlSections]))
+    if ($null -eq $method) { throw 'The FileSystemAclExtensions GetAccessControl API is unavailable.' }
+    return $method.Invoke($null, [object[]]@($Directory, $Sections))
+}
+
+function Set-CodexDirectorySecurity {
+    param(
+        [Parameter(Mandatory = $true)] [IO.DirectoryInfo] $Directory,
+        [Parameter(Mandatory = $true)] [Security.AccessControl.DirectorySecurity] $Security
+    )
+    $extensions = [type]::GetType('System.IO.FileSystemAclExtensions, System.IO.FileSystem.AccessControl', $false)
+    if ($null -eq $extensions) { $Directory.SetAccessControl($Security); return }
+    $method = $extensions.GetMethod('SetAccessControl', [Type[]]@([IO.DirectoryInfo], [Security.AccessControl.DirectorySecurity]))
+    if ($null -eq $method) { throw 'The FileSystemAclExtensions SetAccessControl API is unavailable.' }
+    $method.Invoke($null, [object[]]@($Directory, $Security)) | Out-Null
+}
+
 function Assert-CodexTrustedDirectoryAcl {
     param([Parameter(Mandatory = $true)] [string] $Path)
     $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
@@ -401,9 +429,12 @@ function Ensure-CodexTrustedDirectory {
         # adding the tiny allow-list. This preserves the existing security
         # descriptor's owner/audit metadata while removing broad ACEs alike.
         $directory = [IO.DirectoryInfo]::new($Path)
-        $existingAcl = $directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
+        # PowerShell 7's FileSystemAclExtensions honors the requested sections
+        # strictly; include Owner so the current-owner check does not force a
+        # needless SetOwner operation that can fail without WRITE_OWNER.
+        $existingAcl = Get-CodexDirectorySecurity -Directory $directory -Sections ([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)
         $acl = $existingAcl
-        $existingRules = @($acl.Access)
+        $existingRules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
         $acl.SetAccessRuleProtection($true, $false)
         foreach ($existingRule in $existingRules) { $acl.PurgeAccessRules($existingRule.IdentityReference) }
         $currentSid = Get-CodexCurrentUserSid
@@ -414,7 +445,7 @@ function Ensure-CodexTrustedDirectory {
             $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, [Security.AccessControl.FileSystemRights]::FullControl, $inheritance, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)
             $acl.AddAccessRule($rule)
         }
-        $directory.SetAccessControl($acl)
+        Set-CodexDirectorySecurity -Directory $directory -Security $acl
         Assert-CodexTrustedDirectoryAcl -Path $Path
     } catch {
         throw "Trusted directory ACL could not be established: $($_.Exception.Message)"
@@ -732,7 +763,7 @@ function Invoke-CodexLocalWorkerSetup {
     $runnerConfigured = $false
     $runnerPromoted = $false
     $runnerOwnedPath = $null
-    $createdTaskNames = [Collections.Generic.List[string]]::new()
+    $createdTaskOwnership = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
     $reusedTaskNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($preflight in @($taskPreflight | Where-Object Exists)) { [void]$reusedTaskNames.Add($preflight.Task.Name) }
     $stagingPin = $null
@@ -856,14 +887,14 @@ function Invoke-CodexLocalWorkerSetup {
                 $taskRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = [string[]]$taskArgs; Task = $runnerTask; Xml = $runnerTask.Xml; OwnershipMarker = $plan.TaskOwnershipMarker; InteractiveToken = $true; RestartCount = 3; RestartInterval = 'PT1M'; Action = 'Create' }
                 $taskResult = if ($null -ne $TaskRunner) { & $TaskRunner $taskRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $taskArgs -CommandRunner $CommandRunner }
             } catch {
-                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $runnerTask -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskNames.Add($runnerTask.Name) | Out-Null }
+                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $runnerTask -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskOwnership[$runnerTask.Name] = $plan.TaskOwnershipMarker }
                 throw
             } finally { if ($null -ne $temporaryXml -and (Test-Path -LiteralPath $temporaryXml)) { Remove-Item -LiteralPath $temporaryXml -Force } }
             if (-not (Test-CodexSetupSuccess $taskResult)) {
-                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $runnerTask -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskNames.Add($runnerTask.Name) | Out-Null }
+                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $runnerTask -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskOwnership[$runnerTask.Name] = $plan.TaskOwnershipMarker }
                 throw "Could not register scheduled task $($runnerTask.Name)."
             }
-            $createdTaskNames.Add($runnerTask.Name) | Out-Null
+            $createdTaskOwnership[$runnerTask.Name] = $plan.TaskOwnershipMarker
             $mutations++
         }
         $startRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = @('/Run','/TN',$runnerTask.Name); Task = $runnerTask; Action = 'Start' }
@@ -906,23 +937,31 @@ function Invoke-CodexLocalWorkerSetup {
                 $taskRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = [string[]]$taskArgs; Task = $task; Xml = $task.Xml; OwnershipMarker = $plan.TaskOwnershipMarker; InteractiveToken = $true; RestartCount = 3; RestartInterval = 'PT1M'; Action = 'Create' }
                 $taskResult = if ($null -ne $TaskRunner) { & $TaskRunner $taskRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $taskArgs -CommandRunner $CommandRunner }
             } catch {
-                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $task -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskNames.Add($task.Name) | Out-Null }
+                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $task -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskOwnership[$task.Name] = $plan.TaskOwnershipMarker }
                 throw
             } finally { if ($null -ne $temporaryXml -and (Test-Path -LiteralPath $temporaryXml)) { Remove-Item -LiteralPath $temporaryXml -Force } }
             if (-not (Test-CodexSetupSuccess $taskResult)) {
-                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $task -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskNames.Add($task.Name) | Out-Null }
+                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $task -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskOwnership[$task.Name] = $plan.TaskOwnershipMarker }
                 throw "Could not register scheduled task $($task.Name)."
             }
-            $createdTaskNames.Add($task.Name) | Out-Null
+            $createdTaskOwnership[$task.Name] = $plan.TaskOwnershipMarker
             $mutations++
         }
         } catch {
-            foreach ($taskName in @($createdTaskNames)) {
+            foreach ($ownership in @($createdTaskOwnership.GetEnumerator())) {
+                $taskName = [string]$ownership.Key
+                $attemptMarker = [string]$ownership.Value
+                $taskDefinition = @($plan.Tasks.Runner, $plan.Tasks.Notifier | Where-Object { $_.Name -eq $taskName })[0]
+                # Re-query immediately before either destructive operation.
+                # A task replaced after create is not ours, even if this
+                # install attempt originally created the name.
+                if ($null -eq $taskDefinition -or -not (Confirm-CodexScheduledTaskAttemptOwnership -Task $taskDefinition -Marker $attemptMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner)) { continue }
                 try {
                     $stopRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = @('/End','/TN',$taskName); Action = 'Stop'; TaskName = $taskName }
                     if ($null -ne $TaskStopRunner) { & $TaskStopRunner $stopRequest | Out-Null } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $stopRequest.Arguments -CommandRunner $CommandRunner | Out-Null }
                 } catch { }
                 try {
+                    if (-not (Confirm-CodexScheduledTaskAttemptOwnership -Task $taskDefinition -Marker $attemptMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner)) { continue }
                     $removeRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = @('/Delete','/TN',$taskName,'/F'); Action = 'Delete'; TaskName = $taskName }
                     if ($null -ne $TaskRemoveRunner) { & $TaskRemoveRunner $removeRequest | Out-Null } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $removeRequest.Arguments -CommandRunner $CommandRunner | Out-Null }
                 } catch { }
