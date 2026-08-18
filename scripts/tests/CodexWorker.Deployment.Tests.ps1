@@ -481,6 +481,7 @@ Describe 'Codex runtime deployment' {
         $data = Join-Path $TestDrive 'data'
         New-Item -ItemType Directory -Path $root, $data -Force | Out-Null
         $sha = 'a' * 40
+        $masterSha = 'b' * 40
         $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{}; activeSlot = 'runtime-a'; deployment = [pscustomobject]@{ targetCommit = $sha; sourcePr = 17; requestedAt = '2026-08-18T00:00:00Z'; status = 'pending' } }
         $events = [System.Collections.Generic.List[string]]::new()
         $durable = [pscustomobject]@{ Value = (($state | ConvertTo-Json -Depth 20) | ConvertFrom-Json) }
@@ -488,7 +489,8 @@ Describe 'Codex runtime deployment' {
         $git = {
             param([string[]] $Arguments)
             $events.Add("git:$($Arguments -join ' ')") | Out-Null
-            if ($Arguments -contains 'rev-parse') { return $sha }
+            if ($Arguments -contains 'rev-parse' -and $Arguments -contains 'origin/master^{commit}') { return $masterSha }
+            if ($Arguments -contains 'rev-parse' -and $Arguments -contains 'HEAD') { return $sha }
             return ''
         }.GetNewClosure()
         $process = {
@@ -504,7 +506,7 @@ Describe 'Codex runtime deployment' {
         }.GetNewClosure()
         $reader = { param([string] $Path) return (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) }.GetNewClosure()
         $writer = { param([string] $Path, [object] $Value) $durable.Value = (($Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) }.GetNewClosure()
-        return [pscustomobject]@{ Root = $root; Data = $data; Sha = $sha; State = $state; Durable = $durable; Config = $config; Events = $events; Git = $git; Process = $process; Http = $http; Reader = $reader; Writer = $writer }
+        return [pscustomobject]@{ Root = $root; Data = $data; Sha = $sha; MasterSha = $masterSha; State = $state; Durable = $durable; Config = $config; Events = $events; Git = $git; Process = $process; Http = $http; Reader = $reader; Writer = $writer }
     }
 
     It 'selects only the inactive durable slot and prepares the exact target before switching' {
@@ -572,5 +574,104 @@ Describe 'Codex runtime deployment' {
         $f.Durable.Value.activeSlot | Should Be 'runtime-a'
         $f.Durable.Value.deployment.status | Should Be 'failed'
         @($f.Events | Where-Object { $_ -like 'http:*' }).Count | Should Be 0
+    }
+
+    It 'records the actual sidecar model contract without inventing fallback fields' {
+        $f = New-RuntimeFixture
+        $f.Http = { param([string] $Uri)
+            if ($Uri -match '8787') { return [pscustomobject]@{ StatusCode = 200; Body = '{"status":"ok","modelConfigured":false,"modelMode":"deterministic-fallback"}' } }
+            return [pscustomobject]@{ StatusCode = 200; Body = '{}' }
+        }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $sidecar = $result.Evidence.health.'http://localhost:8787/health'
+        $sidecar.modelConfigured | Should Be $false
+        $sidecar.modelMode | Should Be 'deterministic-fallback'
+        $sidecar.fallback | Should Be $true
+        $sidecar.status | Should Be 'ok'
+    }
+
+    It 'fails closed on an uninspectable runtime path before any destructive git command' {
+        $f = New-RuntimeFixture
+        $inspected = [System.Collections.Generic.List[string]]::new()
+        $gitCalls = [System.Collections.Generic.List[string]]::new()
+        $f.Git = { param([string[]] $Arguments) $gitCalls.Add(($Arguments -join ' ')) | Out-Null; return $f.Sha }.GetNewClosure()
+        $inspector = { param([string] $Path) $inspected.Add($Path) | Out-Null; throw 'ACL inspection denied' }.GetNewClosure()
+        { Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector $inspector } | Should Throw 'ACL inspection denied'
+        @($gitCalls | Where-Object { $_ -match 'worktree remove|worktree add' }).Count | Should Be 0
+    }
+
+    It 'preserves stdout stderr and process identity for launcher evidence' {
+        $f = New-RuntimeFixture
+        $f.Process = { param([string] $FilePath, [string[]] $Arguments, [string] $WorkingDirectory)
+            [pscustomobject]@{ ExitCode = 0; StdOut = 'launcher out'; StdErr = 'launcher err'; ProcessId = 9021; CommandLine = "$FilePath $($Arguments -join ' ')" }
+        }.GetNewClosure()
+        $providerState = @{ Calls = 0 }
+        $processProvider = { $providerState.Calls++; if ($providerState.Calls -lt 3) { return @() }; return @([pscustomobject]@{ ProcessId = 9021; CommandLine = (Join-Path $f.Root '.worktrees\runtime-b\launch.ps1') }) }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider $processProvider -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Evidence.launch.stdout | Should Be 'launcher out'
+        $result.Evidence.launch.stderr | Should Be 'launcher err'
+        @($result.Evidence.processes).Count | Should BeGreaterThan 0
+        $result.Evidence.processes[0].processId | Should Be 9021
+    }
+
+    It 'compensates a partially persisted activation and verifies the previous active slot durably' {
+        $f = New-RuntimeFixture
+        $writeState = @{ Count = 0 }
+        $f.Writer = { param([string] $Path, [object] $Value)
+            $writeState.Count++
+            if ($writeState.Count -eq 1) {
+                $f.Durable.Value = (($Value | ConvertTo-Json -Depth 30) | ConvertFrom-Json)
+                throw 'simulated partial activation write'
+            }
+            $f.Durable.Value = (($Value | ConvertTo-Json -Depth 30) | ConvertFrom-Json)
+        }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $result.Evidence.activationCompensation.verified | Should Be $true
+        $f.Durable.Value.activeSlot | Should Be 'runtime-a'
+        $f.Durable.Value.deployment.status | Should Be 'failed'
+    }
+
+    It 'marks rollback failed when durable activation compensation cannot be verified' {
+        $f = New-RuntimeFixture
+        $f.Writer = { param([string] $Path, [object] $Value) throw 'state writer unavailable' }.GetNewClosure()
+        $githubCalls = [System.Collections.Generic.List[string]]::new()
+        $github = { param([string[]] $Arguments) if ($Arguments -contains '--body') { $githubCalls.Add($Arguments[$Arguments.IndexOf('--body') + 1]) | Out-Null }; return '' }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -GitHubCommandRunner $github -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $result.Evidence.activationCompensation.verified | Should Be $false
+        $result.State.deployment.status | Should Be 'rollback-failed'
+        $githubCalls.Count | Should Be 1
+    }
+
+    It 'rejects invalid durable slots and mismatched exact targets before git mutation' {
+        $f = New-RuntimeFixture
+        $f.Durable.Value.activeSlot = 'runtime-c'
+        { Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } } } | Should Throw 'not configured'
+        $f = New-RuntimeFixture
+        $f.State.deployment.targetCommit = 'c' * 40
+        { Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } } } | Should Throw 'does not match'
+        @($f.Events | Where-Object { $_ -match 'worktree remove|worktree add' }).Count | Should Be 0
+    }
+
+    It 'fails closed on a process inspection error before destructive recreation' {
+        $f = New-RuntimeFixture
+        $gitCalls = [System.Collections.Generic.List[string]]::new()
+        $git = { param([string[]] $Arguments) $gitCalls.Add(($Arguments -join ' ')) | Out-Null; return $f.Sha }.GetNewClosure()
+        $processError = { [pscustomobject]@{ Succeeded = $false; Error = 'WMI unavailable' } }
+        { Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider $processError -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } } } | Should Throw 'Unable to inspect active processes'
+        @($gitCalls | Where-Object { $_ -match 'worktree remove|worktree add' }).Count | Should Be 0
+    }
+
+    It 'does not launch or activate when the optional whitelist import fails' {
+        $f = New-RuntimeFixture
+        $f.Config.tiaWhitelistPath = Join-Path $f.Root 'register-whitelist.reg'
+        [IO.File]::WriteAllText($f.Config.tiaWhitelistPath, 'REGEDIT4')
+        $registry = { param([string] $FilePath, [string[]] $Arguments, [string] $WorkingDirectory) [pscustomobject]@{ ExitCode = 5; StdOut = 'registry out'; StdErr = 'registry denied'; ProcessId = 44 } }
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -RegistryRunner $registry -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $f.Durable.Value.activeSlot | Should Be 'runtime-a'
+        @($f.Events | Where-Object { $_ -match 'powershell.exe' }).Count | Should Be 0
+        $result.Evidence.error | Should Match 'reg.exe'
     }
 }

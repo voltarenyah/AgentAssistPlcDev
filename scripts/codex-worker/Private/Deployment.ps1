@@ -22,13 +22,20 @@ function Invoke-CodexDeploymentProcess {
     param([string] $FilePath, [string[]] $Arguments, [string] $WorkingDirectory, [scriptblock] $ProcessRunner)
     if ($null -ne $ProcessRunner) {
         $value = & $ProcessRunner $FilePath ([string[]]$Arguments) $WorkingDirectory
-        if ($null -ne $value -and $value.PSObject.Properties['ExitCode']) { return $value }
-        return [pscustomobject]@{ ExitCode = 0; Output = (($value | ForEach-Object { [string]$_ }) -join [Environment]::NewLine); ProcessId = $null; CommandLine = "$FilePath $($Arguments -join ' ')" }
+        if ($null -ne $value -and $value.PSObject.Properties['ExitCode']) {
+            if (-not $value.PSObject.Properties['StdOut']) { Add-Member -InputObject $value -NotePropertyName StdOut -NotePropertyValue ([string](Get-CodexDeploymentValue $value 'Output' '')) -Force }
+            if (-not $value.PSObject.Properties['StdErr']) { Add-Member -InputObject $value -NotePropertyName StdErr -NotePropertyValue '' -Force }
+            if (-not $value.PSObject.Properties['Output']) { Add-Member -InputObject $value -NotePropertyName Output -NotePropertyValue ([string](Get-CodexDeploymentValue $value 'StdOut' '')) -Force }
+            return $value
+        }
+        $text = (($value | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        return [pscustomobject]@{ ExitCode = 0; Output = $text; StdOut = $text; StdErr = ''; ProcessId = $null; CommandLine = "$FilePath $($Arguments -join ' ')" }
     }
     Push-Location $WorkingDirectory
     try {
         $output = & $FilePath @Arguments 2>&1
-        return [pscustomobject]@{ ExitCode = [int]$LASTEXITCODE; Output = (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine); ProcessId = $null; CommandLine = "$FilePath $($Arguments -join ' ')" }
+        $text = (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        return [pscustomobject]@{ ExitCode = [int]$LASTEXITCODE; Output = $text; StdOut = $text; StdErr = ''; ProcessId = $null; CommandLine = "$FilePath $($Arguments -join ' ')" }
     } finally { Pop-Location }
 }
 
@@ -44,15 +51,24 @@ function Get-CodexDeploymentRuntimeSlots {
 }
 
 function Assert-CodexDeploymentSlotTrusted {
-    param([string] $SlotName, [string] $SlotPath, [string] $WorktreeRoot, [scriptblock] $PathInspector)
+    param([string] $SlotName, [string] $SlotPath, [string] $WorktreeRoot, [scriptblock] $PathInspector, [switch] $RequireExisting)
     $expected = [IO.Path]::GetFullPath((Join-Path $WorktreeRoot $SlotName))
     if (-not [string]::Equals([IO.Path]::GetFullPath($SlotPath), $expected, [StringComparison]::OrdinalIgnoreCase)) { throw 'Runtime slot path is outside the configured runtime slot.' }
-    if ($null -eq $PathInspector) { $PathInspector = { param($Path) $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue; [pscustomobject]@{ IsReparsePoint = ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) } } }
+    if ($null -eq $PathInspector) {
+        $PathInspector = { param($Path)
+            $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+            $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+            if ($null -eq $acl) { throw "Unable to inspect ACL for '$Path'." }
+            [pscustomobject]@{ IsReparsePoint = (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0); ResolvedPath = $item.FullName }
+        }
+    }
     $cursor = [IO.Path]::GetFullPath($SlotPath)
     while ($true) {
-        if (Test-Path -LiteralPath $cursor) {
-            $inspection = & $PathInspector $cursor
-            if ($null -ne $inspection -and $inspection.PSObject.Properties['IsReparsePoint'] -and [bool]$inspection.IsReparsePoint) { throw "Refusing reparse-point runtime slot path: $cursor" }
+        if ((Test-Path -LiteralPath $cursor -PathType Container -ErrorAction SilentlyContinue) -or ($RequireExisting -and [string]::Equals($cursor, [IO.Path]::GetFullPath($SlotPath), [StringComparison]::OrdinalIgnoreCase))) {
+            try { $inspection = & $PathInspector $cursor } catch { throw "Unable to inspect runtime slot path '$cursor': $($_.Exception.Message)" }
+            if ($null -eq $inspection -or -not $inspection.PSObject.Properties['IsReparsePoint']) { throw "Unable to inspect runtime slot path '$cursor'." }
+            if ([bool]$inspection.IsReparsePoint) { throw "Refusing reparse-point runtime slot path: $cursor" }
+            if ($inspection.PSObject.Properties['ResolvedPath'] -and -not [string]::Equals([IO.Path]::GetFullPath([string]$inspection.ResolvedPath), $cursor, [StringComparison]::OrdinalIgnoreCase)) { throw "Runtime slot path resolved outside the configured path: $cursor" }
         }
         if ([string]::Equals($cursor.TrimEnd('\','/'), $WorktreeRoot.TrimEnd('\','/'), [StringComparison]::OrdinalIgnoreCase)) { break }
         $parent = Split-Path -Parent $cursor
@@ -82,6 +98,23 @@ function Assert-CodexDeploymentSlotNotBusy {
     } catch { if ($_.Exception.Message -match 'process is using|Unable to inspect') { throw } ; throw "Unable to inspect active processes: $($_.Exception.Message)" }
 }
 
+function Get-CodexDeploymentProcessEvidence {
+    param([string] $SlotPath, [scriptblock] $ProcessProvider)
+    if ($null -eq $ProcessProvider) { $ProcessProvider = { @(Get-CimInstance Win32_Process -ErrorAction Stop) } }
+    try {
+        $matches = @()
+        foreach ($process in @(& $ProcessProvider)) {
+            if ($process.PSObject.Properties['Succeeded'] -and -not [bool]$process.Succeeded) { throw "Unable to inspect active processes: $($process.Error)" }
+            if (Test-CodexDeploymentProcessUsesPath -Process $process -Path $SlotPath) {
+                $pid = Get-CodexDeploymentValue $process 'ProcessId' $null
+                if ($null -eq $pid -or [string]::IsNullOrWhiteSpace([string]$pid)) { throw 'Relevant service process had no process ID.' }
+                $matches += [pscustomobject]@{ processId = [int]$pid; commandLine = [string](Get-CodexDeploymentValue $process 'CommandLine' '') }
+            }
+        }
+        return @($matches)
+    } catch { throw "Unable to inspect deployment service processes: $($_.Exception.Message)" }
+}
+
 function Invoke-CodexDeploymentHealth {
     param([object] $Config, [scriptblock] $HttpRunner, [scriptblock] $SleepProvider)
     if ($null -eq $HttpRunner) { $HttpRunner = { param($Uri) Invoke-WebRequest -UseBasicParsing -Uri $Uri -TimeoutSec 2 } }
@@ -99,7 +132,16 @@ function Invoke-CodexDeploymentHealth {
                 $body = if ($response.PSObject.Properties['Body']) { [string]$response.Body } elseif ($response.PSObject.Properties['Content']) { [string]$response.Content } else { '' }
                 $item = [ordered]@{ uri = $uri; statusCode = $status; body = $body }
                 if ($uri -match '/health$') {
-                    try { $json = if (-not [string]::IsNullOrWhiteSpace($body)) { $body | ConvertFrom-Json } else { $response }; $item.model = [string](Get-CodexDeploymentValue $json 'model' ''); $item.fallback = [bool](Get-CodexDeploymentValue $json 'fallback' (Get-CodexDeploymentValue $json 'usingFallback' $false)); if ([string](Get-CodexDeploymentValue $json 'status' '') -ne 'ok') { $all = $false } } catch { $all = $false }
+                    try {
+                        $json = if (-not [string]::IsNullOrWhiteSpace($body)) { $body | ConvertFrom-Json } else { $response }
+                        $item.status = [string](Get-CodexDeploymentValue $json 'status' '')
+                        $item.modelConfigured = Get-CodexDeploymentValue $json 'modelConfigured' $null
+                        $item.modelMode = [string](Get-CodexDeploymentValue $json 'modelMode' '')
+                        $item.model = [string](Get-CodexDeploymentValue $json 'model' '')
+                        $mode = $item.modelMode.ToLowerInvariant()
+                        $item.fallback = if ($mode -eq 'deterministic-fallback' -or $mode -in @('fallback','deterministic','mock','test')) { $true } elseif ($mode -eq 'llm' -and [bool]$item.modelConfigured) { $false } else { $null }
+                        if ($item.status -ne 'ok') { $all = $false }
+                    } catch { $all = $false }
                 }
                 if ($status -ne 200) { $all = $false }
                 $last[$uri] = [pscustomobject]$item
@@ -136,13 +178,14 @@ function Invoke-CodexDeployment {
     $read = if ($null -ne $StateReader) { $StateReader } else { { param($Path) Read-CodexWorkerState -Path $Path } }
     $write = if ($null -ne $StateWriter) { $StateWriter } else { { param($Path, $Value) Write-CodexWorkerState -Path $Path -State $Value } }
     $state = & $read $paths.StatePath
+    $previousState = Copy-CodexDeploymentObject $state
     $slots = Get-CodexDeploymentRuntimeSlots -RepositoryRoot $paths.RepositoryRoot -Config $Config
     $active = [string](Get-CodexDeploymentValue $state 'activeSlot' (Get-CodexDeploymentValue $Deployment 'activeSlot' 'runtime-a'))
     if ($active -notin $slots.Names) { throw "Durable activeSlot '$active' is not configured." }
     $inactive = @($slots.Names | Where-Object { $_ -ne $active })[0]
     $activePath = $slots.Paths[$active]; $inactivePath = $slots.Paths[$inactive]
-    Assert-CodexDeploymentSlotTrusted -SlotName $active -SlotPath $activePath -WorktreeRoot $slots.Root -PathInspector $PathInspector | Out-Null
-    Assert-CodexDeploymentSlotTrusted -SlotName $inactive -SlotPath $inactivePath -WorktreeRoot $slots.Root -PathInspector $PathInspector | Out-Null
+    Assert-CodexDeploymentSlotTrusted -SlotName $active -SlotPath $activePath -WorktreeRoot $slots.Root -PathInspector $PathInspector -RequireExisting | Out-Null
+    Assert-CodexDeploymentSlotTrusted -SlotName $inactive -SlotPath $inactivePath -WorktreeRoot $slots.Root -PathInspector $PathInspector -RequireExisting | Out-Null
     $target = ConvertTo-CodexFullCommit -Commit ([string](Get-CodexDeploymentValue $Deployment 'targetCommit' '')) -Name 'deployment target'
     $durableDeployment = Get-CodexDeploymentValue -Object $state -Name 'deployment' -Default $null
     $durableTargetText = [string](Get-CodexDeploymentValue -Object $durableDeployment -Name 'targetCommit' -Default '')
@@ -150,19 +193,35 @@ function Invoke-CodexDeployment {
         $durableTarget = ConvertTo-CodexFullCommit -Commit $durableTargetText -Name 'durable deployment target'
         if ($durableTarget -ne $target) { throw 'The durable deployment target does not match the requested deployment.' }
     }
-    $evidence = [ordered]@{ targetCommit = $target; activeSlot = $active; targetSlot = $inactive; prepared = $false; steps = @(); logs = @(); rollback = $null; startedAt = $now.ToString('o') }
+    $evidence = [ordered]@{ targetCommit = $target; activeSlot = $active; previousActiveSlot = $active; targetSlot = $inactive; prepared = $false; steps = @(); logs = @(); rollback = $null; startedAt = $now.ToString('o'); previousStateSnapshot = $previousState }
+    $activationAttempted = $false
     $logPath = Join-Path $paths.DataRoot ('runs\deployment-' + $now.ToString('yyyyMMddTHHmmssfffZ') + '.log')
     Assert-CodexDeploymentSlotNotBusy -SlotPath $inactivePath -ProcessProvider $ProcessProvider
     try {
         Invoke-CodexDeploymentGit -RepositoryRoot $paths.RepositoryRoot -Arguments @('fetch','origin','master') -CommandRunner $GitCommandRunner | Out-Null
         $master = ConvertTo-CodexFullCommit -Commit (Invoke-CodexDeploymentGit -RepositoryRoot $paths.RepositoryRoot -Arguments @('rev-parse','origin/master^{commit}') -CommandRunner $GitCommandRunner) -Name 'origin/master commit'
         Assert-CodexCommitReachableFromMaster -RepositoryRoot $paths.RepositoryRoot -Commit $target -MasterCommit $master -GitCommandRunner $GitCommandRunner | Out-Null
+        Assert-CodexDeploymentSlotTrusted -SlotName $inactive -SlotPath $inactivePath -WorktreeRoot $slots.Root -PathInspector $PathInspector -RequireExisting | Out-Null
+        Assert-CodexDeploymentSlotNotBusy -SlotPath $inactivePath -ProcessProvider $ProcessProvider
         Invoke-CodexDeploymentGit -RepositoryRoot $paths.RepositoryRoot -Arguments @('worktree','remove','--force',$inactivePath) -CommandRunner $GitCommandRunner | Out-Null
+        Assert-CodexDeploymentSlotTrusted -SlotName $inactive -SlotPath $inactivePath -WorktreeRoot $slots.Root -PathInspector $PathInspector | Out-Null
         Invoke-CodexDeploymentGit -RepositoryRoot $paths.RepositoryRoot -Arguments @('worktree','add','--detach',$inactivePath,$target) -CommandRunner $GitCommandRunner | Out-Null
         $checkedOut = ConvertTo-CodexFullCommit -Commit (Invoke-CodexDeploymentGit -RepositoryRoot $inactivePath -Arguments @('rev-parse','HEAD') -CommandRunner $GitCommandRunner) -Name 'runtime slot HEAD'
         if ($checkedOut -ne $target) { throw 'Runtime slot did not resolve to the exact target SHA.' }
 
-        $run = { param([string]$File,[string[]]$CommandArgs) if ($null -ne $ProcessRunner) { $result = & $ProcessRunner $File ([string[]]$CommandArgs) $inactivePath; if ($null -eq $result -or -not $result.PSObject.Properties['ExitCode']) { $result = [pscustomobject]@{ ExitCode = 0; Output = (($result | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) } } } else { Push-Location $inactivePath; try { $output = & $File @CommandArgs 2>&1; $result = [pscustomobject]@{ ExitCode = [int]$LASTEXITCODE; Output = (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) } } finally { Pop-Location } }; $logDirectory = Split-Path -Parent $logPath; if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) { New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null }; Add-Content -LiteralPath $logPath -Value ("$File $($CommandArgs -join ' ')`n$($result.Output)"); if ([int]$result.ExitCode -ne 0) { throw "$File exited with code $($result.ExitCode)." }; $evidence.steps += [pscustomobject]@{ file = $File; arguments = $CommandArgs; exitCode = [int]$result.ExitCode }; return $result }.GetNewClosure()
+        $processInvoker = ${function:Invoke-CodexDeploymentProcess}
+        $valueGetter = ${function:Get-CodexDeploymentValue}
+        $run = { param([string]$File,[string[]]$CommandArgs)
+            $result = & $processInvoker $File $CommandArgs $inactivePath $ProcessRunner
+            $stdout = [string](& $valueGetter $result 'StdOut' (& $valueGetter $result 'Output' ''))
+            $stderr = [string](& $valueGetter $result 'StdErr' '')
+            $logDirectory = Split-Path -Parent $logPath
+            if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) { New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null }
+            Add-Content -LiteralPath $logPath -Value ("$File $($CommandArgs -join ' ')`nstdout: $stdout`nstderr: $stderr")
+            $evidence.steps += [pscustomobject]@{ file = $File; arguments = $CommandArgs; workingDirectory = $inactivePath; exitCode = [int]$result.ExitCode; stdout = $stdout; stderr = $stderr; processId = & $valueGetter $result 'ProcessId' $null }
+            if ([int]$result.ExitCode -ne 0) { throw "$File exited with code $($result.ExitCode)." }
+            return $result
+        }.GetNewClosure()
         & $run 'dotnet' @('restore','AgentAssistPlcDev.sln') | Out-Null
         & $run 'dotnet' @('build','AgentAssistPlcDev.sln','-v','q') | Out-Null
         & $run 'npm.cmd' @('ci','--prefix','studio') | Out-Null
@@ -175,16 +234,17 @@ function Invoke-CodexDeployment {
         if (-not [string]::IsNullOrWhiteSpace($regPath) -and (Test-Path -LiteralPath $regPath -PathType Leaf)) {
             $reg = if ($null -ne $RegistryRunner) { & $RegistryRunner 'reg.exe' @('import',$regPath) $inactivePath } else { Invoke-CodexDeploymentProcess -FilePath 'reg.exe' -Arguments @('import',$regPath) -WorkingDirectory $inactivePath -ProcessRunner $ProcessRunner }
             if ($null -ne $reg.PSObject.Properties['ExitCode'] -and [int]$reg.ExitCode -ne 0) { throw "reg.exe exited with code $($reg.ExitCode)." }
-            $evidence.steps += [pscustomobject]@{ file = 'reg.exe'; arguments = @('import',$regPath); exitCode = 0 }
+            $evidence.steps += [pscustomobject]@{ file = 'reg.exe'; arguments = @('import',$regPath); workingDirectory = $inactivePath; exitCode = [int](Get-CodexDeploymentValue $reg 'ExitCode' 0); stdout = [string](Get-CodexDeploymentValue $reg 'StdOut' (Get-CodexDeploymentValue $reg 'Output' '')); stderr = [string](Get-CodexDeploymentValue $reg 'StdErr' ''); processId = Get-CodexDeploymentValue $reg 'ProcessId' $null }
         }
         $evidence.prepared = $true
         $launchArgs = @('-ExecutionPolicy','Bypass','-File',(Join-Path $inactivePath 'launch.ps1'),'-NoBuild')
         $launch = Invoke-CodexDeploymentProcess -FilePath 'powershell.exe' -Arguments $launchArgs -WorkingDirectory $inactivePath -ProcessRunner $ProcessRunner
-        $evidence.launch = [pscustomobject]@{ exitCode = [int]$launch.ExitCode; processId = Get-CodexDeploymentValue $launch 'ProcessId' $null; commandLine = [string](Get-CodexDeploymentValue $launch 'CommandLine' ('powershell.exe ' + ($launchArgs -join ' '))) }
+        $evidence.launch = [pscustomobject]@{ exitCode = [int]$launch.ExitCode; stdout = [string](Get-CodexDeploymentValue $launch 'StdOut' (Get-CodexDeploymentValue $launch 'Output' '')); stderr = [string](Get-CodexDeploymentValue $launch 'StdErr' ''); processId = Get-CodexDeploymentValue $launch 'ProcessId' $null; commandLine = [string](Get-CodexDeploymentValue $launch 'CommandLine' ('powershell.exe ' + ($launchArgs -join ' '))); workingDirectory = $inactivePath }
         if ([int]$launch.ExitCode -ne 0) { throw 'The candidate runtime launcher failed.' }
         $health = Invoke-CodexDeploymentHealth -Config $Config -HttpRunner $HttpRunner -SleepProvider $SleepProvider
         $evidence.health = $health.Endpoints
         if (-not $health.Success) { throw $health.Error }
+        $evidence.processes = @(Get-CodexDeploymentProcessEvidence -SlotPath $inactivePath -ProcessProvider $ProcessProvider)
         $after = & $read $paths.StatePath
         $desired = Copy-CodexDeploymentObject $after
         if ($null -eq $desired.PSObject.Properties['activeSlot']) { Add-Member -InputObject $desired -NotePropertyName activeSlot -NotePropertyValue $inactive -Force } else { $desired.activeSlot = $inactive }
@@ -192,6 +252,7 @@ function Invoke-CodexDeployment {
         if ($null -eq $completed) { $completed = Copy-CodexDeploymentObject $Deployment; Add-Member -InputObject $desired -NotePropertyName deployment -NotePropertyValue $completed -Force }
         if ($null -ne $completed) { $completed.status = 'completed'; if ($null -eq $completed.PSObject.Properties['evidence']) { Add-Member -InputObject $completed -NotePropertyName evidence -NotePropertyValue ([pscustomobject]$evidence) -Force } else { $completed.evidence = [pscustomobject]$evidence } }
         if ($null -eq $desired.PSObject.Properties['lastDeployment']) { Add-Member -InputObject $desired -NotePropertyName lastDeployment -NotePropertyValue ([pscustomobject]$evidence) -Force } else { $desired.lastDeployment = [pscustomobject]$evidence }
+        $activationAttempted = $true
         & $write $paths.StatePath $desired | Out-Null
         $verified = & $read $paths.StatePath
         if ([string](Get-CodexDeploymentValue $verified 'activeSlot' '') -ne $inactive) { throw 'Durable activation verification failed.' }
@@ -199,31 +260,57 @@ function Invoke-CodexDeployment {
     } catch {
         $failure = $_.Exception.Message
         $evidence['error'] = $failure
-        $evidence['logs'] = @($logPath)
+        $rollbackLogPath = Join-Path $paths.DataRoot ('runs\deployment-' + $now.ToString('yyyyMMddTHHmmssfffZ') + '-rollback.log')
+        $evidence['logs'] = @($logPath, $rollbackLogPath)
+        $failureLogDirectory = Split-Path -Parent $logPath
+        if (-not (Test-Path -LiteralPath $failureLogDirectory -PathType Container)) { New-Item -ItemType Directory -Path $failureLogDirectory -Force | Out-Null }
+        Add-Content -LiteralPath $logPath -Value ("deployment target $target`nerror: $failure")
         $rollback = $null
         if ($evidence.prepared) {
             try {
                 $rollbackArgs = @('-ExecutionPolicy','Bypass','-File',(Join-Path $activePath 'launch.ps1'),'-NoBuild')
                 $rollbackLaunch = Invoke-CodexDeploymentProcess -FilePath 'powershell.exe' -Arguments $rollbackArgs -WorkingDirectory $activePath -ProcessRunner $ProcessRunner
                 $rollbackHealth = if ([int]$rollbackLaunch.ExitCode -eq 0) { Invoke-CodexDeploymentHealth -Config $Config -HttpRunner $HttpRunner -SleepProvider $SleepProvider } else { [pscustomobject]@{ Success = $false; Endpoints = @{}; Error = 'Rollback launcher failed.' } }
-                $rollback = [pscustomobject]@{ launchExitCode = [int]$rollbackLaunch.ExitCode; processId = Get-CodexDeploymentValue -Object $rollbackLaunch -Name 'ProcessId' -Default $null; commandLine = [string](Get-CodexDeploymentValue -Object $rollbackLaunch -Name 'CommandLine' -Default ('powershell.exe ' + ($rollbackArgs -join ' '))); health = $rollbackHealth.Endpoints; success = ([int]$rollbackLaunch.ExitCode -eq 0 -and $rollbackHealth.Success) }
+                $rollbackProcesses = if ([int]$rollbackLaunch.ExitCode -eq 0 -and $rollbackHealth.Success) { @(Get-CodexDeploymentProcessEvidence -SlotPath $activePath -ProcessProvider $ProcessProvider) } else { @() }
+                $rollbackStdout = [string](Get-CodexDeploymentValue $rollbackLaunch 'StdOut' (Get-CodexDeploymentValue $rollbackLaunch 'Output' ''))
+                $rollbackStderr = [string](Get-CodexDeploymentValue $rollbackLaunch 'StdErr' '')
+                $rollback = [pscustomobject]@{ launchExitCode = [int]$rollbackLaunch.ExitCode; stdout = $rollbackStdout; stderr = $rollbackStderr; processId = Get-CodexDeploymentValue -Object $rollbackLaunch -Name 'ProcessId' -Default $null; commandLine = [string](Get-CodexDeploymentValue -Object $rollbackLaunch -Name 'CommandLine' -Default ('powershell.exe ' + ($rollbackArgs -join ' '))); workingDirectory = $activePath; health = $rollbackHealth.Endpoints; processes = $rollbackProcesses; success = ([int]$rollbackLaunch.ExitCode -eq 0 -and $rollbackHealth.Success) }
+                $rollbackDirectory = Split-Path -Parent $rollbackLogPath; if (-not (Test-Path -LiteralPath $rollbackDirectory -PathType Container)) { New-Item -ItemType Directory -Path $rollbackDirectory -Force | Out-Null }; Add-Content -LiteralPath $rollbackLogPath -Value ("powershell.exe $($rollbackArgs -join ' ')`nstdout: $rollbackStdout`nstderr: $rollbackStderr")
                 $evidence['rollback'] = $rollback
-            } catch { $evidence['rollback'] = [pscustomobject]@{ success = $false; error = $_.Exception.Message } }
+            } catch { $evidence['rollback'] = [pscustomobject]@{ success = $false; error = $_.Exception.Message; log = $rollbackLogPath } }
         }
+        $compensationSucceeded = $true
+        if ($activationAttempted) {
+            try {
+                $observed = & $read $paths.StatePath
+                $compensation = Copy-CodexDeploymentObject $observed
+                if ($null -eq $compensation.PSObject.Properties['activeSlot']) { Add-Member -InputObject $compensation -NotePropertyName activeSlot -NotePropertyValue $active -Force } else { $compensation.activeSlot = $active }
+                & $write $paths.StatePath $compensation | Out-Null
+                $compensated = & $read $paths.StatePath
+                if ([string](Get-CodexDeploymentValue $compensated 'activeSlot' '') -ne $active) { throw 'Durable active-slot compensation could not be verified.' }
+                $evidence['activationCompensation'] = [pscustomobject]@{ attempted = $true; verified = $true; previousActiveSlot = $active }
+            } catch {
+                $compensationSucceeded = $false
+                $evidence['activationCompensation'] = [pscustomobject]@{ attempted = $true; verified = $false; previousActiveSlot = $active; error = $_.Exception.Message }
+            }
+        }
+        $evidence['failedTarget'] = Copy-CodexDeploymentObject ([pscustomobject]$evidence)
         $current = & $read $paths.StatePath
         $failedState = Copy-CodexDeploymentObject $current
         $failedDeployment = Get-CodexDeploymentValue $failedState 'deployment' $null
         if ($null -eq $failedDeployment) { $failedDeployment = Copy-CodexDeploymentObject $Deployment; Add-Member -InputObject $failedState -NotePropertyName deployment -NotePropertyValue $failedDeployment -Force }
         $rollbackEvidence = Get-CodexDeploymentValue -Object $evidence -Name 'rollback' -Default $null
-        $failedDeployment.status = if ($null -ne $rollbackEvidence -and -not [bool]$rollbackEvidence.success) { 'rollback-failed' } else { 'failed' }
+        $failedDeployment.status = if (-not $compensationSucceeded -or ($null -ne $rollbackEvidence -and -not [bool]$rollbackEvidence.success)) { 'rollback-failed' } else { 'failed' }
         if ($null -eq $failedDeployment.PSObject.Properties['evidence']) { Add-Member -InputObject $failedDeployment -NotePropertyName evidence -NotePropertyValue ([pscustomobject]$evidence) -Force } else { $failedDeployment.evidence = [pscustomobject]$evidence }
         if ($null -eq $failedState.PSObject.Properties['lastDeployment']) { Add-Member -InputObject $failedState -NotePropertyName lastDeployment -NotePropertyValue ([pscustomobject]$evidence) -Force } else { $failedState.lastDeployment = [pscustomobject]$evidence }
-        & $write $paths.StatePath $failedState | Out-Null
+        $failurePersistenceError = $null
+        try { & $write $paths.StatePath $failedState | Out-Null } catch { $failurePersistenceError = $_.Exception.Message }
+        if ($null -ne $failurePersistenceError) { $evidence['persistenceError'] = $failurePersistenceError }
         if ($failedDeployment.status -eq 'rollback-failed' -and $null -ne $GitHubCommandRunner) {
             $issue = [int](Get-CodexDeploymentValue $Deployment 'issueNumber' (Get-CodexDeploymentValue $Deployment 'sourcePr' 0))
             if ($issue -gt 0) { $repositoryName = [string](Get-CodexDeploymentValue -Object $Config -Name 'repository' -Default 'local/repository'); if ([string]::IsNullOrWhiteSpace($repositoryName)) { $repositoryName = 'local/repository' }; Add-CodexIssueComment -Repository $repositoryName -IssueNumber $issue -Body "[HIGH PRIORITY] Runtime deployment failed and rollback failed.`n`n$failure`n`nLogs: $($evidence.logs -join ', ')" -CommandRunner $GitHubCommandRunner | Out-Null }
         }
-        return [pscustomobject]@{ Success = $false; ActiveSlot = $active; TargetCommit = $target; Evidence = [pscustomobject]$evidence; State = $failedState; RollbackSucceeded = if ($null -eq $rollback) { $null } else { [bool]$rollback.success }; Error = $failure }
+        return [pscustomobject]@{ Success = $false; ActiveSlot = $active; TargetCommit = $target; Evidence = [pscustomobject]$evidence; State = $failedState; RollbackSucceeded = if ($null -eq $rollback) { $null } else { [bool]$rollback.success }; Error = $failure; PersistenceError = $failurePersistenceError }
     }
 }
 
