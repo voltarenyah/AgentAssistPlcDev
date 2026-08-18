@@ -371,8 +371,26 @@ function Invoke-CodexIssueRun {
         & $save $attemptState
 
         $worktreeResult = $null
-        if (-not [string]::IsNullOrWhiteSpace([string](Get-CodexOrchestrationField $attemptState 'worktree' ''))) {
-            $worktreeResult = [pscustomobject]@{ Path = $attemptState.worktree; BranchName = $attemptState.branch; Reused = $true; Created = $false }
+        $savedWorktree = [string](Get-CodexOrchestrationField $attemptState 'worktree' '')
+        $reuseSavedWorktree = $false
+        if (-not [string]::IsNullOrWhiteSpace($savedWorktree)) {
+            try {
+                $savedWorktree = [IO.Path]::GetFullPath($savedWorktree)
+                Assert-PathUnderRoot -Path $savedWorktree -Root $paths.WorktreeRoot | Out-Null
+                if (Test-Path -LiteralPath $savedWorktree -PathType Container) {
+                    $registeredWorktrees = @(Get-RegisteredWorktrees -RepositoryRoot $RepositoryRoot -CommandRunner $GitCommandRunner)
+                    $matchingWorktrees = @($registeredWorktrees | Where-Object {
+                            [IO.Path]::GetFullPath([string]$_.Path) -eq $savedWorktree -and
+                            [string]$_.Branch -eq [string]$attemptState.branch
+                        })
+                    $reuseSavedWorktree = $matchingWorktrees.Count -eq 1
+                }
+            } catch {
+                $reuseSavedWorktree = $false
+            }
+        }
+        if ($reuseSavedWorktree) {
+            $worktreeResult = [pscustomobject]@{ Path = $savedWorktree; BranchName = $attemptState.branch; Reused = $true; Created = $false }
         } elseif ($null -ne $WorktreeProvider) {
             $worktreeResult = & $WorktreeProvider $RepositoryRoot $paths.WorktreeRoot $IssueNumber ([string]$issue.title) ([string]$attemptState.branch) ([string](Get-CodexOrchestrationField $Config 'defaultBranch' 'master')) $GitCommandRunner
         } else {

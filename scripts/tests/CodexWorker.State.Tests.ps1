@@ -376,6 +376,38 @@ Describe 'Codex worker paths' {
         $lockCalls.Count | Should Be 0
     }
 
+    It 'reconstructs a missing persisted worktree when retrying a blocked issue' {
+        $statePath = Join-Path $TestDrive 'stale-worktree-state.json'
+        $repositoryRoot = Join-Path $TestDrive 'repo'
+        $staleWorktree = Join-Path $TestDrive 'deleted-worktree'
+        $replacementWorktree = Join-Path $repositoryRoot '.worktrees\issue-42-resume'
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; status = 'blocked'; attempt = 1; branch = 'codex/42-resume'; worktree = $staleWorktree; threadId = $null; runDirectory = $null; commit = $null; prUrl = $null; retryCount = 0; publicationStage = 'none'; lastError = 'old' } }; deployment = $null }
+        Write-CodexWorkerState -Path $statePath -State $state
+        $worktreeCalls = New-Object 'System.Collections.Generic.List[string]'
+        $github = {
+            param([string[]] $Arguments)
+            if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return '{"number":42,"title":"Resume","body":"body","author":{"login":"reporter"},"comments":[],"labels":[{"name":"codex"}],"state":"OPEN","url":"https://github.com/owner/repo/issues/42"}' }
+            if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
+            if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
+            if ($Arguments -contains '--add-label' -or $Arguments -contains '--body') { return '' }
+            throw 'Unexpected GitHub call.'
+        }.GetNewClosure()
+        $worktree = {
+            param($Root, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner)
+            $worktreeCalls.Add($Root) | Out-Null
+            return [pscustomobject]@{ Path = $replacementWorktree; BranchName = $BranchName; Reused = $false; Created = $true }
+        }.GetNewClosure()
+        $setup = { param($Worktree, $Config, $ActivityLogPath) }.GetNewClosure()
+        $codex = { param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath) [pscustomobject]@{ Status = 'failed'; Classification = 'process_failed'; LastError = 'stop after worktree selection' } }.GetNewClosure()
+
+        Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'retry' -RepositoryRoot $repositoryRoot -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex | Out-Null
+
+        $worktreeCalls.Count | Should Be 1
+        $worktreeCalls[0] | Should Be $repositoryRoot
+        (Read-CodexWorkerState -Path $statePath).issues.'42'.worktree | Should Be $replacementWorktree
+    }
+
     It 'resets retry allowance for a resumed blocked attempt' {
         $statePath = Join-Path $TestDrive 'resume-retry-state.json'
         $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; status = 'blocked'; attempt = 1; branch = 'codex/42-resume'; worktree = (Join-Path $TestDrive 'resume-worktree'); threadId = $null; runDirectory = $null; commit = $null; prUrl = $null; retryCount = 1; publicationStage = 'none'; lastError = 'old' } }; deployment = $null }
@@ -390,6 +422,10 @@ Describe 'Codex worker paths' {
             if ($Arguments -contains '--add-label' -or $Arguments -contains '--body') { return '' }
             throw 'Unexpected GitHub call.'
         }.GetNewClosure()
+        $worktree = {
+            param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner)
+            [pscustomobject]@{ Path = (Join-Path $TestDrive 'resume-worktree'); BranchName = $BranchName; Reused = $false; Created = $true }
+        }.GetNewClosure()
         $setup = { param($Worktree, $Config, $ActivityLogPath) }.GetNewClosure()
         $codex = {
             param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath)
@@ -398,7 +434,7 @@ Describe 'Codex worker paths' {
             return [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; Summary = [pscustomobject]@{ status = 'completed'; rootCauseOrApproach = 'resume'; changedComponents = @(); decisions = @(); validation = @(); warnings = @(); remainingRisks = @(); commitMessage = 'fix: resume'; prTitle = 'fix: resume'; requiresHumanInput = $false; humanQuestion = $null } }
         }.GetNewClosure()
 
-        $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'retry' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -SetupProvider $setup -CodexProvider $codex
+        $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'retry' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
 
         $result.Status | Should Be 'pr-ready'
         $codexAttempts.Count | Should Be 2
