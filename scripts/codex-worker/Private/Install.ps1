@@ -165,7 +165,7 @@ function Resolve-CodexRunnerAsset {
     if ($hashes.Count -ne 1) { throw "Could not identify one unambiguous SHA-256 checksum for $name." }
     $tag = [string](Get-CodexSetupProperty $Release 'tag_name' '')
     if ([string]::IsNullOrWhiteSpace($tag)) { throw "Windows x64 runner asset has no unambiguous release version." }
-    return [pscustomobject][ordered]@{ Name = $name; Uri = $url; Sha256 = @($hashes)[0]; Version = ($tag -replace '^v', '') }
+    return [pscustomobject][ordered]@{ Name = $name; Uri = $url; Sha256 = @($hashes)[0]; Tag = $tag; Version = ($tag -replace '^v', '') }
 }
 
 function Get-CodexCurrentUserId {
@@ -197,23 +197,47 @@ function Get-CodexExistingRunnerState {
         [Parameter(Mandatory = $true)] [string] $RunnerRoot,
         [Parameter(Mandatory = $true)] [string] $Repository,
         [Parameter(Mandatory = $true)] [string] $Label,
+        [Parameter(Mandatory = $true)] [string] $RunnerName,
         [object] $Asset,
         [scriptblock] $ProcessProvider
     )
-    $statePath = Join-Path $RunnerRoot '.runner'
+    $statePath = Join-Path $RunnerRoot 'runner-install.json'
     if (-not (Test-Path -LiteralPath $RunnerRoot -PathType Container)) { return [pscustomobject]@{ Exists = $false; Valid = $false; Active = $false; Reason = 'missing' } }
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return [pscustomobject]@{ Exists = $true; Valid = $false; Active = $false; Reason = 'runner state is missing' } }
     try { $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json } catch { return [pscustomobject]@{ Exists = $true; Valid = $false; Active = $false; Reason = 'runner state is malformed' } }
     $labels = @((Get-CodexSetupProperty $state 'labels' @()) | ForEach-Object { if ($_ -is [string]) { $_ } else { [string](Get-CodexSetupProperty $_ 'name' '') } })
     $expectedUrl = "https://github.com/$Repository"
-    $actualUrl = ([string](Get-CodexSetupProperty $state 'repositoryUrl' '')).TrimEnd('/')
+    $actualUrl = ([string](Get-CodexSetupProperty $state 'repositoryUrl' ("https://github.com/" + [string](Get-CodexSetupProperty $state 'repository' '')))).TrimEnd('/')
     $version = [string](Get-CodexSetupProperty $state 'version' '')
-    $hash = [string](Get-CodexSetupProperty $state 'sha256' (Get-CodexSetupProperty $state 'archiveSha256' ''))
-    $valid = $actualUrl.Equals($expectedUrl, [StringComparison]::OrdinalIgnoreCase) -and $labels -contains $Label -and (Test-Path -LiteralPath (Join-Path $RunnerRoot 'run.cmd') -PathType Leaf)
+    $hash = [string](Get-CodexSetupProperty $state 'sha256' '')
+    $metadataName = [string](Get-CodexSetupProperty $state 'runnerName' '')
+    $valid = $actualUrl.Equals($expectedUrl, [StringComparison]::OrdinalIgnoreCase) -and $metadataName -eq $RunnerName -and $labels -contains $Label -and (Test-Path -LiteralPath (Join-Path $RunnerRoot 'run.cmd') -PathType Leaf)
+    if ($valid -and $null -ne $Asset -and -not [string]::IsNullOrWhiteSpace($Asset.Name)) { $valid = [string](Get-CodexSetupProperty $state 'assetName' '') -eq $Asset.Name }
+    if ($valid -and $null -ne $Asset -and -not [string]::IsNullOrWhiteSpace($Asset.Tag)) { $valid = [string](Get-CodexSetupProperty $state 'releaseTag' '') -eq $Asset.Tag }
     if ($valid -and $null -ne $Asset -and -not [string]::IsNullOrWhiteSpace($Asset.Version)) { $valid = $version -eq $Asset.Version }
     if ($valid -and $null -ne $Asset) { $valid = $hash.Equals([string]$Asset.Sha256, [StringComparison]::OrdinalIgnoreCase) }
     $processes = if ($null -ne $ProcessProvider) { @(& $ProcessProvider) } else { @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '(?i)^(Runner\.Listener|runsvc|run)$' }) }
     [pscustomobject][ordered]@{ Exists = $true; Valid = [bool]$valid; Active = @($processes).Count -gt 0; Reason = if ($valid) { 'matching configured runner' } else { 'runner configuration does not match expected repository, label, version, or hash' }; State = $state }
+}
+
+function Get-CodexRunnerInventory {
+    param([string] $Repository, [object] $CommandRunner)
+    $result = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('api',"repos/$Repository/actions/runners") -CommandRunner $CommandRunner
+    if (-not (Test-CodexSetupSuccess $result)) { throw 'GitHub Actions runner inventory could not be read.' }
+    try { return (Get-CodexSetupText $result | ConvertFrom-Json) } catch { throw 'GitHub Actions runner inventory returned malformed JSON.' }
+}
+
+function Assert-CodexRunnerInventoryCompatibility {
+    param([object] $Payload, [string] $RunnerName, [string] $Label, [bool] $Reuse)
+    $runners = @((Get-CodexSetupProperty $Payload 'runners' @()))
+    $named = @($runners | Where-Object { [string](Get-CodexSetupProperty $_ 'name' '') -eq $RunnerName })
+    if ($named.Count -gt 1) { throw "GitHub Actions has multiple runners named '$RunnerName'." }
+    if ($named.Count -eq 0) { if ($Reuse) { throw "The configured runner '$RunnerName' is missing from GitHub Actions inventory." }; return $null }
+    $labels = @((Get-CodexSetupProperty $named[0] 'labels' @()) | ForEach-Object { if ($_ -is [string]) { $_ } else { [string](Get-CodexSetupProperty $_ 'name' '') } })
+    if (-not $Reuse -or [string](Get-CodexSetupProperty $named[0] 'status' '') -ne 'online' -or $labels -notcontains $Label) {
+        throw "GitHub Actions runner '$RunnerName' is already registered incompatibly."
+    }
+    return $named[0]
 }
 
 function Assert-CodexRunnerRegistration {
@@ -246,6 +270,14 @@ function Get-CodexLocalWorkerPlan {
     $label = [string](Get-CodexSetupProperty $Config 'runnerLabel' 'agentassist-local')
     $runnerRoot = [string](Get-CodexSetupProperty $Config 'runnerRoot' (Join-Path $data 'runner'))
     $runnerRoot = [IO.Path]::GetFullPath($runnerRoot)
+    $dataPrefix = $data.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    $repositoryPrefix = $root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if ($runnerRoot.Equals($data, [StringComparison]::OrdinalIgnoreCase) -or -not $runnerRoot.StartsWith($dataPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Worker runner root must be a descendant of the trusted worker data root.'
+    }
+    if ($runnerRoot.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or $runnerRoot.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Worker runner root must remain outside the repository.'
+    }
     $runnerName = [string](Get-CodexSetupProperty $Config 'runnerName' 'AutomationWorkbenchCodexRunner')
     $configPath = Join-Path $data 'config.json'
     $runnerScript = Join-Path $root 'scripts\codex-worker\Start-GitHubRunner.ps1'
@@ -257,7 +289,7 @@ function Get-CodexLocalWorkerPlan {
     $notifierXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $notifierArgs
     return [pscustomobject][ordered]@{
         Repository = $Repository; RepositoryRoot = $root; DataRoot = $data; ConfigPath = $configPath
-        Runner = [pscustomobject][ordered]@{ Root = $runnerRoot; ServiceMode = $false; Label = $label; Name = $runnerName; Reuse = $false }
+        Runner = [pscustomobject][ordered]@{ Root = $runnerRoot; MetadataPath = (Join-Path $runnerRoot 'runner-install.json'); ServiceMode = $false; Label = $label; Name = $runnerName; Reuse = $false }
         Tasks = [pscustomobject][ordered]@{
             Runner = [pscustomobject][ordered]@{ Name = 'AutomationWorkbenchCodexRunner'; LogonTrigger = $true; Hidden = $true; FilePath = 'pwsh.exe'; Arguments = [string[]]$runnerArgs; Xml = $runnerXml }
             Notifier = [pscustomobject][ordered]@{ Name = 'AutomationWorkbenchCodexDeploymentNotifier'; LogonTrigger = $true; Hidden = $true; FilePath = 'pwsh.exe'; Arguments = [string[]]$notifierArgs; Xml = $notifierXml }
@@ -353,45 +385,65 @@ function Invoke-CodexLocalWorkerSetup {
     }
     $asset = $null
     if ($null -ne $release) { $asset = Resolve-CodexRunnerAsset -Release $release }
-    $existing = if ($null -ne $asset) { Get-CodexExistingRunnerState -RunnerRoot $plan.Runner.Root -Repository $Repository -Label $plan.Runner.Label -Asset $asset -ProcessProvider $ProcessProvider } else { [pscustomobject]@{ Exists = $false; Valid = $false; Active = $false; Reason = 'release not resolved' } }
+    $inventoryPayload = $null
+    if ($null -ne $asset) {
+        try { $inventoryPayload = Get-CodexRunnerInventory -Repository $Repository -CommandRunner $CommandRunner }
+        catch { if (-not $whatIf) { throw }; $inventoryPayload = $null }
+    }
+    $existing = if ($null -ne $asset) { Get-CodexExistingRunnerState -RunnerRoot $plan.Runner.Root -Repository $Repository -Label $plan.Runner.Label -RunnerName $plan.Runner.Name -Asset $asset -ProcessProvider $ProcessProvider } else { [pscustomobject]@{ Exists = $false; Valid = $false; Active = $false; Reason = 'release not resolved' } }
     if ($existing.Valid) { $plan.Runner.Reuse = $true }
     elseif ($existing.Exists -and -not $whatIf) {
         if ($existing.Active) { throw "Existing runner is active but does not match the expected repository, label, version, and hash; refusing replacement." }
         throw "Existing runner cannot be safely reused: $($existing.Reason). Refusing in-place replacement."
     }
+    $registeredRunner = $null
+    if ($null -ne $inventoryPayload) {
+        try { $registeredRunner = Assert-CodexRunnerInventoryCompatibility -Payload $inventoryPayload -RunnerName $plan.Runner.Name -Label $plan.Runner.Label -Reuse:$plan.Runner.Reuse }
+        catch { if (-not $whatIf) { throw }; $registeredRunner = $null }
+    }
     if (-not $whatIf -and -not $plan.Runner.Reuse) {
-        $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('actions-runner-' + [Guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+        if (-not (Test-Path -LiteralPath $plan.DataRoot -PathType Container)) { New-Item -ItemType Directory -Path $plan.DataRoot -Force | Out-Null }
+        $stagingRoot = Join-Path $plan.DataRoot ('.staging\runner-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
         try {
-            $archive = Join-Path $tempRoot $asset.Name
+            $archive = Join-Path $stagingRoot $asset.Name
             $downloadRequest = [pscustomobject][ordered]@{ Uri = $asset.Uri; Destination = $archive }
             if ($null -ne $DownloadRunner) { & $DownloadRunner $downloadRequest } else { Invoke-WebRequest -UseBasicParsing -Uri $asset.Uri -OutFile $archive }
             $actualHash = if ($null -ne $HashRunner) { [string](& $HashRunner $archive) } else { (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash }
             if ($actualHash.ToLowerInvariant() -ne $asset.Sha256) { throw 'Downloaded runner checksum does not match the release checksum.' }
-            if (-not (Test-Path -LiteralPath $plan.Runner.Root -PathType Container)) { New-Item -ItemType Directory -Path $plan.Runner.Root -Force | Out-Null }
-            $extractRequest = [pscustomobject][ordered]@{ Archive = $archive; Destination = $plan.Runner.Root }
-            if ($null -ne $ExtractRunner) { & $ExtractRunner $extractRequest } else { Expand-Archive -LiteralPath $archive -DestinationPath $plan.Runner.Root -Force }
-            $mutations += 2
-        } finally { if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force } }
-        $tokenResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('api','--method','POST',"repos/$Repository/actions/runners/registration-token") -CommandRunner $CommandRunner
-        if (-not (Test-CodexSetupSuccess $tokenResult)) { throw 'Could not obtain a runner registration token.' }
-        $tokenPayload = Get-CodexSetupText $tokenResult | ConvertFrom-Json
-        $token = [string](Get-CodexSetupProperty $tokenPayload 'token' '')
-        if ([string]::IsNullOrWhiteSpace($token)) { throw 'GitHub returned an empty runner registration token.' }
-        $configPath = Join-Path $plan.Runner.Root 'config.cmd'
-        $runnerConfigArgs = @('--unattended','--replace','--url',"https://github.com/$Repository",'--token',$token,'--name',$plan.Runner.Name,'--labels',$plan.Runner.Label,'--work','_work')
-        try { $configured = Invoke-CodexInstallCommand -FilePath $configPath -Arguments $runnerConfigArgs -WorkingDirectory $plan.Runner.Root -CommandRunner $CommandRunner }
-        catch { throw 'GitHub Actions runner configuration failed.' }
-        if (-not (Test-CodexSetupSuccess $configured)) { throw 'GitHub Actions runner configuration failed.' }
-        $mutations++
-    }
-
-    $registeredRunner = $null
-    if (-not $whatIf) {
-        $registrationResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('api',"repos/$Repository/actions/runners") -CommandRunner $CommandRunner
-        if (-not (Test-CodexSetupSuccess $registrationResult)) { throw 'GitHub Actions runner registration could not be verified.' }
-        try { $registrationPayload = Get-CodexSetupText $registrationResult | ConvertFrom-Json } catch { throw 'GitHub Actions runner registration returned malformed JSON.' }
-        $registeredRunner = Assert-CodexRunnerRegistration -Payload $registrationPayload -RunnerName $plan.Runner.Name -Label $plan.Runner.Label
+            $extractRequest = [pscustomobject][ordered]@{ Archive = $archive; Destination = $stagingRoot }
+            if ($null -ne $ExtractRunner) { & $ExtractRunner $extractRequest } else { Expand-Archive -LiteralPath $archive -DestinationPath $stagingRoot -Force }
+            if (Test-Path -LiteralPath $archive -PathType Leaf) { Remove-Item -LiteralPath $archive -Force }
+            $tokenResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('api','--method','POST',"repos/$Repository/actions/runners/registration-token") -CommandRunner $CommandRunner
+            if (-not (Test-CodexSetupSuccess $tokenResult)) { throw 'Could not obtain a runner registration token.' }
+            $tokenPayload = Get-CodexSetupText $tokenResult | ConvertFrom-Json
+            $token = [string](Get-CodexSetupProperty $tokenPayload 'token' '')
+            if ([string]::IsNullOrWhiteSpace($token)) { throw 'GitHub returned an empty runner registration token.' }
+            $configPath = Join-Path $stagingRoot 'config.cmd'
+            $runnerConfigArgs = @('--unattended','--replace','--url',"https://github.com/$Repository",'--token',$token,'--name',$plan.Runner.Name,'--labels',$plan.Runner.Label,'--work','_work')
+            try { $configured = Invoke-CodexInstallCommand -FilePath $configPath -Arguments $runnerConfigArgs -WorkingDirectory $stagingRoot -CommandRunner $CommandRunner }
+            catch { throw 'GitHub Actions runner configuration failed.' }
+            if (-not (Test-CodexSetupSuccess $configured)) { throw 'GitHub Actions runner configuration failed.' }
+            $postInventory = Get-CodexRunnerInventory -Repository $Repository -CommandRunner $CommandRunner
+            $registeredRunner = Assert-CodexRunnerRegistration -Payload $postInventory -RunnerName $plan.Runner.Name -Label $plan.Runner.Label
+            $metadata = [ordered]@{
+                schemaVersion = 1; assetName = $asset.Name; releaseTag = $asset.Tag; version = $asset.Version
+                sha256 = $asset.Sha256; repository = $Repository; repositoryUrl = "https://github.com/$Repository"
+                runnerName = $plan.Runner.Name; labels = @($plan.Runner.Label)
+            }
+            [IO.File]::WriteAllText((Join-Path $stagingRoot 'runner-install.json'), ($metadata | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false)))
+            if (Test-Path -LiteralPath $plan.Runner.Root) { throw 'Runner destination appeared during setup; refusing replacement.' }
+            Move-Item -LiteralPath $stagingRoot -Destination $plan.Runner.Root
+            $mutations += 4
+        } catch {
+            if (Test-Path -LiteralPath $stagingRoot) { Remove-Item -LiteralPath $stagingRoot -Recurse -Force }
+            $stagingParent = Split-Path -Parent $stagingRoot
+            if (Test-Path -LiteralPath $stagingParent -PathType Container) {
+                $remainingStaging = @(Get-ChildItem -LiteralPath $stagingParent -Force -ErrorAction SilentlyContinue)
+                if ($remainingStaging.Count -eq 0) { [IO.Directory]::Delete($stagingParent) }
+            }
+            throw
+        }
     }
 
     $configToPersist = [ordered]@{
