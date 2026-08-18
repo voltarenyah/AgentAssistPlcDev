@@ -126,10 +126,19 @@ function ConvertTo-CodexArgumentString {
     return '"' + ($Argument -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
 }
 
+function Resolve-CodexProcessFilePath {
+    param([string] $FilePath)
+    if ([string]::IsNullOrWhiteSpace($FilePath) -or [IO.Path]::IsPathRooted($FilePath) -or $FilePath -match '[\\/]') { return $FilePath }
+    $application = @(Get-Command -Name $FilePath -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1)[0]
+    if ($null -eq $application) { return $FilePath }
+    if (-not [string]::IsNullOrWhiteSpace([string]$application.Path)) { return [string]$application.Path }
+    return [string]$application.Source
+}
+
 function New-CodexProcessStartInfo {
     param([string] $FilePath, [string[]] $Arguments, [string] $WorkingDirectory)
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = $FilePath
+    $startInfo.FileName = Resolve-CodexProcessFilePath -FilePath $FilePath
     $startInfo.WorkingDirectory = $WorkingDirectory
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true

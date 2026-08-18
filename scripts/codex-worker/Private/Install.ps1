@@ -1053,17 +1053,16 @@ function Invoke-CodexLocalWorkerSetup {
         [IO.File]::WriteAllText($plan.ConfigPath, ($configToPersist | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false)))
         $mutations++
         # Task 5's resume capability probe is deliberately part of installation.
-        $resumeProbe = {
-            param($request)
-            if ($null -ne $CommandRunner) {
+        $resumeProbe = $null
+        if ($null -ne $CommandRunner) {
+            $resumeProbe = {
+                param($request)
                 & $CommandRunner ([pscustomobject][ordered]@{
                     FilePath = $request.FilePath; Arguments = [string[]]$request.Arguments
                     WorkingDirectory = $request.WorkingDirectory; Interactive = $false
                 })
-            } else {
-                Invoke-CodexProcess -FilePath $request.FilePath -Arguments $request.Arguments -WorkingDirectory $request.WorkingDirectory -Prompt '' -TimeoutMilliseconds $request.TimeoutMilliseconds
-            }
-        }.GetNewClosure()
+            }.GetNewClosure()
+        }
         Initialize-CodexResumeCapability -IssueWorktree $plan.RepositoryRoot -Config ([pscustomobject]$configToPersist) -ConfigPath $plan.ConfigPath -ProcessRunner $resumeProbe | Out-Null
 
         $runnerTask = $plan.Tasks.Runner
