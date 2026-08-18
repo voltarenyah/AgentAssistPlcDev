@@ -51,6 +51,10 @@
         ,'Assert-CodexCommitReachableFromMaster'
         ,'Register-CodexPendingDeployment'
         ,'Register-CodexPullRequestClosed'
+        ,'Test-CodexInteractiveSession'
+        ,'Show-CodexDeploymentDialog'
+        ,'Invoke-CodexDeploymentNotificationCycle'
+        ,'Invoke-CodexDeploymentNotifier'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
