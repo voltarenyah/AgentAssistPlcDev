@@ -3,6 +3,13 @@ Describe 'Codex worker prompt and process runner' {
         Import-Module (Join-Path $PSScriptRoot '..\codex-worker\CodexWorker.psd1') -Force
     }
 
+    It 'resolves a bare Codex command to an application shim for ProcessStartInfo' {
+        $module = Get-Module CodexWorker
+        $resolved = & $module { Resolve-CodexProcessFilePath -FilePath 'codex' }
+
+        [IO.Path]::GetFileName($resolved) | Should Be 'codex.cmd'
+    }
+
     It 'delimits issue content and preserves repository authority in the issue prompt' {
         $prompt = Join-Path $PSScriptRoot '..\codex-worker\prompts\issue.md'
         $text = Get-Content -Raw $prompt
