@@ -277,6 +277,84 @@ Describe 'Codex worker PR-close deployment handoff' {
         $state.issues.'42'.cleanupAt | Should Be $cleanupAt
     }
 
+    It 'repairs an equal-target deployment with the wrong source PR without repeating cleanup' {
+        $sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        $cleanupAt = '2026-08-18T00:00:00Z'
+        $requestedAt = '2026-08-18T00:30:00Z'
+        $snooze = '2026-08-18T03:00:00Z'
+        $now = [DateTime]::Parse('2026-08-18T01:00:00Z')
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; branch = 'codex/42-fix'; worktree = $null; status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17'; cleanupStatus = 'completed'; cleanupAt = $cleanupAt; cleanupBlockers = @() } }; deployment = [pscustomobject]@{ targetCommit = $sha; sourcePr = 99; requestedAt = $requestedAt; snoozeUntil = $snooze; status = 'pending' } }
+        $writes = [System.Collections.Generic.List[object]]::new(); $cleanupCalls = 0; $comments = 0; $labels = [System.Collections.Generic.List[string]]::new()
+        $github = { param([string[]] $Arguments) if (($Arguments -join ' ') -match 'closingIssuesReferences') { return ([pscustomobject]@{ number = 17; state = 'CLOSED'; url = 'https://github.com/owner/repo/pull/17'; headRefName = 'codex/42-fix'; baseRefName = 'master'; headRepository = @{ nameWithOwner = 'owner/repo' }; baseRepository = @{ nameWithOwner = 'owner/repo' }; mergedAt = '2026-08-18T00:00:00Z'; mergeCommit = @{ oid = $sha }; closingIssuesReferences = @(@{ number = 42; repository = @{ nameWithOwner = 'owner/repo' } }) } | ConvertTo-Json -Depth 10) }; if ($Arguments -contains '--body') { $comments++ }; if ($Arguments -contains '--add-label') { $labels.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null }; return '' }.GetNewClosure()
+        $git = { param([string[]] $Arguments) if ($Arguments -contains 'rev-parse') { return $sha }; if ($Arguments -contains 'merge-base') { return '' }; return '' }.GetNewClosure()
+        $reader = { param($Path) $state }
+        $writer = { param($Path, $Current) $writes.Add($Current) | Out-Null }.GetNewClosure()
+        $cleanup = { $cleanupCalls++; throw 'completed cleanup must not run again' }.GetNewClosure()
+
+        $result = Register-CodexPullRequestClosed -Repository 'owner/repo' -PullRequestNumber 17 -Merged:$true -MergeCommitSha $sha -HeadBranch 'codex/42-fix' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -StateReader $reader -StateWriter $writer -GitHubCommandRunner $github -GitCommandRunner $git -CleanupProvider $cleanup -LockProvider { 'lock' } -UnlockProvider { param($h) } -Now $now
+
+        $result.DeploymentCreated | Should Be $true
+        $state.deployment.targetCommit | Should Be $sha
+        $state.deployment.sourcePr | Should Be 17
+        $state.deployment.requestedAt | Should Be $now.ToUniversalTime().ToString('o')
+        $state.deployment.snoozeUntil | Should Be $snooze
+        $state.deployment.status | Should Be 'pending'
+        $writes.Count | Should Be 1
+        $cleanupCalls | Should Be 0
+        $comments | Should Be 0
+        $labels.Count | Should Be 1
+        $state.issues.'42'.cleanupAt | Should Be $cleanupAt
+    }
+
+    It 'repairs malformed equal-target deployment metadata without preserving malformed snooze data' {
+        $sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        $cleanupAt = '2026-08-18T00:00:00Z'
+        $now = [DateTime]::Parse('2026-08-18T01:00:00Z')
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; branch = 'codex/42-fix'; worktree = $null; status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17'; cleanupStatus = 'completed'; cleanupAt = $cleanupAt; cleanupBlockers = @() } }; deployment = [pscustomobject]@{ targetCommit = $sha; sourcePr = 0; requestedAt = ''; snoozeUntil = 'not-a-timestamp'; status = 'pending' } }
+        $writes = [System.Collections.Generic.List[object]]::new(); $cleanupCalls = 0; $comments = 0; $labels = [System.Collections.Generic.List[string]]::new()
+        $github = { param([string[]] $Arguments) if (($Arguments -join ' ') -match 'closingIssuesReferences') { return ([pscustomobject]@{ number = 17; state = 'CLOSED'; url = 'https://github.com/owner/repo/pull/17'; headRefName = 'codex/42-fix'; baseRefName = 'master'; headRepository = @{ nameWithOwner = 'owner/repo' }; baseRepository = @{ nameWithOwner = 'owner/repo' }; mergedAt = '2026-08-18T00:00:00Z'; mergeCommit = @{ oid = $sha }; closingIssuesReferences = @(@{ number = 42; repository = @{ nameWithOwner = 'owner/repo' } }) } | ConvertTo-Json -Depth 10) }; if ($Arguments -contains '--body') { $comments++ }; if ($Arguments -contains '--add-label') { $labels.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null }; return '' }.GetNewClosure()
+        $git = { param([string[]] $Arguments) if ($Arguments -contains 'rev-parse') { return $sha }; if ($Arguments -contains 'merge-base') { return '' }; return '' }.GetNewClosure()
+        $reader = { param($Path) $state }
+        $writer = { param($Path, $Current) $writes.Add($Current) | Out-Null }.GetNewClosure()
+        $cleanup = { $cleanupCalls++; throw 'completed cleanup must not run again' }.GetNewClosure()
+
+        $result = Register-CodexPullRequestClosed -Repository 'owner/repo' -PullRequestNumber 17 -Merged:$true -MergeCommitSha $sha -HeadBranch 'codex/42-fix' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -StateReader $reader -StateWriter $writer -GitHubCommandRunner $github -GitCommandRunner $git -CleanupProvider $cleanup -LockProvider { 'lock' } -UnlockProvider { param($h) } -Now $now
+
+        $result.DeploymentCreated | Should Be $true
+        $state.deployment.targetCommit | Should Be $sha
+        $state.deployment.sourcePr | Should Be 17
+        $state.deployment.requestedAt | Should Be $now.ToUniversalTime().ToString('o')
+        $state.deployment.snoozeUntil | Should BeNullOrEmpty
+        $state.deployment.status | Should Be 'pending'
+        $writes.Count | Should Be 1
+        $cleanupCalls | Should Be 0
+        $comments | Should Be 0
+        $labels.Count | Should Be 1
+        $state.issues.'42'.cleanupAt | Should Be $cleanupAt
+    }
+
+    It 'fails closed when repaired deployment persistence fails before done mutation' {
+        $sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        $cleanupAt = '2026-08-18T00:00:00Z'
+        $writes = [System.Collections.Generic.List[object]]::new(); $cleanupCalls = 0; $comments = 0; $labels = 0
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; branch = 'codex/42-fix'; worktree = $null; status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17'; cleanupStatus = 'completed'; cleanupAt = $cleanupAt; cleanupBlockers = @() } }; deployment = $null }
+        $github = { param([string[]] $Arguments) if (($Arguments -join ' ') -match 'closingIssuesReferences') { return ([pscustomobject]@{ number = 17; state = 'CLOSED'; url = 'https://github.com/owner/repo/pull/17'; headRefName = 'codex/42-fix'; baseRefName = 'master'; headRepository = @{ nameWithOwner = 'owner/repo' }; baseRepository = @{ nameWithOwner = 'owner/repo' }; mergedAt = '2026-08-18T00:00:00Z'; mergeCommit = @{ oid = $sha }; closingIssuesReferences = @(@{ number = 42; repository = @{ nameWithOwner = 'owner/repo' } }) } | ConvertTo-Json -Depth 10) }; if ($Arguments -contains '--body') { $comments++ }; if ($Arguments -contains '--add-label') { $labels++ }; return '' }.GetNewClosure()
+        $git = { param([string[]] $Arguments) if ($Arguments -contains 'rev-parse') { return $sha }; if ($Arguments -contains 'merge-base') { return '' }; return '' }.GetNewClosure()
+        $reader = { param($Path) $state }
+        $writer = { param($Path, $Current) $writes.Add($Current) | Out-Null; throw 'simulated state persistence failure' }.GetNewClosure()
+        $cleanup = { $cleanupCalls++; throw 'completed cleanup must not run again' }.GetNewClosure()
+
+        $threw = $false
+        try { Register-CodexPullRequestClosed -Repository 'owner/repo' -PullRequestNumber 17 -Merged:$true -MergeCommitSha $sha -HeadBranch 'codex/42-fix' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -StateReader $reader -StateWriter $writer -GitHubCommandRunner $github -GitCommandRunner $git -CleanupProvider $cleanup -LockProvider { 'lock' } -UnlockProvider { param($h) } } catch { $threw = $true }
+
+        $threw | Should Be $true
+        $writes.Count | Should Be 1
+        $cleanupCalls | Should Be 0
+        $comments | Should Be 0
+        $labels | Should Be 0
+        $state.issues.'42'.cleanupAt | Should Be $cleanupAt
+    }
+
     It 'fails before mutation for every invalid trusted close context' {
         $sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; $cases = @(
             @{ Name = 'saved URL'; Change = { param($p) $p.url = 'https://github.com/owner/repo/pull/18' } },

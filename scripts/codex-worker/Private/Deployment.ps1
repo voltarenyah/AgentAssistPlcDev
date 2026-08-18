@@ -120,6 +120,19 @@ function Write-CodexDeploymentState {
     else { Write-CodexWorkerState -Path $StatePath -State $State }
 }
 
+function Set-CodexRepairedDeploymentMetadata {
+    param([object] $Deployment, [object] $Existing, [bool] $SnoozeValid)
+    if ($SnoozeValid) {
+        $snooze = Get-CodexDeploymentValue -Object $Existing -Name 'snoozeUntil' -Default $null
+        if ($null -ne $snooze -and -not [string]::IsNullOrWhiteSpace([string]$snooze)) {
+            $Deployment.snoozeUntil = $snooze
+            $existingStatus = [string](Get-CodexDeploymentValue -Object $Existing -Name 'status' '')
+            if ($existingStatus -in @('pending', 'snoozed')) { $Deployment.status = $existingStatus }
+        }
+    }
+    return $Deployment
+}
+
 function Add-CodexCleanupBlockerComment {
     param([string] $Repository, [int] $PullRequestNumber, [int] $IssueNumber, [string[]] $Blockers, [scriptblock] $GitHubCommandRunner)
     if (@($Blockers).Count -eq 0) { return }
@@ -263,16 +276,26 @@ function Register-CodexPullRequestClosed {
             $existingTargetValid = $false
             try { $existingTarget = ConvertTo-CodexFullCommit -Commit ([string](Get-CodexDeploymentValue -Object $existingDeployment -Name 'targetCommit' '')) -Name 'existing deployment target'; $existingTargetValid = $true } catch { }
             $existingStatus = [string](Get-CodexDeploymentValue -Object $existingDeployment -Name 'status' '')
-            $existingSourcePr = [int](Get-CodexDeploymentValue -Object $existingDeployment -Name 'sourcePr' 0)
+            $existingSourcePr = 0
+            $existingSourcePrValid = [int]::TryParse([string](Get-CodexDeploymentValue -Object $existingDeployment -Name 'sourcePr' 0), [ref]$existingSourcePr) -and $existingSourcePr -gt 0
             $existingRequestedAt = [string](Get-CodexDeploymentValue -Object $existingDeployment -Name 'requestedAt' '')
-            $existingTupleComplete = $existingTargetValid -and $existingStatus -in @('pending', 'snoozed') -and $existingSourcePr -gt 0 -and -not [string]::IsNullOrWhiteSpace($existingRequestedAt)
-            if ($cleanupAlreadyCompleted -and -not $existingTupleComplete) {
+            $existingRequestedAtValue = [DateTime]::MinValue
+            $existingRequestedAtValid = [DateTime]::TryParse($existingRequestedAt, [ref]$existingRequestedAtValue) -and -not [string]::IsNullOrWhiteSpace($existingRequestedAt)
+            $existingSnooze = Get-CodexDeploymentValue -Object $existingDeployment -Name 'snoozeUntil' -Default $null
+            $existingSnoozeValid = $true
+            if ($null -ne $existingSnooze -and -not [string]::IsNullOrWhiteSpace([string]$existingSnooze)) {
+                $existingSnoozeValue = [DateTime]::MinValue
+                $existingSnoozeValid = [DateTime]::TryParse([string]$existingSnooze, [ref]$existingSnoozeValue)
+            }
+            $existingTupleComplete = $existingTargetValid -and $existingStatus -in @('pending', 'snoozed') -and $existingSourcePrValid -and $existingRequestedAtValid -and $existingSnoozeValid
+            $existingTargetMatches = $existingTargetValid -and $existingTarget -eq $candidate
+            if ($cleanupAlreadyCompleted -and (-not $existingTupleComplete -or ($existingTargetMatches -and $existingSourcePr -ne $PullRequestNumber))) {
                 $previewState.deployment = $null
                 $repairIncompleteDeployment = $true
             }
             $previewDeployment = Register-CodexPendingDeployment -RepositoryRoot $paths.RepositoryRoot -DataRoot $paths.DataRoot -MergeCommitSha $MergeCommitSha -PullRequestNumber $PullRequestNumber -State $previewState -GitCommandRunner $GitCommandRunner -Now $Now -VerifiedMasterCommit $verifiedMaster
+            if ($repairIncompleteDeployment) { Set-CodexRepairedDeploymentMetadata -Deployment $previewDeployment -Existing $existingDeployment -SnoozeValid $existingSnoozeValid | Out-Null }
             if ($cleanupAlreadyCompleted) {
-                $existingSnooze = Get-CodexDeploymentValue -Object $existingDeployment -Name 'snoozeUntil' -Default $null
                 $previewTarget = ConvertTo-CodexFullCommit -Commit ([string]$previewDeployment.targetCommit) -Name 'preview deployment target'
                 $previewSnooze = Get-CodexDeploymentValue -Object $previewDeployment -Name 'snoozeUntil' -Default $null
                 $deploymentVerified = $existingTargetValid -and $existingStatus -in @('pending', 'snoozed') -and $existingSourcePr -eq $PullRequestNumber -and -not [string]::IsNullOrWhiteSpace($existingRequestedAt) -and $existingTarget -eq $previewTarget -and $existingStatus -eq [string]$previewDeployment.status -and [string]$existingSnooze -eq [string]$previewSnooze
@@ -324,6 +347,7 @@ function Register-CodexPullRequestClosed {
             }
             $deployment = Register-CodexPendingDeployment -RepositoryRoot $paths.RepositoryRoot -DataRoot $paths.DataRoot -MergeCommitSha $MergeCommitSha -PullRequestNumber $PullRequestNumber -State $registrationState -GitCommandRunner $GitCommandRunner -Now $Now -VerifiedMasterCommit $verifiedMaster
             if ($repairIncompleteDeployment) {
+                Set-CodexRepairedDeploymentMetadata -Deployment $deployment -Existing $existingDeployment -SnoozeValid $existingSnoozeValid | Out-Null
                 if ($null -ne $state.PSObject.Properties['deployment']) { $state.deployment = $deployment }
                 else { Add-Member -InputObject $state -NotePropertyName deployment -NotePropertyValue $deployment -Force }
             }
