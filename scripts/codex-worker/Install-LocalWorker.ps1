@@ -16,12 +16,13 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath = Join-Path $DataRo
 
 $config = [pscustomobject]@{}
 if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
-    $config = [IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json
+    try { $config = [IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json } catch { throw "Worker config is invalid: $($_.Exception.Message)" }
+    if ($null -eq $config -or $config -is [array] -or $config -is [string] -or $config -is [ValueType]) { throw 'Worker config must be a JSON object.' }
 }
 if (-not [string]::IsNullOrWhiteSpace($Repository)) { Add-Member -InputObject $config -NotePropertyName repository -NotePropertyValue $Repository -Force }
 if (-not [string]::IsNullOrWhiteSpace($RepositoryRoot)) { Add-Member -InputObject $config -NotePropertyName repositoryRoot -NotePropertyValue $RepositoryRoot -Force }
 
-$params = @{ Config = $config; Repository = $Repository; RepositoryRoot = $RepositoryRoot; DataRoot = $DataRoot }
+$params = @{ Config = $config; Repository = $Repository; RepositoryRoot = $RepositoryRoot; DataRoot = $DataRoot; ConfigPath = $ConfigPath }
 if ($SkipPrerequisiteProbe) { $params.SkipPrerequisiteProbe = $true }
 if ($WhatIfPreference) { $params.WhatIf = $true }
 Invoke-CodexLocalWorkerSetup @params

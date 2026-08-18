@@ -47,6 +47,29 @@ Optional supported parameters are `-DataRoot`, `-ConfigPath`, and
 `-SkipPrerequisiteProbe`. `-WhatIf` is also supported by the script and plans
 the setup without performing installer mutations. The installer writes its
 effective configuration to `config.json`; do not put credentials in that file.
+`ConfigPath` must be the canonical `config.json` directly under `DataRoot`. If
+it already exists, the installer reads that JSON object itself before doing
+preflight work. It preserves supported operational settings, including
+`defaultBranch`, `codexCommand`, `bootstrapPython`, `workerLockTimeoutSeconds`,
+`codexTimeoutMinutes`, `notificationSeconds`, `snoozeMinutes`,
+`healthTimeoutSeconds`, `runRetentionDays`, and the two `runtimeSlots` values.
+Missing settings receive the defaults from `config.example.json`; a new config
+uses the successfully selected/probed Bootstrap Python command (normally
+`python.exe`) rather than a null value. With `-SkipPrerequisiteProbe`, that
+fallback is the configured command name and is intentionally not version-
+validated. Repository, repository root, data root,
+runner root, runner name, runner label, and config path are installer-derived
+and overwrite conflicting input. Paths must be absolute where a path is
+expected and must remain under the trusted repository or worker data root.
+Malformed JSON, wrong field types, invalid slot lists, and out-of-root paths
+fail before setup state, runner, task, or GitHub mutations.
+
+Normal installation probes and enforces the prerequisite versions. Use
+`-SkipPrerequisiteProbe` only when those checks have been performed separately:
+it deliberately does not call the version-command probe or install a missing
+Codex CLI, but still performs non-probe planning and `gh auth status`. This
+flag carries the risk that a missing or unsupported tool will fail later in the
+runner or task workflow. It is not a credentials or mutation bypass.
 
 If the Codex CLI is missing, setup installs `@openai/codex` with `npm.cmd
 install --global @openai/codex` and invokes `codex login`. If the authentication
@@ -55,8 +78,9 @@ installer. Setup also probes `codex exec resume --help` and persists the boolean
 `supportsResumeOutputControls` in `config.json`.
 
 The runner is downloaded only after its GitHub release asset and SHA-256
-checksum are unambiguous. Registration uses the configured repository, runner
-name, and label `agentassist-local`; it is an interactive runner, not a service.
+checksum are unambiguous. Registration uses the derived repository, fixed
+runner name `AutomationWorkbenchCodexRunner`, and fixed label
+`agentassist-local`; it is an interactive runner, not a service.
 The installer verifies that the registered runner is online with that label
 before creating the notifier task. It also creates the lifecycle labels and
 repository variables `CODEX_LOCAL_REPOSITORY` and `CODEX_WORKER_DATA_ROOT`.

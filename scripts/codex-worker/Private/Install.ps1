@@ -18,6 +18,110 @@ function Get-CodexSetupProperty {
     return $Default
 }
 
+function Test-CodexSetupNumeric {
+    param([object] $Value)
+    return $null -ne $Value -and $Value -isnot [bool] -and $Value -is [IConvertible] -and
+        $Value.GetType().IsPrimitive -and $Value.GetType().Name -match '^(Byte|SByte|Int16|UInt16|Int32|UInt32|Int64|UInt64|Single|Double|Decimal)$'
+}
+
+function Assert-CodexSetupConfigProperty {
+    param([object] $Config, [string] $Name, [type] $ExpectedType, [switch] $AllowNull)
+    $property = if ($null -eq $Config) { $null } else { $Config.PSObject.Properties[$Name] }
+    if ($null -eq $property) { return $null }
+    $value = $property.Value
+    if ($AllowNull -and $null -eq $value) { return $null }
+    if ($ExpectedType -eq [string]) {
+        if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$value)) { throw "Config property '$Name' must be a non-empty string." }
+    } elseif ($ExpectedType -eq [int]) {
+        if (-not (Test-CodexSetupNumeric $value) -or [double]$value -ne [Math]::Truncate([double]$value)) { throw "Config property '$Name' must be an integer." }
+    } elseif (-not ($value -is $ExpectedType)) {
+        throw "Config property '$Name' has the wrong type."
+    }
+    return $value
+}
+
+function Resolve-CodexSetupConfig {
+    [CmdletBinding()]
+    param(
+        [object] $Config,
+        [Parameter(Mandatory = $true)] [string] $Repository,
+        [Parameter(Mandatory = $true)] [string] $RepositoryRoot,
+        [Parameter(Mandatory = $true)] [string] $DataRoot,
+        [Parameter(Mandatory = $true)] [string] $ConfigPath,
+        [string] $BootstrapPython,
+        [switch] $ProtectIdentity
+    )
+    if ($null -eq $Config) { $Config = [pscustomobject]@{} }
+    if ($Config -is [System.Array] -or $Config -is [string] -or $Config -is [ValueType]) { throw 'Worker config must be a JSON object.' }
+
+    $allowed = @('defaultBranch','codexCommand','bootstrapPython','workerLockTimeoutSeconds','codexTimeoutMinutes','notificationSeconds','snoozeMinutes','healthTimeoutSeconds','runRetentionDays','runtimeSlots','tiaWhitelistPath','activityLogPath','supportsResumeOutputControls','pollSeconds','runnerRelease')
+    $merged = [ordered]@{}
+    foreach ($property in $Config.PSObject.Properties) {
+        if ($allowed -contains $property.Name) { $merged[$property.Name] = $property.Value }
+    }
+    foreach ($name in @('defaultBranch','codexCommand','bootstrapPython','tiaWhitelistPath','activityLogPath')) { [void](Assert-CodexSetupConfigProperty $Config $name ([string])) }
+    foreach ($name in @('workerLockTimeoutSeconds','codexTimeoutMinutes','notificationSeconds','snoozeMinutes','healthTimeoutSeconds','runRetentionDays','pollSeconds')) { [void](Assert-CodexSetupConfigProperty $Config $name ([int])) }
+    if ($Config.PSObject.Properties['codexCommand'] -and ([string]$Config.codexCommand -match '[\s/\\]')) { throw "Config property 'codexCommand' must be a command name without path separators." }
+    if ($Config.PSObject.Properties['supportsResumeOutputControls'] -and $Config.supportsResumeOutputControls -isnot [bool]) { throw "Config property 'supportsResumeOutputControls' must be a Boolean." }
+    if ($Config.PSObject.Properties['runtimeSlots']) {
+        if ($Config.runtimeSlots -is [string] -or $Config.runtimeSlots -isnot [System.Collections.IEnumerable]) { throw "Config property 'runtimeSlots' must be an array of two strings." }
+        $slots = @($Config.runtimeSlots)
+        if ($slots.Count -ne 2 -or @($slots | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0 -or $slots[0] -eq $slots[1]) { throw "Config property 'runtimeSlots' must contain two distinct non-empty strings." }
+    }
+    foreach ($name in @('workerLockTimeoutSeconds','codexTimeoutMinutes','snoozeMinutes','healthTimeoutSeconds')) {
+        if ($merged.Contains($name) -and [int]$merged[$name] -le 0) { throw "Config property '$name' must be positive." }
+    }
+    foreach ($name in @('notificationSeconds','runRetentionDays','pollSeconds')) {
+        if ($merged.Contains($name) -and [int]$merged[$name] -lt 0) { throw "Config property '$name' cannot be negative." }
+    }
+    $repositoryRootFull = [IO.Path]::GetFullPath($RepositoryRoot)
+    foreach ($name in @('tiaWhitelistPath','activityLogPath')) {
+        if (-not $merged.Contains($name)) { continue }
+        $path = [string]$merged[$name]
+        if (-not [IO.Path]::IsPathRooted($path)) { throw "Config property '$name' must be an absolute path." }
+        $full = [IO.Path]::GetFullPath($path)
+        $rootPrefix = $repositoryRootFull.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
+        $dataPrefix = $DataRoot.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
+        if (-not ($full.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($dataPrefix, [StringComparison]::OrdinalIgnoreCase))) { throw "Config property '$name' is outside the trusted worker roots." }
+        $merged[$name] = $full
+    }
+    if ($merged.Contains('bootstrapPython')) {
+        $bootstrap = [string]$merged.bootstrapPython
+        if ([IO.Path]::IsPathRooted($bootstrap)) {
+            $fullBootstrap = [IO.Path]::GetFullPath($bootstrap)
+            $rootPrefix = $repositoryRootFull.TrimEnd('\\','/') + [IO.Path]::DirectorySeparatorChar
+            $dataPrefix = $DataRoot.TrimEnd('\\','/') + [IO.Path]::DirectorySeparatorChar
+            if (-not ($fullBootstrap.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -or $fullBootstrap.StartsWith($dataPrefix, [StringComparison]::OrdinalIgnoreCase))) { throw "Config property 'bootstrapPython' is outside the trusted worker roots." }
+            $merged.bootstrapPython = $fullBootstrap
+        } elseif ($bootstrap -match '[\s/\\]') { throw "Config property 'bootstrapPython' must be a command name or a trusted absolute path." }
+    }
+    $merged.defaultBranch = if ($merged.Contains('defaultBranch')) { [string]$merged.defaultBranch } else { 'master' }
+    $merged.codexCommand = if ($merged.Contains('codexCommand')) { [string]$merged.codexCommand } else { 'codex' }
+    if (-not $merged.Contains('workerLockTimeoutSeconds')) { $merged.workerLockTimeoutSeconds = 30 }
+    if (-not $merged.Contains('codexTimeoutMinutes')) { $merged.codexTimeoutMinutes = 120 }
+    if (-not $merged.Contains('notificationSeconds')) { $merged.notificationSeconds = 10 }
+    if (-not $merged.Contains('snoozeMinutes')) { $merged.snoozeMinutes = 5 }
+    if (-not $merged.Contains('healthTimeoutSeconds')) { $merged.healthTimeoutSeconds = 60 }
+    if (-not $merged.Contains('runRetentionDays')) { $merged.runRetentionDays = 30 }
+    if (-not $merged.Contains('runtimeSlots')) { $merged.runtimeSlots = @('runtime-a','runtime-b') }
+    if (-not $merged.Contains('bootstrapPython') -or [string]::IsNullOrWhiteSpace([string]$merged.bootstrapPython)) {
+        if (-not [string]::IsNullOrWhiteSpace($BootstrapPython)) { $merged.bootstrapPython = $BootstrapPython }
+        elseif ($merged.Contains('bootstrapPython')) { $merged.Remove('bootstrapPython') }
+    }
+    $merged.repository = $Repository
+    $merged.repositoryRoot = $repositoryRootFull
+    $merged.dataRoot = $DataRoot
+    # The label, runner name, and runner root are installer-owned identity, not
+    # configuration input. This prevents a config object or file from
+    # redirecting registration.
+    $merged.runnerLabel = 'agentassist-local'
+    $merged.runnerName = 'AutomationWorkbenchCodexRunner'
+    $merged.runnerRoot = [IO.Path]::GetFullPath((Join-Path $DataRoot 'runner'))
+    $merged.runnerService = $false
+    $merged.configPath = $ConfigPath
+    return [pscustomobject]$merged
+}
+
 function New-CodexSetupRequest {
     param(
         [Parameter(Mandatory = $true)] [string] $FilePath,
@@ -584,6 +688,7 @@ function Get-CodexLocalWorkerPlan {
         [Parameter(Mandatory = $true)] [string] $Repository,
         [Parameter(Mandatory = $true)] [string] $RepositoryRoot,
         [string] $DataRoot,
+        [string] $ConfigPath,
         [object] $Config,
         [scriptblock] $PathInspector
     )
@@ -611,7 +716,11 @@ function Get-CodexLocalWorkerPlan {
     Assert-CodexPathHasNoReparseAncestor -Path $runnerRoot -PathInspector $PathInspector
     Assert-CodexPathTreeHasNoReparsePoint -Path $runnerRoot -PathInspector $PathInspector
     $runnerName = [string](Get-CodexSetupProperty $Config 'runnerName' 'AutomationWorkbenchCodexRunner')
-    $configPath = Join-Path $data 'config.json'
+    $configPath = if ([string]::IsNullOrWhiteSpace($ConfigPath)) { Join-Path $data 'config.json' } else { [IO.Path]::GetFullPath($ConfigPath) }
+    $configPrefix = $data.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (-not $configPath.StartsWith($configPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Worker ConfigPath must remain under the trusted worker data root.' }
+    if (-not $configPath.Equals((Join-Path $data 'config.json'), [StringComparison]::OrdinalIgnoreCase)) { throw 'Worker ConfigPath must be the config.json under the trusted worker data root.' }
+    Assert-CodexPathHasNoReparseAncestor -Path $configPath -PathInspector $PathInspector
     $runnerScript = Join-Path $root 'scripts\codex-worker\Start-GitHubRunner.ps1'
     $notifierScript = Join-Path $root 'scripts\codex-worker\Invoke-DeploymentNotifier.ps1'
     $runnerArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$runnerScript,'-RunnerRoot',$runnerRoot,'-ConfigPath',$configPath)
@@ -661,6 +770,7 @@ function Invoke-CodexLocalWorkerSetup {
         [string] $Repository,
         [string] $RepositoryRoot,
         [string] $DataRoot,
+        [string] $ConfigPath,
         [object] $CommandRunner,
         [scriptblock] $DownloadRunner,
         [scriptblock] $HashRunner,
@@ -681,9 +791,23 @@ function Invoke-CodexLocalWorkerSetup {
         [switch] $SkipPrerequisiteProbe,
         [switch] $WhatIf
     )
+    $configPathWasSupplied = -not [string]::IsNullOrWhiteSpace($ConfigPath)
     if ([string]::IsNullOrWhiteSpace($Repository)) { $Repository = [string](Get-CodexSetupProperty $Config 'repository' '') }
     if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) { $RepositoryRoot = [string](Get-CodexSetupProperty $Config 'repositoryRoot' (Get-Location).Path) }
-    $plan = Get-CodexLocalWorkerPlan -Repository $Repository -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot -Config $Config -PathInspector $PathInspector
+    $defaultDataRoot = if ([string]::IsNullOrWhiteSpace($DataRoot)) { Join-Path $env:LOCALAPPDATA 'AutomationWorkbench\CodexWorker' } else { $DataRoot }
+    if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+        $ConfigPath = Join-Path $defaultDataRoot 'config.json'
+    }
+    $ConfigPath = [IO.Path]::GetFullPath($ConfigPath)
+    $expectedConfigPath = [IO.Path]::GetFullPath((Join-Path $defaultDataRoot 'config.json'))
+    Assert-CodexPathHasNoReparseAncestor -Path $ConfigPath -PathInspector $PathInspector
+    if (-not $ConfigPath.Equals($expectedConfigPath, [StringComparison]::OrdinalIgnoreCase)) { throw 'Worker ConfigPath must be the config.json under the trusted worker data root.' }
+    if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+        try { $Config = [IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json } catch { throw "Worker config is invalid: $($_.Exception.Message)" }
+    }
+    $resolvedDataRoot = [IO.Path]::GetFullPath($(if ([string]::IsNullOrWhiteSpace($DataRoot)) { Join-Path $env:LOCALAPPDATA 'AutomationWorkbench\CodexWorker' } else { $DataRoot }))
+    $Config = Resolve-CodexSetupConfig -Config $Config -Repository $Repository -RepositoryRoot ([IO.Path]::GetFullPath($RepositoryRoot)) -DataRoot $resolvedDataRoot -ConfigPath $ConfigPath -BootstrapPython $null -ProtectIdentity:$configPathWasSupplied
+    $plan = Get-CodexLocalWorkerPlan -Repository $Repository -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot -ConfigPath $ConfigPath -Config $Config -PathInspector $PathInspector
     $whatIf = [bool]$WhatIf
     $mutations = 0
     $stateSnapshot = Get-CodexInstallerStateSnapshot -ConfigPath $plan.ConfigPath -PathInspector $PathInspector
@@ -707,18 +831,23 @@ function Invoke-CodexLocalWorkerSetup {
             throw
         }
     }
-    $prereqs = @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner -Probe)
+    $prereqs = if ($SkipPrerequisiteProbe) { @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner) } else { @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner -Probe) }
+    if ([string]::IsNullOrWhiteSpace([string](Get-CodexSetupProperty $Config 'bootstrapPython' ''))) {
+        $pythonPrereq = @($prereqs | Where-Object Name -eq 'Bootstrap Python')[0]
+        $pythonFallback = [string](Get-CodexSetupProperty $pythonPrereq 'FilePath' 'python.exe')
+        $Config = Resolve-CodexSetupConfig -Config $Config -Repository $plan.Repository -RepositoryRoot $plan.RepositoryRoot -DataRoot $plan.DataRoot -ConfigPath $plan.ConfigPath -BootstrapPython $pythonFallback -ProtectIdentity:$configPathWasSupplied
+    }
     $policies = @($prereqs | ForEach-Object { $_.Policy })
     $ghAuthResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('auth','status','--hostname','github.com') -CommandRunner $CommandRunner
     $ghAuthenticated = Test-CodexSetupSuccess $ghAuthResult
     if (-not $whatIf -and -not $ghAuthenticated) { throw 'GitHub CLI authentication is required before setup.' }
     $requiredFailures = @($policies | Where-Object { $_.Name -ne 'Codex CLI' -and -not $_.Valid })
-    if (-not $whatIf -and $requiredFailures.Count -gt 0) { throw ('Required prerequisites failed: ' + (($requiredFailures | ForEach-Object { "$($_.Name): $($_.Error)" }) -join '; ')) }
+    if (-not $whatIf -and -not $SkipPrerequisiteProbe -and $requiredFailures.Count -gt 0) { throw ('Required prerequisites failed: ' + (($requiredFailures | ForEach-Object { "$($_.Name): $($_.Error)" }) -join '; ')) }
     $codexPrereq = @($prereqs | Where-Object Name -eq 'Codex CLI')[0]
     $codex = [string](Get-CodexSetupProperty $Config 'codexCommand' 'codex')
     if (-not $whatIf) {
-        $missing = $null -eq $codexPrereq -or -not [bool]$codexPrereq.Installed
-        if (-not $missing -and -not [bool]$codexPrereq.Policy.Valid) { throw "Codex CLI prerequisite failed: $($codexPrereq.Policy.Error)." }
+        $missing = -not $SkipPrerequisiteProbe -and ($null -eq $codexPrereq -or -not [bool]$codexPrereq.Installed)
+        if (-not $SkipPrerequisiteProbe -and -not $missing -and -not [bool]$codexPrereq.Policy.Valid) { throw "Codex CLI prerequisite failed: $($codexPrereq.Policy.Error)." }
         if ($missing) {
             $install = Invoke-CodexInstallCommand -FilePath 'npm.cmd' -Arguments @('install','--global','@openai/codex') -CommandRunner $CommandRunner
             if (-not (Test-CodexSetupSuccess $install)) { throw 'Codex CLI installation failed.' }
@@ -848,11 +977,11 @@ function Invoke-CodexLocalWorkerSetup {
         $stagingPin = $null
     }
 
-    $configToPersist = [ordered]@{
-        repository = $Repository; repositoryRoot = $plan.RepositoryRoot; dataRoot = $plan.DataRoot
-        runnerLabel = $plan.Runner.Label; runnerName = $plan.Runner.Name; runnerRoot = $plan.Runner.Root; runnerService = $false
-        configPath = $plan.ConfigPath
-    }
+    $configToPersist = [ordered]@{}
+    foreach ($property in $Config.PSObject.Properties) { $configToPersist[$property.Name] = $property.Value }
+    $configToPersist.repository = $Repository; $configToPersist.repositoryRoot = $plan.RepositoryRoot; $configToPersist.dataRoot = $plan.DataRoot
+    $configToPersist.runnerLabel = $plan.Runner.Label; $configToPersist.runnerName = $plan.Runner.Name; $configToPersist.runnerRoot = $plan.Runner.Root; $configToPersist.runnerService = $false
+    $configToPersist.configPath = $plan.ConfigPath
     if (-not $whatIf) {
         try {
         $parent = Split-Path -Parent $plan.ConfigPath
