@@ -1,0 +1,52 @@
+name: Codex local issue worker
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        required: true
+        type: number
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  run:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'codex' || github.event.label.name == 'codex:retry'
+    runs-on: [self-hosted, Windows, X64, agentassist-local]
+    steps:
+      - name: Checkout trusted worker revision
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Dispatch issue to local worker
+        shell: powershell
+        env:
+          CODEX_REPOSITORY: ${{ github.repository }}
+          CODEX_ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          CODEX_ACTOR: ${{ github.actor }}
+          CODEX_EVENT_NAME: ${{ github.event_name }}
+          CODEX_DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          $issueNumber = [int]$env:CODEX_ISSUE_NUMBER
+          $dryRun = if ([string]::IsNullOrWhiteSpace($env:CODEX_DRY_RUN)) {
+              $false
+          } else {
+              [System.Convert]::ToBoolean($env:CODEX_DRY_RUN)
+          }
+          & .\scripts\codex-worker\Invoke-Issue.ps1 `
+              -Repository ([string]$env:CODEX_REPOSITORY) `
+              -IssueNumber $issueNumber `
+              -Actor ([string]$env:CODEX_ACTOR) `
+              -EventName ([string]$env:CODEX_EVENT_NAME) `
+              -DryRun:$dryRun

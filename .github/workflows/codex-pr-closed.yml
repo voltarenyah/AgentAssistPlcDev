@@ -1,0 +1,51 @@
+name: Codex local pull request close handler
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  run:
+    runs-on: [self-hosted, Windows, X64, agentassist-local]
+    steps:
+      - name: Checkout trusted worker revision
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Register close and gated merge handoff
+        shell: powershell
+        env:
+          CODEX_REPOSITORY: ${{ github.repository }}
+          CODEX_ISSUE_NUMBER: ${{ github.event.pull_request.number }}
+          CODEX_PR_NUMBER: ${{ github.event.pull_request.number }}
+          CODEX_MERGED: ${{ github.event.pull_request.merged }}
+          CODEX_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          CODEX_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          CODEX_ACTOR: ${{ github.actor }}
+        run: |
+          $issueNumber = [int]$env:CODEX_ISSUE_NUMBER
+          $pullRequestNumber = [int]$env:CODEX_PR_NUMBER
+          [bool]$merged = [System.Convert]::ToBoolean($env:CODEX_MERGED)
+          $mergeSha = [string]$env:CODEX_MERGE_SHA
+          $headBranch = [string]$env:CODEX_HEAD_BRANCH
+
+          if ($merged) {
+              Write-Host 'Merged PR: deployment handoff is permitted after Register-PrClosed validation.'
+          } else {
+              Write-Host 'Unmerged PR: deployment handoff is gated; Register-PrClosed performs close cleanup only.'
+          }
+
+          & .\scripts\codex-worker\Register-PrClosed.ps1 `
+              -Repository ([string]$env:CODEX_REPOSITORY) `
+              -PullRequestNumber $pullRequestNumber `
+              -IssueNumber $issueNumber `
+              -HeadBranch $headBranch `
+              -Merged $merged `
+              -MergeSha $mergeSha
