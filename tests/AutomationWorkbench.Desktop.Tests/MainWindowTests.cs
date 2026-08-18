@@ -26,11 +26,13 @@ public sealed class MainWindowTests
     }
 
     [Fact]
-    public void UsesBorderlessChromeSoStudioRendersTheCaption()
+    public void KeepsASizableFrameSoSnapAssistAndNativeResizeKeepWorking()
     {
         using var window = CreateWindow();
 
-        Assert.Equal(FormBorderStyle.None, window.FormBorderStyle);
+        // The caption and frame are hidden by WM_NCCALCSIZE handling, but the
+        // sizable styles must stay or snap assist would ignore the window.
+        Assert.Equal(FormBorderStyle.Sizable, window.FormBorderStyle);
         Assert.Equal("Automation Workbench", window.Text);
     }
 
@@ -45,6 +47,18 @@ public sealed class MainWindowTests
 
         window.ApplyWindowCommand("toggle-maximize");
         Assert.Equal(FormWindowState.Maximized, window.WindowState);
+    }
+
+    [Fact]
+    public void RestoringFromMaximizedKeepsAUsableDefaultSize()
+    {
+        using var window = CreateWindow();
+
+        window.ApplyWindowCommand("toggle-maximize");
+
+        Assert.Equal(FormWindowState.Normal, window.WindowState);
+        Assert.True(window.Width >= 1200, $"Expected a usable restore width, got {window.Width}.");
+        Assert.True(window.Height >= 760, $"Expected a usable restore height, got {window.Height}.");
     }
 
     [Fact]

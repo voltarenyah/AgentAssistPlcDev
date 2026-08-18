@@ -8,15 +8,28 @@ namespace AutomationWorkbench.Desktop;
 
 public sealed class MainWindow : Form
 {
-    // The window is borderless: Studio renders the caption (drag area and the
+    // Custom chrome over a sizable frame: the window keeps WS_THICKFRAME and
+    // the min/max boxes so Windows snap assist, edge snapping, DWM shadow, and
+    // native move/resize loops keep working, while WM_NCCALCSIZE removes the
+    // visible caption and frame. Studio renders the caption (drag area and the
     // minimize/maximize/close buttons) inside its own header and drives the
-    // window through WebView2 messages handled by ApplyWindowCommand.
-    private const int ResizeBorderThickness = 6;
-    private const int WmNcHitTest = 0x0084;
+    // window through WebView2 messages handled by ApplyWindowCommand. Because
+    // the WebView2 child window covers the whole client area, edge resizing is
+    // initiated from Studio (pointer near the viewport edge) via "begin-resize"
+    // and completed by a native modal resize loop here.
+    private const int WmNcCalcSize = 0x0083;
     private const int WmGetMinMaxInfo = 0x0024;
     private const int WmNcLButtonDown = 0x00A1;
     private const int HitCaption = 2;
+    private const int DwmwaBorderColor = 34;
+    private const int DwmwaWindowCornerPreference = 33;
+    private const int DwmwcpRound = 2;
     private const uint MonitorDefaultToNearest = 2;
+
+    // The restored (non-maximized) window must be large enough to fit the
+    // whole Studio layout; users can shrink it afterwards.
+    private const int MinimumUsableNormalWidth = 1200;
+    private const int MinimumUsableNormalHeight = 760;
 
     private readonly BackendProcessHost backend;
     private readonly RuntimePaths paths;
@@ -45,9 +58,9 @@ public sealed class MainWindow : Form
         this.backend = backend;
         this.paths = paths;
         Text = "Automation Workbench";
-        FormBorderStyle = FormBorderStyle.None;
+        FormBorderStyle = FormBorderStyle.Sizable;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(1440, 900);
+        Size = DefaultNormalSize(Screen.PrimaryScreen.WorkingArea);
         MinimumSize = new Size(960, 640);
         WindowState = FormWindowState.Maximized;
         ShowInTaskbar = true;
@@ -142,7 +155,7 @@ public sealed class MainWindow : Form
         browser.CoreWebView2.Settings.AreDevToolsEnabled = false;
     }
 
-    internal void ApplyWindowCommand(string command)
+    internal void ApplyWindowCommand(string command, string? direction = null)
     {
         switch (command)
         {
@@ -150,9 +163,15 @@ public sealed class MainWindow : Form
                 WindowState = FormWindowState.Minimized;
                 break;
             case "toggle-maximize":
-                WindowState = WindowState == FormWindowState.Maximized
-                    ? FormWindowState.Normal
-                    : FormWindowState.Maximized;
+                if (WindowState == FormWindowState.Maximized)
+                {
+                    WindowState = FormWindowState.Normal;
+                    ApplyDefaultNormalBoundsIfTooSmall();
+                }
+                else
+                {
+                    WindowState = FormWindowState.Maximized;
+                }
                 break;
             case "close":
                 Close();
@@ -160,11 +179,34 @@ public sealed class MainWindow : Form
             case "begin-drag":
                 BeginNativeDrag();
                 break;
+            case "begin-resize":
+                BeginNativeResize(direction);
+                break;
             case "get-state":
                 NotifyWindowState();
                 break;
         }
     }
+
+    // Restored windows coming out of maximize must default to a size that fits
+    // the whole Studio layout; a deliberate smaller user size is kept as-is.
+    private void ApplyDefaultNormalBoundsIfTooSmall()
+    {
+        if (Width >= MinimumUsableNormalWidth && Height >= MinimumUsableNormalHeight)
+            return;
+        var workingArea = Screen.FromHandle(Handle).WorkingArea;
+        var size = DefaultNormalSize(workingArea);
+        SetBounds(
+            workingArea.Left + (workingArea.Width - size.Width) / 2,
+            workingArea.Top + (workingArea.Height - size.Height) / 2,
+            size.Width,
+            size.Height);
+    }
+
+    private static Size DefaultNormalSize(Rectangle workingArea)
+        => new(
+            Math.Min(Math.Max(1360, workingArea.Width * 85 / 100), workingArea.Width),
+            Math.Min(Math.Max(850, workingArea.Height * 85 / 100), workingArea.Height));
 
     private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -179,7 +221,12 @@ public sealed class MainWindow : Form
                 return;
             if (root.TryGetProperty("command", out var commandElement)
                 && commandElement.GetString() is { } command)
-                ApplyWindowCommand(command);
+            {
+                var direction = root.TryGetProperty("direction", out var directionElement)
+                    ? directionElement.GetString()
+                    : null;
+                ApplyWindowCommand(command, direction);
+            }
         }
         catch (JsonException)
         {
@@ -201,6 +248,31 @@ public sealed class MainWindow : Form
         SendMessage(Handle, WmNcLButtonDown, (IntPtr)HitCaption, IntPtr.Zero);
     }
 
+    // Studio owns the viewport edges, so it detects the pointer near a border
+    // and asks for a resize; the native modal loop takes over from there and
+    // gives normal Windows resize feedback (including snap layouts on move).
+    private void BeginNativeResize(string? direction)
+    {
+        if (WindowState != FormWindowState.Normal)
+            return;
+        var hitCode = direction switch
+        {
+            "left" => HitLeft,
+            "right" => HitRight,
+            "top" => HitTop,
+            "bottom" => HitBottom,
+            "top-left" => HitTopLeft,
+            "top-right" => HitTopRight,
+            "bottom-left" => HitBottomLeft,
+            "bottom-right" => HitBottomRight,
+            _ => 0,
+        };
+        if (hitCode == 0)
+            return;
+        ReleaseCapture();
+        SendMessage(Handle, WmNcLButtonDown, (IntPtr)hitCode, IntPtr.Zero);
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
@@ -220,47 +292,37 @@ public sealed class MainWindow : Form
             $"{{\"type\":\"window-state\",\"state\":\"{state}\"}}");
     }
 
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        // Windows 11 niceties: rounded corners and a subtle border line so the
+        // frameless window still reads as a window. Both no-op on Windows 10.
+        var cornerPreference = DwmwcpRound;
+        _ = DwmSetWindowAttribute(Handle, DwmwaWindowCornerPreference, ref cornerPreference, sizeof(int));
+        var borderColor = 0x00464646; // COLORREF 0x00BBGGRR, a neutral dark gray
+        _ = DwmSetWindowAttribute(Handle, DwmwaBorderColor, ref borderColor, sizeof(int));
+    }
+
     protected override void WndProc(ref Message m)
     {
         switch (m.Msg)
         {
-            case WmNcHitTest when WindowState == FormWindowState.Normal:
-                base.WndProc(ref m);
-                if (m.Result == (IntPtr)HitClient)
-                    m.Result = (IntPtr)HitTestResizeBorder(m.LParam);
+            case WmNcCalcSize when m.WParam != IntPtr.Zero:
+                // Reclaim the whole window rect as client area: the caption
+                // and frame disappear but the sizable styles (and with them
+                // snap assist, DWM shadow, and native move/resize) remain.
+                m.Result = IntPtr.Zero;
                 return;
             case WmGetMinMaxInfo:
                 base.WndProc(ref m);
-                // Borderless windows would otherwise maximize over the taskbar.
+                // With no non-client area the window would otherwise maximize
+                // over the taskbar.
                 ConstrainMaximizeToWorkingArea(m.LParam);
                 return;
             default:
                 base.WndProc(ref m);
                 return;
         }
-    }
-
-    private int HitTestResizeBorder(IntPtr lParam)
-    {
-        var screenPoint = new Point(
-            (short)(lParam.ToInt64() & 0xFFFF),
-            (short)((lParam.ToInt64() >> 16) & 0xFFFF));
-        var point = PointToClient(screenPoint);
-        var grip = ResizeBorderThickness;
-        var left = point.X < grip;
-        var right = point.X >= ClientSize.Width - grip;
-        var top = point.Y < grip;
-        var bottom = point.Y >= ClientSize.Height - grip;
-
-        if (top && left) return HitTopLeft;
-        if (top && right) return HitTopRight;
-        if (bottom && left) return HitBottomLeft;
-        if (bottom && right) return HitBottomRight;
-        if (top) return HitTop;
-        if (bottom) return HitBottom;
-        if (left) return HitLeft;
-        if (right) return HitRight;
-        return HitClient;
     }
 
     private void ConstrainMaximizeToWorkingArea(IntPtr lParam)
@@ -286,7 +348,6 @@ public sealed class MainWindow : Form
         Marshal.StructureToPtr(minMaxInfo, lParam, true);
     }
 
-    private const int HitClient = 1;
     private const int HitLeft = 10;
     private const int HitRight = 11;
     private const int HitTop = 12;
@@ -307,6 +368,9 @@ public sealed class MainWindow : Form
 
     [DllImport("user32.dll")]
     private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MonitorInfo lpmi);
+
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativePoint

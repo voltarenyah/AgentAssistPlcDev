@@ -3,7 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import WindowControls from './WindowControls'
-import { isWindowDragTarget, sendWindowCommand } from './desktopWindowBridge'
+import { installWindowResizeHandles, isWindowDragTarget, sendWindowCommand } from './desktopWindowBridge'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -105,5 +105,63 @@ describe('isWindowDragTarget', () => {
     expect(isWindowDragTarget(button)).toBe(false)
     expect(isWindowDragTarget(icon)).toBe(false)
     expect(isWindowDragTarget(null)).toBe(false)
+  })
+})
+
+describe('installWindowResizeHandles', () => {
+  let uninstall: (() => void) | null = null
+
+  afterEach(() => {
+    uninstall?.()
+    uninstall = null
+    removeWebView2()
+    document.body.style.cursor = ''
+  })
+
+  const pointer = (type: string, x: number, y: number, options: { button?: number, buttons?: number } = {}) =>
+    document.dispatchEvent(new window.MouseEvent(type, {
+      bubbles: true,
+      clientX: x,
+      clientY: y,
+      button: options.button ?? 0,
+      buttons: options.buttons ?? 0,
+    }))
+
+  it('shows a resize cursor near the viewport edges and resets it in the middle', () => {
+    installWebView2()
+    uninstall = installWindowResizeHandles()
+
+    pointer('pointermove', 2, 2)
+    expect(document.body.style.cursor).toBe('nwse-resize')
+
+    pointer('pointermove', window.innerWidth - 2, 300)
+    expect(document.body.style.cursor).toBe('ew-resize')
+
+    pointer('pointermove', 400, 300)
+    expect(document.body.style.cursor).toBe('')
+  })
+
+  it('asks the shell to start a native resize when pressing near an edge', () => {
+    const webview = installWebView2()
+    uninstall = installWindowResizeHandles()
+
+    pointer('pointerdown', 2, window.innerHeight - 2, { button: 0 })
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: 'window-control',
+      command: 'begin-resize',
+      direction: 'bottom-left',
+    })
+
+    webview.postMessage.mockClear()
+    pointer('pointerdown', 400, 300, { button: 0 })
+    expect(webview.postMessage).not.toHaveBeenCalled()
+  })
+
+  it('does nothing outside the desktop shell', () => {
+    uninstall = installWindowResizeHandles()
+
+    pointer('pointermove', 2, 2)
+    pointer('pointerdown', 2, 2, { button: 0 })
+    expect(document.body.style.cursor).toBe('')
   })
 })
