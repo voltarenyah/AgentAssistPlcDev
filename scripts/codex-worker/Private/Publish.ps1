@@ -85,9 +85,10 @@ function Test-CodexPublication {
                 $check = Invoke-CodexPublicationGit -Worktree $Worktree -Arguments ([string[]]$checkArguments) -CommandRunner $GitCommandRunner
                 if (-not [string]::IsNullOrWhiteSpace($check)) { $blockers.Add('git diff --check reported whitespace errors.') | Out-Null }
             }
-            foreach ($diffArguments in @(@('diff', '--no-ext-diff'), @('diff', '--cached', '--no-ext-diff'), @('diff', 'HEAD^', 'HEAD', '--no-ext-diff'))) {
+            foreach ($diffArguments in @(@('diff', '--no-ext-diff', 'HEAD'), @('diff', '--cached', '--no-ext-diff'), @('diff', 'HEAD^', 'HEAD', '--no-ext-diff'))) {
                 $diff = Invoke-CodexPublicationGit -Worktree $Worktree -Arguments ([string[]]$diffArguments) -CommandRunner $GitCommandRunner
                 if ($diff -match '(?m)^\+?(<<<<<<<|=======|>>>>>>>)') { $blockers.Add('Diff contains conflict markers.') | Out-Null }
+                if ($diff -match '(?m)^\+(?!\+\+\+)[^\r\n]*[ \t]+$') { $blockers.Add('Diff contains trailing whitespace.') | Out-Null }
             }
         } catch { $blockers.Add("Unable to validate publication diff: $($_.Exception.Message)") | Out-Null }
     }
@@ -324,6 +325,7 @@ function Invoke-CodexRevision {
             $branchPrNumber = [int](Get-CodexPublicationValue $branchMatch 'number' 0)
             if ($branchPrNumber -le 0) { throw 'Branch pull request resolution did not return a valid number.' }
             $pr = Get-CodexPullRequestContext -Repository $Repository -PullRequestNumber $branchPrNumber -CommandRunner $GitHubCommandRunner
+            if ([int](Get-CodexPublicationValue $pr 'number' 0) -ne $branchPrNumber) { throw 'The branch pull request context number does not match the resolved pull request.' }
         }
         if ($null -eq $pr) { throw 'Revision requires an existing pull request; refusing to create another PR.' }
         if ([string](Get-CodexPublicationValue $pr 'headRefName' '') -ne $branch) { throw 'Pull request head does not match persisted branch.' }

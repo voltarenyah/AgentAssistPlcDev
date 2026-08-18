@@ -180,8 +180,12 @@ Describe 'Codex worker publication' {
         Set-Content -LiteralPath (Join-Path $publishWorktree 'committed.ps1') -Value "<<<<<<< HEAD`n" -NoNewline
         Set-Content -LiteralPath (Join-Path $publishWorktree 'private.key') -Value "secret`n" -NoNewline
         $seen = [System.Collections.Generic.List[object]]::new()
-        $git = { param([string[]] $Arguments)
-            $seen.Add([string[]]$Arguments) | Out-Null
+        $git = { param($Arguments)
+            $seen.Add([pscustomobject]@{
+                Arguments = $Arguments
+                Type = $Arguments.GetType()
+                IsStringArray = ($Arguments -is [string[]])
+            }) | Out-Null
             if ($Arguments -contains '--name-only' -and $Arguments -contains '--cached') { return "staged.ps1`nprivate.key" }
             if ($Arguments -contains '--others') { return "new.ps1" }
             if ($Arguments -contains 'HEAD^' -and $Arguments -contains '--name-only') { return "committed.ps1" }
@@ -196,11 +200,59 @@ Describe 'Codex worker publication' {
         ($review.ChangedPaths -join ' ') | Should Match 'staged.ps1'
         ($review.ChangedPaths -join ' ') | Should Match 'new.ps1'
         ($review.ChangedPaths -join ' ') | Should Match 'committed.ps1'
-        (@($seen | Where-Object { ($_ -join ' ') -match 'diff --name-only' }).Count) | Should Be 1
-        (@($seen | Where-Object { ($_ -join ' ') -match 'diff --cached --name-only' }).Count) | Should Be 1
-        (@($seen | Where-Object { ($_ -join ' ') -match 'ls-files --others --exclude-standard' }).Count) | Should Be 1
-        (@($seen | Where-Object { ($_ -join ' ') -match 'diff HEAD\^ HEAD --name-only' }).Count) | Should Be 1
-        (@($seen | ForEach-Object { $_ | Where-Object { $_ -isnot [string] } }).Count) | Should Be 0
+        (@($seen | Where-Object { ($_.Arguments -join ' ') -match 'diff --name-only' }).Count) | Should Be 1
+        (@($seen | Where-Object { ($_.Arguments -join ' ') -match 'diff --cached --name-only' }).Count) | Should Be 1
+        (@($seen | Where-Object { ($_.Arguments -join ' ') -match 'ls-files --others --exclude-standard' }).Count) | Should Be 1
+        (@($seen | Where-Object { ($_.Arguments -join ' ') -match 'diff HEAD\^ HEAD --name-only' }).Count) | Should Be 1
+        (@($seen | Where-Object { -not $_.IsStringArray }).Count) | Should Be 0
+        $stringArrayType = ([string[]]::new(0)).GetType()
+        (@($seen | Where-Object { $_.Type -ne $stringArrayType }).Count) | Should Be 0
+
+        $root = [IO.Path]::GetFullPath($publishWorktree)
+        $expectedPathQueries = @(
+            [string[]]@('-C', $root, 'diff', '--name-only'),
+            [string[]]@('-C', $root, 'diff', '--cached', '--name-only'),
+            [string[]]@('-C', $root, 'ls-files', '--others', '--exclude-standard'),
+            [string[]]@('-C', $root, 'diff', 'HEAD^', 'HEAD', '--name-only')
+        )
+        foreach ($expected in $expectedPathQueries) {
+            $expectedText = $expected -join "`0"
+            (@($seen | Where-Object { ($_.Arguments -join "`0") -eq $expectedText }).Count) | Should Be 1
+        }
+
+        $expectedContentQueries = @(
+            [string[]]@('-C', $root, 'diff', '--no-ext-diff', 'HEAD'),
+            [string[]]@('-C', $root, 'diff', '--cached', '--no-ext-diff'),
+            [string[]]@('-C', $root, 'diff', 'HEAD^', 'HEAD', '--no-ext-diff')
+        )
+        foreach ($expected in $expectedContentQueries) {
+            $expectedText = $expected -join "`0"
+            (@($seen | Where-Object { ($_.Arguments -join "`0") -eq $expectedText }).Count) | Should Be 1
+        }
+    }
+
+    It 'blocks trailing whitespace reported by the unstaged content diff' {
+        $seen = [System.Collections.Generic.List[object]]::new()
+        $root = [IO.Path]::GetFullPath($publishWorktree)
+        $git = { param($Arguments)
+            $seen.Add([pscustomobject]@{
+                Arguments = $Arguments
+                Type = $Arguments.GetType()
+                IsStringArray = ($Arguments -is [string[]])
+            }) | Out-Null
+            if ($Arguments -contains '--name-only') { return 'src/change.ps1' }
+            if ($Arguments -contains '--no-ext-diff' -and $Arguments -contains 'HEAD' -and $Arguments -notcontains 'HEAD^') {
+                return "diff --git a/src/change.ps1 b/src/change.ps1`n@@ -1 +1 @@`n-safe`n+unsafe  `n"
+            }
+            return ''
+        }.GetNewClosure()
+        $review = Test-CodexPublication -Summary $publishSummary -Worktree $publishWorktree -IssueNumber 42 -GitCommandRunner $git
+        $review.Allowed | Should Be $false
+        ($review.Blockers -join ' ') | Should Match '(?i)trailing whitespace|whitespace errors'
+        $expected = [string[]]@('-C', $root, 'diff', '--no-ext-diff', 'HEAD')
+        $expectedText = $expected -join "`0"
+        $stringArrayType = ([string[]]::new(0)).GetType()
+        (@($seen | Where-Object { $_.IsStringArray -and $_.Type -eq $stringArrayType -and ($_.Arguments -join "`0") -eq $expectedText }).Count) | Should Be 1
     }
 
     It 'treats a failed validation as required unless required is explicitly false' {
@@ -316,6 +368,34 @@ Describe 'Codex worker publication' {
         $viewCount.Value | Should Be 1
         ($events -join ' ') | Should Match 'Please retain the existing user edit'
         ($events -join ' ') | Should Match 'Review says preserve behavior'
+    }
+
+    It 'fails closed when branch PR context returns a different number before Codex or publication' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'revision-data'
+        $worktree = Join-Path $repoRoot '.worktrees\issue-42-publication'
+        New-Item -ItemType Directory -Path $repoRoot,$dataRoot,$worktree -Force | Out-Null
+        $statePath = Join-Path $dataRoot 'state.json'
+        $attempt = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = $worktree; threadId = 'old-thread'; runDirectory = $null; commit = 'old'; prUrl = $null; retryCount = 0; publicationStage = 'pr-created'; lastError = $null }
+        Write-CodexWorkerState -Path $statePath -State ([pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = $attempt }; deployment = $null })
+        $events = [System.Collections.Generic.List[string]]::new()
+        $codexCalls = [pscustomobject]@{ Value = 0 }
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'worktree' -and $Arguments -contains 'list') { return "worktree $worktree`nHEAD old`nbranch refs/heads/codex/42-publication`n" }
+            return ''
+        }.GetNewClosure()
+        $gh = { param([string[]] $Arguments)
+            if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
+            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            if ($Arguments -contains 'list') { return '[{"number":7,"url":"https://example.test/pr/7","state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42"}]' }
+            if ($Arguments -contains 'view') { return '{"number":8,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}' }
+            $events.Add(($Arguments -join ' ')) | Out-Null
+            return ''
+        }.GetNewClosure()
+        $codex = { param($WorktreePath,$Issue,$Config,$RunDirectory,$Path,$Review,$Thread) $codexCalls.Value++; throw 'Codex must not run.' }.GetNewClosure()
+        { Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -LockProvider { param($p) [pscustomobject]@{} } -UnlockProvider { param($h) } -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex | Out-Null } | Should Throw
+        $codexCalls.Value | Should Be 0
+        ($events -join ' ') | Should Not Match '(?i)comment|edit|create|push|publication'
     }
 
     It 'persists the revision thread but blocks malformed summaries before publication' {
