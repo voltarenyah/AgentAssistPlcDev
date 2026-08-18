@@ -345,7 +345,7 @@ function Get-CodexCurrentUserSid {
 }
 
 function New-CodexScheduledTaskXml {
-    param([string] $UserId, [string] $FilePath, [string[]] $Arguments, [string] $OwnershipMarker)
+    param([string] $UserId, [string] $FilePath, [string[]] $Arguments, [string] $OwnershipMarker, [string] $WorkingDirectory)
     $escapedFile = [Security.SecurityElement]::Escape($FilePath)
     $escapedArguments = [Security.SecurityElement]::Escape((($Arguments | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' '))
     $escapedMarker = [Security.SecurityElement]::Escape($OwnershipMarker)
@@ -356,7 +356,7 @@ function New-CodexScheduledTaskXml {
   <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>$([Security.SecurityElement]::Escape($UserId))</UserId></LogonTrigger></Triggers>
   <Principals><Principal id="Author"><UserId>$([Security.SecurityElement]::Escape($UserId))</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><Hidden>true</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>
-  <Actions Context="Author"><Exec><Command>$escapedFile</Command><Arguments>$escapedArguments</Arguments><WorkingDirectory>$([Security.SecurityElement]::Escape((Split-Path -Parent $FilePath)))</WorkingDirectory></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>$escapedFile</Command><Arguments>$escapedArguments</Arguments><WorkingDirectory>$([Security.SecurityElement]::Escape($WorkingDirectory))</WorkingDirectory></Exec></Actions>
 </Task>
 "@
 }
@@ -786,8 +786,8 @@ function Get-CodexLocalWorkerPlan {
     $notifierArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-Sta','-WindowStyle','Hidden','-File',$notifierScript,'-Watch','-ConfigPath',$configPath)
     $userId = Get-CodexCurrentUserId
     $ownershipMarker = [Guid]::NewGuid().ToString('N')
-    $runnerXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $runnerArgs -OwnershipMarker $ownershipMarker
-    $notifierXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $notifierArgs -OwnershipMarker $ownershipMarker
+    $runnerXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $runnerArgs -OwnershipMarker $ownershipMarker -WorkingDirectory (Split-Path -Parent $runnerScript)
+    $notifierXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $notifierArgs -OwnershipMarker $ownershipMarker -WorkingDirectory (Split-Path -Parent $notifierScript)
     return [pscustomobject][ordered]@{
         Repository = $Repository; RepositoryRoot = $root; DataRoot = $data; ConfigPath = $configPath; TaskOwnershipMarker = $ownershipMarker
         Runner = [pscustomobject][ordered]@{ Root = $runnerRoot; MetadataPath = (Join-Path $runnerRoot 'runner-install.json'); ServiceMode = $false; Label = $label; Name = $runnerName; Reuse = $false }
