@@ -10,14 +10,22 @@ function Invoke-CodexGit {
 
     $root = [System.IO.Path]::GetFullPath($RepositoryRoot)
     $fullArguments = @('-C', $root) + @($Arguments)
-    if ($null -ne $CommandRunner) {
-        $output = & $CommandRunner ([string[]] $fullArguments)
-        if ($null -eq $output) { return '' }
-        return (($output | ForEach-Object { [string] $_ }) -join [Environment]::NewLine)
-    }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Git writes ordinary progress to stderr. GitHub Actions sets Stop, so
+        # capture that stream and decide success strictly from Git's exit code.
+        $ErrorActionPreference = 'Continue'
+        if ($null -ne $CommandRunner) {
+            $output = & $CommandRunner ([string[]] $fullArguments) 2>&1
+            if ($null -eq $output) { return '' }
+            return (($output | ForEach-Object { [string] $_ }) -join [Environment]::NewLine)
+        }
 
-    $output = & git.exe @fullArguments 2>&1
-    $exitCode = $LASTEXITCODE
+        $output = & git.exe @fullArguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($exitCode -ne 0) {
         $message = ($output | Out-String).Trim()
         if ([string]::IsNullOrWhiteSpace($message)) { $message = "git exited with code $exitCode." }

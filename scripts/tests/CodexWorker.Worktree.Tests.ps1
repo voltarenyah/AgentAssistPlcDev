@@ -27,6 +27,29 @@ Describe 'Codex worker worktrees' {
         $records[1].Head | Should Be 'def456'
     }
 
+    It 'preserves successful Git progress output when the caller treats errors as terminating' {
+        $runner = {
+            param([string[]] $Arguments)
+            $ErrorActionPreference = 'Continue'
+            Write-Error 'Preparing worktree'
+            return 'completed'
+        }
+        $previousPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Stop'
+            $module = Get-Module CodexWorker
+            $output = & $module {
+                param($progressRunner)
+                Invoke-CodexGit -RepositoryRoot 'C:\repo' -Arguments @('worktree', 'add') -CommandRunner $progressRunner
+            } $runner
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
+
+        $output | Should Match 'Preparing worktree'
+        $output | Should Match 'completed'
+    }
+
     It 'rejects cleanup outside the automation worktree root' {
         { Assert-PathUnderRoot -Path 'C:\repo' -Root 'C:\repo\.worktrees' } |
             Should Throw 'Path is outside the automation worktree root.'
