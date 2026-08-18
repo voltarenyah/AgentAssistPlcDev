@@ -44,9 +44,22 @@ jobs:
           } else {
               [System.Convert]::ToBoolean($env:CODEX_DRY_RUN)
           }
+          $workerConfigPath = Join-Path $env:LOCALAPPDATA 'AutomationWorkbench\CodexWorker\config.json'
+          if (-not (Test-Path -LiteralPath $workerConfigPath -PathType Leaf)) {
+              throw "Codex worker configuration was not found at '$workerConfigPath'."
+          }
+          $workerConfig = Get-Content -Raw -LiteralPath $workerConfigPath | ConvertFrom-Json
+          $repositoryRoot = [string]$workerConfig.repositoryRoot
+          $dataRoot = [string]$workerConfig.dataRoot
+          if ([string]::IsNullOrWhiteSpace($repositoryRoot) -or [string]::IsNullOrWhiteSpace($dataRoot)) {
+              throw 'Codex worker configuration must specify repositoryRoot and dataRoot.'
+          }
+          Write-Host "Dispatching issue worker with repository root '$repositoryRoot'."
           & .\scripts\codex-worker\Invoke-Issue.ps1 `
               -Repository ([string]$env:CODEX_REPOSITORY) `
               -IssueNumber $issueNumber `
               -Actor ([string]$env:CODEX_ACTOR) `
               -EventName ([string]$env:CODEX_EVENT_NAME) `
+              -RepositoryRoot $repositoryRoot `
+              -DataRoot $dataRoot `
               -DryRun:$dryRun
