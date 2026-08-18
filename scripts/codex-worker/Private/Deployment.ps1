@@ -53,9 +53,11 @@ function Invoke-CodexDeploymentProcess {
     try {
         if (-not $process.Start()) { throw "Unable to start '$FilePath'." }
         $processId = $process.Id
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $stderr = $process.StandardError.ReadToEnd()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
         return [pscustomobject]@{ ExitCode = [int]$process.ExitCode; Output = $stdout; StdOut = $stdout; StdErr = $stderr; ProcessId = $processId; CommandLine = "$FilePath $($Arguments -join ' ')"; WorkingDirectory = $WorkingDirectory; Arguments = [string[]]$Arguments }
     } finally { $process.Dispose() }
 }
@@ -290,16 +292,20 @@ function Invoke-CodexDeployment {
         $evidence['logs'] = @($logPath)
         $rollback = $null
         if ($evidence.prepared) {
-            try { $evidence['candidateProcesses'] = @(Get-CodexDeploymentProcessEvidence -SlotPath $inactivePath -ProcessProvider $ProcessProvider) } catch { $evidence['candidateProcessInspectionError'] = $_.Exception.Message }
             try {
                 $rollbackArgs = @('-ExecutionPolicy','Bypass','-File',(Join-Path $activePath 'launch.ps1'),'-NoBuild')
+                $rollbackDirectory = Split-Path -Parent $rollbackLogPath
+                if (-not (Test-Path -LiteralPath $rollbackDirectory -PathType Container)) { New-Item -ItemType Directory -Path $rollbackDirectory -Force | Out-Null }
+                Add-Content -LiteralPath $rollbackLogPath -Value "rollback attempt started"
+                $evidence['logs'] = @($logPath, $rollbackLogPath)
+                try { $evidence['candidateProcesses'] = @(Get-CodexDeploymentProcessEvidence -SlotPath $inactivePath -ProcessProvider $ProcessProvider) } catch { $evidence['candidateProcessInspectionError'] = $_.Exception.Message }
                 $rollbackLaunch = Invoke-CodexDeploymentProcess -FilePath 'powershell.exe' -Arguments $rollbackArgs -WorkingDirectory $activePath -ProcessRunner $ProcessRunner
                 $rollbackHealth = if ([int]$rollbackLaunch.ExitCode -eq 0) { Invoke-CodexDeploymentHealth -Config $Config -HttpRunner $HttpRunner -SleepProvider $SleepProvider } else { [pscustomobject]@{ Success = $false; Endpoints = @{}; Error = 'Rollback launcher failed.' } }
                 $rollbackProcesses = if ([int]$rollbackLaunch.ExitCode -eq 0 -and $rollbackHealth.Success) { @(Get-CodexDeploymentProcessEvidence -SlotPath $activePath -ProcessProvider $ProcessProvider) } else { @() }
                 $rollbackStdout = [string](Get-CodexDeploymentValue $rollbackLaunch 'StdOut' (Get-CodexDeploymentValue $rollbackLaunch 'Output' ''))
                 $rollbackStderr = [string](Get-CodexDeploymentValue $rollbackLaunch 'StdErr' '')
                 $rollback = [pscustomobject]@{ launchExitCode = [int]$rollbackLaunch.ExitCode; stdout = $rollbackStdout; stderr = $rollbackStderr; processId = Get-CodexDeploymentValue -Object $rollbackLaunch -Name 'ProcessId' -Default $null; commandLine = [string](Get-CodexDeploymentValue -Object $rollbackLaunch -Name 'CommandLine' -Default ('powershell.exe ' + ($rollbackArgs -join ' '))); workingDirectory = $activePath; health = $rollbackHealth.Endpoints; processes = $rollbackProcesses; success = ([int]$rollbackLaunch.ExitCode -eq 0 -and $rollbackHealth.Success) }
-                $rollbackDirectory = Split-Path -Parent $rollbackLogPath; if (-not (Test-Path -LiteralPath $rollbackDirectory -PathType Container)) { New-Item -ItemType Directory -Path $rollbackDirectory -Force | Out-Null }; Add-Content -LiteralPath $rollbackLogPath -Value ("powershell.exe $($rollbackArgs -join ' ')`nstdout: $rollbackStdout`nstderr: $rollbackStderr"); $evidence['logs'] = @($logPath, $rollbackLogPath)
+                Add-Content -LiteralPath $rollbackLogPath -Value ("powershell.exe $($rollbackArgs -join ' ')`nstdout: $rollbackStdout`nstderr: $rollbackStderr")
                 $evidence['rollback'] = $rollback
             } catch { $evidence['rollback'] = [pscustomobject]@{ success = $false; error = $_.Exception.Message }; if (Test-Path -LiteralPath $rollbackLogPath -PathType Leaf) { $evidence['logs'] = @($logPath, $rollbackLogPath) } }
         }
@@ -346,7 +352,17 @@ function Invoke-CodexDeployment {
         if (-not $failureStateVerified) { $evidence['failureStateUnverified'] = $true; $failedDeployment.status = 'rollback-failed' }
         if (($failedDeployment.status -eq 'rollback-failed' -or -not $failureStateVerified) -and $null -ne $GitHubCommandRunner) {
             $issue = [int](Get-CodexDeploymentValue $Deployment 'issueNumber' (Get-CodexDeploymentValue $Deployment 'sourcePr' 0))
-            if ($issue -gt 0) { $repositoryName = [string](Get-CodexDeploymentValue -Object $Config -Name 'repository' -Default 'local/repository'); if ([string]::IsNullOrWhiteSpace($repositoryName)) { $repositoryName = 'local/repository' }; Add-CodexIssueComment -Repository $repositoryName -IssueNumber $issue -Body "[HIGH PRIORITY] Runtime deployment failed and rollback failed.`n`n$failure`n`nLogs: $($evidence.logs -join ', ')" -CommandRunner $GitHubCommandRunner | Out-Null }
+            if ($issue -gt 0) {
+                $repositoryName = [string](Get-CodexDeploymentValue -Object $Config -Name 'repository' -Default 'local/repository')
+                if ([string]::IsNullOrWhiteSpace($repositoryName)) { $repositoryName = 'local/repository' }
+                try { Add-CodexIssueComment -Repository $repositoryName -IssueNumber $issue -Body "[HIGH PRIORITY] Runtime deployment failed and rollback failed.`n`n$failure`n`nLogs: $($evidence.logs -join ', ')" -CommandRunner $GitHubCommandRunner | Out-Null }
+                catch {
+                    $evidence['githubCommentError'] = $_.Exception.Message
+                    $failedDeployment.evidence = [pscustomobject]$evidence
+                    $failedState.lastDeployment = [pscustomobject]$evidence
+                    try { & $write $paths.StatePath $failedState | Out-Null } catch { }
+                }
+            }
         }
         return [pscustomobject]@{ Success = $false; ActiveSlot = $active; TargetCommit = $target; Evidence = [pscustomobject]$evidence; State = $failedState; RollbackSucceeded = if ($null -eq $rollback) { $null } else { [bool]$rollback.success }; Error = $failure; PersistenceError = $failurePersistenceError }
     }

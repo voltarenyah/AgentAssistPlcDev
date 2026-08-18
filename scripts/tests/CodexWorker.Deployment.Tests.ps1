@@ -566,6 +566,24 @@ Describe 'Codex runtime deployment' {
         $comments[0] | Should Match '(?i)priority|rollback'
     }
 
+    It 'preserves the primary rollback failure when the GitHub notification provider throws' {
+        $f = New-RuntimeFixture
+        $processState = @{ Calls = 0 }
+        $f.Process = { param([string] $FilePath, [string[]] $Arguments, [string] $WorkingDirectory)
+            $processState.Calls++ | Out-Null
+            if ($FilePath -eq 'powershell.exe' -and $processState.Calls -gt 7) { throw 'rollback launcher unavailable' }
+            [pscustomobject]@{ ExitCode = 0; StdOut = 'out'; StdErr = 'err'; ProcessId = 77; CommandLine = "$FilePath $($Arguments -join ' ')" }
+        }.GetNewClosure()
+        $f.Http = { param([string] $Uri) [pscustomobject]@{ StatusCode = 503; Body = '' } }.GetNewClosure()
+        $github = { throw 'GitHub unavailable' }
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -GitHubCommandRunner $github -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $result.State.deployment.status | Should Be 'rollback-failed'
+        $result.Evidence.githubCommentError | Should Match 'GitHub unavailable'
+        @($result.Evidence.logs).Count | Should Be 2
+        foreach ($path in @($result.Evidence.logs)) { Test-Path -LiteralPath $path -PathType Leaf | Should Be $true }
+    }
+
     It 'fails closed on preparation failure without changing active slot' {
         $f = New-RuntimeFixture
         $f.Process = { param([string] $FilePath, [string[]] $Arguments) $f.Events.Add("run:$FilePath $($Arguments -join ' ')") | Out-Null; if ($Arguments -contains 'build') { return [pscustomobject]@{ ExitCode = 1; Output = 'compile failed' } }; return [pscustomobject]@{ ExitCode = 0; Output = '' } }.GetNewClosure()
@@ -612,6 +630,26 @@ Describe 'Codex runtime deployment' {
         $result.Evidence.launch.stderr | Should Be 'launcher err'
         @($result.Evidence.processes).Count | Should BeGreaterThan 0
         $result.Evidence.processes[0].processId | Should Be 9021
+    }
+
+    It 'drains large native stdout and stderr concurrently without deadlock' {
+        $module = Get-Module CodexWorker
+        if ($null -eq $module) { Import-Module (Join-Path $PSScriptRoot '..\codex-worker\CodexWorker.psd1') -Force; $module = Get-Module CodexWorker }
+        $shell = (Get-Process -Id $PID).Path
+        if ([string]::IsNullOrWhiteSpace($shell)) { $shell = (Get-Command powershell.exe -ErrorAction Stop).Source }
+        $childScript = '[Console]::Out.Write((''O'' * 2000000)); [Console]::Error.Write((''E'' * 2000000))'
+        $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
+        $result = & $module {
+            param($FilePath, $EncodedScript, $WorkingDirectory)
+            Invoke-CodexDeploymentProcess -FilePath $FilePath -Arguments @('-NoProfile','-NonInteractive','-EncodedCommand',$EncodedScript) -WorkingDirectory $WorkingDirectory -ProcessRunner $null
+        } $shell $encodedScript (Get-Location).Path
+
+        $result.ExitCode | Should Be 0
+        $result.StdOut.Length | Should Be 2000000
+        $result.StdErr.Length | Should Be 2000000
+        $result.ProcessId | Should Not BeNullOrEmpty
+        $result.WorkingDirectory | Should Be (Get-Location).Path
+        @($result.Arguments) | Should Be @('-NoProfile','-NonInteractive','-EncodedCommand',$encodedScript)
     }
 
     It 'compensates a partially persisted activation and verifies the previous active slot durably' {

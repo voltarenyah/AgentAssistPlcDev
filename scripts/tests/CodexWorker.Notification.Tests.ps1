@@ -57,7 +57,7 @@ Describe 'Codex worker deployment notification' {
             -StateReader { param($Path) $durable.Value } -StateWriter $writer -SessionProbe { $true } `
             -LockProvider { $events.Add('lock') | Out-Null; 'held' } `
             -UnlockProvider { param($Handle) $events.Add('unlock') | Out-Null } `
-            -DialogProvider { $null } -DeployAction { $events.Add('deploy') | Out-Null }
+            -DialogProvider { $null } -DeployAction { $events.Add('deploy') | Out-Null; return $true }
 
         $result.Decision | Should Be 'Deploy'
         $events[0] | Should Be 'lock'
@@ -406,7 +406,7 @@ Describe 'Codex worker deployment notification' {
             -StateReader { param($Path) $durable.Value } -StateWriter $writer -SessionProbe { $true } `
             -LockProvider { $events.Add('lock') | Out-Null; 'held' } `
             -UnlockProvider { $events.Add('unlock') | Out-Null } -DialogProvider { 'Deploy' } `
-            -DeployAction { $events.Add('deploy') | Out-Null }
+            -DeployAction { $events.Add('deploy') | Out-Null; return $true }
 
         $result.Status | Should Be 'Deployed'
         ($events -join ',') | Should Be 'lock,deploy,persist,unlock'
@@ -444,6 +444,33 @@ Describe 'Codex worker deployment notification' {
         $threw | Should Be $true
         $durable.Value.deployment | Should Not Be $null
         $unlocks.Count | Should Be 1
+    }
+
+    It 'requires explicit deployment success for every action result shape' {
+        $cases = @(
+            [pscustomobject]@{ Name = 'null'; Result = $null },
+            [pscustomobject]@{ Name = 'empty object'; Result = [pscustomobject]@{} },
+            [pscustomobject]@{ Name = 'string'; Result = 'true' },
+            [pscustomobject]@{ Name = 'integer'; Result = 1 },
+            [pscustomobject]@{ Name = 'string success'; Result = [pscustomobject]@{ Success = 'true' } },
+            [pscustomobject]@{ Name = 'false'; Result = $false },
+            [pscustomobject]@{ Name = 'failed object'; Result = [pscustomobject]@{ Success = $false } }
+        )
+        foreach ($case in $cases) {
+            $durable = [pscustomobject]@{ Value = New-NotificationState }
+            $unlocks = New-Object 'System.Collections.Generic.List[string]'
+            $threw = $false
+            try {
+                Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive ("state-$($case.Name).json")) `
+                    -StateReader { param($Path) (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                    -StateWriter { param($Path, $Desired) $durable.Value = (($Desired | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                    -SessionProbe { $true } -LockProvider { 'held' } -UnlockProvider { $unlocks.Add('unlock') | Out-Null } `
+                    -DialogProvider { 'Deploy' } -DeployAction { $case.Result } | Out-Null
+            } catch { $threw = $true }
+            $threw | Should Be $true
+            $durable.Value.deployment | Should Not Be $null
+            $unlocks.Count | Should Be 1
+        }
     }
 
     It 'does not show a snoozed deployment until its due time' {

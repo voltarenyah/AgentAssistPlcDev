@@ -408,8 +408,11 @@ function Invoke-CodexDeploymentNotificationCycle {
 
         if ($null -eq $DeployAction) { throw 'No deployment action was supplied.' }
         $deployResult = & $DeployAction (Copy-CodexNotificationObject -Object $deployment)
-        if ($deployResult -is [bool] -and -not $deployResult) { throw 'The deployment action reported failure.' }
-        if ($null -ne $deployResult -and $deployResult.PSObject.Properties['Success'] -and -not [bool]$deployResult.Success) { throw 'The deployment action reported failure.' }
+        $deploymentSucceeded = ($deployResult -is [bool] -and $deployResult -eq $true)
+        if (-not $deploymentSucceeded -and $null -ne $deployResult -and $deployResult.PSObject.Properties['Success']) {
+            $deploymentSucceeded = ($deployResult.Success -is [bool] -and $deployResult.Success -eq $true)
+        }
+        if (-not $deploymentSucceeded) { throw 'The deployment action did not report explicit success.' }
         # The deployment action may have durably updated activeSlot and
         # evidence. Re-read that authoritative snapshot before clearing the
         # pending notification so the cleanup write cannot restore stale state.
