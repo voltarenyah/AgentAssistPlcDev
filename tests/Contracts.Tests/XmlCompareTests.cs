@@ -37,6 +37,16 @@ public class XmlCompareTests
     }
 
     [Fact]
+    public void Normalize_IgnoresExportGeneratedGuidsAndReferences()
+    {
+        var a = "<CAEXFile>\n  <InternalElement ID=\"11111111-1111-1111-1111-111111111111\" Name=\"PLC\" />\n  <InternalLink RefPartnerSideA=\"11111111-1111-1111-1111-111111111111:Port_1\" RefPartnerSideB=\"[11111111-1111-1111-1111-111111111111]:[Port_2]\" />\n</CAEXFile>";
+        var b = "<CAEXFile>\n  <InternalElement ID=\"22222222-2222-2222-2222-222222222222\" Name=\"PLC\" />\n  <InternalLink RefPartnerSideA=\"22222222-2222-2222-2222-222222222222:Port_1\" RefPartnerSideB=\"[22222222-2222-2222-2222-222222222222]:[Port_2]\" />\n</CAEXFile>";
+
+        Assert.Equal(XmlCompare.Normalize(a), XmlCompare.Normalize(b));
+        Assert.Equal(XmlContentHash.Compute(a), XmlContentHash.Compute(b));
+    }
+
+    [Fact]
     public void Normalize_DifferentContent_ComparesUnequal()
     {
         var a = "<Document>\n  <Text>hi</Text>\n</Document>";
