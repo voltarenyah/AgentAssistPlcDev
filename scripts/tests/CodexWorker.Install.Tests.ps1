@@ -1,12 +1,13 @@
 Describe 'Codex local worker installation' {
     BeforeEach {
         $WhatIfPreference = $false
+        $script:BootstrapPython = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\agent-service\.venv\Scripts\python.exe'))
         Import-Module (Join-Path $PSScriptRoot '..\codex-worker\CodexWorker.psd1') -Force
     }
 
     It 'fails closed when the Windows x64 asset checksum is absent or ambiguous' {
         $release = [pscustomobject]@{
-            assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' })
+            assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' })
             body = "actions-runner-win-x64-1.0.0.zip`n11111111111111111111111111111111111111111111111111111111111111111111`n22222222222222222222222222222222222222222222222222222222222222222222"
         }
         $threw = $false
@@ -29,7 +30,7 @@ Describe 'Codex local worker installation' {
         $command = { param($request) $calls.Add($request) | Out-Null; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '1.0.0'; Stderr = '' } }.GetNewClosure()
         $download = { param($request) $calls.Add($request) | Out-Null; throw 'download should not run' }.GetNewClosure()
         $task = { param($request) $calls.Add($request) | Out-Null; throw 'task should not run' }.GetNewClosure()
-        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = 'C:\repo'; runnerLabel = 'agentassist-local' }
+        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = 'C:\repo'; runnerLabel = 'agentassist-local'; bootstrapPython = $script:BootstrapPython }
 
         $result = Invoke-CodexLocalWorkerSetup -Config $config -DataRoot (Join-Path $TestDrive 'data') -WhatIf -CommandRunner $command -DownloadRunner $download -TaskRunner $task
 
@@ -50,10 +51,10 @@ Describe 'Codex local worker installation' {
             if ($request.FilePath -eq 'gh.exe') { return '{"tag_name":"v1","assets":[],"body":""}' }
             return [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' }
         }.GetNewClosure()
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
         $download = { param($request) $requests.Add($request) | Out-Null }.GetNewClosure()
         $hash = { param($path) 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
-        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = 'C:\repo'; runnerLabel = 'agentassist-local'; runnerRelease = $release }
+        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = 'C:\repo'; runnerLabel = 'agentassist-local'; runnerRelease = $release; bootstrapPython = $script:BootstrapPython }
 
         { Invoke-CodexLocalWorkerSetup -Config $config -DataRoot (Join-Path $TestDrive 'data') -CommandRunner $command -DownloadRunner $download -HashRunner $hash -WhatIf } | Should Not Throw
         @($requests | Where-Object { (($_.Arguments -join ' ') -match 'registration-token') }).Count | Should Be 0
@@ -66,9 +67,9 @@ Describe 'Codex local worker installation' {
         $json = [ordered]@{
             repository = 'attacker/repo'; repositoryRoot = 'C:\attacker'; dataRoot = 'C:\attacker-data'
             runnerLabel = 'attacker-label'; runnerName = 'attacker-runner'; runnerRoot = 'C:\attacker-runner'
-            defaultBranch = 'release'; codexCommand = 'codex-custom'; bootstrapPython = 'python-custom.exe'
+            defaultBranch = 'release'; codexCommand = 'codex-custom'; bootstrapPython = $script:BootstrapPython
             workerLockTimeoutSeconds = 41; codexTimeoutMinutes = 77; notificationSeconds = 12; snoozeMinutes = 6
-            healthTimeoutSeconds = 88; runRetentionDays = 9; runtimeSlots = @('slot-one','slot-two')
+            healthTimeoutSeconds = 88; runRetentionDays = 9; runtimeSlots = @('runtime-a','runtime-b')
         } | ConvertTo-Json -Depth 10
         [IO.File]::WriteAllText($configPath, $json)
         $command = { param($request) if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } } else { [pscustomobject]@{ ExitCode = 0; Stdout = '1.0.0'; Stderr = '' } } }
@@ -80,7 +81,7 @@ Describe 'Codex local worker installation' {
         $result.Config.defaultBranch | Should Be 'release'
         $result.Config.codexCommand | Should Be 'codex-custom'
         $result.Config.workerLockTimeoutSeconds | Should Be 41
-        ($result.Config.runtimeSlots -join ',') | Should Be 'slot-one,slot-two'
+        ($result.Config.runtimeSlots -join ',') | Should Be 'runtime-a,runtime-b'
         $result.Config.runnerLabel | Should Be 'agentassist-local'
         $result.Config.runnerName | Should Be 'AutomationWorkbenchCodexRunner'
         $result.Config.runnerRoot | Should Be ([IO.Path]::GetFullPath((Join-Path $dataRoot 'runner')))
@@ -95,9 +96,9 @@ Describe 'Codex local worker installation' {
             if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }
             return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' }
         }.GetNewClosure()
-        $result = Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = 'C:\repo' }) -DataRoot (Join-Path $TestDrive 'default-data') -WhatIf -CommandRunner $command
+        $result = Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')); bootstrapPython = $script:BootstrapPython }) -DataRoot (Join-Path $TestDrive 'default-data') -WhatIf -CommandRunner $command
 
-        $result.Config.bootstrapPython | Should Be 'python.exe'
+        $result.Config.bootstrapPython | Should Be $script:BootstrapPython
         $result.Config.defaultBranch | Should Be 'master'
         $result.Config.runtimeSlots.Count | Should Be 2
         [string]::IsNullOrWhiteSpace([string]$result.Config.bootstrapPython) | Should Be $false
@@ -107,7 +108,7 @@ Describe 'Codex local worker installation' {
         $dataRoot = Join-Path $TestDrive 'invalid-data'
         New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
         $configPath = Join-Path $dataRoot 'config.json'
-        [IO.File]::WriteAllText($configPath, (@{ workerLockTimeoutSeconds = 'not-an-integer'; runtimeSlots = @('only-one') } | ConvertTo-Json))
+        [IO.File]::WriteAllText($configPath, (@{ workerLockTimeoutSeconds = 'not-an-integer'; runtimeSlots = @('slot-one','slot-two') } | ConvertTo-Json))
         $calls = [Collections.Generic.List[object]]::new()
         $command = { param($request) $calls.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure()
         $threw = $false
@@ -115,6 +116,34 @@ Describe 'Codex local worker installation' {
         $threw | Should Be $true
         @($calls).Count | Should Be 0
         (Get-Content -Raw -LiteralPath $configPath) | Should Match 'not-an-integer'
+    }
+
+    It 'rejects a redirected runner release before any mutation' {
+        $calls = [Collections.Generic.List[object]]::new()
+        $release = [pscustomobject]@{
+            tag_name = 'v1.0.0'
+            assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'http://evil.example/runner.zip' })
+            body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64)
+        }
+        $command = { param($request) $calls.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }.GetNewClosure()
+        $threw = $false
+        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = (Get-Location).Path; bootstrapPython = $script:BootstrapPython; runnerRelease = $release }) -DataRoot (Join-Path $TestDrive 'bad-release-data') -CommandRunner $command -WhatIf | Out-Null } catch { $threw = $true }
+        $threw | Should Be $true
+        @($calls).Count | Should Be 0
+    }
+
+    It 'rejects a real reparse ancestor for bootstrapPython before mutation' {
+        $target = Join-Path $TestDrive 'python-target'
+        $junction = Join-Path $TestDrive 'python-junction'
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $target 'python.exe'), '')
+        New-Item -ItemType Junction -Path $junction -Target $target -Force | Out-Null
+        $calls = [Collections.Generic.List[object]]::new()
+        $command = { param($request) $calls.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }.GetNewClosure()
+        $threw = $false
+        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = (Get-Location).Path; bootstrapPython = (Join-Path $junction 'python.exe') }) -DataRoot (Join-Path $TestDrive 'junction-data') -CommandRunner $command -WhatIf | Out-Null } catch { $threw = $true }
+        $threw | Should Be $true
+        @($calls).Count | Should Be 0
     }
 
     It 'skips prerequisite probing while retaining GitHub auth validation' {
@@ -125,7 +154,7 @@ Describe 'Codex local worker installation' {
             if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }
             return [pscustomobject]@{ ExitCode = 0; Stdout = '1.0.0'; Stderr = '' }
         }.GetNewClosure()
-        $result = Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = 'C:\repo' }) -DataRoot (Join-Path $TestDrive 'skip-data') -SkipPrerequisiteProbe -WhatIf -CommandRunner $command
+        $result = Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = (Get-Location).Path; bootstrapPython = $script:BootstrapPython }) -DataRoot (Join-Path $TestDrive 'skip-data') -SkipPrerequisiteProbe -WhatIf -CommandRunner $command
 
         @($calls | Where-Object { $_.FilePath -in @('pwsh.exe','git.exe','dotnet.exe','node.exe','npm.cmd','python.exe') }).Count | Should Be 0
         @($calls | Where-Object { $_.FilePath -eq 'gh.exe' -and $_.Arguments -contains 'status' }).Count | Should Be 1
@@ -138,7 +167,7 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $requests = [Collections.Generic.List[object]]::new()
         $configRequests = [Collections.Generic.List[object]]::new()
         $runnerStarts = [Collections.Generic.List[object]]::new()
@@ -159,18 +188,27 @@ Describe 'Codex local worker installation' {
             if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }
             if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }
             if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }
-            if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
+            if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
             return [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' }
         }.GetNewClosure()
         $tasks = [Collections.Generic.List[object]]::new()
         $taskRunner = { param($request) $tasks.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure()
         $taskStartRunner = { param($request) $runnerStarts.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure()
-        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = 'python.exe' }
-        $result = Invoke-CodexLocalWorkerSetup -Config $config -DataRoot (Join-Path $TestDrive 'positive-data') -CommandRunner $command -DownloadRunner { param($request) $requests.Add($request) | Out-Null }.GetNewClosure() -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner $taskRunner -TaskStartRunner $taskStartRunner -TemporaryGitPath $TestDrive -WhatIf:$false
+        $positiveData = Join-Path $TestDrive 'positive-data'
+        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = $script:BootstrapPython; token = 'short-lived-secret'; secret = 'must-not-persist' }
+        $result = Invoke-CodexLocalWorkerSetup -Config $config -DataRoot $positiveData -ConfigPath (Join-Path $positiveData 'config.json') -SkipPrerequisiteProbe -CommandRunner $command -DownloadRunner { param($request) $requests.Add($request) | Out-Null }.GetNewClosure() -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner $taskRunner -TaskStartRunner $taskStartRunner -TemporaryGitPath $TestDrive -WhatIf:$false
         $result.Config | ConvertTo-Json -Depth 20 | Should Not Match 'short-lived-secret'
         $result.Plan | ConvertTo-Json -Depth 20 | Should Not Match 'short-lived-secret'
         $positiveFiles = @(Get-ChildItem -LiteralPath (Join-Path $TestDrive 'positive-data') -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "`n"
         $positiveFiles | Should Not Match 'short-lived-secret'
+        $persisted = Get-Content -Raw -LiteralPath (Join-Path $positiveData 'config.json') | ConvertFrom-Json
+        $persisted.repository | Should Be 'owner/repo'
+        $persisted.bootstrapPython | Should Be $script:BootstrapPython
+        ($persisted.runtimeSlots -join ',') | Should Be 'runtime-a,runtime-b'
+        ($persisted.PSObject.Properties.Name -join ',') | Should Not Match '(?i)token|secret'
+        @($requests | Where-Object { $_.Arguments -contains '--version' }).Count | Should Be 0
+        @($requests | Where-Object { $_.FilePath -eq 'gh.exe' -and $_.Arguments -contains 'status' }).Count | Should Be 1
+        @($requests | Where-Object { $_.FilePath -eq 'codex' -and $_.Arguments -contains 'resume' }).Count | Should Be 1
         @($tasks).Count | Should Be 2
         @($runnerStarts).Count | Should Be 1
         $configCall = @($requests | Where-Object { [IO.Path]::GetFileName($_.FilePath) -eq 'config.cmd' })[0]
@@ -204,7 +242,7 @@ Describe 'Codex local worker installation' {
             }
             return [pscustomobject]@{ ExitCode = 0; Stdout = $version; Stderr = '' }
         }.GetNewClosure()
-        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = 'C:\repo'; bootstrapPython = 'python.exe'; codexCommand = 'codex' }
+        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = 'C:\repo'; bootstrapPython = $script:BootstrapPython; codexCommand = 'codex' }
         $result = Invoke-CodexLocalWorkerSetup -Config $config -DataRoot (Join-Path $TestDrive 'whatif-data') -WhatIf -CommandRunner $command -DownloadRunner { throw 'download mutation' } -TaskRunner { throw 'task mutation' }
         @($calls | Where-Object { $_.FilePath -eq 'gh.exe' -and $_.Arguments -contains 'status' }).Count | Should Be 1
         @($calls | Where-Object { $_.FilePath -eq 'gh.exe' -and (($_.Arguments -join ' ') -match 'registration-token') }).Count | Should Be 0
@@ -253,7 +291,7 @@ Describe 'Codex local worker installation' {
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $runnerRoot 'run.cmd'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         [IO.File]::WriteAllText((Join-Path $runnerRoot 'runner-install.json'), (@{ repositoryUrl = 'https://github.com/owner/repo'; repository = 'owner/repo'; runnerName = 'AutomationWorkbenchCodexRunner'; assetName = 'actions-runner-win-x64-1.0.0.zip'; releaseTag = 'v1.0.0'; labels = @('agentassist-local'); version = '1.0.0'; sha256 = ('a' * 64) } | ConvertTo-Json))
         $requests = [Collections.Generic.List[object]]::new()
         $runnerStarts = [Collections.Generic.List[object]]::new()
@@ -271,12 +309,12 @@ Describe 'Codex local worker installation' {
             if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }
             if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }
             if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }
-            if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
+            if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
             if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }
             return [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' }
         }.GetNewClosure()
         $tasks = [Collections.Generic.List[object]]::new()
-        $result = Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRoot = $runnerRoot; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = 'python.exe' }) -DataRoot $dataRoot -CommandRunner $command -DownloadRunner { throw 'download should not run' } -ExtractRunner { throw 'extract should not run' } -TaskRunner { param($request) $tasks.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } } -TaskStartRunner { param($request) $runnerStarts.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -ProcessProvider { @() } -TemporaryGitPath $TestDrive
+        $result = Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRoot = $runnerRoot; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = $script:BootstrapPython }) -DataRoot $dataRoot -CommandRunner $command -DownloadRunner { throw 'download should not run' } -ExtractRunner { throw 'extract should not run' } -TaskRunner { param($request) $tasks.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } } -TaskStartRunner { param($request) $runnerStarts.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -ProcessProvider { @() } -TemporaryGitPath $TestDrive
         $result.Plan.Runner.Reuse | Should Be $true
         @($requests | Where-Object { (($_.Arguments -join ' ') -match 'registration-token') }).Count | Should Be 0
         @($tasks).Count | Should Be 2
@@ -293,10 +331,10 @@ Describe 'Codex local worker installation' {
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $runnerRoot 'run.cmd'), '')
         [IO.File]::WriteAllText((Join-Path $runnerRoot 'runner-install.json'), (@{ repositoryUrl = 'https://github.com/other/repo'; repository = 'other/repo'; runnerName = 'active-runner'; assetName = 'actions-runner-win-x64-1.0.0.zip'; releaseTag = 'v1.0.0'; labels = @('other'); version = '1.0.0'; sha256 = ('a' * 64) } | ConvertTo-Json))
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
-        $command = { param($request) if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'pwsh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'PowerShell 7.4.0'; Stderr = '' } }; if ($request.FilePath -eq 'git.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'git version 2.49.0'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'gh version 2.70.0'; Stderr = '' } }; if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' } }.GetNewClosure()
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $command = { param($request) if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'pwsh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'PowerShell 7.4.0'; Stderr = '' } }; if ($request.FilePath -eq 'git.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'git version 2.49.0'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'gh version 2.70.0'; Stderr = '' } }; if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' } }.GetNewClosure()
         $threw = $false
-        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerRoot = $runnerRoot; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = 'python.exe' }) -DataRoot $dataRoot -CommandRunner $command -DownloadRunner { throw 'download should not run' } -ExtractRunner { throw 'extract should not run' } -ProcessProvider { [pscustomobject]@{ ProcessName = 'Runner.Listener' } } -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true }
+        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerRoot = $runnerRoot; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = $script:BootstrapPython }) -DataRoot $dataRoot -CommandRunner $command -DownloadRunner { throw 'download should not run' } -ExtractRunner { throw 'extract should not run' } -ProcessProvider { [pscustomobject]@{ ProcessName = 'Runner.Listener' } } -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true }
         $threw | Should Be $true
     }
 
@@ -306,11 +344,11 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $extractCount = 0
-        $command = { param($request) if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'pwsh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'PowerShell 7.4.0'; Stderr = '' } }; if ($request.FilePath -eq 'git.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'git version 2.49.0'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'gh version 2.70.0'; Stderr = '' } }; if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' } }.GetNewClosure()
+        $command = { param($request) if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'pwsh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'PowerShell 7.4.0'; Stderr = '' } }; if ($request.FilePath -eq 'git.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'git version 2.49.0'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'gh version 2.70.0'; Stderr = '' } }; if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' } }.GetNewClosure()
         $threw = $false
-        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = 'python.exe' }) -DataRoot (Join-Path $TestDrive 'hash-data') -CommandRunner $command -DownloadRunner { param($request) } -HashRunner { param($path) ('b' * 64) } -ExtractRunner { param($request) $extractCount++ } -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true }
+        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = $script:BootstrapPython }) -DataRoot (Join-Path $TestDrive 'hash-data') -CommandRunner $command -DownloadRunner { param($request) } -HashRunner { param($path) ('b' * 64) } -ExtractRunner { param($request) $extractCount++ } -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true }
         $threw | Should Be $true
         $extractCount | Should Be 0
     }
@@ -321,10 +359,10 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
-        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners($|\s)') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"runners":[{"name":"duplicate-runner","status":"online","labels":[{"name":"agentassist-local"}]},{"name":"duplicate-runner","status":"offline","labels":[{"name":"agentassist-local"}]}]}'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'pwsh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'PowerShell 7.4.0'; Stderr = '' } }; if ($request.FilePath -eq 'git.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'git version 2.49.0'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'gh version 2.70.0'; Stderr = '' } }; if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' } }.GetNewClosure()
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners($|\s)') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"runners":[{"name":"duplicate-runner","status":"online","labels":[{"name":"agentassist-local"}]},{"name":"duplicate-runner","status":"offline","labels":[{"name":"agentassist-local"}]}]}'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'pwsh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'PowerShell 7.4.0'; Stderr = '' } }; if ($request.FilePath -eq 'git.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'git version 2.49.0'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'gh version 2.70.0'; Stderr = '' } }; if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' } }.GetNewClosure()
         $threw = $false
-        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = 'python.exe' }) -DataRoot (Join-Path $TestDrive 'duplicate-data') -CommandRunner $command -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true }
+        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = $script:BootstrapPython }) -DataRoot (Join-Path $TestDrive 'duplicate-data') -CommandRunner $command -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true }
         $threw | Should Be $true
     }
 
@@ -336,7 +374,7 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $requests = [Collections.Generic.List[object]]::new()
         $downloads = [Collections.Generic.List[object]]::new()
         $configs = [Collections.Generic.List[object]]::new()
@@ -358,13 +396,13 @@ Describe 'Codex local worker installation' {
             if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }
             if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }
             if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }
-            if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
+            if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
             if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }
             return [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' }
         }.GetNewClosure()
         $extract = { param($request) $downloads.Add($request) | Out-Null; New-Item -ItemType Directory -Path $request.Destination -Force | Out-Null; [IO.File]::WriteAllText((Join-Path $request.Destination 'run.cmd'), ''); [IO.File]::WriteAllText((Join-Path $request.Destination 'config.cmd'), '') }.GetNewClosure()
         $taskRunner = { param($request) [pscustomobject]@{ ExitCode = 0 } }
-        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRoot = $runnerRoot; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = 'python.exe' }
+        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRoot = $runnerRoot; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = $script:BootstrapPython }
         Invoke-CodexLocalWorkerSetup -Config $config -DataRoot $dataRoot -CommandRunner $command -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner $extract -TaskRunner $taskRunner -ProcessProvider { @() } -TemporaryGitPath $TestDrive | Out-Null
         $metadataPath = Join-Path $runnerRoot 'runner-install.json'
         (Test-Path -LiteralPath $metadataPath -PathType Leaf) | Should Be $true
@@ -386,7 +424,7 @@ Describe 'Codex local worker installation' {
             New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
             [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
             [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-            $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+            $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
             $configRequests = [Collections.Generic.List[object]]::new()
             $removalRequests = [Collections.Generic.List[object]]::new()
             $emptyInventory = '{"runners":[]}'
@@ -420,7 +458,7 @@ Describe 'Codex local worker installation' {
                 if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }
                 if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }
                 if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }
-                if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
+                if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
                 if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }
                 return [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' }
             }
@@ -430,7 +468,7 @@ Describe 'Codex local worker installation' {
             $moveRunner = if ($mode -eq 'move') { { param($request) throw 'move sentinel' } } else { $null }
             $threw = $false
             $errorText = ''
-            try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = 'python.exe' }) -DataRoot $dataRoot -CommandRunner $command -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner $extract -TaskRunner { param($request) [pscustomobject]@{ ExitCode = 0 } } -MetadataWriter $metadataWriter -MoveRunner $moveRunner -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true; $errorText = $_.Exception.Message }
+            try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = $script:BootstrapPython }) -DataRoot $dataRoot -CommandRunner $command -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner $extract -TaskRunner { param($request) [pscustomobject]@{ ExitCode = 0 } } -MetadataWriter $metadataWriter -MoveRunner $moveRunner -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true; $errorText = $_.Exception.Message }
             $threw | Should Be $true
             if ($mode -eq 'metadata' -or $mode -eq 'move') { $errorText | Should Match $mode }
             if ($mode -eq 'verify' -or $mode -eq 'metadata' -or $mode -eq 'move') { @($removalRequests).Count | Should Be 1 }
@@ -492,7 +530,7 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $requests = [Collections.Generic.List[object]]::new()
         $configRequests = [Collections.Generic.List[object]]::new()
         $removals = [Collections.Generic.List[object]]::new()
@@ -514,7 +552,7 @@ Describe 'Codex local worker installation' {
             if ($request.FilePath -eq 'dotnet.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.400'; Stderr = '' } }
             if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }
             if ($request.FilePath -eq 'npm.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = '10.0.0'; Stderr = '' } }
-            if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
+            if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
             if ($request.FilePath -eq 'codex') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'codex-cli 1.0.0'; Stderr = '' } }
             return [pscustomobject]@{ ExitCode = 0; Stdout = 'ok'; Stderr = '' }
         }.GetNewClosure()
@@ -524,7 +562,7 @@ Describe 'Codex local worker installation' {
         $taskCreate = { param($request) $taskState[$request.Task.Name] = $request.Xml; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure()
         $threw = $false
         $errorText = ''
-        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = 'python.exe' }) -DataRoot $dataRoot -CommandRunner $command -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner $extract -TaskQueryRunner $taskQuery -TaskRunner $taskCreate -TaskStartRunner $taskStart -TaskStopRunner { param($request) $runnerStops.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -DelayRunner { param($milliseconds) } -OnlinePollAttempts 2 -PollDelayMilliseconds 0 -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true; $errorText = $_.Exception.Message }
+        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerLabel = 'agentassist-local'; runnerName = 'AutomationWorkbenchCodexRunner'; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = $script:BootstrapPython }) -DataRoot $dataRoot -CommandRunner $command -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner $extract -TaskQueryRunner $taskQuery -TaskRunner $taskCreate -TaskStartRunner $taskStart -TaskStopRunner { param($request) $runnerStops.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -DelayRunner { param($milliseconds) } -OnlinePollAttempts 2 -PollDelayMilliseconds 0 -TemporaryGitPath $TestDrive | Out-Null } catch { $threw = $true; $errorText = $_.Exception.Message }
         $threw | Should Be $true
         $errorText | Should Match 'bounded poll window'
         @($removals).Count | Should Be 1
@@ -542,7 +580,7 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $calls = [Collections.Generic.List[object]]::new()
         $inspector = { param($path) if ($path -match '\.staging') { return [pscustomobject]@{ IsReparsePoint = $true } }; [pscustomobject]@{ IsReparsePoint = $false } }
         $command = { param($request) $calls.Add($request) | Out-Null; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and ($request.Arguments -join ' ') -match '/actions/runners') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"runners":[]}'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
@@ -560,7 +598,7 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $calls = [Collections.Generic.List[object]]::new()
         $stagingChecks = 0
         $inspector = {
@@ -589,9 +627,9 @@ Describe 'Codex local worker installation' {
         $configPath = Join-Path $dataRoot 'config.json'; $tempPath = "$configPath.tmp"
         [IO.File]::WriteAllBytes($configPath, [Text.Encoding]::UTF8.GetBytes('{"preexisting":true}'))
         [IO.File]::WriteAllBytes($tempPath, [Text.Encoding]::UTF8.GetBytes('preexisting-temp'))
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $configured = [Collections.Generic.List[object]]::new()
-        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match 'registration-token') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"token":"registration-secret"}'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'config.cmd') { $configured.Add($request) | Out-Null; return [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { $json = if ($configured.Count -gt 0) { '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}' } else { '{"runners":[]}' }; return [pscustomobject]@{ ExitCode = 0; Stdout = $json; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'resume') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'resume supported'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
+        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match 'registration-token') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"token":"registration-secret"}'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'config.cmd') { $configured.Add($request) | Out-Null; return [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { $json = if ($configured.Count -gt 0) { '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}' } else { '{"runners":[]}' }; return [pscustomobject]@{ ExitCode = 0; Stdout = $json; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'resume') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'resume supported'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
         $configBefore = [IO.File]::ReadAllBytes($configPath); $tempBefore = [IO.File]::ReadAllBytes($tempPath)
         try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRelease = $release }) -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner { param($request) [pscustomobject]@{ Exists = $false } } -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner { param($request) throw 'task failure' } -TemporaryGitPath $TestDrive | Out-Null } catch { }
         [Convert]::ToBase64String([IO.File]::ReadAllBytes($configPath)) | Should Be ([Convert]::ToBase64String($configBefore))
@@ -604,9 +642,9 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $configured = [Collections.Generic.List[object]]::new()
-        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match 'registration-token') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"token":"registration-secret"}'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'config.cmd') { $configured.Add($request) | Out-Null; return [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { $json = if ($configured.Count -gt 0) { '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}' } else { '{"runners":[]}' }; return [pscustomobject]@{ ExitCode = 0; Stdout = $json; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'resume') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'resume supported'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
+        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match 'registration-token') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"token":"registration-secret"}'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'config.cmd') { $configured.Add($request) | Out-Null; return [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { $json = if ($configured.Count -gt 0) { '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}' } else { '{"runners":[]}' }; return [pscustomobject]@{ ExitCode = 0; Stdout = $json; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'resume') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'resume supported'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
         try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRelease = $release }) -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner { param($request) [pscustomobject]@{ Exists = $false } } -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner { param($request) throw 'task failure' } -TemporaryGitPath $TestDrive | Out-Null } catch { }
         (Test-Path -LiteralPath (Join-Path $dataRoot 'config.json')) | Should Be $false
         (Test-Path -LiteralPath (Join-Path $dataRoot 'config.json.tmp')) | Should Be $false
@@ -617,7 +655,7 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $downloaded = $false
         $query = { param($request) [pscustomobject]@{ Exists = $true; Xml = '<Task><Actions><Exec><Command>evil.exe</Command></Exec></Actions></Task>' } }
         $command = { param($request) [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }
@@ -633,16 +671,16 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $removed = [Collections.Generic.List[object]]::new()
         $taskSeen = [Collections.Generic.List[object]]::new()
         $configured = [Collections.Generic.List[object]]::new()
         $taskState = @{}
-        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match 'registration-token') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"token":"registration-secret"}'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'config.cmd') { $configured.Add($request) | Out-Null; return [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { $json = if ($configured.Count -gt 0) { '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}' } else { '{"runners":[]}' }; return [pscustomobject]@{ ExitCode = 0; Stdout = $json; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'resume') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'resume supported'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
+        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match 'registration-token') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"token":"registration-secret"}'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'config.cmd') { $configured.Add($request) | Out-Null; return [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { $json = if ($configured.Count -gt 0) { '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}' } else { '{"runners":[]}' }; return [pscustomobject]@{ ExitCode = 0; Stdout = $json; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'resume') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'resume supported'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
         $query = { param($request) if ($taskState.ContainsKey($request.Task.Name)) { return [pscustomobject]@{ Exists = $true; Xml = $taskState[$request.Task.Name] } }; [pscustomobject]@{ Exists = $false } }.GetNewClosure()
         $task = { param($request) $taskSeen.Add($request) | Out-Null; $taskState[$request.Task.Name] = $request.Xml; throw 'create side effect failure' }.GetNewClosure()
         $errorText = ''
-        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRelease = $release }) -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner $query -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner $task -TaskRemoveRunner { param($request) $removed.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -TemporaryGitPath $TestDrive | Out-Null } catch { $errorText = $_.Exception.ToString() }
+        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRelease = $release; bootstrapPython = $script:BootstrapPython }) -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner $query -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner $task -TaskRemoveRunner { param($request) $removed.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -TemporaryGitPath $TestDrive | Out-Null } catch { $errorText = $_.Exception.ToString() }
         if (@($taskSeen).Count -eq 0) { throw $errorText }
         @($taskSeen).Count | Should Be 1
         @($removed | Where-Object { $_.Action -eq 'Delete' }).Count | Should BeGreaterThan 0
@@ -658,13 +696,13 @@ Describe 'Codex local worker installation' {
         $runnerRoot = Join-Path $dataRoot 'runner'; New-Item -ItemType Directory -Path $runnerRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $runnerRoot 'run.cmd'), '')
         [IO.File]::WriteAllText((Join-Path $runnerRoot 'runner-install.json'), (@{ repositoryUrl = 'https://github.com/owner/repo'; runnerName = 'AutomationWorkbenchCodexRunner'; assetName = 'actions-runner-win-x64-1.0.0.zip'; releaseTag = 'v1.0.0'; labels = @('agentassist-local'); version = '1.0.0'; sha256 = ('a' * 64) } | ConvertTo-Json))
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $removed = [Collections.Generic.List[object]]::new(); $state = @{}
         $foreignXml = '<Task><RegistrationInfo><Description>foreign task</Description></RegistrationInfo><Actions><Exec><Command>evil.exe</Command></Exec></Actions></Task>'
-        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match 'registration-token') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"token":"registration-secret"}'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'config.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
+        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match 'registration-token') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"token":"registration-secret"}'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'config.cmd') { return [pscustomobject]@{ ExitCode = 0; Stdout = ''; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
         $query = { param($request) if ($state.ContainsKey($request.Task.Name)) { return [pscustomobject]@{ Exists = $true; Xml = $state[$request.Task.Name] } }; [pscustomobject]@{ Exists = $false } }.GetNewClosure()
         $task = { param($request) $state[$request.Task.Name] = $foreignXml; throw 'concurrent task appeared' }.GetNewClosure()
-        $errorText = ''; try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRoot = $runnerRoot; runnerRelease = $release }) -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner $query -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner $task -TaskRemoveRunner { param($request) $removed.Add($request) | Out-Null }.GetNewClosure() -TemporaryGitPath $TestDrive | Out-Null } catch { $errorText = $_.Exception.ToString() }
+        $errorText = ''; try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRoot = $runnerRoot; runnerRelease = $release; bootstrapPython = $script:BootstrapPython }) -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner $query -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner $task -TaskRemoveRunner { param($request) $removed.Add($request) | Out-Null }.GetNewClosure() -TemporaryGitPath $TestDrive | Out-Null } catch { $errorText = $_.Exception.ToString() }
         if ($state.Count -eq 0) { throw $errorText }
         @($removed | Where-Object { $_.Action -eq 'Delete' }).Count | Should Be 0
         $state.ContainsValue($foreignXml) | Should Be $true
@@ -675,7 +713,7 @@ Describe 'Codex local worker installation' {
         New-Item -ItemType Directory -Path $scriptsRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Start-GitHubRunner.ps1'), '')
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $state = @{}
         $configured = [Collections.Generic.List[object]]::new()
         $created = [Collections.Generic.List[object]]::new()
@@ -692,7 +730,7 @@ Describe 'Codex local worker installation' {
             if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }
             if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'resume') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'resume supported'; Stderr = '' } }
             if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }
-            if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
+            if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }
             [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' }
         }.GetNewClosure()
         $query = { param($request) if ($state.ContainsKey($request.Task.Name)) { return [pscustomobject]@{ Exists = $true; Xml = $state[$request.Task.Name] } }; [pscustomobject]@{ Exists = $false } }.GetNewClosure()
@@ -709,7 +747,7 @@ Describe 'Codex local worker installation' {
         $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRelease = $release }
         $threw = $false
         try {
-            Invoke-CodexLocalWorkerSetup -Config $config -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner $query -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner $task -TaskStopRunner { param($request) $stopped.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -TaskRemoveRunner { param($request) $removed.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -TemporaryGitPath $TestDrive | Out-Null
+            Invoke-CodexLocalWorkerSetup -Config ($config | Add-Member -NotePropertyName bootstrapPython -NotePropertyValue $script:BootstrapPython -PassThru) -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner $query -DownloadRunner { param($request) } -HashRunner { param($path) ('a' * 64) } -ExtractRunner { param($request) } -TaskRunner $task -TaskStopRunner { param($request) $stopped.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -TaskRemoveRunner { param($request) $removed.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -TemporaryGitPath $TestDrive | Out-Null
         } catch { $threw = $true; $errorText = $_.Exception.ToString() }
         $threw | Should Be $true
         if (@($created).Count -ne 2) { throw $errorText }
@@ -727,13 +765,13 @@ Describe 'Codex local worker installation' {
         [IO.File]::WriteAllText((Join-Path $scriptsRoot 'Invoke-DeploymentNotifier.ps1'), '')
         $runnerRoot = Join-Path $dataRoot 'runner'; New-Item -ItemType Directory -Path $runnerRoot -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $runnerRoot 'run.cmd'), '')
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         [IO.File]::WriteAllText((Join-Path $runnerRoot 'runner-install.json'), (@{ repositoryUrl = 'https://github.com/owner/repo'; runnerName = 'AutomationWorkbenchCodexRunner'; assetName = 'actions-runner-win-x64-1.0.0.zip'; releaseTag = 'v1.0.0'; labels = @('agentassist-local'); version = '1.0.0'; sha256 = ('a' * 64) } | ConvertTo-Json))
         $priorPlan = Get-CodexLocalWorkerPlan -Repository 'owner/repo' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ runnerRoot = $runnerRoot })
         $tasks = [Collections.Generic.List[object]]::new(); $starts = [Collections.Generic.List[object]]::new()
-        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'resume') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'resume supported'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
+        $command = { param($request) $joined = $request.Arguments -join ' '; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and $joined -match '/actions/runners') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"runners":[{"name":"AutomationWorkbenchCodexRunner","repository":"owner/repo","status":"online","labels":[{"name":"agentassist-local"}]}]}'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'resume') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'resume supported'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
         $query = { param($request) $xml = if ($request.Task.Name -match 'Runner$') { $priorPlan.Tasks.Runner.Xml } else { $priorPlan.Tasks.Notifier.Xml }; [pscustomobject]@{ Exists = $true; Xml = $xml } }.GetNewClosure()
-        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRoot = $runnerRoot; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = 'python.exe' }
+        $config = [pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRoot = $runnerRoot; runnerRelease = $release; codexCommand = 'codex'; bootstrapPython = $script:BootstrapPython }
         $result = Invoke-CodexLocalWorkerSetup -Config $config -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner $query -TaskRunner { param($request) $tasks.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -TaskStartRunner { param($request) $starts.Add($request) | Out-Null; [pscustomobject]@{ ExitCode = 0 } }.GetNewClosure() -ProcessProvider { @() } -TemporaryGitPath $TestDrive
         $result.Plan.Tasks.Runner.Name | Should Be 'AutomationWorkbenchCodexRunner'
         @($tasks).Count | Should Be 0
@@ -749,11 +787,11 @@ Describe 'Codex local worker installation' {
         $acl = Get-Acl -LiteralPath $stagingParent
         $broadRule = [Security.AccessControl.FileSystemAccessRule]::new($broadIdentity, [Security.AccessControl.FileSystemRights]::Modify, [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)
         $acl.AddAccessRule($broadRule); Set-Acl -LiteralPath $stagingParent -AclObject $acl
-        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://example.test/runner.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
+        $release = [pscustomobject]@{ tag_name = 'v1.0.0'; assets = @([pscustomobject]@{ name = 'actions-runner-win-x64-1.0.0.zip'; browser_download_url = 'https://github.com/actions/runner/releases/download/v1.0.0/actions-runner-win-x64-1.0.0.zip' }); body = 'actions-runner-win-x64-1.0.0.zip sha256: ' + ('a' * 64) }
         $seen = [Collections.Generic.List[string]]::new()
         $stagingAclSnapshots = [Collections.Generic.List[object]]::new()
-        $command = { param($request) if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and ($request.Arguments -join ' ') -match '/actions/runners') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"runners":[]}'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ($request.FilePath -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
-        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRelease = $release }) -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner { param($request) [pscustomobject]@{ Exists = $false } } -DownloadRunner { param($request) $seen.Add($request.Destination) | Out-Null; $stagingAclSnapshots.Add((Get-Acl -LiteralPath (Split-Path -Parent $request.Destination))) | Out-Null; [IO.File]::WriteAllText((Join-Path (Split-Path -Parent (Split-Path -Parent $request.Destination)) 'keep.txt'), 'keep'); throw 'stop after ACL check' }.GetNewClosure() -TemporaryGitPath $TestDrive | Out-Null } catch { }
+        $command = { param($request) if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; if ($request.FilePath -eq 'gh.exe' -and ($request.Arguments -join ' ') -match '/actions/runners') { return [pscustomobject]@{ ExitCode = 0; Stdout = '{"runners":[]}'; Stderr = '' } }; if ($request.FilePath -eq 'codex' -and $request.Arguments -contains 'exec') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'READY'; Stderr = '' } }; if ($request.FilePath -eq 'node.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'v22.0.0'; Stderr = '' } }; if ([IO.Path]::GetFileName($request.FilePath) -eq 'python.exe') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Python 3.11.9'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '8.0.0'; Stderr = '' } }.GetNewClosure()
+        try { Invoke-CodexLocalWorkerSetup -Config ([pscustomobject]@{ repository = 'owner/repo'; repositoryRoot = $repoRoot; runnerRelease = $release; bootstrapPython = $script:BootstrapPython }) -DataRoot $dataRoot -CommandRunner $command -TaskQueryRunner { param($request) [pscustomobject]@{ Exists = $false } } -DownloadRunner { param($request) $seen.Add($request.Destination) | Out-Null; $stagingAclSnapshots.Add((Get-Acl -LiteralPath (Split-Path -Parent $request.Destination))) | Out-Null; [IO.File]::WriteAllText((Join-Path (Split-Path -Parent (Split-Path -Parent $request.Destination)) 'keep.txt'), 'keep'); throw 'stop after ACL check' }.GetNewClosure() -TemporaryGitPath $TestDrive | Out-Null } catch { }
         $parentAcl = Get-Acl -LiteralPath $stagingParent
         $parentAcl.AreAccessRulesProtected | Should Be $true
         @($parentAcl.Access | Where-Object { $_.IdentityReference -match '(?i)Everyone|Users|Authenticated Users' -and $_.FileSystemRights.ToString() -match '(?i)Write|Modify|FullControl' }).Count | Should Be 0

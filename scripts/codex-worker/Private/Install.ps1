@@ -40,6 +40,63 @@ function Assert-CodexSetupConfigProperty {
     return $value
 }
 
+function Resolve-CodexSafeExecutable {
+    param([Parameter(Mandatory = $true)][string] $Value, [scriptblock] $PathInspector)
+    if ([IO.Path]::IsPathRooted($Value)) {
+        $resolved = [IO.Path]::GetFullPath($Value)
+    } else {
+        try { $command = Get-Command -Name $Value -CommandType Application -ErrorAction Stop | Select-Object -First 1 } catch { throw "Executable '$Value' could not be safely discovered." }
+        $candidate = if (-not [string]::IsNullOrWhiteSpace([string]$command.Source)) { [string]$command.Source } else { [string]$command.Path }
+        $resolved = [IO.Path]::GetFullPath($candidate)
+    }
+    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) { throw "Executable does not exist: $resolved" }
+    Assert-CodexPathHasNoReparseAncestor -Path $resolved -PathInspector $PathInspector
+    return $resolved
+}
+
+function Resolve-CodexBootstrapPython {
+    param(
+        [Parameter(Mandatory = $true)][string] $RepositoryRoot,
+        [Parameter(Mandatory = $true)][string] $Candidate,
+        [scriptblock] $PathInspector
+    )
+    if ([IO.Path]::IsPathRooted($Candidate)) {
+        return Resolve-CodexSafeExecutable -Value $Candidate -PathInspector $PathInspector
+    }
+    # Prefer the repository's configured virtual environment when the
+    # prerequisite probe returned the conventional command name. This avoids
+    # persisting a WindowsApps execution alias while still requiring a real,
+    # canonical executable.
+    $venvPython = Join-Path $RepositoryRoot 'agent-service\.venv\Scripts\python.exe'
+    if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
+        return Resolve-CodexSafeExecutable -Value $venvPython -PathInspector $PathInspector
+    }
+    return Resolve-CodexSafeExecutable -Value $Candidate -PathInspector $PathInspector
+}
+
+function Assert-CodexRunnerRelease {
+    param([Parameter(Mandatory = $true)][object] $Release)
+    if ($Release -is [string] -or $Release -is [ValueType] -or $Release -is [System.Array]) { throw 'runnerRelease must be a release object.' }
+    $tag = [string](Get-CodexSetupProperty $Release 'tag_name' '')
+    if ($tag -notmatch '^v?\d+\.\d+\.\d+$') { throw 'runnerRelease tag_name must be a semantic runner release tag.' }
+    $body = Get-CodexSetupProperty $Release 'body' $null
+    if ($body -isnot [string]) { throw 'runnerRelease body must be a string.' }
+    $assetsValue = Get-CodexSetupProperty $Release 'assets' $null
+    if ($null -eq $assetsValue -or $assetsValue -is [string] -or ($assetsValue -isnot [System.Collections.IEnumerable] -and $assetsValue.PSObject.Properties['name'] -eq $null)) { throw 'runnerRelease assets must be an array.' }
+    $assets = @($assetsValue)
+    $selected = @($assets | Where-Object { [string](Get-CodexSetupProperty $_ 'name' '') -match '(?i)^actions-runner-win-x64-[^/\\]+\.zip$' })
+    if ($selected.Count -ne 1) { throw 'runnerRelease must contain exactly one Windows x64 runner asset.' }
+    $assetName = [string](Get-CodexSetupProperty $selected[0] 'name' '')
+    $uriText = [string](Get-CodexSetupProperty $selected[0] 'browser_download_url' '')
+    $uri = $null
+    if (-not [Uri]::TryCreate($uriText, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https' -or $uri.Host -ine 'github.com') { throw 'runnerRelease asset URL must be an HTTPS GitHub URL.' }
+    $expectedPath = '/actions/runner/releases/download/' + $tag + '/' + $assetName
+    if (-not $uri.AbsolutePath.Equals($expectedPath, [StringComparison]::OrdinalIgnoreCase)) { throw 'runnerRelease asset URL is not the expected GitHub Actions runner release path.' }
+    $hashes = @([regex]::Matches($body, '(?im)^.*' + [regex]::Escape($assetName) + '.*?(?<hash>[0-9a-f]{64}).*$') | ForEach-Object { $_.Groups['hash'].Value.ToLowerInvariant() } | Select-Object -Unique)
+    if ($hashes.Count -ne 1) { throw 'runnerRelease must contain one unambiguous SHA-256 checksum for the selected asset.' }
+    return $true
+}
+
 function Resolve-CodexSetupConfig {
     [CmdletBinding()]
     param(
@@ -49,7 +106,8 @@ function Resolve-CodexSetupConfig {
         [Parameter(Mandatory = $true)] [string] $DataRoot,
         [Parameter(Mandatory = $true)] [string] $ConfigPath,
         [string] $BootstrapPython,
-        [switch] $ProtectIdentity
+        [switch] $ProtectIdentity,
+        [scriptblock] $PathInspector
     )
     if ($null -eq $Config) { $Config = [pscustomobject]@{} }
     if ($Config -is [System.Array] -or $Config -is [string] -or $Config -is [ValueType]) { throw 'Worker config must be a JSON object.' }
@@ -66,7 +124,7 @@ function Resolve-CodexSetupConfig {
     if ($Config.PSObject.Properties['runtimeSlots']) {
         if ($Config.runtimeSlots -is [string] -or $Config.runtimeSlots -isnot [System.Collections.IEnumerable]) { throw "Config property 'runtimeSlots' must be an array of two strings." }
         $slots = @($Config.runtimeSlots)
-        if ($slots.Count -ne 2 -or @($slots | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0 -or $slots[0] -eq $slots[1]) { throw "Config property 'runtimeSlots' must contain two distinct non-empty strings." }
+        if ($slots.Count -ne 2 -or $slots[0] -cne 'runtime-a' -or $slots[1] -cne 'runtime-b') { throw "Config property 'runtimeSlots' must contain exactly runtime-a and runtime-b in that order." }
     }
     foreach ($name in @('workerLockTimeoutSeconds','codexTimeoutMinutes','snoozeMinutes','healthTimeoutSeconds')) {
         if ($merged.Contains($name) -and [int]$merged[$name] -le 0) { throw "Config property '$name' must be positive." }
@@ -82,18 +140,18 @@ function Resolve-CodexSetupConfig {
         $full = [IO.Path]::GetFullPath($path)
         $rootPrefix = $repositoryRootFull.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
         $dataPrefix = $DataRoot.TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
-        if (-not ($full.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($dataPrefix, [StringComparison]::OrdinalIgnoreCase))) { throw "Config property '$name' is outside the trusted worker roots." }
+        if (($name -eq 'activityLogPath' -and -not $full.StartsWith($dataPrefix, [StringComparison]::OrdinalIgnoreCase)) -or ($name -eq 'tiaWhitelistPath' -and -not $full.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase))) { throw "Config property '$name' is outside the trusted worker roots." }
+        Assert-CodexPathHasNoReparseAncestor -Path $full -PathInspector $PathInspector
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { throw "Config property '$name' does not identify an existing file." }
         $merged[$name] = $full
     }
     if ($merged.Contains('bootstrapPython')) {
         $bootstrap = [string]$merged.bootstrapPython
         if ([IO.Path]::IsPathRooted($bootstrap)) {
             $fullBootstrap = [IO.Path]::GetFullPath($bootstrap)
-            $rootPrefix = $repositoryRootFull.TrimEnd('\\','/') + [IO.Path]::DirectorySeparatorChar
-            $dataPrefix = $DataRoot.TrimEnd('\\','/') + [IO.Path]::DirectorySeparatorChar
-            if (-not ($fullBootstrap.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -or $fullBootstrap.StartsWith($dataPrefix, [StringComparison]::OrdinalIgnoreCase))) { throw "Config property 'bootstrapPython' is outside the trusted worker roots." }
-            $merged.bootstrapPython = $fullBootstrap
+            $merged.bootstrapPython = Resolve-CodexSafeExecutable -Value $fullBootstrap -PathInspector $PathInspector
         } elseif ($bootstrap -match '[\s/\\]') { throw "Config property 'bootstrapPython' must be a command name or a trusted absolute path." }
+        else { $merged.bootstrapPython = Resolve-CodexSafeExecutable -Value $bootstrap -PathInspector $PathInspector }
     }
     $merged.defaultBranch = if ($merged.Contains('defaultBranch')) { [string]$merged.defaultBranch } else { 'master' }
     $merged.codexCommand = if ($merged.Contains('codexCommand')) { [string]$merged.codexCommand } else { 'codex' }
@@ -108,6 +166,7 @@ function Resolve-CodexSetupConfig {
         if (-not [string]::IsNullOrWhiteSpace($BootstrapPython)) { $merged.bootstrapPython = $BootstrapPython }
         elseif ($merged.Contains('bootstrapPython')) { $merged.Remove('bootstrapPython') }
     }
+    if ($merged.Contains('runnerRelease') -and $null -ne $merged.runnerRelease) { Assert-CodexRunnerRelease -Release $merged.runnerRelease | Out-Null }
     $merged.repository = $Repository
     $merged.repositoryRoot = $repositoryRootFull
     $merged.dataRoot = $DataRoot
@@ -806,7 +865,7 @@ function Invoke-CodexLocalWorkerSetup {
         try { $Config = [IO.File]::ReadAllText($ConfigPath) | ConvertFrom-Json } catch { throw "Worker config is invalid: $($_.Exception.Message)" }
     }
     $resolvedDataRoot = [IO.Path]::GetFullPath($(if ([string]::IsNullOrWhiteSpace($DataRoot)) { Join-Path $env:LOCALAPPDATA 'AutomationWorkbench\CodexWorker' } else { $DataRoot }))
-    $Config = Resolve-CodexSetupConfig -Config $Config -Repository $Repository -RepositoryRoot ([IO.Path]::GetFullPath($RepositoryRoot)) -DataRoot $resolvedDataRoot -ConfigPath $ConfigPath -BootstrapPython $null -ProtectIdentity:$configPathWasSupplied
+    $Config = Resolve-CodexSetupConfig -Config $Config -Repository $Repository -RepositoryRoot ([IO.Path]::GetFullPath($RepositoryRoot)) -DataRoot $resolvedDataRoot -ConfigPath $ConfigPath -BootstrapPython $null -ProtectIdentity:$configPathWasSupplied -PathInspector $PathInspector
     $plan = Get-CodexLocalWorkerPlan -Repository $Repository -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot -ConfigPath $ConfigPath -Config $Config -PathInspector $PathInspector
     $whatIf = [bool]$WhatIf
     $mutations = 0
@@ -831,11 +890,15 @@ function Invoke-CodexLocalWorkerSetup {
             throw
         }
     }
+    if (($SkipPrerequisiteProbe -or -not $whatIf) -and [string]::IsNullOrWhiteSpace([string](Get-CodexSetupProperty $Config 'bootstrapPython' ''))) {
+        $discoveredPython = Resolve-CodexBootstrapPython -RepositoryRoot $plan.RepositoryRoot -Candidate 'python.exe' -PathInspector $PathInspector
+        $Config = Resolve-CodexSetupConfig -Config $Config -Repository $plan.Repository -RepositoryRoot $plan.RepositoryRoot -DataRoot $plan.DataRoot -ConfigPath $plan.ConfigPath -BootstrapPython $discoveredPython -ProtectIdentity:$configPathWasSupplied -PathInspector $PathInspector
+    }
     $prereqs = if ($SkipPrerequisiteProbe) { @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner) } else { @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner -Probe) }
     if ([string]::IsNullOrWhiteSpace([string](Get-CodexSetupProperty $Config 'bootstrapPython' ''))) {
         $pythonPrereq = @($prereqs | Where-Object Name -eq 'Bootstrap Python')[0]
-        $pythonFallback = [string](Get-CodexSetupProperty $pythonPrereq 'FilePath' 'python.exe')
-        $Config = Resolve-CodexSetupConfig -Config $Config -Repository $plan.Repository -RepositoryRoot $plan.RepositoryRoot -DataRoot $plan.DataRoot -ConfigPath $plan.ConfigPath -BootstrapPython $pythonFallback -ProtectIdentity:$configPathWasSupplied
+        $pythonFallback = Resolve-CodexBootstrapPython -RepositoryRoot $plan.RepositoryRoot -Candidate ([string](Get-CodexSetupProperty $pythonPrereq 'FilePath' 'python.exe')) -PathInspector $PathInspector
+        $Config = Resolve-CodexSetupConfig -Config $Config -Repository $plan.Repository -RepositoryRoot $plan.RepositoryRoot -DataRoot $plan.DataRoot -ConfigPath $plan.ConfigPath -BootstrapPython $pythonFallback -ProtectIdentity:$configPathWasSupplied -PathInspector $PathInspector
     }
     $policies = @($prereqs | ForEach-Object { $_.Policy })
     $ghAuthResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('auth','status','--hostname','github.com') -CommandRunner $CommandRunner
@@ -871,6 +934,7 @@ function Invoke-CodexLocalWorkerSetup {
         if (-not (Test-CodexSetupSuccess $releaseResult)) { throw 'Could not read the latest GitHub Actions runner release.' }
         $release = Get-CodexSetupText $releaseResult | ConvertFrom-Json
     }
+    if ($null -ne $release) { Assert-CodexRunnerRelease -Release $release | Out-Null }
     $asset = $null
     if ($null -ne $release) { $asset = Resolve-CodexRunnerAsset -Release $release }
     $inventoryPayload = $null

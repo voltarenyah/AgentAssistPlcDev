@@ -52,24 +52,36 @@ it already exists, the installer reads that JSON object itself before doing
 preflight work. It preserves supported operational settings, including
 `defaultBranch`, `codexCommand`, `bootstrapPython`, `workerLockTimeoutSeconds`,
 `codexTimeoutMinutes`, `notificationSeconds`, `snoozeMinutes`,
-`healthTimeoutSeconds`, `runRetentionDays`, and the two `runtimeSlots` values.
-Missing settings receive the defaults from `config.example.json`; a new config
-uses the successfully selected/probed Bootstrap Python command (normally
-`python.exe`) rather than a null value. With `-SkipPrerequisiteProbe`, that
-fallback is the configured command name and is intentionally not version-
-validated. Repository, repository root, data root,
+`healthTimeoutSeconds`, `runRetentionDays`, and `pollSeconds`. `runtimeSlots`
+is not an arbitrary list: it is exactly `runtime-a`, then `runtime-b` (the
+installer derives their storage paths). Missing settings receive the defaults
+from `config.example.json`; a new config uses the successfully selected and
+probed Bootstrap Python executable rather than a null value. With
+`-SkipPrerequisiteProbe`, `bootstrapPython` must already be an explicit,
+canonical existing non-reparse executable, or setup must safely discover one
+from the repository virtual environment or `Get-Command`; it never persists a
+blind `python.exe`. Repository, repository root, data root,
 runner root, runner name, runner label, and config path are installer-derived
-and overwrite conflicting input. Paths must be absolute where a path is
-expected and must remain under the trusted repository or worker data root.
-Malformed JSON, wrong field types, invalid slot lists, and out-of-root paths
+and overwrite conflicting input. Rooted `bootstrapPython` must be a canonical
+existing executable (its installation location may be outside the repository);
+rooted `activityLogPath` must remain under
+`DataRoot`; rooted `tiaWhitelistPath` must remain under the trusted repository
+root. Every existing ancestor of these paths and of `bootstrapPython` is
+checked for reparse points before use. A supplied `runnerRelease` is accepted
+only when its tag, checksum, Windows x64 asset, and HTTPS
+`github.com/actions/runner/releases/download/...` URL agree; configuration
+cannot redirect downloads. Malformed JSON, wrong field types, invalid slot
+lists, and out-of-root paths
 fail before setup state, runner, task, or GitHub mutations.
 
 Normal installation probes and enforces the prerequisite versions. Use
 `-SkipPrerequisiteProbe` only when those checks have been performed separately:
-it deliberately does not call the version-command probe or install a missing
-Codex CLI, but still performs non-probe planning and `gh auth status`. This
-flag carries the risk that a missing or unsupported tool will fail later in the
-runner or task workflow. It is not a credentials or mutation bypass.
+it deliberately does not call any prerequisite version command or install a
+missing Codex CLI, but still performs non-probe planning, mandatory
+`gh auth status`, the read-only Codex `exec` authentication smoke test, and the
+mandatory `codex exec resume --help` capability check. This flag carries the
+risk that a missing or unsupported tool will fail later in the runner or task
+workflow. It is not a credentials or mutation bypass.
 
 If the Codex CLI is missing, setup installs `@openai/codex` with `npm.cmd
 install --global @openai/codex` and invokes `codex login`. If the authentication
