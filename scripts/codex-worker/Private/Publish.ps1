@@ -141,6 +141,62 @@ function Write-CodexPublicationAttemptState {
     else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $AttemptState | Out-Null }
 }
 
+function Get-CodexRevisionFileFingerprint {
+    param([string] $Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return 'missing' }
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Get-CodexRevisionUserEditSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string] $Worktree,
+        [scriptblock] $GitCommandRunner
+    )
+    $root = [IO.Path]::GetFullPath($Worktree)
+    $outputs = @(
+        (Invoke-CodexPublicationGit -Worktree $root -Arguments @('diff', '--name-only') -CommandRunner $GitCommandRunner)
+        (Invoke-CodexPublicationGit -Worktree $root -Arguments @('diff', '--cached', '--name-only') -CommandRunner $GitCommandRunner)
+        (Invoke-CodexPublicationGit -Worktree $root -Arguments @('ls-files', '--others', '--exclude-standard') -CommandRunner $GitCommandRunner)
+    )
+    $paths = @($outputs | ForEach-Object { Get-CodexPublicationChangedPaths ([string]$_) } | Sort-Object -Unique)
+    $snapshot = [System.Collections.Generic.List[object]]::new()
+    foreach ($path in $paths) {
+        Assert-PathUnderRoot -Path ([IO.Path]::GetFullPath((Join-Path $root $path))) -Root $root | Out-Null
+        $fullPath = [IO.Path]::GetFullPath((Join-Path $root $path))
+        $snapshot.Add([pscustomobject][ordered]@{ Path = $path; Exists = (Test-Path -LiteralPath $fullPath -PathType Leaf); Fingerprint = (Get-CodexRevisionFileFingerprint -Path $fullPath) }) | Out-Null
+    }
+    return @($snapshot.ToArray())
+}
+
+function Test-CodexRevisionUserEditsPreserved {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string] $Worktree,
+        [object[]] $Snapshot
+    )
+    $root = [IO.Path]::GetFullPath($Worktree)
+    foreach ($entry in @($Snapshot)) {
+        $path = [string](Get-CodexPublicationValue $entry 'Path' '')
+        if ([string]::IsNullOrWhiteSpace($path)) { return $false }
+        $fullPath = [IO.Path]::GetFullPath((Join-Path $root $path))
+        try { Assert-PathUnderRoot -Path $fullPath -Root $root | Out-Null } catch { return $false }
+        $exists = Test-Path -LiteralPath $fullPath -PathType Leaf
+        $fingerprint = Get-CodexRevisionFileFingerprint -Path $fullPath
+        if ([bool](Get-CodexPublicationValue $entry 'Exists' $false) -ne $exists -or [string](Get-CodexPublicationValue $entry 'Fingerprint' '') -ne $fingerprint) { return $false }
+    }
+    return $true
+}
+
+function Format-CodexRevisionUserEditContext {
+    param([object[]] $Snapshot)
+    if (@($Snapshot).Count -eq 0) { return 'No pre-existing user edits were detected in the issue worktree.' }
+    return (@($Snapshot | ForEach-Object { '[user-edit] {0} fingerprint={1}' -f $_.Path, $_.Fingerprint }) -join "`n")
+}
+
 function Publish-CodexIssue {
     [CmdletBinding()]
     param(
@@ -204,13 +260,14 @@ function Publish-CodexIssue {
             $prUrl = [string](Get-CodexPublicationValue $existing 'url' '')
             $prDraftProperty = $existing.PSObject.Properties['isDraft']
             if ($null -eq $prDraftProperty -or -not [bool]$prDraftProperty.Value) { throw 'Existing pull request is not a draft.' }
-            if ([string](Get-CodexPublicationValue $existing 'baseRefName' '') -ne [string](Get-CodexPublicationValue $Config 'defaultBranch' 'master')) { throw 'Existing pull request targets the wrong base branch.' }
+            if ([string](Get-CodexPublicationValue $existing 'state' '') -ne 'OPEN') { throw 'Existing pull request is not open.' }
+            if ([string](Get-CodexPublicationValue $existing 'baseRefName' '') -ne 'master') { throw 'Existing pull request targets the wrong base branch.' }
             if ([string](Get-CodexPublicationValue $existing 'headRefName' '') -ne $branch) { throw 'Existing pull request targets the wrong head branch.' }
             if ([string](Get-CodexPublicationValue $existing 'body' '') -notmatch "(?i)#\s*$issueNumber\b") { throw 'Existing pull request does not identify the requested issue.' }
             Set-CodexPullRequestBody -Repository $Repository -PullRequestNumber $prNumber -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner | Out-Null
         } else {
             if ($RequireExistingPullRequest) { throw 'Revision requires an existing pull request; refusing to create another PR.' }
-            $created = New-CodexDraftPullRequest -Repository $Repository -BaseBranch ([string](Get-CodexPublicationValue $Config 'defaultBranch' 'master')) -HeadBranch $branch -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner
+            $created = New-CodexDraftPullRequest -Repository $Repository -BaseBranch 'master' -HeadBranch $branch -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner
             $prUrl = [string]$created
         }
         Set-CodexOrchestrationField $AttemptState 'prUrl' $prUrl
@@ -242,6 +299,7 @@ function Invoke-CodexRevision {
     Assert-TrustedGitHubActor -Repository $Repository -Actor $Actor -CommandRunner $GitHubCommandRunner | Out-Null
     $paths = Resolve-CodexWorkerPaths -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot
     $lock = $null
+    $attempt = $null
     try {
         if ($null -ne $LockProvider) { $lock = & $LockProvider $paths.LockPath } else { $lock = Enter-CodexWorkerLock -Path $paths.LockPath }
         $state = if ($null -ne $StateReader) { & $StateReader $StatePath } else { Read-CodexWorkerState -Path $StatePath }
@@ -263,13 +321,16 @@ function Invoke-CodexRevision {
         if ($null -eq $pr) { $pr = Get-CodexPullRequestForBranch -Repository $Repository -BranchName $branch -CommandRunner $GitHubCommandRunner }
         if ($null -eq $pr) { throw 'Revision requires an existing pull request; refusing to create another PR.' }
         if ([string](Get-CodexPublicationValue $pr 'headRefName' '') -ne $branch) { throw 'Pull request head does not match persisted branch.' }
-        if ([string](Get-CodexPublicationValue $pr 'baseRefName' '') -ne [string](Get-CodexPublicationValue $Config 'defaultBranch' 'master')) { throw 'Pull request base does not match master.' }
+        if ([string](Get-CodexPublicationValue $pr 'state' '') -ne 'OPEN') { throw 'Pull request is not open.' }
+        if ([string](Get-CodexPublicationValue $pr 'baseRefName' '') -ne 'master') { throw 'Pull request base does not match master.' }
         $draftProperty = $pr.PSObject.Properties['isDraft']
         if ($null -eq $draftProperty -or -not [bool]$draftProperty.Value) { throw 'Pull request is not a draft.' }
         if ([string](Get-CodexPublicationValue $pr 'body' '') -notmatch "(?i)#\s*$IssueNumber\b") { throw 'Pull request does not identify the requested issue.' }
         $resolvedPrNumber = [int](Get-CodexPublicationValue $pr 'number' 0)
         $comments = @((Get-CodexPublicationValue $pr 'comments' @())) + @((Get-CodexPublicationValue $pr 'reviews' @()))
         $reviewText = ($comments | ForEach-Object { [string](Get-CodexPublicationValue $_ 'body' (Get-CodexPublicationValue $_ 'comment' '')) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n`n"
+        $userEditSnapshot = @(Get-CodexRevisionUserEditSnapshot -Worktree $worktree -GitCommandRunner $GitCommandRunner)
+        $reviewText = (@($reviewText, (Format-CodexRevisionUserEditContext -Snapshot $userEditSnapshot)) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n`n"
         $attemptNumber = [int](Get-CodexPublicationValue $attempt 'attempt' 1) + 1
         Set-CodexOrchestrationField $attempt 'attempt' $attemptNumber
         Set-CodexOrchestrationField $attempt 'publicationStage' 'none'
@@ -284,9 +345,12 @@ function Invoke-CodexRevision {
             $freshAttempt = Get-CodexIssueAttemptState -State $freshState -IssueNumber $IssueNumber
             if ($null -ne $freshAttempt) { $attempt = $freshAttempt }
             Set-CodexOrchestrationField $attempt 'threadId' $newThreadId
+            if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attempt | Out-Null } else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attempt | Out-Null }
         }
         $summary = Get-CodexPublicationValue $codex 'Summary' $null
-        if ([string](Get-CodexPublicationValue $codex 'Classification' '') -ne 'completed' -or [string](Get-CodexPublicationValue $codex 'Status' '') -ne 'completed' -or $null -eq $summary) { throw 'Revision Codex run did not complete successfully.' }
+        if ([string](Get-CodexPublicationValue $codex 'Classification' '') -ne 'completed' -or [string](Get-CodexPublicationValue $codex 'Status' '') -ne 'completed') { throw 'Revision Codex run did not complete successfully.' }
+        if ($null -eq $summary -or -not (Test-CodexSummary -Summary $summary)) { throw 'Revision Codex run returned a malformed or incomplete summary.' }
+        if (-not (Test-CodexRevisionUserEditsPreserved -Worktree $worktree -Snapshot $userEditSnapshot)) { throw 'Codex changed a pre-existing user edit; publication is blocked.' }
         Set-CodexOrchestrationField $attempt 'status' 'pr-ready'
         Set-CodexOrchestrationField $attempt 'summary' $summary
         if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attempt | Out-Null } else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attempt | Out-Null }
@@ -294,6 +358,15 @@ function Invoke-CodexRevision {
         $evidence = "Codex revision validation completed for commit $($published.commit). Existing draft PR was updated; no new PR was created."
         Add-CodexPullRequestComment -Repository $Repository -PullRequestNumber $resolvedPrNumber -Body $evidence -CommandRunner $GitHubCommandRunner | Out-Null
         return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'pr-ready'; PublicationStage = $published.publicationStage; PrUrl = $published.prUrl; ExistingPullRequest = $true; PullRequestNumber = $resolvedPrNumber }
+    } catch {
+        if ($null -ne $attempt) {
+            Set-CodexOrchestrationField $attempt 'status' 'blocked'
+            Set-CodexOrchestrationField $attempt 'lastError' $_.Exception.Message
+            try {
+                if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attempt | Out-Null } else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attempt | Out-Null }
+            } catch { }
+        }
+        throw
     } finally {
         if ($null -ne $lock) { if ($null -ne $UnlockProvider) { & $UnlockProvider $lock } else { Exit-CodexWorkerLock -Handle $lock } }
     }

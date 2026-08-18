@@ -335,7 +335,7 @@ function Get-CodexPullRequestContext {
         'pr', 'view', [string] $PullRequestNumber,
         '--repo', $Repository,
         '--comments',
-        '--json', 'number,title,body,author,comments,reviews,files,state,url,headRefName,baseRefName'
+        '--json', 'number,title,body,author,comments,reviews,files,state,isDraft,url,headRefName,baseRefName'
     ) -CommandRunner $CommandRunner
 }
 
@@ -361,6 +361,7 @@ function New-CodexDraftPullRequest {
         [Parameter(Mandatory = $true)][string] $BodyPath,
         [scriptblock] $CommandRunner
     )
+    if ($BaseBranch -ne 'master') { throw 'Codex draft pull requests must target master.' }
     $result = Invoke-GhCommand -Arguments @('pr', 'create', '--repo', $Repository, '--draft', '--base', $BaseBranch, '--head', $HeadBranch, '--body-file', ([IO.Path]::GetFullPath($BodyPath))) -CommandRunner $CommandRunner
     return $result.Trim()
 }

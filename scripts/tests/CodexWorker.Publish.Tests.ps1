@@ -127,6 +127,45 @@ Describe 'Codex worker publication' {
         (Get-CodexPullRequestForBranch -Repository 'owner/repo' -BranchName 'codex/42-publication' -CommandRunner $gh).number | Should Be 7
     }
 
+    It 'requests and returns draft and state fields for an explicit pull request' {
+        $captured = [System.Collections.Generic.List[object]]::new()
+        $gh = { param([string[]] $Arguments) $captured.Add($Arguments) | Out-Null; return '{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master"}' }.GetNewClosure()
+        $pr = Get-CodexPullRequestContext -Repository 'owner/repo' -PullRequestNumber 7 -CommandRunner $gh
+        (($captured[0] -join ',') -match 'isDraft') | Should Be $true
+        (($captured[0] -join ',') -match 'state') | Should Be $true
+        (@($captured[0] | Where-Object { $_ -isnot [string] }).Count) | Should Be 0
+        $pr.isDraft | Should Be $true
+        $pr.state | Should Be 'OPEN'
+    }
+
+    It 'rejects closed, non-draft, wrong-head, and wrong-base revision PRs' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'revision-data'
+        $worktree = Join-Path $repoRoot '.worktrees\issue-42-publication'
+        New-Item -ItemType Directory -Path $repoRoot,$dataRoot,$worktree -Force | Out-Null
+        $statePath = Join-Path $dataRoot 'state.json'
+        $attempt = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = $worktree; threadId = 'old-thread'; runDirectory = $null; commit = 'old'; prUrl = 'https://example.test/pr/7'; retryCount = 0; publicationStage = 'pr-created'; lastError = $null }
+        $git = { param([string[]] $Arguments) if ($Arguments -contains 'worktree' -and $Arguments -contains 'list') { return "worktree $worktree`nHEAD old`nbranch refs/heads/codex/42-publication`n" }; return '' }.GetNewClosure()
+        $codexCalls = [pscustomobject]@{ Value = 0 }
+        $codex = { param($a,$b,$c,$d,$e,$f,$g) $codexCalls.Value++; throw 'Codex must not run for invalid PR metadata.' }.GetNewClosure()
+        foreach ($case in @(
+            [pscustomobject]@{ state = 'CLOSED'; isDraft = $true; headRefName = 'codex/42-publication'; baseRefName = 'master' },
+            [pscustomobject]@{ state = 'OPEN'; isDraft = $false; headRefName = 'codex/42-publication'; baseRefName = 'master' },
+            [pscustomobject]@{ state = 'OPEN'; isDraft = $true; headRefName = 'codex/other'; baseRefName = 'master' },
+            [pscustomobject]@{ state = 'OPEN'; isDraft = $true; headRefName = 'codex/42-publication'; baseRefName = 'develop' }
+        )) {
+            Write-CodexWorkerState -Path $statePath -State ([pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = $attempt }; deployment = $null })
+            $gh = { param([string[]] $Arguments)
+                if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
+                if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+                return ([pscustomobject]@{ number = 7; state = $case.state; isDraft = $case.isDraft; headRefName = $case.headRefName; baseRefName = $case.baseRefName; body = 'Fixes #42'; comments = @(); reviews = @() } | ConvertTo-Json -Compress)
+            }.GetNewClosure()
+            $pullRequestArgument = if ($case.state -eq 'CLOSED') { '' } else { '7' }
+            { Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber $pullRequestArgument -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -LockProvider { param($p) [pscustomobject]@{} } -UnlockProvider { param($h) } -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex } | Should Throw
+        }
+        $codexCalls.Value | Should Be 0
+    }
+
     It 'rejects malformed or incomplete summaries before publication' {
         $malformed = [pscustomobject]@{ status = 'completed'; requiresHumanInput = $false }
         $git = { param($Arguments) if ($Arguments -contains '--name-only') { return 'src/change.ps1' }; return '' }
@@ -136,12 +175,17 @@ Describe 'Codex worker publication' {
     }
 
     It 'inspects staged, untracked, and committed paths for secrets and conflict markers' {
+        Set-Content -LiteralPath (Join-Path $publishWorktree 'staged.ps1') -Value "safe`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $publishWorktree 'new.ps1') -Value "safe`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $publishWorktree 'committed.ps1') -Value "<<<<<<< HEAD`n" -NoNewline
+        Set-Content -LiteralPath (Join-Path $publishWorktree 'private.key') -Value "secret`n" -NoNewline
         $git = { param($Arguments)
-            if ($Arguments -contains '--name-only' -and $Arguments -contains '--cached') { return 'staged.ps1`nprivate.key' }
-            if ($Arguments -contains '--name-only') { return 'unstaged.ps1' }
-            if ($Arguments -contains '--others') { return 'new.ps1' }
+            if ($Arguments -contains '--name-only' -and $Arguments -contains '--cached') { return "staged.ps1`nprivate.key" }
+            if ($Arguments -contains '--others') { return "new.ps1" }
+            if ($Arguments -contains 'HEAD^' -and $Arguments -contains '--name-only') { return "committed.ps1" }
+            if ($Arguments -contains '--name-only') { return '' }
             if ($Arguments -contains '--check') { return '' }
-            if ($Arguments -contains 'HEAD^') { return "diff --git a/new.ps1 b/new.ps1`n+<<<<<<< HEAD" }
+            if ($Arguments -contains 'HEAD^' -and $Arguments -contains '--no-ext-diff') { return "diff --git a/committed.ps1 b/committed.ps1`n+<<<<<<< HEAD" }
             return ''
         }.GetNewClosure()
         $review = Test-CodexPublication -Summary $publishSummary -Worktree $publishWorktree -IssueNumber 42 -GitCommandRunner $git
@@ -149,6 +193,7 @@ Describe 'Codex worker publication' {
         ($review.Blockers -join ' ') | Should Match '(?i)secret|credential|conflict'
         ($review.ChangedPaths -join ' ') | Should Match 'staged.ps1'
         ($review.ChangedPaths -join ' ') | Should Match 'new.ps1'
+        ($review.ChangedPaths -join ' ') | Should Match 'committed.ps1'
     }
 
     It 'treats a failed validation as required unless required is explicitly false' {
@@ -220,13 +265,197 @@ Describe 'Codex worker publication' {
         $codex = { param($WorktreePath,$Issue,$Config,$RunDirectory,$Path,$Review,$Thread) $events.Add(('codex:{0}:{1}' -f $WorktreePath,$Review)) | Out-Null; [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; ThreadId = 'new-thread'; Summary = $summary } }.GetNewClosure()
         $lock = { param($Path) $events.Add('lock') | Out-Null; return [pscustomobject]@{} }.GetNewClosure()
         $unlock = { param($Handle) $events.Add('unlock') | Out-Null }.GetNewClosure()
-        $result = Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -StateWriter $stateWriter -LockProvider $lock -UnlockProvider $unlock -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex
+        $result = Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'develop'; dataRoot = $dataRoot }) -StatePath $statePath -StateWriter $stateWriter -LockProvider $lock -UnlockProvider $unlock -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex
         $result.PullRequestNumber | Should Be 7
         ($events -contains 'comment') | Should Be $true
         ($events -contains 'edit') | Should Be $true
         ($events -contains 'lock') | Should Be $true
         (Get-CodexIssueAttemptState -State (Read-CodexWorkerState -Path $statePath) -IssueNumber 42).threadId | Should Be 'new-thread'
         ($events -join ' ') | Should Not Match '(?i)create|force|merge|ready'
+    }
+
+    It 'persists the revision thread but blocks malformed summaries before publication' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'revision-data'
+        $worktree = Join-Path $repoRoot '.worktrees\issue-42-publication'
+        New-Item -ItemType Directory -Path $repoRoot,$dataRoot,$worktree -Force | Out-Null
+        $statePath = Join-Path $dataRoot 'state.json'
+        $attempt = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = $worktree; threadId = 'old-thread'; runDirectory = $null; commit = 'old'; prUrl = 'https://example.test/pr/7'; retryCount = 0; publicationStage = 'pr-created'; lastError = $null }
+        Write-CodexWorkerState -Path $statePath -State ([pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = $attempt }; deployment = $null })
+        $events = [System.Collections.Generic.List[string]]::new()
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'worktree' -and $Arguments -contains 'list') { return "worktree $worktree`nHEAD old`nbranch refs/heads/codex/42-publication`n" }
+            if ($Arguments -contains 'status') { return '' }
+            if ($Arguments -contains '--name-only' -or $Arguments -contains '--others') { return '' }
+            return ''
+        }.GetNewClosure()
+        $gh = { param([string[]] $Arguments)
+            if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
+            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            if ($Arguments -contains 'view') { return '{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}' }
+            if ($Arguments -contains 'list') { return '[{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42"}]' }
+            $events.Add('github-mutation') | Out-Null
+            return ''
+        }.GetNewClosure()
+        $codex = { param($WorktreePath,$Issue,$Config,$RunDirectory,$Path,$Review,$Thread) [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; ThreadId = 'new-thread'; Summary = [pscustomobject]@{ status = 'completed' } } }
+        $failed = $false
+        try { Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -LockProvider { param($p) [pscustomobject]@{} } -UnlockProvider { param($h) } -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex | Out-Null } catch { $failed = $true }
+        $failed | Should Be $true
+        $saved = (Read-CodexWorkerState -Path $statePath).issues.'42'
+        $saved.threadId | Should Be 'new-thread'
+        $saved.status | Should Be 'blocked'
+        $saved.publicationStage | Should Not Be 'pr-ready'
+        ($events -join ' ') | Should Not Match '(?i)mutation|create|push|comment|edit'
+    }
+
+    It 'persists the revision thread and truthful blocked state when Codex fails' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'revision-data'
+        $worktree = Join-Path $repoRoot '.worktrees\issue-42-publication'
+        New-Item -ItemType Directory -Path $repoRoot,$dataRoot,$worktree -Force | Out-Null
+        $statePath = Join-Path $dataRoot 'state.json'
+        $attempt = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = $worktree; threadId = 'old-thread'; runDirectory = $null; commit = 'old'; prUrl = 'https://example.test/pr/7'; retryCount = 0; publicationStage = 'pr-created'; lastError = $null }
+        Write-CodexWorkerState -Path $statePath -State ([pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = $attempt }; deployment = $null })
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'worktree' -and $Arguments -contains 'list') { return "worktree $worktree`nHEAD old`nbranch refs/heads/codex/42-publication`n" }
+            return ''
+        }.GetNewClosure()
+        $gh = { param([string[]] $Arguments)
+            if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
+            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            return '{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}'
+        }.GetNewClosure()
+        $codex = { param($WorktreePath,$Issue,$Config,$RunDirectory,$Path,$Review,$Thread) [pscustomobject]@{ Status = 'failed'; Classification = 'transient_failure'; ThreadId = 'new-thread'; Summary = $null } }
+        $failed = $false
+        try { Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -LockProvider { param($p) [pscustomobject]@{} } -UnlockProvider { param($h) } -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex | Out-Null } catch { $failed = $true }
+        $failed | Should Be $true
+        $saved = (Read-CodexWorkerState -Path $statePath).issues.'42'
+        $saved.threadId | Should Be 'new-thread'
+        $saved.status | Should Be 'blocked'
+        $saved.publicationStage | Should Not Be 'pr-ready'
+    }
+
+    It 'allows a clean revision with no pre-existing user edits' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'revision-data'
+        $worktree = Join-Path $repoRoot '.worktrees\issue-42-publication'
+        New-Item -ItemType Directory -Path $repoRoot,$dataRoot,$worktree -Force | Out-Null
+        $statePath = Join-Path $dataRoot 'state.json'
+        $attempt = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = $worktree; threadId = 'old-thread'; runDirectory = $null; commit = 'old'; prUrl = 'https://example.test/pr/7'; retryCount = 0; publicationStage = 'pr-created'; lastError = $null }
+        Write-CodexWorkerState -Path $statePath -State ([pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = $attempt }; deployment = $null })
+        $phase = [pscustomobject]@{ CodexFinished = $false }
+        $events = [System.Collections.Generic.List[string]]::new()
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'worktree' -and $Arguments -contains 'list') { return "worktree $worktree`nHEAD old`nbranch refs/heads/codex/42-publication`n" }
+            if ($Arguments -contains 'status' -or $Arguments -contains '--name-only' -or $Arguments -contains '--others') { if ($phase.CodexFinished) { return 'generated.ps1' }; return '' }
+            if ($Arguments -contains 'add' -or $Arguments -contains 'commit' -or $Arguments -contains 'push') { $events.Add(($Arguments -join ' ')) | Out-Null; return '' }
+            if ($Arguments -contains 'rev-parse') { return 'newsha' }
+            return ''
+        }.GetNewClosure()
+        $gh = { param([string[]] $Arguments)
+            if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
+            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            if ($Arguments -contains 'view') { return '{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}' }
+            if ($Arguments -contains 'list') { return '[{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42"}]' }
+            if ($Arguments -contains 'edit' -or $Arguments -contains 'comment') { $events.Add(($Arguments -join ' ')) | Out-Null }
+            return ''
+        }.GetNewClosure()
+        $revisionSummary = $publishSummary.PSObject.Copy()
+        $codex = { param($WorktreePath,$Issue,$Config,$RunDirectory,$Path,$Review,$Thread) Set-Content -LiteralPath (Join-Path $WorktreePath 'generated.ps1') -Value "generated`n" -NoNewline; ($phase.CodexFinished = $true) | Out-Null; [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; ThreadId = 'new-thread'; Summary = $revisionSummary } }.GetNewClosure()
+        $result = Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -LockProvider { param($p) [pscustomobject]@{} } -UnlockProvider { param($h) } -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex
+        $result.Status | Should Be 'pr-ready'
+        ($events -join ' ') | Should Match '(?i)commit'
+    }
+
+    It 'allows a revision when a pre-existing user edit is preserved' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'revision-data'
+        $worktree = Join-Path $repoRoot '.worktrees\issue-42-publication'
+        New-Item -ItemType Directory -Path $repoRoot,$dataRoot,$worktree -Force | Out-Null
+        $userFile = Join-Path $worktree 'user.ps1'; Set-Content -LiteralPath $userFile -Value "user-value`n" -NoNewline
+        $statePath = Join-Path $dataRoot 'state.json'
+        $attempt = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = $worktree; threadId = 'old-thread'; runDirectory = $null; commit = 'old'; prUrl = 'https://example.test/pr/7'; retryCount = 0; publicationStage = 'pr-created'; lastError = $null }
+        Write-CodexWorkerState -Path $statePath -State ([pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = $attempt }; deployment = $null })
+        $phase = [pscustomobject]@{ CodexFinished = $false }
+        $events = [System.Collections.Generic.List[string]]::new()
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'worktree' -and $Arguments -contains 'list') { return "worktree $worktree`nHEAD old`nbranch refs/heads/codex/42-publication`n" }
+            if ($Arguments -contains 'status' -or $Arguments -contains '--name-only') { if ($phase.CodexFinished) { return "user.ps1`ngenerated.ps1" }; return 'user.ps1' }
+            if ($Arguments -contains '--others') { return '' }
+            if ($Arguments -contains 'add' -or $Arguments -contains 'commit' -or $Arguments -contains 'push') { $events.Add(($Arguments -join ' ')) | Out-Null; return '' }
+            if ($Arguments -contains 'rev-parse') { return 'newsha' }
+            return ''
+        }.GetNewClosure()
+        $gh = { param([string[]] $Arguments)
+            if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
+            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            if ($Arguments -contains 'view') { return '{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}' }
+            if ($Arguments -contains 'list') { return '[{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42"}]' }
+            if ($Arguments -contains 'edit' -or $Arguments -contains 'comment') { $events.Add(($Arguments -join ' ')) | Out-Null }
+            return ''
+        }.GetNewClosure()
+        $revisionSummary = $publishSummary.PSObject.Copy()
+        $codex = { param($WorktreePath,$Issue,$Config,$RunDirectory,$Path,$Review,$Thread) Set-Content -LiteralPath (Join-Path $WorktreePath 'generated.ps1') -Value "generated`n" -NoNewline; ($phase.CodexFinished = $true) | Out-Null; [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; ThreadId = 'new-thread'; Summary = $revisionSummary } }.GetNewClosure()
+        $result = Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -LockProvider { param($p) [pscustomobject]@{} } -UnlockProvider { param($h) } -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex
+        $result.Status | Should Be 'pr-ready'
+        (Get-Content -LiteralPath $userFile -Raw) | Should Be "user-value`n"
+        ($events -join ' ') | Should Match '(?i)commit'
+    }
+
+    It 'blocks revision publication when Codex overwrites a pre-existing user edit' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'revision-data'
+        $worktree = Join-Path $repoRoot '.worktrees\issue-42-publication'
+        New-Item -ItemType Directory -Path $repoRoot,$dataRoot,$worktree -Force | Out-Null
+        $userFile = Join-Path $worktree 'user.ps1'; Set-Content -LiteralPath $userFile -Value "user-value`n" -NoNewline
+        $statePath = Join-Path $dataRoot 'state.json'
+        $attempt = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = $worktree; threadId = 'old-thread'; runDirectory = $null; commit = 'old'; prUrl = 'https://example.test/pr/7'; retryCount = 0; publicationStage = 'pr-created'; lastError = $null }
+        Write-CodexWorkerState -Path $statePath -State ([pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = $attempt }; deployment = $null })
+        $events = [System.Collections.Generic.List[string]]::new()
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'worktree' -and $Arguments -contains 'list') { return "worktree $worktree`nHEAD old`nbranch refs/heads/codex/42-publication`n" }
+            if ($Arguments -contains 'status' -or $Arguments -contains '--name-only') { return 'user.ps1' }
+            if ($Arguments -contains '--others') { return '' }
+            if ($Arguments -contains 'add' -or $Arguments -contains 'commit' -or $Arguments -contains 'push') { $events.Add(($Arguments -join ' ')) | Out-Null; return '' }
+            return ''
+        }.GetNewClosure()
+        $gh = { param([string[]] $Arguments)
+            if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
+            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            return '{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}'
+        }.GetNewClosure()
+        $codex = { param($WorktreePath,$Issue,$Config,$RunDirectory,$Path,$Review,$Thread) Set-Content -LiteralPath $userFile -Value "codex-value`n" -NoNewline; [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; ThreadId = 'new-thread'; Summary = $publishSummary } }.GetNewClosure()
+        { Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -LockProvider { param($p) [pscustomobject]@{} } -UnlockProvider { param($h) } -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex } | Should Throw
+        ($events -join ' ') | Should Not Match '(?i)add|commit|push|edit|comment|create'
+        (Read-CodexWorkerState -Path $statePath).issues.'42'.status | Should Be 'blocked'
+    }
+
+    It 'blocks revision publication when Codex deletes a pre-existing user edit' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'revision-data'
+        $worktree = Join-Path $repoRoot '.worktrees\issue-42-publication'
+        New-Item -ItemType Directory -Path $repoRoot,$dataRoot,$worktree -Force | Out-Null
+        $userFile = Join-Path $worktree 'user.ps1'; Set-Content -LiteralPath $userFile -Value "user-value`n" -NoNewline
+        $statePath = Join-Path $dataRoot 'state.json'
+        $attempt = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = $worktree; threadId = 'old-thread'; runDirectory = $null; commit = 'old'; prUrl = 'https://example.test/pr/7'; retryCount = 0; publicationStage = 'pr-created'; lastError = $null }
+        Write-CodexWorkerState -Path $statePath -State ([pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = $attempt }; deployment = $null })
+        $events = [System.Collections.Generic.List[string]]::new()
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'worktree' -and $Arguments -contains 'list') { return "worktree $worktree`nHEAD old`nbranch refs/heads/codex/42-publication`n" }
+            if ($Arguments -contains 'status' -or $Arguments -contains '--name-only') { return 'user.ps1' }
+            if ($Arguments -contains '--others') { return '' }
+            if ($Arguments -contains 'add' -or $Arguments -contains 'commit' -or $Arguments -contains 'push') { $events.Add(($Arguments -join ' ')) | Out-Null; return '' }
+            return ''
+        }.GetNewClosure()
+        $gh = { param([string[]] $Arguments)
+            if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
+            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            return '{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}'
+        }.GetNewClosure()
+        $codex = { param($WorktreePath,$Issue,$Config,$RunDirectory,$Path,$Review,$Thread) Remove-Item -LiteralPath $userFile; [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; ThreadId = 'new-thread'; Summary = $publishSummary } }.GetNewClosure()
+        { Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -LockProvider { param($p) [pscustomobject]@{} } -UnlockProvider { param($h) } -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex } | Should Throw
+        ($events -join ' ') | Should Not Match '(?i)add|commit|push|edit|comment|create'
+        (Read-CodexWorkerState -Path $statePath).issues.'42'.status | Should Be 'blocked'
     }
 
     It 'rejects an explicit pull request number that resolves to another PR' {
