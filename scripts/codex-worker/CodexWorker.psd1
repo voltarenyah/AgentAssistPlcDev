@@ -52,6 +52,8 @@
         ,'Register-CodexPendingDeployment'
         ,'Register-CodexPullRequestClosed'
         ,'Test-CodexInteractiveSession'
+        ,'Read-CodexDeploymentNotifierConfig'
+        ,'New-CodexDeploymentDialogController'
         ,'Show-CodexDeploymentDialog'
         ,'Invoke-CodexDeploymentNotificationCycle'
         ,'Invoke-CodexDeploymentNotifier'

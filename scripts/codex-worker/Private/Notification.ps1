@@ -22,6 +22,48 @@ function Test-CodexInteractiveSession {
     }
 }
 
+function Read-CodexDeploymentNotifierConfig {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string] $ConfigPath)
+
+    if ([string]::IsNullOrWhiteSpace($ConfigPath) -or -not [IO.Path]::IsPathRooted($ConfigPath)) {
+        throw 'ConfigPath must be an absolute path.'
+    }
+    $resolvedConfigPath = [IO.Path]::GetFullPath($ConfigPath)
+    if (-not (Test-Path -LiteralPath $resolvedConfigPath -PathType Leaf)) {
+        throw "Notifier config was not found: $resolvedConfigPath"
+    }
+    try {
+        $config = [IO.File]::ReadAllText($resolvedConfigPath) | ConvertFrom-Json
+    } catch {
+        throw "Notifier config is malformed: $($_.Exception.Message)"
+    }
+    if ($null -eq $config) { throw 'Notifier config is empty.' }
+
+    $repositoryRoot = [string](Get-CodexNotificationValue -Object $config -Name 'repositoryRoot' -Default '')
+    $dataRoot = [string](Get-CodexNotificationValue -Object $config -Name 'dataRoot' -Default '')
+    if ([string]::IsNullOrWhiteSpace($repositoryRoot) -or [string]::IsNullOrWhiteSpace($dataRoot)) {
+        throw 'Notifier config must specify repositoryRoot and dataRoot.'
+    }
+    $paths = Resolve-CodexWorkerPaths -RepositoryRoot $repositoryRoot -DataRoot $dataRoot
+    $repoPrefix = $paths.RepositoryRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if ($paths.DataRoot.Equals($paths.RepositoryRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        $paths.DataRoot.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Notifier dataRoot must be outside the repository.'
+    }
+    if (-not $resolvedConfigPath.Equals($paths.ConfigPath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Notifier ConfigPath must be the config.json under the configured dataRoot.'
+    }
+    $declaredConfigPath = [string](Get-CodexNotificationValue -Object $config -Name 'configPath' -Default '')
+    if (-not [string]::IsNullOrWhiteSpace($declaredConfigPath)) {
+        if (-not [IO.Path]::IsPathRooted($declaredConfigPath) -or
+            -not ([IO.Path]::GetFullPath($declaredConfigPath)).Equals($resolvedConfigPath, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Notifier configPath does not match the supplied ConfigPath.'
+        }
+    }
+    return [pscustomobject][ordered]@{ Config = $config; Paths = $paths }
+}
+
 function Get-CodexNotificationValue {
     param([object] $Object, [string] $Name, [object] $Default = $null)
     if ($null -eq $Object) { return $Default }
@@ -57,11 +99,30 @@ function Test-CodexNotificationDue {
 function Get-CodexNotificationStateSignature {
     param([object] $Deployment)
     if ($null -eq $Deployment) { return '<null>' }
+    $normalizeTimestamp = {
+        param([object] $Value)
+        if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return '' }
+        if ($Value -is [DateTimeOffset]) {
+            return [string]$Value.ToUniversalTime().Ticks
+        }
+        if ($Value -is [DateTime]) {
+            return [string]$Value.ToUniversalTime().Ticks
+        }
+        $parsed = [DateTimeOffset]::MinValue
+        if ([DateTimeOffset]::TryParse(
+                [string]$Value,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind,
+                [ref]$parsed)) {
+            return [string]$parsed.ToUniversalTime().Ticks
+        }
+        return [string]$Value
+    }.GetNewClosure()
     $fields = [ordered]@{
         targetCommit = [string](Get-CodexNotificationValue $Deployment 'targetCommit' '')
         sourcePr = [int](Get-CodexNotificationValue $Deployment 'sourcePr' 0)
-        requestedAt = [string](Get-CodexNotificationValue $Deployment 'requestedAt' '')
-        snoozeUntil = [string](Get-CodexNotificationValue $Deployment 'snoozeUntil' '')
+        requestedAt = & $normalizeTimestamp (Get-CodexNotificationValue $Deployment 'requestedAt' '')
+        snoozeUntil = & $normalizeTimestamp (Get-CodexNotificationValue $Deployment 'snoozeUntil' '')
         status = [string](Get-CodexNotificationValue $Deployment 'status' '')
     }
     return (($fields | ConvertTo-Json -Compress -Depth 10))
@@ -92,6 +153,84 @@ function Write-CodexNotificationStateVerified {
     return $persisted
 }
 
+function New-CodexDeploymentDialogController {
+    [CmdletBinding()]
+    param(
+        [int] $Seconds = 10,
+        [scriptblock] $StartTimer,
+        [scriptblock] $StopTimer,
+        [scriptblock] $DisposeTimer,
+        [scriptblock] $CloseWindow,
+        [scriptblock] $SetMessage
+    )
+
+    $seconds = [Math]::Max(1, $Seconds)
+    $state = [pscustomobject][ordered]@{
+        Remaining = $seconds
+        Decision = $null
+        TimerStarted = $false
+        TimerStopped = $false
+        TimerDisposed = $false
+        WindowClosed = $false
+        Topmost = $true
+        Message = "Automation Workbench will rebuild in $seconds seconds."
+        LaterLabel = 'Later (5 min)'
+        CancelLabel = 'Cancel'
+    }
+
+    if ($null -eq $SetMessage) { $SetMessage = { param($message) $state.Message = $message }.GetNewClosure() }
+    if ($null -eq $StartTimer) { $StartTimer = { }.GetNewClosure() }
+    if ($null -eq $StopTimer) { $StopTimer = { }.GetNewClosure() }
+    if ($null -eq $DisposeTimer) { $DisposeTimer = { }.GetNewClosure() }
+    if ($null -eq $CloseWindow) { $CloseWindow = { $state.WindowClosed = $true }.GetNewClosure() }
+
+    $cleanup = {
+        if (-not $state.TimerStopped) {
+            & $StopTimer
+            $state.TimerStopped = $true
+        }
+        if (-not $state.TimerDisposed) {
+            & $DisposeTimer
+            $state.TimerDisposed = $true
+        }
+    }.GetNewClosure()
+    $finish = {
+        param([string] $decision)
+        if ($null -eq $state.Decision) { $state.Decision = $decision }
+        & $cleanup
+        & $CloseWindow
+    }.GetNewClosure()
+    $contentRendered = {
+        if (-not $state.TimerStarted -and $null -eq $state.Decision) {
+            & $StartTimer
+            $state.TimerStarted = $true
+        }
+    }.GetNewClosure()
+    $tick = {
+        if (-not $state.TimerStarted -or $null -ne $state.Decision) { return }
+        $state.Remaining--
+        $state.Message = "Automation Workbench will rebuild in $($state.Remaining) seconds."
+        & $SetMessage $state.Message
+        if ($state.Remaining -le 0) { & $finish 'Deploy' }
+    }.GetNewClosure()
+    $later = { & $finish 'Later' }.GetNewClosure()
+    $cancel = { & $finish 'Cancel' }.GetNewClosure()
+    $closed = {
+        if ($null -eq $state.Decision) { $state.Decision = 'Later' }
+        & $cleanup
+        $state.WindowClosed = $true
+    }.GetNewClosure()
+
+    return [pscustomobject][ordered]@{
+        State = $state
+        ContentRendered = $contentRendered
+        Tick = $tick
+        Later = $later
+        Cancel = $cancel
+        Closed = $closed
+    }
+}
+
 function Show-CodexDeploymentDialog {
     [CmdletBinding()]
     param([int] $Seconds = 10)
@@ -108,8 +247,6 @@ function Show-CodexDeploymentDialog {
         throw 'WPF is unavailable for the deployment notification.'
     }
 
-    $seconds = [Math]::Max(1, $Seconds)
-    $selection = @{ value = $null }
     $window = New-Object System.Windows.Window
     $window.Title = 'Automation Workbench'
     $window.Topmost = $true
@@ -121,7 +258,7 @@ function Show-CodexDeploymentDialog {
     $panel = New-Object System.Windows.Controls.StackPanel
     $panel.Margin = New-Object System.Windows.Thickness(18)
     $message = New-Object System.Windows.Controls.TextBlock
-    $message.Text = "Automation Workbench will rebuild in $seconds seconds."
+    $message.Text = "Automation Workbench will rebuild in $([Math]::Max(1, $Seconds)) seconds."
     $message.FontSize = 16
     $message.TextWrapping = [System.Windows.TextWrapping]::Wrap
     $panel.Children.Add($message) | Out-Null
@@ -142,41 +279,22 @@ function Show-CodexDeploymentDialog {
     $panel.Children.Add($buttons) | Out-Null
     $window.Content = $panel
 
-    $remaining = $seconds
     $timer = New-Object System.Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromSeconds(1)
-    $timer.add_Tick({
-        $remaining--
-        if ($remaining -le 0) {
-            $selection.value = 'Deploy'
-            $timer.Stop()
-            $window.Close()
-        } else {
-            $message.Text = "Automation Workbench will rebuild in $remaining seconds."
-        }
-    })
-    $window.add_ContentRendered({
-        # The countdown is deliberately started only after the window is
-        # visible; a hidden timeout must never trigger deployment.
-        $timer.Start()
-    })
-    $later.Add_Click({
-        $selection.value = 'Later'
-        $timer.Stop()
-        $window.Close()
-    })
-    $cancel.Add_Click({
-        $selection.value = 'Cancel'
-        $timer.Stop()
-        $window.Close()
-    })
-    $window.add_Closed({
-        if ($timer.IsEnabled) { $timer.Stop() }
-        if ($null -eq $selection.value) { $selection.value = 'Later' }
-    })
+    $controller = New-CodexDeploymentDialogController -Seconds $Seconds `
+        -StartTimer { $timer.Start() } `
+        -StopTimer { if ($timer.IsEnabled) { $timer.Stop() } } `
+        -DisposeTimer { } `
+        -CloseWindow { $window.Close() } `
+        -SetMessage { param($text) $message.Text = $text }
+    $timer.add_Tick({ & $controller.Tick })
+    $window.add_ContentRendered({ & $controller.ContentRendered })
+    $later.Add_Click({ & $controller.Later })
+    $cancel.Add_Click({ & $controller.Cancel })
+    $window.add_Closed({ & $controller.Closed })
 
     $window.ShowDialog() | Out-Null
-    return [string]$selection.value
+    return [string]$controller.State.Decision
 }
 
 function Invoke-CodexDeploymentNotificationCycle {
@@ -325,15 +443,19 @@ function Invoke-CodexDeploymentNotifier {
     }
     if ($PollSeconds -le 0) { throw 'PollSeconds must be positive.' }
     $cycle = 0
+    $results = New-Object 'System.Collections.Generic.List[object]'
     while ($true) {
         $cycle++
         try {
-            Invoke-CodexDeploymentNotificationCycle @cycleParameters | Out-Null
+            $cycleResult = Invoke-CodexDeploymentNotificationCycle @cycleParameters
         } catch {
             Write-Warning "Deployment notifier cycle failed: $($_.Exception.Message)"
+            $cycleResult = [pscustomobject]@{ Status = 'Failed'; Error = $_.Exception.Message; Decision = $null }
         }
+        $results.Add($cycleResult) | Out-Null
         if ($MaxCycles -gt 0 -and $cycle -ge $MaxCycles) { break }
         if ($null -ne $SleepProvider) { & $SleepProvider ([TimeSpan]::FromSeconds($PollSeconds)) }
         else { Start-Sleep -Seconds $PollSeconds }
     }
+    return $results.ToArray()
 }

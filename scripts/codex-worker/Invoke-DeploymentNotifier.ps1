@@ -1,20 +1,20 @@
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory = $true)] [string] $ConfigPath,
     [switch] $Watch,
-    [string] $RepositoryRoot,
-    [string] $DataRoot,
-    [string] $StatePath,
     [int] $PollSeconds = 5
 )
 
 $modulePath = Join-Path $PSScriptRoot 'CodexWorker.psd1'
 Import-Module $modulePath -Force
 
+$loaded = Read-CodexDeploymentNotifierConfig -ConfigPath $ConfigPath
 $parameters = @{
     Watch = $Watch
-    RepositoryRoot = $RepositoryRoot
-    DataRoot = $DataRoot
-    StatePath = $StatePath
+    Config = $loaded.Config
+    RepositoryRoot = $loaded.Paths.RepositoryRoot
+    DataRoot = $loaded.Paths.DataRoot
+    StatePath = $loaded.Paths.StatePath
     PollSeconds = $PollSeconds
 }
 Invoke-CodexDeploymentNotifier @parameters

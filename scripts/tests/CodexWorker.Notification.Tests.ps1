@@ -85,7 +85,10 @@ Describe 'Codex worker deployment notification' {
             -DeployAction { $deploys++ }
 
         $result.Status | Should Be 'Snoozed'
-        $durable.Value.deployment.snoozeUntil | Should Be $now.AddMinutes(5).ToUniversalTime().ToString('o')
+        $actualSnooze = $durable.Value.deployment.snoozeUntil
+        if ($actualSnooze -isnot [DateTime]) { $actualSnooze = [DateTimeOffset]::Parse([string]$actualSnooze).UtcDateTime }
+        else { $actualSnooze = $actualSnooze.ToUniversalTime() }
+        $actualSnooze | Should Be $now.AddMinutes(5).ToUniversalTime()
         $durable.Value.deployment.status | Should Be 'snoozed'
         $writes.Count | Should Be 1
         $deploys | Should Be 0
@@ -123,10 +126,172 @@ Describe 'Codex worker deployment notification' {
         $result = Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive 'state.json') `
             -NowProvider { $now } -StateReader { param($Path) $durable.Value } -StateWriter $writer `
             -SessionProbe { $true } -LockProvider { 'held' } -UnlockProvider { } `
-            -DialogProvider { 'Later' }
+            -DialogProvider { 'Closed' }
 
         $result.Decision | Should Be 'Later'
-        $durable.Value.deployment.snoozeUntil | Should Be $now.AddMinutes(5).ToUniversalTime().ToString('o')
+        $actualSnooze = $durable.Value.deployment.snoozeUntil
+        if ($actualSnooze -isnot [DateTime]) { $actualSnooze = [DateTimeOffset]::Parse([string]$actualSnooze).UtcDateTime }
+        else { $actualSnooze = $actualSnooze.ToUniversalTime() }
+        $actualSnooze | Should Be $now.AddMinutes(5).ToUniversalTime()
+    }
+
+    It 'counts down through the shared controller state and cleans up after zero' {
+        $events = New-Object 'System.Collections.Generic.List[string]'
+        $controller = New-CodexDeploymentDialogController -Seconds 10 `
+            -StartTimer { $events.Add('start') | Out-Null } `
+            -StopTimer { $events.Add('stop') | Out-Null } `
+            -DisposeTimer { $events.Add('dispose') | Out-Null } `
+            -CloseWindow { $events.Add('close') | Out-Null } `
+            -SetMessage { param($text) $events.Add($text) | Out-Null }
+
+        $controller.State.Topmost | Should Be $true
+        $controller.State.Message | Should Be 'Automation Workbench will rebuild in 10 seconds.'
+        $controller.State.LaterLabel | Should Be 'Later (5 min)'
+        $controller.State.CancelLabel | Should Be 'Cancel'
+        $events.Count | Should Be 0
+        & $controller.Tick
+        $controller.State.Remaining | Should Be 10
+
+        & $controller.ContentRendered
+        $events[0] | Should Be 'start'
+        for ($i = 0; $i -lt 10; $i++) { & $controller.Tick }
+
+        $controller.State.Remaining | Should Be 0
+        $controller.State.Message | Should Be 'Automation Workbench will rebuild in 0 seconds.'
+        $controller.State.Decision | Should Be 'Deploy'
+        ($events -join '|') | Should Match 'start.*stop.*dispose.*close'
+        $controller.State.TimerStopped | Should Be $true
+        $controller.State.TimerDisposed | Should Be $true
+    }
+
+    It 'starts the timer only after ContentRendered and maps Later, Cancel, and close' {
+        foreach ($choice in @('Later', 'Cancel', 'Closed')) {
+            $events = New-Object 'System.Collections.Generic.List[string]'
+            $controller = New-CodexDeploymentDialogController -Seconds 10 `
+                -StartTimer { $events.Add('start') | Out-Null } `
+                -StopTimer { $events.Add('stop') | Out-Null } `
+                -DisposeTimer { $events.Add('dispose') | Out-Null } `
+                -CloseWindow { $events.Add('close') | Out-Null }
+            $events.Count | Should Be 0
+            & $controller.ContentRendered
+            $events[0] | Should Be 'start'
+            if ($choice -eq 'Later') { & $controller.Later }
+            elseif ($choice -eq 'Cancel') { & $controller.Cancel }
+            else { & $controller.Closed }
+            $controller.State.Decision | Should Be $choice.Replace('Closed', 'Later')
+            $events -join '|' | Should Match 'start\|stop\|dispose'
+            if ($choice -ne 'Closed') { $events -join '|' | Should Match 'close$' }
+            $controller.State.TimerStarted | Should Be $true
+            & $controller.ContentRendered
+            @($events | Where-Object { $_ -eq 'start' }).Count | Should Be 1
+        }
+    }
+
+    It 'reads configured state through the installed notifier ConfigPath contract' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'worker-data'
+        New-Item -ItemType Directory -Path $repoRoot, $dataRoot -Force | Out-Null
+        $configPath = Join-Path $dataRoot 'config.json'
+        $statePath = Join-Path $dataRoot 'state.json'
+        $config = [ordered]@{ repositoryRoot = $repoRoot; dataRoot = $dataRoot; configPath = $configPath }
+        [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+        $snoozed = New-NotificationState -Status 'snoozed' -SnoozeUntil ([DateTime]::UtcNow.AddHours(1).ToString('o'))
+        [IO.File]::WriteAllText($statePath, ($snoozed | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false)))
+        $scriptPath = Join-Path $PSScriptRoot '..\codex-worker\Invoke-DeploymentNotifier.ps1'
+
+        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -ConfigPath $configPath 2>&1 | Out-String
+
+        $LASTEXITCODE | Should Be 0
+        $output | Should Not Match 'unknown parameter.*ConfigPath'
+        $output | Should Match 'snoozed'
+        $output | Should Not Match 'Idle'
+    }
+
+    It 'rejects missing, malformed, and repository-contained notifier configs' {
+        { Read-CodexDeploymentNotifierConfig -ConfigPath (Join-Path $TestDrive 'missing.json') } | Should Throw 'not found'
+        $bad = Join-Path $TestDrive 'bad.json'; [IO.File]::WriteAllText($bad, '{bad-json')
+        { Read-CodexDeploymentNotifierConfig -ConfigPath $bad } | Should Throw 'malformed'
+        $repo = Join-Path $TestDrive 'repo'; New-Item -ItemType Directory -Path $repo -Force | Out-Null
+        $inside = Join-Path $repo 'config.json'
+        [IO.File]::WriteAllText($inside, (([ordered]@{ repositoryRoot = $repo; dataRoot = $repo; configPath = $inside } | ConvertTo-Json)))
+        { Read-CodexDeploymentNotifierConfig -ConfigPath $inside } | Should Throw 'outside the repository'
+    }
+
+    It 'polls durable state on each watch cycle without beginning deployment' {
+        $state = New-NotificationState
+        $reads = New-Object 'System.Collections.Generic.List[string]'
+        $sleeps = New-Object 'System.Collections.Generic.List[object]'
+        $result = @(Invoke-CodexDeploymentNotifier -Watch -MaxCycles 2 -PollSeconds 5 `
+            -StatePath (Join-Path $TestDrive 'state.json') -StateReader { param($Path) $reads.Add($Path) | Out-Null; $state } `
+            -SessionProbe { $false } -SleepProvider { param($duration) $sleeps.Add($duration) | Out-Null })
+
+        $reads.Count | Should Be 2
+        $sleeps.Count | Should Be 1
+        $result.Count | Should Be 2
+        $result[0].Status | Should Be 'SessionUnavailable'
+    }
+
+    It 'fails closed for a Later no-op writer and releases the lock' {
+        $durable = [pscustomobject]@{ Value = New-NotificationState }
+        $unlocks = New-Object 'System.Collections.Generic.List[object]'
+        $threw = $false
+        try {
+            Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive 'state.json') `
+                -StateReader { param($Path) (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -StateWriter { param($Path, $Desired) } -SessionProbe { $true } -LockProvider { 'held' } `
+                -UnlockProvider { $unlocks.Add('unlock') | Out-Null } -DialogProvider { 'Later' } | Out-Null
+        } catch { $threw = $true }
+        $threw | Should Be $true
+        $durable.Value.deployment.status | Should Be 'pending'
+        $unlocks.Count | Should Be 1
+    }
+
+    It 'fails closed for a Later throwing writer and releases the lock' {
+        $durable = [pscustomobject]@{ Value = New-NotificationState }
+        $unlocks = New-Object 'System.Collections.Generic.List[object]'
+        $threw = $false
+        try {
+            Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive 'state.json') `
+                -StateReader { param($Path) (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -StateWriter { throw 'writer failed' } -SessionProbe { $true } -LockProvider { 'held' } `
+                -UnlockProvider { $unlocks.Add('unlock') | Out-Null } -DialogProvider { 'Later' } | Out-Null
+        } catch { $threw = $true }
+        $threw | Should Be $true
+        $durable.Value.deployment.status | Should Be 'pending'
+        $unlocks.Count | Should Be 1
+    }
+
+    It 'fails closed for a Cancel no-op writer and does not clear durable state' {
+        $durable = [pscustomobject]@{ Value = New-NotificationState }
+        $unlocks = New-Object 'System.Collections.Generic.List[object]'
+        $threw = $false
+        try {
+            Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive 'state.json') `
+                -StateReader { param($Path) (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -StateWriter { param($Path, $Desired) } -SessionProbe { $true } -LockProvider { 'held' } `
+                -UnlockProvider { $unlocks.Add('unlock') | Out-Null } -DialogProvider { 'Cancel' } | Out-Null
+        } catch { $threw = $true }
+        $threw | Should Be $true
+        $durable.Value.deployment | Should Not Be $null
+        $unlocks.Count | Should Be 1
+    }
+
+    It 'fails closed for a Cancel throwing writer and does not deploy' {
+        $durable = [pscustomobject]@{ Value = New-NotificationState }
+        $deploys = New-Object 'System.Collections.Generic.List[object]'
+        $unlocks = New-Object 'System.Collections.Generic.List[object]'
+        $threw = $false
+        try {
+            Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive 'state.json') `
+                -StateReader { param($Path) (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -StateWriter { throw 'writer failed' } -SessionProbe { $true } -LockProvider { 'held' } `
+                -UnlockProvider { $unlocks.Add('unlock') | Out-Null } -DialogProvider { 'Cancel' } `
+                -DeployAction { $deploys.Add('deploy') | Out-Null } | Out-Null
+        } catch { $threw = $true }
+        $threw | Should Be $true
+        $durable.Value.deployment | Should Not Be $null
+        $deploys.Count | Should Be 0
+        $unlocks.Count | Should Be 1
     }
 
     It 'keeps the lock through the injected deploy action' {
