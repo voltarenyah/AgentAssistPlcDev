@@ -187,10 +187,11 @@ Describe 'Codex worker deployment notification' {
         }
     }
 
-    It 'reads configured state through the installed notifier ConfigPath contract' {
+    It 'reads configured state through the installed pwsh STA notifier from an unrelated cwd' {
         $repoRoot = Join-Path $TestDrive 'repo'
         $dataRoot = Join-Path $TestDrive 'worker-data'
-        New-Item -ItemType Directory -Path $repoRoot, $dataRoot -Force | Out-Null
+        $unrelatedRoot = Join-Path $TestDrive 'unrelated'
+        New-Item -ItemType Directory -Path $repoRoot, $dataRoot, $unrelatedRoot -Force | Out-Null
         $configPath = Join-Path $dataRoot 'config.json'
         $statePath = Join-Path $dataRoot 'state.json'
         $config = [ordered]@{ repositoryRoot = $repoRoot; dataRoot = $dataRoot; configPath = $configPath }
@@ -198,13 +199,37 @@ Describe 'Codex worker deployment notification' {
         $snoozed = New-NotificationState -Status 'snoozed' -SnoozeUntil ([DateTime]::UtcNow.AddHours(1).ToString('o'))
         [IO.File]::WriteAllText($statePath, ($snoozed | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false)))
         $scriptPath = Join-Path $PSScriptRoot '..\codex-worker\Invoke-DeploymentNotifier.ps1'
+        $invokeNotifier = {
+            param([string] $Path)
+            Push-Location $unrelatedRoot
+            try {
+                $text = & pwsh.exe -NoProfile -Sta -File $scriptPath -ConfigPath $Path 2>&1 | Out-String
+                return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $text }
+            } finally {
+                Pop-Location
+            }
+        }.GetNewClosure()
 
-        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -ConfigPath $configPath 2>&1 | Out-String
+        $valid = & $invokeNotifier $configPath
+        $valid.ExitCode | Should Be 0
+        $valid.Output | Should Not Match 'unknown parameter.*ConfigPath'
+        $valid.Output | Should Match 'snoozed'
+        $valid.Output | Should Not Match 'Idle'
 
-        $LASTEXITCODE | Should Be 0
-        $output | Should Not Match 'unknown parameter.*ConfigPath'
-        $output | Should Match 'snoozed'
-        $output | Should Not Match 'Idle'
+        $malformedPath = Join-Path $dataRoot 'malformed.json'
+        [IO.File]::WriteAllText($malformedPath, '{not-json')
+        $malformed = & $invokeNotifier $malformedPath
+        $malformed.ExitCode | Should Not Be 0
+        $malformed.Output | Should Match 'malformed'
+
+        $untrustedDataRoot = Join-Path $repoRoot 'worker-data'
+        New-Item -ItemType Directory -Path $untrustedDataRoot -Force | Out-Null
+        $untrustedPath = Join-Path $untrustedDataRoot 'config.json'
+        $untrustedConfig = [ordered]@{ repositoryRoot = $repoRoot; dataRoot = $untrustedDataRoot; configPath = $untrustedPath }
+        [IO.File]::WriteAllText($untrustedPath, ($untrustedConfig | ConvertTo-Json))
+        $untrusted = & $invokeNotifier $untrustedPath
+        $untrusted.ExitCode | Should Not Be 0
+        $untrusted.Output | Should Match 'outside the repository'
     }
 
     It 'rejects missing, malformed, and repository-contained notifier configs' {
@@ -217,18 +242,44 @@ Describe 'Codex worker deployment notification' {
         { Read-CodexDeploymentNotifierConfig -ConfigPath $inside } | Should Throw 'outside the repository'
     }
 
-    It 'polls durable state on each watch cycle without beginning deployment' {
-        $state = New-NotificationState
+    It 'polls independent durable snapshots and only shows due available state' {
+        $first = New-NotificationState -Status 'snoozed' -SnoozeUntil ([DateTime]::UtcNow.AddHours(1).ToString('o'))
+        $second = New-NotificationState
+        $durable = [pscustomobject]@{ Value = $second }
         $reads = New-Object 'System.Collections.Generic.List[string]'
+        $snapshots = New-Object 'System.Collections.Generic.List[object]'
         $sleeps = New-Object 'System.Collections.Generic.List[object]'
+        $dialogs = New-Object 'System.Collections.Generic.List[string]'
+        $readerState = [pscustomobject]@{ Number = 0 }
+        $reader = {
+            param($Path)
+            $readerState.Number++
+            $source = if ($readerState.Number -eq 1) { $first } else { $durable.Value }
+            $snapshot = (($source | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
+            $reads.Add($Path) | Out-Null
+            $snapshots.Add($snapshot) | Out-Null
+            return $snapshot
+        }.GetNewClosure()
+        $writer = {
+            param($Path, $Desired)
+            $durable.Value = (($Desired | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
+        }.GetNewClosure()
         $result = @(Invoke-CodexDeploymentNotifier -Watch -MaxCycles 2 -PollSeconds 5 `
-            -StatePath (Join-Path $TestDrive 'state.json') -StateReader { param($Path) $reads.Add($Path) | Out-Null; $state } `
-            -SessionProbe { $false } -SleepProvider { param($duration) $sleeps.Add($duration) | Out-Null })
+            -StatePath (Join-Path $TestDrive 'state.json') -StateReader $reader -StateWriter $writer `
+            -SessionProbe { $true } -LockProvider { 'held' } -UnlockProvider { } `
+            -DialogProvider { $dialogs.Add('Cancel') | Out-Null; 'Cancel' } `
+            -SleepProvider { param($duration) $sleeps.Add($duration) | Out-Null })
 
-        $reads.Count | Should Be 2
+        $reads.Count | Should Be 4
         $sleeps.Count | Should Be 1
         $result.Count | Should Be 2
-        $result[0].Status | Should Be 'SessionUnavailable'
+        $result[0].Status | Should Be 'snoozed'
+        $result[1].Status | Should Be 'Cancelled'
+        $dialogs.Count | Should Be 1
+        $sleeps[0] | Should Be ([TimeSpan]::FromSeconds(5))
+        [object]::ReferenceEquals($snapshots[0], $snapshots[1]) | Should Be $false
+        [object]::ReferenceEquals($snapshots[1], $snapshots[2]) | Should Be $false
+        $durable.Value.deployment | Should Be $null
     }
 
     It 'fails closed for a Later no-op writer and releases the lock' {
@@ -289,6 +340,53 @@ Describe 'Codex worker deployment notification' {
                 -DeployAction { $deploys.Add('deploy') | Out-Null } | Out-Null
         } catch { $threw = $true }
         $threw | Should Be $true
+        $durable.Value.deployment | Should Not Be $null
+        $deploys.Count | Should Be 0
+        $unlocks.Count | Should Be 1
+    }
+
+    It 'fails closed for a Later corrupt writer and releases the lock' {
+        $durable = [pscustomobject]@{ Value = New-NotificationState }
+        $original = (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
+        $unlocks = New-Object 'System.Collections.Generic.List[object]'
+        $deploys = New-Object 'System.Collections.Generic.List[object]'
+        $threw = $false
+        try {
+            Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive 'state.json') `
+                -StateReader { param($Path) (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -StateWriter {
+                    param($Path, $Desired)
+                    $durable.Value = New-NotificationState -TargetCommit ('b' * 40)
+                } -SessionProbe { $true } -LockProvider { 'held' } `
+                -UnlockProvider { $unlocks.Add('unlock') | Out-Null } -DialogProvider { 'Later' } `
+                -DeployAction { $deploys.Add('deploy') | Out-Null } | Out-Null
+        } catch { $threw = $true }
+        $threw | Should Be $true
+        [object]::ReferenceEquals($durable.Value, $original) | Should Be $false
+        $durable.Value.deployment.targetCommit | Should Be ('b' * 40)
+        $deploys.Count | Should Be 0
+        $unlocks.Count | Should Be 1
+    }
+
+    It 'fails closed for a Cancel corrupt writer and releases the lock' {
+        $durable = [pscustomobject]@{ Value = New-NotificationState }
+        $original = (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
+        $unlocks = New-Object 'System.Collections.Generic.List[object]'
+        $deploys = New-Object 'System.Collections.Generic.List[object]'
+        $threw = $false
+        try {
+            Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive 'state.json') `
+                -StateReader { param($Path) (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -StateWriter {
+                    param($Path, $Desired)
+                    $durable.Value = New-NotificationState -TargetCommit ('c' * 40)
+                } -SessionProbe { $true } -LockProvider { 'held' } `
+                -UnlockProvider { $unlocks.Add('unlock') | Out-Null } -DialogProvider { 'Cancel' } `
+                -DeployAction { $deploys.Add('deploy') | Out-Null } | Out-Null
+        } catch { $threw = $true }
+        $threw | Should Be $true
+        [object]::ReferenceEquals($durable.Value, $original) | Should Be $false
+        $durable.Value.deployment.targetCommit | Should Be ('c' * 40)
         $durable.Value.deployment | Should Not Be $null
         $deploys.Count | Should Be 0
         $unlocks.Count | Should Be 1

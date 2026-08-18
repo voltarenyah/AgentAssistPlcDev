@@ -89,11 +89,19 @@ function Test-CodexNotificationDue {
         return $true
     }
 
-    $snoozeAt = [DateTime]::MinValue
-    if (-not [DateTime]::TryParse([string]$snooze, [ref]$snoozeAt)) {
+    $snoozeAt = [DateTimeOffset]::MinValue
+    if ($snooze -is [DateTimeOffset]) {
+        $snoozeAt = $snooze.ToUniversalTime()
+    } elseif ($snooze -is [DateTime]) {
+        $snoozeAt = ([DateTimeOffset]$snooze).ToUniversalTime()
+    } elseif (-not [DateTimeOffset]::TryParse(
+            [string]$snooze,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind,
+            [ref]$snoozeAt)) {
         throw 'The persisted deployment snooze is invalid.'
     }
-    return $Now.ToUniversalTime() -ge $snoozeAt.ToUniversalTime()
+    return [DateTimeOffset]$Now.ToUniversalTime() -ge $snoozeAt
 }
 
 function Get-CodexNotificationStateSignature {
