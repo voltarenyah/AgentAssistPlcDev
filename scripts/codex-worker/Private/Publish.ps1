@@ -206,6 +206,7 @@ function Publish-CodexIssue {
             if ($null -eq $prDraftProperty -or -not [bool]$prDraftProperty.Value) { throw 'Existing pull request is not a draft.' }
             if ([string](Get-CodexPublicationValue $existing 'baseRefName' '') -ne [string](Get-CodexPublicationValue $Config 'defaultBranch' 'master')) { throw 'Existing pull request targets the wrong base branch.' }
             if ([string](Get-CodexPublicationValue $existing 'headRefName' '') -ne $branch) { throw 'Existing pull request targets the wrong head branch.' }
+            if ([string](Get-CodexPublicationValue $existing 'body' '') -notmatch "(?i)#\s*$issueNumber\b") { throw 'Existing pull request does not identify the requested issue.' }
             Set-CodexPullRequestBody -Repository $Repository -PullRequestNumber $prNumber -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner | Out-Null
         } else {
             if ($RequireExistingPullRequest) { throw 'Revision requires an existing pull request; refusing to create another PR.' }

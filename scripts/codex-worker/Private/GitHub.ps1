@@ -348,6 +348,7 @@ function Get-CodexPullRequestForBranch {
     )
     $items = @(Invoke-GhJson -Arguments @('pr', 'list', '--repo', $Repository, '--head', $BranchName, '--state', 'open', '--json', 'number,url,state,isDraft,headRefName,baseRefName,body') -CommandRunner $CommandRunner)
     if ($items.Count -eq 0) { return $null }
+    if ($items.Count -gt 1) { throw 'Multiple open pull requests match the publication branch.' }
     return $items[0]
 }
 
