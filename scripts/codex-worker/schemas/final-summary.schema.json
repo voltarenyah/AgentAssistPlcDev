@@ -29,7 +29,8 @@
         "properties": {
           "command": { "type": "string" },
           "outcome": { "type": "string", "enum": ["passed", "failed", "skipped"] },
-          "details": { "type": "string" }
+          "details": { "type": "string" },
+          "required": { "type": "boolean" }
         }
       }
     },

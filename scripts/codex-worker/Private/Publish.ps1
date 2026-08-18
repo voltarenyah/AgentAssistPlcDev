@@ -52,35 +52,53 @@ function Test-CodexPublication {
     $blockers = [System.Collections.Generic.List[string]]::new()
     $risks = [System.Collections.Generic.List[string]]::new()
     $changed = @()
-    if ($null -eq $Summary -or [string](Get-CodexPublicationValue $Summary 'status' '') -ne 'completed') { $blockers.Add('Summary status must be completed.') | Out-Null }
+    if ($null -eq $Summary -or -not (Test-CodexSummary -Summary $Summary)) { $blockers.Add('Summary is malformed or incomplete.') | Out-Null }
+    if ([string](Get-CodexPublicationValue $Summary 'status' '') -ne 'completed') { $blockers.Add('Summary status must be completed.') | Out-Null }
     if ([bool](Get-CodexPublicationValue $Summary 'requiresHumanInput' $true)) { $blockers.Add('Summary requires human input.') | Out-Null }
     if ([string]::IsNullOrWhiteSpace($Worktree) -or -not (Test-Path -LiteralPath $Worktree -PathType Container)) { $blockers.Add('Issue worktree does not exist.') | Out-Null }
     else {
         try {
-            $nameText = Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--name-only') -CommandRunner $GitCommandRunner
-            $changed = @(Get-CodexPublicationChangedPaths $nameText)
+            $nameOutputs = @(
+                (Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--name-only') -CommandRunner $GitCommandRunner)
+                (Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--cached', '--name-only') -CommandRunner $GitCommandRunner)
+                (Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('ls-files', '--others', '--exclude-standard') -CommandRunner $GitCommandRunner)
+                (Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', 'HEAD^', 'HEAD', '--name-only') -CommandRunner $GitCommandRunner)
+            )
+            $changed = @($nameOutputs | ForEach-Object { Get-CodexPublicationChangedPaths ([string]$_) } | Sort-Object -Unique)
             if ($changed.Count -eq 0) { $blockers.Add('Worktree diff is empty.') | Out-Null }
             foreach ($path in $changed) {
                 if (Test-CodexPublicationSuspiciousPath $path) { $blockers.Add("Changed path '$path' looks like a credential or secret file.") | Out-Null }
+                $candidate = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetFullPath($Worktree)) $path))
+                $worktreePrefix = [IO.Path]::GetFullPath($Worktree).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+                if (-not $candidate.StartsWith($worktreePrefix, [StringComparison]::OrdinalIgnoreCase)) { $blockers.Add("Changed path '$path' escapes the issue worktree.") | Out-Null; continue }
                 if (-not [string]::IsNullOrWhiteSpace($DataRoot)) {
                     $root = [IO.Path]::GetFullPath($DataRoot).TrimEnd('\', '/')
-                    $candidate = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetFullPath($Worktree)) $path))
                     if ($candidate.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or $candidate.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { $blockers.Add("Changed path '$path' is inside the durable data root.") | Out-Null }
                 }
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                    $content = [IO.File]::ReadAllText($candidate)
+                    if ($content -match '(?m)^(<<<<<<<|=======|>>>>>>>)') { $blockers.Add("Changed file '$path' contains conflict markers.") | Out-Null }
+                    if ($content -match '(?m)[ \t]+(?:\r?$)') { $blockers.Add("Changed file '$path' contains trailing whitespace.") | Out-Null }
+                }
             }
-            $check = Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--check') -CommandRunner $GitCommandRunner
-            if (-not [string]::IsNullOrWhiteSpace($check)) { $blockers.Add('git diff --check reported whitespace errors.') | Out-Null }
-            $diff = Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--no-ext-diff') -CommandRunner $GitCommandRunner
-            if ($diff -match '(?m)^(<<<<<<<|=======|>>>>>>>)') { $blockers.Add('Diff contains conflict markers.') | Out-Null }
+            foreach ($checkArguments in @(@('diff', '--check'), @('diff', '--cached', '--check'), @('diff', 'HEAD^', 'HEAD', '--check'))) {
+                $check = Invoke-CodexPublicationGit -Worktree $Worktree -Arguments ([string[]]$checkArguments) -CommandRunner $GitCommandRunner
+                if (-not [string]::IsNullOrWhiteSpace($check)) { $blockers.Add('git diff --check reported whitespace errors.') | Out-Null }
+            }
+            foreach ($diffArguments in @(@('diff', '--no-ext-diff'), @('diff', '--cached', '--no-ext-diff'), @('diff', 'HEAD^', 'HEAD', '--no-ext-diff'))) {
+                $diff = Invoke-CodexPublicationGit -Worktree $Worktree -Arguments ([string[]]$diffArguments) -CommandRunner $GitCommandRunner
+                if ($diff -match '(?m)^\+?(<<<<<<<|=======|>>>>>>>)') { $blockers.Add('Diff contains conflict markers.') | Out-Null }
+            }
         } catch { $blockers.Add("Unable to validate publication diff: $($_.Exception.Message)") | Out-Null }
     }
     foreach ($entry in @((Get-CodexPublicationValue $Summary 'validation' @()))) {
         $outcome = [string](Get-CodexPublicationValue $entry 'outcome' '')
         $command = [string](Get-CodexPublicationValue $entry 'command' '')
         $details = [string](Get-CodexPublicationValue $entry 'details' '')
+        $explicitlyOptional = ($entry.PSObject.Properties['required'] -ne $null -and (Get-CodexPublicationValue $entry 'required' $true) -eq $false)
         if ($outcome -eq 'skipped') { $risks.Add("Skipped validation: $command") | Out-Null }
         elseif ($outcome -eq 'failed') {
-            if (($command + ' ' + $details) -match '(?i)optional|non[- ]required|not required') { $risks.Add("Non-required validation failed: $command") | Out-Null }
+            if ($explicitlyOptional) { $risks.Add("Non-required validation failed: $command") | Out-Null }
             else { $blockers.Add("Required validation failed: $command") | Out-Null }
         }
     }
@@ -104,7 +122,8 @@ function ConvertTo-CodexPullRequestBody {
     $validationRisks = @($validation | Where-Object { (Get-CodexPublicationValue $_ 'outcome' '') -in @('failed', 'skipped') } | ForEach-Object { 'Validation {0}: {1}' -f (Get-CodexPublicationValue $_ 'outcome' ''), (Get-CodexPublicationValue $_ 'command' '') })
     $risks = @((Get-CodexPublicationValue $Summary 'warnings' @())) + @((Get-CodexPublicationValue $Summary 'remainingRisks' @())) + $validationRisks + @($AdditionalRisks)
     if ($risks.Count -eq 0) { $lines.Add('- None reported.') } else { foreach ($risk in $risks) { if (-not [string]::IsNullOrWhiteSpace([string]$risk)) { $lines.Add('- ' + [string]$risk) } } }
-    $lines.Add(''); $lines.Add('## Issue'); $lines.Add("Fixes #$IssueNumber")
+    $lines.Add(''); $lines.Add('## Issue')
+    if ([string](Get-CodexPublicationValue $Summary 'status' '') -eq 'completed') { $lines.Add("Fixes #$IssueNumber") } else { $lines.Add("Issue #$IssueNumber") }
     return ($lines -join "`n")
 }
 
@@ -133,7 +152,8 @@ function Publish-CodexIssue {
         [scriptblock] $GitCommandRunner,
         [scriptblock] $GitHubCommandRunner,
         [string] $DataRoot,
-        [string] $Repository
+        [string] $Repository,
+        [switch] $RequireExistingPullRequest
     )
     $issueNumber = [int](Get-CodexPublicationValue $AttemptState 'issueNumber' (Get-CodexPublicationValue $IssueContext 'number' 0))
     $worktree = [string](Get-CodexPublicationValue $AttemptState 'worktree' '')
@@ -149,20 +169,15 @@ function Publish-CodexIssue {
     if (Test-Path -LiteralPath $summaryPath -PathType Leaf) { try { $summary = [IO.File]::ReadAllText($summaryPath) | ConvertFrom-Json } catch { throw 'Publication summary is malformed.' } }
     if ($null -eq $summary) { $summary = Get-CodexPublicationValue $AttemptState 'summary' $null }
     if ($null -eq $summary) { throw 'Publication summary is required.' }
+    if ($stage -in @('committed','pushed','pr-created')) {
+        $persistedCommit = [string](Get-CodexPublicationValue $AttemptState 'commit' '')
+        if ([string]::IsNullOrWhiteSpace($persistedCommit)) { throw 'Publication recovery requires a persisted commit SHA.' }
+        $head = (Invoke-CodexPublicationGit -Worktree $worktree -Arguments @('rev-parse', 'HEAD') -CommandRunner $GitCommandRunner).Trim()
+        if ([string]::IsNullOrWhiteSpace($head) -or $head -ne $persistedCommit) { throw 'Persisted publication commit does not match worktree HEAD.' }
+    }
+    $review = Test-CodexPublication -Summary $summary -Worktree $worktree -IssueNumber $issueNumber -DataRoot $DataRoot -GitCommandRunner $GitCommandRunner
+    if (-not $review.Allowed) { throw ('Publication blocked: ' + ($review.Blockers -join ' ')) }
     if ($stage -notin @('committed','pushed','pr-created')) {
-        $existingHead = ''
-        try {
-            $pendingChanges = Invoke-CodexPublicationGit -Worktree $worktree -Arguments @('status', '--porcelain') -CommandRunner $GitCommandRunner
-            if ([string]::IsNullOrWhiteSpace($pendingChanges)) { $existingHead = (Invoke-CodexPublicationGit -Worktree $worktree -Arguments @('rev-parse', 'HEAD') -CommandRunner $GitCommandRunner).Trim() }
-        } catch { $existingHead = '' }
-        if (-not [string]::IsNullOrWhiteSpace($existingHead)) {
-            Set-CodexOrchestrationField $AttemptState 'commit' $existingHead
-            Set-CodexOrchestrationField $AttemptState 'publicationStage' 'committed'
-            Write-CodexPublicationAttemptState -StatePath $StatePath -IssueNumber $issueNumber -AttemptState $AttemptState -StateWriter $StateWriter
-            $stage = 'committed'
-        } else {
-            $review = Test-CodexPublication -Summary $summary -Worktree $worktree -IssueNumber $issueNumber -DataRoot $DataRoot -GitCommandRunner $GitCommandRunner
-            if (-not $review.Allowed) { throw ('Publication blocked: ' + ($review.Blockers -join ' ')) }
             $title = Get-CodexCommitTitle -Suggested (Get-CodexPublicationValue $summary 'commitMessage' '') -IssueNumber $issueNumber
             Invoke-CodexPublicationGit -Worktree $worktree -Arguments @('add', '-A') -CommandRunner $GitCommandRunner | Out-Null
             Invoke-CodexPublicationGit -Worktree $worktree -Arguments @('commit', '-m', $title) -CommandRunner $GitCommandRunner | Out-Null
@@ -171,7 +186,6 @@ function Publish-CodexIssue {
             Set-CodexOrchestrationField $AttemptState 'publicationStage' 'committed'
             Write-CodexPublicationAttemptState -StatePath $StatePath -IssueNumber $issueNumber -AttemptState $AttemptState -StateWriter $StateWriter
             $stage = 'committed'
-        }
     }
     if ($stage -eq 'committed') {
         Invoke-CodexPublicationGit -Worktree $worktree -Arguments @('push', 'origin', $branch) -CommandRunner $GitCommandRunner | Out-Null
@@ -181,14 +195,20 @@ function Publish-CodexIssue {
     }
     if ($stage -eq 'pushed') {
         $body = ConvertTo-CodexPullRequestBody -Summary $summary -IssueContext $IssueContext -IssueNumber $issueNumber
+        if (-not (Test-Path -LiteralPath $runDirectory -PathType Container)) { New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null }
         $bodyPath = Join-Path $runDirectory 'pull-request.md'
         [IO.File]::WriteAllText($bodyPath, $body, (New-Object Text.UTF8Encoding($false)))
         $existing = Get-CodexPullRequestForBranch -Repository $Repository -BranchName $branch -CommandRunner $GitHubCommandRunner
         if ($null -ne $existing) {
             $prNumber = [int](Get-CodexPublicationValue $existing 'number' 0)
             $prUrl = [string](Get-CodexPublicationValue $existing 'url' '')
+            $prDraftProperty = $existing.PSObject.Properties['isDraft']
+            if ($null -eq $prDraftProperty -or -not [bool]$prDraftProperty.Value) { throw 'Existing pull request is not a draft.' }
+            if ([string](Get-CodexPublicationValue $existing 'baseRefName' '') -ne [string](Get-CodexPublicationValue $Config 'defaultBranch' 'master')) { throw 'Existing pull request targets the wrong base branch.' }
+            if ([string](Get-CodexPublicationValue $existing 'headRefName' '') -ne $branch) { throw 'Existing pull request targets the wrong head branch.' }
             Set-CodexPullRequestBody -Repository $Repository -PullRequestNumber $prNumber -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner | Out-Null
         } else {
+            if ($RequireExistingPullRequest) { throw 'Revision requires an existing pull request; refusing to create another PR.' }
             $created = New-CodexDraftPullRequest -Repository $Repository -BaseBranch ([string](Get-CodexPublicationValue $Config 'defaultBranch' 'master')) -HeadBranch $branch -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner
             $prUrl = [string]$created
         }
@@ -223,14 +243,30 @@ function Invoke-CodexRevision {
     $lock = $null
     try {
         if ($null -ne $LockProvider) { $lock = & $LockProvider $paths.LockPath } else { $lock = Enter-CodexWorkerLock -Path $paths.LockPath }
-        $issue = Get-CodexIssueContext -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
-        $pr = $null
-        if (-not [string]::IsNullOrWhiteSpace($PullRequestNumber)) { $pr = Get-CodexPullRequestContext -Repository $Repository -PullRequestNumber ([int]$PullRequestNumber) -CommandRunner $GitHubCommandRunner }
-        if ($null -eq $pr) { $pr = Get-CodexPullRequestForBranch -Repository $Repository -BranchName ([string](Get-CodexPublicationValue $attempt 'branch' '')) -CommandRunner $GitHubCommandRunner }
-        if ($null -eq $pr) { throw 'Revision requires an existing pull request; refusing to create another PR.' }
         $state = if ($null -ne $StateReader) { & $StateReader $StatePath } else { Read-CodexWorkerState -Path $StatePath }
         $attempt = Get-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber
-        if ($null -eq $attempt -or [string]::IsNullOrWhiteSpace([string](Get-CodexPublicationValue $attempt 'worktree' ''))) { throw 'Existing issue worktree state is required for revision.' }
+        if ($null -eq $attempt) { throw 'Existing issue attempt state is required for revision.' }
+        $branch = [string](Get-CodexPublicationValue $attempt 'branch' '')
+        $worktree = [string](Get-CodexPublicationValue $attempt 'worktree' '')
+        if ([string]::IsNullOrWhiteSpace($branch) -or [string]::IsNullOrWhiteSpace($worktree)) { throw 'Revision state must include the expected branch and worktree.' }
+        Assert-PathUnderRoot -Path $worktree -Root $paths.WorktreeRoot | Out-Null
+        $registered = @(Get-RegisteredWorktrees -RepositoryRoot $RepositoryRoot -CommandRunner $GitCommandRunner)
+        $registeredMatch = @($registered | Where-Object { $_.Branch -eq $branch -and [IO.Path]::GetFullPath([string]$_.Path) -eq [IO.Path]::GetFullPath($worktree) })
+        if ($registeredMatch.Count -ne 1) { throw 'Persisted revision worktree is not registered for the expected branch.' }
+        $issue = Get-CodexIssueContext -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
+        $pr = $null
+        if (-not [string]::IsNullOrWhiteSpace($PullRequestNumber)) {
+            $pr = Get-CodexPullRequestContext -Repository $Repository -PullRequestNumber ([int]$PullRequestNumber) -CommandRunner $GitHubCommandRunner
+            if ([int](Get-CodexPublicationValue $pr 'number' 0) -ne [int]$PullRequestNumber) { throw 'The explicit pull request number does not match the resolved pull request.' }
+        }
+        if ($null -eq $pr) { $pr = Get-CodexPullRequestForBranch -Repository $Repository -BranchName $branch -CommandRunner $GitHubCommandRunner }
+        if ($null -eq $pr) { throw 'Revision requires an existing pull request; refusing to create another PR.' }
+        if ([string](Get-CodexPublicationValue $pr 'headRefName' '') -ne $branch) { throw 'Pull request head does not match persisted branch.' }
+        if ([string](Get-CodexPublicationValue $pr 'baseRefName' '') -ne [string](Get-CodexPublicationValue $Config 'defaultBranch' 'master')) { throw 'Pull request base does not match master.' }
+        $draftProperty = $pr.PSObject.Properties['isDraft']
+        if ($null -eq $draftProperty -or -not [bool]$draftProperty.Value) { throw 'Pull request is not a draft.' }
+        if ([string](Get-CodexPublicationValue $pr 'body' '') -notmatch "(?i)#\s*$IssueNumber\b") { throw 'Pull request does not identify the requested issue.' }
+        $resolvedPrNumber = [int](Get-CodexPublicationValue $pr 'number' 0)
         $comments = @((Get-CodexPublicationValue $pr 'comments' @())) + @((Get-CodexPublicationValue $pr 'reviews' @()))
         $reviewText = ($comments | ForEach-Object { [string](Get-CodexPublicationValue $_ 'body' (Get-CodexPublicationValue $_ 'comment' '')) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n`n"
         $attemptNumber = [int](Get-CodexPublicationValue $attempt 'attempt' 1) + 1
@@ -241,15 +277,22 @@ function Invoke-CodexRevision {
         Set-CodexOrchestrationField $attempt 'runDirectory' $attemptRun
         if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attempt | Out-Null } else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attempt | Out-Null }
         if ($null -ne $CodexProvider) { $codex = & $CodexProvider $attempt.worktree $issue $Config $attemptRun $StatePath $reviewText $attempt.threadId } else { $codex = Invoke-CodexRun -IssueWorktree $attempt.worktree -IssueContext $issue -Config $Config -RunDirectory $attemptRun -StatePath $StatePath -Revision -ThreadId $attempt.threadId -ReviewComments $reviewText }
+        $newThreadId = [string](Get-CodexPublicationValue $codex 'ThreadId' '')
+        if (-not [string]::IsNullOrWhiteSpace($newThreadId)) {
+            $freshState = if ($null -ne $StateReader) { & $StateReader $StatePath } else { Read-CodexWorkerState -Path $StatePath }
+            $freshAttempt = Get-CodexIssueAttemptState -State $freshState -IssueNumber $IssueNumber
+            if ($null -ne $freshAttempt) { $attempt = $freshAttempt }
+            Set-CodexOrchestrationField $attempt 'threadId' $newThreadId
+        }
         $summary = Get-CodexPublicationValue $codex 'Summary' $null
         if ([string](Get-CodexPublicationValue $codex 'Classification' '') -ne 'completed' -or [string](Get-CodexPublicationValue $codex 'Status' '') -ne 'completed' -or $null -eq $summary) { throw 'Revision Codex run did not complete successfully.' }
         Set-CodexOrchestrationField $attempt 'status' 'pr-ready'
         Set-CodexOrchestrationField $attempt 'summary' $summary
         if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attempt | Out-Null } else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attempt | Out-Null }
-        $published = Publish-CodexIssue -AttemptState $attempt -IssueContext $issue -Config $Config -StatePath $StatePath -StateWriter $StateWriter -GitCommandRunner $GitCommandRunner -GitHubCommandRunner $GitHubCommandRunner -DataRoot $DataRoot -Repository $Repository
+        $published = Publish-CodexIssue -AttemptState $attempt -IssueContext $issue -Config $Config -StatePath $StatePath -StateWriter $StateWriter -GitCommandRunner $GitCommandRunner -GitHubCommandRunner $GitHubCommandRunner -DataRoot $DataRoot -Repository $Repository -RequireExistingPullRequest
         $evidence = "Codex revision validation completed for commit $($published.commit). Existing draft PR was updated; no new PR was created."
-        if ($null -ne $PullRequestNumber) { Add-CodexPullRequestComment -Repository $Repository -PullRequestNumber ([int]$PullRequestNumber) -Body $evidence -CommandRunner $GitHubCommandRunner | Out-Null }
-        return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'pr-ready'; PublicationStage = $published.publicationStage; PrUrl = $published.prUrl; ExistingPullRequest = $true }
+        Add-CodexPullRequestComment -Repository $Repository -PullRequestNumber $resolvedPrNumber -Body $evidence -CommandRunner $GitHubCommandRunner | Out-Null
+        return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'pr-ready'; PublicationStage = $published.publicationStage; PrUrl = $published.prUrl; ExistingPullRequest = $true; PullRequestNumber = $resolvedPrNumber }
     } finally {
         if ($null -ne $lock) { if ($null -ne $UnlockProvider) { & $UnlockProvider $lock } else { Exit-CodexWorkerLock -Handle $lock } }
     }

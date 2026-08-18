@@ -346,7 +346,7 @@ function Get-CodexPullRequestForBranch {
         [Parameter(Mandatory = $true)][string] $BranchName,
         [scriptblock] $CommandRunner
     )
-    $items = @(Invoke-GhJson -Arguments @('pr', 'list', '--repo', $Repository, '--head', $BranchName, '--state', 'open', '--json', 'number,url,state,headRefName,baseRefName') -CommandRunner $CommandRunner)
+    $items = @(Invoke-GhJson -Arguments @('pr', 'list', '--repo', $Repository, '--head', $BranchName, '--state', 'open', '--json', 'number,url,state,isDraft,headRefName,baseRefName,body') -CommandRunner $CommandRunner)
     if ($items.Count -eq 0) { return $null }
     return $items[0]
 }

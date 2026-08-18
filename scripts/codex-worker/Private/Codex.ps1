@@ -60,9 +60,10 @@ function Test-CodexSummary {
         if ($null -eq $entry) { return $false }
         $entryNames = @(Get-CodexMemberNames $entry)
         if (@('command','outcome','details') | Where-Object { $_ -notin $entryNames }) { return $false }
-        if ($entryNames | Where-Object { $_ -notin @('command','outcome','details') }) { return $false }
+        if ($entryNames | Where-Object { $_ -notin @('command','outcome','details','required') }) { return $false }
         if ((Get-CodexValue $entry 'command') -isnot [string] -or (Get-CodexValue $entry 'details') -isnot [string]) { return $false }
         if ((Get-CodexValue $entry 'outcome') -notin @('passed','failed','skipped')) { return $false }
+        if ($entryNames -contains 'required' -and (Get-CodexValue $entry 'required') -isnot [bool]) { return $false }
     }
     return $true
 }
