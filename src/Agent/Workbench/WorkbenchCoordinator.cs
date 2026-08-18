@@ -3109,7 +3109,7 @@ public sealed class WorkbenchCoordinator
     /// <summary>
     /// Device-scoped Compare with TIA for one source object: ensures the worktree project is
     /// active (opening it when needed), exports only that object into the device staging root,
-    /// and computes a normalized line diff (XmlCompare rules — export timestamp lines and CR
+    /// and computes a normalized line diff (XmlCompare rules — export timestamp lines, generated IDs, and CR
     /// stripped) against the local source file. The comparison stays in memory so
     /// <see cref="AcceptTiaSourceObjectAsync"/> / <see cref="PushSourceObjectToTiaAsync"/> can
     /// act on the staged file afterwards.
@@ -3437,7 +3437,7 @@ public sealed class WorkbenchCoordinator
         Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 
     /// <summary>Hash of an already-normalized compare text — matches the Same verdict, unlike a
-    /// raw file hash (raw files differ by stripped export timestamps).</summary>
+    /// raw file hash (raw files differ by export timestamps and generated IDs).</summary>
     private static string HashText(string text) =>
         Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
 

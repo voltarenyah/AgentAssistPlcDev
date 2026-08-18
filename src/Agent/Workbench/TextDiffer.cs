@@ -12,7 +12,7 @@ public sealed record DiffLine(string Kind, string Text)
 /// <summary>
 /// Line-based diff for PLC source XML comparison (device-scoped Compare with TIA). Callers
 /// normalize the inputs first (<see cref="Contracts.Engineering.XmlCompare.Normalize"/> strips
-/// export timestamp lines and CR) so only real content changes surface.
+/// export timestamp lines and generated IDs) so only real content changes surface.
 /// Common prefixes/suffixes are trimmed before the LCS pass; when the differing middle is too
 /// large for a full matrix the whole middle is reported as removed+added instead of allocating
 /// quadratic memory.

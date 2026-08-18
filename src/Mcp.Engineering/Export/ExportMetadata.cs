@@ -87,7 +87,7 @@ public sealed class ExportMetadataRecord
     public DateTimeOffset? InterfaceModifiedDate { get; set; }
 
     /// <summary>SHA256 (base64url, '=' trimmed) of the normalized exported XML (XmlCompare.Normalize —
-    /// export timestamp lines and CR stripped, so only real content changes move it). Null for failed
+    /// export timestamp lines, generated IDs, and CR stripped, so only real content changes move it). Null for failed
     /// exports and legacy manifests; sync_export treats null as "needs one re-export".</summary>
     public string? ContentHash { get; set; }
 
