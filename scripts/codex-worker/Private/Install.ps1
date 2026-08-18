@@ -308,8 +308,137 @@ function Assert-CodexPathTreeHasNoReparsePoint {
 function Remove-CodexOwnedPath {
     param([Parameter(Mandatory = $true)] [string] $Path, [scriptblock] $PathInspector)
     if (-not (Test-Path -LiteralPath $Path)) { return }
-    try { Assert-CodexPathTreeHasNoReparsePoint -Path $Path -PathInspector $PathInspector } catch { return }
-    Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    try {
+        Assert-CodexPathHasNoReparseAncestor -Path $Path -PathInspector $PathInspector
+        $root = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        $rootInspection = if ($null -ne $PathInspector) { & $PathInspector $Path } else { $root }
+        if (Test-CodexPathInspectionIsReparse -Inspection $rootInspection) {
+            # A swapped root is removed as a link only; never recurse through it.
+            Assert-CodexPathHasNoReparseAncestor -Path (Split-Path -Parent $Path) -PathInspector $PathInspector
+            Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+            return
+        }
+        if ($root.PSIsContainer) {
+            # Walk the owned tree explicitly. Remove-Item -Recurse is never
+            # used: every child is inspected immediately before its own
+            # operation, and a swapped link is deleted as a link only.
+            foreach ($child in @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop)) {
+                Remove-CodexOwnedPath -Path $child.FullName -PathInspector $PathInspector
+            }
+        }
+        Assert-CodexPathHasNoReparseAncestor -Path $Path -PathInspector $PathInspector
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    } catch { return }
+}
+
+function Open-CodexStagingPin {
+    param([Parameter(Mandatory = $true)] [string] $Path, [scriptblock] $PathInspector)
+    Assert-CodexPathHasNoReparseAncestor -Path $Path -PathInspector $PathInspector
+    $marker = Join-Path $Path '.installer-pin'
+    Assert-CodexPathHasNoReparseAncestor -Path $marker -PathInspector $PathInspector
+    $stream = [IO.File]::Open($marker, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    return [pscustomobject][ordered]@{ Path = $Path; Marker = $marker; Stream = $stream }
+}
+
+function Close-CodexStagingPin {
+    param([object] $Pin)
+    if ($null -eq $Pin) { return }
+    try { if ($null -ne $Pin.Stream) { $Pin.Stream.Dispose() } } catch { }
+}
+
+function Ensure-CodexTrustedDataRoot {
+    param([Parameter(Mandatory = $true)] [string] $Path, [scriptblock] $PathInspector)
+    Assert-CodexPathHasNoReparseAncestor -Path $Path -PathInspector $PathInspector
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+    Assert-CodexPathHasNoReparseAncestor -Path $Path -PathInspector $PathInspector
+    try {
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        $acl.SetAccessRuleProtection($true, $false)
+        $identity = Get-CodexCurrentUserId
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new($identity, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)
+        $acl.SetAccessRule($rule)
+        Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+    } catch {
+        throw "Trusted worker data root ACL could not be established: $($_.Exception.Message)"
+    }
+}
+
+function Get-CodexInstallerStateSnapshot {
+    param([Parameter(Mandatory = $true)] [string] $ConfigPath, [scriptblock] $PathInspector)
+    $paths = @($ConfigPath, "$ConfigPath.tmp")
+    $items = [ordered]@{}
+    foreach ($path in $paths) {
+        Assert-CodexPathHasNoReparseAncestor -Path $path -PathInspector $PathInspector
+        $exists = Test-Path -LiteralPath $path -PathType Leaf
+        $items[$path] = [pscustomobject][ordered]@{
+            Exists = [bool]$exists
+            Bytes = if ($exists) { [IO.File]::ReadAllBytes($path) } else { $null }
+        }
+    }
+    return [pscustomobject][ordered]@{ Items = $items }
+}
+
+function Restore-CodexInstallerStateSnapshot {
+    param([Parameter(Mandatory = $true)] [object] $Snapshot, [scriptblock] $PathInspector)
+    foreach ($entry in $Snapshot.Items.GetEnumerator()) {
+        $path = [string]$entry.Key
+        $state = $entry.Value
+        try {
+            Assert-CodexPathHasNoReparseAncestor -Path $path -PathInspector $PathInspector
+            if ($state.Exists) {
+                $parent = Split-Path -Parent $path
+                Assert-CodexPathHasNoReparseAncestor -Path $parent -PathInspector $PathInspector
+                if (-not (Test-Path -LiteralPath $parent -PathType Container)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+                $temporary = "$path.rollback-$([Guid]::NewGuid().ToString('N')).tmp"
+                try {
+                    [IO.File]::WriteAllBytes($temporary, [byte[]]$state.Bytes)
+                    Assert-CodexPathHasNoReparseAncestor -Path $path -PathInspector $PathInspector
+                    Move-Item -LiteralPath $temporary -Destination $path -Force
+                } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue } }
+            } elseif (Test-Path -LiteralPath $path) {
+                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
+}
+
+function Normalize-CodexTaskXml {
+    param([AllowNull()][string] $Xml)
+    if ([string]::IsNullOrWhiteSpace($Xml)) { return '' }
+    try {
+        $document = [Xml.XmlDocument]::new()
+        $document.PreserveWhitespace = $false
+        $document.LoadXml($Xml)
+        return $document.OuterXml
+    } catch { return $Xml.Trim() }
+}
+
+function Get-CodexScheduledTaskPreflight {
+    param([Parameter(Mandatory = $true)] [object] $Task, [scriptblock] $TaskQueryRunner, [object] $CommandRunner)
+    $request = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = @('/Query','/TN',$Task.Name,'/XML'); Task = $Task; Action = 'Query' }
+    $result = if ($null -ne $TaskQueryRunner) { & $TaskQueryRunner $request } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $request.Arguments -CommandRunner $CommandRunner }
+    $existsProperty = $result.PSObject.Properties['Exists']
+    if ($null -ne $existsProperty) {
+        if (-not [bool]$existsProperty.Value) { return [pscustomobject]@{ Exists = $false; Owned = $false; Task = $Task } }
+        $actual = [string](Get-CodexSetupProperty $result 'Xml' (Get-CodexSetupText $result))
+        if ((Normalize-CodexTaskXml $actual) -ne (Normalize-CodexTaskXml $Task.Xml)) { throw "Scheduled task '$($Task.Name)' exists but is not the installer-owned definition." }
+        return [pscustomobject]@{ Exists = $true; Owned = $true; Task = $Task }
+    }
+    if (-not (Test-CodexSetupSuccess $result)) {
+        $queryText = ((Get-CodexSetupProperty $result 'Stdout' '') + ' ' + (Get-CodexSetupProperty $result 'Stderr' ''))
+        if ($queryText -match '(?i)(task.*(not found|does not exist)|cannot find.*(specified|task))') {
+            return [pscustomobject]@{ Exists = $false; Owned = $false; Task = $Task }
+        }
+        throw "Could not query scheduled task '$($Task.Name)' before installation."
+    }
+    $actualXml = Get-CodexSetupText $result
+    # Test seams and older schtasks wrappers may return a successful textual
+    # probe without XML; only an actual Task document proves the name exists.
+    if ($actualXml -notmatch '(?i)<Task(?:\s|>)') { return [pscustomobject]@{ Exists = $false; Owned = $false; Task = $Task } }
+    if ((Normalize-CodexTaskXml $actualXml) -ne (Normalize-CodexTaskXml $Task.Xml)) { throw "Scheduled task '$($Task.Name)' exists but is not the installer-owned definition." }
+    return [pscustomobject]@{ Exists = $true; Owned = $true; Task = $Task }
 }
 
 function Invoke-CodexRunnerRemoteRemoval {
@@ -411,6 +540,7 @@ function Invoke-CodexLocalWorkerSetup {
         [scriptblock] $HashRunner,
         [scriptblock] $ExtractRunner,
         [scriptblock] $TaskRunner,
+        [scriptblock] $TaskQueryRunner,
         [scriptblock] $TaskStartRunner,
         [scriptblock] $TaskStopRunner,
         [scriptblock] $TaskRemoveRunner,
@@ -430,9 +560,14 @@ function Invoke-CodexLocalWorkerSetup {
     $plan = Get-CodexLocalWorkerPlan -Repository $Repository -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot -Config $Config -PathInspector $PathInspector
     $whatIf = [bool]$WhatIf
     $mutations = 0
+    $stateSnapshot = Get-CodexInstallerStateSnapshot -ConfigPath $plan.ConfigPath -PathInspector $PathInspector
+    $taskPreflight = @()
     if (-not $whatIf) {
         foreach ($scriptPath in @((Join-Path $plan.RepositoryRoot 'scripts\codex-worker\Start-GitHubRunner.ps1'), (Join-Path $plan.RepositoryRoot 'scripts\codex-worker\Invoke-DeploymentNotifier.ps1'))) {
             if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "Required task target does not exist: $scriptPath" }
+        }
+        foreach ($task in @($plan.Tasks.Runner, $plan.Tasks.Notifier)) {
+            $taskPreflight += Get-CodexScheduledTaskPreflight -Task $task -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner
         }
     }
     $prereqs = @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner -Probe)
@@ -492,19 +627,29 @@ function Invoke-CodexLocalWorkerSetup {
     $runnerPromoted = $false
     $runnerOwnedPath = $null
     $createdTaskNames = [Collections.Generic.List[string]]::new()
+    $reusedTaskNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($preflight in @($taskPreflight | Where-Object Exists)) { [void]$reusedTaskNames.Add($preflight.Task.Name) }
+    $stagingPin = $null
     if (-not $whatIf -and -not $plan.Runner.Reuse) {
-        if (-not (Test-Path -LiteralPath $plan.DataRoot -PathType Container)) { New-Item -ItemType Directory -Path $plan.DataRoot -Force | Out-Null }
+        Ensure-CodexTrustedDataRoot -Path $plan.DataRoot -PathInspector $PathInspector
         $stagingRoot = Join-Path $plan.DataRoot ('.staging\runner-' + [Guid]::NewGuid().ToString('N'))
         Assert-CodexPathHasNoReparseAncestor -Path $stagingRoot -PathInspector $PathInspector
         New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+        Assert-CodexPathHasNoReparseAncestor -Path $stagingRoot -PathInspector $PathInspector
+        $stagingPin = Open-CodexStagingPin -Path $stagingRoot -PathInspector $PathInspector
         try {
             $archive = Join-Path $stagingRoot $asset.Name
+            Assert-CodexPathHasNoReparseAncestor -Path $stagingRoot -PathInspector $PathInspector
+            Assert-CodexPathHasNoReparseAncestor -Path $archive -PathInspector $PathInspector
             $downloadRequest = [pscustomobject][ordered]@{ Uri = $asset.Uri; Destination = $archive }
             if ($null -ne $DownloadRunner) { & $DownloadRunner $downloadRequest } else { Invoke-WebRequest -UseBasicParsing -Uri $asset.Uri -OutFile $archive }
             $actualHash = if ($null -ne $HashRunner) { [string](& $HashRunner $archive) } else { (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash }
             if ($actualHash.ToLowerInvariant() -ne $asset.Sha256) { throw 'Downloaded runner checksum does not match the release checksum.' }
+            Assert-CodexPathHasNoReparseAncestor -Path $archive -PathInspector $PathInspector
+            Assert-CodexPathHasNoReparseAncestor -Path $stagingRoot -PathInspector $PathInspector
             $extractRequest = [pscustomobject][ordered]@{ Archive = $archive; Destination = $stagingRoot }
             if ($null -ne $ExtractRunner) { & $ExtractRunner $extractRequest } else { Expand-Archive -LiteralPath $archive -DestinationPath $stagingRoot -Force }
+            Assert-CodexPathHasNoReparseAncestor -Path $archive -PathInspector $PathInspector
             if (Test-Path -LiteralPath $archive -PathType Leaf) { Remove-Item -LiteralPath $archive -Force }
             $tokenResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('api','--method','POST',"repos/$Repository/actions/runners/registration-token") -CommandRunner $CommandRunner
             if (-not (Test-CodexSetupSuccess $tokenResult)) { throw 'Could not obtain a runner registration token.' }
@@ -513,6 +658,8 @@ function Invoke-CodexLocalWorkerSetup {
             if ([string]::IsNullOrWhiteSpace($token)) { throw 'GitHub returned an empty runner registration token.' }
             $configPath = Join-Path $stagingRoot 'config.cmd'
             $runnerConfigArgs = @('--unattended','--replace','--url',"https://github.com/$Repository",'--token',$token,'--name',$plan.Runner.Name,'--labels',$plan.Runner.Label,'--work','_work')
+            Assert-CodexPathHasNoReparseAncestor -Path $configPath -PathInspector $PathInspector
+            Assert-CodexPathHasNoReparseAncestor -Path $stagingRoot -PathInspector $PathInspector
             try { $configured = Invoke-CodexInstallCommand -FilePath $configPath -Arguments $runnerConfigArgs -WorkingDirectory $stagingRoot -CommandRunner $CommandRunner }
             catch { throw 'GitHub Actions runner configuration failed.' }
             if (-not (Test-CodexSetupSuccess $configured)) { throw 'GitHub Actions runner configuration failed.' }
@@ -526,16 +673,27 @@ function Invoke-CodexLocalWorkerSetup {
                 runnerName = $plan.Runner.Name; labels = @($plan.Runner.Label)
             }
             $metadataRequest = [pscustomobject][ordered]@{ Path = (Join-Path $stagingRoot 'runner-install.json'); Content = ($metadata | ConvertTo-Json -Depth 10) }
+            Assert-CodexPathHasNoReparseAncestor -Path $metadataRequest.Path -PathInspector $PathInspector
             if ($null -ne $MetadataWriter) { & $MetadataWriter $metadataRequest } else { [IO.File]::WriteAllText($metadataRequest.Path, $metadataRequest.Content, (New-Object Text.UTF8Encoding($false))) }
             Assert-CodexPathHasNoReparseAncestor -Path $plan.Runner.Root -PathInspector $PathInspector
             if (Test-Path -LiteralPath $plan.Runner.Root) { throw 'Runner destination appeared during setup; refusing replacement.' }
             $moveRequest = [pscustomobject][ordered]@{ Source = $stagingRoot; Destination = $plan.Runner.Root }
+            # The pin prevents replacement throughout staging. Windows cannot
+            # rename a directory containing an exclusively-open child, so the
+            # owned handle is released only after the final ancestry check and
+            # immediately before the atomic promotion.
+            Close-CodexStagingPin -Pin $stagingPin
+            $stagingPin = $null
+            Assert-CodexPathHasNoReparseAncestor -Path $stagingRoot -PathInspector $PathInspector
+            Assert-CodexPathHasNoReparseAncestor -Path $plan.Runner.Root -PathInspector $PathInspector
             if ($null -ne $MoveRunner) { & $MoveRunner $moveRequest } else { Move-Item -LiteralPath $stagingRoot -Destination $plan.Runner.Root }
             if (-not (Test-Path -LiteralPath $plan.Runner.Root -PathType Container)) { throw 'Runner promotion did not create the expected destination.' }
             $runnerPromoted = $true
             $runnerOwnedPath = $plan.Runner.Root
             $mutations += 4
         } catch {
+            Close-CodexStagingPin -Pin $stagingPin
+            $stagingPin = $null
             if ($runnerConfigured -and -not $runnerPromoted -and (Test-Path -LiteralPath (Join-Path $plan.Runner.Root 'runner-install.json') -PathType Leaf)) { $runnerPromoted = $true; $runnerOwnedPath = $plan.Runner.Root }
             if ($runnerConfigured) { $rollbackConfig = Join-Path $(if ($runnerPromoted) { $plan.Runner.Root } else { $stagingRoot }) 'config.cmd'; Invoke-CodexRunnerRemoteRemoval -Repository $Repository -ConfigPath $rollbackConfig -CommandRunner $CommandRunner }
             if (Test-Path -LiteralPath $stagingRoot) { Remove-CodexOwnedPath -Path $stagingRoot -PathInspector $PathInspector }
@@ -549,6 +707,8 @@ function Invoke-CodexLocalWorkerSetup {
             }
             throw
         }
+        Close-CodexStagingPin -Pin $stagingPin
+        $stagingPin = $null
     }
 
     $configToPersist = [ordered]@{
@@ -578,6 +738,9 @@ function Invoke-CodexLocalWorkerSetup {
 
         $runnerTask = $plan.Tasks.Runner
         $temporaryXml = $null
+        if (-not $reusedTaskNames.Contains($runnerTask.Name)) {
+            # Ownership is recorded before invoking schtasks: a side-effecting failure is still ours to remove.
+            $createdTaskNames.Add($runnerTask.Name) | Out-Null
         try {
             if ($null -eq $TaskRunner) {
                 $temporaryXml = [IO.Path]::GetTempFileName()
@@ -588,8 +751,8 @@ function Invoke-CodexLocalWorkerSetup {
             $taskResult = if ($null -ne $TaskRunner) { & $TaskRunner $taskRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $taskArgs -CommandRunner $CommandRunner }
         } finally { if ($null -ne $temporaryXml -and (Test-Path -LiteralPath $temporaryXml)) { Remove-Item -LiteralPath $temporaryXml -Force } }
         if (-not (Test-CodexSetupSuccess $taskResult)) { throw "Could not register scheduled task $($runnerTask.Name)." }
-        $createdTaskNames.Add($runnerTask.Name) | Out-Null
         $mutations++
+        }
         $startRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = @('/Run','/TN',$runnerTask.Name); Task = $runnerTask; Action = 'Start' }
         $startResult = if ($null -ne $TaskStartRunner) { & $TaskStartRunner $startRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $startRequest.Arguments -CommandRunner $CommandRunner }
         if (-not (Test-CodexSetupSuccess $startResult)) { throw "Could not start scheduled task $($runnerTask.Name)." }
@@ -619,6 +782,8 @@ function Invoke-CodexLocalWorkerSetup {
             $mutations++
         }
         foreach ($task in @($plan.Tasks.Notifier)) {
+            if ($reusedTaskNames.Contains($task.Name)) { continue }
+            $createdTaskNames.Add($task.Name) | Out-Null
             $temporaryXml = $null
             try {
                 if ($null -eq $TaskRunner) {
@@ -630,7 +795,6 @@ function Invoke-CodexLocalWorkerSetup {
                 $taskResult = if ($null -ne $TaskRunner) { & $TaskRunner $taskRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $taskArgs -CommandRunner $CommandRunner }
             } finally { if ($null -ne $temporaryXml -and (Test-Path -LiteralPath $temporaryXml)) { Remove-Item -LiteralPath $temporaryXml -Force } }
             if (-not (Test-CodexSetupSuccess $taskResult)) { throw "Could not register scheduled task $($task.Name)." }
-            $createdTaskNames.Add($task.Name) | Out-Null
             $mutations++
         }
         } catch {
@@ -649,6 +813,7 @@ function Invoke-CodexLocalWorkerSetup {
                 Invoke-CodexRunnerRemoteRemoval -Repository $Repository -ConfigPath $rollbackConfig -CommandRunner $CommandRunner
                 if ($runnerPromoted) { Remove-CodexOwnedPath -Path $plan.Runner.Root -PathInspector $PathInspector }
             }
+            Restore-CodexInstallerStateSnapshot -Snapshot $stateSnapshot -PathInspector $PathInspector
             throw
         }
     }
