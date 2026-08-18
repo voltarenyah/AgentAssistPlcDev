@@ -47,6 +47,10 @@
         ,'Get-CodexLocalWorkerPlan'
         ,'Invoke-CodexLocalWorkerSetup'
         ,'Test-CodexPrerequisitePolicy'
+        ,'Get-CodexVerifiedMasterCommit'
+        ,'Assert-CodexCommitReachableFromMaster'
+        ,'Register-CodexPendingDeployment'
+        ,'Register-CodexPullRequestClosed'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
