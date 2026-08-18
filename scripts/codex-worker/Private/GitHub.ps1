@@ -331,12 +331,16 @@ function Get-CodexPullRequestContext {
         [scriptblock] $CommandRunner
     )
 
-    return Invoke-GhJson -Arguments @(
+    $context = Invoke-GhJson -Arguments @(
         'pr', 'view', [string] $PullRequestNumber,
         '--repo', $Repository,
         '--comments',
-        '--json', 'number,title,body,author,comments,reviews,files,state,isDraft,url,headRefName,baseRefName,headRepository,baseRepository,mergedAt,mergeCommit,closingIssuesReferences'
+        '--json', 'number,title,body,author,comments,reviews,files,state,isDraft,url,headRefName,baseRefName,headRepository,mergedAt,mergeCommit,closingIssuesReferences'
     ) -CommandRunner $CommandRunner
+    if ($null -ne $context -and $null -eq $context.PSObject.Properties['baseRepository']) {
+        Add-Member -InputObject $context -NotePropertyName baseRepository -NotePropertyValue ([pscustomobject]@{ nameWithOwner = $Repository })
+    }
+    return $context
 }
 
 function Resolve-CodexPullRequestIssueNumber {

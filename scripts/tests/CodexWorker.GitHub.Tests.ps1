@@ -198,7 +198,6 @@ Describe 'Codex worker GitHub adapter' {
             headRefName = 'codex/101-fix'
             baseRefName = 'master'
             headRepository = @{ nameWithOwner = 'owner/repo' }
-            baseRepository = @{ nameWithOwner = 'owner/repo' }
             mergedAt = $null
             mergeCommit = $null
             closingIssuesReferences = @()
@@ -215,6 +214,7 @@ Describe 'Codex worker GitHub adapter' {
         $context.reviews.Count | Should Be 1
         $context.files.Count | Should Be 1
         $context.headRepository.nameWithOwner | Should Be 'owner/repo'
+        $context.baseRepository.nameWithOwner | Should Be 'owner/repo'
         $context.baseRefName | Should Be 'master'
         $context.mergedAt | Should BeNullOrEmpty
         $calls.Count | Should Be 1
@@ -224,6 +224,7 @@ Describe 'Codex worker GitHub adapter' {
         $jsonFields = $calls[0][($calls[0].IndexOf('--json') + 1)]
         $jsonFields | Should Match 'reviews'
         $jsonFields | Should Match 'files'
+        $jsonFields | Should Not Match 'baseRepository'
     }
 
     It 'keeps an issue-labeled revision on its supplied issue without querying a PR' {
