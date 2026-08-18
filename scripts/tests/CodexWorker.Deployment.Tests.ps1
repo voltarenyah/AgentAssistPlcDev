@@ -606,7 +606,7 @@ Describe 'Codex runtime deployment' {
             [pscustomobject]@{ ExitCode = 0; StdOut = 'launcher out'; StdErr = 'launcher err'; ProcessId = 9021; CommandLine = "$FilePath $($Arguments -join ' ')" }
         }.GetNewClosure()
         $providerState = @{ Calls = 0 }
-        $processProvider = { $providerState.Calls++; if ($providerState.Calls -lt 3) { return @() }; return @([pscustomobject]@{ ProcessId = 9021; CommandLine = (Join-Path $f.Root '.worktrees\runtime-b\launch.ps1') }) }.GetNewClosure()
+        $processProvider = { $providerState.Calls++; if ($providerState.Calls -lt 4) { return @() }; return @([pscustomobject]@{ ProcessId = 9021; CommandLine = (Join-Path $f.Root '.worktrees\runtime-b\launch.ps1') }) }.GetNewClosure()
         $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider $processProvider -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
         $result.Evidence.launch.stdout | Should Be 'launcher out'
         $result.Evidence.launch.stderr | Should Be 'launcher err'
@@ -673,5 +673,101 @@ Describe 'Codex runtime deployment' {
         $f.Durable.Value.activeSlot | Should Be 'runtime-a'
         @($f.Events | Where-Object { $_ -match 'powershell.exe' }).Count | Should Be 0
         $result.Evidence.error | Should Match 'reg.exe'
+    }
+
+    It 'returns truthful rollback-failed evidence when authoritative rereads throw' {
+        $f = New-RuntimeFixture
+        $readerState = @{ Calls = 0 }
+        $reader = { param([string] $Path)
+            $readerState.Calls++ | Out-Null
+            if ($readerState.Calls -le 2) { return (($f.Durable.Value | ConvertTo-Json -Depth 30) | ConvertFrom-Json) }
+            throw 'state file became unreadable'
+        }.GetNewClosure()
+        $writeState = @{ Calls = 0 }
+        $writer = { param([string] $Path, [object] $Value)
+            $writeState.Calls++ | Out-Null
+            $f.Durable.Value = (($Value | ConvertTo-Json -Depth 30) | ConvertFrom-Json)
+            throw 'partial write then throw'
+        }.GetNewClosure()
+        $comments = [System.Collections.Generic.List[string]]::new()
+        $github = { param([string[]] $Arguments) if ($Arguments -contains '--body') { $comments.Add($Arguments[$Arguments.IndexOf('--body') + 1]) | Out-Null }; return '' }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $reader -StateWriter $writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -GitHubCommandRunner $github -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $result.Evidence.activationCompensation.verified | Should Be $false
+        $result.Evidence.stateReadError | Should Match 'unreadable'
+        $result.State.deployment.status | Should Be 'rollback-failed'
+        $comments.Count | Should Be 1
+        @($result.Evidence.logs).Count | Should Be 2
+    }
+
+    It 'rejects a reparse swap at the final add boundary without invoking add' {
+        $f = New-RuntimeFixture
+        $worktreeRoot = Join-Path $f.Root '.worktrees'
+        New-Item -ItemType Directory -Path (Join-Path $worktreeRoot 'runtime-a'), (Join-Path $worktreeRoot 'runtime-b') -Force | Out-Null
+        $phase = @{ Value = 'initial'; ProcessCalls = 0; AddCalls = 0 }
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'worktree' -and $Arguments -contains 'add') { $phase.AddCalls++ }
+            return if ($Arguments -contains 'rev-parse' -and $Arguments -contains 'origin/master^{commit}') { $f.MasterSha } elseif ($Arguments -contains 'rev-parse' -and $Arguments -contains 'HEAD') { $f.Sha } else { '' }
+        }.GetNewClosure()
+        $inspector = { param([string] $Path)
+            if ($phase.Value -eq 'swap' -and $Path -like '*runtime-b') { return [pscustomobject]@{ IsReparsePoint = $true } }
+            [pscustomobject]@{ IsReparsePoint = $false }
+        }.GetNewClosure()
+        $process = { $phase.ProcessCalls++; if ($phase.ProcessCalls -ge 3) { $phase.Value = 'swap' }; @() }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider $process -PathInspector $inspector
+        $result.Success | Should Be $false
+        $phase.AddCalls | Should Be 0
+    }
+
+    It 'records a nonzero candidate launcher and keeps health uncalled' {
+        $f = New-RuntimeFixture
+        $httpCalls = [System.Collections.Generic.List[string]]::new()
+        $f.Process = { param([string] $FilePath, [string[]] $Arguments, [string] $WorkingDirectory)
+            if ($FilePath -eq 'powershell.exe') { return [pscustomobject]@{ ExitCode = 17; StdOut = 'launch out'; StdErr = 'launch err'; ProcessId = 701; CommandLine = "$FilePath $($Arguments -join ' ')" } }
+            [pscustomobject]@{ ExitCode = 0; StdOut = 'prep out'; StdErr = 'prep err'; ProcessId = 702; CommandLine = "$FilePath $($Arguments -join ' ')" }
+        }.GetNewClosure()
+        $f.Http = { param([string] $Uri) $httpCalls.Add($Uri) | Out-Null; [pscustomobject]@{ StatusCode = 200; Body = '{}' } }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $result.Evidence.launch.exitCode | Should Be 17
+        $result.Evidence.launch.stderr | Should Be 'launch err'
+        $httpCalls.Count | Should Be 0
+    }
+
+    It 'rejects an unreachable exact target before removing the inactive slot' {
+        $f = New-RuntimeFixture
+        $target = 'c' * 40
+        $f.Durable.Value.deployment.targetCommit = $target
+        $gitCalls = [System.Collections.Generic.List[string]]::new()
+        $git = { param([string[]] $Arguments)
+            $gitCalls.Add(($Arguments -join ' ')) | Out-Null
+            if ($Arguments -contains 'rev-parse' -and $Arguments -contains 'origin/master^{commit}') { return $f.MasterSha }
+            if ($Arguments -contains 'merge-base') { throw 'not reachable' }
+            return $f.Sha
+        }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.Durable.Value.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        @($gitCalls | Where-Object { $_ -match 'worktree remove|worktree add' }).Count | Should Be 0
+    }
+
+    It 'rejects a recreated slot whose detached HEAD differs from the requested SHA' {
+        $f = New-RuntimeFixture
+        $head = 'd' * 40
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'rev-parse' -and $Arguments -contains 'origin/master^{commit}') { return $f.MasterSha }
+            if ($Arguments -contains 'rev-parse' -and $Arguments -contains 'HEAD') { return $head }
+            return ''
+        }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        @($f.Events | Where-Object { $_ -match 'powershell.exe|dotnet restore' }).Count | Should Be 0
+    }
+
+    It 'marks activation failure when the state writer is a no-op and reread stays pending' {
+        $f = New-RuntimeFixture
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter { param($Path, $Value) } -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $result.Evidence.failureStateUnverified | Should Be $true
+        $result.State.deployment.status | Should Be 'rollback-failed'
     }
 }

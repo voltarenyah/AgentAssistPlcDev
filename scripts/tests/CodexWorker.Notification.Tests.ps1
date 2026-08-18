@@ -413,6 +413,39 @@ Describe 'Codex worker deployment notification' {
         $durable.Value.deployment | Should Be $null
     }
 
+    It 'preserves pending deployment when the deployment action returns Boolean false' {
+        $durable = [pscustomobject]@{ Value = New-NotificationState }
+        $unlocks = New-Object 'System.Collections.Generic.List[string]'
+        $threw = $false
+        try {
+            Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive 'state.json') `
+                -StateReader { param($Path) (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -StateWriter { param($Path, $Desired) $durable.Value = (($Desired | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -SessionProbe { $true } -LockProvider { 'held' } -UnlockProvider { $unlocks.Add('unlock') | Out-Null } `
+                -DialogProvider { 'Deploy' } -DeployAction { $false } | Out-Null
+        } catch { $threw = $true }
+        $threw | Should Be $true
+        $durable.Value.deployment | Should Not Be $null
+        $unlocks.Count | Should Be 1
+    }
+
+    It 'preserves failed deployment evidence when the action returns a failed deployment object' {
+        $durable = [pscustomobject]@{ Value = New-NotificationState }
+        $unlocks = New-Object 'System.Collections.Generic.List[string]'
+        $failed = [pscustomobject]@{ Success = $false; State = [pscustomobject]@{ activeSlot = 'runtime-a'; deployment = [pscustomobject]@{ status = 'rollback-failed'; evidence = [pscustomobject]@{ logs = @('failed.log','rollback.log') } } } }
+        $threw = $false
+        try {
+            Invoke-CodexDeploymentNotificationCycle -StatePath (Join-Path $TestDrive 'state.json') `
+                -StateReader { param($Path) (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -StateWriter { param($Path, $Desired) $durable.Value = (($Desired | ConvertTo-Json -Depth 20) | ConvertFrom-Json) } `
+                -SessionProbe { $true } -LockProvider { 'held' } -UnlockProvider { $unlocks.Add('unlock') | Out-Null } `
+                -DialogProvider { 'Deploy' } -DeployAction { $failed } | Out-Null
+        } catch { $threw = $true }
+        $threw | Should Be $true
+        $durable.Value.deployment | Should Not Be $null
+        $unlocks.Count | Should Be 1
+    }
+
     It 'does not show a snoozed deployment until its due time' {
         $now = [DateTime]::Parse('2026-08-18T01:00:00Z')
         $state = New-NotificationState -Status 'snoozed' -SnoozeUntil $now.AddMinutes(1).ToString('o')

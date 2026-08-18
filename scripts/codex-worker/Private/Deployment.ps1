@@ -31,12 +31,33 @@ function Invoke-CodexDeploymentProcess {
         $text = (($value | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
         return [pscustomobject]@{ ExitCode = 0; Output = $text; StdOut = $text; StdErr = ''; ProcessId = $null; CommandLine = "$FilePath $($Arguments -join ' ')" }
     }
-    Push-Location $WorkingDirectory
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $argumentList = $startInfo.PSObject.Properties['ArgumentList']
+    if ($null -ne $argumentList) {
+        foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add([string]$argument) }
+    } else {
+        $quoted = foreach ($argument in $Arguments) {
+            $text = [string]$argument
+            '"' + ($text -replace '(\\*)"', '$1$1\\"' -replace '(\\+)$', '$1$1') + '"'
+        }
+        $startInfo.Arguments = $quoted -join ' '
+    }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
     try {
-        $output = & $FilePath @Arguments 2>&1
-        $text = (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
-        return [pscustomobject]@{ ExitCode = [int]$LASTEXITCODE; Output = $text; StdOut = $text; StdErr = ''; ProcessId = $null; CommandLine = "$FilePath $($Arguments -join ' ')" }
-    } finally { Pop-Location }
+        if (-not $process.Start()) { throw "Unable to start '$FilePath'." }
+        $processId = $process.Id
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        return [pscustomobject]@{ ExitCode = [int]$process.ExitCode; Output = $stdout; StdOut = $stdout; StdErr = $stderr; ProcessId = $processId; CommandLine = "$FilePath $($Arguments -join ' ')"; WorkingDirectory = $WorkingDirectory; Arguments = [string[]]$Arguments }
+    } finally { $process.Dispose() }
 }
 
 function Get-CodexDeploymentRuntimeSlots {
@@ -205,6 +226,8 @@ function Invoke-CodexDeployment {
         Assert-CodexDeploymentSlotNotBusy -SlotPath $inactivePath -ProcessProvider $ProcessProvider
         Invoke-CodexDeploymentGit -RepositoryRoot $paths.RepositoryRoot -Arguments @('worktree','remove','--force',$inactivePath) -CommandRunner $GitCommandRunner | Out-Null
         Assert-CodexDeploymentSlotTrusted -SlotName $inactive -SlotPath $inactivePath -WorktreeRoot $slots.Root -PathInspector $PathInspector | Out-Null
+        Assert-CodexDeploymentSlotNotBusy -SlotPath $inactivePath -ProcessProvider $ProcessProvider
+        Assert-CodexDeploymentSlotTrusted -SlotName $inactive -SlotPath $inactivePath -WorktreeRoot $slots.Root -PathInspector $PathInspector | Out-Null
         Invoke-CodexDeploymentGit -RepositoryRoot $paths.RepositoryRoot -Arguments @('worktree','add','--detach',$inactivePath,$target) -CommandRunner $GitCommandRunner | Out-Null
         $checkedOut = ConvertTo-CodexFullCommit -Commit (Invoke-CodexDeploymentGit -RepositoryRoot $inactivePath -Arguments @('rev-parse','HEAD') -CommandRunner $GitCommandRunner) -Name 'runtime slot HEAD'
         if ($checkedOut -ne $target) { throw 'Runtime slot did not resolve to the exact target SHA.' }
@@ -261,12 +284,13 @@ function Invoke-CodexDeployment {
         $failure = $_.Exception.Message
         $evidence['error'] = $failure
         $rollbackLogPath = Join-Path $paths.DataRoot ('runs\deployment-' + $now.ToString('yyyyMMddTHHmmssfffZ') + '-rollback.log')
-        $evidence['logs'] = @($logPath, $rollbackLogPath)
         $failureLogDirectory = Split-Path -Parent $logPath
         if (-not (Test-Path -LiteralPath $failureLogDirectory -PathType Container)) { New-Item -ItemType Directory -Path $failureLogDirectory -Force | Out-Null }
         Add-Content -LiteralPath $logPath -Value ("deployment target $target`nerror: $failure")
+        $evidence['logs'] = @($logPath)
         $rollback = $null
         if ($evidence.prepared) {
+            try { $evidence['candidateProcesses'] = @(Get-CodexDeploymentProcessEvidence -SlotPath $inactivePath -ProcessProvider $ProcessProvider) } catch { $evidence['candidateProcessInspectionError'] = $_.Exception.Message }
             try {
                 $rollbackArgs = @('-ExecutionPolicy','Bypass','-File',(Join-Path $activePath 'launch.ps1'),'-NoBuild')
                 $rollbackLaunch = Invoke-CodexDeploymentProcess -FilePath 'powershell.exe' -Arguments $rollbackArgs -WorkingDirectory $activePath -ProcessRunner $ProcessRunner
@@ -275,9 +299,9 @@ function Invoke-CodexDeployment {
                 $rollbackStdout = [string](Get-CodexDeploymentValue $rollbackLaunch 'StdOut' (Get-CodexDeploymentValue $rollbackLaunch 'Output' ''))
                 $rollbackStderr = [string](Get-CodexDeploymentValue $rollbackLaunch 'StdErr' '')
                 $rollback = [pscustomobject]@{ launchExitCode = [int]$rollbackLaunch.ExitCode; stdout = $rollbackStdout; stderr = $rollbackStderr; processId = Get-CodexDeploymentValue -Object $rollbackLaunch -Name 'ProcessId' -Default $null; commandLine = [string](Get-CodexDeploymentValue -Object $rollbackLaunch -Name 'CommandLine' -Default ('powershell.exe ' + ($rollbackArgs -join ' '))); workingDirectory = $activePath; health = $rollbackHealth.Endpoints; processes = $rollbackProcesses; success = ([int]$rollbackLaunch.ExitCode -eq 0 -and $rollbackHealth.Success) }
-                $rollbackDirectory = Split-Path -Parent $rollbackLogPath; if (-not (Test-Path -LiteralPath $rollbackDirectory -PathType Container)) { New-Item -ItemType Directory -Path $rollbackDirectory -Force | Out-Null }; Add-Content -LiteralPath $rollbackLogPath -Value ("powershell.exe $($rollbackArgs -join ' ')`nstdout: $rollbackStdout`nstderr: $rollbackStderr")
+                $rollbackDirectory = Split-Path -Parent $rollbackLogPath; if (-not (Test-Path -LiteralPath $rollbackDirectory -PathType Container)) { New-Item -ItemType Directory -Path $rollbackDirectory -Force | Out-Null }; Add-Content -LiteralPath $rollbackLogPath -Value ("powershell.exe $($rollbackArgs -join ' ')`nstdout: $rollbackStdout`nstderr: $rollbackStderr"); $evidence['logs'] = @($logPath, $rollbackLogPath)
                 $evidence['rollback'] = $rollback
-            } catch { $evidence['rollback'] = [pscustomobject]@{ success = $false; error = $_.Exception.Message; log = $rollbackLogPath } }
+            } catch { $evidence['rollback'] = [pscustomobject]@{ success = $false; error = $_.Exception.Message }; if (Test-Path -LiteralPath $rollbackLogPath -PathType Leaf) { $evidence['logs'] = @($logPath, $rollbackLogPath) } }
         }
         $compensationSucceeded = $true
         if ($activationAttempted) {
@@ -295,7 +319,14 @@ function Invoke-CodexDeployment {
             }
         }
         $evidence['failedTarget'] = Copy-CodexDeploymentObject ([pscustomobject]$evidence)
-        $current = & $read $paths.StatePath
+        $currentReadError = $null
+        try {
+            $current = & $read $paths.StatePath
+            if ($null -eq $current -or $current -is [string] -or $current -is [ValueType]) { throw 'Authoritative state was missing or unusable.' }
+        } catch {
+            $currentReadError = $_.Exception.Message
+            $current = Copy-CodexDeploymentObject $previousState
+        }
         $failedState = Copy-CodexDeploymentObject $current
         $failedDeployment = Get-CodexDeploymentValue $failedState 'deployment' $null
         if ($null -eq $failedDeployment) { $failedDeployment = Copy-CodexDeploymentObject $Deployment; Add-Member -InputObject $failedState -NotePropertyName deployment -NotePropertyValue $failedDeployment -Force }
@@ -306,7 +337,14 @@ function Invoke-CodexDeployment {
         $failurePersistenceError = $null
         try { & $write $paths.StatePath $failedState | Out-Null } catch { $failurePersistenceError = $_.Exception.Message }
         if ($null -ne $failurePersistenceError) { $evidence['persistenceError'] = $failurePersistenceError }
-        if ($failedDeployment.status -eq 'rollback-failed' -and $null -ne $GitHubCommandRunner) {
+        $failureStateVerified = $false
+        try {
+            $failureVerification = & $read $paths.StatePath
+            $failureStateVerified = $null -ne $failureVerification -and $failureVerification -isnot [string] -and [string](Get-CodexDeploymentValue $failureVerification 'activeSlot' '') -eq [string](Get-CodexDeploymentValue $failedState 'activeSlot' '') -and [string](Get-CodexDeploymentValue (Get-CodexDeploymentValue $failureVerification 'deployment' $null) 'status' '') -eq [string]$failedDeployment.status
+        } catch { $failureStateVerified = $false }
+        if ($null -ne $currentReadError) { $evidence['stateReadError'] = $currentReadError }
+        if (-not $failureStateVerified) { $evidence['failureStateUnverified'] = $true; $failedDeployment.status = 'rollback-failed' }
+        if (($failedDeployment.status -eq 'rollback-failed' -or -not $failureStateVerified) -and $null -ne $GitHubCommandRunner) {
             $issue = [int](Get-CodexDeploymentValue $Deployment 'issueNumber' (Get-CodexDeploymentValue $Deployment 'sourcePr' 0))
             if ($issue -gt 0) { $repositoryName = [string](Get-CodexDeploymentValue -Object $Config -Name 'repository' -Default 'local/repository'); if ([string]::IsNullOrWhiteSpace($repositoryName)) { $repositoryName = 'local/repository' }; Add-CodexIssueComment -Repository $repositoryName -IssueNumber $issue -Body "[HIGH PRIORITY] Runtime deployment failed and rollback failed.`n`n$failure`n`nLogs: $($evidence.logs -join ', ')" -CommandRunner $GitHubCommandRunner | Out-Null }
         }
@@ -442,9 +480,16 @@ function Set-CodexRepairedDeploymentMetadata {
 function ConvertTo-CodexDeploymentDateTicks {
     param([object] $Value, [string] $Name)
     if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
-    $parsed = [DateTime]::MinValue
-    if (-not [DateTime]::TryParse([string]$Value, [ref]$parsed)) { throw "The persisted deployment $Name is invalid." }
-    return $parsed.ToUniversalTime().Ticks
+    try {
+        if ($Value -is [DateTimeOffset]) { return $Value.ToUniversalTime().UtcTicks }
+        if ($Value -is [DateTime]) {
+            if ($Value.Kind -eq [DateTimeKind]::Unspecified) { return $Value.Ticks }
+            return ([DateTimeOffset]$Value).ToUniversalTime().UtcTicks
+        }
+        $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+        $parsed = [DateTimeOffset]::Parse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, $styles)
+        return $parsed.UtcTicks
+    } catch { throw "The persisted deployment $Name is invalid." }
 }
 
 function Assert-CodexDurablePendingDeployment {
@@ -621,13 +666,14 @@ function Register-CodexPullRequestClosed {
             $existingSourcePr = 0
             $existingSourcePrValid = [int]::TryParse([string](Get-CodexDeploymentValue -Object $existingDeployment -Name 'sourcePr' 0), [ref]$existingSourcePr) -and $existingSourcePr -gt 0
             $existingRequestedAt = [string](Get-CodexDeploymentValue -Object $existingDeployment -Name 'requestedAt' '')
-            $existingRequestedAtValue = [DateTime]::MinValue
-            $existingRequestedAtValid = [DateTime]::TryParse($existingRequestedAt, [ref]$existingRequestedAtValue) -and -not [string]::IsNullOrWhiteSpace($existingRequestedAt)
+            $existingRequestedAtTicks = $null
+            try { $existingRequestedAtTicks = ConvertTo-CodexDeploymentDateTicks -Value $existingRequestedAt -Name 'requestedAt' } catch { }
+            $existingRequestedAtValid = $null -ne $existingRequestedAtTicks
             $existingSnooze = Get-CodexDeploymentValue -Object $existingDeployment -Name 'snoozeUntil' -Default $null
             $existingSnoozeValid = $true
+            $existingSnoozeTicks = $null
             if ($null -ne $existingSnooze -and -not [string]::IsNullOrWhiteSpace([string]$existingSnooze)) {
-                $existingSnoozeValue = [DateTime]::MinValue
-                $existingSnoozeValid = [DateTime]::TryParse([string]$existingSnooze, [ref]$existingSnoozeValue)
+                try { $existingSnoozeTicks = ConvertTo-CodexDeploymentDateTicks -Value $existingSnooze -Name 'snoozeUntil'; $existingSnoozeValid = $true } catch { $existingSnoozeValid = $false; $existingSnoozeTicks = $null }
             }
             $existingTupleComplete = $existingTargetValid -and $existingStatus -in @('pending', 'snoozed') -and $existingSourcePrValid -and $existingRequestedAtValid -and $existingSnoozeValid
             $existingTargetMatches = $existingTargetValid -and $existingTarget -eq $candidate
@@ -639,8 +685,11 @@ function Register-CodexPullRequestClosed {
             if ($repairIncompleteDeployment) { Set-CodexRepairedDeploymentMetadata -Deployment $previewDeployment -Existing $existingDeployment -SnoozeValid $existingSnoozeValid | Out-Null }
             if ($cleanupAlreadyCompleted) {
                 $previewTarget = ConvertTo-CodexFullCommit -Commit ([string]$previewDeployment.targetCommit) -Name 'preview deployment target'
+                $previewRequestedAtTicks = $null; try { $previewRequestedAtTicks = ConvertTo-CodexDeploymentDateTicks -Value (Get-CodexDeploymentValue -Object $previewDeployment -Name 'requestedAt' -Default $null) -Name 'requestedAt' } catch { }
                 $previewSnooze = Get-CodexDeploymentValue -Object $previewDeployment -Name 'snoozeUntil' -Default $null
-                $deploymentVerified = $existingTargetValid -and $existingStatus -in @('pending', 'snoozed') -and $existingSourcePr -eq $PullRequestNumber -and -not [string]::IsNullOrWhiteSpace($existingRequestedAt) -and $existingTarget -eq $previewTarget -and $existingStatus -eq [string]$previewDeployment.status -and [string]$existingSnooze -eq [string]$previewSnooze
+                $previewSnoozeTicks = $null; try { $previewSnoozeTicks = ConvertTo-CodexDeploymentDateTicks -Value $previewSnooze -Name 'snoozeUntil' } catch { }
+                $snoozeMatches = if ($null -eq $existingSnoozeTicks -and $null -eq $previewSnoozeTicks) { $true } else { $existingSnoozeTicks -eq $previewSnoozeTicks }
+                $deploymentVerified = $existingTargetValid -and $existingStatus -in @('pending', 'snoozed') -and $existingSourcePr -eq $PullRequestNumber -and $null -ne $existingRequestedAtTicks -and $existingTarget -eq $previewTarget -and $existingStatus -eq [string]$previewDeployment.status -and $existingRequestedAtTicks -eq $previewRequestedAtTicks -and $snoozeMatches
                 if ($deploymentVerified) {
                     return [pscustomobject][ordered]@{ PullRequestNumber = $PullRequestNumber; IssueNumber = $IssueNumber; Merged = $Merged; CleanedUp = $true; Blockers = @(); DeploymentCreated = $false; Deployment = $state.deployment; State = $state }
                 }
