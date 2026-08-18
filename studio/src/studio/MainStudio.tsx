@@ -27,7 +27,7 @@ import {
 import { toast } from 'sonner'
 import { ThemeToggle } from '@/catalog/ThemeToggle'
 import WindowControls from '@/studio/WindowControls'
-import { isWindowDragTarget, sendWindowCommand } from '@/studio/desktopWindowBridge'
+import { installWindowResizeHandles, isWindowDragTarget, sendWindowCommand } from '@/studio/desktopWindowBridge'
 import { showErrorToast } from '@/components/ui/toast'
 import WorkspaceHost, { type WorkspaceViewKind } from '@/studio/workspace/WorkspaceHost'
 import { WorkspaceService } from '@/studio/workspace/WorkspaceService'
@@ -537,6 +537,10 @@ export default function MainStudio() {
       unsubscribe()
     }
   }, [selection.workbenchId])
+
+  // In the desktop shell the viewport edges act as the hidden window frame's
+  // resize border (resize cursor + native resize loop). No-op in a browser.
+  useEffect(() => installWindowResizeHandles(), [])
 
   useEffect(() => {
     try { writeShellLayout(window.localStorage, shellLayout) } catch { /* storage is optional */ }
