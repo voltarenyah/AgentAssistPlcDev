@@ -409,7 +409,11 @@ function Invoke-CodexDeploymentNotificationCycle {
         if ($null -eq $DeployAction) { throw 'No deployment action was supplied.' }
         $deployResult = & $DeployAction (Copy-CodexNotificationObject -Object $deployment)
         if ($deployResult -is [bool] -and -not $deployResult) { throw 'The deployment action reported failure.' }
-        $desired = Copy-CodexNotificationObject -Object $state
+        # The deployment action may have durably updated activeSlot and
+        # evidence. Re-read that authoritative snapshot before clearing the
+        # pending notification so the cleanup write cannot restore stale state.
+        $postDeployState = if ($null -ne $deployResult -and $deployResult.PSObject.Properties['State'] -and $null -ne $deployResult.State) { $deployResult.State } else { & $read $StatePath }
+        $desired = Copy-CodexNotificationObject -Object $postDeployState
         $desired.deployment = $null
         Write-CodexNotificationStateVerified -StatePath $StatePath -DesiredState $desired -ExpectedDeployment $null -StateWriter $StateWriter -StateReader $StateReader | Out-Null
         return [pscustomobject]@{ Status = 'Deployed'; Decision = 'Deploy' }

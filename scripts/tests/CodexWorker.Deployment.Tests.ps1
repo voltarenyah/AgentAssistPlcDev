@@ -470,3 +470,107 @@ Describe 'Codex worker PR-close deployment handoff' {
         }
     }
 }
+
+Describe 'Codex runtime deployment' {
+    BeforeEach {
+        Import-Module (Join-Path $PSScriptRoot '..\codex-worker\CodexWorker.psd1') -Force
+    }
+
+    function New-RuntimeFixture {
+        $root = Join-Path $TestDrive 'repo'
+        $data = Join-Path $TestDrive 'data'
+        New-Item -ItemType Directory -Path $root, $data -Force | Out-Null
+        $sha = 'a' * 40
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{}; activeSlot = 'runtime-a'; deployment = [pscustomobject]@{ targetCommit = $sha; sourcePr = 17; requestedAt = '2026-08-18T00:00:00Z'; status = 'pending' } }
+        $events = [System.Collections.Generic.List[string]]::new()
+        $durable = [pscustomobject]@{ Value = (($state | ConvertTo-Json -Depth 20) | ConvertFrom-Json) }
+        $config = [pscustomobject]@{ runtimeSlots = @('runtime-a','runtime-b'); healthTimeoutSeconds = 3; bootstrapPython = 'python.exe'; tiaWhitelistPath = ''; repositoryRoot = $root }
+        $git = {
+            param([string[]] $Arguments)
+            $events.Add("git:$($Arguments -join ' ')") | Out-Null
+            if ($Arguments -contains 'rev-parse') { return $sha }
+            return ''
+        }.GetNewClosure()
+        $process = {
+            param([string] $FilePath, [string[]] $Arguments)
+            $events.Add("run:$FilePath $($Arguments -join ' ')") | Out-Null
+            return [pscustomobject]@{ ExitCode = 0; Output = ''; ProcessId = 77; CommandLine = "$FilePath $($Arguments -join ' ')" }
+        }.GetNewClosure()
+        $http = {
+            param([string] $Uri)
+            $events.Add("http:$Uri") | Out-Null
+            if ($Uri -match '8787') { return [pscustomobject]@{ StatusCode = 200; Body = '{"status":"ok","model":"fallback","fallback":true}' } }
+            return [pscustomobject]@{ StatusCode = 200; Body = '{}' }
+        }.GetNewClosure()
+        $reader = { param([string] $Path) return (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) }.GetNewClosure()
+        $writer = { param([string] $Path, [object] $Value) $durable.Value = (($Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) }.GetNewClosure()
+        return [pscustomobject]@{ Root = $root; Data = $data; Sha = $sha; State = $state; Durable = $durable; Config = $config; Events = $events; Git = $git; Process = $process; Http = $http; Reader = $reader; Writer = $writer }
+    }
+
+    It 'selects only the inactive durable slot and prepares the exact target before switching' {
+        $f = New-RuntimeFixture
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $true
+        $f.Durable.Value.activeSlot | Should Be 'runtime-b'
+        ($f.Events -join "`n") | Should Match 'runtime-b'
+        ($f.Events -join "`n") | Should Not Match 'runtime-a.*worktree remove'
+        $f.Durable.Value.lastDeployment.targetCommit | Should Be $f.Sha
+    }
+
+    It 'runs restore, build, npm, venv, pip, whitelist in strict order before launcher and probes all endpoints' {
+        $f = New-RuntimeFixture
+        $f.Config.tiaWhitelistPath = Join-Path $f.Root 'register-whitelist.reg'
+        [IO.File]::WriteAllText($f.Config.tiaWhitelistPath, 'REGEDIT4')
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -RegistryRunner $f.Process -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $true
+        $runEvents = @($f.Events | Where-Object { $_ -like 'run:*' -or $_ -like 'http:*' })
+        ($runEvents -join "`n") | Should Match 'dotnet restore'
+        $runEvents.IndexOf(($runEvents | Where-Object { $_ -match 'dotnet restore' } | Select-Object -First 1)) | Should BeLessThan $runEvents.IndexOf(($runEvents | Where-Object { $_ -match 'dotnet build' } | Select-Object -First 1))
+        $runEvents.IndexOf(($runEvents | Where-Object { $_ -match 'dotnet build' } | Select-Object -First 1)) | Should BeLessThan $runEvents.IndexOf(($runEvents | Where-Object { $_ -match 'npm\.cmd ci' } | Select-Object -First 1))
+        $runEvents.IndexOf(($runEvents | Where-Object { $_ -match 'npm\.cmd run build' } | Select-Object -First 1)) | Should BeLessThan $runEvents.IndexOf(($runEvents | Where-Object { $_ -match 'powershell\.exe' } | Select-Object -First 1))
+        @($f.Events | Where-Object { $_ -like 'http:*' }).Count | Should Be 3
+    }
+
+    It 'rejects a busy inactive slot before removing it' {
+        $f = New-RuntimeFixture
+        $busy = { [pscustomobject]@{ CommandLine = (Join-Path $f.Root '.worktrees\runtime-b') } }.GetNewClosure()
+        { Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider $busy -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } } } | Should Throw 'process is using'
+        @($f.Events | Where-Object { $_ -match 'worktree remove' }).Count | Should Be 0
+    }
+
+    It 'keeps the previous active slot and records rollback evidence when health fails' {
+        $f = New-RuntimeFixture
+        $phase = @{ value = 0 }
+        $f.Process = { param([string] $FilePath, [string[]] $Arguments) if ($FilePath -eq 'powershell.exe') { $phase.value++ }; return [pscustomobject]@{ ExitCode = 0; Output = ''; ProcessId = 77; CommandLine = "$FilePath $($Arguments -join ' ')" } }.GetNewClosure()
+        $f.Http = { param([string] $Uri) if ($phase.value -eq 1) { return [pscustomobject]@{ StatusCode = 500; Body = '' } }; if ($Uri -match '8787') { return [pscustomobject]@{ StatusCode = 200; Body = '{"status":"ok"}' } }; return [pscustomobject]@{ StatusCode = 200; Body = '{}' } }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $result.RollbackSucceeded | Should Be $true
+        $f.Durable.Value.activeSlot | Should Be 'runtime-a'
+        $f.Durable.Value.deployment.status | Should Be 'failed'
+        $f.Durable.Value.deployment.evidence.rollback | Should Not Be $null
+    }
+
+    It 'marks rollback-failed and emits a high-priority issue comment when rollback probes fail' {
+        $f = New-RuntimeFixture
+        $comments = [System.Collections.Generic.List[string]]::new()
+        $f.Http = { param([string] $Uri) return [pscustomobject]@{ StatusCode = 503; Body = '' } }
+        $github = { param([string[]] $Arguments) if ($Arguments -contains '--body') { $comments.Add($Arguments[$Arguments.IndexOf('--body') + 1]) | Out-Null }; return '' }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -GitHubCommandRunner $github -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $result.RollbackSucceeded | Should Be $false
+        $f.Durable.Value.deployment.status | Should Be 'rollback-failed'
+        $comments.Count | Should Be 1
+        $comments[0] | Should Match '(?i)priority|rollback'
+    }
+
+    It 'fails closed on preparation failure without changing active slot' {
+        $f = New-RuntimeFixture
+        $f.Process = { param([string] $FilePath, [string[]] $Arguments) $f.Events.Add("run:$FilePath $($Arguments -join ' ')") | Out-Null; if ($Arguments -contains 'build') { return [pscustomobject]@{ ExitCode = 1; Output = 'compile failed' } }; return [pscustomobject]@{ ExitCode = 0; Output = '' } }.GetNewClosure()
+        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
+        $result.Success | Should Be $false
+        $f.Durable.Value.activeSlot | Should Be 'runtime-a'
+        $f.Durable.Value.deployment.status | Should Be 'failed'
+        @($f.Events | Where-Object { $_ -like 'http:*' }).Count | Should Be 0
+    }
+}

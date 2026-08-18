@@ -57,6 +57,7 @@
         ,'Show-CodexDeploymentDialog'
         ,'Invoke-CodexDeploymentNotificationCycle'
         ,'Invoke-CodexDeploymentNotifier'
+        ,'Invoke-CodexDeployment'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
