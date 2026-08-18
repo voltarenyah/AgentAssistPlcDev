@@ -278,8 +278,12 @@ Describe 'Codex local worker installation' {
         $plan.Tasks.Runner.Xml | Should Match '(?i)RestartOnFailure'
         $plan.Tasks.Runner.Xml | Should Match '(?i)PT1M'
         ($plan.Tasks.Runner.Arguments -join ' ') | Should Match '(?i)WindowStyle.*Hidden'
+        [xml]$runnerXml = $plan.Tasks.Runner.Xml
+        $runnerXml.Task.Actions.Exec.WorkingDirectory | Should Be 'C:\repo\scripts\codex-worker'
         ($plan.Tasks.Notifier.Arguments -join ' ') | Should Match '(?i)-Sta'
         $plan.Tasks.Notifier.Xml | Should Match '(?i)InteractiveToken'
+        [xml]$notifierXml = $plan.Tasks.Notifier.Xml
+        $notifierXml.Task.Actions.Exec.WorkingDirectory | Should Be 'C:\repo\scripts\codex-worker'
     }
 
     It 'reuses an exact existing runner without download, extraction, or token requests' {
