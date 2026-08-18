@@ -175,14 +175,21 @@ function Get-CodexCurrentUserId {
     return "$domain\$user"
 }
 
+function Get-CodexCurrentUserSid {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($null -eq $identity -or $null -eq $identity.User) { throw 'The current Windows user SID could not be resolved.' }
+    return $identity.User
+}
+
 function New-CodexScheduledTaskXml {
-    param([string] $UserId, [string] $FilePath, [string[]] $Arguments)
+    param([string] $UserId, [string] $FilePath, [string[]] $Arguments, [string] $OwnershipMarker)
     $escapedFile = [Security.SecurityElement]::Escape($FilePath)
     $escapedArguments = [Security.SecurityElement]::Escape((($Arguments | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' '))
+    $escapedMarker = [Security.SecurityElement]::Escape($OwnershipMarker)
     return @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Author>Automation Workbench</Author></RegistrationInfo>
+  <RegistrationInfo><Author>Automation Workbench</Author><Description>Automation Workbench installer ownership marker: $escapedMarker</Description></RegistrationInfo>
   <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>$([Security.SecurityElement]::Escape($UserId))</UserId></LogonTrigger></Triggers>
   <Principals><Principal id="Author"><UserId>$([Security.SecurityElement]::Escape($UserId))</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><Hidden>true</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>
@@ -346,23 +353,77 @@ function Close-CodexStagingPin {
     try { if ($null -ne $Pin.Stream) { $Pin.Stream.Dispose() } } catch { }
 }
 
-function Ensure-CodexTrustedDataRoot {
+function Get-CodexAclRuleSid {
+    param([Parameter(Mandatory = $true)] [object] $Rule)
+    try { return $Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]) }
+    catch { throw "Could not resolve ACL identity '$($Rule.IdentityReference)'." }
+}
+
+function Assert-CodexTrustedDirectoryAcl {
+    param([Parameter(Mandatory = $true)] [string] $Path)
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    if (-not $acl.AreAccessRulesProtected) { throw "Trusted directory ACL remains inheritable: $Path" }
+    $currentSid = Get-CodexCurrentUserSid
+    $expected = @(
+        [pscustomobject]@{ Sid = $currentSid; Rights = [Security.AccessControl.FileSystemRights]::FullControl }
+        [pscustomobject]@{ Sid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18'); Rights = [Security.AccessControl.FileSystemRights]::FullControl }
+        [pscustomobject]@{ Sid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'); Rights = [Security.AccessControl.FileSystemRights]::FullControl }
+    )
+    $rules = @($acl.Access)
+    if ($rules.Count -ne $expected.Count) { throw "Trusted directory ACL contains unexpected access entries: $Path" }
+    $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+    if ($ownerSid.Value -ne $currentSid.Value) { throw "Trusted directory owner is not the current user: $Path" }
+    foreach ($item in $expected) {
+        $matching = @($rules | Where-Object {
+            (Get-CodexAclRuleSid -Rule $_).Value -eq $item.Sid.Value -and
+            $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            -not $_.IsInherited -and $_.FileSystemRights -eq $item.Rights -and
+            (($_.InheritanceFlags -band ([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit)) -eq ([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit)) -and
+            $_.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::None
+        })
+        if ($matching.Count -ne 1) { throw "Trusted directory ACL is missing the required entry for $($item.Sid.Value): $Path" }
+    }
+}
+
+function Ensure-CodexTrustedDirectory {
     param([Parameter(Mandatory = $true)] [string] $Path, [scriptblock] $PathInspector)
+    if ($null -ne $PathInspector) {
+        $directInspection = & $PathInspector $Path
+        if (Test-CodexPathInspectionIsReparse -Inspection $directInspection) { throw "Refusing reparse-point trusted directory: $Path" }
+    }
     Assert-CodexPathHasNoReparseAncestor -Path $Path -PathInspector $PathInspector
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
     Assert-CodexPathHasNoReparseAncestor -Path $Path -PathInspector $PathInspector
     try {
-        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        # Protect the DACL and purge every existing explicit identity before
+        # adding the tiny allow-list. This preserves the existing security
+        # descriptor's owner/audit metadata while removing broad ACEs alike.
+        $directory = [IO.DirectoryInfo]::new($Path)
+        $existingAcl = $directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
+        $acl = $existingAcl
+        $existingRules = @($acl.Access)
         $acl.SetAccessRuleProtection($true, $false)
-        $identity = Get-CodexCurrentUserId
-        $rule = [Security.AccessControl.FileSystemAccessRule]::new($identity, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)
-        $acl.SetAccessRule($rule)
-        Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+        foreach ($existingRule in $existingRules) { $acl.PurgeAccessRules($existingRule.IdentityReference) }
+        $currentSid = Get-CodexCurrentUserSid
+        $existingOwner = $existingAcl.GetOwner([Security.Principal.SecurityIdentifier])
+        if ($null -eq $existingOwner -or $existingOwner.Value -ne $currentSid.Value) { $acl.SetOwner($currentSid) }
+        $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+        foreach ($sid in @($currentSid, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'), [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
+            $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, [Security.AccessControl.FileSystemRights]::FullControl, $inheritance, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)
+            $acl.AddAccessRule($rule)
+        }
+        $directory.SetAccessControl($acl)
+        Assert-CodexTrustedDirectoryAcl -Path $Path
     } catch {
-        throw "Trusted worker data root ACL could not be established: $($_.Exception.Message)"
+        throw "Trusted directory ACL could not be established: $($_.Exception.Message)"
     }
+}
+
+function Ensure-CodexTrustedDataRoot {
+    param([Parameter(Mandatory = $true)] [string] $Path, [scriptblock] $PathInspector)
+    Ensure-CodexTrustedDirectory -Path $Path -PathInspector $PathInspector
 }
 
 function Get-CodexInstallerStateSnapshot {
@@ -411,8 +472,26 @@ function Normalize-CodexTaskXml {
         $document = [Xml.XmlDocument]::new()
         $document.PreserveWhitespace = $false
         $document.LoadXml($Xml)
+        foreach ($description in @($document.SelectNodes("//*[local-name()='RegistrationInfo']/*[local-name()='Description']"))) {
+            if ($description.InnerText -match '(?i)^Automation Workbench installer ownership marker:\s*[0-9a-f]{32}$') {
+                $description.InnerText = 'Automation Workbench installer ownership marker'
+            }
+        }
         return $document.OuterXml
     } catch { return $Xml.Trim() }
+}
+
+function Get-CodexTaskOwnershipMarker {
+    param([AllowNull()][string] $Xml)
+    if ([string]::IsNullOrWhiteSpace($Xml)) { return $null }
+    try {
+        $document = [Xml.XmlDocument]::new(); $document.LoadXml($Xml)
+        foreach ($description in @($document.SelectNodes("//*[local-name()='RegistrationInfo']/*[local-name()='Description']"))) {
+            $match = [regex]::Match($description.InnerText, '(?i)^Automation Workbench installer ownership marker:\s*(?<marker>[0-9a-f]{32})$')
+            if ($match.Success) { return $match.Groups['marker'].Value.ToLowerInvariant() }
+        }
+    } catch { return $null }
+    return $null
 }
 
 function Get-CodexScheduledTaskPreflight {
@@ -423,8 +502,10 @@ function Get-CodexScheduledTaskPreflight {
     if ($null -ne $existsProperty) {
         if (-not [bool]$existsProperty.Value) { return [pscustomobject]@{ Exists = $false; Owned = $false; Task = $Task } }
         $actual = [string](Get-CodexSetupProperty $result 'Xml' (Get-CodexSetupText $result))
+        $marker = Get-CodexTaskOwnershipMarker -Xml $actual
+        if ([string]::IsNullOrWhiteSpace($marker)) { throw "Scheduled task '$($Task.Name)' exists but has no installer ownership marker." }
         if ((Normalize-CodexTaskXml $actual) -ne (Normalize-CodexTaskXml $Task.Xml)) { throw "Scheduled task '$($Task.Name)' exists but is not the installer-owned definition." }
-        return [pscustomobject]@{ Exists = $true; Owned = $true; Task = $Task }
+        return [pscustomobject]@{ Exists = $true; Owned = $true; Marker = $marker; Xml = $actual; Task = $Task }
     }
     if (-not (Test-CodexSetupSuccess $result)) {
         $queryText = ((Get-CodexSetupProperty $result 'Stdout' '') + ' ' + (Get-CodexSetupProperty $result 'Stderr' ''))
@@ -437,8 +518,21 @@ function Get-CodexScheduledTaskPreflight {
     # Test seams and older schtasks wrappers may return a successful textual
     # probe without XML; only an actual Task document proves the name exists.
     if ($actualXml -notmatch '(?i)<Task(?:\s|>)') { return [pscustomobject]@{ Exists = $false; Owned = $false; Task = $Task } }
+    $marker = Get-CodexTaskOwnershipMarker -Xml $actualXml
+    if ([string]::IsNullOrWhiteSpace($marker)) { throw "Scheduled task '$($Task.Name)' exists but has no installer ownership marker." }
     if ((Normalize-CodexTaskXml $actualXml) -ne (Normalize-CodexTaskXml $Task.Xml)) { throw "Scheduled task '$($Task.Name)' exists but is not the installer-owned definition." }
-    return [pscustomobject]@{ Exists = $true; Owned = $true; Task = $Task }
+    return [pscustomobject]@{ Exists = $true; Owned = $true; Marker = $marker; Xml = $actualXml; Task = $Task }
+}
+
+function Confirm-CodexScheduledTaskAttemptOwnership {
+    param([Parameter(Mandatory = $true)] [object] $Task, [Parameter(Mandatory = $true)] [string] $Marker, [scriptblock] $TaskQueryRunner, [object] $CommandRunner)
+    try {
+        $definition = Get-CodexScheduledTaskPreflight -Task $Task -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner
+        return [bool]$definition.Exists -and [string]$definition.Marker -eq $Marker
+    } catch {
+        # A foreign or unverifiable definition is never ours to remove.
+        return $false
+    }
 }
 
 function Invoke-CodexRunnerRemoteRemoval {
@@ -492,10 +586,11 @@ function Get-CodexLocalWorkerPlan {
     $runnerArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$runnerScript,'-RunnerRoot',$runnerRoot,'-ConfigPath',$configPath)
     $notifierArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-Sta','-WindowStyle','Hidden','-File',$notifierScript,'-Watch','-ConfigPath',$configPath)
     $userId = Get-CodexCurrentUserId
-    $runnerXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $runnerArgs
-    $notifierXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $notifierArgs
+    $ownershipMarker = [Guid]::NewGuid().ToString('N')
+    $runnerXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $runnerArgs -OwnershipMarker $ownershipMarker
+    $notifierXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $notifierArgs -OwnershipMarker $ownershipMarker
     return [pscustomobject][ordered]@{
-        Repository = $Repository; RepositoryRoot = $root; DataRoot = $data; ConfigPath = $configPath
+        Repository = $Repository; RepositoryRoot = $root; DataRoot = $data; ConfigPath = $configPath; TaskOwnershipMarker = $ownershipMarker
         Runner = [pscustomobject][ordered]@{ Root = $runnerRoot; MetadataPath = (Join-Path $runnerRoot 'runner-install.json'); ServiceMode = $false; Label = $label; Name = $runnerName; Reuse = $false }
         Tasks = [pscustomobject][ordered]@{
             Runner = [pscustomobject][ordered]@{ Name = 'AutomationWorkbenchCodexRunner'; LogonTrigger = $true; Hidden = $true; FilePath = 'pwsh.exe'; Arguments = [string[]]$runnerArgs; Xml = $runnerXml }
@@ -569,6 +664,17 @@ function Invoke-CodexLocalWorkerSetup {
         foreach ($task in @($plan.Tasks.Runner, $plan.Tasks.Notifier)) {
             $taskPreflight += Get-CodexScheduledTaskPreflight -Task $task -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner
         }
+        # Establish the trusted boundary before any installer state or runner
+        # bytes are written. Reapply it on every run, including an existing
+        # .staging directory left by an interrupted attempt.
+        $dataRootExisted = Test-Path -LiteralPath $plan.DataRoot -PathType Container
+        try {
+            Ensure-CodexTrustedDataRoot -Path $plan.DataRoot -PathInspector $PathInspector
+            Ensure-CodexTrustedDirectory -Path (Join-Path $plan.DataRoot '.staging') -PathInspector $PathInspector
+        } catch {
+            if (-not $dataRootExisted -and (Test-Path -LiteralPath $plan.DataRoot)) { Remove-CodexOwnedPath -Path $plan.DataRoot -PathInspector $PathInspector }
+            throw
+        }
     }
     $prereqs = @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner -Probe)
     $policies = @($prereqs | ForEach-Object { $_.Policy })
@@ -631,11 +737,11 @@ function Invoke-CodexLocalWorkerSetup {
     foreach ($preflight in @($taskPreflight | Where-Object Exists)) { [void]$reusedTaskNames.Add($preflight.Task.Name) }
     $stagingPin = $null
     if (-not $whatIf -and -not $plan.Runner.Reuse) {
-        Ensure-CodexTrustedDataRoot -Path $plan.DataRoot -PathInspector $PathInspector
         $stagingRoot = Join-Path $plan.DataRoot ('.staging\runner-' + [Guid]::NewGuid().ToString('N'))
         Assert-CodexPathHasNoReparseAncestor -Path $stagingRoot -PathInspector $PathInspector
         New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
         Assert-CodexPathHasNoReparseAncestor -Path $stagingRoot -PathInspector $PathInspector
+        Ensure-CodexTrustedDirectory -Path $stagingRoot -PathInspector $PathInspector
         $stagingPin = Open-CodexStagingPin -Path $stagingRoot -PathInspector $PathInspector
         try {
             $archive = Join-Path $stagingRoot $asset.Name
@@ -739,19 +845,26 @@ function Invoke-CodexLocalWorkerSetup {
         $runnerTask = $plan.Tasks.Runner
         $temporaryXml = $null
         if (-not $reusedTaskNames.Contains($runnerTask.Name)) {
-            # Ownership is recorded before invoking schtasks: a side-effecting failure is still ours to remove.
-            $createdTaskNames.Add($runnerTask.Name) | Out-Null
-        try {
-            if ($null -eq $TaskRunner) {
-                $temporaryXml = [IO.Path]::GetTempFileName()
-                [IO.File]::WriteAllText($temporaryXml, $runnerTask.Xml, (New-Object Text.UnicodeEncoding($false, $true)))
+            try {
+                if ($null -eq $TaskRunner) {
+                    $temporaryXml = [IO.Path]::GetTempFileName()
+                    [IO.File]::WriteAllText($temporaryXml, $runnerTask.Xml, (New-Object Text.UnicodeEncoding($false, $true)))
+                }
+                # No /F: an absent-task preflight must not overwrite a task
+                # inserted by another actor between query and create.
+                $taskArgs = @('/Create','/TN',$runnerTask.Name,'/XML',$(if ($null -ne $temporaryXml) { $temporaryXml } else { '<injected-task-xml>' }))
+                $taskRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = [string[]]$taskArgs; Task = $runnerTask; Xml = $runnerTask.Xml; OwnershipMarker = $plan.TaskOwnershipMarker; InteractiveToken = $true; RestartCount = 3; RestartInterval = 'PT1M'; Action = 'Create' }
+                $taskResult = if ($null -ne $TaskRunner) { & $TaskRunner $taskRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $taskArgs -CommandRunner $CommandRunner }
+            } catch {
+                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $runnerTask -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskNames.Add($runnerTask.Name) | Out-Null }
+                throw
+            } finally { if ($null -ne $temporaryXml -and (Test-Path -LiteralPath $temporaryXml)) { Remove-Item -LiteralPath $temporaryXml -Force } }
+            if (-not (Test-CodexSetupSuccess $taskResult)) {
+                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $runnerTask -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskNames.Add($runnerTask.Name) | Out-Null }
+                throw "Could not register scheduled task $($runnerTask.Name)."
             }
-            $taskArgs = @('/Create','/TN',$runnerTask.Name,'/XML',$(if ($null -ne $temporaryXml) { $temporaryXml } else { '<injected-task-xml>' }),'/F')
-            $taskRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = [string[]]$taskArgs; Task = $runnerTask; Xml = $runnerTask.Xml; InteractiveToken = $true; RestartCount = 3; RestartInterval = 'PT1M'; Action = 'Create' }
-            $taskResult = if ($null -ne $TaskRunner) { & $TaskRunner $taskRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $taskArgs -CommandRunner $CommandRunner }
-        } finally { if ($null -ne $temporaryXml -and (Test-Path -LiteralPath $temporaryXml)) { Remove-Item -LiteralPath $temporaryXml -Force } }
-        if (-not (Test-CodexSetupSuccess $taskResult)) { throw "Could not register scheduled task $($runnerTask.Name)." }
-        $mutations++
+            $createdTaskNames.Add($runnerTask.Name) | Out-Null
+            $mutations++
         }
         $startRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = @('/Run','/TN',$runnerTask.Name); Task = $runnerTask; Action = 'Start' }
         $startResult = if ($null -ne $TaskStartRunner) { & $TaskStartRunner $startRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $startRequest.Arguments -CommandRunner $CommandRunner }
@@ -783,18 +896,24 @@ function Invoke-CodexLocalWorkerSetup {
         }
         foreach ($task in @($plan.Tasks.Notifier)) {
             if ($reusedTaskNames.Contains($task.Name)) { continue }
-            $createdTaskNames.Add($task.Name) | Out-Null
             $temporaryXml = $null
             try {
                 if ($null -eq $TaskRunner) {
                     $temporaryXml = [IO.Path]::GetTempFileName()
                     [IO.File]::WriteAllText($temporaryXml, $task.Xml, (New-Object Text.UnicodeEncoding($false, $true)))
                 }
-                $taskArgs = @('/Create','/TN',$task.Name,'/XML',$(if ($null -ne $temporaryXml) { $temporaryXml } else { '<injected-task-xml>' }),'/F')
-                $taskRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = [string[]]$taskArgs; Task = $task; Xml = $task.Xml; InteractiveToken = $true; RestartCount = 3; RestartInterval = 'PT1M'; Action = 'Create' }
+                $taskArgs = @('/Create','/TN',$task.Name,'/XML',$(if ($null -ne $temporaryXml) { $temporaryXml } else { '<injected-task-xml>' }))
+                $taskRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = [string[]]$taskArgs; Task = $task; Xml = $task.Xml; OwnershipMarker = $plan.TaskOwnershipMarker; InteractiveToken = $true; RestartCount = 3; RestartInterval = 'PT1M'; Action = 'Create' }
                 $taskResult = if ($null -ne $TaskRunner) { & $TaskRunner $taskRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $taskArgs -CommandRunner $CommandRunner }
+            } catch {
+                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $task -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskNames.Add($task.Name) | Out-Null }
+                throw
             } finally { if ($null -ne $temporaryXml -and (Test-Path -LiteralPath $temporaryXml)) { Remove-Item -LiteralPath $temporaryXml -Force } }
-            if (-not (Test-CodexSetupSuccess $taskResult)) { throw "Could not register scheduled task $($task.Name)." }
+            if (-not (Test-CodexSetupSuccess $taskResult)) {
+                if (Confirm-CodexScheduledTaskAttemptOwnership -Task $task -Marker $plan.TaskOwnershipMarker -TaskQueryRunner $TaskQueryRunner -CommandRunner $CommandRunner) { $createdTaskNames.Add($task.Name) | Out-Null }
+                throw "Could not register scheduled task $($task.Name)."
+            }
+            $createdTaskNames.Add($task.Name) | Out-Null
             $mutations++
         }
         } catch {
