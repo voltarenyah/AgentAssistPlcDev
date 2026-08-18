@@ -11,7 +11,9 @@ Describe 'Codex worker GitHub adapter' {
                 'Get-CodexIssueDevelopment',
                 'Set-CodexIssueStatus',
                 'Add-CodexIssueComment',
-                'Get-CodexPullRequestContext')) {
+                'Get-CodexPullRequestContext',
+                'Resolve-CodexPullRequestIssueNumber',
+                'Resolve-CodexRevisionIssueNumber')) {
             $module.ExportedFunctions.ContainsKey($name) | Should Be $true
         }
 
@@ -212,6 +214,51 @@ Describe 'Codex worker GitHub adapter' {
         $jsonFields = $calls[0][($calls[0].IndexOf('--json') + 1)]
         $jsonFields | Should Match 'reviews'
         $jsonFields | Should Match 'files'
+    }
+
+    It 'keeps an issue-labeled revision on its supplied issue without querying a PR' {
+        $calls = New-Object 'System.Collections.Generic.List[object]'
+        $runner = { param($Arguments) $calls.Add(@($Arguments)) | Out-Null; throw 'PR lookup must not run for an issue event.' }.GetNewClosure()
+
+        (Resolve-CodexRevisionIssueNumber -Repository 'owner/repo' -IssueNumber 42 -PullRequestNumber '' -CommandRunner $runner) | Should Be 42
+        $calls.Count | Should Be 0
+    }
+
+    It 'resolves one same-repository closing issue for a PR revision' {
+        $calls = New-Object 'System.Collections.Generic.List[object]'
+        $payload = [ordered]@{
+            number = 101
+            closingIssuesReferences = @([ordered]@{ number = 42; repository = [ordered]@{ nameWithOwner = 'owner/repo' } })
+        }
+        $runner = { param($Arguments) $calls.Add(@($Arguments)) | Out-Null; $payload | ConvertTo-Json -Depth 10 }.GetNewClosure()
+
+        (Resolve-CodexRevisionIssueNumber -Repository 'owner/repo' -IssueNumber 0 -PullRequestNumber 101 -CommandRunner $runner) | Should Be 42
+        $calls.Count | Should Be 1
+        (@($calls[0]) -join ' ') | Should Match '(?i)pr view 101 --repo owner/repo'
+        (@($calls[0]) -join ' ') | Should Match 'closingIssuesReferences'
+    }
+
+    It 'fails closed for zero, multiple, and cross-repository closing issue references' {
+        foreach ($references in @(
+                @(),
+                @([ordered]@{ number = 42; repository = [ordered]@{ nameWithOwner = 'owner/repo' } }, [ordered]@{ number = 43; repository = [ordered]@{ nameWithOwner = 'owner/repo' } }),
+                @([ordered]@{ number = 42; repository = [ordered]@{ nameWithOwner = 'other/repo' } }))) {
+            $payload = [ordered]@{ number = 101; closingIssuesReferences = $references }
+            $runner = { param($Arguments) $payload | ConvertTo-Json -Depth 10 }.GetNewClosure()
+            { Resolve-CodexRevisionIssueNumber -Repository 'owner/repo' -IssueNumber 0 -PullRequestNumber 101 -CommandRunner $runner } |
+                Should Throw
+        }
+    }
+
+    It 'rejects a supplied issue that does not match the PR closing reference' {
+        $payload = [ordered]@{
+            number = 101
+            closingIssuesReferences = @([ordered]@{ number = 42; repository = [ordered]@{ nameWithOwner = 'owner/repo' } })
+        }
+        $runner = { param($Arguments) $payload | ConvertTo-Json -Depth 10 }.GetNewClosure()
+
+        { Resolve-CodexRevisionIssueNumber -Repository 'owner/repo' -IssueNumber 99 -PullRequestNumber 101 -CommandRunner $runner } |
+            Should Throw
     }
 
     It 'builds a workflow run URL only when all workflow coordinates are present' {

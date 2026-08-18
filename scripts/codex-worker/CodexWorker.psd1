@@ -39,6 +39,8 @@
         ,'New-CodexDraftPullRequest'
         ,'Set-CodexPullRequestBody'
         ,'Add-CodexPullRequestComment'
+        ,'Resolve-CodexPullRequestIssueNumber'
+        ,'Resolve-CodexRevisionIssueNumber'
         ,'Invoke-CodexRevision'
     )
     CmdletsToExport = @()

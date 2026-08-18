@@ -339,6 +339,61 @@ function Get-CodexPullRequestContext {
     ) -CommandRunner $CommandRunner
 }
 
+function Resolve-CodexPullRequestIssueNumber {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string] $Repository,
+        [Parameter(Mandatory = $true)][int] $PullRequestNumber,
+        [scriptblock] $CommandRunner
+    )
+
+    if ($PullRequestNumber -le 0) { throw 'A positive pull request number is required to resolve its linked issue.' }
+    $context = Invoke-GhJson -Arguments @(
+        'pr', 'view', [string]$PullRequestNumber,
+        '--repo', $Repository,
+        '--json', 'number,closingIssuesReferences'
+    ) -CommandRunner $CommandRunner
+    $resolvedNumber = [int](Get-CodexValue -Object $context -Name 'number' -Default 0)
+    if ($resolvedNumber -ne $PullRequestNumber) { throw 'The resolved pull request number does not match the requested pull request.' }
+
+    $references = @((Get-CodexValue -Object $context -Name 'closingIssuesReferences' -Default @()) | Where-Object { $null -ne $_ })
+    if ($references.Count -ne 1) { throw 'Revision requires exactly one linked issue in the pull request closing references.' }
+    $reference = $references[0]
+    $issueNumber = [int](Get-CodexValue -Object $reference -Name 'number' -Default 0)
+    if ($issueNumber -le 0) { throw 'The pull request closing reference did not contain a valid issue number.' }
+    $referenceRepository = Get-CodexValue -Object (Get-CodexValue -Object $reference -Name 'repository' -Default $null) -Name 'nameWithOwner' -Default ''
+    if ([string]::IsNullOrWhiteSpace([string]$referenceRepository) -or
+        -not [string]::Equals([string]$referenceRepository, $Repository, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The pull request closing reference is not in the requested repository.'
+    }
+    return $issueNumber
+}
+
+function Resolve-CodexRevisionIssueNumber {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string] $Repository,
+        [int] $IssueNumber = 0,
+        [string] $PullRequestNumber,
+        [scriptblock] $CommandRunner
+    )
+
+    $hasPullRequest = -not [string]::IsNullOrWhiteSpace($PullRequestNumber)
+    if (-not $hasPullRequest) {
+        if ($IssueNumber -le 0) { throw 'Revision requires an issue number or pull request number.' }
+        return $IssueNumber
+    }
+    $parsedPullRequestNumber = 0
+    if (-not [int]::TryParse($PullRequestNumber, [ref]$parsedPullRequestNumber) -or $parsedPullRequestNumber -le 0) {
+        throw 'Revision pull request number must be a positive integer.'
+    }
+    $linkedIssueNumber = Resolve-CodexPullRequestIssueNumber -Repository $Repository -PullRequestNumber $parsedPullRequestNumber -CommandRunner $CommandRunner
+    if ($IssueNumber -gt 0 -and $linkedIssueNumber -ne $IssueNumber) {
+        throw 'The supplied issue number does not match the pull request closing reference.'
+    }
+    return $linkedIssueNumber
+}
+
 function Get-CodexPullRequestForBranch {
     [CmdletBinding()]
     param(

@@ -22,20 +22,34 @@ jobs:
           ref: refs/heads/${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      - name: Dispatch revision to local worker
+      - name: Dispatch issue revision
+        if: github.event_name == 'issues' && github.event.label.name == 'codex:revise'
         shell: powershell
         env:
           CODEX_REPOSITORY: ${{ github.repository }}
-          CODEX_ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-          CODEX_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || '' }}
+          CODEX_ISSUE_NUMBER: ${{ github.event.issue.number }}
           CODEX_ACTOR: ${{ github.actor }}
           CODEX_EVENT_NAME: ${{ github.event_name }}
         run: |
           $issueNumber = [int]$env:CODEX_ISSUE_NUMBER
-          $pullRequestNumber = [string]$env:CODEX_PULL_REQUEST_NUMBER
           & .\scripts\codex-worker\Invoke-Revision.ps1 `
               -Repository ([string]$env:CODEX_REPOSITORY) `
               -IssueNumber $issueNumber `
               -Actor ([string]$env:CODEX_ACTOR) `
+              -EventName ([string]$env:CODEX_EVENT_NAME)
+
+      - name: Dispatch pull request revision
+        if: github.event_name == 'pull_request' && github.event.label.name == 'codex:revise'
+        shell: powershell
+        env:
+          CODEX_REPOSITORY: ${{ github.repository }}
+          CODEX_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          CODEX_ACTOR: ${{ github.actor }}
+          CODEX_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          $pullRequestNumber = [int]$env:CODEX_PULL_REQUEST_NUMBER
+          & .\scripts\codex-worker\Invoke-Revision.ps1 `
+              -Repository ([string]$env:CODEX_REPOSITORY) `
               -PullRequestNumber $pullRequestNumber `
+              -Actor ([string]$env:CODEX_ACTOR) `
               -EventName ([string]$env:CODEX_EVENT_NAME)
