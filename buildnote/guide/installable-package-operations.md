@@ -197,7 +197,16 @@ $status
 }
 ```
 
-Expected result: an Automation Workbench window displays the Studio UI, the API reports the requested version, no console window is visible, and Chrome is not opened. The window has no native Windows title bar; the Studio header acts as the caption — dragging empty header space moves the window, double-clicking it toggles maximize, and the minimize, maximize/restore, and close buttons sit at the right end of the header, immediately right of the theme (dark mode) toggle. The taskbar entry reads "Automation Workbench". Exercise the three in-app window buttons and confirm minimize, maximize/restore, and close all work. Closing the window must stop the shell-owned `ApiHost.exe` and MCP child processes.
+Expected result: an Automation Workbench window displays the Studio UI, the API reports the requested version, no console window is visible, and Chrome is not opened. The window has no visible native title bar; the Studio header acts as the caption — dragging empty header space moves the window, double-clicking it toggles maximize, and the minimize, maximize/restore, and close buttons sit at the right end of the header, immediately right of the theme (dark mode) toggle. The taskbar entry reads "Automation Workbench". Exercise the three in-app window buttons and confirm minimize, maximize/restore, and close all work.
+
+Also verify the custom-chrome window behaviors in restored (non-maximized) mode:
+
+- The restored window defaults to a size that fits the whole Studio layout, including the bottom status bar, without scrolling; the user can shrink it afterwards.
+- Moving the pointer to any window edge or corner shows the matching resize cursor, and dragging resizes the window.
+- On Windows 11 the window shows rounded corners and a subtle border line.
+- Windows snap assist works: dragging the window to the left or right screen edge shows the snap preview, and Automation Workbench appears in the snap-suggestion list for the remaining half so another app (such as TIA Portal) can be placed beside it.
+
+Closing the window must stop the shell-owned `ApiHost.exe` and MCP child processes.
 
 ## 6. Upgrade test
 
@@ -383,7 +392,7 @@ For each package intended for distribution or pre-production testing, record:
 - release test result;
 - installer SHA-256;
 - clean-install API status;
-- desktop shell window, hidden-process, WebView2, and in-app window-controls (minimize, maximize/restore, close, header drag) result;
+- desktop shell window, hidden-process, WebView2, and in-app window-controls (minimize, maximize/restore, close, header drag, edge resize, snap assist) result;
 - upgrade result, if performed;
 - repair result, if performed;
 - uninstall result and user-data preservation result;
