@@ -2,7 +2,10 @@ function Get-CodexValue {
     param([object] $Object, [string] $Name, [object] $Default = $null)
     if ($null -eq $Object) { return $Default }
     $property = $Object.PSObject.Properties[$Name]
-    if ($null -ne $property) { Write-Output -NoEnumerate $property.Value; return }
+    if ($null -ne $property) {
+        if ($property.Value -is [array]) { return ,$property.Value }
+        return $property.Value
+    }
     return $Default
 }
 

@@ -11,11 +11,14 @@ function Invoke-CodexPublicationGit {
     if ($null -ne $CommandRunner) {
         $result = & $CommandRunner $full
         if ($null -eq $result) { return '' }
-        return (($result | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        $stdout = @($result | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] })
+        return (($stdout | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
     }
     $result = & git.exe @full 2>&1
-    if ($LASTEXITCODE -ne 0) { throw (($result | Out-String).Trim()) }
-    return (($result | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) { throw (($result | Out-String).Trim()) }
+    $stdout = @($result | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] })
+    return (($stdout | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
 }
 
 function Get-CodexPublicationValue {
@@ -268,7 +271,8 @@ function Publish-CodexIssue {
             Set-CodexPullRequestBody -Repository $Repository -PullRequestNumber $prNumber -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner | Out-Null
         } else {
             if ($RequireExistingPullRequest) { throw 'Revision requires an existing pull request; refusing to create another PR.' }
-            $created = New-CodexDraftPullRequest -Repository $Repository -BaseBranch 'master' -HeadBranch $branch -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner
+            $prTitle = Get-CodexCommitTitle -Suggested ([string](Get-CodexPublicationValue $summary 'prTitle' '')) -IssueNumber $issueNumber
+            $created = New-CodexDraftPullRequest -Repository $Repository -BaseBranch 'master' -HeadBranch $branch -Title $prTitle -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner
             $prUrl = [string]$created
         }
         Set-CodexOrchestrationField $AttemptState 'prUrl' $prUrl

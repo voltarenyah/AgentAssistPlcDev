@@ -34,6 +34,18 @@ Describe 'Codex worker prompt and process runner' {
         $text | Should Match '(?i)rewrit(e|ing).*published history'
     }
 
+    It 'requires every validation property in the strict output schema' {
+        $schemaPath = Join-Path $PSScriptRoot '..\codex-worker\schemas\final-summary.schema.json'
+        $schema = Get-Content -Raw -LiteralPath $schemaPath | ConvertFrom-Json
+        $validationItems = $schema.properties.validation.items
+        $propertyNames = @($validationItems.properties.PSObject.Properties | ForEach-Object { $_.Name })
+        $requiredNames = @($validationItems.required)
+
+        foreach ($propertyName in $propertyNames) {
+            ($requiredNames -contains $propertyName) | Should Be $true
+        }
+    }
+
     It 'accepts every valid final summary status' {
         foreach ($status in @('completed', 'blocked', 'failed')) {
             $summary = [pscustomobject][ordered]@{
@@ -51,6 +63,32 @@ Describe 'Codex worker prompt and process runner' {
             }
             (Test-CodexSummary -Summary $summary) | Should Be $true
         }
+    }
+
+    It 'returns scalar summary values without wrapping them and preserves arrays' {
+        $module = Get-Module CodexWorker
+        $values = & $module {
+            $sample = [pscustomobject]@{
+                status = 'completed'
+                required = $true
+                items = [object[]]@('one')
+                emptyItems = [object[]]@()
+            }
+
+            [pscustomobject]@{
+                Status = Get-CodexValue $sample 'status'
+                Required = Get-CodexValue $sample 'required'
+                Items = Get-CodexValue $sample 'items'
+                EmptyItems = Get-CodexValue $sample 'emptyItems'
+            }
+        }
+
+        ($values.Status -is [string]) | Should Be $true
+        ($values.Required -is [bool]) | Should Be $true
+        ($values.Items -is [array]) | Should Be $true
+        $values.Items.Count | Should Be 1
+        ($values.EmptyItems -is [array]) | Should Be $true
+        $values.EmptyItems.Count | Should Be 0
     }
 
     It 'rejects an undeclared summary property' {

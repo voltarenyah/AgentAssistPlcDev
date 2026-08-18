@@ -424,11 +424,12 @@ function New-CodexDraftPullRequest {
         [Parameter(Mandatory = $true)][string] $Repository,
         [Parameter(Mandatory = $true)][string] $BaseBranch,
         [Parameter(Mandatory = $true)][string] $HeadBranch,
+        [Parameter(Mandatory = $true)][string] $Title,
         [Parameter(Mandatory = $true)][string] $BodyPath,
         [scriptblock] $CommandRunner
     )
     if ($BaseBranch -ne 'master') { throw 'Codex draft pull requests must target master.' }
-    $result = Invoke-GhCommand -Arguments @('pr', 'create', '--repo', $Repository, '--draft', '--base', $BaseBranch, '--head', $HeadBranch, '--body-file', ([IO.Path]::GetFullPath($BodyPath))) -CommandRunner $CommandRunner
+    $result = Invoke-GhCommand -Arguments @('pr', 'create', '--repo', $Repository, '--draft', '--base', $BaseBranch, '--head', $HeadBranch, '--title', $Title, '--body-file', ([IO.Path]::GetFullPath($BodyPath))) -CommandRunner $CommandRunner
     return $result.Trim()
 }
 

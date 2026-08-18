@@ -20,6 +20,20 @@ Describe 'Codex worker publication' {
         $script:publishSummary = $summary
     }
 
+    It 'does not treat successful Git stderr warnings as changed paths' {
+        $warning = [Management.Automation.ErrorRecord]::new(
+            [Exception]::new('warning: line endings will be replaced'),
+            'git-warning',
+            [Management.Automation.ErrorCategory]::NotSpecified,
+            $null)
+        $runner = { param($Arguments) @('docs/local-codex-worker.md', $warning) }.GetNewClosure()
+        $module = Get-Module CodexWorker
+
+        $output = & $module { param($Worktree, $GitRunner) Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--name-only') -CommandRunner $GitRunner } $publishWorktree $runner
+
+        $output | Should Be 'docs/local-codex-worker.md'
+    }
+
     It 'rejects an empty diff' {
         $git = { param($Arguments) if ($Arguments -contains '--name-only') { return '' }; return '' }.GetNewClosure()
         $review = Test-CodexPublication -Summary $publishSummary -Worktree $publishWorktree -IssueNumber 42 -GitCommandRunner $git
@@ -136,6 +150,21 @@ Describe 'Codex worker publication' {
         (@($captured[0] | Where-Object { $_ -isnot [string] }).Count) | Should Be 0
         $pr.isDraft | Should Be $true
         $pr.state | Should Be 'OPEN'
+    }
+
+    It 'creates a non-interactive draft pull request with an explicit title' {
+        $captured = [System.Collections.Generic.List[object]]::new()
+        $gh = { param([string[]] $Arguments) $captured.Add($Arguments) | Out-Null; return 'https://example.test/pr/7' }.GetNewClosure()
+        $bodyPath = Join-Path $TestDrive 'pull-request.md'
+        Set-Content -LiteralPath $bodyPath -Value 'body'
+
+        $url = New-CodexDraftPullRequest -Repository 'owner/repo' -BaseBranch 'master' -HeadBranch 'codex/42-publication' -Title 'fix: example (#42)' -BodyPath $bodyPath -CommandRunner $gh
+
+        $url | Should Be 'https://example.test/pr/7'
+        $arguments = @($captured[0])
+        $arguments -contains '--title' | Should Be $true
+        $arguments[([array]::IndexOf($arguments, '--title') + 1)] | Should Be 'fix: example (#42)'
+        $arguments -contains '--body-file' | Should Be $true
     }
 
     It 'rejects closed, non-draft, wrong-head, and wrong-base revision PRs' {

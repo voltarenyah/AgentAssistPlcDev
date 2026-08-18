@@ -25,7 +25,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["command", "outcome", "details"],
+        "required": ["command", "outcome", "details", "required"],
         "properties": {
           "command": { "type": "string" },
           "outcome": { "type": "string", "enum": ["passed", "failed", "skipped"] },
