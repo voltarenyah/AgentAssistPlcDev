@@ -246,26 +246,49 @@ function Register-CodexPullRequestClosed {
         if ($null -eq $attempt) { throw "No saved Codex state exists for issue #$IssueNumber." }
         Assert-CodexClosedPullRequestContext -Context $context -Attempt $attempt -Repository $Repository -PullRequestNumber $PullRequestNumber -HeadBranch $HeadBranch -Merged $Merged -MergeCommitSha $MergeCommitSha | Out-Null
         if ([string]::IsNullOrWhiteSpace([string](Get-CodexDeploymentValue -Object $context -Name 'headRefName' '')) -or [string]::IsNullOrWhiteSpace($HeadBranch) -or [string]::IsNullOrWhiteSpace([string](Get-CodexDeploymentValue -Object $attempt -Name 'branch' ''))) { throw 'Pull request and saved Codex branch names are required.' }
-        if ([string](Get-CodexDeploymentValue -Object $attempt -Name 'cleanupStatus' '') -eq 'completed') {
+        $cleanupStatus = [string](Get-CodexDeploymentValue -Object $attempt -Name 'cleanupStatus' '')
+        $cleanupAlreadyCompleted = ($cleanupStatus -eq 'completed')
+        if ($cleanupAlreadyCompleted -and -not $Merged) {
             return [pscustomobject][ordered]@{ PullRequestNumber = $PullRequestNumber; IssueNumber = $IssueNumber; Merged = $Merged; CleanedUp = $true; Blockers = @(); DeploymentCreated = $false; Deployment = $state.deployment; State = $state }
         }
         $verifiedMaster = $null
+        $repairIncompleteDeployment = $false
         if ($Merged) {
             $verifiedMaster = Get-CodexVerifiedMasterCommit -RepositoryRoot $paths.RepositoryRoot -GitCommandRunner $GitCommandRunner
             $candidate = ConvertTo-CodexFullCommit -Commit $MergeCommitSha -Name 'merge commit'
             Assert-CodexCommitReachableFromMaster -RepositoryRoot $paths.RepositoryRoot -Commit $candidate -MasterCommit $verifiedMaster -GitCommandRunner $GitCommandRunner | Out-Null
             $previewState = (($state | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
-            Register-CodexPendingDeployment -RepositoryRoot $paths.RepositoryRoot -DataRoot $paths.DataRoot -MergeCommitSha $MergeCommitSha -PullRequestNumber $PullRequestNumber -State $previewState -GitCommandRunner $GitCommandRunner -Now $Now -VerifiedMasterCommit $verifiedMaster | Out-Null
+            $existingDeployment = Get-CodexDeploymentValue -Object $state -Name 'deployment' -Default $null
+            $existingTarget = ''
+            $existingTargetValid = $false
+            try { $existingTarget = ConvertTo-CodexFullCommit -Commit ([string](Get-CodexDeploymentValue -Object $existingDeployment -Name 'targetCommit' '')) -Name 'existing deployment target'; $existingTargetValid = $true } catch { }
+            $existingStatus = [string](Get-CodexDeploymentValue -Object $existingDeployment -Name 'status' '')
+            $existingSourcePr = [int](Get-CodexDeploymentValue -Object $existingDeployment -Name 'sourcePr' 0)
+            $existingRequestedAt = [string](Get-CodexDeploymentValue -Object $existingDeployment -Name 'requestedAt' '')
+            $existingTupleComplete = $existingTargetValid -and $existingStatus -in @('pending', 'snoozed') -and $existingSourcePr -gt 0 -and -not [string]::IsNullOrWhiteSpace($existingRequestedAt)
+            if ($cleanupAlreadyCompleted -and -not $existingTupleComplete) {
+                $previewState.deployment = $null
+                $repairIncompleteDeployment = $true
+            }
+            $previewDeployment = Register-CodexPendingDeployment -RepositoryRoot $paths.RepositoryRoot -DataRoot $paths.DataRoot -MergeCommitSha $MergeCommitSha -PullRequestNumber $PullRequestNumber -State $previewState -GitCommandRunner $GitCommandRunner -Now $Now -VerifiedMasterCommit $verifiedMaster
+            if ($cleanupAlreadyCompleted) {
+                $existingSnooze = Get-CodexDeploymentValue -Object $existingDeployment -Name 'snoozeUntil' -Default $null
+                $previewTarget = ConvertTo-CodexFullCommit -Commit ([string]$previewDeployment.targetCommit) -Name 'preview deployment target'
+                $previewSnooze = Get-CodexDeploymentValue -Object $previewDeployment -Name 'snoozeUntil' -Default $null
+                $deploymentVerified = $existingTargetValid -and $existingStatus -in @('pending', 'snoozed') -and $existingSourcePr -eq $PullRequestNumber -and -not [string]::IsNullOrWhiteSpace($existingRequestedAt) -and $existingTarget -eq $previewTarget -and $existingStatus -eq [string]$previewDeployment.status -and [string]$existingSnooze -eq [string]$previewSnooze
+                if ($deploymentVerified) {
+                    return [pscustomobject][ordered]@{ PullRequestNumber = $PullRequestNumber; IssueNumber = $IssueNumber; Merged = $Merged; CleanedUp = $true; Blockers = @(); DeploymentCreated = $false; Deployment = $state.deployment; State = $state }
+                }
+            }
         }
         $branch = [string](Get-CodexDeploymentValue -Object $attempt -Name 'branch' '')
         $worktree = [string](Get-CodexDeploymentValue -Object $attempt -Name 'worktree' '')
         $blockers = [System.Collections.Generic.List[string]]::new()
         if ([string]::IsNullOrWhiteSpace($branch) -or $branch -ne $HeadBranch) { $blockers.Add('Pull request head branch does not match the saved Codex issue branch.') | Out-Null }
-        $cleanupStatus = [string](Get-CodexDeploymentValue -Object $attempt -Name 'cleanupStatus' '')
         if ([string]::IsNullOrWhiteSpace($worktree) -and $cleanupStatus -ne 'completed') { $blockers.Add('Saved Codex issue state does not contain a worktree.') | Out-Null }
 
         $cleanedUp = $false
-        if ([string]::IsNullOrWhiteSpace($worktree) -and $cleanupStatus -eq 'completed') {
+        if ($cleanupAlreadyCompleted) {
             $cleanedUp = $true
         } elseif ($blockers.Count -eq 0) {
             if ($null -ne $CleanupProvider) {
@@ -278,7 +301,7 @@ function Register-CodexPullRequestClosed {
             }
             if ($null -ne $CleanupProvider -and $blockers.Count -eq 0) { $cleanedUp = $true }
         }
-        if ($cleanedUp -and $blockers.Count -eq 0) {
+        if ($cleanedUp -and $blockers.Count -eq 0 -and -not $cleanupAlreadyCompleted) {
             Set-CodexOrchestrationField $attempt 'worktree' $null
             Set-CodexOrchestrationField $attempt 'cleanupStatus' 'completed'
             Set-CodexOrchestrationField $attempt 'cleanupAt' $Now.ToUniversalTime().ToString('o')
@@ -288,13 +311,22 @@ function Register-CodexPullRequestClosed {
             Set-CodexOrchestrationField $attempt 'cleanupAt' $Now.ToUniversalTime().ToString('o')
             Set-CodexOrchestrationField $attempt 'cleanupBlockers' @($blockers.ToArray())
         }
-        if ($cleanedUp -or $blockers.Count -gt 0) { Write-CodexDeploymentState -StatePath $paths.StatePath -State $state -StateWriter $StateWriter }
+        if (($cleanedUp -or $blockers.Count -gt 0) -and -not $cleanupAlreadyCompleted) { Write-CodexDeploymentState -StatePath $paths.StatePath -State $state -StateWriter $StateWriter }
         Add-CodexCleanupBlockerComment -Repository $Repository -PullRequestNumber $PullRequestNumber -IssueNumber $IssueNumber -Blockers @($blockers.ToArray()) -GitHubCommandRunner $GitHubCommandRunner
 
         $deploymentCreated = $false
         if ($Merged) {
             if ([string]::IsNullOrWhiteSpace($MergeCommitSha)) { throw 'A merged pull request must provide its merge commit SHA.' }
-            $deployment = Register-CodexPendingDeployment -RepositoryRoot $paths.RepositoryRoot -DataRoot $paths.DataRoot -MergeCommitSha $MergeCommitSha -PullRequestNumber $PullRequestNumber -State $state -GitCommandRunner $GitCommandRunner -Now $Now -VerifiedMasterCommit $verifiedMaster
+            $registrationState = $state
+            if ($repairIncompleteDeployment) {
+                $registrationState = (($state | ConvertTo-Json -Depth 20) | ConvertFrom-Json)
+                $registrationState.deployment = $null
+            }
+            $deployment = Register-CodexPendingDeployment -RepositoryRoot $paths.RepositoryRoot -DataRoot $paths.DataRoot -MergeCommitSha $MergeCommitSha -PullRequestNumber $PullRequestNumber -State $registrationState -GitCommandRunner $GitCommandRunner -Now $Now -VerifiedMasterCommit $verifiedMaster
+            if ($repairIncompleteDeployment) {
+                if ($null -ne $state.PSObject.Properties['deployment']) { $state.deployment = $deployment }
+                else { Add-Member -InputObject $state -NotePropertyName deployment -NotePropertyValue $deployment -Force }
+            }
             Write-CodexDeploymentState -StatePath $paths.StatePath -State $state -StateWriter $StateWriter
             $deploymentCreated = $true
             $currentStatus = [string](Get-CodexDeploymentValue -Object $attempt -Name 'status' 'pr-ready')

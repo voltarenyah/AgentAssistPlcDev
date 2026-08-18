@@ -139,13 +139,22 @@ Describe 'Codex worker PR-close deployment handoff' {
     }
 
     It 'retains the existing deployment tuple when an older close arrives' {
-        $old = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; $candidate = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; $master = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        $candidate = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; $old = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; $master = 'cccccccccccccccccccccccccccccccccccccccc'
         $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{}; deployment = [pscustomobject]@{ targetCommit = $old; sourcePr = 3; requestedAt = '2026-08-18T00:00:00Z'; snoozeUntil = '2026-08-18T03:00:00Z'; status = 'pending' } }
-        $git = { param([string[]] $Arguments) if ($Arguments -contains 'rev-parse') { return $master }; if ($Arguments -contains 'merge-base' -and $Arguments[-2] -eq $old -and $Arguments[-1] -eq $master) { return '' }; return '' }
+        $before = $state.deployment | ConvertTo-Json -Depth 5
+        $git = {
+            param([string[]] $Arguments)
+            if ($Arguments -contains 'rev-parse') { return $master }
+            if ($Arguments -contains 'merge-base') {
+                $left = $Arguments[$Arguments.IndexOf('--is-ancestor') + 1]; $right = $Arguments[$Arguments.IndexOf('--is-ancestor') + 2]
+                if (($left -eq $candidate -and $right -eq $master) -or ($left -eq $old -and $right -eq $master) -or ($left -eq $candidate -and $right -eq $old)) { return '' }
+                throw 'not ancestor'
+            }
+            return ''
+        }
         $result = Register-CodexPendingDeployment -RepositoryRoot 'C:\repo' -MergeCommitSha $candidate -PullRequestNumber 9 -State $state -GitCommandRunner $git -Now ([DateTime]::Parse('2026-08-18T01:00:00Z'))
-        $result.targetCommit | Should Be $old
-        $result.sourcePr | Should Be 3
-        $result.requestedAt | Should Be '2026-08-18T00:00:00Z'
+        ($result | ConvertTo-Json -Depth 5) | Should Be ($state.deployment | ConvertTo-Json -Depth 5)
+        ($state.deployment | ConvertTo-Json -Depth 5) | Should Be $before
     }
 
     It 'replaces the tuple only when the existing target is an ancestor of the incoming merge' {
@@ -218,6 +227,53 @@ Describe 'Codex worker PR-close deployment handoff' {
         $writes | Should Be 0
         $cleanupCalls | Should Be 0
         $comments | Should Be 0
+        $state.issues.'42'.cleanupAt | Should Be $cleanupAt
+    }
+
+    It 'repairs a merged completed cleanup state when deployment registration was lost' {
+        $sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        $cleanupAt = '2026-08-18T00:00:00Z'
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; branch = 'codex/42-fix'; worktree = $null; status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17'; cleanupStatus = 'completed'; cleanupAt = $cleanupAt; cleanupBlockers = @() } }; deployment = $null }
+        $writes = [System.Collections.Generic.List[object]]::new(); $cleanupCalls = 0; $comments = 0; $labels = [System.Collections.Generic.List[string]]::new()
+        $github = { param([string[]] $Arguments) if (($Arguments -join ' ') -match 'closingIssuesReferences') { return ([pscustomobject]@{ number = 17; state = 'CLOSED'; url = 'https://github.com/owner/repo/pull/17'; headRefName = 'codex/42-fix'; baseRefName = 'master'; headRepository = @{ nameWithOwner = 'owner/repo' }; baseRepository = @{ nameWithOwner = 'owner/repo' }; mergedAt = '2026-08-18T00:00:00Z'; mergeCommit = @{ oid = $sha }; closingIssuesReferences = @(@{ number = 42; repository = @{ nameWithOwner = 'owner/repo' } }) } | ConvertTo-Json -Depth 10) }; if ($Arguments -contains '--body') { $comments++ }; if ($Arguments -contains '--add-label') { $labels.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null }; return '' }.GetNewClosure()
+        $git = { param([string[]] $Arguments) if ($Arguments -contains 'rev-parse') { return $sha }; if ($Arguments -contains 'merge-base') { return '' }; return '' }
+        $reader = { param($Path) $state }
+        $writer = { param($Path, $Current) $writes.Add($Current) | Out-Null }.GetNewClosure()
+        $cleanup = { $cleanupCalls++; throw 'completed cleanup must not run again' }.GetNewClosure()
+
+        $result = Register-CodexPullRequestClosed -Repository 'owner/repo' -PullRequestNumber 17 -Merged:$true -MergeCommitSha $sha -HeadBranch 'codex/42-fix' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -StateReader $reader -StateWriter $writer -GitHubCommandRunner $github -GitCommandRunner $git -CleanupProvider $cleanup -LockProvider { 'lock' } -UnlockProvider { param($h) } -Now ([DateTime]::Parse('2026-08-18T01:00:00Z'))
+
+        $result.DeploymentCreated | Should Be $true
+        $state.deployment.targetCommit | Should Be $sha
+        $state.deployment.sourcePr | Should Be 17
+        $writes.Count | Should Be 1
+        $cleanupCalls | Should Be 0
+        $comments | Should Be 0
+        $labels.Count | Should Be 1
+        $state.issues.'42'.cleanupAt | Should Be $cleanupAt
+    }
+
+    It 'does nothing for a merged completed cleanup state with a verified deployment' {
+        $sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        $cleanupAt = '2026-08-18T00:00:00Z'
+        $requestedAt = '2026-08-18T00:30:00Z'
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; branch = 'codex/42-fix'; worktree = $null; status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17'; cleanupStatus = 'completed'; cleanupAt = $cleanupAt; cleanupBlockers = @() } }; deployment = [pscustomobject]@{ targetCommit = $sha; sourcePr = 17; requestedAt = $requestedAt; snoozeUntil = '2026-08-18T03:00:00Z'; status = 'snoozed' } }
+        $before = $state.deployment | ConvertTo-Json -Depth 5
+        $writes = [System.Collections.Generic.List[object]]::new(); $cleanupCalls = 0; $comments = 0; $labels = [System.Collections.Generic.List[string]]::new()
+        $github = { param([string[]] $Arguments) if (($Arguments -join ' ') -match 'closingIssuesReferences') { return ([pscustomobject]@{ number = 17; state = 'CLOSED'; url = 'https://github.com/owner/repo/pull/17'; headRefName = 'codex/42-fix'; baseRefName = 'master'; headRepository = @{ nameWithOwner = 'owner/repo' }; baseRepository = @{ nameWithOwner = 'owner/repo' }; mergedAt = '2026-08-18T00:00:00Z'; mergeCommit = @{ oid = $sha }; closingIssuesReferences = @(@{ number = 42; repository = @{ nameWithOwner = 'owner/repo' } }) } | ConvertTo-Json -Depth 10) }; if ($Arguments -contains '--body') { $comments++ }; if ($Arguments -contains '--add-label') { $labels.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null }; return '' }.GetNewClosure()
+        $git = { param([string[]] $Arguments) if ($Arguments -contains 'rev-parse') { return $sha }; if ($Arguments -contains 'merge-base') { return '' }; return '' }
+        $reader = { param($Path) $state }
+        $writer = { param($Path, $Current) $writes.Add($Current) | Out-Null }.GetNewClosure()
+        $cleanup = { $cleanupCalls++; throw 'verified duplicate must not run cleanup' }.GetNewClosure()
+
+        $result = Register-CodexPullRequestClosed -Repository 'owner/repo' -PullRequestNumber 17 -Merged:$true -MergeCommitSha $sha -HeadBranch 'codex/42-fix' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -StateReader $reader -StateWriter $writer -GitHubCommandRunner $github -GitCommandRunner $git -CleanupProvider $cleanup -LockProvider { 'lock' } -UnlockProvider { param($h) } -Now ([DateTime]::Parse('2026-08-18T01:00:00Z'))
+
+        $result.DeploymentCreated | Should Be $false
+        ($state.deployment | ConvertTo-Json -Depth 5) | Should Be $before
+        $writes.Count | Should Be 0
+        $cleanupCalls | Should Be 0
+        $comments | Should Be 0
+        $labels.Count | Should Be 0
         $state.issues.'42'.cleanupAt | Should Be $cleanupAt
     }
 
