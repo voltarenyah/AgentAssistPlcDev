@@ -1,0 +1,42 @@
+name: Codex local pull request close handler
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  run:
+    runs-on: [self-hosted, Windows, X64, agentassist-local]
+    steps:
+      - name: Checkout trusted worker revision
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Register merged pull request handoff
+        shell: powershell
+        env:
+          CODEX_REPOSITORY: ${{ github.repository }}
+          CODEX_PR_NUMBER: ${{ github.event.pull_request.number }}
+          CODEX_MERGED: ${{ github.event.pull_request.merged }}
+          CODEX_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          CODEX_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          $pullRequestNumber = [int]$env:CODEX_PR_NUMBER
+          [bool]$merged = [System.Convert]::ToBoolean($env:CODEX_MERGED)
+          $mergeCommitSha = [string]$env:CODEX_MERGE_COMMIT_SHA
+          $headBranch = [string]$env:CODEX_HEAD_BRANCH
+
+          & .\scripts\codex-worker\Register-PrClosed.ps1 `
+              -Repository ([string]$env:CODEX_REPOSITORY) `
+              -PullRequestNumber $pullRequestNumber `
+              -Merged $merged `
+              -MergeCommitSha $mergeCommitSha `
+              -HeadBranch $headBranch

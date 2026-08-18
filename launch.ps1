@@ -80,11 +80,16 @@ if (-not $NoBuild) {
 #    cannot ShellExecute an http:// URL from a child process.
 Write-Host ">>> Starting ApiHost (port 5239)..." -ForegroundColor Cyan
 $apiProject = Join-Path $root "src\ApiHost\ApiHost.csproj"
+$apiArguments = @("run")
+if ($NoBuild) {
+    $apiArguments += "--no-build"
+}
+$apiArguments += @("--project", $apiProject, "--", "Application:OpenBrowserOnStart=false")
 Start-Process `
     -WindowStyle Normal `
     -WorkingDirectory $root `
     -FilePath "dotnet" `
-    -ArgumentList @("run", "--project", $apiProject, "--", "Application:OpenBrowserOnStart=false")
+    -ArgumentList $apiArguments
 
 # 4. Start the LangGraph App Assistant. The desktop host owns this lifecycle
 #    in packaged mode; development launches always start the local sidecar.

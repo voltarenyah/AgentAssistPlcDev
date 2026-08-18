@@ -98,3 +98,5 @@ Active development. Engineering, knowledge, version-control, and chat/agent slic
 implemented and tested; the safe generate → review → apply edit workflow and live-TIA
 acceptance for the source editor are in progress. See `buildnote/plan/` for the phased
 build plan and current milestone status.
+
+For the local Codex issue worker, see [the operator guide](docs/local-codex-worker.md).

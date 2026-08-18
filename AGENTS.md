@@ -387,3 +387,13 @@ relevant validation passes, unrelated changes are excluded, the diff has been
 reviewed, the branch contains the intended commits, a PR is ready for human
 review, and remaining risks are documented. The agent must not merge the PR
 unless explicitly instructed.
+
+### Unattended local Codex automation
+
+Unattended issue, revision, cleanup, and deployment runs follow the same issue
+scope, isolated `codex/<issue>-<slug>` worktree, focused/broad validation,
+reviewed draft-PR, and no-merge rules above. They must preserve the primary
+checkout and unrelated user changes; the wrapper owns commits, pushes, labels,
+comments, and PR publication while Codex edits only the active issue worktree.
+See [docs/local-codex-worker.md](docs/local-codex-worker.md) for the operational
+trust, monitoring, recovery, and deployment procedures.

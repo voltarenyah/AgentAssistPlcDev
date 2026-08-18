@@ -1,0 +1,15 @@
+{
+  "repository": "voltarenyah/AgentAssistPlcDev",
+  "repositoryRoot": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev",
+  "defaultBranch": "master",
+  "runnerLabel": "agentassist-local",
+  "codexCommand": "codex",
+  "bootstrapPython": "C:\\Users\\Ansel\\orca\\projects\\AgentAssistPlcDev\\agent-service\\.venv\\Scripts\\python.exe",
+  "workerLockTimeoutSeconds": 30,
+  "codexTimeoutMinutes": 120,
+  "notificationSeconds": 10,
+  "snoozeMinutes": 5,
+  "healthTimeoutSeconds": 60,
+  "runRetentionDays": 30,
+  "runtimeSlots": ["runtime-a", "runtime-b"]
+}
