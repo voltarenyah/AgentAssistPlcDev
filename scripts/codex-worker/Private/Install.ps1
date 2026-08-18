@@ -67,8 +67,44 @@ function Get-CodexSetupText {
     param([object] $Result)
     if ($null -eq $Result) { return '' }
     $stdout = Get-CodexSetupProperty $Result 'Stdout' ''
+    if ([string]::IsNullOrWhiteSpace([string]$stdout)) { $stdout = Get-CodexSetupProperty $Result 'Output' '' }
+    if ([string]::IsNullOrWhiteSpace([string]$stdout)) { $stdout = Get-CodexSetupProperty $Result 'Version' '' }
     if ([string]::IsNullOrWhiteSpace([string]$stdout)) { $stdout = [string]$Result }
     return [string]$stdout
+}
+
+function ConvertTo-CodexVersion {
+    param([AllowNull()][string] $Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    $match = [regex]::Match($Text, '(?<!\d)(?<version>\d+\.\d+(?:\.\d+)?)(?!\d)')
+    if (-not $match.Success) { return $null }
+    try { return [version]$match.Groups['version'].Value } catch { return $null }
+}
+
+function Test-CodexPrerequisitePolicy {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)] [object] $Prerequisite)
+    $name = [string](Get-CodexSetupProperty $Prerequisite 'Name' '')
+    $installed = [bool](Get-CodexSetupProperty $Prerequisite 'Installed' $false)
+    $text = [string](Get-CodexSetupProperty $Prerequisite 'Version' '')
+    $parsed = ConvertTo-CodexVersion $text
+    $minimum = $null
+    $maximumExclusive = $null
+    switch ($name) {
+        'PowerShell 7' { $minimum = [version]'7.0' }
+        '.NET 8' { $minimum = [version]'8.0' }
+        'Node.js' { $minimum = [version]'20.0' }
+        'Bootstrap Python' { $minimum = [version]'3.11'; $maximumExclusive = [version]'3.14' }
+        default { }
+    }
+    $valid = $installed -and $null -ne $parsed
+    if ($valid -and $null -ne $minimum) { $valid = $parsed -ge $minimum }
+    if ($valid -and $null -ne $maximumExclusive) { $valid = $parsed -lt $maximumExclusive }
+    [pscustomobject][ordered]@{
+        Name = $name; Installed = $installed; Version = $text; ParsedVersion = $parsed
+        Minimum = $minimum; MaximumExclusive = $maximumExclusive; Valid = [bool]$valid
+        Error = if (-not $installed) { 'missing' } elseif ($null -eq $parsed) { 'unparseable version' } elseif ($null -ne $minimum -and $parsed -lt $minimum) { 'version is too old' } elseif ($null -ne $maximumExclusive -and $parsed -ge $maximumExclusive) { 'version is outside the supported range' } else { $null }
+    }
 }
 
 function Get-CodexPrerequisitePlan {
@@ -99,10 +135,12 @@ function Get-CodexPrerequisitePlan {
                 $version = Get-CodexSetupText $result
             } catch { $installed = $false; $version = $_.Exception.Message }
         }
-        [pscustomobject][ordered]@{
+        $prerequisite = [pscustomobject][ordered]@{
             Name = $check.Name; FilePath = $check.FilePath; Arguments = [string[]]$check.Arguments
             Required = [bool]$check.Required; Installed = $installed; Version = $version
         }
+        $prerequisite | Add-Member -NotePropertyName Policy -NotePropertyValue (Test-CodexPrerequisitePolicy -Prerequisite $prerequisite)
+        $prerequisite
     }
 }
 
@@ -125,7 +163,69 @@ function Resolve-CodexRunnerAsset {
         [void]$hashes.Add($match.Groups['hash'].Value.ToLowerInvariant())
     }
     if ($hashes.Count -ne 1) { throw "Could not identify one unambiguous SHA-256 checksum for $name." }
-    return [pscustomobject][ordered]@{ Name = $name; Uri = $url; Sha256 = @($hashes)[0] }
+    $tag = [string](Get-CodexSetupProperty $Release 'tag_name' '')
+    if ([string]::IsNullOrWhiteSpace($tag)) { throw "Windows x64 runner asset has no unambiguous release version." }
+    return [pscustomobject][ordered]@{ Name = $name; Uri = $url; Sha256 = @($hashes)[0]; Version = ($tag -replace '^v', '') }
+}
+
+function Get-CodexCurrentUserId {
+    $domain = [Environment]::UserDomainName
+    $user = [Environment]::UserName
+    if ([string]::IsNullOrWhiteSpace($domain)) { return $user }
+    return "$domain\$user"
+}
+
+function New-CodexScheduledTaskXml {
+    param([string] $UserId, [string] $FilePath, [string[]] $Arguments)
+    $escapedFile = [Security.SecurityElement]::Escape($FilePath)
+    $escapedArguments = [Security.SecurityElement]::Escape((($Arguments | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' '))
+    return @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Author>Automation Workbench</Author></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>$([Security.SecurityElement]::Escape($UserId))</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>$([Security.SecurityElement]::Escape($UserId))</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><Hidden>true</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>
+  <Actions Context="Author"><Exec><Command>$escapedFile</Command><Arguments>$escapedArguments</Arguments><WorkingDirectory>$([Security.SecurityElement]::Escape((Split-Path -Parent $FilePath)))</WorkingDirectory></Exec></Actions>
+</Task>
+"@
+}
+
+function Get-CodexExistingRunnerState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)] [string] $RunnerRoot,
+        [Parameter(Mandatory = $true)] [string] $Repository,
+        [Parameter(Mandatory = $true)] [string] $Label,
+        [object] $Asset,
+        [scriptblock] $ProcessProvider
+    )
+    $statePath = Join-Path $RunnerRoot '.runner'
+    if (-not (Test-Path -LiteralPath $RunnerRoot -PathType Container)) { return [pscustomobject]@{ Exists = $false; Valid = $false; Active = $false; Reason = 'missing' } }
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { return [pscustomobject]@{ Exists = $true; Valid = $false; Active = $false; Reason = 'runner state is missing' } }
+    try { $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json } catch { return [pscustomobject]@{ Exists = $true; Valid = $false; Active = $false; Reason = 'runner state is malformed' } }
+    $labels = @((Get-CodexSetupProperty $state 'labels' @()) | ForEach-Object { if ($_ -is [string]) { $_ } else { [string](Get-CodexSetupProperty $_ 'name' '') } })
+    $expectedUrl = "https://github.com/$Repository"
+    $actualUrl = ([string](Get-CodexSetupProperty $state 'repositoryUrl' '')).TrimEnd('/')
+    $version = [string](Get-CodexSetupProperty $state 'version' '')
+    $hash = [string](Get-CodexSetupProperty $state 'sha256' (Get-CodexSetupProperty $state 'archiveSha256' ''))
+    $valid = $actualUrl.Equals($expectedUrl, [StringComparison]::OrdinalIgnoreCase) -and $labels -contains $Label -and (Test-Path -LiteralPath (Join-Path $RunnerRoot 'run.cmd') -PathType Leaf)
+    if ($valid -and $null -ne $Asset -and -not [string]::IsNullOrWhiteSpace($Asset.Version)) { $valid = $version -eq $Asset.Version }
+    if ($valid -and $null -ne $Asset) { $valid = $hash.Equals([string]$Asset.Sha256, [StringComparison]::OrdinalIgnoreCase) }
+    $processes = if ($null -ne $ProcessProvider) { @(& $ProcessProvider) } else { @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '(?i)^(Runner\.Listener|runsvc|run)$' }) }
+    [pscustomobject][ordered]@{ Exists = $true; Valid = [bool]$valid; Active = @($processes).Count -gt 0; Reason = if ($valid) { 'matching configured runner' } else { 'runner configuration does not match expected repository, label, version, or hash' }; State = $state }
+}
+
+function Assert-CodexRunnerRegistration {
+    param([object] $Payload, [string] $RunnerName, [string] $Label)
+    $runners = @((Get-CodexSetupProperty $Payload 'runners' @()))
+    $named = @($runners | Where-Object { [string](Get-CodexSetupProperty $_ 'name' '') -eq $RunnerName })
+    if ($named.Count -ne 1) { throw "Expected one uniquely registered runner named '$RunnerName'; found $($named.Count)." }
+    $labels = @((Get-CodexSetupProperty $named[0] 'labels' @()) | ForEach-Object { if ($_ -is [string]) { $_ } else { [string](Get-CodexSetupProperty $_ 'name' '') } })
+    if ([string](Get-CodexSetupProperty $named[0] 'status' '') -ne 'online' -or $labels -notcontains $Label) {
+        throw "Expected registered runner '$RunnerName' to be online with label '$Label'."
+    }
+    return $named[0]
 }
 
 function Get-CodexLocalWorkerPlan {
@@ -144,18 +244,23 @@ function Get-CodexLocalWorkerPlan {
         throw 'Worker data must be outside the repository.'
     }
     $label = [string](Get-CodexSetupProperty $Config 'runnerLabel' 'agentassist-local')
-    $runnerRoot = Join-Path $data 'runner'
+    $runnerRoot = [string](Get-CodexSetupProperty $Config 'runnerRoot' (Join-Path $data 'runner'))
+    $runnerRoot = [IO.Path]::GetFullPath($runnerRoot)
+    $runnerName = [string](Get-CodexSetupProperty $Config 'runnerName' 'AutomationWorkbenchCodexRunner')
     $configPath = Join-Path $data 'config.json'
     $runnerScript = Join-Path $root 'scripts\codex-worker\Start-GitHubRunner.ps1'
     $notifierScript = Join-Path $root 'scripts\codex-worker\Invoke-DeploymentNotifier.ps1'
     $runnerArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$runnerScript,'-RunnerRoot',$runnerRoot,'-ConfigPath',$configPath)
     $notifierArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-Sta','-WindowStyle','Hidden','-File',$notifierScript,'-Watch','-ConfigPath',$configPath)
+    $userId = Get-CodexCurrentUserId
+    $runnerXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $runnerArgs
+    $notifierXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $notifierArgs
     return [pscustomobject][ordered]@{
         Repository = $Repository; RepositoryRoot = $root; DataRoot = $data; ConfigPath = $configPath
-        Runner = [pscustomobject][ordered]@{ Root = $runnerRoot; ServiceMode = $false; Label = $label }
+        Runner = [pscustomobject][ordered]@{ Root = $runnerRoot; ServiceMode = $false; Label = $label; Name = $runnerName; Reuse = $false }
         Tasks = [pscustomobject][ordered]@{
-            Runner = [pscustomobject][ordered]@{ Name = 'AutomationWorkbenchCodexRunner'; LogonTrigger = $true; Hidden = $true; FilePath = 'pwsh.exe'; Arguments = [string[]]$runnerArgs }
-            Notifier = [pscustomobject][ordered]@{ Name = 'AutomationWorkbenchCodexDeploymentNotifier'; LogonTrigger = $true; Hidden = $true; FilePath = 'pwsh.exe'; Arguments = [string[]]$notifierArgs }
+            Runner = [pscustomobject][ordered]@{ Name = 'AutomationWorkbenchCodexRunner'; LogonTrigger = $true; Hidden = $true; FilePath = 'pwsh.exe'; Arguments = [string[]]$runnerArgs; Xml = $runnerXml }
+            Notifier = [pscustomobject][ordered]@{ Name = 'AutomationWorkbenchCodexDeploymentNotifier'; LogonTrigger = $true; Hidden = $true; FilePath = 'pwsh.exe'; Arguments = [string[]]$notifierArgs; Xml = $notifierXml }
         }
     }
 }
@@ -196,6 +301,7 @@ function Invoke-CodexLocalWorkerSetup {
         [scriptblock] $HashRunner,
         [scriptblock] $ExtractRunner,
         [scriptblock] $TaskRunner,
+        [scriptblock] $ProcessProvider,
         [string] $TemporaryGitPath,
         [switch] $SkipPrerequisiteProbe,
         [switch] $WhatIf
@@ -205,15 +311,29 @@ function Invoke-CodexLocalWorkerSetup {
     $plan = Get-CodexLocalWorkerPlan -Repository $Repository -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot -Config $Config
     $whatIf = [bool]$WhatIf
     $mutations = 0
-    $prereqs = if ($whatIf -or $SkipPrerequisiteProbe) { @(Get-CodexPrerequisitePlan -Config $Config) } else { @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner -Probe) }
+    if (-not $whatIf) {
+        foreach ($scriptPath in @((Join-Path $plan.RepositoryRoot 'scripts\codex-worker\Start-GitHubRunner.ps1'), (Join-Path $plan.RepositoryRoot 'scripts\codex-worker\Invoke-DeploymentNotifier.ps1'))) {
+            if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "Required task target does not exist: $scriptPath" }
+        }
+    }
+    $prereqs = @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner -Probe)
+    $policies = @($prereqs | ForEach-Object { $_.Policy })
+    $ghAuthResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('auth','status','--hostname','github.com') -CommandRunner $CommandRunner
+    $ghAuthenticated = Test-CodexSetupSuccess $ghAuthResult
+    if (-not $whatIf -and -not $ghAuthenticated) { throw 'GitHub CLI authentication is required before setup.' }
+    $requiredFailures = @($policies | Where-Object { $_.Name -ne 'Codex CLI' -and -not $_.Valid })
+    if (-not $whatIf -and $requiredFailures.Count -gt 0) { throw ('Required prerequisites failed: ' + (($requiredFailures | ForEach-Object { "$($_.Name): $($_.Error)" }) -join '; ')) }
     $codexPrereq = @($prereqs | Where-Object Name -eq 'Codex CLI')[0]
     $codex = [string](Get-CodexSetupProperty $Config 'codexCommand' 'codex')
     if (-not $whatIf) {
         $missing = $null -eq $codexPrereq -or -not [bool]$codexPrereq.Installed
+        if (-not $missing -and -not [bool]$codexPrereq.Policy.Valid) { throw "Codex CLI prerequisite failed: $($codexPrereq.Policy.Error)." }
         if ($missing) {
             $install = Invoke-CodexInstallCommand -FilePath 'npm.cmd' -Arguments @('install','--global','@openai/codex') -CommandRunner $CommandRunner
             if (-not (Test-CodexSetupSuccess $install)) { throw 'Codex CLI installation failed.' }
             $mutations++
+            $reprobe = @(Get-CodexPrerequisitePlan -Config $Config -CommandRunner $CommandRunner -Probe | Where-Object Name -eq 'Codex CLI')[0]
+            if ($null -eq $reprobe -or -not $reprobe.Policy.Valid) { throw 'Codex CLI is still missing or has an unparseable version after installation.' }
             $login = Invoke-CodexInstallCommand -FilePath $codex -Arguments @('login') -CommandRunner $CommandRunner -Interactive
             if (-not (Test-CodexSetupSuccess $login)) { throw 'Codex login was not completed.' }
         }
@@ -233,7 +353,13 @@ function Invoke-CodexLocalWorkerSetup {
     }
     $asset = $null
     if ($null -ne $release) { $asset = Resolve-CodexRunnerAsset -Release $release }
-    if (-not $whatIf) {
+    $existing = if ($null -ne $asset) { Get-CodexExistingRunnerState -RunnerRoot $plan.Runner.Root -Repository $Repository -Label $plan.Runner.Label -Asset $asset -ProcessProvider $ProcessProvider } else { [pscustomobject]@{ Exists = $false; Valid = $false; Active = $false; Reason = 'release not resolved' } }
+    if ($existing.Valid) { $plan.Runner.Reuse = $true }
+    elseif ($existing.Exists -and -not $whatIf) {
+        if ($existing.Active) { throw "Existing runner is active but does not match the expected repository, label, version, and hash; refusing replacement." }
+        throw "Existing runner cannot be safely reused: $($existing.Reason). Refusing in-place replacement."
+    }
+    if (-not $whatIf -and -not $plan.Runner.Reuse) {
         $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('actions-runner-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
         try {
@@ -253,15 +379,24 @@ function Invoke-CodexLocalWorkerSetup {
         $token = [string](Get-CodexSetupProperty $tokenPayload 'token' '')
         if ([string]::IsNullOrWhiteSpace($token)) { throw 'GitHub returned an empty runner registration token.' }
         $configPath = Join-Path $plan.Runner.Root 'config.cmd'
-        $runnerConfigArgs = @('--unattended','--replace','--url',"https://github.com/$Repository",'--token',$token,'--labels',$plan.Runner.Label,'--work','_work')
-        $configured = Invoke-CodexInstallCommand -FilePath $configPath -Arguments $runnerConfigArgs -WorkingDirectory $plan.Runner.Root -CommandRunner $CommandRunner
+        $runnerConfigArgs = @('--unattended','--replace','--url',"https://github.com/$Repository",'--token',$token,'--name',$plan.Runner.Name,'--labels',$plan.Runner.Label,'--work','_work')
+        try { $configured = Invoke-CodexInstallCommand -FilePath $configPath -Arguments $runnerConfigArgs -WorkingDirectory $plan.Runner.Root -CommandRunner $CommandRunner }
+        catch { throw 'GitHub Actions runner configuration failed.' }
         if (-not (Test-CodexSetupSuccess $configured)) { throw 'GitHub Actions runner configuration failed.' }
         $mutations++
     }
 
+    $registeredRunner = $null
+    if (-not $whatIf) {
+        $registrationResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('api',"repos/$Repository/actions/runners") -CommandRunner $CommandRunner
+        if (-not (Test-CodexSetupSuccess $registrationResult)) { throw 'GitHub Actions runner registration could not be verified.' }
+        try { $registrationPayload = Get-CodexSetupText $registrationResult | ConvertFrom-Json } catch { throw 'GitHub Actions runner registration returned malformed JSON.' }
+        $registeredRunner = Assert-CodexRunnerRegistration -Payload $registrationPayload -RunnerName $plan.Runner.Name -Label $plan.Runner.Label
+    }
+
     $configToPersist = [ordered]@{
         repository = $Repository; repositoryRoot = $plan.RepositoryRoot; dataRoot = $plan.DataRoot
-        runnerLabel = $plan.Runner.Label; runnerRoot = $plan.Runner.Root; runnerService = $false
+        runnerLabel = $plan.Runner.Label; runnerName = $plan.Runner.Name; runnerRoot = $plan.Runner.Root; runnerService = $false
         configPath = $plan.ConfigPath
     }
     if (-not $whatIf) {
@@ -293,15 +428,17 @@ function Invoke-CodexLocalWorkerSetup {
             if (-not (Test-CodexSetupSuccess $variableResult)) { throw "Could not set repository variable $($variable[0])." }
             $mutations++
         }
-        $auth = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('auth','status','--hostname','github.com') -CommandRunner $CommandRunner
-        if (-not (Test-CodexSetupSuccess $auth)) { throw 'GitHub CLI authentication is required.' }
-        $runners = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('api',"repos/$Repository/actions/runners") -CommandRunner $CommandRunner
-        if (-not (Test-CodexSetupSuccess $runners)) { throw 'GitHub Actions runner registration could not be verified.' }
         foreach ($task in @($plan.Tasks.Runner, $plan.Tasks.Notifier)) {
-            $quotedTaskArguments = @(foreach ($argument in $task.Arguments) { '"' + ($argument -replace '"','\"') + '"' }) -join ' '
-            $taskCommand = '"{0}" {1}' -f $task.FilePath, $quotedTaskArguments
-            $taskArgs = @('/Create','/TN',$task.Name,'/TR',$taskCommand,'/SC','ONLOGON','/RL','LIMITED','/F')
-            $taskResult = if ($null -ne $TaskRunner) { & $TaskRunner ([pscustomobject]@{ FilePath = 'schtasks.exe'; Arguments = [string[]]$taskArgs; Task = $task }) } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $taskArgs -CommandRunner $CommandRunner }
+            $temporaryXml = $null
+            try {
+                if ($null -eq $TaskRunner) {
+                    $temporaryXml = [IO.Path]::GetTempFileName()
+                    [IO.File]::WriteAllText($temporaryXml, $task.Xml, (New-Object Text.UnicodeEncoding($false, $true)))
+                }
+                $taskArgs = @('/Create','/TN',$task.Name,'/XML',$(if ($null -ne $temporaryXml) { $temporaryXml } else { '<injected-task-xml>' }),'/F')
+                $taskRequest = [pscustomobject][ordered]@{ FilePath = 'schtasks.exe'; Arguments = [string[]]$taskArgs; Task = $task; Xml = $task.Xml; InteractiveToken = $true; RestartCount = 3; RestartInterval = 'PT1M' }
+                $taskResult = if ($null -ne $TaskRunner) { & $TaskRunner $taskRequest } else { Invoke-CodexInstallCommand -FilePath 'schtasks.exe' -Arguments $taskArgs -CommandRunner $CommandRunner }
+            } finally { if ($null -ne $temporaryXml -and (Test-Path -LiteralPath $temporaryXml)) { Remove-Item -LiteralPath $temporaryXml -Force } }
             if (-not (Test-CodexSetupSuccess $taskResult)) { throw "Could not register scheduled task $($task.Name)." }
             $mutations++
         }

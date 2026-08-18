@@ -46,6 +46,7 @@
         ,'Resolve-CodexRunnerAsset'
         ,'Get-CodexLocalWorkerPlan'
         ,'Invoke-CodexLocalWorkerSetup'
+        ,'Test-CodexPrerequisitePolicy'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
