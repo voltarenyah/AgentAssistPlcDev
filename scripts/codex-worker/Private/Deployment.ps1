@@ -70,30 +70,27 @@ function Register-CodexPendingDeployment {
     $existingStatus = [string](Get-CodexDeploymentValue -Object $existing -Name 'status' '')
     $target = $mergeCommit
     $sourcePr = $PullRequestNumber
+    $requestedAt = $Now.ToUniversalTime().ToString('o')
+    $replaced = $false
     if ($existingStatus -in @('pending', 'snoozed')) {
         $oldTargetText = [string](Get-CodexDeploymentValue -Object $existing -Name 'targetCommit' '')
+        if ($oldTargetText -notmatch '^[0-9a-fA-F]{40}$') { throw 'Existing pending deployment has an invalid target commit.' }
+        $oldSourcePr = [int](Get-CodexDeploymentValue -Object $existing -Name 'sourcePr' 0)
+        $oldRequestedAt = [string](Get-CodexDeploymentValue -Object $existing -Name 'requestedAt' '')
+        if ($oldSourcePr -le 0 -or [string]::IsNullOrWhiteSpace($oldRequestedAt)) { throw 'Existing pending deployment tuple is incomplete.' }
         if ($oldTargetText -match '^[0-9a-fA-F]{40}$') {
             $oldTarget = $oldTargetText.ToLowerInvariant()
+            Assert-CodexCommitReachableFromMaster -RepositoryRoot $RepositoryRoot -Commit $oldTarget -MasterCommit $masterCommit -GitCommandRunner $GitCommandRunner | Out-Null
             if ($oldTarget -ne $masterCommit) {
-                try {
-                    Invoke-CodexDeploymentGit -RepositoryRoot $RepositoryRoot -Arguments @('merge-base', '--is-ancestor', $oldTarget, $masterCommit) -CommandRunner $GitCommandRunner | Out-Null
-                    $target = $masterCommit
-                } catch {
-                    # If the incoming merge advances the existing target, it is
-                    # safe to coalesce to that exact merge. Otherwise retain the
-                    # already verified target; never move a pending deployment
-                    # backwards because a close event arrived out of order.
-                    try {
-                        Invoke-CodexDeploymentGit -RepositoryRoot $RepositoryRoot -Arguments @('merge-base', '--is-ancestor', $oldTarget, $mergeCommit) -CommandRunner $GitCommandRunner | Out-Null
-                        $target = $mergeCommit
-                    } catch {
-                        $target = $oldTarget
-                        $sourcePr = [int](Get-CodexDeploymentValue -Object $existing -Name 'sourcePr' $PullRequestNumber)
-                    }
-                }
+                Invoke-CodexDeploymentGit -RepositoryRoot $RepositoryRoot -Arguments @('merge-base', '--is-ancestor', $oldTarget, $masterCommit) -CommandRunner $GitCommandRunner | Out-Null
+                $target = $masterCommit
+                $replaced = $true
             } else {
                 $target = $oldTarget
-                $sourcePr = [int](Get-CodexDeploymentValue -Object $existing -Name 'sourcePr' $PullRequestNumber)
+            }
+            if (-not $replaced) {
+                $sourcePr = $oldSourcePr
+                $requestedAt = $oldRequestedAt
             }
         }
     }
@@ -102,7 +99,7 @@ function Register-CodexPendingDeployment {
     $deployment = [pscustomobject][ordered]@{
         targetCommit = $target
         sourcePr = $sourcePr
-        requestedAt = $Now.ToUniversalTime().ToString('o')
+        requestedAt = $requestedAt
         snoozeUntil = $snooze
         status = 'pending'
     }
@@ -129,12 +126,13 @@ function Add-CodexCleanupBlockerComment {
 }
 
 function Resolve-CodexClosedPullRequestIssueNumber {
-    param([string] $Repository, [int] $PullRequestNumber, [scriptblock] $CommandRunner)
-    $context = Invoke-GhJson -Arguments @('pr', 'view', [string]$PullRequestNumber, '--repo', $Repository, '--json', 'number,closingIssuesReferences') -CommandRunner $CommandRunner
-    $numberProperty = $context.PSObject.Properties['number']
+    param([Parameter(Mandatory = $true)][object] $Context, [string] $Repository, [int] $PullRequestNumber)
+    $numberProperty = $Context.PSObject.Properties['number']
     if ($null -eq $numberProperty -or [int]$numberProperty.Value -ne $PullRequestNumber) { throw 'The resolved pull request number does not match the requested pull request.' }
-    $referencesProperty = $context.PSObject.Properties['closingIssuesReferences']
-    $references = if ($null -eq $referencesProperty -or $null -eq $referencesProperty.Value) { @() } else { @($referencesProperty.Value) }
+    $referencesProperty = $Context.PSObject.Properties['closingIssuesReferences']
+    $references = @(
+        if ($null -ne $referencesProperty -and $null -ne $referencesProperty.Value) { @($referencesProperty.Value) }
+    )
     if ($references.Count -ne 1) { throw 'The pull request must contain exactly one linked issue in its trusted closing references.' }
     $reference = $references[0]
     $issueProperty = $reference.PSObject.Properties['number']
@@ -142,6 +140,60 @@ function Resolve-CodexClosedPullRequestIssueNumber {
     $nameProperty = if ($null -ne $repositoryProperty -and $null -ne $repositoryProperty.Value) { $repositoryProperty.Value.PSObject.Properties['nameWithOwner'] } else { $null }
     if ($null -eq $issueProperty -or [int]$issueProperty.Value -le 0 -or $null -eq $nameProperty -or -not [string]::Equals([string]$nameProperty.Value, $Repository, [StringComparison]::OrdinalIgnoreCase)) { throw 'The pull request closing reference is invalid or belongs to another repository.' }
     return [int]$issueProperty.Value
+}
+
+function Get-CodexPrRepositoryName {
+    param([object] $Context, [string] $PropertyName)
+    $property = $Context.PSObject.Properties[$PropertyName]
+    if ($null -eq $property -or $null -eq $property.Value) { return '' }
+    if ($property.Value -is [string]) { return [string]$property.Value }
+    $name = $property.Value.PSObject.Properties['nameWithOwner']
+    if ($null -ne $name) { return [string]$name.Value }
+    return ''
+}
+
+function Assert-CodexClosedPullRequestContext {
+    param(
+        [Parameter(Mandatory = $true)][object] $Context,
+        [Parameter(Mandatory = $true)][object] $Attempt,
+        [Parameter(Mandatory = $true)][string] $Repository,
+        [Parameter(Mandatory = $true)][int] $PullRequestNumber,
+        [Parameter(Mandatory = $true)][string] $HeadBranch,
+        [Parameter(Mandatory = $true)][bool] $Merged,
+        [string] $MergeCommitSha
+    )
+    $number = $Context.PSObject.Properties['number']
+    $url = $Context.PSObject.Properties['url']
+    $state = $Context.PSObject.Properties['state']
+    $base = $Context.PSObject.Properties['baseRefName']
+    $head = $Context.PSObject.Properties['headRefName']
+    if ($null -eq $number -or [int]$number.Value -ne $PullRequestNumber) { throw 'Pull request context number does not match the close event.' }
+    $savedUrl = [string](Get-CodexDeploymentValue -Object $Attempt -Name 'prUrl' '')
+    if ([string]::IsNullOrWhiteSpace($savedUrl) -or $null -eq $url -or -not [string]::Equals($savedUrl, [string]$url.Value, [StringComparison]::OrdinalIgnoreCase)) { throw 'Pull request URL does not match the saved Codex attempt.' }
+    if ([string]$url.Value -notmatch ('/pull/' + [regex]::Escape([string]$PullRequestNumber) + '$')) { throw 'Pull request URL does not identify the close event pull request.' }
+    if ($null -eq $state -or [string]$state.Value -ne 'CLOSED') { throw 'Pull request is not closed.' }
+    if ($null -eq $base -or [string]$base.Value -ne 'master') { throw 'Pull request base branch is not master.' }
+    if ($null -eq $head -or [string]$head.Value -ne $HeadBranch) { throw 'Pull request head branch does not match the close event.' }
+    if ([string](Get-CodexDeploymentValue -Object $Attempt -Name 'branch' '') -ne $HeadBranch) { throw 'Pull request head branch does not match the saved Codex branch.' }
+    if ((Get-CodexPrRepositoryName -Context $Context -PropertyName 'headRepository') -ne $Repository) { throw 'Pull request head repository does not match the current repository.' }
+    if ((Get-CodexPrRepositoryName -Context $Context -PropertyName 'baseRepository') -ne $Repository) { throw 'Pull request base repository does not match the current repository.' }
+    $mergedAt = $Context.PSObject.Properties['mergedAt']
+    $mergeProperty = $Context.PSObject.Properties['mergeCommit']
+    $mergeOid = ''
+    if ($null -ne $mergeProperty -and $null -ne $mergeProperty.Value) {
+        $oid = $mergeProperty.Value.PSObject.Properties['oid']
+        if ($null -ne $oid) { $mergeOid = [string]$oid.Value }
+        elseif ($mergeProperty.Value -is [string]) { $mergeOid = [string]$mergeProperty.Value }
+    }
+    $contextMerged = ($null -ne $mergedAt -and $null -ne $mergedAt.Value -and -not [string]::IsNullOrWhiteSpace([string]$mergedAt.Value)) -or -not [string]::IsNullOrWhiteSpace($mergeOid)
+    if ($contextMerged -ne $Merged) { throw 'Pull request merged state does not match the close event.' }
+    if ($Merged) {
+        $expected = ConvertTo-CodexFullCommit -Commit $MergeCommitSha -Name 'merge commit'
+        if ($mergeOid.ToLowerInvariant() -ne $expected) { throw 'Pull request merge commit does not match the close event.' }
+    } elseif (-not [string]::IsNullOrWhiteSpace($MergeCommitSha)) {
+        throw 'An unmerged pull request must not provide a merge commit SHA.'
+    }
+    return $true
 }
 
 function Register-CodexPullRequestClosed {
@@ -174,20 +226,28 @@ function Register-CodexPullRequestClosed {
     $linkedIssue = 0
     try {
         if ($null -ne $LockProvider) { $lock = & $LockProvider $paths.LockPath } else { $lock = Enter-CodexWorkerLock -Path $paths.LockPath }
-        $linkedIssue = Resolve-CodexClosedPullRequestIssueNumber -Repository $Repository -PullRequestNumber $PullRequestNumber -CommandRunner $GitHubCommandRunner
+        $state = if ($null -ne $StateReader) { & $StateReader $paths.StatePath } else { Read-CodexWorkerState -Path $paths.StatePath }
+        $attempt = $null
+        $context = Get-CodexPullRequestContext -Repository $Repository -PullRequestNumber $PullRequestNumber -CommandRunner $GitHubCommandRunner
+        $savedIssue = if ($IssueNumber -gt 0) { Get-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber } else { $null }
+        if ($null -ne $savedIssue) { Assert-CodexClosedPullRequestContext -Context $context -Attempt $savedIssue -Repository $Repository -PullRequestNumber $PullRequestNumber -HeadBranch $HeadBranch -Merged $Merged -MergeCommitSha $MergeCommitSha | Out-Null }
+        $linkedIssue = Resolve-CodexClosedPullRequestIssueNumber -Context $context -Repository $Repository -PullRequestNumber $PullRequestNumber
         if ($IssueNumber -gt 0 -and $IssueNumber -ne $linkedIssue) { throw "The supplied issue number $IssueNumber does not match the pull request closing reference $linkedIssue." }
         $IssueNumber = $linkedIssue
-        $state = if ($null -ne $StateReader) { & $StateReader $paths.StatePath } else { Read-CodexWorkerState -Path $paths.StatePath }
         $attempt = Get-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber
         if ($null -eq $attempt) { throw "No saved Codex state exists for issue #$IssueNumber." }
+        Assert-CodexClosedPullRequestContext -Context $context -Attempt $attempt -Repository $Repository -PullRequestNumber $PullRequestNumber -HeadBranch $HeadBranch -Merged $Merged -MergeCommitSha $MergeCommitSha | Out-Null
         $branch = [string](Get-CodexDeploymentValue -Object $attempt -Name 'branch' '')
         $worktree = [string](Get-CodexDeploymentValue -Object $attempt -Name 'worktree' '')
         $blockers = [System.Collections.Generic.List[string]]::new()
         if ([string]::IsNullOrWhiteSpace($branch) -or $branch -ne $HeadBranch) { $blockers.Add('Pull request head branch does not match the saved Codex issue branch.') | Out-Null }
-        if ([string]::IsNullOrWhiteSpace($worktree)) { $blockers.Add('Saved Codex issue state does not contain a worktree.') | Out-Null }
+        $cleanupStatus = [string](Get-CodexDeploymentValue -Object $attempt -Name 'cleanupStatus' '')
+        if ([string]::IsNullOrWhiteSpace($worktree) -and $cleanupStatus -ne 'completed') { $blockers.Add('Saved Codex issue state does not contain a worktree.') | Out-Null }
 
         $cleanedUp = $false
-        if ($blockers.Count -eq 0) {
+        if ([string]::IsNullOrWhiteSpace($worktree) -and $cleanupStatus -eq 'completed') {
+            $cleanedUp = $true
+        } elseif ($blockers.Count -eq 0) {
             if ($null -ne $CleanupProvider) {
                 $cleanupResult = @(& $CleanupProvider $paths.RepositoryRoot $paths.WorktreeRoot $worktree $branch $GitCommandRunner $ProcessProvider)
                 foreach ($item in $cleanupResult) { if (-not [string]::IsNullOrWhiteSpace([string]$item)) { $blockers.Add([string]$item) | Out-Null } }
@@ -198,6 +258,17 @@ function Register-CodexPullRequestClosed {
             }
             if ($null -ne $CleanupProvider -and $blockers.Count -eq 0) { $cleanedUp = $true }
         }
+        if ($cleanedUp -and $blockers.Count -eq 0) {
+            Set-CodexOrchestrationField $attempt 'worktree' $null
+            Set-CodexOrchestrationField $attempt 'cleanupStatus' 'completed'
+            Set-CodexOrchestrationField $attempt 'cleanupAt' $Now.ToUniversalTime().ToString('o')
+            Set-CodexOrchestrationField $attempt 'cleanupBlockers' @()
+        } elseif ($blockers.Count -gt 0) {
+            Set-CodexOrchestrationField $attempt 'cleanupStatus' 'blocked'
+            Set-CodexOrchestrationField $attempt 'cleanupAt' $Now.ToUniversalTime().ToString('o')
+            Set-CodexOrchestrationField $attempt 'cleanupBlockers' @($blockers.ToArray())
+        }
+        if ($cleanedUp -or $blockers.Count -gt 0) { Write-CodexDeploymentState -StatePath $paths.StatePath -State $state -StateWriter $StateWriter }
         Add-CodexCleanupBlockerComment -Repository $Repository -PullRequestNumber $PullRequestNumber -IssueNumber $IssueNumber -Blockers @($blockers.ToArray()) -GitHubCommandRunner $GitHubCommandRunner
 
         $deploymentCreated = $false

@@ -195,6 +195,13 @@ Describe 'Codex worker GitHub adapter' {
             files = @(@{ path = 'src/Station.cs'; additions = 2; deletions = 1 })
             state = 'OPEN'
             url = 'https://github.com/owner/repo/pull/101'
+            headRefName = 'codex/101-fix'
+            baseRefName = 'master'
+            headRepository = @{ nameWithOwner = 'owner/repo' }
+            baseRepository = @{ nameWithOwner = 'owner/repo' }
+            mergedAt = $null
+            mergeCommit = $null
+            closingIssuesReferences = @()
         }
         $calls = New-Object 'System.Collections.Generic.List[object]'
         $runner = {
@@ -207,6 +214,9 @@ Describe 'Codex worker GitHub adapter' {
 
         $context.reviews.Count | Should Be 1
         $context.files.Count | Should Be 1
+        $context.headRepository.nameWithOwner | Should Be 'owner/repo'
+        $context.baseRefName | Should Be 'master'
+        $context.mergedAt | Should BeNullOrEmpty
         $calls.Count | Should Be 1
         (@($calls[0]) -contains 'pr') | Should Be $true
         (@($calls[0]) -contains 'view') | Should Be $true
@@ -245,8 +255,8 @@ Describe 'Codex worker GitHub adapter' {
                 @([ordered]@{ number = 42; repository = [ordered]@{ nameWithOwner = 'other/repo' } }))) {
             $payload = [ordered]@{ number = 101; closingIssuesReferences = $references }
             $runner = { param($Arguments) $payload | ConvertTo-Json -Depth 10 }.GetNewClosure()
-            { Resolve-CodexRevisionIssueNumber -Repository 'owner/repo' -IssueNumber 0 -PullRequestNumber 101 -CommandRunner $runner } |
-                Should Throw
+            $threw = $false; try { Resolve-CodexRevisionIssueNumber -Repository 'owner/repo' -IssueNumber 0 -PullRequestNumber 101 -CommandRunner $runner } catch { $threw = $true }
+            $threw | Should Be $true
         }
     }
 
@@ -257,8 +267,8 @@ Describe 'Codex worker GitHub adapter' {
         }
         $runner = { param($Arguments) $payload | ConvertTo-Json -Depth 10 }.GetNewClosure()
 
-        { Resolve-CodexRevisionIssueNumber -Repository 'owner/repo' -IssueNumber 99 -PullRequestNumber 101 -CommandRunner $runner } |
-            Should Throw
+        $threw = $false; try { Resolve-CodexRevisionIssueNumber -Repository 'owner/repo' -IssueNumber 99 -PullRequestNumber 101 -CommandRunner $runner } catch { $threw = $true }
+        $threw | Should Be $true
     }
 
     It 'builds a workflow run URL only when all workflow coordinates are present' {

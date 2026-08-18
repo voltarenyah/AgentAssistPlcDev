@@ -18,9 +18,9 @@ jobs:
         with:
           ref: refs/heads/${{ github.event.repository.default_branch }}
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Register merged pull request handoff
-        if: github.event.pull_request.merged == true
         shell: powershell
         env:
           CODEX_REPOSITORY: ${{ github.repository }}

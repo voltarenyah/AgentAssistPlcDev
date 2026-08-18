@@ -171,11 +171,17 @@ Describe 'Codex worker GitHub Actions workflows' {
         $text | Should Match '(?m)^\s*\$headBranch\s*=\s*\[string\]\$env:CODEX_HEAD_BRANCH\s*$'
         $text | Should Match '(?m)^\s*\$pullRequestNumber\s*=\s*\[int\]\$env:CODEX_PR_NUMBER\s*$'
         $handoff = Get-StepSection -Text $text -Name 'Register merged pull request handoff'
-        $handoff | Should Match '(?m)^        if:\s*github\.event\.pull_request\.merged == true\s*$'
+        $handoff | Should Not Match '(?m)^        if:\s*github\.event\.pull_request\.merged == true\s*$'
         $handoff | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Register-PrClosed\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-PullRequestNumber\s+\$pullRequestNumber\s*`?\s+-Merged\s+\$merged\s*`?\s+-MergeCommitSha\s+\$mergeCommitSha\s*`?\s+-HeadBranch\s+\$headBranch'
         $handoff | Should Not Match 'IssueNumber|github\.event\.pull_request\.issue\.number|github\.event\.pull_request\.body'
         Assert-TrustedCheckout $text
         Assert-RunnerAndQueueContract $text
         Assert-ExplicitPermissions $text
+        $checkout = Get-StepSection -Text $text -Name 'Checkout trusted worker revision'
+        $checkout | Should Match '(?m)^          fetch-depth:\s*0\s*$'
+        $handler = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\codex-worker\Register-PrClosed.ps1'))
+        $handler | Should Match '(?m)Register-CodexPullRequestClosed'
+        $deployment = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\codex-worker\Private\Deployment.ps1'))
+        $deployment | Should Match '(?m)if \(\$Merged\)'
     }
 }

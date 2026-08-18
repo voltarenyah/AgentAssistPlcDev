@@ -335,7 +335,7 @@ function Get-CodexPullRequestContext {
         'pr', 'view', [string] $PullRequestNumber,
         '--repo', $Repository,
         '--comments',
-        '--json', 'number,title,body,author,comments,reviews,files,state,isDraft,url,headRefName,baseRefName'
+        '--json', 'number,title,body,author,comments,reviews,files,state,isDraft,url,headRefName,baseRefName,headRepository,baseRepository,mergedAt,mergeCommit,closingIssuesReferences'
     ) -CommandRunner $CommandRunner
 }
 
@@ -353,15 +353,22 @@ function Resolve-CodexPullRequestIssueNumber {
         '--repo', $Repository,
         '--json', 'number,closingIssuesReferences'
     ) -CommandRunner $CommandRunner
-    $resolvedNumber = [int](Get-CodexValue -Object $context -Name 'number' -Default 0)
+    $numberProperty = if ($null -ne $context) { $context.PSObject.Properties['number'] } else { $null }
+    $resolvedNumber = if ($null -ne $numberProperty) { [int]$numberProperty.Value } else { 0 }
     if ($resolvedNumber -ne $PullRequestNumber) { throw 'The resolved pull request number does not match the requested pull request.' }
 
-    $references = @((Get-CodexValue -Object $context -Name 'closingIssuesReferences' -Default @()) | Where-Object { $null -ne $_ })
+    $referencesProperty = if ($null -ne $context) { $context.PSObject.Properties['closingIssuesReferences'] } else { $null }
+    $references = @(
+        if ($null -ne $referencesProperty -and $null -ne $referencesProperty.Value) { @($referencesProperty.Value) }
+    )
     if ($references.Count -ne 1) { throw 'Revision requires exactly one linked issue in the pull request closing references.' }
     $reference = $references[0]
-    $issueNumber = [int](Get-CodexValue -Object $reference -Name 'number' -Default 0)
+    $issueProperty = $reference.PSObject.Properties['number']
+    $issueNumber = if ($null -ne $issueProperty) { [int]$issueProperty.Value } else { 0 }
     if ($issueNumber -le 0) { throw 'The pull request closing reference did not contain a valid issue number.' }
-    $referenceRepository = Get-CodexValue -Object (Get-CodexValue -Object $reference -Name 'repository' -Default $null) -Name 'nameWithOwner' -Default ''
+    $repositoryProperty = $reference.PSObject.Properties['repository']
+    $nameProperty = if ($null -ne $repositoryProperty -and $null -ne $repositoryProperty.Value) { $repositoryProperty.Value.PSObject.Properties['nameWithOwner'] } else { $null }
+    $referenceRepository = if ($null -ne $nameProperty) { [string]$nameProperty.Value } else { '' }
     if ([string]::IsNullOrWhiteSpace([string]$referenceRepository) -or
         -not [string]::Equals([string]$referenceRepository, $Repository, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The pull request closing reference is not in the requested repository.'

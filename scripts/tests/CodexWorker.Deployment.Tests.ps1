@@ -7,7 +7,7 @@ Describe 'Codex worker PR-close deployment handoff' {
         $state = [pscustomobject]@{
             schemaVersion = 1
             issues = [pscustomobject]@{ '42' = [pscustomobject]@{
-                issueNumber = 42; branch = 'codex/42-fix'; worktree = (Join-Path $TestDrive 'issue-42-fix'); status = 'pr-ready'
+                issueNumber = 42; branch = 'codex/42-fix'; worktree = (Join-Path $TestDrive 'issue-42-fix'); status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17'
             } }
             deployment = $null
         }
@@ -16,7 +16,7 @@ Describe 'Codex worker PR-close deployment handoff' {
         $github = {
             param([string[]] $Arguments)
             if (($Arguments -join ' ') -match 'closingIssuesReferences') {
-                return '{"number":17,"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}'
+                return '{"number":17,"state":"CLOSED","url":"https://github.com/owner/repo/pull/17","headRefName":"codex/42-fix","baseRefName":"master","headRepository":{"nameWithOwner":"owner/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":null,"mergeCommit":null,"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}'
             }
             if ($Arguments -contains '--add-label') { $labels.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) }
             return ''
@@ -37,14 +37,14 @@ Describe 'Codex worker PR-close deployment handoff' {
         $state = [pscustomobject]@{
             schemaVersion = 1
             issues = [pscustomobject]@{ '42' = [pscustomobject]@{
-                issueNumber = 42; branch = 'codex/42-fix'; worktree = (Join-Path $TestDrive 'issue-42-fix'); status = 'pr-ready'
+                issueNumber = 42; branch = 'codex/42-fix'; worktree = (Join-Path $TestDrive 'issue-42-fix'); status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17'
             } }
             deployment = $null
         }
         $labels = [System.Collections.Generic.List[string]]::new()
         $github = {
             param([string[]] $Arguments)
-            if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}' }
+            if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"state":"CLOSED","url":"https://github.com/owner/repo/pull/17","headRefName":"codex/42-fix","baseRefName":"master","headRepository":{"nameWithOwner":"owner/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":"2026-08-18T00:00:00Z","mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}' }
             if ($Arguments -contains '--add-label') { $labels.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) }
             return ''
         }.GetNewClosure()
@@ -88,11 +88,11 @@ Describe 'Codex worker PR-close deployment handoff' {
     }
 
     It 'preserves a dirty worktree and reports blockers without removing it' {
-        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; branch = 'codex/42-fix'; worktree = (Join-Path $TestDrive 'issue-42-fix'); status = 'pr-ready' } }; deployment = $null }
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; branch = 'codex/42-fix'; worktree = (Join-Path $TestDrive 'issue-42-fix'); status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17' } }; deployment = $null }
         $comments = [System.Collections.Generic.List[string]]::new()
         $github = {
             param([string[]] $Arguments)
-            if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}' }
+            if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"state":"CLOSED","url":"https://github.com/owner/repo/pull/17","headRefName":"codex/42-fix","baseRefName":"master","headRepository":{"nameWithOwner":"owner/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":null,"mergeCommit":null,"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}' }
             if ($Arguments -contains '--body') { $comments.Add($Arguments[$Arguments.IndexOf('--body') + 1]) }
             return ''
         }.GetNewClosure()
@@ -105,5 +105,56 @@ Describe 'Codex worker PR-close deployment handoff' {
         $result.CleanedUp | Should Be $false
         (@($result.Blockers) -contains 'Worktree has uncommitted changes.') | Should Be $true
         @($comments | Where-Object { $_ -match 'uncommitted' }).Count | Should Be 1
+    }
+
+    It 'rejects a fork PR before invoking cleanup' {
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; branch = 'codex/42-fix'; worktree = (Join-Path $TestDrive 'issue-42-fix'); status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17' } }; deployment = $null }
+        $cleanupCalls = 0
+        $github = { param([string[]] $Arguments) if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"state":"CLOSED","url":"https://github.com/owner/repo/pull/17","headRefName":"codex/42-fix","baseRefName":"master","headRepository":{"nameWithOwner":"fork/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":null,"mergeCommit":null,"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}' }; return '' }
+        $cleanup = { $cleanupCalls++; @() }.GetNewClosure()
+        $reader = { param($Path) $state }
+        $threw = $false; try { Register-CodexPullRequestClosed -Repository 'owner/repo' -PullRequestNumber 17 -Merged:$false -HeadBranch 'codex/42-fix' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -StateReader $reader -GitHubCommandRunner $github -CleanupProvider $cleanup -LockProvider { 'lock' } -UnlockProvider { param($h) } } catch { $threw = $true }
+        $threw | Should Be $true
+        $cleanupCalls | Should Be 0
+    }
+
+    It 'persists cleared worktree cleanup state and makes duplicate close idempotent' {
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; branch = 'codex/42-fix'; worktree = (Join-Path $TestDrive 'issue-42-fix'); status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/17' } }; deployment = $null }
+        $writes = 0
+        $github = { param([string[]] $Arguments) if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"state":"CLOSED","url":"https://github.com/owner/repo/pull/17","headRefName":"codex/42-fix","baseRefName":"master","headRepository":{"nameWithOwner":"owner/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":null,"mergeCommit":null,"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}' }; return '' }
+        $cleanup = { @() }
+        $reader = { param($Path) $state }
+        $writer = { param($Path, $Current) $writes++; $state = $Current }.GetNewClosure()
+        $first = Register-CodexPullRequestClosed -Repository 'owner/repo' -PullRequestNumber 17 -Merged:$false -HeadBranch 'codex/42-fix' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -StateReader $reader -StateWriter $writer -GitHubCommandRunner $github -CleanupProvider $cleanup -LockProvider { 'lock' } -UnlockProvider { param($h) }
+        $state.issues.'42'.worktree | Should BeNullOrEmpty
+        $state.issues.'42'.cleanupStatus | Should Be 'completed'
+        $second = Register-CodexPullRequestClosed -Repository 'owner/repo' -PullRequestNumber 17 -Merged:$false -HeadBranch 'codex/42-fix' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -StateReader $reader -StateWriter $writer -GitHubCommandRunner $github -CleanupProvider { throw 'duplicate must not invoke cleanup' } -LockProvider { 'lock' } -UnlockProvider { param($h) }
+        $second.CleanedUp | Should Be $true
+        $second.Blockers.Count | Should Be 0
+    }
+
+    It 'retains the existing deployment tuple when an older close arrives' {
+        $old = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; $candidate = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; $master = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{}; deployment = [pscustomobject]@{ targetCommit = $old; sourcePr = 3; requestedAt = '2026-08-18T00:00:00Z'; snoozeUntil = '2026-08-18T03:00:00Z'; status = 'pending' } }
+        $git = { param([string[]] $Arguments) if ($Arguments -contains 'rev-parse') { return $master }; if ($Arguments -contains 'merge-base' -and $Arguments[-2] -eq $old -and $Arguments[-1] -eq $master) { return '' }; return '' }
+        $result = Register-CodexPendingDeployment -RepositoryRoot 'C:\repo' -MergeCommitSha $candidate -PullRequestNumber 9 -State $state -GitCommandRunner $git -Now ([DateTime]::Parse('2026-08-18T01:00:00Z'))
+        $result.targetCommit | Should Be $old
+        $result.sourcePr | Should Be 3
+        $result.requestedAt | Should Be '2026-08-18T00:00:00Z'
+    }
+
+    It 'uses real cleanup guards for outside-root and dirty evidence' {
+        $root = Join-Path $TestDrive 'repo'; $worktreeRoot = Join-Path $root '.worktrees'; $worktree = Join-Path $worktreeRoot 'issue-42-fix'
+        New-Item -ItemType Directory -Path $worktree -Force | Out-Null
+        $runner = { param([string[]] $Arguments) if ($Arguments -contains 'list') { return "worktree $worktree`nHEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`nbranch refs/heads/codex/42-fix`n" }; if ($Arguments -contains 'status') { return ' M tracked.txt' }; if ($Arguments -contains 'log') { return '' }; return '' }.GetNewClosure()
+        $dirty = @(Test-CodexWorktreeCleanup -RepositoryRoot $root -WorktreeRoot $worktreeRoot -WorktreePath $worktree -BranchName 'codex/42-fix' -CommandRunner $runner -ProcessProvider { @() })
+        (@($dirty) -contains 'Worktree has uncommitted changes.') | Should Be $true
+        $outside = @(Test-CodexWorktreeCleanup -RepositoryRoot $root -WorktreeRoot $worktreeRoot -WorktreePath $root -BranchName 'codex/42-fix' -CommandRunner $runner -ProcessProvider { @() })
+        (@($outside) -match 'outside') | Should Be $true
+        $busy = @(Test-CodexWorktreeCleanup -RepositoryRoot $root -WorktreeRoot $worktreeRoot -WorktreePath $worktree -BranchName 'codex/42-fix' -CommandRunner $runner -ProcessProvider { [pscustomobject]@{ CommandLine = (Join-Path $worktree 'pwsh.exe') } }.GetNewClosure())
+        (@($busy) -match 'active process') | Should Be $true
+        $unpushedRunner = { param([string[]] $Arguments) if ($Arguments -contains 'list') { return "worktree $worktree`nHEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`nbranch refs/heads/codex/42-fix`n" }; if ($Arguments -contains 'log') { return 'abc123' }; return '' }.GetNewClosure()
+        $unpushed = @(Test-CodexWorktreeCleanup -RepositoryRoot $root -WorktreeRoot $worktreeRoot -WorktreePath $worktree -BranchName 'codex/42-fix' -CommandRunner $unpushedRunner -ProcessProvider { @() })
+        (@($unpushed) -match 'not present on its remote') | Should Be $true
     }
 }
