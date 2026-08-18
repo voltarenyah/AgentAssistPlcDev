@@ -42,6 +42,10 @@
         ,'Resolve-CodexPullRequestIssueNumber'
         ,'Resolve-CodexRevisionIssueNumber'
         ,'Invoke-CodexRevision'
+        ,'Get-CodexPrerequisitePlan'
+        ,'Resolve-CodexRunnerAsset'
+        ,'Get-CodexLocalWorkerPlan'
+        ,'Invoke-CodexLocalWorkerSetup'
     )
     CmdletsToExport = @()
     VariablesToExport = @()

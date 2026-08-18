@@ -269,11 +269,21 @@ function Initialize-CodexResumeCapability {
     param(
         [Parameter(Mandatory = $true)] [string] $IssueWorktree,
         [Parameter(Mandatory = $true)] [object] $Config,
-        [string] $ConfigPath
+        [string] $ConfigPath,
+        [scriptblock] $ProcessRunner
     )
     $command = [string](Get-CodexValue $Config 'codexCommand' 'codex')
     if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) { Set-CodexValue $Config 'configPath' $ConfigPath }
-    $probe = Invoke-CodexProcess -FilePath $command -Arguments @('exec','resume','--help') -WorkingDirectory ([IO.Path]::GetFullPath($IssueWorktree)) -Prompt '' -TimeoutMilliseconds 30000
+    $probeRequest = [pscustomobject][ordered]@{
+        FilePath = $command
+        Arguments = [string[]]@('exec','resume','--help')
+        WorkingDirectory = [IO.Path]::GetFullPath($IssueWorktree)
+        Prompt = ''
+        TimeoutMilliseconds = 30000
+    }
+    $probe = if ($null -ne $ProcessRunner) { & $ProcessRunner $probeRequest } else {
+        Invoke-CodexProcess -FilePath $probeRequest.FilePath -Arguments $probeRequest.Arguments -WorkingDirectory $probeRequest.WorkingDirectory -Prompt $probeRequest.Prompt -TimeoutMilliseconds $probeRequest.TimeoutMilliseconds
+    }
     $supported = ($probe.ExitCode -eq 0 -and (($probe.Stdout + $probe.Stderr) -notmatch '(?i)unknown|unrecognized|invalid'))
     Save-CodexConfigResumeCapability -Config $Config -Supported ([bool]$supported)
     return [bool]$supported
