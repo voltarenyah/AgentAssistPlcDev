@@ -318,7 +318,13 @@ function Invoke-CodexRevision {
             $pr = Get-CodexPullRequestContext -Repository $Repository -PullRequestNumber ([int]$PullRequestNumber) -CommandRunner $GitHubCommandRunner
             if ([int](Get-CodexPublicationValue $pr 'number' 0) -ne [int]$PullRequestNumber) { throw 'The explicit pull request number does not match the resolved pull request.' }
         }
-        if ($null -eq $pr) { $pr = Get-CodexPullRequestForBranch -Repository $Repository -BranchName $branch -CommandRunner $GitHubCommandRunner }
+        if ($null -eq $pr) {
+            $branchMatch = Get-CodexPullRequestForBranch -Repository $Repository -BranchName $branch -CommandRunner $GitHubCommandRunner
+            if ($null -eq $branchMatch) { throw 'Revision requires an existing pull request; refusing to create another PR.' }
+            $branchPrNumber = [int](Get-CodexPublicationValue $branchMatch 'number' 0)
+            if ($branchPrNumber -le 0) { throw 'Branch pull request resolution did not return a valid number.' }
+            $pr = Get-CodexPullRequestContext -Repository $Repository -PullRequestNumber $branchPrNumber -CommandRunner $GitHubCommandRunner
+        }
         if ($null -eq $pr) { throw 'Revision requires an existing pull request; refusing to create another PR.' }
         if ([string](Get-CodexPublicationValue $pr 'headRefName' '') -ne $branch) { throw 'Pull request head does not match persisted branch.' }
         if ([string](Get-CodexPublicationValue $pr 'state' '') -ne 'OPEN') { throw 'Pull request is not open.' }

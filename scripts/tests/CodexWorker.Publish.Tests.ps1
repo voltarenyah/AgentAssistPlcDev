@@ -179,7 +179,9 @@ Describe 'Codex worker publication' {
         Set-Content -LiteralPath (Join-Path $publishWorktree 'new.ps1') -Value "safe`n" -NoNewline
         Set-Content -LiteralPath (Join-Path $publishWorktree 'committed.ps1') -Value "<<<<<<< HEAD`n" -NoNewline
         Set-Content -LiteralPath (Join-Path $publishWorktree 'private.key') -Value "secret`n" -NoNewline
-        $git = { param($Arguments)
+        $seen = [System.Collections.Generic.List[object]]::new()
+        $git = { param([string[]] $Arguments)
+            $seen.Add([string[]]$Arguments) | Out-Null
             if ($Arguments -contains '--name-only' -and $Arguments -contains '--cached') { return "staged.ps1`nprivate.key" }
             if ($Arguments -contains '--others') { return "new.ps1" }
             if ($Arguments -contains 'HEAD^' -and $Arguments -contains '--name-only') { return "committed.ps1" }
@@ -194,6 +196,11 @@ Describe 'Codex worker publication' {
         ($review.ChangedPaths -join ' ') | Should Match 'staged.ps1'
         ($review.ChangedPaths -join ' ') | Should Match 'new.ps1'
         ($review.ChangedPaths -join ' ') | Should Match 'committed.ps1'
+        (@($seen | Where-Object { ($_ -join ' ') -match 'diff --name-only' }).Count) | Should Be 1
+        (@($seen | Where-Object { ($_ -join ' ') -match 'diff --cached --name-only' }).Count) | Should Be 1
+        (@($seen | Where-Object { ($_ -join ' ') -match 'ls-files --others --exclude-standard' }).Count) | Should Be 1
+        (@($seen | Where-Object { ($_ -join ' ') -match 'diff HEAD\^ HEAD --name-only' }).Count) | Should Be 1
+        (@($seen | ForEach-Object { $_ | Where-Object { $_ -isnot [string] } }).Count) | Should Be 0
     }
 
     It 'treats a failed validation as required unless required is explicitly false' {
@@ -272,6 +279,43 @@ Describe 'Codex worker publication' {
         ($events -contains 'lock') | Should Be $true
         (Get-CodexIssueAttemptState -State (Read-CodexWorkerState -Path $statePath) -IssueNumber 42).threadId | Should Be 'new-thread'
         ($events -join ' ') | Should Not Match '(?i)create|force|merge|ready'
+    }
+
+    It 'resolves a branch PR number then fetches full context and passes review comments' {
+        $repoRoot = Join-Path $TestDrive 'repo'
+        $dataRoot = Join-Path $TestDrive 'revision-data'
+        $worktree = Join-Path $repoRoot '.worktrees\issue-42-publication'
+        New-Item -ItemType Directory -Path $repoRoot,$dataRoot,$worktree -Force | Out-Null
+        $statePath = Join-Path $dataRoot 'state.json'
+        $attempt = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = $worktree; threadId = 'old-thread'; runDirectory = $null; commit = 'old'; prUrl = 'https://example.test/pr/7'; retryCount = 0; publicationStage = 'pr-created'; lastError = $null }
+        Write-CodexWorkerState -Path $statePath -State ([pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = $attempt }; deployment = $null })
+        $events = [System.Collections.Generic.List[string]]::new()
+        $viewCount = [pscustomobject]@{ Value = 0 }
+        $git = { param([string[]] $Arguments)
+            if ($Arguments -contains 'worktree' -and $Arguments -contains 'list') { return "worktree $worktree`nHEAD old`nbranch refs/heads/codex/42-publication`n" }
+            if ($Arguments -contains 'status') { return ' M src/change.ps1' }
+            if ($Arguments -contains '--name-only') { return 'src/change.ps1' }
+            if ($Arguments -contains '--others') { return '' }
+            if ($Arguments -contains '--check' -or $Arguments -contains '--no-ext-diff') { return '' }
+            if ($Arguments -contains 'add' -or $Arguments -contains 'commit' -or $Arguments -contains 'push') { return '' }
+            if ($Arguments -contains 'rev-parse') { return 'newsha' }
+            return ''
+        }.GetNewClosure()
+        $gh = { param([string[]] $Arguments)
+            if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
+            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            if ($Arguments -contains 'list') { return '[{"number":7,"url":"https://example.test/pr/7","state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42"}]' }
+            if ($Arguments -contains 'view') { $viewCount.Value++; return '{"number":7,"state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[{"body":"Please retain the existing user edit."}],"reviews":[{"body":"Review says preserve behavior."}]}' }
+            if ($Arguments -contains 'edit' -or $Arguments -contains 'comment') { $events.Add(($Arguments -join ' ')) | Out-Null; return '' }
+            throw 'unexpected GitHub operation'
+        }.GetNewClosure()
+        $revisionSummary = $publishSummary.PSObject.Copy()
+        $codex = { param($WorktreePath,$Issue,$Config,$RunDirectory,$Path,$Review,$Thread) $events.Add($Review) | Out-Null; [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; ThreadId = 'new-thread'; Summary = $revisionSummary } }.GetNewClosure()
+        $result = Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'master'; dataRoot = $dataRoot }) -StatePath $statePath -LockProvider { param($p) [pscustomobject]@{} } -UnlockProvider { param($h) } -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex
+        $result.PullRequestNumber | Should Be 7
+        $viewCount.Value | Should Be 1
+        ($events -join ' ') | Should Match 'Please retain the existing user edit'
+        ($events -join ' ') | Should Match 'Review says preserve behavior'
     }
 
     It 'persists the revision thread but blocks malformed summaries before publication' {
