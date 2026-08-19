@@ -4,6 +4,8 @@ This guide operates the repository-owned PowerShell worker that turns a trusted
 GitHub issue label into an isolated Codex run and a draft pull request. It also
 covers the post-merge handoff to the local A/B runtime notifier.
 
+Pilot marker: the local automation workflow has been verified.
+
 The workflow files must be merged into the repository's default branch before
 issue-label events can run. Each workflow checks out that trusted default-branch
 revision; a workflow file that exists only on a feature branch cannot receive a
