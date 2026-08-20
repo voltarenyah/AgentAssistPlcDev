@@ -612,6 +612,67 @@ Describe 'Codex worker paths' {
         @($events | Where-Object { $_ -eq 'blocked-comment-attempt' }).Count | Should Be 1
     }
 
+    It 'persists actionable detail when an exception message is empty' {
+        $statePath = Join-Path $TestDrive 'empty-exception-state.json'
+        $comments = New-Object 'System.Collections.Generic.List[string]'
+        $github = {
+            param([string[]] $Arguments)
+            if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return '{"number":65,"title":"Empty exception","body":"body","author":{"login":"reporter"},"comments":[],"labels":[{"name":"codex"}],"state":"OPEN","url":"https://github.com/owner/repo/issues/65"}' }
+            if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
+            if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
+            if ($Arguments -contains '--add-label') { return '' }
+            if ($Arguments -contains '--body') {
+                $comments.Add([string]$Arguments[$Arguments.IndexOf('--body') + 1]) | Out-Null
+                return ''
+            }
+            throw 'Unexpected GitHub call.'
+        }.GetNewClosure()
+        $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive 'empty-exception'); BranchName = 'codex/65-empty-exception' } }.GetNewClosure()
+        $setup = { param($Worktree, $Config, $ActivityLogPath) throw [System.Exception]::new('') }.GetNewClosure()
+
+        { Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 65 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup } | Should Throw
+
+        $saved = Read-CodexWorkerState -Path $statePath
+        $saved.issues.'65'.status | Should Be 'blocked'
+        $saved.issues.'65'.lastError | Should Not BeNullOrEmpty
+        $saved.issues.'65'.lastError | Should Match 'System.Exception'
+        (@($comments | Where-Object { $_ -like 'Codex work is blocked.*System.Exception*' })).Count | Should Be 1
+    }
+
+    It 'refreshes live labels before an exception transition to blocked' {
+        $statePath = Join-Path $TestDrive 'exception-label-state.json'
+        $issueReads = @{ Value = 0 }
+        $blockedArguments = @{ Value = $null }
+        $github = {
+            param([string[]] $Arguments)
+            if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) {
+                $issueReads.Value++
+                $labels = if ($issueReads.Value -gt 1) { '[{"name":"codex"},{"name":"codex:running"}]' } else { '[{"name":"codex"}]' }
+                return ('{"number":66,"title":"Refresh labels","body":"body","author":{"login":"reporter"},"comments":[],"labels":' + $labels + ',"state":"OPEN","url":"https://github.com/owner/repo/issues/66"}')
+            }
+            if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
+            if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
+            if ($Arguments -contains '--add-label') {
+                $label = $Arguments[$Arguments.IndexOf('--add-label') + 1]
+                if ($label -eq 'codex:blocked') { $blockedArguments.Value = @($Arguments) }
+                return ''
+            }
+            if ($Arguments -contains '--body') { return '' }
+            throw 'Unexpected GitHub call.'
+        }.GetNewClosure()
+        $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive 'exception-labels'); BranchName = 'codex/66-refresh-labels' } }.GetNewClosure()
+        $setup = { param($Worktree, $Config, $ActivityLogPath) throw 'setup failed' }.GetNewClosure()
+
+        { Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 66 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup } | Should Throw 'setup failed'
+
+        $issueReads.Value | Should Be 2
+        ($blockedArguments.Value -contains '--remove-label') | Should Be $true
+        ($blockedArguments.Value -contains 'codex:running') | Should Be $true
+        ($blockedArguments.Value -contains 'codex:blocked') | Should Be $true
+    }
+
     It 'persists distinct blocked snapshots around successful exception notifications' {
         $statePath = Join-Path $TestDrive 'exception-success-state.json'
         $events = New-Object 'System.Collections.Generic.List[string]'

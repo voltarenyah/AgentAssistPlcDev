@@ -197,8 +197,17 @@ function Invoke-CodexSetupCommand {
         if ($result -is [psobject] -and $result.PSObject.Properties.Name -contains 'ExitCode') { return $result }
         return [pscustomobject]@{ ExitCode = 0; Output = (($result | ForEach-Object { [string] $_ }) -join [Environment]::NewLine) }
     }
-    $output = & $FilePath @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Setup tools can write informational progress to stderr even when they
+        # succeed. GitHub Actions sets Stop, so capture both streams and decide
+        # success strictly from the native process exit code.
+        $ErrorActionPreference = 'Continue'
+        $output = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     return [pscustomobject]@{ ExitCode = $exitCode; Output = (($output | ForEach-Object { [string] $_ }) -join [Environment]::NewLine) }
 }
 

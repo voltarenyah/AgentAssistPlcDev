@@ -534,20 +534,26 @@ function Invoke-CodexIssueRun {
             return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'pr-ready'; State = $attemptState; Summary = $summary }
         }
     } catch {
-        $originalException = $_.Exception
+        $originalError = $_
+        $originalException = $originalError.Exception
+        $originalErrorText = [string]$originalException.Message
+        if ([string]::IsNullOrWhiteSpace($originalErrorText)) {
+            $errorId = [string]$originalError.FullyQualifiedErrorId
+            if ([string]::IsNullOrWhiteSpace($errorId)) { $errorId = 'unknown' }
+            $originalErrorText = "PowerShell error '$errorId' ($($originalException.GetType().FullName))."
+        }
         if ($null -ne $attemptState) {
             Set-CodexOrchestrationField $attemptState 'status' 'blocked'
-            Set-CodexOrchestrationField $attemptState 'lastError' $originalException.Message
+            Set-CodexOrchestrationField $attemptState 'lastError' $originalErrorText
             try {
                 Set-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber -AttemptState $attemptState | Out-Null
                 if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attemptState }
                 else { Write-CodexWorkerState -Path $StatePath -State $state }
             } catch {}
-            $safeError = [string]$originalException.Message
+            $safeError = $originalErrorText
             try { $safeError = Redact-CodexString -Text $safeError -SecretValues (Get-CodexBlockedSecretValues) } catch {}
             try {
-                $notificationLabels = @(Get-CodexOrchestrationField $issue 'labels' @())
-                Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'blocked' -CurrentLabels $notificationLabels -CommandRunner $GitHubCommandRunner | Out-Null
+                Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'blocked' -CurrentLabels $null -CommandRunner $GitHubCommandRunner | Out-Null
                 try {
                     if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attemptState }
                     else { Write-CodexWorkerState -Path $StatePath -State $state }
