@@ -79,6 +79,8 @@ export type WorkspaceGitProps = {
   workbenchId: string
   worktreeId: string
   onSelectionChange: (selection: unknown) => void
+  /** Starts a title-bar operation and returns its id, so long-running actions (full TIA compare) show live progress. */
+  onBeginOperation?: (kind: string, label: string) => string
 }
 
 /** The props bundles every workspace view may draw from, keyed by view kind. */

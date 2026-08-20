@@ -10,6 +10,7 @@ export type VersionControlPanelProps = {
   workbenchId: string
   worktreeId: string
   onSelectionChange?: (selection: unknown) => void
+  onBeginOperation?: (kind: string, label: string) => string
 }
 
 function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSourceEntry | null {
@@ -41,7 +42,7 @@ function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSo
   }
 }
 
-export default function VersionControlPanel({ workbenchId, worktreeId, onSelectionChange }: VersionControlPanelProps) {
+export default function VersionControlPanel({ workbenchId, worktreeId, onSelectionChange, onBeginOperation }: VersionControlPanelProps) {
   const [status, setStatus] = useState<api.VcStatusResult | null>(null)
   const [history, setHistory] = useState<api.VcCommitEntry[]>([])
   const [tab, setTab] = useState<'changes' | 'compare' | 'history' | 'native'>('changes')
@@ -97,7 +98,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onSelecti
       </nav>
       <div className="min-h-0 flex-1 overflow-hidden">
         {tab === 'changes' && <VersionControlChanges workbenchId={workbenchId} worktreeId={worktreeId} entries={entries} onSelectionChange={entry => onSelectionChange?.(entry ? { kind: 'source', entry } : null)} onCommitted={() => void refresh()} />}
-        {tab === 'compare' && <VersionControlCompare workbenchId={workbenchId} worktreeId={worktreeId} branch={status?.branch ?? ''} onCommitted={() => void refresh()} />}
+        {tab === 'compare' && <VersionControlCompare workbenchId={workbenchId} worktreeId={worktreeId} branch={status?.branch ?? ''} onCommitted={() => void refresh()} onBeginOperation={onBeginOperation} />}
         {tab === 'history' && <VersionControlHistory workbenchId={workbenchId} worktreeId={worktreeId} commits={history} onCommitSelect={commit => onSelectionChange?.({ kind: 'commit', commit })} onObjectSelect={(commit, path) => onSelectionChange?.({ kind: 'commit', commit, path })} />}
         {tab === 'native' && <NativeStorePanel workbenchId={workbenchId} worktreeId={worktreeId} />}
       </div>

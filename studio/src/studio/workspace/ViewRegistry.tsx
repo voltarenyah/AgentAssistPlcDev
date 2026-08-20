@@ -94,6 +94,7 @@ export const workspaceViewRegistry: Record<WorkspaceViewKind, WorkspaceViewDefin
           workbenchId={git.workbenchId}
           worktreeId={git.worktreeId}
           onSelectionChange={git.onSelectionChange}
+          onBeginOperation={git.onBeginOperation}
         />
       </div>
     ),

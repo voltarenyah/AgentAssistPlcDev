@@ -156,16 +156,25 @@ public sealed class WorkbenchConsistencyService
         var devicesToScan = evidenceSourceCanNarrow
             ? devices.Where(item => !ChecksumMatches(evidence!, item.Metadata, liveChecksums[item.Metadata.DeviceId])).ToArray()
             : devices.ToArray();
+        // The previous export manifest knows how many XML files each device produced, so the
+        // per-device "Exported PLC source files: N" counters can be surfaced as an overall
+        // "current of total" for the whole compare (best effort: no manifest, no totals).
+        var expectedTotals = devicesToScan
+            .Select(item => DeviceSnapshotReader.ReadManifestSourceObjects(item.Context.StagingRoot).Count)
+            .ToArray();
+        var exportProgress = progress is null ? null : new ExportProgressAggregator(progress, expectedTotals);
+        var scanProgress = exportProgress is { HasTotals: true } ? exportProgress : progress;
         var scans = new Dictionary<string, DeviceScanResult>(StringComparer.Ordinal);
         foreach (var device in devicesToScan)
         {
-            progress?.Report($"Comparing TIA source for {device.Metadata.PlcName}...");
+            scanProgress?.Report($"Comparing TIA source for {device.Metadata.PlcName}...");
             scans[device.Metadata.DeviceId] = await scanner.ScanAsync(
                     device.Context,
                     cancellationToken,
-                    progress,
+                    scanProgress,
                     device.Metadata.PlcName)
                 .ConfigureAwait(false);
+            exportProgress?.DeviceCompleted();
         }
 
         var differences = new List<SourceDifference>();
