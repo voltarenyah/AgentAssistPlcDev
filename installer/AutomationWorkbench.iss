@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0-dev.1"
+  #define MyAppVersion "0.2.0"
 #endif
 #ifndef ReleaseDir
   #define ReleaseDir "..\artifacts\release\win-x64"

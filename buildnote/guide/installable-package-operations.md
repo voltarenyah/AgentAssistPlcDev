@@ -53,10 +53,10 @@ git status --short
 
 The expected branch is `master`. The working tree should normally be clean. If it is not clean, stop and determine whether the changes are intentional before packaging.
 
-Choose a new semantic version. For example, after `0.1.0-dev.2`, use `0.1.0-dev.3`:
+Choose a new semantic version. Releases use plain `major.minor.patch` versions without a dev suffix; increment the patch number for each new package. For example, after `0.2.0`, use `0.2.1`:
 
 ```powershell
-$version = '0.1.0-dev.3'
+$version = '0.2.1'
 ```
 
 Do not reuse an older package version for a new codebase state.
@@ -68,11 +68,11 @@ Run both scripts from the repository root, in this order. Use PowerShell 7 (`pws
 ```powershell
 Set-Location 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev'
 
-pwsh -NoProfile -File .\scripts\build-release.ps1 -Version 0.1.0-dev.3
-pwsh -NoProfile -File .\scripts\build-installer.ps1 -Version 0.1.0-dev.3
+pwsh -NoProfile -File .\scripts\build-release.ps1 -Version 0.2.1
+pwsh -NoProfile -File .\scripts\build-installer.ps1 -Version 0.2.1
 ```
 
-If the machine routes traffic through a local HTTP proxy (for example `HTTP_PROXY` environment variables or a system proxy on `127.0.0.1`), clear those variables and set `DOTNET_SYSTEM_NET_HTTP_USEPROXY=false` for the build session. Otherwise the loopback health checks in the release test run (such as the live app-assistant sidecar test) are routed to the proxy and fail even though the services are healthy.
+If the machine routes traffic through a local HTTP proxy (for example `HTTP_PROXY` environment variables or a system proxy on `127.0.0.1`), clear all proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and their lowercase variants) and set `DOTNET_SYSTEM_NET_HTTP_USEPROXY=false` for the build session. Otherwise the loopback health checks in the release test run (such as the live app-assistant sidecar test) are routed to the proxy and fail even though the services are healthy.
 
 `build-release.ps1` performs the release build and verification, including solution tests and the Studio frontend checks. It rebuilds:
 
@@ -83,8 +83,8 @@ artifacts\release\win-x64
 `build-installer.ps1` packages that release with Inno Setup and creates:
 
 ```text
-artifacts\installer\AutomationWorkbench-0.1.0-dev.3-win-x64-setup.exe
-artifacts\installer\AutomationWorkbench-0.1.0-dev.3-win-x64-setup.exe.sha256
+artifacts\installer\AutomationWorkbench-0.2.1-win-x64-setup.exe
+artifacts\installer\AutomationWorkbench-0.2.1-win-x64-setup.exe.sha256
 ```
 
 The build requires the .NET 8 SDK, Node/npm, Git, and Inno Setup 6. The current packaging baseline intentionally remains on the existing framework targets; do not upgrade it to .NET 10 as part of routine package generation.
@@ -109,7 +109,7 @@ diagnostic.
 Verify the outputs before installing:
 
 ```powershell
-$installer = 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev\artifacts\installer\AutomationWorkbench-0.1.0-dev.3-win-x64-setup.exe'
+$installer = 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev\artifacts\installer\AutomationWorkbench-0.2.1-win-x64-setup.exe'
 $hashFile = "$installer.sha256"
 
 Test-Path $installer
@@ -126,7 +126,7 @@ Use a temporary install root for package validation so that the production insta
 
 ```powershell
 $root = 'C:\Temp\Automation Workbench Installer Test'
-$installer = 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev\artifacts\installer\AutomationWorkbench-0.1.0-dev.3-win-x64-setup.exe'
+$installer = 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev\artifacts\installer\AutomationWorkbench-0.2.1-win-x64-setup.exe'
 
 if (Test-Path "$root\unins000.exe") {
     & "$root\unins000.exe" /VERYSILENT /NORESTART
@@ -214,8 +214,8 @@ For a real upgrade test, use two different package versions and the same tempora
 
 ```powershell
 $root = 'C:\Temp\Automation Workbench Upgrade Test'
-$a = 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev\artifacts\installer\AutomationWorkbench-0.1.0-dev.1-win-x64-setup.exe'
-$b = 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev\artifacts\installer\AutomationWorkbench-0.1.0-dev.2-win-x64-setup.exe'
+$a = 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev\artifacts\installer\AutomationWorkbench-0.2.0-win-x64-setup.exe'
+$b = 'C:\Users\Ansel\orca\projects\AgentAssistPlcDev\artifacts\installer\AutomationWorkbench-0.2.1-win-x64-setup.exe'
 
 Get-CimInstance Win32_Process |
     Where-Object { $_.ExecutablePath -like "$root\*" } |
@@ -339,7 +339,7 @@ If required, provide the compiler explicitly:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\build-installer.ps1 `
-    -Version 0.1.0-dev.3 `
+    -Version 0.2.1 `
     -InnoSetupPath 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
 ```
 
@@ -349,7 +349,7 @@ The script was started with Windows PowerShell 5.1 (`powershell.exe`). Rerun it 
 
 ### Release tests fail on loopback health checks while the services are healthy
 
-A local HTTP proxy (`HTTP_PROXY` environment variables or an enabled system proxy) is intercepting the test runner's `127.0.0.1` requests. Clear the proxy variables and set `DOTNET_SYSTEM_NET_HTTP_USEPROXY=false`, then rerun the release build.
+A local HTTP proxy (`HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` environment variables, or an enabled system proxy) is intercepting the test runner's `127.0.0.1` requests. Clear all of these variables (including the lowercase variants and `ALL_PROXY`) and set `DOTNET_SYSTEM_NET_HTTP_USEPROXY=false`, then rerun the release build.
 
 ### Silent install exits with code 2 and installs nothing
 

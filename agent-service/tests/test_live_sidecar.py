@@ -69,7 +69,7 @@ def test_live_uvicorn_sidecar_health_and_shutdown(tmp_path: Path):
         assert health is not None
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
-        assert health.json()["graphVersion"] == "0.1.0"
+        assert health.json()["graphVersion"] == "0.2.0"
         assert health.json()["modelConfigured"] is False
         assert health.json()["modelMode"] == "deterministic-fallback"
     finally:
