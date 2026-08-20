@@ -26,7 +26,7 @@ const comparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): ap
   ...overrides,
 })
 
-const render = async (onCommitted?: () => void) => {
+const render = async (onCommitted?: () => void, onBeginOperation?: (kind: string, label: string) => string) => {
   vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue({
     revision: {
       schemaVersion: 1,
@@ -44,7 +44,7 @@ const render = async (onCommitted?: () => void) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
-  await act(async () => root.render(<VersionControlCompare workbenchId="wb-1" worktreeId="wt-1" branch="master" onCommitted={onCommitted} />))
+  await act(async () => root.render(<VersionControlCompare workbenchId="wb-1" worktreeId="wt-1" branch="master" onCommitted={onCommitted} onBeginOperation={onBeginOperation} />))
   return { host, root }
 }
 
@@ -94,6 +94,17 @@ describe('VersionControlCompare', () => {
     )
     expect(compare).toHaveBeenCalledTimes(2)
     expect(host.textContent).toContain('Committed commit-2')
+  })
+
+  it('reports the full compare as a tracked operation when the host supports it', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({ differences: [], state: 'Consistent' }))
+    const onBeginOperation = vi.fn(() => 'op-42')
+    const { host } = await render(undefined, onBeginOperation)
+
+    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
+
+    expect(onBeginOperation).toHaveBeenCalledWith('compare-tia', expect.stringContaining('Comparing'))
+    expect(compare).toHaveBeenCalledWith('wb-1', 'op-42')
   })
 
   it('notifies the parent after an accepted TIA commit so history can refresh', async () => {

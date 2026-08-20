@@ -3,7 +3,14 @@ import { CheckCircle2, Loader2, ShieldAlert } from 'lucide-react'
 import * as api from '@/api/client'
 import FeatureValidationDialog from './FeatureValidationDialog'
 
-type Props = { workbenchId: string; worktreeId: string; branch: string; onCommitted?: () => void }
+type Props = {
+  workbenchId: string
+  worktreeId: string
+  branch: string
+  onCommitted?: () => void
+  /** Starts a title-bar operation and returns its id so the full compare reports live export progress. */
+  onBeginOperation?: (kind: string, label: string) => string
+}
 
 const normalizeChecksum = (value: string) => value.replace(/\s+/g, '').toUpperCase()
 const storedChecksumValues = (aggregate: string | null | undefined): string[] =>
@@ -14,7 +21,7 @@ const storedChecksumValues = (aggregate: string | null | undefined): string[] =>
     .filter(Boolean)
     .sort()
 
-export default function VersionControlCompare({ workbenchId, worktreeId, branch, onCommitted }: Props) {
+export default function VersionControlCompare({ workbenchId, worktreeId, branch, onCommitted, onBeginOperation }: Props) {
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
@@ -31,9 +38,10 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
 
   const compare = async () => {
     setBusy(true); setError(null); setPushOutcomes(null); setSavepointSha(null)
+    const operationId = onBeginOperation?.('compare-tia', 'Comparing master with TIA Portal...')
     try {
       const [nextComparison, engineeringState] = await Promise.all([
-        api.compareMasterWithTia(workbenchId),
+        api.compareMasterWithTia(workbenchId, operationId),
         api.getWorktreeEngineeringState(workbenchId, worktreeId).catch(() => null),
       ])
       setComparison(nextComparison)
