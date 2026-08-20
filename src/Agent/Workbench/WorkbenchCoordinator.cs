@@ -283,6 +283,23 @@ public sealed class WorkbenchCoordinator
             : worktree.ManagedTiaProjectPath;
 
     /// <summary>
+    /// Ensures the master worktree's managed TIA project is the connected session before an
+    /// operation talks to TIA, opening it silently instead of surfacing "No project connected".
+    /// </summary>
+    private Task EnsureMasterProjectConnectedAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata master,
+        CancellationToken token,
+        IOperationProgress? progress)
+    {
+        var context = LoadMasterContexts(workbench, master).FirstOrDefault().Context
+            ?? throw new WorkbenchCatalogException(
+                "DEVICE_NOT_FOUND",
+                $"Master worktree '{master.WorktreeId}' has no registered PLC devices.");
+        return EnsureActiveProjectMatchesWorktreeAsync(context, token, progress);
+    }
+
+    /// <summary>
     /// Re-attaches a still-running TIA instance (by session id) that already holds the
     /// registered project, e.g. after this application was restarted.
     /// </summary>
@@ -1463,6 +1480,7 @@ public sealed class WorkbenchCoordinator
         IOperationProgress? progress,
         bool allowCompile)
     {
+        await EnsureActiveProjectMatchesWorktreeAsync(device, token, progress).ConfigureAwait(false);
         var result = await stager.StageAsync(device, plcName, token, progress, allowCompile).ConfigureAwait(false);
         progress?.Report("Preparing refresh preview...");
         return result;
@@ -1658,9 +1676,11 @@ public sealed class WorkbenchCoordinator
         }
 
         var activeProject = await ReadActiveProjectAsync(cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(activeProject.Path)
+        if (string.IsNullOrWhiteSpace(activeProject?.Path)
             || !ProjectPathsEqual(projectPath, activeProject.Path))
         {
+            // No project (or the wrong project) connected is not an error: detach the current
+            // session without closing TIA and open the worktree's registered project instead.
             progress?.Report("Opening the selected TIA project before continuing...");
             await engineering.CallAsync<object>(
                 "disconnect",
@@ -1683,7 +1703,7 @@ public sealed class WorkbenchCoordinator
             activeProject = await ReadActiveProjectAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        if (string.IsNullOrWhiteSpace(activeProject.Path))
+        if (string.IsNullOrWhiteSpace(activeProject?.Path))
         {
             throw new WorkbenchLifecycleException(
                 "ENGINEERING_PROJECT_NOT_ACTIVE",
@@ -1699,8 +1719,25 @@ public sealed class WorkbenchCoordinator
         }
     }
 
-    private Task<ProjectInfo> ReadActiveProjectAsync(CancellationToken cancellationToken) =>
-        engineering.CallAsync<ProjectInfo>("get_project_info", new { }, cancellationToken);
+    /// <summary>
+    /// Reads the active project, or null when no TIA project is connected. NOT_CONNECTED is a
+    /// recoverable state here, not an error: the caller opens the registered project itself.
+    /// </summary>
+    private async Task<ProjectInfo?> ReadActiveProjectAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await engineering.CallAsync<ProjectInfo>("get_project_info", new { }, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ToolCallException exception) when (string.Equals(
+            exception.Code,
+            "NOT_CONNECTED",
+            StringComparison.Ordinal))
+        {
+            return null;
+        }
+    }
 
     private static bool ProjectPathsEqual(string left, string right)
     {
@@ -2260,6 +2297,7 @@ public sealed class WorkbenchCoordinator
             ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
         var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
         var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
+        await EnsureMasterProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
         return await consistency.CompareAsync(workbench, master, token, progress).ConfigureAwait(false);
     }
 
@@ -2278,22 +2316,40 @@ public sealed class WorkbenchCoordinator
         var feature = LoadRegisteredWorktree(workbench, featureWorktreeId);
         if (string.Equals(feature.Branch, "master", StringComparison.OrdinalIgnoreCase))
             throw new WorkbenchLifecycleException("FEATURE_WORKTREE_REQUIRED", "Import plans require a feature worktree.");
+        var master = LoadRegisteredWorktree(
+            workbench,
+            workbench.Worktrees.Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
+        await EnsureMasterProjectConnectedAsync(workbench, master, token, null).ConfigureAwait(false);
         return await featureImport.PlanAsync(workbench, feature, token).ConfigureAwait(false);
     }
 
-    public Task<FeatureImportSession> ImportFeatureAsync(
+    public async Task<FeatureImportSession> ImportFeatureAsync(
         string workbenchId,
         string planId,
         IReadOnlyList<string> paths,
-        CancellationToken token = default) =>
-        featureImport.ImportAsync(LoadRegisteredWorkbench(workbenchId), planId, paths, token);
+        CancellationToken token = default)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var master = LoadRegisteredWorktree(
+            workbench,
+            workbench.Worktrees.Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
+        await EnsureMasterProjectConnectedAsync(workbench, master, token, null).ConfigureAwait(false);
+        return await featureImport.ImportAsync(workbench, planId, paths, token).ConfigureAwait(false);
+    }
 
-    public Task<FeatureImportSession> RollbackFeatureImportAsync(
+    public async Task<FeatureImportSession> RollbackFeatureImportAsync(
         string workbenchId,
         string sessionId,
         IReadOnlyList<string> paths,
-        CancellationToken token = default) =>
-        featureImport.RollbackAsync(LoadRegisteredWorkbench(workbenchId), sessionId, paths, token);
+        CancellationToken token = default)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var master = LoadRegisteredWorktree(
+            workbench,
+            workbench.Worktrees.Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
+        await EnsureMasterProjectConnectedAsync(workbench, master, token, null).ConfigureAwait(false);
+        return await featureImport.RollbackAsync(workbench, sessionId, paths, token).ConfigureAwait(false);
+    }
 
     public FeatureImportSession KeepFeatureImportAfterCompileFailure(
         string workbenchId,
@@ -2315,6 +2371,10 @@ public sealed class WorkbenchCoordinator
         var workbench = LoadRegisteredWorkbench(request.WorkbenchId);
         var feature = LoadRegisteredWorktree(workbench, request.FeatureWorktreeId);
         var session = featureImport.ReadSession(workbench, request.ImportSessionId);
+        var master = LoadRegisteredWorktree(
+            workbench,
+            workbench.Worktrees.Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
+        await EnsureMasterProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
         return await validatedMerge.ValidateAsync(workbench, feature, session, request, token, progress).ConfigureAwait(false);
     }
 
@@ -2399,6 +2459,7 @@ public sealed class WorkbenchCoordinator
             ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
         var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
         var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
+        await EnsureMasterProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
         return await consistency.ValidateSynchronizedMasterAsync(workbench, master, confirmedBy, token, progress)
             .ConfigureAwait(false);
     }

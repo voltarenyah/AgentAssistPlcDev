@@ -229,6 +229,80 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task ReloadHardwareConnectsToRegisteredProjectWhenNothingIsConnected()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\ProjectB.ap17");
+        var hardwareRoot = Path.Combine(
+            WorkbenchPaths.ResolveHardwareRoot(fixture.Context.WorktreeRoot), "Hardware");
+        Directory.CreateDirectory(hardwareRoot);
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), "<CAEXFile />");
+        var engineering = new FakeToolCaller()
+            .Fail("get_project_info", "NOT_CONNECTED", "No project connected. Call connect first.")
+            .Respond("disconnect", new object())
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "ProjectB",
+                Path = @"C:\Projects\ProjectB.ap17",
+            })
+            .Respond("export_hardware_configuration", new[]
+            {
+                new HardwareExportResult
+                {
+                    Scope = "project",
+                    Success = true,
+                    ContentHash = "project-hash",
+                },
+            });
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_commit_hardware", new CoordinatorGitCommitResult { Sha = "commit-1" });
+        var coordinator = Create(fixture, engineering: engineering, versionControl: versionControl);
+
+        var result = await coordinator.ReloadHardwareAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal("commit-1", result.CommitSha);
+        Assert.Equal(
+            ["get_project_info", "disconnect", "list_sessions", "connect", "get_project_info", "export_hardware_configuration"],
+            engineering.Calls);
+        Assert.Equal(@"C:\Projects\ProjectB.ap17", Property<string>(
+            engineering.CallArgs["connect"].Single(), "projectPath"));
+        Assert.True(Property<bool>(engineering.CallArgs["connect"].Single(), "withUI"));
+    }
+
+    [Fact]
+    public async Task StageRefreshConnectsToRegisteredProjectWhenNothingIsConnected()
+    {
+        var fixture = Fixture.Create(root);
+        var engineering = new FakeToolCaller()
+            .Fail("get_project_info", "NOT_CONNECTED", "No project connected. Call connect first.")
+            .Respond("disconnect", new object())
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+            })
+            .Respond("rebuild_export", (Func<object, object>)(args =>
+            {
+                var output = Property<string>(args, "outputDir");
+                Directory.CreateDirectory(output);
+                File.WriteAllText(Path.Combine(output, "metadata.json"), "{}");
+                return new[] { new SyncResult { PlcName = "PLC_1", ExportRoot = output } };
+            }));
+        var coordinator = Create(fixture, engineering: engineering);
+
+        await coordinator.StageRefreshAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal(
+            ["get_project_info", "disconnect", "list_sessions", "connect", "get_project_info", "rebuild_export"],
+            engineering.Calls);
+        Assert.Equal(@"C:\Projects\Line.ap17", Property<string>(
+            engineering.CallArgs["connect"].Single(), "projectPath"));
+    }
+
+    [Fact]
     public async Task CompareHardwareRejectsWhenAttachedTiaProjectDoesNotMatchSelectedWorktree()
     {
         var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\ProjectB.ap17");
@@ -417,12 +491,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         await Task.Yield();
         Assert.False(opening.IsCompleted);
-        Assert.Equal(["rebuild_export"], engineering.Calls);
+        Assert.Equal(["get_project_info", "rebuild_export"], engineering.Calls);
 
         engineering.ReleaseExport.SetResult();
         await Task.WhenAll(staging, opening);
 
-        Assert.Equal(["rebuild_export", "connect"], engineering.Calls);
+        Assert.Equal(["get_project_info", "rebuild_export", "connect"], engineering.Calls);
     }
 
     [Fact]
@@ -459,7 +533,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             engineering.Calls.Take(6).ToArray());
         // The engineering session is released between the managed-copy phase and the export,
         // so the waiting OpenProjectInTia connect interleaves with the bootstrap tail.
-        Assert.Equal(10, engineering.Calls.Count);
+        Assert.Equal(11, engineering.Calls.Count);
         Assert.Equal(2, engineering.Calls.Count(call => call == "connect"));
         Assert.True(
             engineering.Calls.IndexOf("rebuild_export") < engineering.Calls.IndexOf("disconnect"));
@@ -559,7 +633,9 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "engineering:compile_plc",
                 "engineering:compile_plc",
                 "engineering:get_plc_checksums",
+                "engineering:get_project_info",
                 "engineering:rebuild_export",
+                "engineering:get_project_info",
                 "engineering:rebuild_export",
                 "engineering:export_hardware_configuration",
                 "knowledge:ingest_source",
@@ -1031,6 +1107,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "engineering:get_project_info",
                 "engineering:compile_plc",
                 "engineering:get_plc_checksums",
+                "engineering:get_project_info",
                 "engineering:rebuild_export",
                 "engineering:export_hardware_configuration",
                 "knowledge:ingest_source",
@@ -1318,7 +1395,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             CancellationToken.None,
             allowCompile: true);
 
-        Assert.Equal(new[] { "rebuild_export", "compile_plc", "rebuild_export" }, engineering.Calls);
+        Assert.Equal(new[] { "get_project_info", "rebuild_export", "compile_plc", "rebuild_export" }, engineering.Calls);
         Assert.Equal("PLC_1", Property<string>(engineering.CallArgs["compile_plc"].Single(), "plcName"));
         Assert.True(File.Exists(Path.Combine(fixture.Context.StagingRoot, "metadata.json")));
     }
@@ -1333,6 +1410,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             "Exporting tag table MachineTags...",
             "Exported PLC source files: 1",
             "Exported PLC source files: 2",
+        });
+        engineering.Respond("get_project_info", new ProjectInfo
+        {
+            Name = "Line",
+            Path = @"C:\Projects\Line.ap17",
         });
         var coordinator = Create(fixture, engineering: engineering);
         var progress = new RecordingProgress();
@@ -1794,6 +1876,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal(
             new[]
             {
+                "engineering:get_project_info",
                 "engineering:rebuild_export",
                 "version:vc_log",
                 "version:vc_commit_selected",
@@ -1892,7 +1975,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         Assert.Equal("FilesUpdated", result.Baseline.State.ToString());
         Assert.Equal(
-            new[] { "rebuild_export", "compile_plc", "rebuild_export" },
+            new[] { "get_project_info", "rebuild_export", "compile_plc", "rebuild_export" },
             engineering.Calls);
         Assert.Equal("PLC_1", Property<string>(engineering.CallArgs["compile_plc"].Single(), "plcName"));
         Assert.Equal("baseline-sha", result.Baseline.CommitSha);
@@ -2211,6 +2294,17 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 Path = managedPath,
                 PlcDevices = plcs,
             });
+        // Each device's bootstrap stage-refresh verifies the managed project is connected.
+        foreach (var plc in plcs)
+        {
+            caller.Respond("get_project_info", _ => new ProjectInfo
+            {
+                Name = "Line",
+                Path = managedPath,
+                PlcDevices = plcs,
+            });
+        }
+
         foreach (var plc in plcs)
         {
             caller.Respond("compile_plc", new CompileResult { State = compileState });
@@ -2438,6 +2532,15 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             Calls.Add(tool);
             CallArgs[tool] = new List<object> { args };
             order?.Add($"engineering:{tool}");
+            if (tool == "get_project_info")
+            {
+                return Task.FromResult((T)(object)new ProjectInfo
+                {
+                    Name = "Line",
+                    Path = @"C:\Projects\Line.ap17",
+                });
+            }
+
             var output = Property<string>(args, "outputDir");
             Directory.CreateDirectory(Path.Combine(output, "Blocks"));
             File.WriteAllText(Path.Combine(output, "Blocks", "A.xml"), "<a />");
@@ -2484,6 +2587,15 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
             list.Add(args);
             order?.Add($"engineering:{tool}");
+            if (tool == "get_project_info")
+            {
+                return Task.FromResult((T)(object)new ProjectInfo
+                {
+                    Name = "Line",
+                    Path = @"C:\Projects\Line.ap17",
+                });
+            }
+
             if (tool != "rebuild_export")
                 throw new InvalidOperationException(tool);
 
@@ -2537,6 +2649,15 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             }
 
             list.Add(args);
+            if (tool == "get_project_info")
+            {
+                return Task.FromResult((T)(object)new ProjectInfo
+                {
+                    Name = "Line",
+                    Path = @"C:\Projects\Line.ap17",
+                });
+            }
+
             if (tool == "compile_plc")
             {
                 return Task.FromResult((T)(object)new CompileResult { State = "success" });
@@ -2603,6 +2724,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         {
             this.result = result;
             this.order = order;
+            Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+            });
         }
 
         public override Task<T> CallAsync<T>(
@@ -2610,6 +2736,11 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             object args,
             CancellationToken cancellationToken = default)
         {
+            if (!string.Equals(tool, "rebuild_export", StringComparison.Ordinal))
+            {
+                return base.CallAsync<T>(tool, args, cancellationToken);
+            }
+
             Calls.Add(tool);
             CallArgs[tool] = new List<object> { args };
             order?.Add($"engineering:{tool}");
@@ -2667,6 +2798,15 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             }
 
             list.Add(args);
+            if (tool == "get_project_info")
+            {
+                return Task.FromResult((T)(object)new ProjectInfo
+                {
+                    Name = "Line",
+                    Path = @"C:\Projects\Line.ap17",
+                });
+            }
+
             if (tool == "compile_plc")
             {
                 return Task.FromResult((T)(object)new CompileResult
@@ -2724,6 +2864,15 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             Calls.Add(tool);
+            if (tool == "get_project_info")
+            {
+                return (T)(object)new ProjectInfo
+                {
+                    Name = "Line",
+                    Path = @"C:\Projects\Line.ap17",
+                };
+            }
+
             if (tool == "rebuild_export")
             {
                 ExportEntered.SetResult();
