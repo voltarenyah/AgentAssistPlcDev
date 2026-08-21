@@ -372,7 +372,23 @@ function Invoke-CodexRevision {
         Set-CodexOrchestrationField $attempt 'runDirectory' $attemptRun
         if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attempt | Out-Null } else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attempt | Out-Null }
         Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase 'AGENT STARTED' -Details ("Revision attempt {0} for PR #{1}" -f $attemptNumber, $resolvedPrNumber)
-        if ($null -ne $CodexProvider) { $codex = & $CodexProvider $attempt.worktree $issue $Config $attemptRun $StatePath $reviewText $attempt.threadId } else { $codex = Invoke-CodexRun -IssueWorktree $attempt.worktree -IssueContext $issue -Config $Config -RunDirectory $attemptRun -StatePath $StatePath -Revision -ThreadId $attempt.threadId -ReviewComments $reviewText }
+        if ($null -ne $CodexProvider) {
+            $codex = & $CodexProvider $attempt.worktree $issue $Config $attemptRun $StatePath $reviewText $attempt.threadId
+        } else {
+            $providerName = [string](Get-CodexValue $Config 'provider' '')
+            $providerEvent = if ([string]::IsNullOrWhiteSpace($providerName)) { 'codex' } else { $providerName.ToLowerInvariant() }
+            $provider = Resolve-CodexWorkerProvider -Provider $providerName -EventName $providerEvent
+            $codex = Invoke-CodexWorkerAgentRun -Provider $provider -RunParameters @{
+                IssueWorktree = $attempt.worktree
+                IssueContext = $issue
+                Config = $Config
+                RunDirectory = $attemptRun
+                StatePath = $StatePath
+                Revision = $true
+                ThreadId = $attempt.threadId
+                ReviewComments = $reviewText
+            }
+        }
         $newThreadId = [string](Get-CodexPublicationValue $codex 'ThreadId' '')
         if (-not [string]::IsNullOrWhiteSpace($newThreadId)) {
             $freshState = if ($null -ne $StateReader) { & $StateReader $StatePath } else { Read-CodexWorkerState -Path $StatePath }

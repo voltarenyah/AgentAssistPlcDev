@@ -22,3 +22,10 @@ function Resolve-CodexWorkerProvider {
     }
     return $selected
 }
+
+function Invoke-CodexWorkerAgentRun {
+    param([object]$Provider, [hashtable]$RunParameters)
+    if ($Provider.Name -eq 'Codex') { return Invoke-CodexRun @RunParameters }
+    if ($Provider.Name -eq 'Kimi') { return Invoke-KimiRun @RunParameters }
+    throw "Unsupported worker provider '$($Provider.Name)'."
+}

@@ -426,7 +426,14 @@ function Invoke-CodexIssueRun {
             if ($null -ne $CodexProvider) {
                 $codexResult = & $CodexProvider $attemptState.worktree $issue $Config $runDirectory $StatePath
             } else {
-                $codexResult = Invoke-CodexRun -IssueWorktree $attemptState.worktree -IssueContext $issue -Config $Config -RunDirectory $runDirectory -StatePath $StatePath
+                $provider = Resolve-CodexWorkerProvider -Provider ([string](Get-CodexValue $Config 'provider' '')) -EventName $EventName
+                $codexResult = Invoke-CodexWorkerAgentRun -Provider $provider -RunParameters @{
+                    IssueWorktree = $attemptState.worktree
+                    IssueContext = $issue
+                    Config = $Config
+                    RunDirectory = $runDirectory
+                    StatePath = $StatePath
+                }
             }
             $classification = [string](Get-CodexOrchestrationField $codexResult 'Classification' '')
             $summary = Get-CodexOrchestrationField $codexResult 'Summary' $null
