@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Actor,
     [string]$PullRequestNumber,
     [string]$EventName = 'codex:revise',
+    [ValidateSet('Codex', 'Kimi')][string]$Provider = 'Codex',
     [string]$RepositoryRoot,
     [string]$DataRoot
 )
@@ -13,12 +14,18 @@ if ($EventName -notmatch '(?i)revise') { throw "Revision entry requires a revise
 
 $modulePath = Join-Path $PSScriptRoot 'CodexWorker.psd1'
 Import-Module $modulePath -Force
+$provider = Resolve-CodexWorkerProvider -Provider $Provider -EventName $EventName
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) { $RepositoryRoot = (Get-Location).Path }
 $paths = Resolve-CodexWorkerPaths -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot
 $IssueNumber = Resolve-CodexRevisionIssueNumber -Repository $Repository -IssueNumber $IssueNumber -PullRequestNumber $PullRequestNumber
 $config = [pscustomobject]@{ repository = $Repository; dataRoot = $paths.DataRoot; defaultBranch = 'master' }
 if (Test-Path -LiteralPath $paths.ConfigPath -PathType Leaf) {
     try { $config = [IO.File]::ReadAllText($paths.ConfigPath) | ConvertFrom-Json } catch { throw "Codex worker configuration is invalid: $($_.Exception.Message)" }
+}
+if ($null -eq $config.PSObject.Properties['provider']) {
+    $config | Add-Member -NotePropertyName provider -NotePropertyValue $provider.Name
+} else {
+    $config.provider = $provider.Name
 }
 $params = @{
     Repository = $Repository

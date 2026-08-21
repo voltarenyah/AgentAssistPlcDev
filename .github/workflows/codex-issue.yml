@@ -12,6 +12,11 @@ on:
         required: false
         type: boolean
         default: false
+      provider:
+        required: false
+        type: choice
+        options: [Codex, Kimi]
+        default: Codex
 
 permissions:
   contents: write
@@ -20,7 +25,7 @@ permissions:
 
 jobs:
   run:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'codex' || github.event.label.name == 'codex:retry'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'codex' || github.event.label.name == 'codex:retry' || github.event.label.name == 'kimi' || github.event.label.name == 'kimi-retry'
     runs-on: [self-hosted, Windows, X64, agentassist-local]
     steps:
       - name: Checkout trusted worker revision
@@ -36,6 +41,7 @@ jobs:
           CODEX_ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
           CODEX_ACTOR: ${{ github.actor }}
           CODEX_EVENT_NAME: ${{ github.event.label.name || github.event_name }}
+          CODEX_PROVIDER: ${{ startsWith(github.event.label.name, 'kimi') && 'Kimi' || inputs.provider || 'Codex' }}
           CODEX_DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           $issueNumber = [int]$env:CODEX_ISSUE_NUMBER
@@ -60,6 +66,7 @@ jobs:
               -IssueNumber $issueNumber `
               -Actor ([string]$env:CODEX_ACTOR) `
               -EventName ([string]$env:CODEX_EVENT_NAME) `
+              -Provider ([string]$env:CODEX_PROVIDER) `
               -RepositoryRoot $repositoryRoot `
               -DataRoot $dataRoot `
               -DryRun:$dryRun | Out-Null
