@@ -600,7 +600,8 @@ function Assert-CodexClosedPullRequestContext {
     $savedUrl = [string](Get-CodexDeploymentValue -Object $Attempt -Name 'prUrl' '')
     if ([string]::IsNullOrWhiteSpace($savedUrl) -or $null -eq $url -or -not [string]::Equals($savedUrl, [string]$url.Value, [StringComparison]::OrdinalIgnoreCase)) { throw 'Pull request URL does not match the saved Codex attempt.' }
     if ([string]$url.Value -notmatch ('/pull/' + [regex]::Escape([string]$PullRequestNumber) + '$')) { throw 'Pull request URL does not identify the close event pull request.' }
-    if ($null -eq $state -or [string]$state.Value -ne 'CLOSED') { throw 'Pull request is not closed.' }
+    $allowedStates = if ($Merged) { @('CLOSED', 'MERGED') } else { @('CLOSED') }
+    if ($null -eq $state -or [string]$state.Value -notin $allowedStates) { throw 'Pull request is not closed.' }
     if ($null -eq $base -or [string]$base.Value -ne 'master') { throw 'Pull request base branch is not master.' }
     if ($null -eq $head -or [string]$head.Value -ne $HeadBranch) { throw 'Pull request head branch does not match the close event.' }
     if ($savedBranch -ne $HeadBranch) { throw 'Pull request head branch does not match the saved Codex branch.' }
