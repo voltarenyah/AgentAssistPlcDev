@@ -65,6 +65,7 @@ Describe 'Codex worker PR-close deployment handoff' {
         $state.deployment.targetCommit | Should Be $sha
         $state.deployment.sourcePr | Should Be 17
         $state.deployment.status | Should Be 'pending'
+        $state.issues.'42'.status | Should Be 'done'
         (@($labels) -contains 'codex:done') | Should Be $true
         (@($labels) -contains 'remove:codex:revise') | Should Be $true
     }
@@ -256,7 +257,7 @@ Describe 'Codex worker PR-close deployment handoff' {
         $state.issues.'42'.cleanupAt | Should Be $cleanupAt
     }
 
-    It 'does nothing for a merged completed cleanup state with a verified deployment' {
+    It 'finalizes the durable issue state for a merged completed cleanup state with a verified deployment' {
         $sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
         $cleanupAt = '2026-08-18T00:00:00Z'
         $requestedAt = '2026-08-18T00:30:00Z'
@@ -273,10 +274,11 @@ Describe 'Codex worker PR-close deployment handoff' {
 
         $result.DeploymentCreated | Should Be $false
         ($state.deployment | ConvertTo-Json -Depth 5) | Should Be $before
-        $writes.Count | Should Be 0
+        $writes.Count | Should Be 1
         $cleanupCalls | Should Be 0
         $comments | Should Be 0
-        $labels.Count | Should Be 0
+        $labels.Count | Should Be 1
+        $state.issues.'42'.status | Should Be 'done'
         $state.issues.'42'.cleanupAt | Should Be $cleanupAt
     }
 

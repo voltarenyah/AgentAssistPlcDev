@@ -480,6 +480,26 @@ function Write-CodexDeploymentState {
     else { Write-CodexWorkerState -Path $StatePath -State $State }
 }
 
+function Complete-CodexMergedIssue {
+    param(
+        [string] $StatePath,
+        [object] $State,
+        [int] $IssueNumber,
+        [string] $Repository,
+        [scriptblock] $StateWriter,
+        [scriptblock] $GitHubCommandRunner
+    )
+
+    $attempt = Get-CodexIssueAttemptState -State $State -IssueNumber $IssueNumber
+    if ($null -eq $attempt) { throw "The persisted worker state does not contain issue #$IssueNumber." }
+    if ([string](Get-CodexDeploymentValue -Object $attempt -Name 'status' '') -ne 'done') {
+        Set-CodexOrchestrationField $attempt 'status' 'done'
+        Set-CodexOrchestrationField $attempt 'lastError' $null
+        Write-CodexDeploymentState -StatePath $StatePath -State $State -StateWriter $StateWriter
+    }
+    Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'done' -CommandRunner $GitHubCommandRunner | Out-Null
+}
+
 function Set-CodexRepairedDeploymentMetadata {
     param([object] $Deployment, [object] $Existing, [bool] $SnoozeValid)
     if ($SnoozeValid) {
@@ -713,6 +733,7 @@ function Register-CodexPullRequestClosed {
                 $snoozeMatches = if ($null -eq $existingSnoozeTicks -and $null -eq $previewSnoozeTicks) { $true } else { $existingSnoozeTicks -eq $previewSnoozeTicks }
                 $deploymentVerified = $existingTargetValid -and $existingStatus -in @('pending', 'snoozed') -and $existingSourcePr -eq $PullRequestNumber -and $null -ne $existingRequestedAtTicks -and $existingTarget -eq $previewTarget -and $existingStatus -eq [string]$previewDeployment.status -and $existingRequestedAtTicks -eq $previewRequestedAtTicks -and $snoozeMatches
                 if ($deploymentVerified) {
+                    Complete-CodexMergedIssue -StatePath $paths.StatePath -State $state -IssueNumber $IssueNumber -Repository $Repository -StateWriter $StateWriter -GitHubCommandRunner $GitHubCommandRunner
                     return [pscustomobject][ordered]@{ PullRequestNumber = $PullRequestNumber; IssueNumber = $IssueNumber; Merged = $Merged; CleanedUp = $true; Blockers = @(); DeploymentCreated = $false; Deployment = $state.deployment; State = $state }
                 }
             }
@@ -764,13 +785,15 @@ function Register-CodexPullRequestClosed {
                 if ($null -ne $state.PSObject.Properties['deployment']) { $state.deployment = $deployment }
                 else { Add-Member -InputObject $state -NotePropertyName deployment -NotePropertyValue $deployment -Force }
             }
+            Set-CodexOrchestrationField $attempt 'status' 'done'
+            Set-CodexOrchestrationField $attempt 'lastError' $null
             Write-CodexDeploymentState -StatePath $paths.StatePath -State $state -StateWriter $StateWriter
             $durableState = if ($null -ne $StateReader) { & $StateReader $paths.StatePath } else { Read-CodexWorkerState -Path $paths.StatePath }
             $durableDeployment = Assert-CodexDurablePendingDeployment -State $durableState -IssueNumber $IssueNumber -ExpectedDeployment $deployment -ExpectedTargetCommit $MergeCommitSha -PullRequestNumber $PullRequestNumber
             $state = $durableState
             $deployment = $durableDeployment
             $deploymentCreated = $true
-            Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'done' -CommandRunner $GitHubCommandRunner | Out-Null
+            Complete-CodexMergedIssue -StatePath $paths.StatePath -State $state -IssueNumber $IssueNumber -Repository $Repository -StateWriter $StateWriter -GitHubCommandRunner $GitHubCommandRunner
         }
         return [pscustomobject][ordered]@{ PullRequestNumber = $PullRequestNumber; IssueNumber = $IssueNumber; Merged = $Merged; CleanedUp = $cleanedUp; Blockers = @($blockers.ToArray()); DeploymentCreated = $deploymentCreated; Deployment = if ($deploymentCreated) { $state.deployment } else { $null } }
     } finally {
