@@ -239,7 +239,7 @@ Describe 'Codex worker GitHub adapter' {
         $calls = New-Object 'System.Collections.Generic.List[object]'
         $payload = [ordered]@{
             number = 101
-            closingIssuesReferences = @([ordered]@{ number = 42; repository = [ordered]@{ nameWithOwner = 'owner/repo' } })
+            closingIssuesReferences = @([ordered]@{ number = 42; repository = [ordered]@{ name = 'repo'; owner = [ordered]@{ login = 'owner' } } })
         }
         $runner = { param($Arguments) $calls.Add(@($Arguments)) | Out-Null; $payload | ConvertTo-Json -Depth 10 }.GetNewClosure()
 

@@ -235,6 +235,22 @@ function Get-CodexLabelName {
     return $null
 }
 
+function Get-CodexRepositoryName {
+    param([object] $Repository)
+
+    if ($Repository -is [string]) { return [string]$Repository }
+    if ($null -eq $Repository) { return '' }
+    $nameWithOwner = $Repository.PSObject.Properties['nameWithOwner']
+    if ($null -ne $nameWithOwner -and -not [string]::IsNullOrWhiteSpace([string]$nameWithOwner.Value)) { return [string]$nameWithOwner.Value }
+    $name = $Repository.PSObject.Properties['name']
+    $owner = $Repository.PSObject.Properties['owner']
+    $ownerLogin = if ($null -ne $owner -and $null -ne $owner.Value) { $owner.Value.PSObject.Properties['login'] } else { $null }
+    if ($null -ne $name -and -not [string]::IsNullOrWhiteSpace([string]$name.Value) -and $null -ne $ownerLogin -and -not [string]::IsNullOrWhiteSpace([string]$ownerLogin.Value)) {
+        return ('{0}/{1}' -f [string]$ownerLogin.Value, [string]$name.Value)
+    }
+    return ''
+}
+
 function Set-CodexIssueStatus {
     [CmdletBinding()]
     param(
@@ -372,8 +388,7 @@ function Resolve-CodexPullRequestIssueNumber {
     $issueNumber = if ($null -ne $issueProperty) { [int]$issueProperty.Value } else { 0 }
     if ($issueNumber -le 0) { throw 'The pull request closing reference did not contain a valid issue number.' }
     $repositoryProperty = $reference.PSObject.Properties['repository']
-    $nameProperty = if ($null -ne $repositoryProperty -and $null -ne $repositoryProperty.Value) { $repositoryProperty.Value.PSObject.Properties['nameWithOwner'] } else { $null }
-    $referenceRepository = if ($null -ne $nameProperty) { [string]$nameProperty.Value } else { '' }
+    $referenceRepository = if ($null -ne $repositoryProperty) { Get-CodexRepositoryName -Repository $repositoryProperty.Value } else { '' }
     if ([string]::IsNullOrWhiteSpace([string]$referenceRepository) -or
         -not [string]::Equals([string]$referenceRepository, $Repository, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The pull request closing reference is not in the requested repository.'
