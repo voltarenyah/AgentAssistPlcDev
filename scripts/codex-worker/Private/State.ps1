@@ -445,7 +445,6 @@ function Invoke-CodexIssueRun {
             if ($null -ne $CodexProvider) {
                 $codexResult = & $CodexProvider $attemptState.worktree $issue $Config $runDirectory $StatePath
             } else {
-                $provider = Resolve-CodexWorkerProvider -Provider ([string](Get-CodexValue $Config 'provider' '')) -EventName $EventName
                 $codexResult = Invoke-CodexWorkerAgentRun -Provider $provider -RunParameters @{
                     IssueWorktree = $attemptState.worktree
                     IssueContext = $issue

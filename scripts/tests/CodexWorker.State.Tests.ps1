@@ -87,6 +87,50 @@ Describe 'Codex worker paths' {
         $legacyAttempt.agentProvider | Should Be 'Codex'
     }
 
+    It 'resumes a persisted Kimi attempt when the retry configuration omits provider' {
+        $statePath = Join-Path $TestDrive 'persisted-kimi-retry.json'
+        $fakeKimi = Join-Path $TestDrive 'fake-kimi.cmd'
+        @'
+@echo off
+echo Kimi unavailable 1>&2
+exit /b 1
+'@ | Set-Content -LiteralPath $fakeKimi -Encoding ascii
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '73' = [pscustomobject]@{
+                issueNumber = 73; status = 'blocked'; attempt = 1; branch = 'codex/73-kimi-retry'; worktree = $null; threadId = $null; runDirectory = $null
+                commit = $null; prUrl = $null; retryCount = 0; publicationStage = 'none'; lastError = 'prior failure'; agentProvider = 'Kimi'
+            } }; deployment = $null }
+        Write-CodexWorkerState -Path $statePath -State $state
+        $labels = New-Object 'System.Collections.Generic.List[string]'
+        $github = {
+            param([string[]] $Arguments)
+            if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return '{"number":73,"title":"Persisted Kimi","body":"body","author":{"login":"reporter"},"comments":[],"labels":[{"name":"kimi"},{"name":"kimi-blocked"},{"name":"codex:done"}],"state":"OPEN","url":"https://github.com/owner/repo/issues/73"}' }
+            if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
+            if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'edit') {
+                if ($Arguments -contains '--add-label') { $labels.Add([string]$Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null }
+                return ''
+            }
+            if ($Arguments -contains '--body') { return '' }
+            throw 'Unexpected GitHub operation.'
+        }.GetNewClosure()
+        $worktree = {
+            param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner)
+            $path = Join-Path $TestDrive 'persisted-kimi-worktree'
+            New-Item -ItemType Directory -Path $path -Force | Out-Null
+            [pscustomobject]@{ Path = $path; BranchName = $BranchName }
+        }.GetNewClosure()
+        $setup = { param($Worktree, $Config, $ActivityLogPath) }.GetNewClosure()
+
+        $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 73 -Actor 'trusted-user' -EventName 'kimi-retry' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{ kimiCommand = $fakeKimi; kimiTimeoutMinutes = 1 }) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup
+
+        $result.Status | Should Be 'blocked'
+        (Read-CodexWorkerState -Path $statePath).issues.'73'.agentProvider | Should Be 'Kimi'
+        ($labels.ToArray() -contains 'kimi-running') | Should Be $true
+        ($labels.ToArray() -contains 'kimi-blocked') | Should Be $true
+        ($labels.ToArray() -contains 'codex:blocked') | Should Be $false
+    }
+
     It 'persists a queued issue through running to pr-ready with bounded milestones' {
         $statePath = Join-Path $TestDrive 'lifecycle-state.json'
         $events = New-Object 'System.Collections.Generic.List[string]'
