@@ -38,6 +38,8 @@ if (-not [string]::IsNullOrWhiteSpace($configuredRepositoryRoot)) {
 $paths = Resolve-CodexWorkerPaths -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot
 $providerEventName = if ($EventName -eq 'workflow_dispatch') { $Provider.ToLowerInvariant() } else { $EventName }
 $provider = Resolve-CodexWorkerProvider -Provider $Provider -EventName $providerEventName
+$enabledProviders = if ($null -ne $config.PSObject.Properties['enabledProviders']) { @($config.enabledProviders) } else { @('Codex') }
+if ($provider.Name -notin $enabledProviders) { throw "Worker provider '$($provider.Name)' is not enabled by configuration." }
 if ($null -eq $config.PSObject.Properties['provider']) {
     $config | Add-Member -NotePropertyName provider -NotePropertyValue $provider.Name
 } else {

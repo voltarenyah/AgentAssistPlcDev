@@ -22,6 +22,8 @@ $config = [pscustomobject]@{ repository = $Repository; dataRoot = $paths.DataRoo
 if (Test-Path -LiteralPath $paths.ConfigPath -PathType Leaf) {
     try { $config = [IO.File]::ReadAllText($paths.ConfigPath) | ConvertFrom-Json } catch { throw "Codex worker configuration is invalid: $($_.Exception.Message)" }
 }
+$enabledProviders = if ($null -ne $config.PSObject.Properties['enabledProviders']) { @($config.enabledProviders) } else { @('Codex') }
+if ($provider.Name -notin $enabledProviders) { throw "Worker provider '$($provider.Name)' is not enabled by configuration." }
 if ($null -eq $config.PSObject.Properties['provider']) {
     $config | Add-Member -NotePropertyName provider -NotePropertyValue $provider.Name
 } else {
