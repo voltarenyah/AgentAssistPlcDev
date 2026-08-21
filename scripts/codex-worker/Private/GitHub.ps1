@@ -269,7 +269,8 @@ function Set-CodexIssueStatus {
 
     if ($null -eq $CurrentLabels) {
         $issue = Get-CodexIssueContext -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $CommandRunner
-        $CurrentLabels = @($issue.labels)
+        $labelsProperty = if ($null -ne $issue) { $issue.PSObject.Properties['labels'] } else { $null }
+        $CurrentLabels = if ($null -ne $labelsProperty -and $null -ne $labelsProperty.Value) { @($labelsProperty.Value) } else { @() }
     }
 
     $arguments = [System.Collections.Generic.List[string]]::new()

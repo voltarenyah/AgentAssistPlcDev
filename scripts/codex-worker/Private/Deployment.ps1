@@ -558,9 +558,8 @@ function Resolve-CodexClosedPullRequestIssueNumber {
     if ($references.Count -ne 1) { throw 'The pull request must contain exactly one linked issue in its trusted closing references.' }
     $reference = $references[0]
     $issueProperty = $reference.PSObject.Properties['number']
-    $repositoryProperty = $reference.PSObject.Properties['repository']
-    $nameProperty = if ($null -ne $repositoryProperty -and $null -ne $repositoryProperty.Value) { $repositoryProperty.Value.PSObject.Properties['nameWithOwner'] } else { $null }
-    if ($null -eq $issueProperty -or [int]$issueProperty.Value -le 0 -or $null -eq $nameProperty -or -not [string]::Equals([string]$nameProperty.Value, $Repository, [StringComparison]::OrdinalIgnoreCase)) { throw 'The pull request closing reference is invalid or belongs to another repository.' }
+    $referenceRepository = Get-CodexPrRepositoryName -Context $reference -PropertyName 'repository'
+    if ($null -eq $issueProperty -or [int]$issueProperty.Value -le 0 -or [string]::IsNullOrWhiteSpace($referenceRepository) -or -not [string]::Equals($referenceRepository, $Repository, [StringComparison]::OrdinalIgnoreCase)) { throw 'The pull request closing reference is invalid or belongs to another repository.' }
     return [int]$issueProperty.Value
 }
 
@@ -571,6 +570,12 @@ function Get-CodexPrRepositoryName {
     if ($property.Value -is [string]) { return [string]$property.Value }
     $name = $property.Value.PSObject.Properties['nameWithOwner']
     if ($null -ne $name) { return [string]$name.Value }
+    $repositoryName = $property.Value.PSObject.Properties['name']
+    $owner = $property.Value.PSObject.Properties['owner']
+    $ownerLogin = if ($null -ne $owner -and $null -ne $owner.Value) { $owner.Value.PSObject.Properties['login'] } else { $null }
+    if ($null -ne $repositoryName -and -not [string]::IsNullOrWhiteSpace([string]$repositoryName.Value) -and $null -ne $ownerLogin -and -not [string]::IsNullOrWhiteSpace([string]$ownerLogin.Value)) {
+        return ('{0}/{1}' -f [string]$ownerLogin.Value, [string]$repositoryName.Value)
+    }
     return ''
 }
 
@@ -764,9 +769,7 @@ function Register-CodexPullRequestClosed {
             $state = $durableState
             $deployment = $durableDeployment
             $deploymentCreated = $true
-            $currentStatus = [string](Get-CodexDeploymentValue -Object $attempt -Name 'status' 'pr-ready')
-            $labels = if ($currentStatus -match '^codex:') { @($currentStatus) } else { @("codex:$currentStatus") }
-            Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'done' -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
+            Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'done' -CommandRunner $GitHubCommandRunner | Out-Null
         }
         return [pscustomobject][ordered]@{ PullRequestNumber = $PullRequestNumber; IssueNumber = $IssueNumber; Merged = $Merged; CleanedUp = $cleanedUp; Blockers = @($blockers.ToArray()); DeploymentCreated = $deploymentCreated; Deployment = if ($deploymentCreated) { $state.deployment } else { $null } }
     } finally {

@@ -353,9 +353,11 @@ Describe 'Codex worker publication' {
             if ($Arguments -contains 'push') { return '' }
             return ''
         }.GetNewClosure()
+        $issueLabelCommands = [System.Collections.Generic.List[string]]::new()
         $gh = { param($Arguments)
             if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
-            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'view') { return '{"number":42,"title":"Issue","body":"body","labels":[{"name":"codex"},{"name":"codex:revise"}],"comments":[]}' }
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'edit') { $issueLabelCommands.Add(($Arguments -join ' ')) | Out-Null; return '' }
             if ($Arguments -contains 'pr' -and $Arguments -contains 'view') { return '{"number":7,"url":"https://example.test/pr/7","state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}' }
             if ($Arguments -contains 'pr' -and $Arguments -contains 'list') { return '[{"number":7,"url":"https://example.test/pr/7","state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42"}]' }
             if ($Arguments -contains 'pr' -and $Arguments -contains 'comment') { $events.Add('comment') | Out-Null; return '' }
@@ -372,6 +374,8 @@ Describe 'Codex worker publication' {
         ($events -contains 'edit') | Should Be $true
         ($events -contains 'lock') | Should Be $true
         (Get-CodexIssueAttemptState -State (Read-CodexWorkerState -Path $statePath) -IssueNumber 42).threadId | Should Be 'new-thread'
+        ($issueLabelCommands -join ' ') | Should Match '--remove-label codex:revise'
+        ($issueLabelCommands -join ' ') | Should Match '--add-label codex:pr-ready'
         ($events -join ' ') | Should Not Match '(?i)create|force|merge|ready'
     }
 

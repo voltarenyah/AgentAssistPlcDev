@@ -44,8 +44,10 @@ Describe 'Codex worker PR-close deployment handoff' {
         $labels = [System.Collections.Generic.List[string]]::new()
         $github = {
             param([string[]] $Arguments)
-            if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"state":"CLOSED","url":"https://github.com/owner/repo/pull/17","headRefName":"codex/42-fix","baseRefName":"master","headRepository":{"nameWithOwner":"owner/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":"2026-08-18T00:00:00Z","mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}' }
+            if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"state":"CLOSED","url":"https://github.com/owner/repo/pull/17","headRefName":"codex/42-fix","baseRefName":"master","headRepository":{"nameWithOwner":"owner/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":"2026-08-18T00:00:00Z","mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"closingIssuesReferences":[{"number":42,"repository":{"name":"repo","owner":{"login":"owner"}}}]}' }
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'view') { return '{"number":42,"title":"Issue","body":"body","labels":[{"name":"codex"},{"name":"codex:revise"}]}' }
             if ($Arguments -contains '--add-label') { $labels.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) }
+            if ($Arguments -contains '--remove-label') { $labels.Add(('remove:' + $Arguments[$Arguments.IndexOf('--remove-label') + 1])) }
             return ''
         }.GetNewClosure()
         $git = {
@@ -64,6 +66,7 @@ Describe 'Codex worker PR-close deployment handoff' {
         $state.deployment.sourcePr | Should Be 17
         $state.deployment.status | Should Be 'pending'
         (@($labels) -contains 'codex:done') | Should Be $true
+        (@($labels) -contains 'remove:codex:revise') | Should Be $true
     }
 
     It 'coalesces a later verified origin master commit and preserves a later snooze' {
