@@ -361,7 +361,7 @@ Describe 'Codex worker publication' {
             if ($Arguments -contains 'pr' -and $Arguments -contains 'view') { return '{"number":7,"url":"https://example.test/pr/7","state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}' }
             if ($Arguments -contains 'pr' -and $Arguments -contains 'list') { return '[{"number":7,"url":"https://example.test/pr/7","state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42"}]' }
             if ($Arguments -contains 'pr' -and $Arguments -contains 'comment') { $events.Add('comment') | Out-Null; return '' }
-            if ($Arguments -contains 'pr' -and $Arguments -contains 'edit') { $events.Add('edit') | Out-Null; return '' }
+            if ($Arguments -contains 'pr' -and $Arguments -contains 'edit') { $events.Add(($Arguments -join ' ')) | Out-Null; return '' }
             throw 'unexpected GitHub operation'
         }.GetNewClosure()
         $stateWriter = { param($Path,$Number,$Current) Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Current | Out-Null }.GetNewClosure()
@@ -371,11 +371,12 @@ Describe 'Codex worker publication' {
         $result = Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'develop'; dataRoot = $dataRoot }) -StatePath $statePath -StateWriter $stateWriter -LockProvider $lock -UnlockProvider $unlock -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex
         $result.PullRequestNumber | Should Be 7
         ($events -contains 'comment') | Should Be $true
-        ($events -contains 'edit') | Should Be $true
+        ($events -join ' ') | Should Match 'pr edit 7'
         ($events -contains 'lock') | Should Be $true
         (Get-CodexIssueAttemptState -State (Read-CodexWorkerState -Path $statePath) -IssueNumber 42).threadId | Should Be 'new-thread'
         ($issueLabelCommands -join ' ') | Should Match '--remove-label codex:revise'
         ($issueLabelCommands -join ' ') | Should Match '--add-label codex:pr-ready'
+        ($events -join ' ') | Should Match 'pr edit 7 .*--remove-label codex:revise'
         ($events -join ' ') | Should Not Match '(?i)create|force|merge|ready'
     }
 

@@ -449,6 +449,22 @@ function New-CodexDraftPullRequest {
     return $result.Trim()
 }
 
+function Remove-CodexPullRequestLabel {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string] $Repository,
+        [Parameter(Mandatory = $true)][int] $PullRequestNumber,
+        [Parameter(Mandatory = $true)][string] $Label,
+        [scriptblock] $CommandRunner
+    )
+
+    return (Invoke-GhCommand -Arguments @(
+        'pr', 'edit', [string]$PullRequestNumber,
+        '--repo', $Repository,
+        '--remove-label', $Label
+    ) -CommandRunner $CommandRunner).Trim()
+}
+
 function Set-CodexPullRequestBody {
     [CmdletBinding()]
     param(

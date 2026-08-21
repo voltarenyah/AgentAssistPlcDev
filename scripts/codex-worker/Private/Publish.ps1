@@ -382,6 +382,7 @@ function Invoke-CodexRevision {
         $published = Publish-CodexIssue -AttemptState $attempt -IssueContext $issue -Config $Config -StatePath $StatePath -StateWriter $StateWriter -GitCommandRunner $GitCommandRunner -GitHubCommandRunner $GitHubCommandRunner -DataRoot $DataRoot -Repository $Repository -RequireExistingPullRequest
         $evidence = "Codex revision validation completed for commit $($published.commit). Existing draft PR was updated; no new PR was created."
         Add-CodexPullRequestComment -Repository $Repository -PullRequestNumber $resolvedPrNumber -Body $evidence -CommandRunner $GitHubCommandRunner | Out-Null
+        Remove-CodexPullRequestLabel -Repository $Repository -PullRequestNumber $resolvedPrNumber -Label 'codex:revise' -CommandRunner $GitHubCommandRunner | Out-Null
         Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'pr-ready' -CommandRunner $GitHubCommandRunner | Out-Null
         return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'pr-ready'; PublicationStage = $published.publicationStage; PrUrl = $published.prUrl; ExistingPullRequest = $true; PullRequestNumber = $resolvedPrNumber }
     } catch {
