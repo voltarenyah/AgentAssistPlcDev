@@ -8,14 +8,27 @@ function Invoke-CodexPublicationGit {
     )
     $root = [IO.Path]::GetFullPath($Worktree)
     $full = [string[]] (@('-C', $root) + @($Arguments))
+    $previousErrorActionPreference = $ErrorActionPreference
+    $result = $null
+    $exitCode = 0
+    try {
+        # Git writes ordinary warnings to stderr. The GitHub Actions PowerShell
+        # shell uses Stop, so capture stderr and judge native Git only by exit code.
+        $ErrorActionPreference = 'Continue'
+        if ($null -ne $CommandRunner) {
+            $result = & $CommandRunner $full 2>&1
+        } else {
+            $result = & git.exe @full 2>&1
+            $exitCode = $LASTEXITCODE
+        }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($null -ne $CommandRunner) {
-        $result = & $CommandRunner $full
         if ($null -eq $result) { return '' }
         $stdout = @($result | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] })
         return (($stdout | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
     }
-    $result = & git.exe @full 2>&1
-    $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) { throw (($result | Out-String).Trim()) }
     $stdout = @($result | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] })
     return (($stdout | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)

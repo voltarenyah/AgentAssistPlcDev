@@ -20,18 +20,31 @@ Describe 'Codex worker publication' {
         $script:publishSummary = $summary
     }
 
-    It 'does not treat successful Git stderr warnings as changed paths' {
-        $warning = [Management.Automation.ErrorRecord]::new(
-            [Exception]::new('warning: line endings will be replaced'),
-            'git-warning',
-            [Management.Automation.ErrorCategory]::NotSpecified,
-            $null)
-        $runner = { param($Arguments) @('docs/local-codex-worker.md', $warning) }.GetNewClosure()
+    It 'returns stdout when Git emits a successful stderr warning under Stop' {
+        $warningWorktree = Join-Path $TestDrive 'line-ending-warning-worktree'
+        New-Item -ItemType Directory -Path $warningWorktree -Force | Out-Null
+        & git.exe -C $warningWorktree init -q
+        & git.exe -C $warningWorktree config user.email 'test@example.invalid'
+        & git.exe -C $warningWorktree config user.name 'Codex Worker Test'
+        [IO.File]::WriteAllText((Join-Path $warningWorktree 'sample.txt'), "one`ntwo`n", [Text.UTF8Encoding]::new($false))
+        & git.exe -C $warningWorktree -c core.autocrlf=false add sample.txt
+        & git.exe -C $warningWorktree -c core.autocrlf=false commit -qm initial
+        & git.exe -C $warningWorktree config core.autocrlf true
+        [IO.File]::WriteAllText((Join-Path $warningWorktree 'sample.txt'), "one`nthree`n", [Text.UTF8Encoding]::new($false))
         $module = Get-Module CodexWorker
 
-        $output = & $module { param($Worktree, $GitRunner) Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--name-only') -CommandRunner $GitRunner } $publishWorktree $runner
+        $output = & $module {
+            param($Worktree)
+            $previousPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Stop'
+            try {
+                Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--name-only')
+            } finally {
+                $ErrorActionPreference = $previousPreference
+            }
+        } $warningWorktree
 
-        $output | Should Be 'docs/local-codex-worker.md'
+        $output | Should Be 'sample.txt'
     }
 
     It 'rejects an empty diff' {
