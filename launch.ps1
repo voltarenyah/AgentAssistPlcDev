@@ -94,6 +94,7 @@ Start-Process `
 # 4. Start the LangGraph App Assistant. The desktop host owns this lifecycle
 #    in packaged mode; development launches always start the local sidecar.
 $assistantRoot = Join-Path $root "agent-service"
+$assistantRuntimeCommand = Join-Path $root "scripts\AppAssistantRuntime.ps1"
 $assistantLogRoot = Join-Path $root ".assistant-logs"
 $assistantStdout = Join-Path $assistantLogRoot "stdout.log"
 $assistantStderr = Join-Path $assistantLogRoot "stderr.log"
@@ -107,15 +108,13 @@ if (-not (Test-Path (Join-Path $assistantRoot "pyproject.toml"))) {
     exit 1
 }
 
-$assistantVenvPython = Join-Path $assistantRoot ".venv\Scripts\python.exe"
-if (Test-Path $assistantVenvPython) {
-    $assistantExecutable = $assistantVenvPython
-    $assistantArguments = @("-m", "uvicorn", "app_assistant.server:app", "--host", "127.0.0.1", "--port", "8787")
-} elseif (Get-Command py.exe -ErrorAction SilentlyContinue) {
-    $assistantExecutable = "py.exe"
-    $assistantArguments = @("-3.13", "-m", "uvicorn", "app_assistant.server:app", "--host", "127.0.0.1", "--port", "8787")
-} else {
-    Write-Host "!!! No Python runtime was found for the LangGraph App Assistant. Create agent-service\.venv or install py.exe." -ForegroundColor Red
+. $assistantRuntimeCommand
+try {
+    $assistantLaunchSpec = Get-AppAssistantLaunchSpec -AgentServiceRoot $assistantRoot
+    $assistantExecutable = $assistantLaunchSpec.Executable
+    $assistantArguments = $assistantLaunchSpec.Arguments
+} catch {
+    Write-Host "!!! $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
 
