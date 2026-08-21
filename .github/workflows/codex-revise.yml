@@ -29,7 +29,7 @@ jobs:
           CODEX_REPOSITORY: ${{ github.repository }}
           CODEX_ISSUE_NUMBER: ${{ github.event.issue.number }}
           CODEX_ACTOR: ${{ github.actor }}
-          CODEX_EVENT_NAME: ${{ github.event_name }}
+          CODEX_EVENT_NAME: ${{ github.event.label.name }}
         run: |
           $issueNumber = [int]$env:CODEX_ISSUE_NUMBER
           & .\scripts\codex-worker\Invoke-Revision.ps1 `
@@ -45,7 +45,7 @@ jobs:
           CODEX_REPOSITORY: ${{ github.repository }}
           CODEX_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
           CODEX_ACTOR: ${{ github.actor }}
-          CODEX_EVENT_NAME: ${{ github.event_name }}
+          CODEX_EVENT_NAME: ${{ github.event.label.name }}
         run: |
           $pullRequestNumber = [int]$env:CODEX_PULL_REQUEST_NUMBER
           & .\scripts\codex-worker\Invoke-Revision.ps1 `
