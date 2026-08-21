@@ -12,7 +12,7 @@ Describe 'App Assistant Python resolution' {
         . (Join-Path $PSScriptRoot '..\AppAssistantRuntime.ps1')
     }
 
-    It 'falls back from a stale venv to the Python launcher' {
+    It 'repairs a stale venv with the configured bootstrap interpreter' {
         $root = Join-Path $TestDrive 'agent-service'
         $venv = Join-Path $root '.venv\Scripts\python.exe'
         New-Item -ItemType Directory -Force -Path (Split-Path $venv) | Out-Null
@@ -20,22 +20,29 @@ Describe 'App Assistant Python resolution' {
 
         $spec = Get-AppAssistantLaunchSpec `
             -AgentServiceRoot $root `
-            -CanRunPython { param($path) $path -eq 'py.exe' } `
-            -FindPython { 'py.exe' }
+            -BootstrapPython 'conda.exe' `
+            -CanRunPython { param($path) $path -eq $venv } `
+            -RepairVenv {
+                param($bootstrapPython, $venvPath, $agentServiceRoot)
+                if ($bootstrapPython -ne 'conda.exe' -or
+                    $venvPath -ne (Join-Path $root '.venv') -or
+                    $agentServiceRoot -ne $root) {
+                    throw 'repair did not receive the configured bootstrap interpreter and sidecar paths'
+                }
+            }.GetNewClosure()
 
-        $spec.Executable | Should Be 'py.exe'
-        $spec.Arguments | Should Be @('-3.13', '-m', 'uvicorn', 'app_assistant.server:app', '--host', '127.0.0.1', '--port', '8787')
+        $spec.Executable | Should Be $venv
+        $spec.Arguments | Should Be @('-m', 'uvicorn', 'app_assistant.server:app', '--host', '127.0.0.1', '--port', '8787')
     }
 
-    It 'rejects a Python launcher that cannot run the sidecar' {
+    It 'rejects a missing configured bootstrap interpreter' {
         $root = Join-Path $TestDrive 'agent-service'
         $specAction = {
             Get-AppAssistantLaunchSpec `
                 -AgentServiceRoot $root `
-                -CanRunPython { param($path) $false } `
-                -FindPython { 'py.exe' }
+                -CanRunPython { param($path) $false }
         }
 
-        $specAction | Should Throw 'No usable Python runtime was found. Repair agent-service\.venv or install py.exe.'
+        $specAction | Should Throw 'No usable Python runtime was found. Configure bootstrapPython to repair agent-service\.venv.'
     }
 }

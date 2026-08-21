@@ -109,8 +109,29 @@ if (-not (Test-Path (Join-Path $assistantRoot "pyproject.toml"))) {
 }
 
 . $assistantRuntimeCommand
+$assistantBootstrapPython = $null
+$assistantWorkerConfigPath = Join-Path $env:LOCALAPPDATA 'AutomationWorkbench\CodexWorker\config.json'
+$assistantWorkerConfigExists = $false
 try {
-    $assistantLaunchSpec = Get-AppAssistantLaunchSpec -AgentServiceRoot $assistantRoot
+    $assistantWorkerConfigExists = Test-Path -LiteralPath $assistantWorkerConfigPath -PathType Leaf -ErrorAction Stop
+} catch {
+    Write-Host "!!! Could not access configured Codex worker bootstrap Python at $assistantWorkerConfigPath." -ForegroundColor Red
+    exit 1
+}
+if ($assistantWorkerConfigExists) {
+    try {
+        $assistantWorkerConfig = Get-Content -Raw -LiteralPath $assistantWorkerConfigPath | ConvertFrom-Json
+        $bootstrapProperty = $assistantWorkerConfig.PSObject.Properties['bootstrapPython']
+        if ($null -ne $bootstrapProperty) {
+            $assistantBootstrapPython = [string]$bootstrapProperty.Value
+        }
+    } catch {
+        Write-Host "!!! Could not read configured Codex worker bootstrap Python from $assistantWorkerConfigPath." -ForegroundColor Red
+        exit 1
+    }
+}
+try {
+    $assistantLaunchSpec = Get-AppAssistantLaunchSpec -AgentServiceRoot $assistantRoot -BootstrapPython $assistantBootstrapPython
     $assistantExecutable = $assistantLaunchSpec.Executable
     $assistantArguments = $assistantLaunchSpec.Arguments
 } catch {
