@@ -16,23 +16,20 @@ const resolve = (overrides: Partial<ContextDockInputs> = {}) =>
 
 describe('resolveContextDock', () => {
   it('hides the dock without a worktree (project landing)', () => {
-    for (const focusedView of ['overview', 'chat', 'source', 'knowledge', 'git'] as WorkspaceViewKind[]) {
+    for (const focusedView of ['overview', 'chat', 'source', 'knowledge'] as WorkspaceViewKind[]) {
       const state = resolve({ worktreeId: null, deviceId: null, mainViewKind: 'project', focusedView })
       expect(state.visible, `focus ${focusedView}`).toBe(false)
       expect(state.content.kind).toBe('none')
     }
   })
 
-  it('hides the dock on the worktree landing page for device-view focus kinds', () => {
-    for (const focusedView of ['overview', 'chat', 'source', 'knowledge'] as WorkspaceViewKind[]) {
+  it('shows the version-control dock on the worktree landing page regardless of stale focus', () => {
+    // Version control is worktree-level: the dock hosts it whenever the
+    // worktree landing page is shown, even with a stale device-view focus.
+    for (const focusedView of ['overview', 'chat', 'source', 'knowledge', null] as Array<WorkspaceViewKind | null>) {
       const state = resolve({ deviceId: null, mainViewKind: 'worktree', focusedView })
-      expect(state.visible, `focus ${focusedView}`).toBe(false)
+      expect(state, `focus ${focusedView}`).toEqual({ visible: true, content: { kind: 'version-control' } })
     }
-  })
-
-  it('shows the version-control dock for git focus even without a device (stale focus on landing)', () => {
-    const state = resolve({ deviceId: null, mainViewKind: 'worktree', focusedView: 'git' })
-    expect(state).toEqual({ visible: true, content: { kind: 'version-control' } })
   })
 
   it('shows the hardware dock on the hardware tree page without a device', () => {
@@ -41,9 +38,9 @@ describe('resolveContextDock', () => {
   })
 
   it('keeps device/session docks out of hardware pages even with stale focus', () => {
-    // A stale 'git' focus left over from before the hardware page opened must
-    // not stack the version-control dock on top of the hardware dock.
-    const stale = resolve({ deviceId: null, mainViewKind: 'hardware', hardwarePage: 'tree', focusedView: 'git' })
+    // A stale workspace focus left over from before the hardware page opened
+    // must not stack a device dock on top of the hardware dock.
+    const stale = resolve({ deviceId: null, mainViewKind: 'hardware', hardwarePage: 'tree', focusedView: 'chat' })
     expect(stale).toEqual({ visible: true, content: { kind: 'hardware' } })
 
     for (const page of ['bom', 'network'] as const) {
@@ -61,11 +58,6 @@ describe('resolveContextDock', () => {
       .toEqual({ visible: true, content: { kind: 'knowledge' } })
     expect(resolve({ focusedView: 'knowledge', hasKnowledgeContext: false }))
       .toEqual({ visible: true, content: { kind: 'none' } })
-  })
-
-  it('shows the version-control dock for git focus with a device', () => {
-    expect(resolve({ focusedView: 'git' }))
-      .toEqual({ visible: true, content: { kind: 'version-control' } })
   })
 
   it('shows the session dock for chat and source focus', () => {

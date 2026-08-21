@@ -25,7 +25,7 @@ const tabIdsOf = (model: Model, tabsetId: string): string[] => {
 }
 
 describe('workspace model geometry', () => {
-  it('starts as one tabset with the five view tabs in kind order', () => {
+  it('starts as one tabset with the four view tabs in kind order', () => {
     const model = Model.fromJson(buildDefaultWorkspaceLayout())
 
     expect(tabsetIds(model)).toEqual([DEFAULT_WORKSPACE_TABSET_ID])
@@ -55,19 +55,18 @@ describe('workspace model geometry', () => {
       workspaceViewInstanceId('overview'),
       workspaceViewInstanceId('chat'),
       workspaceViewInstanceId('knowledge'),
-      workspaceViewInstanceId('git'),
     ])
   })
 
   it('selectTab keeps the instanceId ↔ kind mapping intact for onTabChange', () => {
     const model = Model.fromJson(buildDefaultWorkspaceLayout())
 
-    model.doAction(Actions.selectTab(workspaceViewInstanceId('git')))
+    model.doAction(Actions.selectTab(workspaceViewInstanceId('knowledge')))
 
     const selectedId = model.getActiveTabset()?.getSelectedNode()?.getId()
-    expect(selectedId).toBe(workspaceViewInstanceId('git'))
+    expect(selectedId).toBe(workspaceViewInstanceId('knowledge'))
     // This is the exact mapping WorkspaceHost's onModelChange handler applies.
-    expect(workspaceViewKindForInstanceId(selectedId!)).toBe('git')
+    expect(workspaceViewKindForInstanceId(selectedId!)).toBe('knowledge')
   })
 })
 

@@ -33,7 +33,7 @@ import WorkspaceHost, { type WorkspaceViewKind } from '@/studio/workspace/Worksp
 import { WorkspaceService } from '@/studio/workspace/WorkspaceService'
 import { resolveContextDock } from '@/studio/workspace/contextDock'
 import { readWorkspaceLayout, writeWorkspaceLayout } from '@/studio/workspace/workspaceLayoutStorage'
-import VersionControlDetailsDock from '@/studio/version-control/VersionControlDetailsDock'
+import VersionControlPanel from '@/studio/version-control/VersionControlPanel'
 import WorkbenchNavigator, {
   type WorkbenchSelection,
 } from '@/studio/workbench/WorkbenchNavigator'
@@ -510,17 +510,12 @@ export default function MainStudio() {
   const [apiBalance, setApiBalance] = useState<api.DeepSeekBalance | null>(null)
   const [balanceRefreshState, setBalanceRefreshState] = useState<DeepSeekBalanceRefreshState>('idle')
   const [chatSourceContext, setChatSourceContext] = useState<SourceChatContext | null>(null)
-  const [versionControlSelection, setVersionControlSelection] = useState<unknown>(null)
   const [appAssistantOpen, setAppAssistantOpen] = useState(false)
   const [appAssistantRuntime, setAppAssistantRuntime] = useState<api.AppAssistantRuntimeSnapshot | null>(null)
   const [projectAccess, setProjectAccess] = useState<{
     project: api.ProjectInfo
     capabilities: api.ProjectCapabilities
   } | null>(null)
-
-  useEffect(() => {
-    setVersionControlSelection(null)
-  }, [selection.workbenchId, selection.worktreeId, selection.deviceId])
 
   useEffect(() => {
     setAppAssistantRuntime(null)
@@ -929,6 +924,9 @@ export default function MainStudio() {
       }))
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
       setMainView({ kind: 'worktree', tab: 'overview' })
+      // Version control lives in the right dock of the worktree page; make
+      // sure the dock is visible when navigating there.
+      setShellLayout(previous => previous.rightOpen ? previous : { ...previous, rightOpen: true })
       setDeviceSelection(null)
       setChatTabs(emptyChatTabs())
     } catch (error) {
@@ -1620,8 +1618,12 @@ export default function MainStudio() {
     const workbench = targetContext?.workbench ?? activeWorkbench
     const worktree = targetContext?.worktree ?? activeWorktree
     if (!workbench || !worktree || worktree.branch === 'master') return
-    workspaceService.showDiff()
-    toast.info(`Validate and merge ${worktree.branch} from the Version control workspace.`)
+    // Version control is a worktree-level concern and lives in the worktree
+    // page right dock: navigate there so the branch can be validated/merged.
+    if (selection.worktreeId !== worktree.worktreeId || selection.deviceId !== null) {
+      await selectWorktree(workbench, worktree)
+    }
+    toast.info(`Validate and merge ${worktree.branch} from the version control dock.`)
   }
 
   const deleteWorkbench = async () => {
@@ -2094,7 +2096,7 @@ export default function MainStudio() {
                 </div>
                 <h1 className="text-xl font-semibold tracking-tight">Select a device context</h1>
                 <p className="mx-auto mt-2 max-w-md text-[11px] leading-relaxed text-muted-foreground">
-                  Choose a workbench, linked worktree, and PLC device. Every source, knowledge, Git, and chat operation is then bound to that exact context.
+                  Choose a workbench, linked worktree, and PLC device. Every source, knowledge, and chat operation is then bound to that exact context.
                 </p>
                 {workbenches.length === 0 && (
                   <button className="primary-button mt-5" onClick={openCreateWorkbench}>
@@ -2171,11 +2173,6 @@ export default function MainStudio() {
                 onNodeSelect: node => setKnowledgeSelection(previous => ({ ...previous, node })),
                 onEdgeSelect: edge => setKnowledgeSelection(previous => ({ ...previous, edge })),
               }}
-              git={{
-                workbenchId: selection.workbenchId!,
-                worktreeId: selection.worktreeId!,
-                onSelectionChange: setVersionControlSelection,
-              }}
             />
           )}
         </main>
@@ -2218,11 +2215,10 @@ export default function MainStudio() {
                   hidden={false}
                 />
               )}
-              {contextDock.content.kind === 'version-control' && (
-                <VersionControlDetailsDock
-                  context={{ workbenchId: selection.workbenchId!, worktreeId: selection.worktreeId! }}
-                  selection={versionControlSelection}
-                  hidden={false}
+              {contextDock.content.kind === 'version-control' && selection.workbenchId && selection.worktreeId && (
+                <VersionControlPanel
+                  workbenchId={selection.workbenchId}
+                  worktreeId={selection.worktreeId}
                 />
               )}
               {contextDock.content.kind === 'sessions' && (

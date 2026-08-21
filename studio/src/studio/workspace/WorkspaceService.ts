@@ -90,13 +90,8 @@ export class WorkspaceService {
     this.focusView('source')
   }
 
-  /** Semantic alias: intent is "review/merge changes", not geometry. */
-  showDiff(): void {
-    this.focusView('git')
-  }
-
   /**
-   * Replaces the model with the default layout (single tabset, five views).
+   * Replaces the model with the default layout (single tabset, four views).
    * Notifies model subscribers so hosts remount the Layout, restores focus to
    * the overview, and reports the default geometry via onLayoutChange (which
    * overwrites any persisted custom layout).

@@ -18,7 +18,9 @@ const entry = (overrides: Partial<VersionControlSourceEntry> = {}): VersionContr
   ...overrides,
 })
 
-const render = async (entries: VersionControlSourceEntry[], onSelectionChange = vi.fn()) => {
+const snapshot = { revision: 3, commitsSince: 2, hardwareDiffers: false }
+
+const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -27,23 +29,25 @@ const render = async (entries: VersionControlSourceEntry[], onSelectionChange = 
       <VersionControlChanges
         workbenchId="wb-1"
         worktreeId="wt-1"
+        branch="master"
         entries={entries}
-        onSelectionChange={onSelectionChange}
+        compareSignal={compareSignal}
+        snapshot={snapshotOverride}
       />,
     )
   })
-  return { host, root, onSelectionChange }
+  return { host, root }
 }
 
 const click = async (element: Element) => {
   await act(async () => element.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 }
 
-const input = async (element: HTMLInputElement, value: string) => {
+const type = async (element: HTMLTextAreaElement | HTMLInputElement, value: string) => {
   await act(async () => {
-    element.value = value
+    const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(element, value)
     element.dispatchEvent(new Event('input', { bubbles: true }))
-    element.dispatchEvent(new Event('change', { bubbles: true }))
   })
 }
 
@@ -53,7 +57,24 @@ afterEach(() => {
 })
 
 describe('VersionControlChanges', () => {
-  it('groups PLC objects and commits exactly the selected paths', async () => {
+  it('groups PLC objects into collapsible folders and selects rows on click', async () => {
+    const { host } = await render([
+      entry({ filePath: 'devices/PLC_1/source/Blocks/A.xml', objectName: 'A' }),
+      entry({ filePath: 'devices/PLC_1/source/Blocks/B.xml', objectName: 'B', state: 'Unauthorized', authorizedOnMaster: false }),
+      entry({ plcName: 'PLC_2', deviceId: 'dev-2', category: 'Tags', objectName: 'Inputs', filePath: 'devices/PLC_2/source/Tags/Inputs.xml' }),
+    ])
+
+    expect(host.textContent).toContain('PLC_1 · Block')
+    expect(host.textContent).toContain('PLC_2 · Tags')
+
+    const row = host.querySelector('[data-testid="plc-source-row"]')!
+    expect(row.getAttribute('data-selected')).toBe('false')
+    await click(row)
+    expect(host.querySelector('[data-testid="plc-source-row"]')!.getAttribute('data-selected')).toBe('true')
+    expect(host.textContent).toContain('Commit selected (1)')
+  })
+
+  it('commits exactly the selected paths with the typed message', async () => {
     const commit = vi.spyOn(api, 'commitVcPaths').mockResolvedValue({
       sha: 'abc',
       message: 'change A',
@@ -62,47 +83,90 @@ describe('VersionControlChanges', () => {
     const { host } = await render([
       entry({ filePath: 'devices/PLC_1/source/Blocks/A.xml', objectName: 'A' }),
       entry({ filePath: 'devices/PLC_1/source/Blocks/B.xml', objectName: 'B' }),
-      entry({ plcName: 'PLC_2', deviceId: 'dev-2', category: 'Tags', objectName: 'Inputs', filePath: 'devices/PLC_2/source/Tags/Inputs.xml' }),
     ])
 
-    expect(host.textContent).toContain('PLC_1 · Block')
-    expect(host.textContent).toContain('PLC_2 · Tags')
+    const commitButton = host.querySelector('[data-testid="vc-commit-selected"]') as HTMLButtonElement
+    expect(commitButton.disabled).toBe(true)
 
-    await click(host.querySelector('input[aria-label="Select A"]')!)
-    await input(host.querySelector('input[aria-label="Commit message"]')!, 'change A')
-    await click(host.querySelector('button[aria-label="Commit selected (1)"]')!)
+    await click(host.querySelectorAll('[data-testid="plc-source-row"]')[0])
+    await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'change A')
+    await click(host.querySelector('[data-testid="vc-commit-selected"]')!)
 
-    expect(commit).toHaveBeenCalledWith(
-      'wb-1',
-      'wt-1',
-      ['devices/PLC_1/source/Blocks/A.xml'],
-      'change A',
-    )
+    expect(commit).toHaveBeenCalledWith('wb-1', 'wt-1', ['devices/PLC_1/source/Blocks/A.xml'], 'change A')
   })
 
-  it('selects all objects in a group; direct master edits stay selectable and labeled', async () => {
+  it('commits all changes through the split-button menu', async () => {
+    const commit = vi.spyOn(api, 'commitVcPaths').mockResolvedValue({
+      sha: 'abc',
+      message: 'all',
+      files: ['devices/PLC_1/source/Blocks/A.xml', 'devices/PLC_1/source/Blocks/B.xml'],
+    })
     const { host } = await render([
-      entry({ objectName: 'A', filePath: 'devices/PLC_1/source/Blocks/A.xml' }),
-      entry({ objectName: 'B', filePath: 'devices/PLC_1/source/Blocks/B.xml', state: 'Unauthorized', authorizedOnMaster: false }),
+      entry({ filePath: 'devices/PLC_1/source/Blocks/A.xml', objectName: 'A' }),
+      entry({ filePath: 'devices/PLC_1/source/Blocks/B.xml', objectName: 'B' }),
     ])
 
-    const groupSelect = host.querySelector('input[aria-label="Select all PLC_1 Block objects"]')!
-    await click(groupSelect)
+    await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'all')
+    await click(host.querySelector('button[aria-label="Commit options"]')!)
+    await click(host.querySelector('[data-testid="vc-commit-all"]')!)
 
-    expect((host.querySelector('input[aria-label="Select A"]') as HTMLInputElement).checked).toBe(true)
-    // Direct master edits are committable (policy relaxed); the label is informational only.
-    expect((host.querySelector('input[aria-label="Select B"]') as HTMLInputElement).checked).toBe(true)
-    expect(host.textContent).toContain('Direct master edit')
-    expect(host.textContent).not.toMatch(/Stage|Unstage|Restore/)
+    expect(commit).toHaveBeenCalledWith('wb-1', 'wt-1', [
+      'devices/PLC_1/source/Blocks/A.xml',
+      'devices/PLC_1/source/Blocks/B.xml',
+    ], 'all')
   })
 
-  it('reports row selection separately from commit selection', async () => {
-    const onSelectionChange = vi.fn()
-    const item = entry()
-    const { host } = await render([item], onSelectionChange)
+  it('shows the clean-state hero when there are no changes', async () => {
+    const { host } = await render([])
+    expect(host.querySelector('[data-testid="vc-changes-empty"]')?.textContent).toContain('No changes on this branch')
+    expect(host.querySelector('textarea')).toBeNull()
+  })
 
-    await click(host.querySelector('[data-testid="plc-source-row"]')!)
+  it('shows the snapshot area with revision, drift, and hardware badges', async () => {
+    const { host } = await render([entry()], { revision: 3, commitsSince: 2, hardwareDiffers: true })
 
-    expect(onSelectionChange).toHaveBeenCalledWith(item)
+    expect(host.querySelector('[data-testid="vc-snapshot-revision"]')?.textContent).toBe('r3')
+    expect(host.querySelector('[data-testid="vc-snapshot-drift"]')?.textContent).toContain('2 commits since')
+    expect(host.querySelector('[data-testid="vc-hardware-differs"]')?.textContent).toContain('hardware different')
+  })
+
+  it('creates a TIA snapshot only with a description', async () => {
+    const create = vi.spyOn(api, 'createSvnSavepoint').mockResolvedValue({ sha: 'deadbeefcafe', message: 'before IP change', files: [] })
+    const { host } = await render([], { revision: null, commitsSince: null, hardwareDiffers: false })
+
+    expect(host.textContent).toContain('No savepoint yet')
+    const button = host.querySelector('[data-testid="vc-create-snapshot"]') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+
+    await type(host.querySelector('input[aria-label="Description for TIA snapshot"]')!, 'before IP change')
+    await click(host.querySelector('[data-testid="vc-create-snapshot"]')!)
+
+    expect(create).toHaveBeenCalledWith('wb-1', 'wt-1', 'before IP change')
+  })
+
+  it('runs the TIA comparison inline when signalled and lists the detected files', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue({
+      comparisonId: 'comparison-1',
+      masterSha: 'master-1',
+      fastGatePassed: false,
+      state: 'Different',
+      liveChecksums: {},
+      differences: [{
+        deviceId: 'dev-1',
+        plcName: 'PLC_1',
+        relativePath: 'devices/PLC_1/source/Blocks/Main.xml',
+        identity: 'Main',
+        kind: 'Changed',
+        masterFingerprint: 'old',
+        tiaFingerprint: 'new',
+        supported: true,
+      }],
+    })
+    vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
+    const { host } = await render([entry()], snapshot, 1)
+
+    expect(compare).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
+    expect(host.textContent).toContain('PLC_1 · Main')
   })
 })

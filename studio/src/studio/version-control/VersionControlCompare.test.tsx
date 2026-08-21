@@ -26,7 +26,7 @@ const comparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): ap
   ...overrides,
 })
 
-const render = async (onCommitted?: () => void) => {
+const render = async (props: { signal?: number; commitMessage?: string; branch?: string; onCommitted?: () => void } = {}) => {
   vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue({
     revision: {
       schemaVersion: 1,
@@ -44,7 +44,16 @@ const render = async (onCommitted?: () => void) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
-  await act(async () => root.render(<VersionControlCompare workbenchId="wb-1" worktreeId="wt-1" branch="master" onCommitted={onCommitted} />))
+  await act(async () => root.render(
+    <VersionControlCompare
+      workbenchId="wb-1"
+      worktreeId="wt-1"
+      branch={props.branch ?? 'master'}
+      signal={props.signal ?? 1}
+      commitMessage={props.commitMessage ?? ''}
+      onCommitted={props.onCommitted}
+    />,
+  ))
   return { host, root }
 }
 
@@ -52,21 +61,31 @@ const click = async (element: Element) => {
   await act(async () => element.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 }
 
-const input = async (element: HTMLInputElement, value: string) => {
-  await act(async () => {
-    element.value = value
-    element.dispatchEvent(new Event('input', { bubbles: true }))
-    element.dispatchEvent(new Event('change', { bubbles: true }))
-  })
-}
-
 afterEach(() => {
   vi.restoreAllMocks()
   document.body.innerHTML = ''
 })
 
-describe('VersionControlCompare', () => {
-  it('requires a title and auto-commits selected TIA changes', async () => {
+describe('VersionControlCompare (inline)', () => {
+  it('renders nothing until a compare is signalled', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    const { host } = await render({ signal: 0 })
+
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
+    expect(compare).not.toHaveBeenCalled()
+  })
+
+  it('executes the comparison as soon as the signal arrives and lists differences', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    const { host } = await render({ signal: 1 })
+
+    expect(compare).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
+    expect(host.textContent).toContain('PLC_1 · Main')
+    expect(host.textContent).toContain('TIA differs from master')
+  })
+
+  it('accepts selected TIA changes using the changes-page commit message', async () => {
     const compare = vi.spyOn(api, 'compareMasterWithTia')
       .mockResolvedValueOnce(comparison())
       .mockResolvedValueOnce(comparison({ differences: [], state: 'Consistent' }))
@@ -75,16 +94,10 @@ describe('VersionControlCompare', () => {
       pendingPaths: [],
       commitSha: 'commit-2',
     })
-    const { host } = await render()
+    const { host } = await render({ signal: 1, commitMessage: 'Accept Main from TIA' })
 
-    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
     await click(host.querySelector('input[type="checkbox"]')!)
-
-    const acceptButton = host.querySelector('button[aria-label="Accept selected TIA changes"]') as HTMLButtonElement
-    expect(acceptButton.disabled).toBe(true)
-    await input(host.querySelector('input[aria-label="TIA commit title"]')!, 'Accept Main from TIA')
-    expect(acceptButton.disabled).toBe(false)
-    await click(acceptButton)
+    await click(host.querySelector('button[aria-label="Accept selected TIA changes"]')!)
 
     expect(accept).toHaveBeenCalledWith(
       'wb-1',
@@ -93,27 +106,18 @@ describe('VersionControlCompare', () => {
       'Accept Main from TIA',
     )
     expect(compare).toHaveBeenCalledTimes(2)
-    expect(host.textContent).toContain('Committed commit-2')
+    expect(host.textContent).toContain('TIA matches master')
   })
 
-  it('notifies the parent after an accepted TIA commit so history can refresh', async () => {
-    vi.spyOn(api, 'compareMasterWithTia')
-      .mockResolvedValueOnce(comparison())
-      .mockResolvedValueOnce(comparison({ differences: [], state: 'Consistent' }))
-    vi.spyOn(api, 'acceptTiaSynchronization').mockResolvedValue({
-      comparisonId: 'comparison-1',
-      pendingPaths: [],
-      commitSha: 'commit-2',
-    })
-    const onCommitted = vi.fn()
-    const { host } = await render(onCommitted)
+  it('keeps accept disabled until a commit message exists', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    const { host } = await render({ signal: 1, commitMessage: '' })
 
-    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
     await click(host.querySelector('input[type="checkbox"]')!)
-    await input(host.querySelector('input[aria-label="TIA commit title"]')!, 'Accept Main from TIA')
-    await click(host.querySelector('button[aria-label="Accept selected TIA changes"]')!)
 
-    expect(onCommitted).toHaveBeenCalledOnce()
+    const acceptButton = host.querySelector('button[aria-label="Accept selected TIA changes"]') as HTMLButtonElement
+    expect(acceptButton.disabled).toBe(true)
+    expect(host.textContent).toContain('Type a commit message above')
   })
 
   it('pushes selected local objects into TIA and shows per-object outcomes', async () => {
@@ -122,9 +126,8 @@ describe('VersionControlCompare', () => {
       comparisonId: 'comparison-1',
       outcomes: [{ path: 'devices/PLC_1/source/Blocks/Main.xml', success: true, message: null }],
     })
-    const { host } = await render()
+    const { host } = await render({ signal: 1 })
 
-    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
     await click(host.querySelector('input[type="checkbox"]')!)
     await click(host.querySelector('button[aria-label="Push selected local changes to TIA"]')!)
 
@@ -133,49 +136,31 @@ describe('VersionControlCompare', () => {
     expect(host.textContent).toContain('devices/PLC_1/source/Blocks/Main.xml')
   })
 
-  it('offers an SVN savepoint when checksums drift without source differences', async () => {
+  it('points checksum drift without source differences to the snapshot area', async () => {
     vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
       differences: [],
       state: 'Consistent',
       liveChecksums: { 'dev-1': 'checksum-9' },
     }))
-    const createSavepoint = vi.spyOn(api, 'createSvnSavepoint').mockResolvedValue({
-      sha: 'feedface00',
-      message: 'safety change',
-      files: ['engineering-state/revision.json'],
-    })
-    const { host } = await render()
-
-    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
+    const { host } = await render({ signal: 1 })
 
     expect(host.textContent).toContain('TIA changed outside the tracked source')
-    const messageInput = host.querySelector('input[aria-label="Savepoint message"]') as HTMLInputElement
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
-      setter.call(messageInput, 'safety change')
-      messageInput.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    await click(host.querySelector('button[aria-label="Create SVN savepoint"]')!)
-
-    expect(createSavepoint).toHaveBeenCalledWith('wb-1', 'wt-1', 'safety change')
-    expect(host.textContent).toContain('SVN savepoint committed feedface')
+    expect(host.textContent).toContain('TIA snapshot below')
   })
 
-  it('reports no need to commit when checksums match and no differences exist', async () => {
+  it('reports TIA matches master when checksums match and no differences exist', async () => {
     vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
       differences: [],
       state: 'Consistent',
       liveChecksums: { 'dev-1': 'checksum-2' },
     }))
-    const { host } = await render()
+    const { host } = await render({ signal: 1 })
 
-    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
-
-    expect(host.textContent).toContain('no need to commit')
+    expect(host.textContent).toContain('TIA matches master')
     expect(host.textContent).not.toContain('TIA changed outside the tracked source')
   })
 
-  it('requires a message before accepting project hardware changes', async () => {
+  it('accepts project hardware changes with the commit message as title', async () => {
     const hardware = {
       state: 'changed' as const,
       rootPath: 'C:/wb/worktrees/master/hardware',
@@ -191,19 +176,20 @@ describe('VersionControlCompare', () => {
       artifactCount: 1,
       commitSha: 'hardware-commit',
     })
-    const { host } = await render()
-
-    await click(host.querySelector('button[aria-label="Compare with TIA"]')!)
+    const { host } = await render({ signal: 1, commitMessage: 'Add safety relay' })
 
     expect(host.textContent).toContain('Project hardware differs from TIA')
-    expect(host.textContent).not.toContain('TIA matches master')
-    const acceptButton = host.querySelector('button[aria-label="Accept TIA hardware configuration"]') as HTMLButtonElement
-    expect(acceptButton.disabled).toBe(true)
-    await input(host.querySelector('input[aria-label="Hardware commit message"]')!, 'Add safety relay')
-    expect(acceptButton.disabled).toBe(false)
-    await click(acceptButton)
+    await click(host.querySelector('button[aria-label="Accept TIA hardware configuration"]')!)
 
     expect(overwrite).toHaveBeenCalledWith('wb-1', 'wt-1', true, undefined, 'Add safety relay')
-    expect(host.textContent).toContain('Hardware committed hardware')
+  })
+
+  it('dismisses the result section', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    const { host } = await render({ signal: 1 })
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
+
+    await click(host.querySelector('button[aria-label="Dismiss comparison"]')!)
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
   })
 })

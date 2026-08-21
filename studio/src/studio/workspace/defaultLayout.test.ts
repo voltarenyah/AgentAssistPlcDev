@@ -12,7 +12,7 @@ describe('buildDefaultWorkspaceLayout', () => {
     const tabset = json.layout.children[0]
     expect(tabset.type).toBe('tabset')
     expect(tabset.id).toBe(DEFAULT_WORKSPACE_TABSET_ID)
-    expect(tabset.children).toHaveLength(5)
+    expect(tabset.children).toHaveLength(4)
   })
 
   it('uses stable instanceIds as tab ids and the kind as the component', () => {
@@ -26,7 +26,6 @@ describe('buildDefaultWorkspaceLayout', () => {
       'AI chat',
       'PLC source',
       'Knowledge',
-      'Version control',
     ])
   })
 

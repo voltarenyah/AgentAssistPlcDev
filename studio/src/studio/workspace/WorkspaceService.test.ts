@@ -45,14 +45,11 @@ describe('WorkspaceService', () => {
     expect(service.getFocusedViewKind()).toBe('knowledge')
   })
 
-  it('showSource and showDiff are semantic aliases for the source and git views', () => {
+  it('showSource is a semantic alias for the source view', () => {
     const service = new WorkspaceService()
 
     service.showSource()
     expect(service.getFocusedViewKind()).toBe('source')
-
-    service.showDiff()
-    expect(service.getFocusedViewKind()).toBe('git')
   })
 
   it('focus follows the selected tab of the active tabset after a split', () => {
@@ -71,10 +68,10 @@ describe('WorkspaceService', () => {
     expect(service.getFocusedViewKind()).toBe('source')
 
     // Focusing a view in the original tabset reactivates that tabset.
-    service.focusView('git')
-    expect(service.getFocusedViewKind()).toBe('git')
+    service.focusView('knowledge')
+    expect(service.getFocusedViewKind()).toBe('knowledge')
 
-    expect(listener.mock.calls.map(call => call[0])).toEqual(['source', 'git'])
+    expect(listener.mock.calls.map(call => call[0])).toEqual(['source', 'knowledge'])
   })
 
   it('stops notifying after unsubscribe', () => {

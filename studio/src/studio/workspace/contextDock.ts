@@ -4,6 +4,9 @@
 // splits this mapping just re-runs with the new focused kind. When landing or
 // hardware pages are shown the workspace is not visible and focusedView may be
 // stale — the rules below keep device/session docks out of those states.
+//
+// Version control is a worktree-level concept: on the worktree landing page
+// (no device selected) the right dock hosts the version control panel.
 
 import type { WorkspaceViewKind } from './workspaceTypes'
 
@@ -36,11 +39,14 @@ export const resolveContextDock = (inputs: ContextDockInputs): ContextDockState 
   const { worktreeId, deviceId, mainViewKind, hardwarePage, focusedView, hasKnowledgeContext } = inputs
 
   const visible = Boolean(worktreeId)
-    && (deviceId !== null || mainViewKind === 'hardware' || focusedView === 'git')
+    && (deviceId !== null || mainViewKind === 'hardware' || mainViewKind === 'worktree')
   if (!visible) return { visible: false, content: none }
 
-  // Hardware page without a device: the properties dock wins even over a stale
-  // 'git' focus left over from before the hardware page was opened.
+  // Worktree landing page: the version control panel is the worktree-level dock.
+  if (deviceId === null && mainViewKind === 'worktree') {
+    return { visible, content: { kind: 'version-control' } }
+  }
+  // Hardware page without a device: the properties dock wins.
   if (deviceId === null && mainViewKind === 'hardware' && hardwarePage === 'tree') {
     return { visible, content: { kind: 'hardware' } }
   }
@@ -49,9 +55,6 @@ export const resolveContextDock = (inputs: ContextDockInputs): ContextDockState 
   }
   if (deviceId !== null && focusedView === 'knowledge' && hasKnowledgeContext) {
     return { visible, content: { kind: 'knowledge' } }
-  }
-  if (focusedView === 'git') {
-    return { visible, content: { kind: 'version-control' } }
   }
   // Sessions fallback covers chat/source and a (normally impossible) null focus.
   if (deviceId !== null && focusedView !== 'overview' && focusedView !== 'knowledge') {
