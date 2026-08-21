@@ -32,11 +32,23 @@ jobs:
           CODEX_EVENT_NAME: ${{ github.event.label.name }}
         run: |
           $issueNumber = [int]$env:CODEX_ISSUE_NUMBER
+          $workerConfigPath = Join-Path $env:LOCALAPPDATA 'AutomationWorkbench\CodexWorker\config.json'
+          if (-not (Test-Path -LiteralPath $workerConfigPath -PathType Leaf)) {
+              throw "Codex worker configuration was not found at '$workerConfigPath'."
+          }
+          $workerConfig = Get-Content -Raw -LiteralPath $workerConfigPath | ConvertFrom-Json
+          $repositoryRoot = [string]$workerConfig.repositoryRoot
+          $dataRoot = [string]$workerConfig.dataRoot
+          if ([string]::IsNullOrWhiteSpace($repositoryRoot) -or [string]::IsNullOrWhiteSpace($dataRoot)) {
+              throw 'Codex worker configuration must specify repositoryRoot and dataRoot.'
+          }
           & .\scripts\codex-worker\Invoke-Revision.ps1 `
               -Repository ([string]$env:CODEX_REPOSITORY) `
               -IssueNumber $issueNumber `
               -Actor ([string]$env:CODEX_ACTOR) `
-              -EventName ([string]$env:CODEX_EVENT_NAME)
+              -EventName ([string]$env:CODEX_EVENT_NAME) `
+              -RepositoryRoot $repositoryRoot `
+              -DataRoot $dataRoot
 
       - name: Dispatch pull request revision
         if: github.event_name == 'pull_request' && github.event.label.name == 'codex:revise'
@@ -48,8 +60,20 @@ jobs:
           CODEX_EVENT_NAME: ${{ github.event.label.name }}
         run: |
           $pullRequestNumber = [int]$env:CODEX_PULL_REQUEST_NUMBER
+          $workerConfigPath = Join-Path $env:LOCALAPPDATA 'AutomationWorkbench\CodexWorker\config.json'
+          if (-not (Test-Path -LiteralPath $workerConfigPath -PathType Leaf)) {
+              throw "Codex worker configuration was not found at '$workerConfigPath'."
+          }
+          $workerConfig = Get-Content -Raw -LiteralPath $workerConfigPath | ConvertFrom-Json
+          $repositoryRoot = [string]$workerConfig.repositoryRoot
+          $dataRoot = [string]$workerConfig.dataRoot
+          if ([string]::IsNullOrWhiteSpace($repositoryRoot) -or [string]::IsNullOrWhiteSpace($dataRoot)) {
+              throw 'Codex worker configuration must specify repositoryRoot and dataRoot.'
+          }
           & .\scripts\codex-worker\Invoke-Revision.ps1 `
               -Repository ([string]$env:CODEX_REPOSITORY) `
               -PullRequestNumber $pullRequestNumber `
               -Actor ([string]$env:CODEX_ACTOR) `
-              -EventName ([string]$env:CODEX_EVENT_NAME)
+              -EventName ([string]$env:CODEX_EVENT_NAME) `
+              -RepositoryRoot $repositoryRoot `
+              -DataRoot $dataRoot
