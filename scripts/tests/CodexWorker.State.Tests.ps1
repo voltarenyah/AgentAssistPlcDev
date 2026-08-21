@@ -720,7 +720,7 @@ Describe 'Codex worker paths' {
         $events[$blockedLabelIndex + 1] | Should Not Be $events[$blockedCommentIndex + 1]
     }
 
-    It 'recovers publication through an injected boundary after the locked reread' {
+    It 'recovers publication and restores the pr-ready label after the locked reread' {
         $statePath = Join-Path $TestDrive 'publication-state.json'
         $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = (Join-Path $TestDrive 'publication-worktree'); threadId = $null; runDirectory = $null; commit = 'abc'; prUrl = $null; retryCount = 0; publicationStage = 'committed'; lastError = $null } }; deployment = $null }
         Write-CodexWorkerState -Path $statePath -State $state
@@ -731,13 +731,15 @@ Describe 'Codex worker paths' {
             $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
             $events.Add('save:' + $snapshot.publicationStage) | Out-Null
         }.GetNewClosure()
+        $statusCommands = New-Object 'System.Collections.Generic.List[string]'
         $github = {
             param([string[]] $Arguments)
             if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
-            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { $events.Add('issue-read') | Out-Null; return '{"number":42,"title":"Publication","body":"body","author":{"login":"reporter"},"comments":[],"labels":[],"state":"OPEN","url":"https://github.com/owner/repo/issues/42"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { $events.Add('issue-read') | Out-Null; return '{"number":42,"title":"Publication","body":"body","author":{"login":"reporter"},"comments":[],"labels":[{"name":"codex"},{"name":"codex:retry"},{"name":"codex:pr-ready"}],"state":"OPEN","url":"https://github.com/owner/repo/issues/42"}' }
             if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { $events.Add('development-read') | Out-Null; return '' }
             if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
-            throw 'Publication recovery must not mutate GitHub directly.'
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'edit') { $statusCommands.Add(($Arguments -join ' ')) | Out-Null; return '' }
+            throw 'Unexpected GitHub operation.'
         }.GetNewClosure()
         $lock = { param($Path) $events.Add('lock') | Out-Null; 'handle' }.GetNewClosure()
         $unlock = { param($Handle) $events.Add('unlock') | Out-Null }.GetNewClosure()
@@ -751,6 +753,8 @@ Describe 'Codex worker paths' {
         $saved = Read-CodexWorkerState -Path $statePath
         $saved.issues.'42'.publicationStage | Should Be 'pr-created'
         $saved.issues.'42'.prUrl | Should Be 'https://github.example/pr/42'
+        ($statusCommands -join ' ') | Should Match '--remove-label codex:retry'
+        ($statusCommands -join ' ') | Should Match '--add-label codex:pr-ready'
         $events.IndexOf('lock') | Should BeLessThan $events.IndexOf('issue-read')
         $events.IndexOf('issue-read') | Should BeLessThan $events.IndexOf('publication')
         $events.IndexOf('publication') | Should BeLessThan $events.IndexOf('save:pr-created')

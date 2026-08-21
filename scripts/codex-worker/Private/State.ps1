@@ -316,6 +316,8 @@ function Invoke-CodexIssueRun {
             if (-not [string]::IsNullOrWhiteSpace($newPrUrl)) { Set-CodexOrchestrationField $attemptState 'prUrl' $newPrUrl }
             if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attemptState }
             else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attemptState | Out-Null }
+            $recoveryLabels = @(Get-CodexOrchestrationField $issue 'labels' @())
+            Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'pr-ready' -CurrentLabels $recoveryLabels -CommandRunner $GitHubCommandRunner | Out-Null
             return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = $attemptState.status; PublicationStage = $attemptState.publicationStage; PrUrl = $attemptState.prUrl; RecoveredPublication = $true }
         }
         if ($existingStatus -in @('running', 'pr-ready') -and -not ($resumeEvent -and $existingStatus -eq 'pr-ready')) {
