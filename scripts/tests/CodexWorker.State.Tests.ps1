@@ -79,6 +79,14 @@ Describe 'Codex worker paths' {
         $module.ExportedFunctions.ContainsKey('Invoke-CodexIssueRun') | Should Be $true
     }
 
+    It 'persists explicit Kimi provider identity while legacy attempts default to Codex' {
+        $kimiAttempt = New-CodexIssueAttemptState -IssueNumber 71 -AgentProvider 'Kimi'
+        $legacyAttempt = New-CodexIssueAttemptState -IssueNumber 72
+
+        $kimiAttempt.agentProvider | Should Be 'Kimi'
+        $legacyAttempt.agentProvider | Should Be 'Codex'
+    }
+
     It 'persists a queued issue through running to pr-ready with bounded milestones' {
         $statePath = Join-Path $TestDrive 'lifecycle-state.json'
         $events = New-Object 'System.Collections.Generic.List[string]'

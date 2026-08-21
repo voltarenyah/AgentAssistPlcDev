@@ -67,7 +67,31 @@ Describe 'Codex worker PR-close deployment handoff' {
         $state.deployment.status | Should Be 'pending'
         $state.issues.'42'.status | Should Be 'done'
         (@($labels) -contains 'codex:done') | Should Be $true
-        (@($labels) -contains 'remove:codex:revise') | Should Be $true
+        (@($labels) -contains 'remove:codex:revise') | Should Be $false
+    }
+
+    It 'marks a merged Kimi attempt done without changing Codex lifecycle labels' {
+        $sha = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+        $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '71' = [pscustomobject]@{ issueNumber = 71; agentProvider = 'Kimi'; branch = 'codex/71-kimi'; worktree = (Join-Path $TestDrive 'issue-71-kimi'); status = 'pr-ready'; prUrl = 'https://github.com/owner/repo/pull/71' } }; deployment = $null }
+        $labels = [System.Collections.Generic.List[string]]::new()
+        $github = {
+            param([string[]] $Arguments)
+            if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":71,"state":"MERGED","url":"https://github.com/owner/repo/pull/71","headRefName":"codex/71-kimi","baseRefName":"master","headRepository":{"nameWithOwner":"owner/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":"2026-08-18T00:00:00Z","mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"closingIssuesReferences":[{"number":71,"repository":{"nameWithOwner":"owner/repo"}}]}' }
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'view') { return '{"number":71,"title":"Kimi","body":"body","labels":[{"name":"kimi"},{"name":"kimi-ready"},{"name":"codex:done"}]}' }
+            if ($Arguments -contains '--add-label') { $labels.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null }
+            if ($Arguments -contains '--remove-label') { $labels.Add('remove:' + $Arguments[$Arguments.IndexOf('--remove-label') + 1]) | Out-Null }
+            return ''
+        }.GetNewClosure()
+        $git = { param([string[]] $Arguments) if ($Arguments -contains 'rev-parse') { return $sha }; if ($Arguments -contains 'merge-base') { return '' }; return '' }.GetNewClosure()
+        $reader = { param($Path) $state }
+        $writer = { param($Path, $Current) $state = $Current }.GetNewClosure()
+
+        Register-CodexPullRequestClosed -Repository 'owner/repo' -PullRequestNumber 71 -Merged:$true -MergeCommitSha $sha -HeadBranch 'codex/71-kimi' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -StateReader $reader -StateWriter $writer -GitHubCommandRunner $github -GitCommandRunner $git -CleanupProvider { @() } -LockProvider { 'lock' } -UnlockProvider { param($h) } | Out-Null
+
+        $state.issues.'71'.agentProvider | Should Be 'Kimi'
+        $state.issues.'71'.status | Should Be 'done'
+        ($labels -contains 'kimi-done') | Should Be $true
+        ($labels -contains 'remove:codex:done') | Should Be $false
     }
 
     It 'coalesces a later verified origin master commit and preserves a later snooze' {

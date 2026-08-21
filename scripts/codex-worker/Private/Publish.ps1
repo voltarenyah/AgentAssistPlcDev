@@ -42,6 +42,14 @@ function Get-CodexPublicationValue {
     return $property.Value
 }
 
+function Get-CodexPublicationProvider {
+    param([object] $AttemptState)
+    $name = [string](Get-CodexPublicationValue $AttemptState 'agentProvider' 'Codex')
+    if ([string]::IsNullOrWhiteSpace($name)) { $name = 'Codex'; Set-CodexOrchestrationField $AttemptState 'agentProvider' $name }
+    $eventName = if ($name -eq 'Codex') { 'codex' } else { $name.ToLowerInvariant() }
+    return Resolve-CodexWorkerProvider -Provider $name -EventName $eventName
+}
+
 function Get-CodexPublicationChangedPaths {
     param([string] $DiffNames)
     return @($DiffNames -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -232,6 +240,7 @@ function Publish-CodexIssue {
     $worktree = [string](Get-CodexPublicationValue $AttemptState 'worktree' '')
     $branch = [string](Get-CodexPublicationValue $AttemptState 'branch' '')
     $stage = [string](Get-CodexPublicationValue $AttemptState 'publicationStage' 'none')
+    $provider = Get-CodexPublicationProvider -AttemptState $AttemptState
     if ($null -eq $Config) { $Config = [pscustomobject]@{} }
     if ([string]::IsNullOrWhiteSpace($Repository)) { $Repository = [string](Get-CodexPublicationValue $Config 'repository' $env:GITHUB_REPOSITORY) }
     if ([string]::IsNullOrWhiteSpace($DataRoot)) { $DataRoot = [string](Get-CodexPublicationValue $Config 'dataRoot' '') }
@@ -258,14 +267,14 @@ function Publish-CodexIssue {
             Set-CodexOrchestrationField $AttemptState 'commit' $sha.Trim()
             Set-CodexOrchestrationField $AttemptState 'publicationStage' 'committed'
             Write-CodexPublicationAttemptState -StatePath $StatePath -IssueNumber $issueNumber -AttemptState $AttemptState -StateWriter $StateWriter
-            Write-CodexWorkerMilestone -IssueNumber $issueNumber -Phase 'COMMITTED' -Details $AttemptState.commit
+            Write-CodexWorkerMilestone -IssueNumber $issueNumber -Phase (Get-CodexWorkerMilestonePhase -Provider $provider -CodexPhase 'COMMITTED' -ProviderPhase 'COMMITTED') -Details $AttemptState.commit
             $stage = 'committed'
     }
     if ($stage -eq 'committed') {
         Invoke-CodexPublicationGit -Worktree $worktree -Arguments @('push', 'origin', $branch) -CommandRunner $GitCommandRunner | Out-Null
         Set-CodexOrchestrationField $AttemptState 'publicationStage' 'pushed'
         Write-CodexPublicationAttemptState -StatePath $StatePath -IssueNumber $issueNumber -AttemptState $AttemptState -StateWriter $StateWriter
-        Write-CodexWorkerMilestone -IssueNumber $issueNumber -Phase 'PUSHED' -Details $branch
+        Write-CodexWorkerMilestone -IssueNumber $issueNumber -Phase (Get-CodexWorkerMilestonePhase -Provider $provider -CodexPhase 'PUSHED' -ProviderPhase 'PUSHED') -Details $branch
         $stage = 'pushed'
     }
     if ($stage -eq 'pushed') {
@@ -296,7 +305,8 @@ function Publish-CodexIssue {
         Set-CodexOrchestrationField $AttemptState 'publicationStage' 'pr-created'
         Write-CodexPublicationAttemptState -StatePath $StatePath -IssueNumber $issueNumber -AttemptState $AttemptState -StateWriter $StateWriter
         $prNumber = if ($prUrl -match '/pull/(\d+)(?:$|[/?#])') { $Matches[1] } else { 'unknown' }
-        $prPhase = if ($createdPullRequest) { 'PR RAISED' } else { 'PR READY' }
+        $codexPrPhase = if ($createdPullRequest) { 'PR RAISED' } else { 'PR READY' }
+        $prPhase = Get-CodexWorkerMilestonePhase -Provider $provider -CodexPhase $codexPrPhase -ProviderPhase 'READY'
         Write-CodexWorkerMilestone -IssueNumber $issueNumber -Phase $prPhase -Details ("PR #{0}: {1}" -f $prNumber, $prUrl)
     }
     return [pscustomobject][ordered]@{ publicationStage = $AttemptState.publicationStage; prUrl = $AttemptState.prUrl; commit = $AttemptState.commit; bodyPath = (Join-Path $runDirectory 'pull-request.md') }
@@ -330,6 +340,7 @@ function Invoke-CodexRevision {
         $state = if ($null -ne $StateReader) { & $StateReader $StatePath } else { Read-CodexWorkerState -Path $StatePath }
         $attempt = Get-CodexIssueAttemptState -State $state -IssueNumber $IssueNumber
         if ($null -eq $attempt) { throw 'Existing issue attempt state is required for revision.' }
+        $provider = Get-CodexPublicationProvider -AttemptState $attempt
         $branch = [string](Get-CodexPublicationValue $attempt 'branch' '')
         $worktree = [string](Get-CodexPublicationValue $attempt 'worktree' '')
         if ([string]::IsNullOrWhiteSpace($branch) -or [string]::IsNullOrWhiteSpace($worktree)) { throw 'Revision state must include the expected branch and worktree.' }
@@ -338,7 +349,7 @@ function Invoke-CodexRevision {
         $registeredMatch = @($registered | Where-Object { $_.Branch -eq $branch -and [IO.Path]::GetFullPath([string]$_.Path) -eq [IO.Path]::GetFullPath($worktree) })
         if ($registeredMatch.Count -ne 1) { throw 'Persisted revision worktree is not registered for the expected branch.' }
         $issue = Get-CodexIssueContext -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
-        Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase 'REVISION STARTED' -Details ([string](Get-CodexPublicationValue $issue 'title' "Issue $IssueNumber"))
+        Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase (Get-CodexWorkerMilestonePhase -Provider $provider -CodexPhase 'REVISION STARTED' -ProviderPhase 'REVISION STARTED') -Details ([string](Get-CodexPublicationValue $issue 'title' "Issue $IssueNumber"))
         $pr = $null
         if (-not [string]::IsNullOrWhiteSpace($PullRequestNumber)) {
             $pr = Get-CodexPullRequestContext -Repository $Repository -PullRequestNumber ([int]$PullRequestNumber) -CommandRunner $GitHubCommandRunner
@@ -371,13 +382,10 @@ function Invoke-CodexRevision {
         $attemptRun = Join-Path $paths.RunRoot (Join-Path "issue-$IssueNumber" ([string]$attemptNumber))
         Set-CodexOrchestrationField $attempt 'runDirectory' $attemptRun
         if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attempt | Out-Null } else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attempt | Out-Null }
-        Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase 'AGENT STARTED' -Details ("Revision attempt {0} for PR #{1}" -f $attemptNumber, $resolvedPrNumber)
+        Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase (Get-CodexWorkerMilestonePhase -Provider $provider -CodexPhase 'AGENT STARTED' -ProviderPhase 'AGENT STARTED') -Details ("Revision attempt {0} for PR #{1}" -f $attemptNumber, $resolvedPrNumber)
         if ($null -ne $CodexProvider) {
             $codex = & $CodexProvider $attempt.worktree $issue $Config $attemptRun $StatePath $reviewText $attempt.threadId
         } else {
-            $providerName = [string](Get-CodexValue $Config 'provider' '')
-            $providerEvent = if ([string]::IsNullOrWhiteSpace($providerName)) { 'codex' } else { $providerName.ToLowerInvariant() }
-            $provider = Resolve-CodexWorkerProvider -Provider $providerName -EventName $providerEvent
             $codex = Invoke-CodexWorkerAgentRun -Provider $provider -RunParameters @{
                 IssueWorktree = $attempt.worktree
                 IssueContext = $issue
@@ -405,11 +413,11 @@ function Invoke-CodexRevision {
         Set-CodexOrchestrationField $attempt 'summary' $summary
         if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attempt | Out-Null } else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attempt | Out-Null }
         $published = Publish-CodexIssue -AttemptState $attempt -IssueContext $issue -Config $Config -StatePath $StatePath -StateWriter $StateWriter -GitCommandRunner $GitCommandRunner -GitHubCommandRunner $GitHubCommandRunner -DataRoot $DataRoot -Repository $Repository -RequireExistingPullRequest
-        $evidence = "Codex revision validation completed for commit $($published.commit). Existing draft PR was updated; no new PR was created."
+        $evidence = "$($provider.Name) revision validation completed for commit $($published.commit). Existing draft PR was updated; no new PR was created."
         Add-CodexPullRequestComment -Repository $Repository -PullRequestNumber $resolvedPrNumber -Body $evidence -CommandRunner $GitHubCommandRunner | Out-Null
-        Remove-CodexPullRequestLabel -Repository $Repository -PullRequestNumber $resolvedPrNumber -Label 'codex:revise' -CommandRunner $GitHubCommandRunner | Out-Null
-        Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'pr-ready' -CommandRunner $GitHubCommandRunner | Out-Null
-        Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase 'PR UPDATED' -Details ("PR #{0}: {1}" -f $resolvedPrNumber, $published.prUrl)
+        Remove-CodexPullRequestLabel -Repository $Repository -PullRequestNumber $resolvedPrNumber -Label $provider.RevisionLabel -CommandRunner $GitHubCommandRunner | Out-Null
+        Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'pr-ready' -Provider $provider -CommandRunner $GitHubCommandRunner | Out-Null
+        Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase (Get-CodexWorkerMilestonePhase -Provider $provider -CodexPhase 'PR UPDATED' -ProviderPhase 'READY') -Details ("PR #{0}: {1}" -f $resolvedPrNumber, $published.prUrl)
         return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'pr-ready'; PublicationStage = $published.publicationStage; PrUrl = $published.prUrl; ExistingPullRequest = $true; PullRequestNumber = $resolvedPrNumber }
     } catch {
         try { Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase 'FAILED' -Details $_.Exception.Message } catch { }

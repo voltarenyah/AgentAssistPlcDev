@@ -167,6 +167,25 @@ Describe 'Codex worker GitHub adapter' {
         ($arguments -contains 'codex:running') | Should Be $true
     }
 
+    It 'moves a Kimi issue from kimi to kimi-ready without altering Codex labels' {
+        $events = [System.Collections.Generic.List[string]]::new()
+        $github = {
+            param([string[]] $Arguments)
+            if ($Arguments -contains '--add-label') { $events.Add('add:' + $Arguments[$Arguments.IndexOf('--add-label') + 1]) | Out-Null }
+            foreach ($index in 0..($Arguments.Count - 1)) {
+                if ($Arguments[$index] -eq '--remove-label') { $events.Add('remove:' + $Arguments[$index + 1]) | Out-Null }
+            }
+            return ''
+        }.GetNewClosure()
+        $kimi = Resolve-CodexWorkerProvider -Provider 'Kimi' -EventName 'kimi'
+
+        Set-CodexIssueStatus -Repository 'owner/repo' -IssueNumber 71 -Status 'pr-ready' -Provider $kimi -CurrentLabels @('kimi','kimi-running','codex:done') -CommandRunner $github
+
+        ($events -contains 'add:kimi-ready') | Should Be $true
+        ($events -contains 'remove:kimi-running') | Should Be $true
+        ($events -contains 'remove:codex:done') | Should Be $false
+    }
+
     It 'adds an issue comment without interpolating the body into a command' {
         $calls = New-Object 'System.Collections.Generic.List[object]'
         $runner = {

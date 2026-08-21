@@ -492,12 +492,16 @@ function Complete-CodexMergedIssue {
 
     $attempt = Get-CodexIssueAttemptState -State $State -IssueNumber $IssueNumber
     if ($null -eq $attempt) { throw "The persisted worker state does not contain issue #$IssueNumber." }
+    $providerName = [string](Get-CodexDeploymentValue -Object $attempt -Name 'agentProvider' -Default 'Codex')
+    if ([string]::IsNullOrWhiteSpace($providerName)) { $providerName = 'Codex'; Set-CodexOrchestrationField $attempt 'agentProvider' $providerName }
+    $providerEvent = if ($providerName -eq 'Codex') { 'codex' } else { $providerName.ToLowerInvariant() }
+    $provider = Resolve-CodexWorkerProvider -Provider $providerName -EventName $providerEvent
     if ([string](Get-CodexDeploymentValue -Object $attempt -Name 'status' '') -ne 'done') {
         Set-CodexOrchestrationField $attempt 'status' 'done'
         Set-CodexOrchestrationField $attempt 'lastError' $null
         Write-CodexDeploymentState -StatePath $StatePath -State $State -StateWriter $StateWriter
     }
-    Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'done' -CommandRunner $GitHubCommandRunner | Out-Null
+    Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'done' -Provider $provider -CommandRunner $GitHubCommandRunner | Out-Null
 }
 
 function Set-CodexRepairedDeploymentMetadata {
