@@ -34,9 +34,10 @@ jobs:
           $mergeCommitSha = [string]$env:CODEX_MERGE_COMMIT_SHA
           $headBranch = [string]$env:CODEX_HEAD_BRANCH
 
+          Write-Host "CODEX WORKER | PR #$pullRequestNumber | CLOSE HANDLER | merged=$merged"
           & .\scripts\codex-worker\Register-PrClosed.ps1 `
               -Repository ([string]$env:CODEX_REPOSITORY) `
               -PullRequestNumber $pullRequestNumber `
               -Merged $merged `
               -MergeCommitSha $mergeCommitSha `
-              -HeadBranch $headBranch
+              -HeadBranch $headBranch | Out-Null

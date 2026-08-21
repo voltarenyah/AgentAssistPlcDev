@@ -122,6 +122,24 @@ function Write-CodexReadableLine {
     else { Write-Host $line }
 }
 
+function Write-CodexWorkerMilestone {
+    param(
+        [Parameter(Mandatory = $true)][int] $IssueNumber,
+        [Parameter(Mandatory = $true)][string] $Phase,
+        [string] $Details,
+        [scriptblock] $ConsoleWriter
+    )
+
+    $safePhase = (($Phase -replace '[\r\n]+', ' ') -replace '\s+', ' ').Trim().ToUpperInvariant()
+    $safeDetails = Redact-CodexString -Text $Details -SecretValues (Get-CodexBlockedSecretValues)
+    $safeDetails = (($safeDetails -replace '[\r\n]+', ' ') -replace '\s+', ' ').Trim()
+    if ($safeDetails.Length -gt 300) { $safeDetails = $safeDetails.Substring(0, 297) + '...' }
+    $line = "CODEX WORKER | Issue #$IssueNumber | $safePhase"
+    if (-not [string]::IsNullOrWhiteSpace($safeDetails)) { $line += " | $safeDetails" }
+    if ($null -ne $ConsoleWriter) { & $ConsoleWriter $line }
+    else { [Console]::WriteLine($line) }
+}
+
 function ConvertTo-CodexArgumentString {
     param([string] $Argument)
     if ($null -eq $Argument -or $Argument.Length -eq 0) { return '""' }

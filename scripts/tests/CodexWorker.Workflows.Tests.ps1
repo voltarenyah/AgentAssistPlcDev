@@ -144,6 +144,23 @@ Describe 'Codex worker GitHub Actions workflows' {
         Assert-ExplicitPermissions $text
     }
 
+    It 'suppresses raw result tables so the worker lifecycle milestones are the useful console output' {
+        $issueWorker = Get-WorkflowText 'codex-issue.yml'
+        $revisionWorker = Get-WorkflowText 'codex-revise.yml'
+        $closeWorker = Get-WorkflowText 'codex-pr-closed.yml'
+
+        $issueWorker | Should Match '(?ms)&\s+\.\\scripts\\codex-worker\\Invoke-Issue\.ps1.*?\|\s*Out-Null'
+        ([regex]::Matches($revisionWorker, '(?ms)&\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1.*?\|\s*Out-Null')).Count | Should Be 2
+        $closeWorker | Should Match '(?ms)&\s+\.\\scripts\\codex-worker\\Register-PrClosed\.ps1.*?\|\s*Out-Null'
+    }
+
+    It 'prints a concise close-handler failure reason instead of leaving only a generic failed job' {
+        $handler = Get-Content -Raw (Join-Path $PSScriptRoot '..\codex-worker\Register-PrClosed.ps1')
+
+        $handler | Should Match 'CODEX WORKER \| PR #\$PullRequestNumber \| CLOSE HANDLER FAILED'
+        $handler | Should Match 'catch\s*\{[\s\S]*throw'
+    }
+
     It 'routes revise labels from issues and pull requests to the revision worker' {
         $text = Get-WorkflowText 'codex-revise.yml'
         $on = Get-TopLevelSection -Text $text -Name 'on'

@@ -258,12 +258,14 @@ function Publish-CodexIssue {
             Set-CodexOrchestrationField $AttemptState 'commit' $sha.Trim()
             Set-CodexOrchestrationField $AttemptState 'publicationStage' 'committed'
             Write-CodexPublicationAttemptState -StatePath $StatePath -IssueNumber $issueNumber -AttemptState $AttemptState -StateWriter $StateWriter
+            Write-CodexWorkerMilestone -IssueNumber $issueNumber -Phase 'COMMITTED' -Details $AttemptState.commit
             $stage = 'committed'
     }
     if ($stage -eq 'committed') {
         Invoke-CodexPublicationGit -Worktree $worktree -Arguments @('push', 'origin', $branch) -CommandRunner $GitCommandRunner | Out-Null
         Set-CodexOrchestrationField $AttemptState 'publicationStage' 'pushed'
         Write-CodexPublicationAttemptState -StatePath $StatePath -IssueNumber $issueNumber -AttemptState $AttemptState -StateWriter $StateWriter
+        Write-CodexWorkerMilestone -IssueNumber $issueNumber -Phase 'PUSHED' -Details $branch
         $stage = 'pushed'
     }
     if ($stage -eq 'pushed') {
@@ -272,6 +274,7 @@ function Publish-CodexIssue {
         $bodyPath = Join-Path $runDirectory 'pull-request.md'
         [IO.File]::WriteAllText($bodyPath, $body, (New-Object Text.UTF8Encoding($false)))
         $existing = Get-CodexPullRequestForBranch -Repository $Repository -BranchName $branch -CommandRunner $GitHubCommandRunner
+        $createdPullRequest = $false
         if ($null -ne $existing) {
             $prNumber = [int](Get-CodexPublicationValue $existing 'number' 0)
             $prUrl = [string](Get-CodexPublicationValue $existing 'url' '')
@@ -287,10 +290,14 @@ function Publish-CodexIssue {
             $prTitle = Get-CodexCommitTitle -Suggested ([string](Get-CodexPublicationValue $summary 'prTitle' '')) -IssueNumber $issueNumber
             $created = New-CodexDraftPullRequest -Repository $Repository -BaseBranch 'master' -HeadBranch $branch -Title $prTitle -BodyPath $bodyPath -CommandRunner $GitHubCommandRunner
             $prUrl = [string]$created
+            $createdPullRequest = $true
         }
         Set-CodexOrchestrationField $AttemptState 'prUrl' $prUrl
         Set-CodexOrchestrationField $AttemptState 'publicationStage' 'pr-created'
         Write-CodexPublicationAttemptState -StatePath $StatePath -IssueNumber $issueNumber -AttemptState $AttemptState -StateWriter $StateWriter
+        $prNumber = if ($prUrl -match '/pull/(\d+)(?:$|[/?#])') { $Matches[1] } else { 'unknown' }
+        $prPhase = if ($createdPullRequest) { 'PR RAISED' } else { 'PR READY' }
+        Write-CodexWorkerMilestone -IssueNumber $issueNumber -Phase $prPhase -Details ("PR #{0}: {1}" -f $prNumber, $prUrl)
     }
     return [pscustomobject][ordered]@{ publicationStage = $AttemptState.publicationStage; prUrl = $AttemptState.prUrl; commit = $AttemptState.commit; bodyPath = (Join-Path $runDirectory 'pull-request.md') }
 }
@@ -331,6 +338,7 @@ function Invoke-CodexRevision {
         $registeredMatch = @($registered | Where-Object { $_.Branch -eq $branch -and [IO.Path]::GetFullPath([string]$_.Path) -eq [IO.Path]::GetFullPath($worktree) })
         if ($registeredMatch.Count -ne 1) { throw 'Persisted revision worktree is not registered for the expected branch.' }
         $issue = Get-CodexIssueContext -Repository $Repository -IssueNumber $IssueNumber -CommandRunner $GitHubCommandRunner
+        Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase 'REVISION STARTED' -Details ([string](Get-CodexPublicationValue $issue 'title' "Issue $IssueNumber"))
         $pr = $null
         if (-not [string]::IsNullOrWhiteSpace($PullRequestNumber)) {
             $pr = Get-CodexPullRequestContext -Repository $Repository -PullRequestNumber ([int]$PullRequestNumber) -CommandRunner $GitHubCommandRunner
@@ -363,6 +371,7 @@ function Invoke-CodexRevision {
         $attemptRun = Join-Path $paths.RunRoot (Join-Path "issue-$IssueNumber" ([string]$attemptNumber))
         Set-CodexOrchestrationField $attempt 'runDirectory' $attemptRun
         if ($null -ne $StateWriter) { & $StateWriter $StatePath $IssueNumber $attempt | Out-Null } else { Write-CodexIssueAttemptState -Path $StatePath -IssueNumber $IssueNumber -AttemptState $attempt | Out-Null }
+        Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase 'AGENT STARTED' -Details ("Revision attempt {0} for PR #{1}" -f $attemptNumber, $resolvedPrNumber)
         if ($null -ne $CodexProvider) { $codex = & $CodexProvider $attempt.worktree $issue $Config $attemptRun $StatePath $reviewText $attempt.threadId } else { $codex = Invoke-CodexRun -IssueWorktree $attempt.worktree -IssueContext $issue -Config $Config -RunDirectory $attemptRun -StatePath $StatePath -Revision -ThreadId $attempt.threadId -ReviewComments $reviewText }
         $newThreadId = [string](Get-CodexPublicationValue $codex 'ThreadId' '')
         if (-not [string]::IsNullOrWhiteSpace($newThreadId)) {
@@ -384,8 +393,10 @@ function Invoke-CodexRevision {
         Add-CodexPullRequestComment -Repository $Repository -PullRequestNumber $resolvedPrNumber -Body $evidence -CommandRunner $GitHubCommandRunner | Out-Null
         Remove-CodexPullRequestLabel -Repository $Repository -PullRequestNumber $resolvedPrNumber -Label 'codex:revise' -CommandRunner $GitHubCommandRunner | Out-Null
         Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'pr-ready' -CommandRunner $GitHubCommandRunner | Out-Null
+        Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase 'PR UPDATED' -Details ("PR #{0}: {1}" -f $resolvedPrNumber, $published.prUrl)
         return [pscustomobject][ordered]@{ IssueNumber = $IssueNumber; Status = 'pr-ready'; PublicationStage = $published.publicationStage; PrUrl = $published.prUrl; ExistingPullRequest = $true; PullRequestNumber = $resolvedPrNumber }
     } catch {
+        try { Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase 'FAILED' -Details $_.Exception.Message } catch { }
         if ($null -ne $attempt) {
             Set-CodexOrchestrationField $attempt 'status' 'blocked'
             Set-CodexOrchestrationField $attempt 'lastError' $_.Exception.Message

@@ -42,13 +42,14 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($repositoryRoot) -or [string]::IsNullOrWhiteSpace($dataRoot)) {
               throw 'Codex worker configuration must specify repositoryRoot and dataRoot.'
           }
+          Write-Host "CODEX WORKER | Issue #$issueNumber | REVISION DISPATCHING | event $env:CODEX_EVENT_NAME"
           & .\scripts\codex-worker\Invoke-Revision.ps1 `
               -Repository ([string]$env:CODEX_REPOSITORY) `
               -IssueNumber $issueNumber `
               -Actor ([string]$env:CODEX_ACTOR) `
               -EventName ([string]$env:CODEX_EVENT_NAME) `
               -RepositoryRoot $repositoryRoot `
-              -DataRoot $dataRoot
+              -DataRoot $dataRoot | Out-Null
 
       - name: Dispatch pull request revision
         if: github.event_name == 'pull_request' && github.event.label.name == 'codex:revise'
@@ -70,10 +71,11 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($repositoryRoot) -or [string]::IsNullOrWhiteSpace($dataRoot)) {
               throw 'Codex worker configuration must specify repositoryRoot and dataRoot.'
           }
+          Write-Host "CODEX WORKER | PR #$pullRequestNumber | REVISION DISPATCHING | event $env:CODEX_EVENT_NAME"
           & .\scripts\codex-worker\Invoke-Revision.ps1 `
               -Repository ([string]$env:CODEX_REPOSITORY) `
               -PullRequestNumber $pullRequestNumber `
               -Actor ([string]$env:CODEX_ACTOR) `
               -EventName ([string]$env:CODEX_EVENT_NAME) `
               -RepositoryRoot $repositoryRoot `
-              -DataRoot $dataRoot
+              -DataRoot $dataRoot | Out-Null
