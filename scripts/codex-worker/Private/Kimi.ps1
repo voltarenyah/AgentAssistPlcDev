@@ -35,7 +35,8 @@ function Invoke-KimiRun {
         [string] $ActivityLogPath,
         [Parameter(Mandatory = $true)] [string] $StatePath,
         [scriptblock] $ConsoleWriter,
-        [string] $Prompt
+        [string] $Prompt,
+        [string] $ThreadId
     )
     if ($null -eq $Config) { $Config = [pscustomobject]@{} }
     $command = [string](Get-CodexValue $Config 'kimiCommand' 'kimi')
@@ -66,7 +67,7 @@ function Invoke-KimiRun {
         foreach ($secret in @($secretValues | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })) { $result = $result.Replace([string]$secret, '[REDACTED]') }
         $result = [regex]::Replace($result, '(?i)\bgh[pousr]_[A-Za-z0-9_\-]+\b', '[REDACTED]')
         $result = [regex]::Replace($result, '(?i)\bgithub_pat_[A-Za-z0-9_\-]+\b', '[REDACTED]')
-        return $result
+        return [regex]::Replace($result, '(?i)\bsk-(?:proj-)?[A-Za-z0-9_\-]{8,}\b', '[REDACTED]')
     }.GetNewClosure()
     $localWrite = { param([string]$text) $line = '[{0}] {1}' -f [DateTime]::UtcNow.ToString('o'), (& $localRedact $text); [IO.File]::AppendAllText($ActivityLogPath, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false))); if ($null -ne $ConsoleWriter) { & $ConsoleWriter $line } else { Write-Host $line } }.GetNewClosure()
     $localAssistantText = {
