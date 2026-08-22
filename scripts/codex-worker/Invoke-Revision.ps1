@@ -14,7 +14,7 @@ if ($EventName -notmatch '(?i)revise') { throw "Revision entry requires a revise
 
 $modulePath = Join-Path $PSScriptRoot 'CodexWorker.psd1'
 Import-Module $modulePath -Force
-$provider = Resolve-CodexWorkerProvider -Provider $Provider -EventName $EventName
+$resolvedProvider = Resolve-CodexWorkerProvider -Provider $Provider -EventName $EventName
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) { $RepositoryRoot = (Get-Location).Path }
 $paths = Resolve-CodexWorkerPaths -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot
 $IssueNumber = Resolve-CodexRevisionIssueNumber -Repository $Repository -IssueNumber $IssueNumber -PullRequestNumber $PullRequestNumber
@@ -23,11 +23,11 @@ if (Test-Path -LiteralPath $paths.ConfigPath -PathType Leaf) {
     try { $config = [IO.File]::ReadAllText($paths.ConfigPath) | ConvertFrom-Json } catch { throw "Codex worker configuration is invalid: $($_.Exception.Message)" }
 }
 $enabledProviders = if ($null -ne $config.PSObject.Properties['enabledProviders']) { @($config.enabledProviders) } else { @('Codex') }
-if ($provider.Name -notin $enabledProviders) { throw "Worker provider '$($provider.Name)' is not enabled by configuration." }
+if ($resolvedProvider.Name -notin $enabledProviders) { throw "Worker provider '$($resolvedProvider.Name)' is not enabled by configuration." }
 if ($null -eq $config.PSObject.Properties['provider']) {
-    $config | Add-Member -NotePropertyName provider -NotePropertyValue $provider.Name
+    $config | Add-Member -NotePropertyName provider -NotePropertyValue $resolvedProvider.Name
 } else {
-    $config.provider = $provider.Name
+    $config.provider = $resolvedProvider.Name
 }
 $params = @{
     Repository = $Repository

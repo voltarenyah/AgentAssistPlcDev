@@ -37,13 +37,13 @@ if (-not [string]::IsNullOrWhiteSpace($configuredRepositoryRoot)) {
 
 $paths = Resolve-CodexWorkerPaths -RepositoryRoot $RepositoryRoot -DataRoot $DataRoot
 $providerEventName = if ($EventName -eq 'workflow_dispatch') { $Provider.ToLowerInvariant() } else { $EventName }
-$provider = Resolve-CodexWorkerProvider -Provider $Provider -EventName $providerEventName
+$resolvedProvider = Resolve-CodexWorkerProvider -Provider $Provider -EventName $providerEventName
 $enabledProviders = if ($null -ne $config.PSObject.Properties['enabledProviders']) { @($config.enabledProviders) } else { @('Codex') }
-if ($provider.Name -notin $enabledProviders) { throw "Worker provider '$($provider.Name)' is not enabled by configuration." }
+if ($resolvedProvider.Name -notin $enabledProviders) { throw "Worker provider '$($resolvedProvider.Name)' is not enabled by configuration." }
 if ($null -eq $config.PSObject.Properties['provider']) {
-    $config | Add-Member -NotePropertyName provider -NotePropertyValue $provider.Name
+    $config | Add-Member -NotePropertyName provider -NotePropertyValue $resolvedProvider.Name
 } else {
-    $config.provider = $provider.Name
+    $config.provider = $resolvedProvider.Name
 }
 
 # Configuration is data. The workflow-supplied repository and event values remain
