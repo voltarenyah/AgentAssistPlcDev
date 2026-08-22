@@ -150,7 +150,184 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         Assert.Contains("vc_validation_create", versionControl.Calls);
     }
 
+    [Fact]
+    public async Task RecordedChecksumsSkipExportWhenHeadRecordedThem()
+    {
+        WriteRevisionState(fixture.Root, "PLC_1:one;PLC_2:two");
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.Equal(ConsistencyState.Consistent, result.State);
+        Assert.True(result.FastGatePassed);
+        Assert.DoesNotContain("rebuild_export", engineering.Calls);
+    }
+
+    [Fact]
+    public async Task PlainCommitOnTopOfTheRecordForcesTheFingerprintScan()
+    {
+        WriteRevisionState(fixture.Root, "PLC_1:one;PLC_2:two");
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null)
+        {
+            RevisionRecordSha = "older-savepoint",
+        };
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.False(result.FastGatePassed);
+        Assert.Equal(2, engineering.Calls.Count(call => call == "rebuild_export"));
+    }
+
+    [Fact]
+    public async Task MissingSoftwareChecksumRequiresCompileAndSave()
+    {
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", null));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var exception = await Assert.ThrowsAsync<WorkbenchLifecycleException>(
+            () => service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None));
+
+        Assert.Equal("PLC_COMPILE_REQUIRED", exception.Code);
+        Assert.DoesNotContain("rebuild_export", engineering.Calls);
+    }
+
+    [Fact]
+    public async Task CompletingCommitEarnsTiaSyncEvidence()
+    {
+        var difference = CurrentDifference("device-1", "PLC_1");
+        WriteComparison(Comparison("cmp-1", ("device-1", "one"), ("device-2", "two"), difference));
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        await service.TryStampSynchronizedCommitAsync(
+            fixture.Workbench,
+            fixture.Master,
+            "commit-new",
+            new[] { difference.RelativePath },
+            "Test User <test@example.local>",
+            CancellationToken.None);
+
+        Assert.Equal("vc_validation_create", versionControl.Calls.Last());
+        var evidence = versionControl.CreatedEvidence!;
+        Assert.Equal("tia-sync", evidence.EvidenceKind);
+        Assert.Equal("commit-new", evidence.CommitSha);
+        Assert.Equal(2, evidence.Devices.Count);
+        Assert.Equal("one", evidence.Devices.Single(device => device.PlcName == "PLC_1").ProjectChecksum);
+        Assert.Contains(evidence.Devices.Single(device => device.PlcName == "PLC_1").Objects,
+            item => item.RelativePath == difference.RelativePath && item.Sha256 == difference.TiaFingerprint);
+    }
+
+    [Fact]
+    public async Task PartialCommitAdvancesTheLedgerAndTheCompletingCommitEarnsEvidence()
+    {
+        var first = CurrentDifference("device-1", "PLC_1");
+        var second = CurrentDifference("device-2", "PLC_2");
+        var path = WriteComparison(Comparison("cmp-1", ("device-1", "one"), ("device-2", "two"), first, second));
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        await service.TryStampSynchronizedCommitAsync(
+            fixture.Workbench, fixture.Master, "commit-partial", new[] { first.RelativePath }, "Tester", CancellationToken.None);
+
+        Assert.Null(versionControl.CreatedEvidence);
+        var ledger = new AtomicJsonStore().Read<WorkbenchConsistencyResult>(path);
+        Assert.Equal(new[] { first.RelativePath }, ledger.CommittedPaths);
+
+        await service.TryStampSynchronizedCommitAsync(
+            fixture.Workbench, fixture.Master, "commit-complete", new[] { second.RelativePath }, "Tester", CancellationToken.None);
+
+        Assert.Equal("commit-complete", versionControl.CreatedEvidence?.CommitSha);
+    }
+
+    [Fact]
+    public async Task StaleTiaChecksumBlocksTheEvidence()
+    {
+        var difference = CurrentDifference("device-1", "PLC_1");
+        WriteComparison(Comparison("cmp-1", ("device-1", "old"), ("device-2", "old"), difference));
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        await service.TryStampSynchronizedCommitAsync(
+            fixture.Workbench, fixture.Master, "commit-new", new[] { difference.RelativePath }, "Tester", CancellationToken.None);
+
+        Assert.Null(versionControl.CreatedEvidence);
+    }
+
+    [Fact]
+    public async Task UnsupportedDifferenceBlocksTheEvidence()
+    {
+        var difference = CurrentDifference("device-1", "PLC_1") with { Supported = false };
+        WriteComparison(Comparison("cmp-1", ("device-1", "one"), ("device-2", "two"), difference));
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        await service.TryStampSynchronizedCommitAsync(
+            fixture.Workbench, fixture.Master, "commit-new", new[] { difference.RelativePath }, "Tester", CancellationToken.None);
+
+        Assert.Null(versionControl.CreatedEvidence);
+    }
+
     public void Dispose() => fixture.Dispose();
+
+    private void WriteRevisionState(string root, string aggregateChecksum)
+    {
+        var masterRoot = Path.Combine(root, "worktrees", "master");
+        EngineeringStateWriter.Write(masterRoot, EngineeringStateWriter.Create(
+            null,
+            null,
+            aggregateChecksum,
+            null,
+            EngineeringCompileStatus.Success));
+    }
+
+    private string WriteComparison(WorkbenchConsistencyResult comparison)
+    {
+        var path = Path.Combine(fixture.Root, ".automation", "comparisons", comparison.ComparisonId + ".json");
+        new AtomicJsonStore().Write(path, comparison);
+        return path;
+    }
+
+    private WorkbenchConsistencyResult Comparison(
+        string comparisonId,
+        (string DeviceId, string Checksum) deviceOne,
+        (string DeviceId, string Checksum) deviceTwo,
+        params SourceDifference[] differences) =>
+        new(
+            comparisonId,
+            fixture.Head,
+            false,
+            ConsistencyState.Different,
+            new Dictionary<string, string?>
+            {
+                [deviceOne.DeviceId] = deviceOne.Checksum,
+                [deviceTwo.DeviceId] = deviceTwo.Checksum,
+            },
+            differences);
+
+    private SourceDifference CurrentDifference(string deviceId, string plcName)
+    {
+        var context = WorkbenchPaths.ResolveDevice("wb-1", fixture.Root, "master-1", "master", deviceId, plcName);
+        var snapshot = new SourceTreeReader().Read(context.SourceRoot).Single();
+        var prefix = $"{Path.GetRelativePath(context.WorktreeRoot, context.SourceRoot).Replace('\\', '/')}/";
+        return new SourceDifference(
+            deviceId,
+            plcName,
+            prefix + snapshot.RelativePath,
+            snapshot.Identity,
+            SourceDifferenceKind.Changed,
+            "master-fingerprint",
+            snapshot.Sha256,
+            true);
+    }
 
     private static string LegacyHardwareHash(string xml)
     {
@@ -171,30 +348,36 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         }
 
         public bool DirtySource { get; set; }
+        /// <summary>Sha returned for vc_log calls filtered to revision.json — defaults to HEAD
+        /// (HEAD recorded the checksums); set to an older sha to simulate a plain commit on top.</summary>
+        public string? RevisionRecordSha { get; set; }
+        public TiaSyncEvidence? CreatedEvidence { get; private set; }
         public List<string> Calls { get; } = new();
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
             Calls.Add(tool);
+            if (tool == "vc_log")
+            {
+                var filePath = args.GetType().GetProperty("filePath")?.GetValue(args) as string;
+                var sha = filePath is null ? head : RevisionRecordSha ?? head;
+                return Task.FromResult((T)(object)new ConsistencyLogResult { Commits = new[] { new ConsistencyCommit { Sha = sha } } });
+            }
+
+            if (tool == "vc_validation_create")
+            {
+                CreatedEvidence = args.GetType().GetProperty("evidence")?.GetValue(args) as TiaSyncEvidence;
+                return Task.FromResult((T)(object)(CreatedEvidence ?? new TiaSyncEvidence { EvidenceKind = "tia-sync" }));
+            }
+
             object result = tool switch
             {
-                "vc_log" => new ConsistencyLogResult { Commits = new[] { new ConsistencyCommit { Sha = head } } },
                 "vc_validation_get" => evidence!,
                 "vc_status" => new ConsistencyStatusResult
                 {
                     Entries = DirtySource
                         ? new[] { new ConsistencyStatusEntry { FilePath = "devices/PLC_1/source/Blocks/Main.xml" } }
                         : Array.Empty<ConsistencyStatusEntry>(),
-                },
-                "vc_validation_create" => new TiaSyncEvidence
-                {
-                    EvidenceKind = "tia-sync",
-                    MachineValidated = false,
-                    Devices = new[]
-                    {
-                        new TiaSyncEvidenceDevice { DeviceId = "device-1" },
-                        new TiaSyncEvidenceDevice { DeviceId = "device-2" },
-                    },
                 },
                 _ => throw new InvalidOperationException(tool),
             };
@@ -205,9 +388,9 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     private sealed class ConsistencyEngineeringCaller : IMcpToolCaller
     {
         private readonly string root;
-        private readonly Dictionary<string, string> checksums;
+        private readonly Dictionary<string, string?> checksums;
 
-        public ConsistencyEngineeringCaller(string root, params (string PlcName, string Checksum)[] checksums)
+        public ConsistencyEngineeringCaller(string root, params (string PlcName, string? Checksum)[] checksums)
         {
             this.root = root;
             this.checksums = checksums.ToDictionary(item => item.PlcName, item => item.Checksum);

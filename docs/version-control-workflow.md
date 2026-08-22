@@ -188,6 +188,15 @@ Validation is permanent evidence attached to a commit as an annotated tag named
 immutable. History marks commits as `Validated`, `Unlabeled`, or `Invalid` and
 records whether the evidence came from `tia-sync` or `feature-merge`.
 
+Ordinary master commits earn `tia-sync` evidence automatically: when a commit
+completes the newest comparison's full difference set — alone, or as the last of
+several partial commits (the comparison keeps a committed-path ledger) — and TIA
+still holds the compared software checksums and every committed file still matches
+its compared TIA fingerprint, the completing commit is stamped with the checksum
+evidence. Partial commits, unsupported export coverage, a moved TIA checksum, or
+leftover dirty source all skip the stamp; stamping is best-effort and never fails
+the commit.
+
 ## Unauthorized master changes
 
 If master contains source changes outside the editor policy, the user may move
@@ -222,11 +231,17 @@ result inline at the top of the Changes page — no separate view. Accepting TIA
 changes and accepting hardware differences reuse the page's commit message as
 the commit title.
 
-Compare with TIA first checks the saved checksum evidence for each PLC, then
-also exports and compares the project-level hardware AML. A checksum match is
+Compare with TIA first reads each PLC's software checksum. If a PLC has none —
+the project was changed but not compiled and saved — the action asks for
+confirmation and then compiles and saves the TIA project before comparing. When
+the live checksums match the ones recorded by HEAD itself (a savepoint or
+baseline commit's `revision.json`) or by HEAD's validation evidence and the
+source tree is clean, the software is assumed unchanged and no XML export runs;
+only the project-level hardware AML is exported and hashed. A checksum match is
 not sufficient to declare the project clean when hardware differs. A mismatch
-runs a full source scan and presents individual block, DB, UDT, and tag-table
-differences. Hardware differences are shown separately with the staged AML;
+runs a source scan (narrowed to the devices whose checksum drifted) and presents
+individual block, DB, UDT, and tag-table differences. Hardware differences are
+shown separately with the staged AML;
 accepting them requires an explanatory commit message and creates a hardware
 commit. Both source directions are offered:
 accepting selected TIA changes into the local repo (with a commit title), or

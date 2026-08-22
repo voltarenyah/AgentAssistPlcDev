@@ -48,4 +48,7 @@ public sealed record WorkbenchConsistencyResult(
     ConsistencyState State,
     IReadOnlyDictionary<string, string?> LiveChecksums,
     IReadOnlyList<SourceDifference> Differences,
-    HardwareConfigurationCompareResult? Hardware = null);
+    HardwareConfigurationCompareResult? Hardware = null,
+    /// <summary>Diff paths already consumed by master commits since this comparison ran.
+    /// When it covers every supported difference, the completing commit earns tia-sync evidence.</summary>
+    IReadOnlyList<string>? CommittedPaths = null);

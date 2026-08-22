@@ -804,6 +804,7 @@ public static class WorkbenchEndpoints
         });
         app.MapPost("/api/workbenches/{workbenchId}/vc/compare-tia", async (
             string workbenchId,
+            bool? allowCompile,
             WorkbenchApiState state,
             WorkbenchCoordinator coordinator,
             OperationStatusRegistry operations,
@@ -814,7 +815,7 @@ public static class WorkbenchEndpoints
                 operations,
                 "compare-tia",
                 "Comparing master with TIA Portal...",
-                progress => coordinator.CompareMasterWithTiaAsync(workbenchId, ct, progress),
+                progress => coordinator.CompareMasterWithTiaAsync(workbenchId, allowCompile == true, ct, progress),
                 "TIA comparison completed.").ConfigureAwait(false));
         app.MapGet("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}", (
             string workbenchId,

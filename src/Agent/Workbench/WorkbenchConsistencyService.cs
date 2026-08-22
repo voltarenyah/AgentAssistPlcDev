@@ -128,19 +128,32 @@ public sealed class WorkbenchConsistencyService
             StringComparer.Ordinal);
 
         var sourceClean = !status.Entries.Any(entry => IsManagedSourceXml(entry.FilePath));
-        var evidenceCurrent = evidence is not null
-            && string.Equals(evidence.CommitSha, head.Sha, StringComparison.OrdinalIgnoreCase)
-            && evidence.Devices.Length == devices.Count;
-        var checksumsMatch = evidenceCurrent && devices.All(item =>
-        {
-            var expected = evidence!.Devices.FirstOrDefault(device =>
-                string.Equals(device.DeviceId, item.Metadata.DeviceId, StringComparison.Ordinal));
-            return expected is not null
-                && string.Equals(expected.PlcName, item.Metadata.PlcName, StringComparison.Ordinal)
-                && string.Equals(expected.ProjectChecksum, liveChecksums[item.Metadata.DeviceId], StringComparison.Ordinal);
-        });
 
-        if (evidenceCurrent && sourceClean && checksumsMatch)
+        // The checksum is the comparison currency: without it the TIA project has
+        // uncompiled/unsaved changes and the fingerprint scan would fail anyway
+        // (PlcSourceScanner requires it). The caller offers compile+save and retries.
+        var uncompiled = devices
+            .Where(item => string.IsNullOrEmpty(liveChecksums[item.Metadata.DeviceId]))
+            .Select(item => item.Metadata.PlcName)
+            .ToArray();
+        if (uncompiled.Length > 0)
+        {
+            throw new WorkbenchLifecycleException(
+                "PLC_COMPILE_REQUIRED",
+                $"No software checksum for {string.Join(", ", uncompiled)} — the TIA project was changed but not compiled and saved. Compile and save the TIA project, then run the comparison again.");
+        }
+
+        // Baseline for "TIA software is unchanged since ...": exact HEAD validation evidence
+        // first, then the checksums HEAD itself recorded in revision.json (savepoints and the
+        // workbench baseline commit compile TIA and record them). Any plain source commit in
+        // between invalidates the baseline and forces the fingerprint scan.
+        var baseline = BuildEvidenceBaseline(evidence, head, devices)
+            ?? await ReadRecordedBaselineAsync(masterRoot, head.Sha, cancellationToken).ConfigureAwait(false);
+
+        var matchesBaseline = baseline is not null
+            && sourceClean
+            && devices.All(item => MatchesBaseline(baseline, item.Metadata, liveChecksums[item.Metadata.DeviceId]));
+        if (matchesBaseline)
         {
             return Persist(workbench, new WorkbenchConsistencyResult(
                 Guid.NewGuid().ToString("N"),
@@ -152,9 +165,9 @@ public sealed class WorkbenchConsistencyService
                 hardware));
         }
 
-        var evidenceSourceCanNarrow = evidenceCurrent && sourceClean;
-        var devicesToScan = evidenceSourceCanNarrow
-            ? devices.Where(item => !ChecksumMatches(evidence!, item.Metadata, liveChecksums[item.Metadata.DeviceId])).ToArray()
+        var canNarrow = baseline is not null && sourceClean;
+        var devicesToScan = canNarrow
+            ? devices.Where(item => !MatchesBaseline(baseline!, item.Metadata, liveChecksums[item.Metadata.DeviceId])).ToArray()
             : devices.ToArray();
         // The previous export manifest knows how many XML files each device produced, so the
         // per-device "Exported PLC source files: N" counters can be surfaced as an overall
@@ -373,6 +386,171 @@ public sealed class WorkbenchConsistencyService
         return store.Read<WorkbenchConsistencyResult>(path);
     }
 
+    /// <summary>
+    /// Best-effort evidence stamping after a master commit: when the commit completes the newest
+    /// comparison's difference set and TIA still holds the compared checksums, the commit is
+    /// stamped with tia-sync evidence — the software checksum is the proof. Partial commits only
+    /// advance the comparison's committed-path ledger; a later completing commit still earns the
+    /// evidence. A failed stamp must never fail the commit itself.
+    /// </summary>
+    public async Task TryStampSynchronizedCommitAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata master,
+        string commitSha,
+        IReadOnlyList<string> committedPaths,
+        string confirmedBy,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await StampSynchronizedCommitAsync(workbench, master, commitSha, committedPaths, confirmedBy, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Best-effort: evidence must never fail or roll back a completed commit.
+        }
+    }
+
+    private async Task StampSynchronizedCommitAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata master,
+        string commitSha,
+        IReadOnlyList<string> committedPaths,
+        string confirmedBy,
+        CancellationToken cancellationToken)
+    {
+        var directory = Path.Combine(workbench.RootPath, ".automation", "comparisons");
+        if (!Directory.Exists(directory))
+        {
+            return;
+        }
+
+        var latest = Directory.EnumerateFiles(directory, "*.json")
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+        if (latest is null)
+        {
+            return;
+        }
+
+        var comparison = store.TryRead<WorkbenchConsistencyResult>(latest);
+        if (comparison is null || comparison.Differences.Any(difference => !difference.Supported))
+        {
+            // Unsupported objects mean incomplete export coverage — committing the listed items
+            // can never prove the whole software state, so no evidence is possible.
+            return;
+        }
+
+        var required = comparison.Differences
+            .Select(difference => difference.RelativePath)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .ToHashSet(StringComparer.Ordinal);
+        if (required.Count == 0)
+        {
+            return;
+        }
+
+        var covered = (comparison.CommittedPaths ?? Array.Empty<string>())
+            .Concat(committedPaths)
+            .ToHashSet(StringComparer.Ordinal);
+        var ledger = covered.OrderBy(path => path, StringComparer.Ordinal).ToArray();
+        if (!required.IsSubsetOf(covered))
+        {
+            Persist(workbench, comparison with { CommittedPaths = ledger });
+            return;
+        }
+
+        var masterRoot = ResolveMasterRoot(workbench, master);
+
+        // The source tree must be fully committed — leftover dirty XML means master still differs.
+        var status = await versionControl.CallAsync<ConsistencyStatusResult>(
+                "vc_status",
+                new { repoPath = masterRoot },
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (status.Entries.Any(entry => IsManagedSourceXml(entry.FilePath)))
+        {
+            return;
+        }
+
+        // TIA must still hold the compared checksums, otherwise the diff list is stale.
+        var devices = LoadDevices(workbench, master);
+        var checksums = await engineering.CallAsync<PlcChecksumInfo[]>(
+                "get_plc_checksums",
+                new { },
+                cancellationToken)
+            .ConfigureAwait(false);
+        var liveByPlc = checksums
+            .Where(checksum => !string.IsNullOrEmpty(checksum.SoftwareChecksum))
+            .ToDictionary(checksum => checksum.PlcName, StringComparer.OrdinalIgnoreCase);
+        foreach (var device in devices)
+        {
+            var expected = comparison.LiveChecksums.TryGetValue(device.Metadata.DeviceId, out var value) ? value : null;
+            if (string.IsNullOrEmpty(expected)
+                || !liveByPlc.TryGetValue(device.Metadata.PlcName, out var live)
+                || !string.Equals(expected, live.SoftwareChecksum, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        // Content proof: every compared TIA fingerprint must now be master's committed content
+        // (a null fingerprint means "absent in TIA" — the local file must be gone).
+        foreach (var device in devices)
+        {
+            var prefix = $"{Path.GetRelativePath(device.Context.WorktreeRoot, device.Context.SourceRoot).Replace('\\', '/')}/";
+            var current = new SourceTreeReader().Read(device.Context.SourceRoot)
+                .ToDictionary(item => prefix + item.RelativePath, item => item.Sha256, StringComparer.Ordinal);
+            foreach (var difference in comparison.Differences.Where(item => item.DeviceId == device.Metadata.DeviceId))
+            {
+                var matches = difference.TiaFingerprint is null
+                    ? !current.ContainsKey(difference.RelativePath)
+                    : current.TryGetValue(difference.RelativePath, out var sha)
+                        && string.Equals(sha, difference.TiaFingerprint, StringComparison.Ordinal);
+                if (!matches)
+                {
+                    return;
+                }
+            }
+        }
+
+        var evidence = new TiaSyncEvidence
+        {
+            SchemaVersion = "1.0",
+            EvidenceKind = "tia-sync",
+            CommitSha = commitSha,
+            WorkbenchId = workbench.WorkbenchId,
+            SourceWorktreeId = master.WorktreeId,
+            ConfirmedAt = DateTimeOffset.UtcNow.ToString("O"),
+            ConfirmedBy = confirmedBy,
+            MachineValidated = false,
+            Devices = devices.Select(device => new TiaSyncEvidenceDevice
+            {
+                DeviceId = device.Metadata.DeviceId,
+                PlcName = device.Metadata.PlcName,
+                ProjectIdentity = liveByPlc[device.Metadata.PlcName].ProjectIdentity,
+                ProjectChecksum = liveByPlc[device.Metadata.PlcName].SoftwareChecksum!,
+                Objects = comparison.Differences
+                    .Where(difference => difference.DeviceId == device.Metadata.DeviceId && difference.TiaFingerprint is not null)
+                    .Select(difference => new TiaSyncEvidenceObject
+                    {
+                        Identity = difference.Identity,
+                        RelativePath = difference.RelativePath,
+                        Sha256 = difference.TiaFingerprint!,
+                    })
+                    .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
+                    .ToArray(),
+            }).OrderBy(device => device.DeviceId, StringComparer.Ordinal).ToArray(),
+        };
+        await versionControl.CallAsync<TiaSyncEvidence>(
+                "vc_validation_create",
+                new { repoPath = masterRoot, evidence },
+                cancellationToken)
+            .ConfigureAwait(false);
+        Persist(workbench, comparison with { CommittedPaths = ledger });
+    }
+
     private WorkbenchConsistencyResult Persist(WorkbenchMetadata workbench, WorkbenchConsistencyResult result)
     {
         store.Write(Path.Combine(workbench.RootPath, ".automation", "comparisons", result.ComparisonId + ".json"), result);
@@ -422,8 +600,95 @@ public sealed class WorkbenchConsistencyService
         return WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
     }
 
-    private static bool ChecksumMatches(ConsistencyValidationEvidence evidence, DeviceMetadata metadata, string? live) =>
-        string.Equals(evidence.Devices.FirstOrDefault(item => item.DeviceId == metadata.DeviceId)?.ProjectChecksum, live, StringComparison.Ordinal);
+    private static Dictionary<string, string>? BuildEvidenceBaseline(
+        ConsistencyValidationEvidence? evidence,
+        ConsistencyCommit head,
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices)
+    {
+        if (evidence is null
+            || !string.Equals(evidence.CommitSha, head.Sha, StringComparison.OrdinalIgnoreCase)
+            || evidence.Devices.Length != devices.Count)
+        {
+            return null;
+        }
+
+        var baseline = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var device in evidence.Devices)
+        {
+            baseline[device.PlcName] = device.ProjectChecksum;
+        }
+
+        return baseline;
+    }
+
+    /// <summary>Checksums recorded by HEAD's own revision.json (savepoints and the workbench
+    /// baseline commit compile TIA and record the aggregate). Null when HEAD recorded none —
+    /// a later plain source commit means the recorded state no longer describes the tree.</summary>
+    private async Task<IReadOnlyDictionary<string, string>?> ReadRecordedBaselineAsync(
+        string masterRoot,
+        string headSha,
+        CancellationToken cancellationToken)
+    {
+        var recordLog = await versionControl.CallAsync<ConsistencyLogResult>(
+                "vc_log",
+                new { repoPath = masterRoot, maxCount = 1, filePath = EngineeringStateWriter.RelativePath },
+                cancellationToken)
+            .ConfigureAwait(false);
+        var recordSha = recordLog.Commits.FirstOrDefault()?.Sha;
+        if (recordSha is null || !string.Equals(recordSha, headSha, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var path = WorkbenchPaths.ResolveRevisionState(masterRoot);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        EngineeringRevisionState state;
+        try
+        {
+            state = EngineeringStateWriter.Read(path);
+        }
+        catch (WorkbenchLifecycleException)
+        {
+            return null;
+        }
+
+        return ParseAggregateChecksum(state.Tia?.ProjectChecksum);
+    }
+
+    private static bool MatchesBaseline(
+        IReadOnlyDictionary<string, string> baseline,
+        DeviceMetadata metadata,
+        string? live) =>
+        live is not null
+        && baseline.TryGetValue(metadata.PlcName, out var expected)
+        && string.Equals(expected, live, StringComparison.Ordinal);
+
+    /// <summary>Parses the aggregate "PLC_1:AA BB;PLC_2:CC DD" written by AggregateProjectChecksum.</summary>
+    private static Dictionary<string, string>? ParseAggregateChecksum(string? aggregate)
+    {
+        if (string.IsNullOrWhiteSpace(aggregate))
+        {
+            return null;
+        }
+
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var part in aggregate.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separator = part.IndexOf(':');
+            if (separator <= 0)
+            {
+                return null;
+            }
+
+            map[part[..separator]] = part[(separator + 1)..];
+        }
+
+        return map.Count == 0 ? null : map;
+    }
 
     private static IReadOnlyList<SourceDifference> CompareDevice(
         DeviceMetadata metadata,

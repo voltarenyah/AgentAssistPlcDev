@@ -37,20 +37,26 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   const [error, setError] = useState<string | null>(null)
   const [plan, setPlan] = useState<api.FeatureImportPlan | null>(null)
   const [pushOutcomes, setPushOutcomes] = useState<api.PushToTiaOutcome[] | null>(null)
+  const [compileRequired, setCompileRequired] = useState<string | null>(null)
   const handledSignal = useRef(0)
 
-  const compare = async () => {
-    setBusy(true); setError(null); setPushOutcomes(null)
-    const operationId = onBeginOperation?.('compare-tia', 'Comparing master with TIA Portal...')
+  const compare = async (allowCompile = false) => {
+    setBusy(true); setError(null); setPushOutcomes(null); setCompileRequired(null)
+    const operationId = onBeginOperation?.('compare-tia', allowCompile ? 'Compiling, saving and comparing with TIA Portal...' : 'Comparing master with TIA Portal...')
     try {
       const [nextComparison, engineeringState] = await Promise.all([
-        api.compareMasterWithTia(workbenchId, operationId),
+        api.compareMasterWithTia(workbenchId, operationId, allowCompile),
         api.getWorktreeEngineeringState(workbenchId, worktreeId).catch(() => null),
       ])
       setComparison(nextComparison)
       setStoredChecksum(engineeringState?.revision?.tia?.projectChecksum ?? null)
       setSelected(new Set())
-    } catch (reason) { setError(displayError(reason)) }
+    } catch (reason) {
+      // No software checksum = the TIA project was changed but not compiled and saved;
+      // offer the compile+save retry instead of a plain error.
+      if (reason instanceof api.WorkbenchApiError && reason.code === 'PLC_COMPILE_REQUIRED') setCompileRequired(reason.message)
+      else setError(displayError(reason))
+    }
     finally { setBusy(false) }
   }
 
@@ -133,6 +139,22 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
           </div>
         )}
         {error && <div className="py-1 text-[10px] text-destructive">{error}</div>}
+
+        {compileRequired && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600" data-testid="vc-compile-required">
+            <div className="font-medium">TIA project needs compile and save</div>
+            <div className="mt-1 text-[9px]">{compileRequired}</div>
+            <button
+              type="button"
+              data-testid="vc-compile-and-compare"
+              className="mt-1.5 rounded-md bg-chart-2 px-2 py-1 text-[10px] font-medium text-white disabled:opacity-40"
+              disabled={busy}
+              onClick={() => void compare(true)}
+            >
+              Compile, save and compare
+            </button>
+          </div>
+        )}
 
         {comparison && (
           <div className="space-y-2">

@@ -866,9 +866,9 @@ export const createRollbackFeature = (workbenchId: string, historicalSha: string
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/rollback-features`,
     withOperation(jsonRequest('POST', { historicalSha, paths, featureName }), operationId),
   )
-export const compareMasterWithTia = (workbenchId: string, operationId?: string) =>
+export const compareMasterWithTia = (workbenchId: string, operationId?: string, allowCompile = false) =>
   workbenchRequest<WorkbenchConsistencyResult>(
-    `/workbenches/${encodeURIComponent(workbenchId)}/vc/compare-tia`,
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/compare-tia${allowCompile ? '?allowCompile=true' : ''}`,
     withOperation(jsonRequest('POST'), operationId),
   )
 export const getWorkbenchComparison = (workbenchId: string, comparisonId: string) =>

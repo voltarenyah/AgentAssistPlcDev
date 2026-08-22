@@ -68,6 +68,22 @@ afterEach(() => {
 })
 
 describe('VersionControlCompare (inline)', () => {
+  it('offers compile and save when TIA has no software checksum yet', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia')
+      .mockRejectedValueOnce(new api.WorkbenchApiError(400, 'PLC_COMPILE_REQUIRED', 'No software checksum for PLC_1 — compile and save the TIA project.'))
+      .mockResolvedValue(comparison({ differences: [], state: 'Consistent', fastGatePassed: true }))
+    const { host } = await render({ signal: 1 })
+
+    expect(host.querySelector('[data-testid="vc-compile-required"]')?.textContent).toContain('PLC_1')
+    expect(compare).toHaveBeenCalledWith('wb-1', undefined, false)
+
+    await click(host.querySelector('[data-testid="vc-compile-and-compare"]')!)
+
+    expect(compare).toHaveBeenLastCalledWith('wb-1', undefined, true)
+    expect(host.querySelector('[data-testid="vc-compile-required"]')).toBeNull()
+    expect(host.textContent).toContain('TIA matches master')
+  })
+
   it('renders nothing until a compare is signalled', async () => {
     const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
     const { host } = await render({ signal: 0 })
@@ -127,7 +143,7 @@ describe('VersionControlCompare (inline)', () => {
     await render({ signal: 1, onBeginOperation })
 
     expect(onBeginOperation).toHaveBeenCalledWith('compare-tia', expect.stringContaining('Comparing'))
-    expect(compare).toHaveBeenCalledWith('wb-1', 'op-42')
+    expect(compare).toHaveBeenCalledWith('wb-1', 'op-42', false)
   })
 
   it('notifies the parent after an accepted TIA commit so history can refresh', async () => {

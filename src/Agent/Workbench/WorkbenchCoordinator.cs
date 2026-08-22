@@ -2288,6 +2288,7 @@ public sealed class WorkbenchCoordinator
 
     public async Task<WorkbenchConsistencyResult> CompareMasterWithTiaAsync(
         string workbenchId,
+        bool allowCompile = false,
         CancellationToken token = default,
         IOperationProgress? progress = null)
     {
@@ -2298,6 +2299,40 @@ public sealed class WorkbenchCoordinator
         var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
         var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
         await EnsureMasterProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
+        if (allowCompile)
+        {
+            // User confirmed the compile prompt: save and compile the live project so every PLC
+            // produces a software checksum, then compare.
+            var devices = LoadWorktreeDeviceContexts(workbench, master, masterRegistration.RelativePath);
+            await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                progress?.Report("Saving and compiling the TIA project...");
+                await engineering.CallAsync<object>("save_project", new { }, token).ConfigureAwait(false);
+                await CompileManagedForCommitAsync(
+                    devices.Select(device => device.Metadata.PlcName).ToArray(),
+                    token).ConfigureAwait(false);
+            }
+            finally
+            {
+                engineeringSession.Release();
+            }
+
+            // A PLC that still has no checksum after compile+save does not support checksums —
+            // surface a terminal error instead of looping the compile prompt.
+            try
+            {
+                return await consistency.CompareAsync(workbench, master, token, progress)
+                    .ConfigureAwait(false);
+            }
+            catch (WorkbenchLifecycleException exception) when (exception.Code == "PLC_COMPILE_REQUIRED")
+            {
+                throw new WorkbenchLifecycleException(
+                    "PLC_CHECKSUM_UNAVAILABLE",
+                    "Compile and save completed, but TIA still did not provide a software checksum — this PLC may not support checksums.");
+            }
+        }
+
         return await consistency.CompareAsync(workbench, master, token, progress).ConfigureAwait(false);
     }
 
@@ -2694,6 +2729,18 @@ public sealed class WorkbenchCoordinator
                 WorkbenchWritePolicy.PendingSchemaVersion,
                 worktree.WorktreeId,
                 remaining.Select(item => item with { MasterHeadSha = newHead }).ToArray()));
+
+            // A master commit that completes the newest TIA comparison's diff set earns tia-sync
+            // evidence (the software checksum is the proof); partial commits only advance the
+            // comparison's ledger, and a later completing commit still earns it.
+            await consistency.TryStampSynchronizedCommitAsync(
+                    workbench,
+                    worktree,
+                    result.Sha,
+                    selected,
+                    author ?? "PLC Assistant",
+                    token)
+                .ConfigureAwait(false);
         }
 
         return result;
