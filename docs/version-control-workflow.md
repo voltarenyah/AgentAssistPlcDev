@@ -198,11 +198,29 @@ requires an explicit confirmation.
 
 ## Version control workspace
 
-The Version control tab is worktree-scoped and covers every registered PLC.
-Changes shows source XML objects (grouped by PLC and category) plus tracked
-hardware exports under a Hardware group. Select individual objects and enter a
-commit message; there is no staging concept in the UI. Direct master edits are
-committable from this screen (unlabeled).
+Version control is a worktree-level concept. The panel lives in the right dock
+of the worktree page (select a worktree without selecting a device) and covers
+every registered PLC. It is a quick-access surface with two pages, switched
+from an icon tab bar:
+
+- **Changes** — a Compare with TIA action on top, then the commit message area
+  and split commit button, then the modified-files tree (collapsible
+  PLC · category folders; clicking a row toggles its selection). At the
+  bottom, the snapshot area shows the last SVN savepoint revision, how many
+  commits happened since, a hardware-different label when `project.aml`
+  changed, and a description input with a Snapshot button that records a new
+  TIA savepoint.
+- **History** — a single timeline merging git commits (blue circles) and SVN
+  savepoints (violet squares), newest first. Expanding a commit shows author,
+  time, linked SVN revision, TIA checksum, validation state, and its changed
+  files; selecting files there offers creating a rollback feature (master is
+  never reset). Right-clicking a savepoint exports that saved project as a
+  lean copy — the live project is never touched.
+
+The Compare with TIA action runs the comparison immediately and renders the
+result inline at the top of the Changes page — no separate view. Accepting TIA
+changes and accepting hardware differences reuse the page's commit message as
+the commit title.
 
 Compare with TIA first checks the saved checksum evidence for each PLC, then
 also exports and compares the project-level hardware AML. A checksum match is
@@ -214,8 +232,8 @@ commit. Both source directions are offered:
 accepting selected TIA changes into the local repo (with a commit title), or
 pushing selected local objects back into TIA (per-object import outcomes;
 compile and snapshot afterwards). When no source differences exist but the TIA
-checksum differs from the last savepoint, the view offers creating an SVN
-savepoint to record the remaining untrackable change; when source and hardware
+checksum differs from the last savepoint, the result points to the TIA
+snapshot area to record the remaining untrackable change; when source and hardware
 match, it reports that no commit is needed.
 
 For a feature worktree, Prepare feature import creates a three-way import plan.

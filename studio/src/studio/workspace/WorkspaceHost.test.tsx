@@ -75,11 +75,6 @@ const makeViewProps = () => ({
     onNodeSelect: vi.fn(),
     onEdgeSelect: vi.fn(),
   },
-  git: {
-    workbenchId: 'wb1',
-    worktreeId: 'wt1',
-    onSelectionChange: vi.fn(),
-  },
 })
 
 const render = async (element: React.ReactNode) => {
@@ -98,11 +93,11 @@ afterEach(() => {
 })
 
 describe('WorkspaceHost', () => {
-  it('renders the five workspace tabs and the focused overview view', async () => {
+  it('renders the four workspace tabs and the focused overview view', async () => {
     const workspace = new WorkspaceService()
     const { host } = await render(<WorkspaceHost workspace={workspace} {...makeViewProps()} />)
 
-    for (const label of ['Device overview', 'AI chat', 'PLC source', 'Knowledge', 'Version control']) {
+    for (const label of ['Device overview', 'AI chat', 'PLC source', 'Knowledge']) {
       expect(tabButton(host, label), `tab "${label}"`).toBeTruthy()
     }
     expect(host.querySelector('h1')?.textContent).toBe('PLC_1')

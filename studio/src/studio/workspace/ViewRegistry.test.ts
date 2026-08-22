@@ -16,7 +16,6 @@ describe('workspaceViewRegistry', () => {
       'AI chat',
       'PLC source',
       'Knowledge',
-      'Version control',
     ])
   })
 })

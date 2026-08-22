@@ -3,11 +3,10 @@
 // and its tabs only carry instanceId/kind.
 
 import type { ReactNode } from 'react'
-import { Code2, Cpu, Database, GitBranch, MessageSquare, type LucideIcon } from 'lucide-react'
+import { Code2, Cpu, Database, MessageSquare, type LucideIcon } from 'lucide-react'
 import ChatWorkspace from '@/studio/chat/ChatWorkspace'
 import PlcSourcePanel from '@/studio/PlcSourcePanel'
 import NodeEdgesView from '@/studio/NodeEdgesView'
-import VersionControlPanel from '@/studio/version-control/VersionControlPanel'
 import DeviceOverviewView from '@/studio/DeviceOverviewView'
 import type { WorkspaceViewKind, WorkspaceViewProps } from './workspaceTypes'
 
@@ -82,20 +81,6 @@ export const workspaceViewRegistry: Record<WorkspaceViewKind, WorkspaceViewDefin
             />
           )}
         </div>
-      </div>
-    ),
-  },
-  git: {
-    title: 'Version control',
-    icon: GitBranch,
-    render: ({ git }) => (
-      <div className="h-full min-h-0">
-        <VersionControlPanel
-          workbenchId={git.workbenchId}
-          worktreeId={git.worktreeId}
-          onSelectionChange={git.onSelectionChange}
-          onBeginOperation={git.onBeginOperation}
-        />
       </div>
     ),
   },

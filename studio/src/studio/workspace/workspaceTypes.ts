@@ -15,7 +15,7 @@ import type { SourceChatContext } from '@/studio/plcSourceState'
 import type { DeviceViewState } from '@/studio/deviceSnapshot'
 import type { DeviceOverviewViewProps } from '@/studio/DeviceOverviewView'
 
-export type WorkspaceViewKind = 'overview' | 'chat' | 'source' | 'knowledge' | 'git'
+export type WorkspaceViewKind = 'overview' | 'chat' | 'source' | 'knowledge'
 
 /** One mounted view in the workspace. V1 uses exactly one instance per kind. */
 export type WorkbenchViewInstance = {
@@ -31,7 +31,6 @@ export const DEFAULT_WORKSPACE_VIEW_KINDS: readonly WorkspaceViewKind[] = [
   'chat',
   'source',
   'knowledge',
-  'git',
 ]
 
 export const defaultWorkspaceViewInstances = (): WorkbenchViewInstance[] =>
@@ -75,19 +74,10 @@ export type WorkspaceKnowledgeProps = {
   onEdgeSelect: (edge: GraphEdge | null) => void
 }
 
-export type WorkspaceGitProps = {
-  workbenchId: string
-  worktreeId: string
-  onSelectionChange: (selection: unknown) => void
-  /** Starts a title-bar operation and returns its id, so long-running actions (full TIA compare) show live progress. */
-  onBeginOperation?: (kind: string, label: string) => string
-}
-
 /** The props bundles every workspace view may draw from, keyed by view kind. */
 export type WorkspaceViewProps = {
   overview: DeviceOverviewViewProps
   chat: WorkspaceChatProps
   source: WorkspaceSourceProps
   knowledge: WorkspaceKnowledgeProps
-  git: WorkspaceGitProps
 }

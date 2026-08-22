@@ -4,11 +4,13 @@ Use this checklist in order. Mark each item only after the expected result is co
 
 ## 1. Open the workspace
 
-- [ ] Open the Version Control page.
-- [ ] Confirm the current worktree and branch are shown.
-- [ ] Confirm only meaningful PLC source objects are listed.
+- [ ] Select a worktree (without selecting a device) to open the worktree page.
+- [ ] Confirm the version control dock is shown on the right side of the worktree page.
+- [ ] Confirm the current branch and its base/validation line are shown under the Compare with TIA action.
+- [ ] Confirm only meaningful PLC source objects are listed, grouped in collapsible PLC · category folders.
 - [ ] Confirm staging files, knowledge databases, and temporary metadata are not shown as source changes.
-- [ ] Select an object and confirm its details appear in the right dock.
+- [ ] Click a changed file row and confirm it becomes selected (highlighted) for commit.
+- [ ] Confirm the snapshot area at the bottom shows the last savepoint revision, the commits-since counter, and a hardware-different label when `project.aml` is changed.
 
 ## 2. Verify a clean master baseline
 

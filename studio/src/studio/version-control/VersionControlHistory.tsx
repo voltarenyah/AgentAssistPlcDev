@@ -1,272 +1,272 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, GitCommitHorizontal, History, Loader2, RotateCcw, ShieldCheck } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { ChevronRight, Copy, Download, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import * as api from '@/api/client'
+import { showErrorToast } from '@/components/ui/toast'
+
+export type VcTimelineItem =
+  | {
+      kind: 'commit'
+      sha: string
+      message: string
+      author: string
+      timestamp: string
+      files: string[]
+      tiaChecksum: string | null
+      svnRevision: number | null
+      validationState: api.VcValidationState
+    }
+  | {
+      kind: 'savepoint'
+      revision: number
+      message: string
+      author: string
+      timestamp: string
+      tiaChecksum: string | null
+      gitCommitSha: string
+    }
 
 type Props = {
   workbenchId: string
   worktreeId: string
-  commits?: api.VcCommitEntry[]
-  onCommitSelect?: (commit: api.VcCommitEntry) => void
-  onObjectSelect?: (commit: api.VcCommitEntry, relativePath: string) => void
-}
-
-type EvidenceState = {
+  branch: string
+  items: VcTimelineItem[]
   loading: boolean
-  evidence: api.VcValidationEvidence | null
-  error: string | null
 }
 
-const emptyEvidence: EvidenceState = { loading: false, evidence: null, error: null }
+type MenuState = { x: number; y: number; item: Extract<VcTimelineItem, { kind: 'savepoint' }> }
 
-function objectName(relativePath: string): string {
-  const fileName = relativePath.split('/').pop() ?? relativePath
-  return fileName.replace(/\.xml$/i, '')
+const itemKey = (item: VcTimelineItem) => item.kind === 'commit' ? `c:${item.sha}` : `s:${item.revision}`
+
+const formatTime = (value: string) => {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-function validationLabel(commit: api.VcCommitEntry): string {
-  if (commit.validationState === 'Validated') return 'TIA validated'
-  if (commit.validationState === 'Invalid') return 'Validation invalid'
-  return 'No validation evidence'
-}
+// TIA checksums arrive as "PLC_1:AA BB; PLC_2:CC DD" — one left-aligned row
+// per device so multi-device projects stay scannable.
+const ChecksumRows = ({ value }: { value: string }) => (
+  <div className="space-y-0.5" data-testid="checksum-rows">
+    {value.split(';').map(part => part.trim()).filter(Boolean).map(part => (
+      <div key={part} className="font-mono text-[10px] text-sky-500">Σ {part}</div>
+    ))}
+  </div>
+)
 
-function validationColor(commit: api.VcCommitEntry): string {
-  if (commit.validationState === 'Validated') return '#22c55e'
-  if (commit.validationState === 'Invalid') return '#ef4444'
-  return 'var(--muted-foreground)'
-}
-
-function evidenceLabel(evidenceKind: string | null): string {
-  if (evidenceKind === 'feature-merge') return 'Feature merge'
-  if (evidenceKind === 'tia-sync') return 'TIA sync'
-  return 'Commit'
-}
-
-function shortSha(sha: string): string {
-  return sha.slice(0, 7)
-}
-
-function defaultRollbackName(sha: string): string {
-  return `rollback-${shortSha(sha)}`
-}
-
-export default function VersionControlHistory({
-  workbenchId,
-  worktreeId,
-  commits,
-  onCommitSelect,
-  onObjectSelect,
-}: Props) {
-  const [history, setHistory] = useState<api.VcCommitEntry[]>(commits ?? [])
-  const [loading, setLoading] = useState(commits === undefined)
-  const [error, setError] = useState<string | null>(null)
-  const [selectedCommit, setSelectedCommit] = useState<api.VcCommitEntry | null>(null)
-  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
-  const [evidence, setEvidence] = useState<EvidenceState>(emptyEvidence)
-  const [featureName, setFeatureName] = useState('')
+export default function VersionControlHistory({ workbenchId, worktreeId, branch, items, loading }: Props) {
+  const [openKey, setOpenKey] = useState<string | null>(null)
+  const [menu, setMenu] = useState<MenuState | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [rollbackPaths, setRollbackPaths] = useState<Set<string>>(new Set())
+  const [rollbackName, setRollbackName] = useState('')
   const [creatingRollback, setCreatingRollback] = useState(false)
-  const [rollbackCreated, setRollbackCreated] = useState(false)
 
   useEffect(() => {
-    if (commits !== undefined) {
-      setHistory(commits)
-      setLoading(false)
-      return
+    if (!menu) return
+    const close = () => setMenu(null)
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('blur', close)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('blur', close)
     }
+  }, [menu])
 
-    let cancelled = false
-    setLoading(true)
-    setError(null)
-    api.getWorktreeVcLog(workbenchId, worktreeId, 50)
-      .then(result => { if (!cancelled) setHistory(result.commits) })
-      .catch(reason => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : 'Failed to load version history')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-
-    return () => { cancelled = true }
-  }, [commits, workbenchId, worktreeId])
-
-  const selectCommit = async (commit: api.VcCommitEntry) => {
-    setSelectedCommit(commit)
-    setSelectedPaths([])
-    setFeatureName(defaultRollbackName(commit.sha))
-    setRollbackCreated(false)
-    onCommitSelect?.(commit)
-
-    if (commit.validationState !== 'Validated') {
-      setEvidence(emptyEvidence)
-      return
-    }
-
-    setEvidence({ loading: true, evidence: null, error: null })
-    try {
-      const result = await api.getVcValidation(workbenchId, worktreeId, commit.sha)
-      setEvidence({ loading: false, evidence: result, error: null })
-    } catch (reason) {
-      setEvidence({
-        loading: false,
-        evidence: null,
-        error: reason instanceof Error ? reason.message : 'Failed to load validation evidence',
-      })
-    }
+  const toggleOpen = (key: string, sha: string | null) => {
+    setOpenKey(previous => previous === key ? null : key)
+    setRollbackPaths(new Set())
+    setRollbackName(sha ? `rollback-${sha.slice(0, 7)}` : '')
   }
 
-  const selectObject = (commit: api.VcCommitEntry, relativePath: string) => {
-    setSelectedCommit(commit)
-    setSelectedPaths([relativePath])
-    setFeatureName(defaultRollbackName(commit.sha))
-    setRollbackCreated(false)
-    onObjectSelect?.(commit, relativePath)
+  const toggleRollbackPath = (path: string) => {
+    setRollbackPaths(previous => {
+      const next = new Set(previous)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
   }
 
-  const createRollback = async () => {
-    if (!selectedCommit || selectedPaths.length === 0 || !featureName.trim()) return
+  const createRollback = async (sha: string) => {
+    if (rollbackPaths.size === 0 || !rollbackName.trim() || creatingRollback) return
     setCreatingRollback(true)
-    setError(null)
-    setRollbackCreated(false)
     try {
-      await api.createRollbackFeature(
-        workbenchId,
-        selectedCommit.sha,
-        selectedPaths,
-        featureName.trim(),
-      )
-      setRollbackCreated(true)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Failed to create rollback feature')
+      await api.createRollbackFeature(workbenchId, sha, [...rollbackPaths], rollbackName.trim())
+      toast.success(`Rollback feature “${rollbackName.trim()}” created — switch to it and commit the generated changes`)
+      setRollbackPaths(new Set())
+    } catch (cause) {
+      showErrorToast(`Rollback failed: ${cause instanceof Error ? cause.message : 'Unexpected failure'}`)
     } finally {
       setCreatingRollback(false)
     }
   }
 
+  const exportSavepoint = async (item: Extract<VcTimelineItem, { kind: 'savepoint' }>) => {
+    setMenu(null)
+    if (exporting) return
+    setExporting(true)
+    try {
+      const result = await api.restoreTiaProject(workbenchId, worktreeId, item.gitCommitSha)
+      toast.success(`Exported r${item.revision} to ${result.restoredDirectory} — live project untouched`)
+    } catch (cause) {
+      showErrorToast(`Export failed: ${cause instanceof Error ? cause.message : 'Unexpected failure'}`)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const copyRevision = (item: Extract<VcTimelineItem, { kind: 'savepoint' }>) => {
+    setMenu(null)
+    void navigator.clipboard?.writeText(`r${item.revision}`).then(() => toast.success(`Copied r${item.revision}`))
+  }
+
+  const headKey = items.find(item => item.kind === 'commit') ? itemKey(items.find(item => item.kind === 'commit')!) : null
+
   return (
-    <section className="flex h-full min-h-0 w-full flex-col bg-card" aria-label="Version control history">
-      <header className="flex shrink-0 items-center gap-2 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
-        <History className="h-3.5 w-3.5 text-chart-4" />
-        <div className="min-w-0 flex-1">
-          <h2 className="text-[10px] font-semibold">PLC history</h2>
-          <p className="text-[8px] text-muted-foreground">Commits, validation evidence, and safe recovery</p>
-        </div>
-      </header>
-
-      {error && <div className="shrink-0 px-3 py-2 text-[9px] text-destructive">{error}</div>}
-
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+    <div className="flex h-full min-h-0 flex-col" data-testid="version-control-history">
+      <div className="flex shrink-0 items-center gap-1.5 px-3.5 pb-1.5 pt-3.5 text-[11px] font-bold uppercase tracking-wide">
+        <span>Timeline</span>
+        <span className="font-normal normal-case tracking-normal text-muted-foreground">{items.length}</span>
+      </div>
+      <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-2.5 pb-3">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 py-6 text-[9px] text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" /> Loading history...
+          <div className="flex items-center justify-center gap-2 py-6 text-[10px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" /> Loading timeline...
           </div>
-        ) : history.length === 0 ? (
-          <div className="py-6 text-center text-[9px] text-muted-foreground">No commits yet</div>
+        ) : items.length === 0 ? (
+          <div className="py-6 text-center text-[10px] text-muted-foreground">No commits yet</div>
         ) : (
-          history.map(commit => (
-            <article
-              key={commit.sha}
-              className="rounded-md border bg-background"
-              style={{ borderColor: selectedCommit?.sha === commit.sha ? 'var(--ring)' : 'var(--border)' }}
-            >
-              <button
-                type="button"
-                data-testid={`commit-${shortSha(commit.sha)}`}
-                onClick={() => void selectCommit(commit)}
-                className="flex w-full items-start gap-2 p-2 text-left hover:bg-accent/40"
+          items.map((item, index) => {
+            const key = itemKey(item)
+            const open = openKey === key
+            const isSavepoint = item.kind === 'savepoint'
+            return (
+              <div
+                key={key}
+                className={`relative pl-6 before:absolute before:bottom-0 before:left-[5.5px] before:top-0 before:w-0.5 ${isSavepoint ? 'before:bg-violet-500/35' : 'before:bg-blue-600/50'} ${index === 0 ? 'before:top-[15px]' : ''} ${index === items.length - 1 ? 'before:bottom-[calc(100%-15px)]' : ''}`}
               >
-                <GitCommitHorizontal className="mt-0.5 h-3.5 w-3.5 shrink-0 text-chart-3" />
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-1.5">
-                    <span className="font-mono text-[9px] text-chart-3">{shortSha(commit.sha)}</span>
-                    <span className="truncate text-[10px] font-medium">{commit.message}</span>
-                  </span>
-                  <span className="mt-0.5 flex flex-wrap gap-x-2 text-[8px] text-muted-foreground">
-                    <span>{commit.author}</span>
-                    <span>{commit.timestamp ? new Date(commit.timestamp).toLocaleString() : 'Unknown time'}</span>
-                    <span>{commit.files.length} changed object{commit.files.length === 1 ? '' : 's'}</span>
-                  </span>
-                </span>
-                <span className="flex shrink-0 flex-col items-end gap-1">
-                  <span className="rounded px-1 py-0.5 text-[8px]" style={{ color: validationColor(commit), background: `${validationColor(commit)}18` }}>
-                    {validationLabel(commit)}
-                  </span>
-                  <span className="text-[8px] text-muted-foreground">{evidenceLabel(commit.evidenceKind)}</span>
-                </span>
-              </button>
-
-              <div className="border-t px-2 pb-2 pt-1.5" style={{ borderColor: 'var(--border)' }}>
-                <div className="mb-1 text-[8px] uppercase tracking-[0.12em] text-muted-foreground">Changed PLC objects</div>
-                <div className="flex flex-wrap gap-1">
-                  {commit.files.map(path => (
-                    <button
-                      key={path}
-                      type="button"
-                      data-testid={`object-${objectName(path)}`}
-                      onClick={() => selectObject(commit, path)}
-                      className="rounded border px-1.5 py-1 text-left text-[9px] hover:bg-accent"
-                      style={{ borderColor: 'var(--border)' }}
-                      title={path}
-                    >
-                      {objectName(path)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </article>
-          ))
-        )}
-
-        {selectedCommit && (
-          <div className="space-y-2 rounded-md border bg-background p-2" style={{ borderColor: 'var(--border)' }}>
-            <div className="flex items-center gap-1.5 text-[9px] font-medium">
-              <ShieldCheck className="h-3 w-3 text-chart-2" /> Validation evidence
-            </div>
-            {evidence.loading && <div className="text-[9px] text-muted-foreground">Loading permanent evidence...</div>}
-            {evidence.error && <div className="text-[9px] text-destructive">{evidence.error}</div>}
-            {evidence.evidence && (
-              <div className="space-y-1 rounded bg-muted/40 p-1.5 text-[8px]">
-                <div className="flex items-center gap-1 text-chart-2"><CheckCircle2 className="h-3 w-3" /> Permanent evidence</div>
-                <div>Confirmed by {evidence.evidence.confirmedBy}</div>
-                <div>Machine validated: {evidence.evidence.machineValidated ? 'Yes' : 'No'}</div>
-                {evidence.evidence.devices.map(device => (
-                  <div key={device.deviceId} className="border-t pt-1" style={{ borderColor: 'var(--border)' }}>
-                    <div className="font-medium">{device.plcName}</div>
-                    <div className="font-mono text-muted-foreground">Checksum: {device.projectChecksum}</div>
-                    <div className="text-muted-foreground">{device.objects.length} validated object{device.objects.length === 1 ? '' : 's'}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {selectedCommit.validationState !== 'Validated' && (
-              <div className="text-[9px] text-muted-foreground">This commit has no validated TIA evidence.</div>
-            )}
-
-            {selectedPaths.length > 0 && (
-              <div className="space-y-1.5 border-t pt-2" style={{ borderColor: 'var(--border)' }}>
-                <div className="flex items-center gap-1 text-[9px] font-medium"><RotateCcw className="h-3 w-3 text-chart-5" /> Recover selected history as a feature</div>
-                <div className="text-[8px] text-muted-foreground">Create a new feature containing the selected historical XML. Master is never reset.</div>
-                <input
-                  aria-label="Rollback feature name"
-                  value={featureName}
-                  onChange={event => setFeatureName(event.target.value)}
-                  onInput={event => setFeatureName(event.currentTarget.value)}
-                  className="w-full rounded border bg-muted px-2 py-1 text-[9px] outline-none"
-                  style={{ borderColor: 'var(--border)' }}
-                  placeholder="Rollback feature name"
+                <span
+                  className={`absolute left-0 top-[9px] z-10 h-[13px] w-[13px] border-2 ${isSavepoint
+                    ? 'rounded-[3px] border-violet-400 bg-violet-400'
+                    : `rounded-full border-blue-500 ${key === headKey ? 'bg-card' : 'bg-blue-500'}`}`}
                 />
                 <button
                   type="button"
-                  data-testid="create-rollback-feature"
-                  onClick={() => void createRollback()}
-                  disabled={creatingRollback || !featureName.trim()}
-                  className="flex w-full items-center justify-center gap-1 rounded bg-chart-5 px-2 py-1 text-[9px] text-white disabled:opacity-50"
+                  data-testid={isSavepoint ? `savepoint-r${item.revision}` : `commit-${item.sha.slice(0, 7)}`}
+                  className="flex w-full items-center gap-1.5 rounded-lg px-2 py-[7px] text-left hover:bg-white/5"
+                  onClick={() => toggleOpen(key, item.kind === 'commit' ? item.sha : null)}
+                  onContextMenu={isSavepoint ? event => {
+                    event.preventDefault()
+                    setMenu({ x: event.clientX, y: event.clientY, item })
+                  } : undefined}
                 >
-                  {creatingRollback ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
-                  {creatingRollback ? 'Creating...' : 'Create rollback feature'}
+                  <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
+                  <span className={`min-w-0 flex-1 truncate text-[12px] ${isSavepoint ? 'text-violet-400' : ''}`}>{item.message}</span>
+                  {isSavepoint ? (
+                    <span className="shrink-0 rounded-full border border-violet-400/35 bg-violet-400/10 px-2 py-0.5 font-mono text-[10px] font-bold text-violet-400">r{item.revision}</span>
+                  ) : key === headKey && branch ? (
+                    <span className="max-w-[130px] shrink-0 truncate rounded-full border bg-white/5 px-2 py-0.5 font-mono text-[10px]" style={{ borderColor: 'var(--border)' }}>{branch}</span>
+                  ) : null}
                 </button>
-                {rollbackCreated && <div className="text-[9px] text-chart-2">Rollback feature created. Switch to it and commit the generated changes.</div>}
+                {open && (
+                  <div className="pb-2.5 pl-[27px] pr-2" data-testid="timeline-detail">
+                    {item.kind === 'commit' ? (
+                      <>
+                        <div className="mb-1.5 text-[10px] text-muted-foreground"><b className="font-medium text-foreground">{item.author}</b> · {formatTime(item.timestamp)}</div>
+                        <div className="mb-1.5 flex flex-wrap gap-1">
+                          {item.svnRevision !== null && <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-violet-400" title="Linked SVN revision">r{item.svnRevision}</span>}
+                          <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${item.validationState === 'Validated' ? 'bg-emerald-500/10 text-emerald-500' : item.validationState === 'Invalid' ? 'bg-red-500/10 text-red-500' : 'bg-muted text-muted-foreground'}`}>
+                            {item.validationState === 'Validated' ? '✓ TIA validated' : item.validationState === 'Invalid' ? 'Validation invalid' : 'No evidence'}
+                          </span>
+                        </div>
+                        {item.tiaChecksum && <div className="mb-1.5"><ChecksumRows value={item.tiaChecksum} /></div>}
+                        <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Changed files · {item.files.length}</div>
+                        {item.files.map(file => (
+                          <button
+                            key={file}
+                            type="button"
+                            data-testid={`object-${file.split('/').pop()}`}
+                            data-selected={rollbackPaths.has(file)}
+                            title={`${file} — select for rollback`}
+                            onClick={() => toggleRollbackPath(file)}
+                            className={`block w-full truncate rounded px-1 py-0.5 text-left font-mono text-[10px] hover:bg-white/5 ${rollbackPaths.has(file) ? 'bg-blue-500/10 text-foreground' : ''}`}
+                          >
+                            {file}
+                          </button>
+                        ))}
+                        {rollbackPaths.size > 0 && (
+                          <div className="mt-1.5 space-y-1.5 border-t pt-2" style={{ borderColor: 'var(--border)' }}>
+                            <div className="text-[9px] text-muted-foreground">Recover {rollbackPaths.size} selected file{rollbackPaths.size === 1 ? '' : 's'} as a new feature — master is never reset.</div>
+                            <input
+                              aria-label="Rollback feature name"
+                              value={rollbackName}
+                              onChange={event => setRollbackName(event.currentTarget.value)}
+                              className="h-7 w-full rounded-lg border bg-white/[0.03] px-2.5 text-[11px] outline-none focus:border-white/20"
+                              style={{ borderColor: 'var(--border)' }}
+                              placeholder="Rollback feature name"
+                            />
+                            <button
+                              type="button"
+                              data-testid="create-rollback-feature"
+                              disabled={!rollbackName.trim() || creatingRollback}
+                              onClick={() => void createRollback(item.sha)}
+                              className="flex h-7 w-full items-center justify-center gap-1.5 rounded-lg bg-chart-5 text-[11px] font-semibold text-white disabled:opacity-40"
+                            >
+                              {creatingRollback && <Loader2 className="h-3 w-3 animate-spin" />}
+                              Create rollback feature
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div className="mb-1.5 text-[10px] text-muted-foreground"><b className="font-medium text-foreground">SVN savepoint</b> · {formatTime(item.timestamp)}</div>
+                        <div className="mb-1.5 flex flex-wrap gap-1">
+                          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-violet-400">r{item.revision}</span>
+                          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" title="Linked git commit">{item.gitCommitSha.slice(0, 7)}</span>
+                        </div>
+                        {item.tiaChecksum && <div className="mb-1.5"><ChecksumRows value={item.tiaChecksum} /></div>}
+                        <div className="text-[9px] italic text-muted-foreground">Right-click to export this saved project</div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            )
+          })
         )}
       </div>
-    </section>
+
+      {menu && createPortal(
+        <div
+          className="fixed z-50 min-w-[190px] rounded-lg border bg-popover p-1 shadow-2xl"
+          style={{ left: Math.min(menu.x, window.innerWidth - 210), top: Math.min(menu.y, window.innerHeight - 130), borderColor: 'var(--border)' }}
+          data-testid="savepoint-menu"
+          onPointerDown={event => event.stopPropagation()}
+        >
+          <div className="px-2.5 pb-0.5 pt-1 text-[9px] uppercase tracking-widest text-muted-foreground">SVN savepoint r{menu.item.revision}</div>
+          <button
+            type="button"
+            data-testid="savepoint-export"
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] hover:bg-accent disabled:opacity-40"
+            disabled={exporting}
+            onClick={() => void exportSavepoint(menu.item)}
+          >
+            {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : <Download className="h-3.5 w-3.5 text-muted-foreground" />}
+            Export saved project
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] hover:bg-accent"
+            onClick={() => copyRevision(menu.item)}
+          >
+            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+            Copy revision number
+          </button>
+        </div>,
+        document.body,
+      )}
+    </div>
   )
 }

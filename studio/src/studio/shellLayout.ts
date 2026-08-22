@@ -15,7 +15,7 @@ export const DEFAULT_SHELL_LAYOUT: ShellLayout = {
   leftOpen: true,
   rightOpen: true,
   leftWidth: 310,
-  rightWidth: 320,
+  rightWidth: 360,
 }
 
 export const clampDockWidth = (_side: DockSide, value: number) =>

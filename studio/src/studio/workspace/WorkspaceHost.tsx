@@ -20,7 +20,6 @@ import type {
 
 export type {
   WorkspaceChatProps,
-  WorkspaceGitProps,
   WorkspaceKnowledgeProps,
   WorkspaceSourceProps,
   WorkspaceViewKind,
@@ -31,7 +30,7 @@ export type WorkspaceHostProps = WorkspaceViewProps & {
   workspace: WorkspaceService
 }
 
-export default function WorkspaceHost({ workspace, overview, chat, source, knowledge, git }: WorkspaceHostProps) {
+export default function WorkspaceHost({ workspace, overview, chat, source, knowledge }: WorkspaceHostProps) {
   // Re-reads (and remounts the Layout via key) when the service replaces the
   // model instance (resetLayout); stable identity otherwise.
   const { model, version } = useSyncExternalStore(
@@ -46,10 +45,10 @@ export default function WorkspaceHost({ workspace, overview, chat, source, knowl
     return (
       <WorkbenchViewHost
         instance={instance}
-        viewProps={{ overview, chat, source, knowledge, git }}
+        viewProps={{ overview, chat, source, knowledge }}
       />
     )
-  }, [overview, chat, source, knowledge, git])
+  }, [overview, chat, source, knowledge])
 
   const renderTab = useCallback((node: TabNode, renderValues: ITabRenderValues) => {
     const kind = node.getComponent() as WorkspaceViewKind
