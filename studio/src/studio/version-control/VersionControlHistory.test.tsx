@@ -103,6 +103,25 @@ describe('VersionControlHistory', () => {
     )
   })
 
+  it('keeps multiple timeline items expanded at the same time', async () => {
+    const { host } = await render([
+      commit(),
+      commit({ sha: '1234567abcdef890', message: 'Adjust alarms' }),
+      savepoint(),
+    ])
+
+    await click(host.querySelector('[data-testid="commit-abcdef1"]')!)
+    await click(host.querySelector('[data-testid="commit-1234567"]')!)
+    await click(host.querySelector('[data-testid="savepoint-r4"]')!)
+
+    // Expanding one item no longer folds the others.
+    expect(host.querySelectorAll('[data-testid="timeline-detail"]').length).toBe(3)
+
+    // Clicking an open item folds just that one.
+    await click(host.querySelector('[data-testid="commit-1234567"]')!)
+    expect(host.querySelectorAll('[data-testid="timeline-detail"]').length).toBe(2)
+  })
+
   it('exports a savepoint project through the right-click menu', async () => {
     const restore = vi.spyOn(api, 'restoreTiaProject').mockResolvedValue({
       gitCommit: 'abcdef1234567890',

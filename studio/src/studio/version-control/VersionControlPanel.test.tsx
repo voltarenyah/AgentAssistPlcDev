@@ -124,4 +124,29 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.textContent).toContain('TIA matches master')
     expect(host.querySelector('[data-testid="vc-changes-empty"]')).toBeTruthy()
   })
+
+  it('does not re-run the TIA comparison when switching between pages', async () => {
+    mockVcState()
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue({
+      comparisonId: 'comparison-1',
+      masterSha: 'master-1',
+      fastGatePassed: true,
+      state: 'Consistent',
+      liveChecksums: {},
+      differences: [],
+    })
+    vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    await click(host.querySelector('[data-testid="vc-compare-open"]')!)
+    expect(compare).toHaveBeenCalledTimes(1)
+
+    // Switching to history and back keeps the result instead of comparing again.
+    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
+    await click(host.querySelector('[data-testid="vc-tab-changes"]')!)
+
+    expect(compare).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
+    expect(host.textContent).toContain('TIA matches master')
+  })
 })
