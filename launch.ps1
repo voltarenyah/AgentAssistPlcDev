@@ -234,7 +234,17 @@ $env:APP_ASSISTANT_DATA_DIR = $assistantDataDir
             break
         }
         try {
-            $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8787/health" -TimeoutSec 1
+            # Bypass any configured system/session proxy: the sidecar is loopback-only,
+            # and a proxy on 127.0.0.1 cannot reach it (causes false health-check failures).
+            $healthParams = @{
+                UseBasicParsing = $true
+                Uri             = "http://127.0.0.1:8787/health"
+                TimeoutSec      = 1
+            }
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                $healthParams.NoProxy = $true
+            }
+            $health = Invoke-WebRequest @healthParams
             if ($health.StatusCode -eq 200) {
                 $assistantReady = $true
                 break
