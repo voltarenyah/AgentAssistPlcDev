@@ -192,7 +192,7 @@ async def test_configured_model_composes_read_only_answer_with_versioned_metadat
         "provider": "deepseek",
         "model": "deepseek-v4-flash",
         "mode": "llm",
-        "graphVersion": "0.1.0",
+        "graphVersion": "0.2.0",
         "promptVersion": "workbench-assistant-command-v1",
         "orientationPromptVersion": "workbench-assistant-orientation-v1",
     }

@@ -7,6 +7,8 @@ import VersionControlHistory, { type VcTimelineItem } from './VersionControlHist
 export type VersionControlPanelProps = {
   workbenchId: string
   worktreeId: string
+  /** Starts a title-bar operation and returns its id, so the full TIA compare shows live export progress. */
+  onBeginOperation?: (kind: string, label: string) => string
 }
 
 type VersionControlTab = 'changes' | 'history'
@@ -45,7 +47,7 @@ function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSo
   }
 }
 
-export default function VersionControlPanel({ workbenchId, worktreeId }: VersionControlPanelProps) {
+export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOperation }: VersionControlPanelProps) {
   const [status, setStatus] = useState<api.VcStatusResult | null>(null)
   const [log, setLog] = useState<api.VcCommitEntry[]>([])
   const [timeline, setTimeline] = useState<api.VersionControlTimelineResult | null>(null)
@@ -189,6 +191,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId }: Version
               hardwareDiffers,
             }}
             onCommitted={() => void refresh()}
+            onBeginOperation={onBeginOperation}
           />
         )}
         {tab === 'history' && (

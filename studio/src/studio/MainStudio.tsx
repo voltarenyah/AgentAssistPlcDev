@@ -1869,7 +1869,10 @@ export default function MainStudio() {
         <div className="flex-1" />
           <div className="flex items-center gap-2">
           {activeOperation && (
-            <div className="max-w-[360px] rounded-full border px-2 py-1" style={{ borderColor: 'var(--border)' }}>
+            // No fixed width cap: the pill may use the free header space so long export
+            // messages ("Exporting block …") render in full; min-w-0 + truncate inside
+            // OperationStatusLine stays the last-resort fallback on very narrow windows.
+            <div className="min-w-0 rounded-full border px-2 py-1" style={{ borderColor: 'var(--border)' }}>
               <OperationStatusLine
                 status={activeOperation.status}
                 fallback={activeOperation.label}
@@ -2219,6 +2222,7 @@ export default function MainStudio() {
                 <VersionControlPanel
                   workbenchId={selection.workbenchId}
                   worktreeId={selection.worktreeId}
+                  onBeginOperation={(kind, label) => beginOperation(kind, label).id}
                 />
               )}
               {contextDock.content.kind === 'sessions' && (

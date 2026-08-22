@@ -54,7 +54,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($repositoryRoot) -or [string]::IsNullOrWhiteSpace($dataRoot)) {
               throw 'Codex worker configuration must specify repositoryRoot and dataRoot.'
           }
-          Write-Host "Dispatching issue worker with repository root '$repositoryRoot'."
+          Write-Host "CODEX WORKER | Issue #$issueNumber | DISPATCHING | event $env:CODEX_EVENT_NAME"
           & .\scripts\codex-worker\Invoke-Issue.ps1 `
               -Repository ([string]$env:CODEX_REPOSITORY) `
               -IssueNumber $issueNumber `
@@ -62,4 +62,4 @@ jobs:
               -EventName ([string]$env:CODEX_EVENT_NAME) `
               -RepositoryRoot $repositoryRoot `
               -DataRoot $dataRoot `
-              -DryRun:$dryRun
+              -DryRun:$dryRun | Out-Null

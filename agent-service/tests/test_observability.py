@@ -23,7 +23,7 @@ def test_run_metadata_contains_trace_fields_without_user_content():
             "assistant_metadata": {
                 "provider": "deepseek",
                 "model": "deepseek-v4-flash",
-                "graphVersion": "0.1.0",
+                "graphVersion": "0.2.0",
                 "promptVersion": "workbench-assistant-v1",
                 "orientationPromptVersion": "workbench-assistant-orientation-v1",
             },
@@ -48,7 +48,7 @@ def test_run_metadata_contains_trace_fields_without_user_content():
         "actionId": None,
         "operationId": "op-7",
         "outcome": "completed",
-        "graphVersion": "0.1.0",
+        "graphVersion": "0.2.0",
         "promptVersion": "workbench-assistant-v1",
         "orientationPromptVersion": "workbench-assistant-orientation-v1",
         "modelVersion": "deepseek-v4-flash",
@@ -62,7 +62,7 @@ def test_run_metadata_records_orientation_without_user_content():
             "request_mode": "orientation",
             "context_revision": 4,
             "assistant_metadata": {
-                "graphVersion": "0.1.0",
+                "graphVersion": "0.2.0",
                 "promptVersion": "workbench-assistant-command-v1",
                 "orientationPromptVersion": "workbench-assistant-orientation-v1",
                 "model": "deepseek-v4-flash",

@@ -612,6 +612,67 @@ Describe 'Codex worker paths' {
         @($events | Where-Object { $_ -eq 'blocked-comment-attempt' }).Count | Should Be 1
     }
 
+    It 'persists actionable detail when an exception message is empty' {
+        $statePath = Join-Path $TestDrive 'empty-exception-state.json'
+        $comments = New-Object 'System.Collections.Generic.List[string]'
+        $github = {
+            param([string[]] $Arguments)
+            if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { return '{"number":65,"title":"Empty exception","body":"body","author":{"login":"reporter"},"comments":[],"labels":[{"name":"codex"}],"state":"OPEN","url":"https://github.com/owner/repo/issues/65"}' }
+            if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
+            if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
+            if ($Arguments -contains '--add-label') { return '' }
+            if ($Arguments -contains '--body') {
+                $comments.Add([string]$Arguments[$Arguments.IndexOf('--body') + 1]) | Out-Null
+                return ''
+            }
+            throw 'Unexpected GitHub call.'
+        }.GetNewClosure()
+        $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive 'empty-exception'); BranchName = 'codex/65-empty-exception' } }.GetNewClosure()
+        $setup = { param($Worktree, $Config, $ActivityLogPath) throw [System.Exception]::new('') }.GetNewClosure()
+
+        { Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 65 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup } | Should Throw
+
+        $saved = Read-CodexWorkerState -Path $statePath
+        $saved.issues.'65'.status | Should Be 'blocked'
+        $saved.issues.'65'.lastError | Should Not BeNullOrEmpty
+        $saved.issues.'65'.lastError | Should Match 'System.Exception'
+        (@($comments | Where-Object { $_ -like 'Codex work is blocked.*System.Exception*' })).Count | Should Be 1
+    }
+
+    It 'refreshes live labels before an exception transition to blocked' {
+        $statePath = Join-Path $TestDrive 'exception-label-state.json'
+        $issueReads = @{ Value = 0 }
+        $blockedArguments = @{ Value = $null }
+        $github = {
+            param([string[]] $Arguments)
+            if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) {
+                $issueReads.Value++
+                $labels = if ($issueReads.Value -gt 1) { '[{"name":"codex"},{"name":"codex:running"}]' } else { '[{"name":"codex"}]' }
+                return ('{"number":66,"title":"Refresh labels","body":"body","author":{"login":"reporter"},"comments":[],"labels":' + $labels + ',"state":"OPEN","url":"https://github.com/owner/repo/issues/66"}')
+            }
+            if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { return '' }
+            if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
+            if ($Arguments -contains '--add-label') {
+                $label = $Arguments[$Arguments.IndexOf('--add-label') + 1]
+                if ($label -eq 'codex:blocked') { $blockedArguments.Value = @($Arguments) }
+                return ''
+            }
+            if ($Arguments -contains '--body') { return '' }
+            throw 'Unexpected GitHub call.'
+        }.GetNewClosure()
+        $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive 'exception-labels'); BranchName = 'codex/66-refresh-labels' } }.GetNewClosure()
+        $setup = { param($Worktree, $Config, $ActivityLogPath) throw 'setup failed' }.GetNewClosure()
+
+        { Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 66 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup } | Should Throw 'setup failed'
+
+        $issueReads.Value | Should Be 2
+        ($blockedArguments.Value -contains '--remove-label') | Should Be $true
+        ($blockedArguments.Value -contains 'codex:running') | Should Be $true
+        ($blockedArguments.Value -contains 'codex:blocked') | Should Be $true
+    }
+
     It 'persists distinct blocked snapshots around successful exception notifications' {
         $statePath = Join-Path $TestDrive 'exception-success-state.json'
         $events = New-Object 'System.Collections.Generic.List[string]'
@@ -659,7 +720,7 @@ Describe 'Codex worker paths' {
         $events[$blockedLabelIndex + 1] | Should Not Be $events[$blockedCommentIndex + 1]
     }
 
-    It 'recovers publication through an injected boundary after the locked reread' {
+    It 'recovers publication and restores the pr-ready label after the locked reread' {
         $statePath = Join-Path $TestDrive 'publication-state.json'
         $state = [pscustomobject]@{ schemaVersion = 1; issues = [pscustomobject]@{ '42' = [pscustomobject]@{ issueNumber = 42; status = 'pr-ready'; attempt = 1; branch = 'codex/42-publication'; worktree = (Join-Path $TestDrive 'publication-worktree'); threadId = $null; runDirectory = $null; commit = 'abc'; prUrl = $null; retryCount = 0; publicationStage = 'committed'; lastError = $null } }; deployment = $null }
         Write-CodexWorkerState -Path $statePath -State $state
@@ -670,13 +731,15 @@ Describe 'Codex worker paths' {
             $snapshot = (Read-CodexWorkerState -Path $Path).issues."$Number"
             $events.Add('save:' + $snapshot.publicationStage) | Out-Null
         }.GetNewClosure()
+        $statusCommands = New-Object 'System.Collections.Generic.List[string]'
         $github = {
             param([string[]] $Arguments)
             if (@($Arguments | Where-Object { $_ -match 'permission' }).Count -gt 0) { return '{"permission":"write"}' }
-            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { $events.Add('issue-read') | Out-Null; return '{"number":42,"title":"Publication","body":"body","author":{"login":"reporter"},"comments":[],"labels":[],"state":"OPEN","url":"https://github.com/owner/repo/issues/42"}' }
+            if (($Arguments -contains 'view') -and ($Arguments -contains 'issue')) { $events.Add('issue-read') | Out-Null; return '{"number":42,"title":"Publication","body":"body","author":{"login":"reporter"},"comments":[],"labels":[{"name":"codex"},{"name":"codex:retry"},{"name":"codex:pr-ready"}],"state":"OPEN","url":"https://github.com/owner/repo/issues/42"}' }
             if (($Arguments -contains 'develop') -and ($Arguments -contains '--list')) { $events.Add('development-read') | Out-Null; return '' }
             if (($Arguments -contains 'pr') -and ($Arguments -contains 'list')) { return '[]' }
-            throw 'Publication recovery must not mutate GitHub directly.'
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'edit') { $statusCommands.Add(($Arguments -join ' ')) | Out-Null; return '' }
+            throw 'Unexpected GitHub operation.'
         }.GetNewClosure()
         $lock = { param($Path) $events.Add('lock') | Out-Null; 'handle' }.GetNewClosure()
         $unlock = { param($Handle) $events.Add('unlock') | Out-Null }.GetNewClosure()
@@ -690,6 +753,8 @@ Describe 'Codex worker paths' {
         $saved = Read-CodexWorkerState -Path $statePath
         $saved.issues.'42'.publicationStage | Should Be 'pr-created'
         $saved.issues.'42'.prUrl | Should Be 'https://github.example/pr/42'
+        ($statusCommands -join ' ') | Should Match '--remove-label codex:retry'
+        ($statusCommands -join ' ') | Should Match '--add-label codex:pr-ready'
         $events.IndexOf('lock') | Should BeLessThan $events.IndexOf('issue-read')
         $events.IndexOf('issue-read') | Should BeLessThan $events.IndexOf('publication')
         $events.IndexOf('publication') | Should BeLessThan $events.IndexOf('save:pr-created')

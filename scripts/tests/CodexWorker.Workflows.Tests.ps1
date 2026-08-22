@@ -144,6 +144,23 @@ Describe 'Codex worker GitHub Actions workflows' {
         Assert-ExplicitPermissions $text
     }
 
+    It 'suppresses raw result tables so the worker lifecycle milestones are the useful console output' {
+        $issueWorker = Get-WorkflowText 'codex-issue.yml'
+        $revisionWorker = Get-WorkflowText 'codex-revise.yml'
+        $closeWorker = Get-WorkflowText 'codex-pr-closed.yml'
+
+        $issueWorker | Should Match '(?ms)&\s+\.\\scripts\\codex-worker\\Invoke-Issue\.ps1.*?\|\s*Out-Null'
+        ([regex]::Matches($revisionWorker, '(?ms)&\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1.*?\|\s*Out-Null')).Count | Should Be 2
+        $closeWorker | Should Match '(?ms)&\s+\.\\scripts\\codex-worker\\Register-PrClosed\.ps1.*?\|\s*Out-Null'
+    }
+
+    It 'prints a concise close-handler failure reason instead of leaving only a generic failed job' {
+        $handler = Get-Content -Raw (Join-Path $PSScriptRoot '..\codex-worker\Register-PrClosed.ps1')
+
+        $handler | Should Match 'CODEX WORKER \| PR #\$PullRequestNumber \| CLOSE HANDLER FAILED'
+        $handler | Should Match 'catch\s*\{[\s\S]*throw'
+    }
+
     It 'routes revise labels from issues and pull requests to the revision worker' {
         $text = Get-WorkflowText 'codex-revise.yml'
         $on = Get-TopLevelSection -Text $text -Name 'on'
@@ -154,14 +171,22 @@ Describe 'Codex worker GitHub Actions workflows' {
         $issueDispatch = Get-StepSection -Text $text -Name 'Dispatch issue revision'
         $issueDispatch | Should Match '(?m)^        if:\s*github\.event_name == ''issues'' && github\.event\.label\.name == ''codex:revise''\s*$'
         $issueDispatch | Should Match '(?m)^          CODEX_ISSUE_NUMBER:\s*\$\{\{\s*github\.event\.issue\.number\s*\}\}\s*$'
+        $issueDispatch | Should Match '(?m)^          CODEX_EVENT_NAME:\s*\$\{\{\s*github\.event\.label\.name\s*\}\}\s*$'
+        $issueDispatch | Should Match '(?m)^          \$workerConfigPath\s*=\s*Join-Path\s+\$env:LOCALAPPDATA'
+        $issueDispatch | Should Match '(?m)^          \$repositoryRoot\s*=\s*\[string\]\$workerConfig\.repositoryRoot\s*$'
+        $issueDispatch | Should Match '(?m)^          \$dataRoot\s*=\s*\[string\]\$workerConfig\.dataRoot\s*$'
         $issueDispatch | Should Match '(?m)^          \$issueNumber\s*=\s*\[int\]\$env:CODEX_ISSUE_NUMBER\s*$'
-        $issueDispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-IssueNumber\s+\$issueNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)'
+        $issueDispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-IssueNumber\s+\$issueNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)\s*`?\s+-RepositoryRoot\s+\$repositoryRoot\s*`?\s+-DataRoot\s+\$dataRoot'
         $issueDispatch | Should Not Match 'PullRequestNumber'
         $prDispatch = Get-StepSection -Text $text -Name 'Dispatch pull request revision'
         $prDispatch | Should Match '(?m)^        if:\s*github\.event_name == ''pull_request'' && github\.event\.label\.name == ''codex:revise''\s*$'
         $prDispatch | Should Match '(?m)^          CODEX_PULL_REQUEST_NUMBER:\s*\$\{\{\s*github\.event\.pull_request\.number\s*\}\}\s*$'
+        $prDispatch | Should Match '(?m)^          CODEX_EVENT_NAME:\s*\$\{\{\s*github\.event\.label\.name\s*\}\}\s*$'
+        $prDispatch | Should Match '(?m)^          \$workerConfigPath\s*=\s*Join-Path\s+\$env:LOCALAPPDATA'
+        $prDispatch | Should Match '(?m)^          \$repositoryRoot\s*=\s*\[string\]\$workerConfig\.repositoryRoot\s*$'
+        $prDispatch | Should Match '(?m)^          \$dataRoot\s*=\s*\[string\]\$workerConfig\.dataRoot\s*$'
         $prDispatch | Should Match '(?m)^          \$pullRequestNumber\s*=\s*\[int\]\$env:CODEX_PULL_REQUEST_NUMBER\s*$'
-        $prDispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-PullRequestNumber\s+\$pullRequestNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)'
+        $prDispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-PullRequestNumber\s+\$pullRequestNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)\s*`?\s+-RepositoryRoot\s+\$repositoryRoot\s*`?\s+-DataRoot\s+\$dataRoot'
         $prDispatch | Should Not Match 'IssueNumber|github\.event\.issue\.number|github\.event\.(?:issue|pull_request)\.body|inputs\.body'
         Assert-TrustedCheckout $text
         Assert-RunnerAndQueueContract $text

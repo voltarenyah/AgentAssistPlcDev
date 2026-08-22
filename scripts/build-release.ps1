@@ -188,7 +188,8 @@ Copy-DirectoryContents $assistantServiceSource $assistantServiceDestination @(
     '.assistant-data',
     '.pytest_cache',
     '.venv',
-    '__pycache__'
+    '__pycache__',
+    'tests'
 )
 
 $engineeringConfig = Join-Path $engineeringDestination 'Mcp.Engineering.exe.config'

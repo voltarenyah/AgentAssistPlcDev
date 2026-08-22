@@ -12,6 +12,8 @@ type Props = {
   /** The changes page commit message — reused as the title for accept actions. */
   commitMessage: string
   onCommitted?: () => void | Promise<void>
+  /** Starts a title-bar operation and returns its id so the full compare reports live export progress. */
+  onBeginOperation?: (kind: string, label: string) => string
 }
 
 const normalizeChecksum = (value: string) => value.replace(/\s+/g, '').toUpperCase()
@@ -25,7 +27,7 @@ const storedChecksumValues = (aggregate: string | null | undefined): string[] =>
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
 
-export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onCommitted }: Props) {
+export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onCommitted, onBeginOperation }: Props) {
   const [started, setStarted] = useState(false)
   const [dismissed, setDismissed] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
@@ -39,9 +41,10 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
 
   const compare = async () => {
     setBusy(true); setError(null); setPushOutcomes(null)
+    const operationId = onBeginOperation?.('compare-tia', 'Comparing master with TIA Portal...')
     try {
       const [nextComparison, engineeringState] = await Promise.all([
-        api.compareMasterWithTia(workbenchId),
+        api.compareMasterWithTia(workbenchId, operationId),
         api.getWorktreeEngineeringState(workbenchId, worktreeId).catch(() => null),
       ])
       setComparison(nextComparison)

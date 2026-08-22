@@ -26,7 +26,7 @@ const comparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): ap
   ...overrides,
 })
 
-const render = async (props: { signal?: number; commitMessage?: string; branch?: string; onCommitted?: () => void } = {}) => {
+const render = async (props: { signal?: number; commitMessage?: string; branch?: string; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string } = {}) => {
   vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue({
     revision: {
       schemaVersion: 1,
@@ -52,6 +52,7 @@ const render = async (props: { signal?: number; commitMessage?: string; branch?:
       signal={props.signal ?? 1}
       commitMessage={props.commitMessage ?? ''}
       onCommitted={props.onCommitted}
+      onBeginOperation={props.onBeginOperation}
     />,
   ))
   return { host, root }
@@ -118,6 +119,33 @@ describe('VersionControlCompare (inline)', () => {
     const acceptButton = host.querySelector('button[aria-label="Accept selected TIA changes"]') as HTMLButtonElement
     expect(acceptButton.disabled).toBe(true)
     expect(host.textContent).toContain('Type a commit message above')
+  })
+
+  it('reports the full compare as a tracked operation when the host supports it', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({ differences: [], state: 'Consistent' }))
+    const onBeginOperation = vi.fn(() => 'op-42')
+    await render({ signal: 1, onBeginOperation })
+
+    expect(onBeginOperation).toHaveBeenCalledWith('compare-tia', expect.stringContaining('Comparing'))
+    expect(compare).toHaveBeenCalledWith('wb-1', 'op-42')
+  })
+
+  it('notifies the parent after an accepted TIA commit so history can refresh', async () => {
+    vi.spyOn(api, 'compareMasterWithTia')
+      .mockResolvedValueOnce(comparison())
+      .mockResolvedValueOnce(comparison({ differences: [], state: 'Consistent' }))
+    vi.spyOn(api, 'acceptTiaSynchronization').mockResolvedValue({
+      comparisonId: 'comparison-1',
+      pendingPaths: [],
+      commitSha: 'commit-2',
+    })
+    const onCommitted = vi.fn()
+    const { host } = await render({ signal: 1, commitMessage: 'Accept Main from TIA', onCommitted })
+
+    await click(host.querySelector('input[type="checkbox"]')!)
+    await click(host.querySelector('button[aria-label="Accept selected TIA changes"]')!)
+
+    expect(onCommitted).toHaveBeenCalled()
   })
 
   it('pushes selected local objects into TIA and shows per-object outcomes', async () => {

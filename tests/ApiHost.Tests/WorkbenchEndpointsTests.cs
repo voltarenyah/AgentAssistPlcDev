@@ -1124,7 +1124,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             new[]
             {
                 "connect", "get_current_session", "get_project_info", "save_project_as", "get_project_info",
-                "compile_plc", "get_plc_checksums", "rebuild_export",
+                "compile_plc", "get_plc_checksums", "get_project_info", "rebuild_export",
                 "export_hardware_configuration", "close_session", "disconnect",
             },
             engineering.Calls);
@@ -2223,6 +2223,9 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 Path.Combine(deviceRoot, "plc-knowledge.db"));
             Directory.CreateDirectory(context.SourceRoot);
             Directory.CreateDirectory(context.StagingRoot);
+            // Tests that script a TIA export simulate a connected engineering session, so the
+            // worktree needs a registered project path for the ensure-connected check.
+            sourceProjectPath ??= stageExport is not null ? @"C:\Projects\Line.ap17" : null;
             store.Write(
                 Path.Combine(worktreeRoot, "worktree.json"),
                 new WorktreeMetadata(
@@ -2237,7 +2240,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             if (databaseExists)
                 await File.WriteAllBytesAsync(context.KnowledgeDbPath, [1]);
 
-            var engineering = new ThrowingToolCaller(engineeringOffline, stageExport);
+            var engineering = new ThrowingToolCaller(engineeringOffline, stageExport, sourceProjectPath);
             var versionControl = new RecordingToolCaller(versionControlJson ?? """
                 {"Sha":"baseline-1","Message":"Initial PLC source baseline","Files":["devices/PLC_1/source/Blocks/Main.xml"]}
                 """);
@@ -2393,7 +2396,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
     private sealed class ThrowingToolCaller(
         bool throwOnCall = true,
-        Action<string, string>? stageExport = null) : IMcpToolCaller
+        Action<string, string>? stageExport = null,
+        string? connectedProjectPath = null) : IMcpToolCaller
     {
         public List<string> Calls { get; } = [];
         public Dictionary<string, JsonElement> Arguments { get; } = [];
@@ -2405,6 +2409,16 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         {
             Calls.Add(tool);
             Arguments[tool] = JsonSerializer.SerializeToElement(args);
+            if (tool == "get_project_info" && connectedProjectPath is not null)
+            {
+                return Task.FromResult((T)(object)new ProjectInfo
+                {
+                    Name = "Line",
+                    Path = connectedProjectPath,
+                    PlcDevices = ["PLC_1"],
+                });
+            }
+
             if (tool == "rebuild_export" && stageExport is not null)
             {
                 var arguments = Arguments[tool];

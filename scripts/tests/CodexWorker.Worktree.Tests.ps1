@@ -50,6 +50,33 @@ Describe 'Codex worker worktrees' {
         $output | Should Match 'completed'
     }
 
+    It 'preserves native stderr when a setup command exits successfully' {
+        $previousPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Stop'
+            $module = Get-Module CodexWorker
+            $result = & $module {
+                $previousModulePreference = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = 'Stop'
+                    Invoke-CodexSetupCommand -FilePath 'cmd.exe' -Arguments @(
+                        '/d',
+                        '/s',
+                        '/c',
+                        'echo pip upgrade notice 1>&2 & exit /b 0'
+                    )
+                } finally {
+                    $ErrorActionPreference = $previousModulePreference
+                }
+            }
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
+
+        $result.ExitCode | Should Be 0
+        $result.Output | Should Match 'pip upgrade notice'
+    }
+
     It 'rejects cleanup outside the automation worktree root' {
         { Assert-PathUnderRoot -Path 'C:\repo' -Root 'C:\repo\.worktrees' } |
             Should Throw 'Path is outside the automation worktree root.'

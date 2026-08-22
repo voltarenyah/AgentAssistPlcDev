@@ -91,6 +91,23 @@ Describe 'Codex worker prompt and process runner' {
         $values.EmptyItems.Count | Should Be 0
     }
 
+    It 'formats a compact redacted issue lifecycle milestone for the runner console' {
+        $module = Get-Module CodexWorker
+        $lines = [System.Collections.Generic.List[string]]::new()
+
+        & $module {
+            param($Lines)
+            Write-CodexWorkerMilestone -IssueNumber 42 -Phase 'STARTED' -Details "Repair worker output`nwith ghp_console_secret" -ConsoleWriter {
+                param($Line)
+                $Lines.Add([string]$Line) | Out-Null
+            }
+        } $lines
+
+        $lines.Count | Should Be 1
+        $lines[0] | Should Match '^CODEX WORKER \| Issue #42 \| STARTED \| Repair worker output with \[REDACTED\]$'
+        $lines[0] | Should Not Match 'ghp_console_secret|\r|\n'
+    }
+
     It 'rejects an undeclared summary property' {
         $summary = [pscustomobject][ordered]@{
             status = 'completed'; rootCauseOrApproach = 'evidence'; changedComponents = @(); decisions = @()

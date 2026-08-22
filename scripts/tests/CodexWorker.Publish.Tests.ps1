@@ -20,18 +20,31 @@ Describe 'Codex worker publication' {
         $script:publishSummary = $summary
     }
 
-    It 'does not treat successful Git stderr warnings as changed paths' {
-        $warning = [Management.Automation.ErrorRecord]::new(
-            [Exception]::new('warning: line endings will be replaced'),
-            'git-warning',
-            [Management.Automation.ErrorCategory]::NotSpecified,
-            $null)
-        $runner = { param($Arguments) @('docs/local-codex-worker.md', $warning) }.GetNewClosure()
+    It 'returns stdout when Git emits a successful stderr warning under Stop' {
+        $warningWorktree = Join-Path $TestDrive 'line-ending-warning-worktree'
+        New-Item -ItemType Directory -Path $warningWorktree -Force | Out-Null
+        & git.exe -C $warningWorktree init -q
+        & git.exe -C $warningWorktree config user.email 'test@example.invalid'
+        & git.exe -C $warningWorktree config user.name 'Codex Worker Test'
+        [IO.File]::WriteAllText((Join-Path $warningWorktree 'sample.txt'), "one`ntwo`n", [Text.UTF8Encoding]::new($false))
+        & git.exe -C $warningWorktree -c core.autocrlf=false add sample.txt
+        & git.exe -C $warningWorktree -c core.autocrlf=false commit -qm initial
+        & git.exe -C $warningWorktree config core.autocrlf true
+        [IO.File]::WriteAllText((Join-Path $warningWorktree 'sample.txt'), "one`nthree`n", [Text.UTF8Encoding]::new($false))
         $module = Get-Module CodexWorker
 
-        $output = & $module { param($Worktree, $GitRunner) Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--name-only') -CommandRunner $GitRunner } $publishWorktree $runner
+        $output = & $module {
+            param($Worktree)
+            $previousPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Stop'
+            try {
+                Invoke-CodexPublicationGit -Worktree $Worktree -Arguments @('diff', '--name-only')
+            } finally {
+                $ErrorActionPreference = $previousPreference
+            }
+        } $warningWorktree
 
-        $output | Should Be 'docs/local-codex-worker.md'
+        $output | Should Be 'sample.txt'
     }
 
     It 'rejects an empty diff' {
@@ -340,13 +353,15 @@ Describe 'Codex worker publication' {
             if ($Arguments -contains 'push') { return '' }
             return ''
         }.GetNewClosure()
+        $issueLabelCommands = [System.Collections.Generic.List[string]]::new()
         $gh = { param($Arguments)
             if (($Arguments -join '/') -match '/permission$') { return '{"permission":"write"}' }
-            if ($Arguments -contains 'issue') { return '{"number":42,"title":"Issue","body":"body","labels":[],"comments":[]}' }
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'view') { return '{"number":42,"title":"Issue","body":"body","labels":[{"name":"codex"},{"name":"codex:revise"}],"comments":[]}' }
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'edit') { $issueLabelCommands.Add(($Arguments -join ' ')) | Out-Null; return '' }
             if ($Arguments -contains 'pr' -and $Arguments -contains 'view') { return '{"number":7,"url":"https://example.test/pr/7","state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42","comments":[],"reviews":[]}' }
             if ($Arguments -contains 'pr' -and $Arguments -contains 'list') { return '[{"number":7,"url":"https://example.test/pr/7","state":"OPEN","isDraft":true,"headRefName":"codex/42-publication","baseRefName":"master","body":"Fixes #42"}]' }
             if ($Arguments -contains 'pr' -and $Arguments -contains 'comment') { $events.Add('comment') | Out-Null; return '' }
-            if ($Arguments -contains 'pr' -and $Arguments -contains 'edit') { $events.Add('edit') | Out-Null; return '' }
+            if ($Arguments -contains 'pr' -and $Arguments -contains 'edit') { $events.Add(($Arguments -join ' ')) | Out-Null; return '' }
             throw 'unexpected GitHub operation'
         }.GetNewClosure()
         $stateWriter = { param($Path,$Number,$Current) Write-CodexIssueAttemptState -Path $Path -IssueNumber $Number -AttemptState $Current | Out-Null }.GetNewClosure()
@@ -356,9 +371,12 @@ Describe 'Codex worker publication' {
         $result = Invoke-CodexRevision -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -PullRequestNumber '7' -RepositoryRoot $repoRoot -DataRoot $dataRoot -Config ([pscustomobject]@{ repository = 'owner/repo'; defaultBranch = 'develop'; dataRoot = $dataRoot }) -StatePath $statePath -StateWriter $stateWriter -LockProvider $lock -UnlockProvider $unlock -GitCommandRunner $git -GitHubCommandRunner $gh -CodexProvider $codex
         $result.PullRequestNumber | Should Be 7
         ($events -contains 'comment') | Should Be $true
-        ($events -contains 'edit') | Should Be $true
+        ($events -join ' ') | Should Match 'pr edit 7'
         ($events -contains 'lock') | Should Be $true
         (Get-CodexIssueAttemptState -State (Read-CodexWorkerState -Path $statePath) -IssueNumber 42).threadId | Should Be 'new-thread'
+        ($issueLabelCommands -join ' ') | Should Match '--remove-label codex:revise'
+        ($issueLabelCommands -join ' ') | Should Match '--add-label codex:pr-ready'
+        ($events -join ' ') | Should Match 'pr edit 7 .*--remove-label codex:revise'
         ($events -join ' ') | Should Not Match '(?i)create|force|merge|ready'
     }
 

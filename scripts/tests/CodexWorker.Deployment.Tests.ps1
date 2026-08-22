@@ -44,8 +44,10 @@ Describe 'Codex worker PR-close deployment handoff' {
         $labels = [System.Collections.Generic.List[string]]::new()
         $github = {
             param([string[]] $Arguments)
-            if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"state":"CLOSED","url":"https://github.com/owner/repo/pull/17","headRefName":"codex/42-fix","baseRefName":"master","headRepository":{"nameWithOwner":"owner/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":"2026-08-18T00:00:00Z","mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"closingIssuesReferences":[{"number":42,"repository":{"nameWithOwner":"owner/repo"}}]}' }
+            if (($Arguments -join ' ') -match 'closingIssuesReferences') { return '{"number":17,"state":"MERGED","url":"https://github.com/owner/repo/pull/17","headRefName":"codex/42-fix","baseRefName":"master","headRepository":{"nameWithOwner":"owner/repo"},"baseRepository":{"nameWithOwner":"owner/repo"},"mergedAt":"2026-08-18T00:00:00Z","mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"closingIssuesReferences":[{"number":42,"repository":{"name":"repo","owner":{"login":"owner"}}}]}' }
+            if ($Arguments -contains 'issue' -and $Arguments -contains 'view') { return '{"number":42,"title":"Issue","body":"body","labels":[{"name":"codex"},{"name":"codex:revise"}]}' }
             if ($Arguments -contains '--add-label') { $labels.Add($Arguments[$Arguments.IndexOf('--add-label') + 1]) }
+            if ($Arguments -contains '--remove-label') { $labels.Add(('remove:' + $Arguments[$Arguments.IndexOf('--remove-label') + 1])) }
             return ''
         }.GetNewClosure()
         $git = {
@@ -63,7 +65,9 @@ Describe 'Codex worker PR-close deployment handoff' {
         $state.deployment.targetCommit | Should Be $sha
         $state.deployment.sourcePr | Should Be 17
         $state.deployment.status | Should Be 'pending'
+        $state.issues.'42'.status | Should Be 'done'
         (@($labels) -contains 'codex:done') | Should Be $true
+        (@($labels) -contains 'remove:codex:revise') | Should Be $true
     }
 
     It 'coalesces a later verified origin master commit and preserves a later snooze' {
@@ -253,7 +257,7 @@ Describe 'Codex worker PR-close deployment handoff' {
         $state.issues.'42'.cleanupAt | Should Be $cleanupAt
     }
 
-    It 'does nothing for a merged completed cleanup state with a verified deployment' {
+    It 'finalizes the durable issue state for a merged completed cleanup state with a verified deployment' {
         $sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
         $cleanupAt = '2026-08-18T00:00:00Z'
         $requestedAt = '2026-08-18T00:30:00Z'
@@ -270,10 +274,11 @@ Describe 'Codex worker PR-close deployment handoff' {
 
         $result.DeploymentCreated | Should Be $false
         ($state.deployment | ConvertTo-Json -Depth 5) | Should Be $before
-        $writes.Count | Should Be 0
+        $writes.Count | Should Be 1
         $cleanupCalls | Should Be 0
         $comments | Should Be 0
-        $labels.Count | Should Be 0
+        $labels.Count | Should Be 1
+        $state.issues.'42'.status | Should Be 'done'
         $state.issues.'42'.cleanupAt | Should Be $cleanupAt
     }
 

@@ -31,6 +31,8 @@ export type VersionControlChangesProps = {
   compareSignal: number
   snapshot: VersionControlSnapshotInfo
   onCommitted?: () => void | Promise<void>
+  /** Starts a title-bar operation and returns its id so the full compare reports live export progress. */
+  onBeginOperation?: (kind: string, label: string) => string
 }
 
 const categoryOrder = ['Block', 'DB', 'Udt', 'Tags', 'Hardware']
@@ -57,7 +59,7 @@ const groupLabel = (entry: VersionControlSourceEntry) =>
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
 
-export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, snapshot, onCommitted }: VersionControlChangesProps) {
+export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, snapshot, onCommitted, onBeginOperation }: VersionControlChangesProps) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [message, setMessage] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -139,6 +141,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
           signal={compareSignal}
           commitMessage={message}
           onCommitted={onCommitted}
+          onBeginOperation={onBeginOperation}
         />
         {entries.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" data-testid="vc-changes-empty">
