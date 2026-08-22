@@ -55,7 +55,7 @@ const ChecksumRows = ({ value }: { value: string }) => (
 )
 
 export default function VersionControlHistory({ workbenchId, worktreeId, branch, items, loading }: Props) {
-  const [openKey, setOpenKey] = useState<string | null>(null)
+  const [openKeys, setOpenKeys] = useState<Set<string>>(new Set())
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [exporting, setExporting] = useState(false)
   const [rollbackPaths, setRollbackPaths] = useState<Set<string>>(new Set())
@@ -74,9 +74,18 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
   }, [menu])
 
   const toggleOpen = (key: string, sha: string | null) => {
-    setOpenKey(previous => previous === key ? null : key)
-    setRollbackPaths(new Set())
-    setRollbackName(sha ? `rollback-${sha.slice(0, 7)}` : '')
+    setOpenKeys(previous => {
+      const next = new Set(previous)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+    // Opening a commit starts a fresh rollback selection for that commit;
+    // other open items stay expanded so details can be compared side by side.
+    if (sha) {
+      setRollbackPaths(new Set())
+      setRollbackName(`rollback-${sha.slice(0, 7)}`)
+    }
   }
 
   const toggleRollbackPath = (path: string) => {
@@ -139,7 +148,7 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
         ) : (
           items.map((item, index) => {
             const key = itemKey(item)
-            const open = openKey === key
+            const open = openKeys.has(key)
             const isSavepoint = item.kind === 'savepoint'
             return (
               <div
