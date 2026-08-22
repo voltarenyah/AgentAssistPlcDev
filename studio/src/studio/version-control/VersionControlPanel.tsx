@@ -177,8 +177,11 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
       </div>
       {error && <div className="shrink-0 px-3.5 py-2 text-[10px] text-destructive">{error}</div>}
 
+      {/* Both pages stay mounted (hidden when inactive) so tab switches do not
+          remount them — a remount would re-run the TIA comparison and drop
+          local UI state like the compare result or expanded timeline items. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {tab === 'changes' && (
+        <div className={tab === 'changes' ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'hidden'}>
           <VersionControlChanges
             workbenchId={workbenchId}
             worktreeId={worktreeId}
@@ -193,8 +196,8 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
             onCommitted={() => void refresh()}
             onBeginOperation={onBeginOperation}
           />
-        )}
-        {tab === 'history' && (
+        </div>
+        <div className={tab === 'history' ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'hidden'}>
           <VersionControlHistory
             workbenchId={workbenchId}
             worktreeId={worktreeId}
@@ -202,7 +205,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
             items={timelineItems}
             loading={loading && timeline === null}
           />
-        )}
+        </div>
       </div>
     </section>
   )
