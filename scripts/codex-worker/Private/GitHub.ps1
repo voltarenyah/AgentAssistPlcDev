@@ -1,8 +1,25 @@
-$script:CodexStatusLabels = @(
-    'codex:queued', 'codex:running', 'codex:pr-ready',
-    'codex:blocked', 'codex:retry', 'codex:revise', 'codex:done'
-)
 $script:CodexMilestoneKeys = @{}
+
+function Get-CodexWorkerStatusProvider {
+    param([object] $Provider)
+    if ($null -eq $Provider) { return Resolve-CodexWorkerProvider -Provider 'Codex' -EventName 'codex' }
+    return $Provider
+}
+
+function Get-CodexWorkerStatusLabel {
+    param([object] $Provider, [string] $Status)
+    $selected = Get-CodexWorkerStatusProvider -Provider $Provider
+    $label = $selected.StatusLabels[$Status]
+    if ([string]::IsNullOrWhiteSpace([string]$label)) { throw "Unknown $($selected.Name) issue status '$Status'." }
+    return [string]$label
+}
+
+function Get-CodexWorkerMilestonePhase {
+    param([object] $Provider, [string] $CodexPhase, [string] $ProviderPhase)
+    $selected = Get-CodexWorkerStatusProvider -Provider $Provider
+    if ($selected.Name -eq 'Codex') { return $CodexPhase }
+    return ('{0} {1}' -f $selected.Name.ToUpperInvariant(), $ProviderPhase)
+}
 
 function Get-CodexWorkflowRunUrl {
     [CmdletBinding()]
@@ -265,6 +282,8 @@ function Set-CodexIssueStatus {
         [Parameter(Mandatory = $true)]
         [string] $Status,
 
+        [object] $Provider,
+
         [Alias('Labels')]
         [object[]] $CurrentLabels,
 
@@ -273,10 +292,8 @@ function Set-CodexIssueStatus {
         [scriptblock] $CommandRunner
     )
 
-    $normalizedStatus = if ($Status.StartsWith('codex:')) { $Status } else { "codex:$Status" }
-    if ($normalizedStatus -notin $script:CodexStatusLabels) {
-        throw "Unknown Codex issue status '$Status'."
-    }
+    $selectedProvider = Get-CodexWorkerStatusProvider -Provider $Provider
+    $normalizedStatus = if ($selectedProvider.StatusLabels.ContainsKey($Status)) { [string]$selectedProvider.StatusLabels[$Status] } elseif ($Status -in @($selectedProvider.StatusLabels.Values)) { $Status } else { throw "Unknown $($selectedProvider.Name) issue status '$Status'." }
 
     if (-not [string]::IsNullOrWhiteSpace($Actor)) {
         Assert-TrustedGitHubActor -Repository $Repository -Actor $Actor -CommandRunner $CommandRunner |
@@ -298,7 +315,7 @@ function Set-CodexIssueStatus {
 
     foreach ($label in @($CurrentLabels)) {
         $name = Get-CodexLabelName -Label $label
-        if ($name -in $script:CodexStatusLabels -and $name -ne $normalizedStatus) {
+        if ($name -in @($selectedProvider.StatusLabels.Values) -and $name -ne $normalizedStatus) {
             $arguments.Add('--remove-label')
             $arguments.Add($name)
         }

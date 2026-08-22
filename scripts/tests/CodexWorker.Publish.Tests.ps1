@@ -374,7 +374,7 @@ Describe 'Codex worker publication' {
         ($events -join ' ') | Should Match 'pr edit 7'
         ($events -contains 'lock') | Should Be $true
         (Get-CodexIssueAttemptState -State (Read-CodexWorkerState -Path $statePath) -IssueNumber 42).threadId | Should Be 'new-thread'
-        ($issueLabelCommands -join ' ') | Should Match '--remove-label codex:revise'
+        ($issueLabelCommands -join ' ') | Should Not Match '--remove-label codex:revise'
         ($issueLabelCommands -join ' ') | Should Match '--add-label codex:pr-ready'
         ($events -join ' ') | Should Match 'pr edit 7 .*--remove-label codex:revise'
         ($events -join ' ') | Should Not Match '(?i)create|force|merge|ready'

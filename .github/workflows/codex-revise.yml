@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   run:
-    if: github.event.label.name == 'codex:revise'
+    if: github.event.label.name == 'codex:revise' || github.event.label.name == 'kimi-revise'
     runs-on: [self-hosted, Windows, X64, agentassist-local]
     steps:
       - name: Checkout trusted worker revision
@@ -23,13 +23,14 @@ jobs:
           persist-credentials: false
 
       - name: Dispatch issue revision
-        if: github.event_name == 'issues' && github.event.label.name == 'codex:revise'
+        if: github.event_name == 'issues' && (github.event.label.name == 'codex:revise' || github.event.label.name == 'kimi-revise')
         shell: powershell
         env:
           CODEX_REPOSITORY: ${{ github.repository }}
           CODEX_ISSUE_NUMBER: ${{ github.event.issue.number }}
           CODEX_ACTOR: ${{ github.actor }}
           CODEX_EVENT_NAME: ${{ github.event.label.name }}
+          CODEX_PROVIDER: ${{ startsWith(github.event.label.name, 'kimi') && 'Kimi' || 'Codex' }}
         run: |
           $issueNumber = [int]$env:CODEX_ISSUE_NUMBER
           $workerConfigPath = Join-Path $env:LOCALAPPDATA 'AutomationWorkbench\CodexWorker\config.json'
@@ -48,17 +49,19 @@ jobs:
               -IssueNumber $issueNumber `
               -Actor ([string]$env:CODEX_ACTOR) `
               -EventName ([string]$env:CODEX_EVENT_NAME) `
+              -Provider ([string]$env:CODEX_PROVIDER) `
               -RepositoryRoot $repositoryRoot `
               -DataRoot $dataRoot | Out-Null
 
       - name: Dispatch pull request revision
-        if: github.event_name == 'pull_request' && github.event.label.name == 'codex:revise'
+        if: github.event_name == 'pull_request' && (github.event.label.name == 'codex:revise' || github.event.label.name == 'kimi-revise')
         shell: powershell
         env:
           CODEX_REPOSITORY: ${{ github.repository }}
           CODEX_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
           CODEX_ACTOR: ${{ github.actor }}
           CODEX_EVENT_NAME: ${{ github.event.label.name }}
+          CODEX_PROVIDER: ${{ startsWith(github.event.label.name, 'kimi') && 'Kimi' || 'Codex' }}
         run: |
           $pullRequestNumber = [int]$env:CODEX_PULL_REQUEST_NUMBER
           $workerConfigPath = Join-Path $env:LOCALAPPDATA 'AutomationWorkbench\CodexWorker\config.json'
@@ -77,5 +80,6 @@ jobs:
               -PullRequestNumber $pullRequestNumber `
               -Actor ([string]$env:CODEX_ACTOR) `
               -EventName ([string]$env:CODEX_EVENT_NAME) `
+              -Provider ([string]$env:CODEX_PROVIDER) `
               -RepositoryRoot $repositoryRoot `
               -DataRoot $dataRoot | Out-Null

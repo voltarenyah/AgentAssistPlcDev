@@ -58,6 +58,9 @@
         ,'Invoke-CodexDeploymentNotificationCycle'
         ,'Invoke-CodexDeploymentNotifier'
         ,'Invoke-CodexDeployment'
+        ,'Resolve-CodexWorkerProvider'
+        ,'Invoke-KimiRun'
+        ,'Invoke-CodexWorkerAgentRun'
     )
     CmdletsToExport = @()
     VariablesToExport = @()

@@ -25,6 +25,33 @@ Describe 'Codex local worker installation' {
         $plan.ConfigPath.StartsWith('C:\repo', [StringComparison]::OrdinalIgnoreCase) | Should Be $false
     }
 
+    It 'creates the Kimi labels only when Kimi is enabled' {
+        $common = @{ Repository = 'owner/repo'; RepositoryRoot = 'C:\repo'; DataRoot = (Join-Path $TestDrive 'kimi-labels') }
+        $codexPlan = Get-CodexLocalWorkerPlan @common -Config ([pscustomobject]@{})
+        $kimiPlan = Get-CodexLocalWorkerPlan @common -Config ([pscustomobject]@{ enabledProviders = @('Codex', 'Kimi'); kimiCommand = 'kimi' })
+
+        ($codexPlan.LifecycleLabels.Name -contains 'kimi') | Should Be $false
+        ($kimiPlan.LifecycleLabels.Name -contains 'kimi') | Should Be $true
+        ($kimiPlan.LifecycleLabels.Name -contains 'kimi-ready') | Should Be $true
+    }
+
+    It 'marks a failed Kimi version probe as a required prerequisite failure' {
+        $requests = [Collections.Generic.List[object]]::new()
+        $missingKimi = {
+            param($request)
+            $requests.Add($request) | Out-Null
+            if ($request.FilePath -eq 'kimi') { return [pscustomobject]@{ ExitCode = 1; Stdout = ''; Stderr = 'not found' } }
+            return [pscustomobject]@{ ExitCode = 0; Stdout = '1.0.0'; Stderr = '' }
+        }.GetNewClosure()
+
+        $prerequisites = @(Get-CodexPrerequisitePlan -Config ([pscustomobject]@{ enabledProviders = @('Codex', 'Kimi'); kimiCommand = 'kimi' }) -CommandRunner $missingKimi -Probe)
+        $kimi = @($prerequisites | Where-Object Name -eq 'Kimi CLI')[0]
+
+        $kimi.Required | Should Be $true
+        $kimi.Policy.Valid | Should Be $false
+        (@($requests | Where-Object { $_.FilePath -eq 'kimi' -and $_.Arguments -join ' ' -eq '--version' })).Count | Should Be 1
+    }
+
     It 'does not invoke mutation seams under WhatIf' {
         $calls = [Collections.Generic.List[object]]::new()
         $command = { param($request) $calls.Add($request) | Out-Null; if ($request.FilePath -eq 'gh.exe' -and $request.Arguments -contains 'status') { return [pscustomobject]@{ ExitCode = 0; Stdout = 'Logged in'; Stderr = '' } }; [pscustomobject]@{ ExitCode = 0; Stdout = '1.0.0'; Stderr = '' } }.GetNewClosure()

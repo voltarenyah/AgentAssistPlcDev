@@ -122,26 +122,36 @@ Describe 'Codex worker GitHub Actions workflows' {
         $allText | Should Not Match '(?m)^concurrency\s*:'
     }
 
-    It 'routes codex and retry labels through a trusted issue worker with typed environment inputs' {
+    It 'routes explicit provider labels through a trusted issue worker with typed environment inputs' {
         $text = Get-WorkflowText 'codex-issue.yml'
         $on = Get-TopLevelSection -Text $text -Name 'on'
         $on | Should Match '(?ms)^  issues:\s*\r?\n    types:\s*\[labeled\]\s*$'
         $on | Should Match '(?ms)^  workflow_dispatch:\s*$'
-        $on | Should Match '(?ms)^    inputs:\s*\r?\n      issue_number:\s*\r?\n        required:\s*true\s*\r?\n        type:\s*number\s*\r?\n      dry_run:\s*\r?\n        required:\s*false\s*\r?\n        type:\s*boolean\s*\r?\n        default:\s*false\s*$'
+        $on | Should Match '(?ms)^    inputs:\s*\r?\n      issue_number:\s*\r?\n        required:\s*true\s*\r?\n        type:\s*number\s*\r?\n      dry_run:\s*\r?\n        required:\s*false\s*\r?\n        type:\s*boolean\s*\r?\n        default:\s*false\s*\r?\n      provider:\s*\r?\n        required:\s*false\s*\r?\n        type:\s*choice\s*\r?\n        options:\s*\[Codex, Kimi\]\s*\r?\n        default:\s*Codex\s*$'
         $jobs = Get-TopLevelSection -Text $text -Name 'jobs'
-        $jobs | Should Match "(?m)^    if:\s*github\.event_name == 'workflow_dispatch' \|\| github\.event\.label\.name == 'codex' \|\| github\.event\.label\.name == 'codex:retry'\s*$"
+        $jobs | Should Match "(?m)^    if:\s*github\.event_name == 'workflow_dispatch' \|\| github\.event\.label\.name == 'codex' \|\| github\.event\.label\.name == 'codex:retry' \|\| github\.event\.label\.name == 'kimi' \|\| github\.event\.label\.name == 'kimi-retry'\s*$"
         $dispatch = Get-StepSection -Text $text -Name 'Dispatch issue to local worker'
         $dispatch | Should Match '(?m)^          CODEX_ISSUE_NUMBER:\s*\$\{\{\s*github\.event\.issue\.number\s*\|\|\s*inputs\.issue_number\s*\}\}\s*$'
         $dispatch | Should Match '(?m)^          \$issueNumber\s*=\s*\[int\]\$env:CODEX_ISSUE_NUMBER\s*$'
         $dispatch | Should Match '(?m)^          CODEX_EVENT_NAME:\s*\$\{\{\s*github\.event\.label\.name\s*\|\|\s*github\.event_name\s*\}\}\s*$'
+        $dispatch | Should Match "(?m)^          CODEX_PROVIDER:\s*\$\{\{\s*startsWith\(github\.event\.label\.name, 'kimi'\) && 'Kimi' \|\| inputs\.provider \|\| 'Codex'\s*\}\}\s*$"
         $dispatch | Should Match '(?m)^          \$workerConfigPath\s*=\s*Join-Path\s+\$env:LOCALAPPDATA'
         $dispatch | Should Match '(?m)^          \$repositoryRoot\s*=\s*\[string\]\$workerConfig\.repositoryRoot\s*$'
         $dispatch | Should Match '(?m)^          \$dataRoot\s*=\s*\[string\]\$workerConfig\.dataRoot\s*$'
-        $dispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Issue\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-IssueNumber\s+\$issueNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)\s*`?\s+-RepositoryRoot\s+\$repositoryRoot\s*`?\s+-DataRoot\s+\$dataRoot\s*`?\s+-DryRun:\$dryRun'
+        $dispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Issue\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-IssueNumber\s+\$issueNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)\s*`?\s+-Provider\s+\(\[string\]\$env:CODEX_PROVIDER\)\s*`?\s+-RepositoryRoot\s+\$repositoryRoot\s*`?\s+-DataRoot\s+\$dataRoot\s*`?\s+-DryRun:\$dryRun'
         $dispatch | Should Not Match 'github\.event\.issue\.body|inputs\.body'
         Assert-TrustedCheckout $text
         Assert-RunnerAndQueueContract $text
         Assert-ExplicitPermissions $text
+    }
+
+    It 'routes only kimi and kimi-retry labels to the Kimi provider' {
+        $issueWorkflow = Get-WorkflowText 'codex-issue.yml'
+
+        $issueWorkflow | Should Match "github\.event\.label\.name == 'kimi'"
+        $issueWorkflow | Should Match "github\.event\.label\.name == 'kimi-retry'"
+        $issueWorkflow | Should Match 'CODEX_PROVIDER:'
+        $issueWorkflow | Should Not Match 'fallback.*Kimi|Kimi.*fallback'
     }
 
     It 'suppresses raw result tables so the worker lifecycle milestones are the useful console output' {
@@ -167,30 +177,48 @@ Describe 'Codex worker GitHub Actions workflows' {
         $on | Should Match '(?ms)^  issues:\s*\r?\n    types:\s*\[labeled\]\s*$'
         $on | Should Match '(?ms)^  pull_request:\s*\r?\n    types:\s*\[labeled\]\s*$'
         $jobs = Get-TopLevelSection -Text $text -Name 'jobs'
-        $jobs | Should Match "(?m)^    if:\s*github\.event\.label\.name == 'codex:revise'\s*$"
+        $jobs | Should Match "(?m)^    if:\s*github\.event\.label\.name == 'codex:revise' \|\| github\.event\.label\.name == 'kimi-revise'\s*$"
         $issueDispatch = Get-StepSection -Text $text -Name 'Dispatch issue revision'
-        $issueDispatch | Should Match '(?m)^        if:\s*github\.event_name == ''issues'' && github\.event\.label\.name == ''codex:revise''\s*$'
+        $issueDispatch | Should Match '(?m)^        if:\s*github\.event_name == ''issues'' && \(github\.event\.label\.name == ''codex:revise'' \|\| github\.event\.label\.name == ''kimi-revise''\)\s*$'
         $issueDispatch | Should Match '(?m)^          CODEX_ISSUE_NUMBER:\s*\$\{\{\s*github\.event\.issue\.number\s*\}\}\s*$'
         $issueDispatch | Should Match '(?m)^          CODEX_EVENT_NAME:\s*\$\{\{\s*github\.event\.label\.name\s*\}\}\s*$'
+        $issueDispatch | Should Match "(?m)^          CODEX_PROVIDER:\s*\$\{\{\s*startsWith\(github\.event\.label\.name, 'kimi'\) && 'Kimi' \|\| 'Codex'\s*\}\}\s*$"
         $issueDispatch | Should Match '(?m)^          \$workerConfigPath\s*=\s*Join-Path\s+\$env:LOCALAPPDATA'
         $issueDispatch | Should Match '(?m)^          \$repositoryRoot\s*=\s*\[string\]\$workerConfig\.repositoryRoot\s*$'
         $issueDispatch | Should Match '(?m)^          \$dataRoot\s*=\s*\[string\]\$workerConfig\.dataRoot\s*$'
         $issueDispatch | Should Match '(?m)^          \$issueNumber\s*=\s*\[int\]\$env:CODEX_ISSUE_NUMBER\s*$'
-        $issueDispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-IssueNumber\s+\$issueNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)\s*`?\s+-RepositoryRoot\s+\$repositoryRoot\s*`?\s+-DataRoot\s+\$dataRoot'
+        $issueDispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-IssueNumber\s+\$issueNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)\s*`?\s+-Provider\s+\(\[string\]\$env:CODEX_PROVIDER\)\s*`?\s+-RepositoryRoot\s+\$repositoryRoot\s*`?\s+-DataRoot\s+\$dataRoot'
         $issueDispatch | Should Not Match 'PullRequestNumber'
         $prDispatch = Get-StepSection -Text $text -Name 'Dispatch pull request revision'
-        $prDispatch | Should Match '(?m)^        if:\s*github\.event_name == ''pull_request'' && github\.event\.label\.name == ''codex:revise''\s*$'
+        $prDispatch | Should Match '(?m)^        if:\s*github\.event_name == ''pull_request'' && \(github\.event\.label\.name == ''codex:revise'' \|\| github\.event\.label\.name == ''kimi-revise''\)\s*$'
         $prDispatch | Should Match '(?m)^          CODEX_PULL_REQUEST_NUMBER:\s*\$\{\{\s*github\.event\.pull_request\.number\s*\}\}\s*$'
         $prDispatch | Should Match '(?m)^          CODEX_EVENT_NAME:\s*\$\{\{\s*github\.event\.label\.name\s*\}\}\s*$'
+        $prDispatch | Should Match "(?m)^          CODEX_PROVIDER:\s*\$\{\{\s*startsWith\(github\.event\.label\.name, 'kimi'\) && 'Kimi' \|\| 'Codex'\s*\}\}\s*$"
         $prDispatch | Should Match '(?m)^          \$workerConfigPath\s*=\s*Join-Path\s+\$env:LOCALAPPDATA'
         $prDispatch | Should Match '(?m)^          \$repositoryRoot\s*=\s*\[string\]\$workerConfig\.repositoryRoot\s*$'
         $prDispatch | Should Match '(?m)^          \$dataRoot\s*=\s*\[string\]\$workerConfig\.dataRoot\s*$'
         $prDispatch | Should Match '(?m)^          \$pullRequestNumber\s*=\s*\[int\]\$env:CODEX_PULL_REQUEST_NUMBER\s*$'
-        $prDispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-PullRequestNumber\s+\$pullRequestNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)\s*`?\s+-RepositoryRoot\s+\$repositoryRoot\s*`?\s+-DataRoot\s+\$dataRoot'
+        $prDispatch | Should Match '(?ms)^          &\s+\.\\scripts\\codex-worker\\Invoke-Revision\.ps1\s*`?\s+-Repository\s+\(\[string\]\$env:CODEX_REPOSITORY\)\s*`?\s+-PullRequestNumber\s+\$pullRequestNumber\s*`?\s+-Actor\s+\(\[string\]\$env:CODEX_ACTOR\)\s*`?\s+-EventName\s+\(\[string\]\$env:CODEX_EVENT_NAME\)\s*`?\s+-Provider\s+\(\[string\]\$env:CODEX_PROVIDER\)\s*`?\s+-RepositoryRoot\s+\$repositoryRoot\s*`?\s+-DataRoot\s+\$dataRoot'
         $prDispatch | Should Not Match 'IssueNumber|github\.event\.issue\.number|github\.event\.(?:issue|pull_request)\.body|inputs\.body'
         Assert-TrustedCheckout $text
         Assert-RunnerAndQueueContract $text
         Assert-ExplicitPermissions $text
+    }
+
+    It 'routes kimi-revise from issues and PRs to the revision worker' {
+        $revisionWorkflow = Get-WorkflowText 'codex-revise.yml'
+
+        $revisionWorkflow | Should Match "github\.event\.label\.name == 'kimi-revise'"
+    }
+
+    It 'validates and resolves the supplied provider before invoking either worker' {
+        $issueEntry = Get-Content -Raw (Join-Path $PSScriptRoot '..\codex-worker\Invoke-Issue.ps1')
+        $revisionEntry = Get-Content -Raw (Join-Path $PSScriptRoot '..\codex-worker\Invoke-Revision.ps1')
+
+        $issueEntry | Should Match '\[ValidateSet\(''Codex'', ''Kimi''\)\]\[string\]\$Provider'
+        $revisionEntry | Should Match '\[ValidateSet\(''Codex'', ''Kimi''\)\]\[string\]\$Provider'
+        $issueEntry | Should Match '(?s)Resolve-CodexWorkerProvider.*Invoke-CodexIssueRun'
+        $revisionEntry | Should Match '(?s)Resolve-CodexWorkerProvider.*Invoke-CodexRevision'
     }
 
     It 'passes typed close metadata and gates deployment handoff on merged state' {

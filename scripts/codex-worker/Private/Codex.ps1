@@ -166,7 +166,7 @@ function New-CodexProcessStartInfo {
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $blocked = @('GITHUB_TOKEN','GH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY','DEEPSEEK_API_KEY')
+    $blocked = @('GITHUB_TOKEN','GH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY','DEEPSEEK_API_KEY','KIMI_API_KEY','MOONSHOT_API_KEY')
     $startInfo.EnvironmentVariables.Clear()
     foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
         $startInfo.EnvironmentVariables[[string]$entry.Key] = [string]$entry.Value
@@ -183,7 +183,7 @@ function New-CodexProcessStartInfo {
 
 function Get-CodexBlockedSecretValues {
     $values = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in @('GITHUB_TOKEN','GH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY','DEEPSEEK_API_KEY')) {
+    foreach ($name in @('GITHUB_TOKEN','GH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY','DEEPSEEK_API_KEY','KIMI_API_KEY','MOONSHOT_API_KEY')) {
         $value = [Environment]::GetEnvironmentVariable($name)
         if (-not [string]::IsNullOrWhiteSpace($value)) { $values.Add([string]$value) }
     }
