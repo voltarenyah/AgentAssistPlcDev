@@ -9,6 +9,16 @@ $script:CodexLifecycleLabels = [ordered]@{
     'codex:revise' = 'bf8700'
     'codex:done' = '2da44e'
 }
+$script:KimiLifecycleLabels = [ordered]@{
+    'kimi' = '1f6feb'
+    'kimi-queued' = '1f6feb'
+    'kimi-running' = 'fbca04'
+    'kimi-ready' = '8250df'
+    'kimi-blocked' = 'd1242f'
+    'kimi-retry' = 'f0883e'
+    'kimi-revise' = 'bf8700'
+    'kimi-done' = '2da44e'
+}
 
 function Get-CodexSetupProperty {
     param([object] $Object, [string] $Name, [object] $Default = $null)
@@ -16,6 +26,23 @@ function Get-CodexSetupProperty {
     $property = $Object.PSObject.Properties[$Name]
     if ($null -ne $property) { return $property.Value }
     return $Default
+}
+
+function Get-CodexEnabledProviders {
+    param([object] $Config)
+    $value = Get-CodexSetupProperty $Config 'enabledProviders' $null
+    if ($null -eq $value) { return ,@('Codex') }
+    if ($value -is [string] -or $value -isnot [System.Collections.IEnumerable]) { throw "Config property 'enabledProviders' must be an array." }
+    $providers = @($value | ForEach-Object { [string]$_ })
+    if ($providers.Count -eq 0 -or @($providers | Where-Object { $_ -notin @('Codex', 'Kimi') }).Count -gt 0 -or @($providers | Select-Object -Unique).Count -ne $providers.Count) {
+        throw "Config property 'enabledProviders' must contain unique Codex and/or Kimi values."
+    }
+    return ,$providers
+}
+
+function Test-CodexKimiEnabled {
+    param([object] $Config)
+    return (Get-CodexEnabledProviders -Config $Config) -contains 'Kimi'
 }
 
 function Test-CodexSetupNumeric {
@@ -112,21 +139,27 @@ function Resolve-CodexSetupConfig {
     if ($null -eq $Config) { $Config = [pscustomobject]@{} }
     if ($Config -is [System.Array] -or $Config -is [string] -or $Config -is [ValueType]) { throw 'Worker config must be a JSON object.' }
 
-    $allowed = @('defaultBranch','codexCommand','bootstrapPython','workerLockTimeoutSeconds','codexTimeoutMinutes','notificationSeconds','snoozeMinutes','healthTimeoutSeconds','runRetentionDays','runtimeSlots','tiaWhitelistPath','activityLogPath','supportsResumeOutputControls','pollSeconds','runnerRelease')
+    $allowed = @('defaultBranch','codexCommand','kimiCommand','kimiModel','bootstrapPython','workerLockTimeoutSeconds','codexTimeoutMinutes','kimiTimeoutMinutes','notificationSeconds','snoozeMinutes','healthTimeoutSeconds','runRetentionDays','runtimeSlots','enabledProviders','tiaWhitelistPath','activityLogPath','supportsResumeOutputControls','pollSeconds','runnerRelease')
     $merged = [ordered]@{}
     foreach ($property in $Config.PSObject.Properties) {
         if ($allowed -contains $property.Name) { $merged[$property.Name] = $property.Value }
     }
     foreach ($name in @('defaultBranch','codexCommand','bootstrapPython','tiaWhitelistPath','activityLogPath')) { [void](Assert-CodexSetupConfigProperty $Config $name ([string])) }
-    foreach ($name in @('workerLockTimeoutSeconds','codexTimeoutMinutes','notificationSeconds','snoozeMinutes','healthTimeoutSeconds','runRetentionDays','pollSeconds')) { [void](Assert-CodexSetupConfigProperty $Config $name ([int])) }
+    foreach ($name in @('workerLockTimeoutSeconds','codexTimeoutMinutes','kimiTimeoutMinutes','notificationSeconds','snoozeMinutes','healthTimeoutSeconds','runRetentionDays','pollSeconds')) { [void](Assert-CodexSetupConfigProperty $Config $name ([int])) }
     if ($Config.PSObject.Properties['codexCommand'] -and ([string]$Config.codexCommand -match '[\s/\\]')) { throw "Config property 'codexCommand' must be a command name without path separators." }
+    $enabledProviders = Get-CodexEnabledProviders -Config $Config
+    if ($enabledProviders -contains 'Kimi') {
+        [void](Assert-CodexSetupConfigProperty $Config 'kimiCommand' ([string]))
+        if ([string]$Config.kimiCommand -match '[\s/\\]') { throw "Config property 'kimiCommand' must be a command name without path separators." }
+    }
+    if ($Config.PSObject.Properties['kimiModel'] -and $Config.kimiModel -isnot [string]) { throw "Config property 'kimiModel' must be a string." }
     if ($Config.PSObject.Properties['supportsResumeOutputControls'] -and $Config.supportsResumeOutputControls -isnot [bool]) { throw "Config property 'supportsResumeOutputControls' must be a Boolean." }
     if ($Config.PSObject.Properties['runtimeSlots']) {
         if ($Config.runtimeSlots -is [string] -or $Config.runtimeSlots -isnot [System.Collections.IEnumerable]) { throw "Config property 'runtimeSlots' must be an array of two strings." }
         $slots = @($Config.runtimeSlots)
         if ($slots.Count -ne 2 -or $slots[0] -cne 'runtime-a' -or $slots[1] -cne 'runtime-b') { throw "Config property 'runtimeSlots' must contain exactly runtime-a and runtime-b in that order." }
     }
-    foreach ($name in @('workerLockTimeoutSeconds','codexTimeoutMinutes','snoozeMinutes','healthTimeoutSeconds')) {
+    foreach ($name in @('workerLockTimeoutSeconds','codexTimeoutMinutes','kimiTimeoutMinutes','snoozeMinutes','healthTimeoutSeconds')) {
         if ($merged.Contains($name) -and [int]$merged[$name] -le 0) { throw "Config property '$name' must be positive." }
     }
     foreach ($name in @('notificationSeconds','runRetentionDays','pollSeconds')) {
@@ -155,8 +188,12 @@ function Resolve-CodexSetupConfig {
     }
     $merged.defaultBranch = if ($merged.Contains('defaultBranch')) { [string]$merged.defaultBranch } else { 'master' }
     $merged.codexCommand = if ($merged.Contains('codexCommand')) { [string]$merged.codexCommand } else { 'codex' }
+    $merged.enabledProviders = $enabledProviders
+    $merged.kimiCommand = if ($merged.Contains('kimiCommand')) { [string]$merged.kimiCommand } else { 'kimi' }
+    $merged.kimiModel = if ($merged.Contains('kimiModel')) { [string]$merged.kimiModel } else { '' }
     if (-not $merged.Contains('workerLockTimeoutSeconds')) { $merged.workerLockTimeoutSeconds = 30 }
     if (-not $merged.Contains('codexTimeoutMinutes')) { $merged.codexTimeoutMinutes = 120 }
+    if (-not $merged.Contains('kimiTimeoutMinutes')) { $merged.kimiTimeoutMinutes = 120 }
     if (-not $merged.Contains('notificationSeconds')) { $merged.notificationSeconds = 10 }
     if (-not $merged.Contains('snoozeMinutes')) { $merged.snoozeMinutes = 5 }
     if (-not $merged.Contains('healthTimeoutSeconds')) { $merged.healthTimeoutSeconds = 60 }
@@ -288,6 +325,9 @@ function Get-CodexPrerequisitePlan {
         [pscustomobject]@{ Name = 'Bootstrap Python'; FilePath = $python; Arguments = @('--version'); Required = $true }
         [pscustomobject]@{ Name = 'Codex CLI'; FilePath = [string](Get-CodexSetupProperty $Config 'codexCommand' 'codex'); Arguments = @('--version'); Required = $false }
     )
+    if (Test-CodexKimiEnabled -Config $Config) {
+        $checks += [pscustomobject]@{ Name = 'Kimi CLI'; FilePath = [string](Get-CodexSetupProperty $Config 'kimiCommand' 'kimi'); Arguments = @('--version'); Required = $true }
+    }
     foreach ($check in $checks) {
         $installed = $null
         $version = $null
@@ -788,8 +828,12 @@ function Get-CodexLocalWorkerPlan {
     $ownershipMarker = [Guid]::NewGuid().ToString('N')
     $runnerXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $runnerArgs -OwnershipMarker $ownershipMarker -WorkingDirectory (Split-Path -Parent $runnerScript)
     $notifierXml = New-CodexScheduledTaskXml -UserId $userId -FilePath 'pwsh.exe' -Arguments $notifierArgs -OwnershipMarker $ownershipMarker -WorkingDirectory (Split-Path -Parent $notifierScript)
+    $labels = @($script:CodexLifecycleLabels.GetEnumerator())
+    if (Test-CodexKimiEnabled -Config $Config) { $labels += @($script:KimiLifecycleLabels.GetEnumerator()) }
+    $lifecycleLabels = @($labels | ForEach-Object { [pscustomobject][ordered]@{ Name = $_.Key; Color = $_.Value } })
     return [pscustomobject][ordered]@{
         Repository = $Repository; RepositoryRoot = $root; DataRoot = $data; ConfigPath = $configPath; TaskOwnershipMarker = $ownershipMarker
+        LifecycleLabels = $lifecycleLabels
         Runner = [pscustomobject][ordered]@{ Root = $runnerRoot; MetadataPath = (Join-Path $runnerRoot 'runner-install.json'); ServiceMode = $false; Label = $label; Name = $runnerName; Reuse = $false }
         Tasks = [pscustomobject][ordered]@{
             Runner = [pscustomobject][ordered]@{ Name = 'AutomationWorkbenchCodexRunner'; LogonTrigger = $true; Hidden = $true; FilePath = 'pwsh.exe'; Arguments = [string[]]$runnerArgs; Xml = $runnerXml }
@@ -820,6 +864,19 @@ function Invoke-CodexAuthSmoke {
     } finally {
         if ($created -and (Test-Path -LiteralPath $TemporaryGitPath)) { Remove-Item -LiteralPath $TemporaryGitPath -Recurse -Force }
     }
+}
+
+function Invoke-KimiAuthSmoke {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)] [string] $KimiCommand,
+        [object] $CommandRunner
+    )
+    $result = Invoke-CodexInstallCommand -FilePath $KimiCommand -Arguments @('--auto','--prompt','Reply exactly READY','--output-format','text') -CommandRunner $CommandRunner
+    if (-not (Test-CodexSetupSuccess $result) -or (Get-CodexSetupText $result).Trim() -notmatch '(?m)^READY\s*$') {
+        throw "Kimi authentication smoke test did not return READY. Complete 'kimi login' interactively and rerun setup."
+    }
+    return $true
 }
 
 function Invoke-CodexLocalWorkerSetup {
@@ -908,6 +965,7 @@ function Invoke-CodexLocalWorkerSetup {
     if (-not $whatIf -and -not $SkipPrerequisiteProbe -and $requiredFailures.Count -gt 0) { throw ('Required prerequisites failed: ' + (($requiredFailures | ForEach-Object { "$($_.Name): $($_.Error)" }) -join '; ')) }
     $codexPrereq = @($prereqs | Where-Object Name -eq 'Codex CLI')[0]
     $codex = [string](Get-CodexSetupProperty $Config 'codexCommand' 'codex')
+    $kimiEnabled = Test-CodexKimiEnabled -Config $Config
     if (-not $whatIf) {
         $missing = -not $SkipPrerequisiteProbe -and ($null -eq $codexPrereq -or -not [bool]$codexPrereq.Installed)
         if (-not $SkipPrerequisiteProbe -and -not $missing -and -not [bool]$codexPrereq.Policy.Valid) { throw "Codex CLI prerequisite failed: $($codexPrereq.Policy.Error)." }
@@ -925,6 +983,19 @@ function Invoke-CodexLocalWorkerSetup {
             $login = Invoke-CodexInstallCommand -FilePath $codex -Arguments @('login') -CommandRunner $CommandRunner -Interactive
             if (-not (Test-CodexSetupSuccess $login)) { throw 'Codex login was not completed.' }
             Invoke-CodexAuthSmoke -CodexCommand $codex -CommandRunner $CommandRunner -TemporaryGitPath $TemporaryGitPath | Out-Null
+        }
+        if ($kimiEnabled) {
+            $kimiPrereq = @($prereqs | Where-Object Name -eq 'Kimi CLI')[0]
+            if ($SkipPrerequisiteProbe) {
+                $kimiVersionResult = Invoke-CodexInstallCommand -FilePath ([string]$Config.kimiCommand) -Arguments @('--version') -CommandRunner $CommandRunner
+                $kimiPrereq = [pscustomobject]@{ Name = 'Kimi CLI'; Installed = (Test-CodexSetupSuccess $kimiVersionResult); Version = (Get-CodexSetupText $kimiVersionResult) }
+                $kimiPrereq | Add-Member -NotePropertyName Policy -NotePropertyValue (Test-CodexPrerequisitePolicy -Prerequisite $kimiPrereq)
+            }
+            if ($null -eq $kimiPrereq -or -not [bool]$kimiPrereq.Policy.Valid) {
+                $detail = if ($null -eq $kimiPrereq) { 'missing prerequisite result' } else { [string]$kimiPrereq.Policy.Error }
+                throw "Kimi CLI prerequisite failed: $detail. Complete 'kimi login' interactively after installing Kimi."
+            }
+            Invoke-KimiAuthSmoke -KimiCommand ([string]$Config.kimiCommand) -CommandRunner $CommandRunner | Out-Null
         }
     }
 
@@ -1106,10 +1177,9 @@ function Invoke-CodexLocalWorkerSetup {
             }
         }
         if (-not $online) { throw "Runner did not become online within the bounded poll window: $lastOnlineError" }
-        $labels = @($script:CodexLifecycleLabels.GetEnumerator())
-        foreach ($entry in $labels) {
-            $labelResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('label','create',$entry.Key,'--repo',$Repository,'--color',$entry.Value,'--force') -CommandRunner $CommandRunner
-            if (-not (Test-CodexSetupSuccess $labelResult)) { throw "Could not create label $($entry.Key)." }
+        foreach ($entry in @($plan.LifecycleLabels)) {
+            $labelResult = Invoke-CodexInstallCommand -FilePath 'gh.exe' -Arguments @('label','create',$entry.Name,'--repo',$Repository,'--color',$entry.Color,'--force') -CommandRunner $CommandRunner
+            if (-not (Test-CodexSetupSuccess $labelResult)) { throw "Could not create label $($entry.Name)." }
             $mutations++
         }
         foreach ($variable in @(@('CODEX_LOCAL_REPOSITORY',$plan.RepositoryRoot), @('CODEX_WORKER_DATA_ROOT',$plan.DataRoot))) {

@@ -20,7 +20,8 @@ credentials and performs GitHub reads/writes, commits, pushes, comments, labels,
 and draft-PR creation. Issue and review text is data in a prompt, never shell
 code. Only GitHub actors with repository `write`, `maintain`, or `admin`
 permission pass the trigger trust check; this is a GitHub permission check, not
-an instruction to grant Codex broader filesystem access.
+an instruction to grant Codex or Kimi broader filesystem access. The wrapper,
+not Kimi, commits, pushes, labels, opens PRs, or deploys.
 
 Every issue uses a branch named `codex/<issue-number>-<slug>` and a worktree
 below the repository's `.worktrees` directory. The primary checkout is not an
@@ -32,7 +33,12 @@ for human review.
 ## Prerequisites and installation
 
 The installer probes PowerShell 7, Git, GitHub CLI, .NET 8, Node.js 20+, npm,
-Bootstrap Python 3.11 through 3.13, and the Codex CLI. GitHub CLI must already
+Bootstrap Python 3.11 through 3.13, and the Codex CLI. Kimi is opt-in: set
+`enabledProviders` to `["Codex", "Kimi"]`, provide a bare `kimiCommand`, and
+the installer will validate `kimi --version` plus the read-only `READY` smoke
+check. If that check fails, complete `kimi login` interactively and rerun the
+installer. The installer does not store credentials or manage a Kimi provider.
+GitHub CLI must already
 be authenticated; the installer checks this with `gh auth status --hostname
 github.com`. The repository and default branch are the values in
 `config.example.json` (`voltarenyah/AgentAssistPlcDev` and `master`).
@@ -115,7 +121,10 @@ runner task must remain interactive because deployment notification uses WPF.
 
 Apply `codex` to a trusted, low-risk issue after the workflows are merged and
 the runner is online. The issue workflow accepts `codex` and `codex:retry`.
-The revision workflow accepts `codex:revise` on an issue or pull request. The
+The revision workflow accepts `codex:revise` on an issue or pull request. Apply
+`kimi` to an issue to start Kimi. Apply `kimi-revise` to its open draft PR or
+issue for a revision. Kimi is never selected automatically and a `codex` retry
+remains a Codex retry. The
 close workflow receives both merged and unmerged PR closes so cleanup can run;
 only a validated merged close creates a deployment record.
 
@@ -132,6 +141,10 @@ status; it preserves the trigger label `codex` and unrelated labels.
 | `codex:blocked` | Human input, a failed required step, malformed output, or an unrecoverable error needs attention. |
 | `codex:revise` | Reuse the existing open draft PR worktree for review changes. |
 | `codex:done` | A merged PR close was validated and its deployment handoff was durably recorded. |
+| `kimi` | Explicit user trigger for initial Kimi issue work. |
+| `kimi-ready` | Kimi validation completed and wrapper publication is ready or recovering. |
+| `kimi-blocked` | Kimi needs human input, remediation, or an output correction. |
+| `kimi-done` | A Kimi draft PR merged close was validated and its deployment handoff was recorded. |
 
 An initial run claims one issue, creates or reuses its branch/worktree, prepares
 dependencies, invokes Codex, records milestones, validates the structured final
@@ -160,8 +173,10 @@ Its important files are:
   `runs\deployment-<UTC timestamp>-rollback.log`: deployment/rollback command,
   stdout, and stderr evidence.
 
-The run state records `threadId`, `runDirectory`, `publicationStage`, `commit`,
-and `prUrl`. The final summary must contain `status`, `rootCauseOrApproach`,
+The run state records `agentProvider`, `threadId`, `runDirectory`,
+`publicationStage`, `commit`, and `prUrl`. Monitor with `gh run list --workflow
+"Codex local issue worker"`, inspect `state.json` `agentProvider`, and follow
+the issue's persisted `runDirectory` `activity.log`. The final summary must contain `status`, `rootCauseOrApproach`,
 `changedComponents`, `decisions`, `validation`, `warnings`, `remainingRisks`,
 `commitMessage`, `prTitle`, `requiresHumanInput`, and `humanQuestion`.
 
