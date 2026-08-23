@@ -112,7 +112,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
       gitCommitSha: revision.gitCommitSha,
     }))
     return [...commits, ...revisions].sort((left, right) => right.timestamp.localeCompare(left.timestamp))
-  }, [timeline, log])
+  }, [timeline, log, savepoints])
 
   // Ordinary Git commits inherit revision.json, so the newest savepoint entry
   // is not necessarily a new native snapshot. Use the commit where the
