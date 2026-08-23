@@ -563,9 +563,16 @@ function Invoke-CodexIssueRun {
             }
             Set-CodexOrchestrationField $attemptState 'status' 'pr-ready'
             Set-CodexOrchestrationField $attemptState 'publicationStage' 'ready'
+            Set-CodexOrchestrationField $attemptState 'summary' $summary
             Set-CodexOrchestrationField $attemptState 'lastError' $null
             & $save $attemptState
             Write-CodexWorkerMilestone -IssueNumber $IssueNumber -Phase (Get-CodexWorkerMilestonePhase -Provider $provider -CodexPhase 'VALIDATED' -ProviderPhase 'READY') -Details 'Implementation is ready for wrapper publication.'
+            if ($null -ne $PublicationProvider) { $publicationResult = & $PublicationProvider $attemptState $issue $Config $StatePath }
+            else { $publicationResult = Publish-CodexIssue -AttemptState $attemptState -IssueContext $issue -Config $Config -StatePath $StatePath -Repository $Repository -DataRoot $paths.DataRoot }
+            Set-CodexOrchestrationField $attemptState 'publicationStage' ([string](Get-CodexOrchestrationField $publicationResult 'publicationStage' $attemptState.publicationStage))
+            $newPrUrl = [string](Get-CodexOrchestrationField $publicationResult 'prUrl' '')
+            if (-not [string]::IsNullOrWhiteSpace($newPrUrl)) { Set-CodexOrchestrationField $attemptState 'prUrl' $newPrUrl }
+            & $save $attemptState
             Set-CodexIssueStatus -Repository $Repository -IssueNumber $IssueNumber -Status 'pr-ready' -Provider $provider -CurrentLabels $labels -CommandRunner $GitHubCommandRunner | Out-Null
             $labels = @($labels) + @(Get-CodexWorkerStatusLabel -Provider $provider -Status 'pr-ready')
             & $save $attemptState
