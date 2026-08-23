@@ -19,6 +19,19 @@ public sealed class PlcSourceScannerTests : IDisposable
 
         Assert.Equal("same", result.ProjectChecksum);
         Assert.Single(result.Objects);
+        Assert.Equal(new[] { "get_plc_checksums", "sync_export", "get_plc_checksums" }, engineering.Calls);
+    }
+
+    [Fact]
+    public async Task ScanUsesRebuildExportWhenForceFullExportIsTrue()
+    {
+        var engineering = new ScannerEngineeringCaller(root, "same");
+        var scanner = new PlcSourceScanner(engineering);
+
+        var result = await scanner.ScanAsync(Context(), CancellationToken.None, forceFullExport: true);
+
+        Assert.Equal("same", result.ProjectChecksum);
+        Assert.Single(result.Objects);
         Assert.Equal(new[] { "get_plc_checksums", "rebuild_export", "get_plc_checksums" }, engineering.Calls);
     }
 
@@ -105,7 +118,7 @@ public sealed class PlcSourceScannerTests : IDisposable
                 });
             }
 
-            if (tool == "rebuild_export")
+            if (tool == "sync_export" || tool == "rebuild_export")
             {
                 var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
                 Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));

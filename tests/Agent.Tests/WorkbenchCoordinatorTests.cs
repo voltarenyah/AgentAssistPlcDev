@@ -2736,7 +2736,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             object args,
             CancellationToken cancellationToken = default)
         {
-            if (!string.Equals(tool, "rebuild_export", StringComparison.Ordinal))
+            if (!string.Equals(tool, "rebuild_export", StringComparison.Ordinal)
+                && !string.Equals(tool, "sync_export", StringComparison.Ordinal))
             {
                 return base.CallAsync<T>(tool, args, cancellationToken);
             }

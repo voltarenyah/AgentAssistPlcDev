@@ -62,7 +62,8 @@ public sealed class FeatureImportService
         var masterComparison = await consistency.CompareAsync(
             workbench,
             master,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            forceFullExport: false).ConfigureAwait(false);
         var tiaPaths = masterComparison.Differences
             .Where(item => !string.IsNullOrWhiteSpace(item.RelativePath))
             .Select(item => item.RelativePath)

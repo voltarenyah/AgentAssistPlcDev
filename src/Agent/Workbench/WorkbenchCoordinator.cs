@@ -1481,7 +1481,7 @@ public sealed class WorkbenchCoordinator
         bool allowCompile)
     {
         await EnsureActiveProjectMatchesWorktreeAsync(device, token, progress).ConfigureAwait(false);
-        var result = await stager.StageAsync(device, plcName, token, progress, allowCompile).ConfigureAwait(false);
+        var result = await stager.StageAsync(device, plcName, token, progress, allowCompile, forceFullExport: true).ConfigureAwait(false);
         progress?.Report("Preparing refresh preview...");
         return result;
     }
@@ -2290,7 +2290,8 @@ public sealed class WorkbenchCoordinator
         string workbenchId,
         CancellationToken token = default,
         IOperationProgress? progress = null,
-        bool allowCompile = false)
+        bool allowCompile = false,
+        bool forceFullExport = false)
     {
         var workbench = LoadRegisteredWorkbench(workbenchId);
         var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
@@ -2299,7 +2300,7 @@ public sealed class WorkbenchCoordinator
         var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
         var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
         await EnsureMasterProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
-        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile).ConfigureAwait(false);
+        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile, forceFullExport).ConfigureAwait(false);
     }
 
     public WorkbenchConsistencyResult GetComparison(string workbenchId, string comparisonId)
@@ -2630,6 +2631,32 @@ public sealed class WorkbenchCoordinator
                 message.Trim(),
                 token)
             .ConfigureAwait(false);
+
+        // Record TIA state (per-device checksums) for this commit so it can be traced later.
+        var stateDevices = comparison.LiveChecksums
+            .Where(item => !string.IsNullOrWhiteSpace(item.Value))
+            .Select(item =>
+            {
+                var plcName = comparison.Differences
+                    .FirstOrDefault(d => d.DeviceId == item.Key)?.PlcName
+                    ?? ReadDevice(contexts[item.Key]).PlcName;
+                return new { deviceId = item.Key, plcName, projectChecksum = item.Value };
+            })
+            .ToArray();
+        if (stateDevices.Length > 0)
+        {
+            await versionControl.CallAsync<object>(
+                "vc_commit_state_create",
+                new
+                {
+                    repoPath = masterRoot,
+                    commitSha = commit.Sha,
+                    workbenchId,
+                    devices = stateDevices,
+                },
+                token).ConfigureAwait(false);
+        }
+
         var remaining = writePolicy.ReadPending(masterRoot, master.WorktreeId).Sources;
         return new TiaSynchronizationResult(
             comparisonId,

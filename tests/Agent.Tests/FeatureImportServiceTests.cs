@@ -426,7 +426,7 @@ public sealed class FeatureImportServiceTests : IDisposable
                 });
             }
 
-            if (tool == "rebuild_export")
+            if (tool == "rebuild_export" || tool == "sync_export")
             {
                 var output = Property<string>(args, "outputDir");
                 Directory.CreateDirectory(Path.Combine(output, "Blocks"));

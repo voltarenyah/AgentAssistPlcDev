@@ -22,17 +22,31 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
 
         Assert.Equal(ConsistencyState.Consistent, result.State);
         Assert.True(result.FastGatePassed);
+        Assert.DoesNotContain("sync_export", engineering.Calls);
         Assert.DoesNotContain("rebuild_export", engineering.Calls);
     }
 
     [Fact]
-    public async Task UnlabeledMasterScansEveryDevice()
+    public async Task UnlabeledMasterScansEveryDeviceWithSyncExport()
     {
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
         var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
         var service = new WorkbenchConsistencyService(engineering, versionControl);
 
         var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.False(result.FastGatePassed);
+        Assert.Equal(2, engineering.Calls.Count(call => call == "sync_export"));
+    }
+
+    [Fact]
+    public async Task UnlabeledMasterCanForceFullRebuildExport()
+    {
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None, forceFullExport: true);
 
         Assert.False(result.FastGatePassed);
         Assert.Equal(2, engineering.Calls.Count(call => call == "rebuild_export"));
@@ -51,7 +65,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
 
         Assert.False(result.FastGatePassed);
-        Assert.Equal(2, engineering.Calls.Count(call => call == "rebuild_export"));
+        Assert.Equal(2, engineering.Calls.Count(call => call == "sync_export"));
     }
 
     [Fact]
@@ -234,7 +248,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                 return Task.FromResult((T)(object)values);
             }
 
-            if (tool == "rebuild_export")
+            if (tool == "sync_export" || tool == "rebuild_export")
             {
                 var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
                 Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));

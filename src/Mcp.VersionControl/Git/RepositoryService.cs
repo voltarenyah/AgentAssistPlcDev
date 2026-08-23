@@ -685,6 +685,26 @@ internal static class RepositoryService
         return ValidationTagStore.Read(repo, commitSha).Evidence;
     }
 
+    /// <summary>Create an immutable TIA state tag on a commit, recording per-device checksums.</summary>
+    public static VcCommitStateEvidence CreateCommitState(
+        string repoPath,
+        string commitSha,
+        string workbenchId,
+        IReadOnlyList<VcCommitStateDevice> devices)
+    {
+        EnsureRepo(repoPath);
+        using var repo = new Repository(repoPath);
+        return CommitStateTagStore.Create(repo, commitSha, workbenchId, devices);
+    }
+
+    /// <summary>Read TIA state evidence for a commit; absent or invalid returns null.</summary>
+    public static VcCommitStateEvidence? GetCommitState(string repoPath, string commitSha)
+    {
+        EnsureRepo(repoPath);
+        using var repo = new Repository(repoPath);
+        return CommitStateTagStore.Read(repo, commitSha);
+    }
+
     /// <summary>Read a git-tracked text file at a specific commit (or HEAD). Returns null when
     /// the commit or the path does not exist — callers distinguish "no record" from content.</summary>
     public static string? ShowFile(string repoPath, string? commitSha, string filePath)

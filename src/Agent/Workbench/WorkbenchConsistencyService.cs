@@ -96,7 +96,8 @@ public sealed class WorkbenchConsistencyService
         WorktreeMetadata master,
         CancellationToken cancellationToken = default,
         IOperationProgress? progress = null,
-        bool allowCompile = false)
+        bool allowCompile = false,
+        bool forceFullExport = false)
     {
         ArgumentNullException.ThrowIfNull(workbench);
         ArgumentNullException.ThrowIfNull(master);
@@ -188,7 +189,8 @@ public sealed class WorkbenchConsistencyService
                     cancellationToken,
                     scanProgress,
                     device.Metadata.PlcName,
-                    allowCompile)
+                    allowCompile,
+                    forceFullExport)
                 .ConfigureAwait(false);
             exportProgress?.DeviceCompleted();
         }

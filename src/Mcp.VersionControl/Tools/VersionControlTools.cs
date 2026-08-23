@@ -156,6 +156,22 @@ public sealed class VersionControlTools
         [Description("Validation evidence. Its commitSha must equal the current HEAD.")] VcValidationEvidence? evidence)
         => Invoke(() => RepositoryService.CreateValidation(repoPath, evidence));
 
+    [McpServerTool(Name = "vc_commit_state_create")]
+    [Description("App-internal: create an annotated tag recording per-device TIA checksums for a commit.")]
+    public CallToolResult VcCommitStateCreate(
+        [Description("Path to the git repository.")] string repoPath,
+        [Description("Commit SHA to tag.")] string commitSha,
+        [Description("Workbench ID.")] string workbenchId,
+        [Description("Per-device checksums at commit time.")] VcCommitStateDevice[] devices)
+        => Invoke(() => RepositoryService.CreateCommitState(repoPath, commitSha, workbenchId, devices));
+
+    [McpServerTool(Name = "vc_commit_state_get")]
+    [Description("Read TIA state evidence for a commit; returns null when absent or invalid.")]
+    public CallToolResult VcCommitStateGet(
+        [Description("Path to the git repository.")] string repoPath,
+        [Description("Commit SHA to inspect.")] string commitSha)
+        => Invoke(() => RepositoryService.GetCommitState(repoPath, commitSha)!);
+
     [McpServerTool(Name = "vc_diff")]
     [Description("Show an XML source diff and semantic summary. No refs compares HEAD to working tree; oldSha only compares that ref to working tree; both refs compare them; newSha only compares HEAD to that ref.")]
     public CallToolResult VcDiff(
