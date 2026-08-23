@@ -26,7 +26,7 @@ const comparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): ap
   ...overrides,
 })
 
-const render = async (props: { signal?: number; commitMessage?: string; branch?: string; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string } = {}) => {
+const render = async (props: { signal?: number; commitMessage?: string; branch?: string; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string; onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void } = {}) => {
   vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue({
     revision: {
       schemaVersion: 1,
@@ -53,6 +53,7 @@ const render = async (props: { signal?: number; commitMessage?: string; branch?:
       commitMessage={props.commitMessage ?? ''}
       onCommitted={props.onCommitted}
       onBeginOperation={props.onBeginOperation}
+      onSelectionChanged={props.onSelectionChanged}
     />,
   ))
   return { host, root }
@@ -110,40 +111,21 @@ describe('VersionControlCompare (inline)', () => {
     expect(host.querySelector('[aria-label="Push selected local changes to TIA"]')).toBeNull()
   })
 
-  it('accepts selected TIA changes using the changes-page commit message', async () => {
-    const compare = vi.spyOn(api, 'compareMasterWithTia')
-      .mockResolvedValueOnce(comparison())
-      .mockResolvedValueOnce(comparison({ differences: [], state: 'Consistent' }))
-    const accept = vi.spyOn(api, 'acceptTiaSynchronization').mockResolvedValue({
-      comparisonId: 'comparison-1',
-      pendingPaths: [],
-      commitSha: 'commit-2',
-    })
-    const { host } = await render({ signal: 1, commitMessage: 'Accept Main from TIA' })
+  it('reports checked TIA paths to the global commit flow without an individual accept button', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    const onSelectionChanged = vi.fn()
+    const { host } = await render({ signal: 1, onSelectionChanged })
 
     await click(host.querySelector('input[type="checkbox"]')!)
-    await click(host.querySelector('button[aria-label="Accept selected TIA changes"]')!)
 
-    expect(accept).toHaveBeenCalledWith(
-      'wb-1',
+    expect(onSelectionChanged).toHaveBeenLastCalledWith(
       'comparison-1',
       ['devices/PLC_1/source/Blocks/Main.xml'],
-      'Accept Main from TIA',
     )
-    expect(compare).toHaveBeenCalledTimes(2)
-    expect(host.textContent).toContain('TIA matches master')
+    expect(host.querySelector('[aria-label="Accept selected TIA changes"]')).toBeNull()
+    expect(host.textContent).not.toContain('Accept 1 into local repo')
   })
 
-  it('keeps accept disabled until a commit message exists', async () => {
-    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
-    const { host } = await render({ signal: 1, commitMessage: '' })
-
-    await click(host.querySelector('input[type="checkbox"]')!)
-
-    const acceptButton = host.querySelector('button[aria-label="Accept selected TIA changes"]') as HTMLButtonElement
-    expect(acceptButton.disabled).toBe(true)
-    expect(host.textContent).toContain('Type a commit message above')
-  })
 
   it('reports the full compare as a tracked operation when the host supports it', async () => {
     const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({ differences: [], state: 'Consistent' }))
@@ -154,35 +136,16 @@ describe('VersionControlCompare (inline)', () => {
     expect(compare).toHaveBeenCalledWith('wb-1', 'op-42')
   })
 
-  it('notifies the parent after an accepted TIA commit so history can refresh', async () => {
-    vi.spyOn(api, 'compareMasterWithTia')
-      .mockResolvedValueOnce(comparison())
-      .mockResolvedValueOnce(comparison({ differences: [], state: 'Consistent' }))
-    vi.spyOn(api, 'acceptTiaSynchronization').mockResolvedValue({
-      comparisonId: 'comparison-1',
-      pendingPaths: [],
-      commitSha: 'commit-2',
-    })
-    const onCommitted = vi.fn()
-    const { host } = await render({ signal: 1, commitMessage: 'Accept Main from TIA', onCommitted })
-
-    await click(host.querySelector('input[type="checkbox"]')!)
-    await click(host.querySelector('button[aria-label="Accept selected TIA changes"]')!)
-
-    expect(onCommitted).toHaveBeenCalled()
-  })
-
-
-  it('points checksum drift without source differences to the snapshot area', async () => {
+  it('hides the clean comparison when only the TIA checksum drifts', async () => {
     vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
       differences: [],
-      state: 'Consistent',
+      state: 'Different',
       liveChecksums: { 'dev-1': 'checksum-9' },
     }))
     const { host } = await render({ signal: 1 })
 
-    expect(host.textContent).toContain('TIA changed outside the tracked source')
-    expect(host.textContent).toContain('TIA snapshot below')
+    expect(host.textContent).not.toContain('TIA matches master')
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
   })
 
   it('reports TIA matches master when checksums match and no differences exist', async () => {
@@ -193,8 +156,8 @@ describe('VersionControlCompare (inline)', () => {
     }))
     const { host } = await render({ signal: 1 })
 
-    expect(host.textContent).toContain('TIA matches master')
-    expect(host.textContent).not.toContain('TIA changed outside the tracked source')
+    expect(host.textContent).not.toContain('TIA matches master')
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
   })
 
   it('accepts project hardware changes with the commit message as title', async () => {

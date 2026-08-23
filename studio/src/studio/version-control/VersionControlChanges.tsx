@@ -61,6 +61,9 @@ const displayError = (error: unknown) => error instanceof Error ? error.message 
 
 export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, snapshot, onCommitted, onBeginOperation }: VersionControlChangesProps) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
+  const [tiaSelection, setTiaSelection] = useState<{ comparisonId: string; paths: string[] } | null>(null)
+  const [tiaHasDifferences, setTiaHasDifferences] = useState<boolean | null>(null)
+  const [tiaSelectionResetSignal, setTiaSelectionResetSignal] = useState(0)
   const [message, setMessage] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [commitMenuOpen, setCommitMenuOpen] = useState(false)
@@ -78,7 +81,8 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
     return [...grouped.entries()].map(([key, groupEntries]) => ({ key, entries: groupEntries }))
   }, [entries])
 
-  const canCommit = selectedPaths.size > 0 && message.trim().length > 0 && !busy
+  const selectedCommitPaths = new Set([...selectedPaths, ...(tiaSelection?.paths ?? [])])
+  const canCommit = selectedCommitPaths.size > 0 && message.trim().length > 0 && !busy
 
   const togglePath = (filePath: string) => {
     setSelectedPaths(previous => {
@@ -98,16 +102,31 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
     })
   }
 
-  const commit = async (paths: string[]) => {
-    if (paths.length === 0 || !message.trim() || busy) return
+  const commit = async (localSelection = [...selectedPaths]) => {
+    const tiaPaths = tiaSelection?.paths ?? []
+    const localPaths = localSelection.filter(path => !tiaPaths.includes(path))
+    if (tiaPaths.length === 0 && localPaths.length === 0 || !message.trim() || busy) return
     setBusy(true)
     setCommitMenuOpen(false)
     try {
-      const result = await api.commitVcPaths(workbenchId, worktreeId, paths, message.trim())
-      const committed = new Set(result.files)
+      let committedFiles: string[] = []
+      let commitSha: string | null = null
+      if (tiaSelection && tiaPaths.length > 0) {
+        const result = await api.acceptTiaSynchronization(workbenchId, tiaSelection.comparisonId, tiaPaths, message.trim())
+        committedFiles = [...committedFiles, ...tiaPaths]
+        commitSha = result.commitSha ?? null
+        setTiaSelection(null)
+        setTiaSelectionResetSignal(previous => previous + 1)
+      }
+      if (localPaths.length > 0) {
+        const result = await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim())
+        committedFiles = [...committedFiles, ...result.files]
+        commitSha = result.sha
+      }
+      const committed = new Set(committedFiles)
       setSelectedPaths(previous => new Set([...previous].filter(path => !committed.has(path))))
       setMessage('')
-      toast.success(`Committed ${result.sha.slice(0, 8)}`)
+      if (commitSha) toast.success(`Committed ${commitSha.slice(0, 8)}`)
       await onCommitted?.()
     } catch (cause) {
       showErrorToast(`Commit failed: ${displayError(cause)}`)
@@ -134,15 +153,6 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="version-control-changes">
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
-        <VersionControlCompare
-          workbenchId={workbenchId}
-          worktreeId={worktreeId}
-          branch={branch}
-          signal={compareSignal}
-          commitMessage={message}
-          onCommitted={onCommitted}
-          onBeginOperation={onBeginOperation}
-        />
         {entries.length === 0 && compareSignal === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" data-testid="vc-changes-empty">
             <div className="grid h-10 w-10 place-items-center rounded-full border border-emerald-500/35 bg-emerald-500/10">
@@ -155,62 +165,77 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
           </div>
         ) : (
           <>
-            <div className="px-3.5 pt-3">
+            <div data-testid="vc-commit-controls" className="px-3.5 pt-2.5">
               <textarea
                 aria-label="Commit message"
                 placeholder="Message"
                 value={message}
                 onChange={event => setMessage(event.currentTarget.value)}
-                className="h-[76px] w-full resize-none rounded-[10px] border bg-white/[0.03] px-3 py-2.5 text-[12px] outline-none placeholder:text-neutral-500 focus:border-white/20"
+                className="h-[52px] w-full resize-none rounded-[9px] border bg-white/[0.03] px-2.5 py-2 text-[11px] outline-none placeholder:text-neutral-500 focus:border-white/20"
                 style={{ borderColor: 'var(--border)' }}
               />
-            </div>
-            <div className="relative mx-3.5 mt-2.5 flex rounded-[10px] border bg-white/[0.03]" style={{ borderColor: 'var(--border)' }}>
-              <button
-                type="button"
-                data-testid="vc-commit-selected"
-                disabled={!canCommit}
-                onClick={() => void commit(entries.filter(entry => selectedPaths.has(entry.filePath)).map(entry => entry.filePath))}
-                className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-l-[10px] text-[12px] font-semibold hover:bg-white/5 disabled:opacity-40 disabled:hover:bg-transparent"
-              >
-                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                Commit selected ({selectedPaths.size})
-              </button>
-              <button
-                type="button"
-                aria-label="Commit options"
-                className="flex w-9 items-center justify-center rounded-r-[10px] border-l text-muted-foreground hover:bg-white/5 hover:text-foreground"
-                style={{ borderColor: 'var(--border)' }}
-                onClick={() => setCommitMenuOpen(open => !open)}
-              >
-                <ChevronDown className="h-3.5 w-3.5" />
-              </button>
-              {commitMenuOpen && (
-                <div className="absolute right-0 top-10 z-20 min-w-[180px] rounded-lg border bg-popover p-1 shadow-xl" style={{ borderColor: 'var(--border)' }}>
-                  <button
-                    type="button"
-                    data-testid="vc-commit-all"
-                    disabled={message.trim().length === 0 || busy}
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] hover:bg-accent disabled:opacity-40"
-                    onClick={() => void commit(entries.map(entry => entry.filePath))}
-                  >
-                    Commit all changes ({entries.length})
-                  </button>
-                </div>
-              )}
+              <div className="relative mt-1.5 flex rounded-[9px] border bg-white/[0.03]" style={{ borderColor: 'var(--border)' }}>
+                <button
+                  type="button"
+                  data-testid="vc-commit-selected"
+                  disabled={!canCommit}
+                  onClick={() => void commit()}
+                  className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-l-[9px] text-[11px] font-semibold hover:bg-white/5 disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                  Commit selected ({selectedCommitPaths.size})
+                </button>
+                <button
+                  type="button"
+                  aria-label="Commit options"
+                  className="flex w-8 items-center justify-center rounded-r-[9px] border-l text-muted-foreground hover:bg-white/5 hover:text-foreground"
+                  style={{ borderColor: 'var(--border)' }}
+                  onClick={() => setCommitMenuOpen(open => !open)}
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+                {commitMenuOpen && (
+                  <div className="absolute right-0 top-9 z-20 min-w-[180px] rounded-lg border bg-popover p-1 shadow-xl" style={{ borderColor: 'var(--border)' }}>
+                    <button
+                      type="button"
+                      data-testid="vc-commit-all"
+                      disabled={message.trim().length === 0 || busy}
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[11px] hover:bg-accent disabled:opacity-40"
+                      onClick={() => void commit(entries.map(entry => entry.filePath))}
+                    >
+                      Commit all changes ({entries.length})
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="flex items-center gap-1.5 px-3.5 pb-1.5 pt-3.5 text-[11px] font-bold uppercase tracking-wide">
-              <span>Changes</span>
-              <span className="font-normal text-muted-foreground">{entries.length}</span>
-              <button
-                type="button"
-                className="ml-auto text-[11px] font-normal normal-case tracking-normal text-muted-foreground hover:text-foreground"
-                onClick={() => setCollapsed(previous => previous.size === 0 ? new Set(groups.map(group => group.key)) : new Set())}
-              >
-                {collapsed.size === 0 ? 'Collapse all' : 'Expand all'}
-              </button>
-            </div>
+            <VersionControlCompare
+              workbenchId={workbenchId}
+              worktreeId={worktreeId}
+              branch={branch}
+              signal={compareSignal}
+              commitMessage={message}
+              onSelectionChanged={(comparisonId, paths) => setTiaSelection(comparisonId && paths.length > 0 ? { comparisonId, paths } : null)}
+              onComparisonStateChanged={setTiaHasDifferences}
+              selectionResetSignal={tiaSelectionResetSignal}
+              onCommitted={onCommitted}
+              onBeginOperation={onBeginOperation}
+            />
+
+            {(entries.length > 0 || tiaHasDifferences !== false) && (
+              <div className="flex items-center gap-1.5 px-3.5 pb-1.5 pt-3.5 text-[11px] font-bold uppercase tracking-wide">
+                <span>Changes</span>
+                <span className="font-normal text-muted-foreground">{entries.length}</span>
+                <button
+                  type="button"
+                  className="ml-auto text-[11px] font-normal normal-case tracking-normal text-muted-foreground hover:text-foreground"
+                  onClick={() => setCollapsed(previous => previous.size === 0 ? new Set(groups.map(group => group.key)) : new Set())}
+                >
+                  {collapsed.size === 0 ? 'Collapse all' : 'Expand all'}
+                </button>
+              </div>
+            )}
 
             <div className="px-2.5 pb-2.5">
               {groups.map(group => {

@@ -76,6 +76,8 @@ describe('VersionControlHistory', () => {
     const detail = host.querySelector('[data-testid="timeline-detail"]')!
     expect(detail.textContent).not.toContain('TIA validated')
     expect(detail.textContent).toContain('r4')
+    expect(detail.textContent).toContain('Git commit: abcdef1234567890')
+    expect(detail.textContent).toContain('TIA checksum:')
     expect(detail.textContent).toContain('B3 35 56 49')
     expect(detail.textContent).toContain('devices/PLC_1/source/Blocks/Main.xml')
   })

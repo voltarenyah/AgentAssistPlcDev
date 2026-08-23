@@ -90,6 +90,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
   // validation log by sha) plus SVN savepoints, newest first.
   const timelineItems = useMemo<VcTimelineItem[]>(() => {
     const validationBySha = new Map(log.map(commit => [commit.sha, commit.validationState]))
+    const savepointBySha = new Map(savepoints.map(savepoint => [savepoint.sha, savepoint]))
     const commits: VcTimelineItem[] = (timeline?.gitCommits ?? []).map(commit => ({
       kind: 'commit',
       sha: commit.sha,
@@ -97,8 +98,8 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
       author: commit.author,
       timestamp: commit.timestamp,
       files: commit.files,
-      tiaChecksum: commit.tiaChecksum,
-      svnRevision: commit.svnRevision,
+      tiaChecksum: commit.tiaChecksum ?? savepointBySha.get(commit.sha)?.projectChecksum ?? null,
+      svnRevision: commit.svnRevision ?? savepointBySha.get(commit.sha)?.svnRevision ?? null,
       validationState: validationBySha.get(commit.sha) ?? 'Unlabeled',
     }))
     const revisions: VcTimelineItem[] = (timeline?.svnRevisions ?? []).map(revision => ({
@@ -113,8 +114,17 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
     return [...commits, ...revisions].sort((left, right) => right.timestamp.localeCompare(left.timestamp))
   }, [timeline, log])
 
-  // Snapshot area data: newest savepoint, drift since it, hardware change flag.
-  const lastSavepoint = savepoints[0] ?? null
+  // Ordinary Git commits inherit revision.json, so the newest savepoint entry
+  // is not necessarily a new native snapshot. Use the commit where the
+  // current SVN revision first appeared as the snapshot boundary.
+  const lastSavepoint = useMemo(() => {
+    const currentRevision = savepoints[0]?.svnRevision
+    if (currentRevision === null || currentRevision === undefined) return null
+    return savepoints.find((savepoint, index) => (
+      savepoint.svnRevision === currentRevision
+      && (index === savepoints.length - 1 || savepoints[index + 1]?.svnRevision !== currentRevision)
+    )) ?? null
+  }, [savepoints])
   const commitsSinceSavepoint = useMemo(() => {
     if (!lastSavepoint) return null
     const index = log.findIndex(commit => commit.sha === lastSavepoint.sha)

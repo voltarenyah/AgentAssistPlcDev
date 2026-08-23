@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, GitCompare, Loader2, ShieldAlert, X } from 'lucide-react'
+import { GitCompare, Loader2, ShieldAlert, X } from 'lucide-react'
 import * as api from '@/api/client'
 import FeatureValidationDialog from './FeatureValidationDialog'
 
@@ -11,27 +11,23 @@ type Props = {
   signal: number
   /** The changes page commit message — reused as the title for accept actions. */
   commitMessage: string
+  /** Reports the TIA paths selected for the global commit action. */
+  onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void
+  /** Reports whether the completed comparison has anything to display. */
+  onComparisonStateChanged?: (hasDifferences: boolean) => void
+  /** Incremented by the global commit flow after selected TIA sources are committed. */
+  selectionResetSignal?: number
   onCommitted?: () => void | Promise<void>
   /** Starts a title-bar operation and returns its id so the full compare reports live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
 }
 
-const normalizeChecksum = (value: string) => value.replace(/\s+/g, '').toUpperCase()
-const storedChecksumValues = (aggregate: string | null | undefined): string[] =>
-  (aggregate ?? '')
-    .split(';')
-    .map(entry => entry.split(':')[1] ?? '')
-    .map(normalizeChecksum)
-    .filter(Boolean)
-    .sort()
-
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
 
-export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onCommitted, onBeginOperation }: Props) {
+export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation }: Props) {
   const [started, setStarted] = useState(false)
   const [dismissed, setDismissed] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
-  const [storedChecksum, setStoredChecksum] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -43,15 +39,13 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     setBusy(true); setError(null); setNeedsCompileConfirmation(false)
     const operationId = onBeginOperation?.('compare-tia', 'Comparing master with TIA Portal...')
     try {
-      const [nextComparison, engineeringState] = await Promise.all([
-        allowCompile
-          ? api.compareMasterWithTia(workbenchId, operationId, true)
-          : api.compareMasterWithTia(workbenchId, operationId),
-        api.getWorktreeEngineeringState(workbenchId, worktreeId).catch(() => null),
-      ])
+      const nextComparison = await (allowCompile
+        ? api.compareMasterWithTia(workbenchId, operationId, true)
+        : api.compareMasterWithTia(workbenchId, operationId))
       setComparison(nextComparison)
-      setStoredChecksum(engineeringState?.revision?.tia?.projectChecksum ?? null)
+      onComparisonStateChanged?.(nextComparison.state === 'Unavailable' || nextComparison.differences.length > 0 || nextComparison.hardware?.state === 'changed')
       setSelected(new Set())
+      onSelectionChanged?.(nextComparison.comparisonId, [])
     } catch (reason) {
       if (reason instanceof api.WorkbenchApiError && reason.code === 'PLC_CHECKSUM_UNAVAILABLE') {
         setNeedsCompileConfirmation(true)
@@ -71,17 +65,23 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signal])
 
-  const accept = async () => {
-    if (!comparison || selected.size === 0 || !commitMessage.trim()) return
-    setBusy(true); setError(null)
-    try {
-      await api.acceptTiaSynchronization(workbenchId, comparison.comparisonId, [...selected], commitMessage.trim())
-      await compare()
-      await onCommitted?.()
-    }
-    catch (reason) { setError(displayError(reason)) }
-    finally { setBusy(false) }
+  useEffect(() => {
+    if (selectionResetSignal === 0) return
+    setSelected(new Set())
+    onSelectionChanged?.(null, [])
+    void compare()
+    // The reset signal is the only trigger; the parent callback is intentionally a render-local handler.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionResetSignal])
+
+  const toggleSelection = (path: string, checked: boolean) => {
+    const next = new Set(selected)
+    if (checked) next.add(path)
+    else next.delete(path)
+    setSelected(next)
+    if (comparison) onSelectionChanged?.(comparison.comparisonId, [...next])
   }
+
   const acceptHardware = async () => {
     if (!comparison?.hardware || comparison.hardware.state === 'in-sync' || !commitMessage.trim()) return
     setBusy(true); setError(null)
@@ -102,16 +102,12 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
 
   if (!started || dismissed) return null
 
-  const liveChecksumValues = comparison
-    ? Object.values(comparison.liveChecksums).filter((value): value is string => Boolean(value)).map(normalizeChecksum).sort()
-    : []
-  const checksumDrift = comparison != null
-    && !comparison.fastGatePassed
-    && storedChecksum != null
-    && storedChecksumValues(storedChecksum).join('|') !== liveChecksumValues.join('|')
   const hardwareDiffers = comparison?.hardware != null && comparison.hardware.state !== 'in-sync'
   const differences = comparison?.differences ?? []
   const titleMissing = commitMessage.trim().length === 0
+  const cleanComparison = comparison != null && comparison.state !== 'Unavailable' && differences.length === 0 && !hardwareDiffers
+
+  if (cleanComparison) return null
 
   return (
     <div className="shrink-0 border-b" style={{ borderColor: 'var(--border)' }} data-testid="vc-compare-result">
@@ -167,26 +163,18 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
             )}
 
             {differences.length === 0 ? (
-              <>
-                <div className={`rounded-lg border p-2.5 text-[10px] ${hardwareDiffers ? 'bg-muted/30' : 'border-emerald-500/30 bg-emerald-500/5'}`} style={hardwareDiffers ? { borderColor: 'var(--border)' } : undefined}>
-                  <div className={`flex items-center gap-1.5 font-medium ${hardwareDiffers ? 'text-muted-foreground' : 'text-emerald-600'}`}>
-                    {hardwareDiffers ? 'Tracked PLC source matches master' : <><CheckCircle2 className="h-3.5 w-3.5" />TIA matches master</>}
-                  </div>
-                  <div className="mt-1 text-[9px] text-muted-foreground">
-                    {comparison.fastGatePassed ? 'All device checksums match; no full object scan was required.' : 'A full object scan found no remaining differences.'}
-                  </div>
+              <div className="px-3.5 py-5 text-center text-[10px] text-muted-foreground" data-testid="vc-clean-state">
+                <div className={`font-medium ${hardwareDiffers ? 'text-muted-foreground' : 'text-emerald-600'}`}>
+                  {hardwareDiffers ? 'Tracked PLC source matches master' : 'TIA matches master'}
                 </div>
-                {checksumDrift && !hardwareDiffers && (
-                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600">
-                    <div className="font-medium">TIA changed outside the tracked source</div>
-                    <div className="mt-1 text-[9px]">The exported XML matches, but the TIA checksum differs from the last savepoint — record it with a TIA snapshot below.</div>
-                  </div>
-                )}
-              </>
+                <div className="mt-1 text-[9px]">
+                  {comparison.fastGatePassed ? 'All device checksums match; no full object scan was required.' : 'A full object scan found no remaining differences.'}
+                </div>
+              </div>
             ) : (
               <>
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-[10px] text-amber-600">
-                  {comparison.state === 'Unavailable' ? 'TIA checksum unavailable.' : 'TIA differs from master. Accept TIA changes into the local repo, or push local objects back into TIA.'}
+                  {comparison.state === 'Unavailable' ? 'TIA checksum unavailable.' : 'TIA differs from master. Select the source items to include in the global commit.'}
                 </div>
                 {differences.map(diff => {
                   const path = diff.relativePath
@@ -197,13 +185,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                         type="checkbox"
                         disabled={disabled}
                         checked={path ? selected.has(path) : false}
-                        onChange={event => setSelected(previous => {
-                          const next = new Set(previous)
-                          if (!path) return next
-                          if (event.target.checked) next.add(path)
-                          else next.delete(path)
-                          return next
-                        })}
+                        onChange={event => path && toggleSelection(path, event.target.checked)}
                       />
                       <span className="min-w-0 flex-1">
                         <span className="block text-[10px] font-medium">{diff.plcName} · {diff.identity || diff.relativePath}</span>
@@ -214,22 +196,8 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                     </label>
                   )
                 })}
-                {selected.size > 0 && (
-                  <div className="flex gap-1.5">
-                    <button
-                      type="button"
-                      aria-label="Accept selected TIA changes"
-                      className="h-7 flex-1 rounded-lg bg-chart-2 text-[10px] font-semibold text-white disabled:opacity-40"
-                      disabled={busy || titleMissing}
-                      title={titleMissing ? 'Type a commit message above first' : undefined}
-                      onClick={() => void accept()}
-                    >
-                      Accept {selected.size} into local repo
-                    </button>
-                  </div>
-                )}
                 {selected.size > 0 && titleMissing && (
-                  <div className="text-[9px] text-muted-foreground">Type a commit message above to accept into the local repo.</div>
+                  <div className="text-[9px] text-muted-foreground">Type a commit message above to include the selected TIA sources in the global commit.</div>
                 )}
               </>
             )}
