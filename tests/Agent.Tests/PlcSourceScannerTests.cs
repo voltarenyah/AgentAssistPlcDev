@@ -35,6 +35,18 @@ public sealed class PlcSourceScannerTests : IDisposable
     }
 
     [Fact]
+    public async Task ScanCanCompileWhenTheUserExplicitlyAllowsIt()
+    {
+        var engineering = new ScannerEngineeringCaller(root, string.Empty, "compiled");
+        var scanner = new PlcSourceScanner(engineering);
+
+        var result = await scanner.ScanAsync(Context(), CancellationToken.None, allowCompile: true);
+
+        Assert.Equal("compiled", result.ProjectChecksum);
+        Assert.Contains("compile_plc", engineering.Calls);
+    }
+
+    [Fact]
     public async Task ScanReportsObjectsThatOpennessCannotExport()
     {
         var engineering = new ScannerEngineeringCaller(root, "same") { AddUnsupported = true };
@@ -112,6 +124,9 @@ public sealed class PlcSourceScannerTests : IDisposable
                     },
                 });
             }
+
+            if (tool == "compile_plc")
+                return Task.FromResult((T)(object)new CompileResult { State = "success" });
 
             throw new InvalidOperationException(tool);
         }

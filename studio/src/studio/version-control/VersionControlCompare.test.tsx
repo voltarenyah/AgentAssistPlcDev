@@ -86,6 +86,30 @@ describe('VersionControlCompare (inline)', () => {
     expect(host.textContent).toContain('TIA differs from master')
   })
 
+  it('asks before retrying a missing-checksum comparison with automatic compile and save', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia')
+      .mockRejectedValueOnce(new api.WorkbenchApiError(400, 'PLC_CHECKSUM_UNAVAILABLE', "TIA did not provide a compiled software checksum for PLC 'PLC_1'."))
+      .mockResolvedValueOnce(comparison())
+    const { host } = await render({ signal: 1 })
+
+    expect(host.textContent).toContain('Compile and save')
+    expect(host.querySelector('[aria-label="Compile and save in TIA, then compare"]')).toBeTruthy()
+
+    await click(host.querySelector('[aria-label="Compile and save in TIA, then compare"]')!)
+
+    expect(compare).toHaveBeenNthCalledWith(2, 'wb-1', undefined, true)
+    expect(host.textContent).toContain('TIA differs from master')
+  })
+
+  it('does not offer a per-selection push-to-TIA action', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    const { host } = await render({ signal: 1, commitMessage: 'Accept Main' })
+
+    await click(host.querySelector('input[type="checkbox"]')!)
+
+    expect(host.querySelector('[aria-label="Push selected local changes to TIA"]')).toBeNull()
+  })
+
   it('accepts selected TIA changes using the changes-page commit message', async () => {
     const compare = vi.spyOn(api, 'compareMasterWithTia')
       .mockResolvedValueOnce(comparison())
@@ -148,21 +172,6 @@ describe('VersionControlCompare (inline)', () => {
     expect(onCommitted).toHaveBeenCalled()
   })
 
-  it('pushes selected local objects into TIA and shows per-object outcomes', async () => {
-    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
-    const push = vi.spyOn(api, 'pushSourcesToTia').mockResolvedValue({
-      comparisonId: 'comparison-1',
-      outcomes: [{ path: 'devices/PLC_1/source/Blocks/Main.xml', success: true, message: null }],
-    })
-    const { host } = await render({ signal: 1 })
-
-    await click(host.querySelector('input[type="checkbox"]')!)
-    await click(host.querySelector('button[aria-label="Push selected local changes to TIA"]')!)
-
-    expect(push).toHaveBeenCalledWith('wb-1', 'comparison-1', ['devices/PLC_1/source/Blocks/Main.xml'])
-    expect(host.textContent).toContain('✓')
-    expect(host.textContent).toContain('devices/PLC_1/source/Blocks/Main.xml')
-  })
 
   it('points checksum drift without source differences to the snapshot area', async () => {
     vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({

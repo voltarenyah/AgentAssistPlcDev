@@ -808,13 +808,14 @@ public static class WorkbenchEndpoints
             WorkbenchCoordinator coordinator,
             OperationStatusRegistry operations,
             HttpContext http,
-            CancellationToken ct) =>
+            CancellationToken ct,
+            bool allowCompile = false) =>
             await RunOperationAsync(
                 http,
                 operations,
                 "compare-tia",
                 "Comparing master with TIA Portal...",
-                progress => coordinator.CompareMasterWithTiaAsync(workbenchId, ct, progress),
+                progress => coordinator.CompareMasterWithTiaAsync(workbenchId, ct, progress, allowCompile),
                 "TIA comparison completed.").ConfigureAwait(false));
         app.MapGet("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}", (
             string workbenchId,

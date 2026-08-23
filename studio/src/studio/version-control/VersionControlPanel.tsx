@@ -122,10 +122,6 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
   }, [lastSavepoint, log])
   const hardwareDiffers = useMemo(() => entries.some(entry => entry.category === 'Hardware'), [entries])
 
-  const validation = log[0]?.validationState ?? 'Unlabeled'
-  const baseLine = isMaster
-    ? (validation === 'Validated' ? 'TIA validated' : validation === 'Invalid' ? 'Validation evidence invalid' : 'Full scan required')
-    : 'master'
 
   return (
     <section className="flex h-full min-h-0 w-full flex-col bg-card" aria-label="Version control workspace">
@@ -170,10 +166,9 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
           <GitBranch className="h-3 w-3 self-center text-chart-4" />
           <span className="truncate font-mono text-[12px] font-bold" title={branch} data-testid="vc-branch-name">{branch || 'Version control'}</span>
         </div>
-        <div className="mt-0.5 flex items-center gap-1.5 pl-[18px] font-mono text-[11px] font-semibold text-muted-foreground">
-          <ArrowUpRight className="h-3 w-3" />
-          {baseLine}
-        </div>
+        {!isMaster && <div className="mt-0.5 flex items-center gap-1.5 pl-[18px] font-mono text-[11px] font-semibold text-muted-foreground">
+          <ArrowUpRight className="h-3 w-3" /> master
+        </div>}
       </div>
       {error && <div className="shrink-0 px-3.5 py-2 text-[10px] text-destructive">{error}</div>}
 

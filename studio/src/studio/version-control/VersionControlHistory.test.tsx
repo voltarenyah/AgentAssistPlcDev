@@ -68,13 +68,13 @@ describe('VersionControlHistory', () => {
     expect(host.querySelector('[data-testid="commit-abcdef1"]')?.textContent).toContain('master')
   })
 
-  it('expands a commit to show checksum, validation, and changed files', async () => {
+  it('expands a commit to show checksum and changed files', async () => {
     const { host } = await render([commit()])
 
     await click(host.querySelector('[data-testid="commit-abcdef1"]')!)
 
     const detail = host.querySelector('[data-testid="timeline-detail"]')!
-    expect(detail.textContent).toContain('TIA validated')
+    expect(detail.textContent).not.toContain('TIA validated')
     expect(detail.textContent).toContain('r4')
     expect(detail.textContent).toContain('B3 35 56 49')
     expect(detail.textContent).toContain('devices/PLC_1/source/Blocks/Main.xml')

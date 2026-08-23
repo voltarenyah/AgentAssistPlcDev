@@ -36,21 +36,29 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [plan, setPlan] = useState<api.FeatureImportPlan | null>(null)
-  const [pushOutcomes, setPushOutcomes] = useState<api.PushToTiaOutcome[] | null>(null)
+  const [needsCompileConfirmation, setNeedsCompileConfirmation] = useState(false)
   const handledSignal = useRef(0)
 
-  const compare = async () => {
-    setBusy(true); setError(null); setPushOutcomes(null)
+  const compare = async (allowCompile = false) => {
+    setBusy(true); setError(null); setNeedsCompileConfirmation(false)
     const operationId = onBeginOperation?.('compare-tia', 'Comparing master with TIA Portal...')
     try {
       const [nextComparison, engineeringState] = await Promise.all([
-        api.compareMasterWithTia(workbenchId, operationId),
+        allowCompile
+          ? api.compareMasterWithTia(workbenchId, operationId, true)
+          : api.compareMasterWithTia(workbenchId, operationId),
         api.getWorktreeEngineeringState(workbenchId, worktreeId).catch(() => null),
       ])
       setComparison(nextComparison)
       setStoredChecksum(engineeringState?.revision?.tia?.projectChecksum ?? null)
       setSelected(new Set())
-    } catch (reason) { setError(displayError(reason)) }
+    } catch (reason) {
+      if (reason instanceof api.WorkbenchApiError && reason.code === 'PLC_CHECKSUM_UNAVAILABLE') {
+        setNeedsCompileConfirmation(true)
+      } else {
+        setError(displayError(reason))
+      }
+    }
     finally { setBusy(false) }
   }
 
@@ -69,17 +77,6 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     try {
       await api.acceptTiaSynchronization(workbenchId, comparison.comparisonId, [...selected], commitMessage.trim())
       await compare()
-      await onCommitted?.()
-    }
-    catch (reason) { setError(displayError(reason)) }
-    finally { setBusy(false) }
-  }
-  const push = async () => {
-    if (!comparison || selected.size === 0) return
-    setBusy(true); setError(null); setPushOutcomes(null)
-    try {
-      const result = await api.pushSourcesToTia(workbenchId, comparison.comparisonId, [...selected])
-      setPushOutcomes(result.outcomes)
       await onCommitted?.()
     }
     catch (reason) { setError(displayError(reason)) }
@@ -133,6 +130,21 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
           </div>
         )}
         {error && <div className="py-1 text-[10px] text-destructive">{error}</div>}
+        {needsCompileConfirmation && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600">
+            <div className="font-medium">TIA has no compiled PLC checksum</div>
+            <div className="mt-1 text-[9px]">Compile and save the connected TIA project automatically, then compare again?</div>
+            <button
+              type="button"
+              aria-label="Compile and save in TIA, then compare"
+              className="mt-1.5 rounded-md bg-chart-2 px-2 py-1 text-[10px] font-medium text-white disabled:opacity-40"
+              disabled={busy}
+              onClick={() => void compare(true)}
+            >
+              Compile and save, then compare
+            </button>
+          </div>
+        )}
 
         {comparison && (
           <div className="space-y-2">
@@ -214,28 +226,10 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                     >
                       Accept {selected.size} into local repo
                     </button>
-                    <button
-                      type="button"
-                      aria-label="Push selected local changes to TIA"
-                      className="h-7 flex-1 rounded-lg bg-chart-4 text-[10px] font-semibold text-white disabled:opacity-40"
-                      disabled={busy}
-                      onClick={() => void push()}
-                    >
-                      Push {selected.size} to TIA
-                    </button>
                   </div>
                 )}
                 {selected.size > 0 && titleMissing && (
                   <div className="text-[9px] text-muted-foreground">Type a commit message above to accept into the local repo.</div>
-                )}
-                {pushOutcomes && (
-                  <div className="space-y-0.5 rounded-lg border p-2 text-[9px]" style={{ borderColor: 'var(--border)' }}>
-                    {pushOutcomes.map(outcome => (
-                      <div key={outcome.path} className={outcome.success ? 'text-emerald-600' : 'text-destructive'}>
-                        {outcome.success ? '✓' : '✗'} {outcome.path}{outcome.message ? ` — ${outcome.message}` : ''}
-                      </div>
-                    ))}
-                  </div>
                 )}
               </>
             )}

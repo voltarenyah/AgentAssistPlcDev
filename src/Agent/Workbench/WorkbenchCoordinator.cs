@@ -2289,7 +2289,8 @@ public sealed class WorkbenchCoordinator
     public async Task<WorkbenchConsistencyResult> CompareMasterWithTiaAsync(
         string workbenchId,
         CancellationToken token = default,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        bool allowCompile = false)
     {
         var workbench = LoadRegisteredWorkbench(workbenchId);
         var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
@@ -2298,7 +2299,7 @@ public sealed class WorkbenchCoordinator
         var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
         var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
         await EnsureMasterProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
-        return await consistency.CompareAsync(workbench, master, token, progress).ConfigureAwait(false);
+        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile).ConfigureAwait(false);
     }
 
     public WorkbenchConsistencyResult GetComparison(string workbenchId, string comparisonId)

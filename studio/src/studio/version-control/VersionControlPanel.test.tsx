@@ -122,7 +122,29 @@ describe('VersionControlPanel (worktree dock)', () => {
     // The result renders inline on the changes page — no overlay, no navigation.
     expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
     expect(host.textContent).toContain('TIA matches master')
-    expect(host.querySelector('[data-testid="vc-changes-empty"]')).toBeTruthy()
+    expect(host.querySelector('[data-testid="vc-changes-empty"]')).toBeNull()
+  })
+
+  it('does not describe the branch as clean when TIA comparison finds differences', async () => {
+    mockVcState()
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue({
+      comparisonId: 'comparison-1',
+      masterSha: 'master-1',
+      fastGatePassed: false,
+      state: 'Different',
+      liveChecksums: { 'dev-1': 'checksum-2' },
+      differences: [{
+        deviceId: 'dev-1', plcName: 'PLC_1', relativePath: 'devices/PLC_1/source/Blocks/Main.xml',
+        identity: 'Main', kind: 'Changed', masterFingerprint: 'old', tiaFingerprint: 'new', supported: true,
+      }],
+    })
+    vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    await click(host.querySelector('[data-testid="vc-compare-open"]')!)
+
+    expect(host.querySelector('[data-testid="vc-changes-empty"]')).toBeNull()
+    expect(host.textContent).toContain('TIA differs from master')
   })
 
   it('does not re-run the TIA comparison when switching between pages', async () => {

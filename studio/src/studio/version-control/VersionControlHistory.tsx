@@ -185,9 +185,6 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                         <div className="mb-1.5 text-[10px] text-muted-foreground"><b className="font-medium text-foreground">{item.author}</b> · {formatTime(item.timestamp)}</div>
                         <div className="mb-1.5 flex flex-wrap gap-1">
                           {item.svnRevision !== null && <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-violet-400" title="Linked SVN revision">r{item.svnRevision}</span>}
-                          <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${item.validationState === 'Validated' ? 'bg-emerald-500/10 text-emerald-500' : item.validationState === 'Invalid' ? 'bg-red-500/10 text-red-500' : 'bg-muted text-muted-foreground'}`}>
-                            {item.validationState === 'Validated' ? '✓ TIA validated' : item.validationState === 'Invalid' ? 'Validation invalid' : 'No evidence'}
-                          </span>
                         </div>
                         {item.tiaChecksum && <div className="mb-1.5"><ChecksumRows value={item.tiaChecksum} /></div>}
                         <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Changed files · {item.files.length}</div>
