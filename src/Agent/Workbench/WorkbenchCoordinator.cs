@@ -2631,6 +2631,32 @@ public sealed class WorkbenchCoordinator
                 message.Trim(),
                 token)
             .ConfigureAwait(false);
+
+        // Record TIA state (per-device checksums) for this commit so it can be traced later.
+        var stateDevices = comparison.LiveChecksums
+            .Where(item => !string.IsNullOrWhiteSpace(item.Value))
+            .Select(item =>
+            {
+                var plcName = comparison.Differences
+                    .FirstOrDefault(d => d.DeviceId == item.Key)?.PlcName
+                    ?? ReadDevice(contexts[item.Key]).PlcName;
+                return new { deviceId = item.Key, plcName, projectChecksum = item.Value };
+            })
+            .ToArray();
+        if (stateDevices.Length > 0)
+        {
+            await versionControl.CallAsync<object>(
+                "vc_commit_state_create",
+                new
+                {
+                    repoPath = masterRoot,
+                    commitSha = commit.Sha,
+                    workbenchId,
+                    devices = stateDevices,
+                },
+                token).ConfigureAwait(false);
+        }
+
         var remaining = writePolicy.ReadPending(masterRoot, master.WorktreeId).Sources;
         return new TiaSynchronizationResult(
             comparisonId,
