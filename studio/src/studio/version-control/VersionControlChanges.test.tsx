@@ -168,5 +168,60 @@ describe('VersionControlChanges', () => {
     expect(compare).toHaveBeenCalledTimes(1)
     expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
     expect(host.textContent).toContain('PLC_1 · Main')
+    const commitControls = host.querySelector('[data-testid="vc-commit-controls"]')!
+    const compareResult = host.querySelector('[data-testid="vc-compare-result"]')!
+    expect(commitControls.compareDocumentPosition(compareResult) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('uses the global commit action to overwrite selected local sources from TIA and commit them', async () => {
+    vi.spyOn(api, 'compareMasterWithTia')
+      .mockResolvedValueOnce({
+        comparisonId: 'comparison-1',
+        masterSha: 'master-1',
+        fastGatePassed: false,
+        state: 'Different',
+        liveChecksums: {},
+        differences: [{
+          deviceId: 'dev-1',
+          plcName: 'PLC_1',
+          relativePath: 'devices/PLC_1/source/Blocks/Main.xml',
+          identity: 'Main',
+          kind: 'Changed',
+          masterFingerprint: 'old',
+          tiaFingerprint: 'new',
+          supported: true,
+        }],
+      })
+      .mockResolvedValueOnce({
+        comparisonId: 'comparison-2',
+        masterSha: 'commit-2',
+        fastGatePassed: true,
+        state: 'Consistent',
+        liveChecksums: {},
+        differences: [],
+      })
+    vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
+    const accept = vi.spyOn(api, 'acceptTiaSynchronization').mockResolvedValue({
+      comparisonId: 'comparison-1',
+      pendingPaths: [],
+      commitSha: 'commit-2',
+    })
+    const commit = vi.spyOn(api, 'commitVcPaths')
+    const { host } = await render([], snapshot, 1)
+
+    await click(host.querySelector('input[type="checkbox"]')!)
+    await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'Accept Main from TIA')
+    expect(host.textContent).toContain('Commit selected (1)')
+    await click(host.querySelector('[data-testid="vc-commit-selected"]')!)
+
+    expect(accept).toHaveBeenCalledWith(
+      'wb-1',
+      'comparison-1',
+      ['devices/PLC_1/source/Blocks/Main.xml'],
+      'Accept Main from TIA',
+    )
+    expect(commit).not.toHaveBeenCalled()
+    expect(host.querySelector('input[type="checkbox"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
   })
 })

@@ -143,10 +143,10 @@ describe('WorktreeLandingPage', () => {
     await act(async () => root.unmount())
   })
 
-  it('renders version-control history between metadata and tasks on the overview', async () => {
+  it('keeps version-control history in the right dock instead of duplicating it on the overview', async () => {
     const { host, root } = await renderPage()
 
-    expect(host.textContent).toContain('Worktree version control')
+    expect(host.textContent).not.toContain('Worktree version control')
     const sections = [...host.querySelectorAll('section')]
     const contextIndex = sections.findIndex(section => section.getAttribute('data-testid') === 'worktree-context')
     const metadataIndex = sections.findIndex(section => section.textContent?.includes('Worktree metadata'))
@@ -155,8 +155,8 @@ describe('WorktreeLandingPage', () => {
     expect(contextIndex).toBe(metadataIndex)
     expect(sections[contextIndex]?.querySelector('[aria-label="Worktree purpose"]')).not.toBeNull()
     expect(sections[contextIndex]?.querySelector('[aria-label="Worktree owner"]')).not.toBeNull()
-    expect(metadataIndex).toBeLessThan(timelineIndex)
-    expect(timelineIndex).toBeLessThan(tasksIndex)
+    expect(timelineIndex).toBe(-1)
+    expect(metadataIndex).toBeLessThan(tasksIndex)
 
     await act(async () => root.unmount())
   })

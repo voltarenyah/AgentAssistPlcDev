@@ -5,7 +5,6 @@ import { showErrorToast } from '@/components/ui/toast'
 import InlineEdit from './InlineEdit'
 import StatusBadge from './StatusBadge'
 import WorktreeTasksPanel from './WorktreeTasksPanel'
-import WorktreeVersionControlTimeline from './WorktreeVersionControlTimeline'
 import { rememberDeviceSnapshot } from '@/studio/deviceSnapshot'
 
 export type WorktreeLandingTab = 'overview' | 'tasks'
@@ -266,8 +265,6 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
 
           {tab === 'overview' && (
             <>
-              <WorktreeVersionControlTimeline workbenchId={workbenchId} worktreeId={worktreeId} />
-
               <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center gap-3">
                   <ListTodo className="h-4 w-4 text-chart-2" />

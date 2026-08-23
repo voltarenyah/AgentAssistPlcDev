@@ -71,8 +71,36 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.querySelector('[data-testid="vc-snapshot-revision"]')?.textContent).toBe('r3')
   })
 
+  it('counts commits after the latest SVN revision boundary', async () => {
+    const commit = (sha: string): api.VcCommitEntry => ({
+      sha,
+      author: 'PLC Assistant',
+      message: sha,
+      timestamp: '2026-08-23T08:00:00.000Z',
+      files: [],
+      validationState: 'Unlabeled',
+    })
+    const savepoint = (sha: string, revision: number): api.SavepointInfo => ({
+      sha,
+      message: sha,
+      svnUrl: '^/native/main',
+      svnRevision: revision,
+      projectChecksum: null,
+      compileStatus: 'SUCCESS',
+      fSignature: null,
+    })
+    mockVcState({
+      commits: [commit('new-3'), commit('new-2'), commit('new-1'), commit('snapshot-r3'), commit('old-r2')],
+      savepoints: [savepoint('new-3', 3), savepoint('new-2', 3), savepoint('new-1', 3), savepoint('snapshot-r3', 3), savepoint('old-r2', 2)],
+    })
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    expect(host.querySelector('[data-testid="vc-snapshot-drift"]')?.textContent).toContain('3 commits since')
+  })
+
   it('switches to the history timeline through the tab bar', async () => {
     mockVcState({
+      savepoints: [{ sha: 'abcdef1234567890', message: 'native savepoint', svnUrl: '^/native/main', svnRevision: 4, projectChecksum: 'PLC_1:AA BB', compileStatus: 'SUCCESS', fSignature: null }],
       timeline: {
         gitCommits: [{
           sha: 'abcdef1234567890',
@@ -101,6 +129,9 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.querySelector('[data-testid="vc-tab-history"]')?.getAttribute('aria-pressed')).toBe('true')
     expect(host.querySelector('[data-testid="commit-abcdef1"]')).toBeTruthy()
     expect(host.querySelector('[data-testid="savepoint-r4"]')).toBeTruthy()
+
+    await click(host.querySelector('[data-testid="commit-abcdef1"]')!)
+    expect(host.querySelector('[data-testid="timeline-detail"]')?.textContent).toContain('PLC_1:AA BB')
   })
 
   it('executes the TIA comparison directly from the header action', async () => {
@@ -119,9 +150,9 @@ describe('VersionControlPanel (worktree dock)', () => {
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
 
     expect(compare).toHaveBeenCalledTimes(1)
-    // The result renders inline on the changes page — no overlay, no navigation.
-    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
-    expect(host.textContent).toContain('TIA matches master')
+    // A clean comparison leaves the changes dock empty without a result banner.
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
+    expect(host.textContent).not.toContain('TIA matches master')
     expect(host.querySelector('[data-testid="vc-changes-empty"]')).toBeNull()
   })
 
@@ -168,7 +199,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     await click(host.querySelector('[data-testid="vc-tab-changes"]')!)
 
     expect(compare).toHaveBeenCalledTimes(1)
-    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
-    expect(host.textContent).toContain('TIA matches master')
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
+    expect(host.textContent).not.toContain('TIA matches master')
   })
 })

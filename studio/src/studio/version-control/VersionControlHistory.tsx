@@ -183,6 +183,10 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                     {item.kind === 'commit' ? (
                       <>
                         <div className="mb-1.5 text-[10px] text-muted-foreground"><b className="font-medium text-foreground">{item.author}</b> · {formatTime(item.timestamp)}</div>
+                        <div className="mb-1.5 font-mono text-[10px] text-muted-foreground" data-testid="commit-evidence">
+                          <div>Git commit: {item.sha}</div>
+                          {item.tiaChecksum && <div>TIA checksum:</div>}
+                        </div>
                         <div className="mb-1.5 flex flex-wrap gap-1">
                           {item.svnRevision !== null && <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-violet-400" title="Linked SVN revision">r{item.svnRevision}</span>}
                         </div>
