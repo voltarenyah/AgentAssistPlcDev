@@ -131,7 +131,7 @@ exit /b 1
         ($labels.ToArray() -contains 'codex:blocked') | Should Be $false
     }
 
-    It 'persists a queued issue through running to pr-ready with bounded milestones' {
+    It 'publishes a queued issue before marking it pr-ready with bounded milestones' {
         $statePath = Join-Path $TestDrive 'lifecycle-state.json'
         $events = New-Object 'System.Collections.Generic.List[string]'
         $saveCounter = @{ Value = 0 }
@@ -177,6 +177,11 @@ exit /b 1
             return [pscustomobject]@{ Path = (Join-Path $TestDrive 'issue-42-fix'); BranchName = 'codex/42-fix'; Created = $true; Reused = $false }
         }.GetNewClosure()
         $setup = { param($Worktree, $Config, $ActivityLogPath) $events.Add('setup') | Out-Null }.GetNewClosure()
+        $publication = {
+            param($Attempt, $Issue, $Config, $Path)
+            $events.Add('publication') | Out-Null
+            [pscustomobject]@{ publicationStage = 'pr-created'; prUrl = 'https://github.example/pr/42' }
+        }.GetNewClosure()
         $codex = {
             param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath)
             $events.Add('codex') | Out-Null
@@ -188,7 +193,7 @@ exit /b 1
 
         $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'labeled' `
             -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{ defaultBranch = 'master'; codexTimeoutMinutes = 1 }) `
-            -StatePath $statePath -StateWriter $stateWriter -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
+            -StatePath $statePath -StateWriter $stateWriter -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex -PublicationProvider $publication
 
         $result.Status | Should Be 'pr-ready'
         $saved = Read-CodexWorkerState -Path $statePath
@@ -200,15 +205,16 @@ exit /b 1
         $saved.issues.'42'.threadId | Should Be 'thread-42'
         $saved.issues.'42'.runDirectory | Should Be (Join-Path $TestDrive 'runs\issue-42\1')
         $saved.issues.'42'.commit | Should Be 'abc123'
-        $saved.issues.'42'.prUrl | Should BeNullOrEmpty
+        $saved.issues.'42'.prUrl | Should Be 'https://github.example/pr/42'
         $saved.issues.'42'.retryCount | Should Be 0
-        $saved.issues.'42'.publicationStage | Should Be 'ready'
+        $saved.issues.'42'.publicationStage | Should Be 'pr-created'
         $saved.issues.'42'.lastError | Should BeNullOrEmpty
         foreach ($field in @('issueNumber', 'status', 'attempt', 'branch', 'worktree', 'threadId', 'runDirectory', 'commit', 'prUrl', 'retryCount', 'publicationStage', 'lastError')) {
             $saved.issues.'42'.PSObject.Properties.Name -contains $field | Should Be $true
         }
         @($events | Where-Object { $_ -eq 'worktree' }).Count | Should Be 1
         @($events | Where-Object { $_ -eq 'codex' }).Count | Should Be 1
+        @($events | Where-Object { $_ -eq 'publication' }).Count | Should Be 1
         $events.IndexOf('save:queued') | Should BeLessThan $events.IndexOf('status:codex:queued')
         $events.IndexOf('save:running') | Should BeLessThan $events.IndexOf('codex')
         $events.IndexOf('save:running') | Should BeLessThan $events.IndexOf('status:codex:running')
@@ -217,7 +223,7 @@ exit /b 1
             'claimed-comment' = 'status=running;attempt=1;retry=0;run=;publication=none'
             'approach-comment' = ('status=running;attempt=1;retry=0;run={0};publication=none' -f (Join-Path $TestDrive 'runs\issue-42\1'))
             'validation-comment' = ('status=running;attempt=1;retry=0;run={0};publication=none' -f (Join-Path $TestDrive 'runs\issue-42\1'))
-            'ready-comment' = ('status=pr-ready;attempt=1;retry=0;run={0};publication=ready' -f (Join-Path $TestDrive 'runs\issue-42\1'))
+            'ready-comment' = ('status=pr-ready;attempt=1;retry=0;run={0};publication=pr-created' -f (Join-Path $TestDrive 'runs\issue-42\1'))
         }
         foreach ($milestone in @('claimed-comment', 'approach-comment', 'validation-comment', 'ready-comment')) {
             $milestoneIndex = $events.IndexOf($milestone)
@@ -400,8 +406,9 @@ exit /b 1
         $worktree = { param($RepositoryRoot, $WorktreeRoot, $IssueNumber, $Title, $BranchName, $DefaultBranch, $CommandRunner) [pscustomobject]@{ Path = (Join-Path $TestDrive 'order-worktree'); BranchName = 'codex/42-order' } }.GetNewClosure()
         $setup = { param($Worktree, $Config, $ActivityLogPath) }.GetNewClosure()
         $codex = { param($IssueWorktree, $IssueContext, $Config, $RunDirectory, $StatePath) [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; Summary = [pscustomobject]@{ status = 'completed'; rootCauseOrApproach = 'order'; changedComponents = @('x'); decisions = @(); validation = @(); warnings = @(); remainingRisks = @(); commitMessage = 'fix: order'; prTitle = 'fix: order'; requiresHumanInput = $false; humanQuestion = $null } } }.GetNewClosure()
+        $publication = { param($Attempt, $Issue, $Config, $Path) [pscustomobject]@{ publicationStage = 'pr-created'; prUrl = 'https://github.example/pr/42' } }.GetNewClosure()
 
-        Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -StateReader $stateReader -LockProvider $lock -UnlockProvider $unlock -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex | Out-Null
+        Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'labeled' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -StateReader $stateReader -LockProvider $lock -UnlockProvider $unlock -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex -PublicationProvider $publication | Out-Null
 
         $events.IndexOf('lock') | Should BeLessThan $events.IndexOf('issue-read')
         $events.IndexOf('lock') | Should BeLessThan $events.IndexOf('permission')
@@ -485,8 +492,9 @@ exit /b 1
             if ($codexAttempts.Count -eq 1) { return [pscustomobject]@{ Status = 'failed'; Classification = 'transient_service_unavailable'; LastError = 'temporary' } }
             return [pscustomobject]@{ Status = 'completed'; Classification = 'completed'; Summary = [pscustomobject]@{ status = 'completed'; rootCauseOrApproach = 'resume'; changedComponents = @(); decisions = @(); validation = @(); warnings = @(); remainingRisks = @(); commitMessage = 'fix: resume'; prTitle = 'fix: resume'; requiresHumanInput = $false; humanQuestion = $null } }
         }.GetNewClosure()
+        $publication = { param($Attempt, $Issue, $Config, $Path) [pscustomobject]@{ publicationStage = 'pr-created'; prUrl = 'https://github.example/pr/42' } }.GetNewClosure()
 
-        $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'retry' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex
+        $result = Invoke-CodexIssueRun -Repository 'owner/repo' -IssueNumber 42 -Actor 'trusted-user' -EventName 'retry' -RepositoryRoot 'C:\repo' -DataRoot $TestDrive -Config ([pscustomobject]@{}) -StatePath $statePath -GitHubCommandRunner $github -WorktreeProvider $worktree -SetupProvider $setup -CodexProvider $codex -PublicationProvider $publication
 
         $result.Status | Should Be 'pr-ready'
         $codexAttempts.Count | Should Be 2
