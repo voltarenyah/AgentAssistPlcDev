@@ -95,7 +95,8 @@ public sealed class WorkbenchConsistencyService
         WorkbenchMetadata workbench,
         WorktreeMetadata master,
         CancellationToken cancellationToken = default,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        bool allowCompile = false)
     {
         ArgumentNullException.ThrowIfNull(workbench);
         ArgumentNullException.ThrowIfNull(master);
@@ -115,12 +116,26 @@ public sealed class WorkbenchConsistencyService
                 new { repoPath = masterRoot },
                 cancellationToken)
             .ConfigureAwait(false);
+        var devices = LoadDevices(workbench, master);
+        if (allowCompile)
+        {
+            await engineering.CallAsync<object>("save_project", new { }, cancellationToken).ConfigureAwait(false);
+            foreach (var device in devices)
+            {
+                var compile = await engineering.CallAsync<CompileResult>(
+                        "compile_plc",
+                        new { plcName = device.Metadata.PlcName },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (string.Equals(compile.State, "error", StringComparison.OrdinalIgnoreCase))
+                    throw new WorkbenchLifecycleException("PLC_COMPILE_FAILED", $"Automatic PLC compile failed for '{device.Metadata.PlcName}'.");
+            }
+        }
         var checksums = await engineering.CallAsync<PlcChecksumInfo[]>(
                 "get_plc_checksums",
                 new { },
                 cancellationToken)
             .ConfigureAwait(false);
-        var devices = LoadDevices(workbench, master);
         var liveChecksums = devices.ToDictionary(
             item => item.Metadata.DeviceId,
             item => checksums.FirstOrDefault(checksum =>
@@ -172,7 +187,8 @@ public sealed class WorkbenchConsistencyService
                     device.Context,
                     cancellationToken,
                     scanProgress,
-                    device.Metadata.PlcName)
+                    device.Metadata.PlcName,
+                    allowCompile)
                 .ConfigureAwait(false);
             exportProgress?.DeviceCompleted();
         }

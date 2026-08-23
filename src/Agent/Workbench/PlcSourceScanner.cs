@@ -33,7 +33,8 @@ public sealed class PlcSourceScanner
         DeviceContext device,
         CancellationToken cancellationToken = default,
         IOperationProgress? progress = null,
-        string? plcName = null)
+        string? plcName = null,
+        bool allowCompile = false)
     {
         ArgumentNullException.ThrowIfNull(device);
         plcName ??= new DirectoryInfo(device.DeviceRoot).Name;
@@ -41,12 +42,20 @@ public sealed class PlcSourceScanner
         try
         {
             var before = await ReadChecksumAsync(plcName, cancellationToken).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(before.SoftwareChecksum))
+            if (string.IsNullOrWhiteSpace(before.SoftwareChecksum) && allowCompile)
             {
-                throw new ReconciliationException(
-                    "PLC_CHECKSUM_UNAVAILABLE",
-                    $"TIA did not provide a compiled software checksum for PLC '{plcName}'.");
+                progress?.Report($"Compiling PLC '{plcName}' before export...");
+                var compile = await engineering.CallAsync<CompileResult>(
+                        "compile_plc",
+                        new { plcName },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (string.Equals(compile.State, "error", StringComparison.OrdinalIgnoreCase))
+                    throw new WorkbenchLifecycleException("PLC_COMPILE_FAILED", $"Automatic PLC compile failed for '{plcName}'.");
+                before = await ReadChecksumAsync(plcName, cancellationToken).ConfigureAwait(false);
             }
+            if (string.IsNullOrWhiteSpace(before.SoftwareChecksum))
+                throw new ReconciliationException("PLC_CHECKSUM_UNAVAILABLE", $"TIA did not provide a compiled software checksum for PLC '{plcName}'.");
 
             var staged = await stager.StageAsync(
                     device,

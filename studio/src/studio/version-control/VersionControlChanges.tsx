@@ -143,7 +143,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
           onCommitted={onCommitted}
           onBeginOperation={onBeginOperation}
         />
-        {entries.length === 0 ? (
+        {entries.length === 0 && compareSignal === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" data-testid="vc-changes-empty">
             <div className="grid h-10 w-10 place-items-center rounded-full border border-emerald-500/35 bg-emerald-500/10">
               <Check className="h-4.5 w-4.5 text-emerald-500" />
