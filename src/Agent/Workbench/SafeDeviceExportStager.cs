@@ -58,10 +58,11 @@ public sealed class SafeDeviceExportStager
         string plcName,
         CancellationToken cancellationToken = default,
         IOperationProgress? progress = null,
-        bool allowCompile = false) =>
+        bool allowCompile = false,
+        bool forceFullExport = false) =>
         operationLock.RunAsync(
             device,
-            token => StageCoreAsync(device, plcName, token, progress, allowCompile),
+            token => StageCoreAsync(device, plcName, token, progress, allowCompile, forceFullExport),
             cancellationToken);
 
     private async Task<SyncResult[]> StageCoreAsync(
@@ -69,10 +70,11 @@ public sealed class SafeDeviceExportStager
         string plcName,
         CancellationToken cancellationToken,
         IOperationProgress? progress,
-        bool allowCompile)
+        bool allowCompile,
+        bool forceFullExport)
     {
         var attemptedCompile = false;
-        return await StageAttemptAsync(device, plcName, cancellationToken, progress, allowCompile, attemptedCompile)
+        return await StageAttemptAsync(device, plcName, cancellationToken, progress, allowCompile, attemptedCompile, forceFullExport)
             .ConfigureAwait(false);
     }
 
@@ -82,7 +84,8 @@ public sealed class SafeDeviceExportStager
         CancellationToken cancellationToken,
         IOperationProgress? progress,
         bool allowCompile,
-        bool attemptedCompile)
+        bool attemptedCompile,
+        bool forceFullExport)
     {
         progress?.Report(attemptedCompile
             ? "Preparing export staging area after compile..."
@@ -96,6 +99,14 @@ public sealed class SafeDeviceExportStager
         try
         {
             files.CreateDirectory(incoming);
+
+            // For incremental export, seed the incoming directory with the previous staging
+            // so sync_export has a manifest baseline to diff against.
+            if (!forceFullExport && files.DirectoryExists(device.StagingRoot))
+            {
+                CopyDirectoryContents(device.StagingRoot, incoming);
+            }
+
             // TIA cannot create files once a path exceeds the Windows 260-char limit, and the
             // worktree path alone consumes most of that budget on deeply nested PLC groups.
             // Export through a short directory junction that points AT the same incoming dir:
@@ -104,17 +115,18 @@ public sealed class SafeDeviceExportStager
             var outputDir = exportAlias ?? incoming;
             progress?.Report("Exporting PLC source...");
             var progressBridge = progress is null ? null : new McpProgressBridge(progress);
+            var exportTool = forceFullExport ? "rebuild_export" : "sync_export";
             SyncResult[] result;
             try
             {
                 result = engineering is IProgressMcpToolCaller progressCaller
                     ? await progressCaller.CallAsync<SyncResult[]>(
-                        "rebuild_export",
+                        exportTool,
                         new { outputDir, plcName },
                         progressBridge,
                         cancellationToken).ConfigureAwait(false)
                     : await engineering.CallAsync<SyncResult[]>(
-                        "rebuild_export",
+                        exportTool,
                         new { outputDir, plcName },
                         cancellationToken).ConfigureAwait(false);
             }
@@ -160,7 +172,8 @@ public sealed class SafeDeviceExportStager
                             cancellationToken,
                             progress,
                             allowCompile,
-                            attemptedCompile: true)
+                            attemptedCompile: true,
+                            forceFullExport)
                         .ConfigureAwait(false);
                 }
 
@@ -335,6 +348,36 @@ public sealed class SafeDeviceExportStager
         }
 
         files.DeleteDirectory(path);
+    }
+
+    /// <summary>Recursively copies all files and subdirectories from <paramref name="source"/> to
+    /// <paramref name="destination"/>, preserving the directory structure. Used to seed the
+    /// incoming staging directory with the previous baseline so <c>sync_export</c> can perform
+    /// incremental diffs.</summary>
+    private void CopyDirectoryContents(string source, string destination)
+    {
+        if (!files.DirectoryExists(source))
+        {
+            return;
+        }
+
+        files.CreateDirectory(destination);
+        foreach (var entry in files.EnumerateEntries(source))
+        {
+            var name = Path.GetFileName(entry);
+            var destEntry = Path.Combine(destination, name);
+            if (files.DirectoryExists(entry))
+            {
+                if ((files.GetAttributes(entry) & FileAttributes.ReparsePoint) == 0)
+                {
+                    CopyDirectoryContents(entry, destEntry);
+                }
+            }
+            else
+            {
+                File.Copy(entry, destEntry, overwrite: true);
+            }
+        }
     }
 
     private static string BuildIncompleteExportMessage(int failed, SyncResult[] selected)

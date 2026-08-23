@@ -21,7 +21,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         File.WriteAllText(sentinel, "unchanged");
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line", PlcDevices = new[] { "PLC_1" } })
-            .Respond("rebuild_export", new[]
+            .Respond("sync_export", new[]
             {
                 new SyncResult { PlcName = "PLC_1", ExportRoot = context.StagingRoot },
             });
@@ -32,8 +32,8 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
 
         var result = await workflow.RunAsync(context, "PLC_1");
 
-        Assert.Equal(new[] { "get_project_info", "rebuild_export" }, engineering.Calls);
-        var args = engineering.CallArgs["rebuild_export"].Single();
+        Assert.Equal(new[] { "get_project_info", "sync_export" }, engineering.Calls);
+        var args = engineering.CallArgs["sync_export"].Single();
         var outputDir = Property<string>(args, "outputDir");
         Assert.True(
             outputDir.StartsWith(context.DeviceRoot, StringComparison.OrdinalIgnoreCase)
@@ -59,7 +59,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         File.WriteAllText(Path.Combine(context.SourceRoot, "metadata.json"), "{}");
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
-            .Respond("rebuild_export", new[] { new SyncResult { PlcName = "PLC_1" } });
+            .Respond("sync_export", new[] { new SyncResult { PlcName = "PLC_1" } });
         var knowledge = new FakeToolCaller();
         var workflow = new ReadProjectContextWorkflow(
             engineering,
@@ -78,7 +78,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         WriteDeviceMetadata(context, stale: false);
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
-            .Respond("rebuild_export", new[]
+            .Respond("sync_export", new[]
             {
                 new SyncResult { PlcName = "PLC_1", BaselineExisted = true },
             });
@@ -100,7 +100,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         WriteDeviceMetadata(context, stale: true);
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
-            .Respond("rebuild_export", new[]
+            .Respond("sync_export", new[]
             {
                 new SyncResult { PlcName = "PLC_1", BaselineExisted = true },
             });
@@ -122,7 +122,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         WriteDeviceMetadata(context, stale: false);
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
-            .Respond("rebuild_export", new[]
+            .Respond("sync_export", new[]
             {
                 new SyncResult { PlcName = "PLC_1", BaselineExisted = true },
             });
@@ -142,7 +142,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         var context = Context();
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
-            .Respond("rebuild_export", new[]
+            .Respond("sync_export", new[]
             {
                 new SyncResult
                 {
@@ -171,7 +171,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         File.WriteAllText(Path.Combine(context.StagingRoot, "sentinel.txt"), "previous");
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
-            .Respond("rebuild_export", new[]
+            .Respond("sync_export", new[]
             {
                 new SyncResult
                 {
@@ -211,7 +211,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
         var context = Context();
         var engineering = new ManifestExportCaller()
             .Respond("get_project_info", new ProjectInfo { Name = "Line" })
-            .Respond("rebuild_export", new[]
+            .Respond("sync_export", new[]
             {
                 new SyncResult
                 {
@@ -292,7 +292,7 @@ public sealed class ReadProjectContextWorkflowTests : IDisposable
             object args,
             CancellationToken cancellationToken = default)
         {
-            if (tool == "rebuild_export")
+            if (tool == "sync_export" || tool == "rebuild_export")
             {
                 var output = Property<string>(args, "outputDir");
                 Directory.CreateDirectory(output);

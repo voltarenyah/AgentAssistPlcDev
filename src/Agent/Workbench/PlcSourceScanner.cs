@@ -34,7 +34,8 @@ public sealed class PlcSourceScanner
         CancellationToken cancellationToken = default,
         IOperationProgress? progress = null,
         string? plcName = null,
-        bool allowCompile = false)
+        bool allowCompile = false,
+        bool forceFullExport = false)
     {
         ArgumentNullException.ThrowIfNull(device);
         plcName ??= new DirectoryInfo(device.DeviceRoot).Name;
@@ -61,7 +62,9 @@ public sealed class PlcSourceScanner
                     device,
                     plcName,
                     cancellationToken,
-                    progress)
+                    progress,
+                    allowCompile,
+                    forceFullExport)
                 .ConfigureAwait(false);
             var after = await ReadChecksumAsync(plcName, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(before.SoftwareChecksum, after.SoftwareChecksum, StringComparison.Ordinal))

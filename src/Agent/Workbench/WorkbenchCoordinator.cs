@@ -1481,7 +1481,7 @@ public sealed class WorkbenchCoordinator
         bool allowCompile)
     {
         await EnsureActiveProjectMatchesWorktreeAsync(device, token, progress).ConfigureAwait(false);
-        var result = await stager.StageAsync(device, plcName, token, progress, allowCompile).ConfigureAwait(false);
+        var result = await stager.StageAsync(device, plcName, token, progress, allowCompile, forceFullExport: true).ConfigureAwait(false);
         progress?.Report("Preparing refresh preview...");
         return result;
     }
@@ -2290,7 +2290,8 @@ public sealed class WorkbenchCoordinator
         string workbenchId,
         CancellationToken token = default,
         IOperationProgress? progress = null,
-        bool allowCompile = false)
+        bool allowCompile = false,
+        bool forceFullExport = false)
     {
         var workbench = LoadRegisteredWorkbench(workbenchId);
         var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
@@ -2299,7 +2300,7 @@ public sealed class WorkbenchCoordinator
         var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
         var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
         await EnsureMasterProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
-        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile).ConfigureAwait(false);
+        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile, forceFullExport).ConfigureAwait(false);
     }
 
     public WorkbenchConsistencyResult GetComparison(string workbenchId, string comparisonId)
