@@ -397,3 +397,15 @@ checkout and unrelated user changes; the wrapper owns commits, pushes, labels,
 comments, and PR publication while Codex edits only the active issue worktree.
 See [docs/local-codex-worker.md](docs/local-codex-worker.md) for the operational
 trust, monitoring, recovery, and deployment procedures.
+
+## Cost-controlled Codex orchestration
+
+- `codex-workflows` is the project workflow. Use the lightest route: direct Codex for tiny work, `$recipe-task` for focused fixes, `$recipe-implement` for meaningful changes, and staged design/plan/build recipes only when durable design decisions require them.
+- One parent owns delegation. Children must not recursively delegate, create agent trees, or silently expand the approved scope.
+- Default maximum is 3 concurrently active subagents (4 only for clearly beneficial independent read-heavy work). Prefer <=6 fresh subagent contexts per request; 8 is the hard default ceiling. Stop and serialize, combine, reuse, or escalate before exceeding it.
+- Prefer read parallelism and serialize overlapping write work. Reuse an existing executor/reviewer context for corrections instead of respawning it.
+- Default lifecycle is implement -> focused tests -> one scoped review -> blocking fixes -> targeted verification. A third review cycle requires concrete evidence of an unresolved test, security issue, review finding, or material implementation change.
+- Reviews inspect the changed diff, acceptance criteria, affected execution paths, correctness/regression/security, and meaningful missing tests. Do not reopen for style-only or unrelated cleanup.
+- The parent/master should normally run as `gpt-5.6-terra` with medium reasoning; child TOMLs must pin their own tier so they do not inherit the parent model.
+- Luna Medium handles routine analysis, execution, testing, and mechanical verification. Terra Medium/High handles selective design, review, security, and difficult judgment. `expert-solver` is the only Sol role and is advisory-only, read-only, and escalation-only.
+- Escalate Luna -> Terra -> Sol only for unresolved root cause, contradictory evidence, non-obvious cross-layer state/lifecycle behavior, high-risk design ambiguity, or repeated failed attempts with an unknown cause. Distill the problem, evidence, ruled-out hypotheses, constraints, and exact decision before invoking Sol. Never escalate merely because work is large, has many files, or failed once.
