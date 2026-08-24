@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Document>
+  <DocumentInfo><Created>keep</Created></DocumentInfo>
+  <SW.Blocks.OB ID="B1">
+    <ObjectList>
+      <SW.Blocks.CompileUnit ID="N1" CompositionName="CompileUnits">
+        <ObjectList>
+          <MultilingualText ID="T1" CompositionName="Title">
+            <ObjectList><MultilingualTextItem ID="TI1" CompositionName="Items"><AttributeList><Culture>en-US</Culture><Text>Old title</Text></AttributeList></MultilingualTextItem></ObjectList>
+          </MultilingualText>
+          <MultilingualText ID="C1" CompositionName="Comment">
+            <ObjectList><MultilingualTextItem ID="CI1" CompositionName="Items"><AttributeList><Culture>en-US</Culture><Text>Old comment</Text></AttributeList></MultilingualTextItem></ObjectList>
+          </MultilingualText>
+          <Other ID="keep"><Value>untouched</Value></Other>
+        </ObjectList>
+      </SW.Blocks.CompileUnit>
+    </ObjectList>
+  </SW.Blocks.OB>
+</Document>
