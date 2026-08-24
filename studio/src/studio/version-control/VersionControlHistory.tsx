@@ -44,7 +44,7 @@ const formatTime = (value: string) => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-const fileName = (value: string) => value.replace(/\\/g, '/').split('/').pop() ?? value
+const fileName = (value: string) => (value.replace(/\\/g, '/').split('/').pop() ?? value).replace(/\.xml$/i, '')
 
 // TIA checksums arrive as "PLC_1:AA BB; PLC_2:CC DD" — one left-aligned row
 // per device so multi-device projects stay scannable.
@@ -185,16 +185,11 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                     {item.kind === 'commit' ? (
                       <>
                         <div className="mb-1.5 text-[10px] text-muted-foreground"><b className="font-medium text-foreground">{item.author}</b> · {formatTime(item.timestamp)}</div>
-                        <div className="mb-1.5 space-y-1" data-testid="commit-evidence">
-                          <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-wide text-muted-foreground">
-                            <span>Git commit</span>
-                            <span className="rounded bg-sky-500/10 px-1.5 py-0.5 font-mono text-[10px] font-bold normal-case tracking-normal text-sky-500" data-testid="git-commit-badge" title={`Git commit ${item.sha}`}>{item.sha.slice(0, 7)}</span>
-                          </div>
-                          {item.tiaChecksum && <div className="text-[9px] uppercase tracking-wide text-muted-foreground" data-testid="tia-checksum-label">TIA checksum</div>}
-                        </div>
-                        <div className="mb-1.5 flex flex-wrap gap-1">
+                        <div className="mb-1.5 flex flex-wrap gap-1" data-testid="commit-badges">
+                          <span className="rounded bg-sky-500/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-sky-500" data-testid="git-commit-badge" title={`Git commit ${item.sha}`}>{item.sha.slice(0, 7)}</span>
                           {item.svnRevision !== null && <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-violet-400" title="Linked SVN revision">r{item.svnRevision}</span>}
                         </div>
+                        {item.tiaChecksum && <div className="mb-1 text-[9px] uppercase tracking-wide text-muted-foreground" data-testid="tia-checksum-label">TIA checksum</div>}
                         {item.tiaChecksum && <div className="mb-1.5" data-testid="tia-checksum-section"><ChecksumRows value={item.tiaChecksum} /></div>}
                         <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Changed files · {item.files.length}</div>
                         {item.files.map(file => (
@@ -239,7 +234,7 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                         <div className="mb-1.5 text-[10px] text-muted-foreground"><b className="font-medium text-foreground">SVN savepoint</b> · {formatTime(item.timestamp)}</div>
                         <div className="mb-1.5 flex flex-wrap gap-1">
                           <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-violet-400">r{item.revision}</span>
-                          <span className="rounded bg-sky-500/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-sky-500" title={`Linked git commit ${item.gitCommitSha}`}>git {item.gitCommitSha.slice(0, 7)}</span>
+                          <span className="rounded bg-sky-500/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-sky-500" title={`Linked git commit ${item.gitCommitSha}`}>git {item.gitCommitSha.slice(0, 7)}</span>
                         </div>
                         {item.tiaChecksum && <div className="mb-1.5"><ChecksumRows value={item.tiaChecksum} /></div>}
                         <div className="text-[9px] italic text-muted-foreground">Right-click to export this saved project</div>
