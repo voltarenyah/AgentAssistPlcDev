@@ -13,7 +13,9 @@ public sealed class PlcDocument
         _originalTree = originalTree;
         SourceName = sourceName; Objects = objects; RawValues = rawValues; Children = children;
         EncodingName = encodingName; HasBom = hasBom; UsesCrLf = usesCrLf;
-        _networks = objects.SelectMany(FindNetworks).Select(o => new PlcNetwork(this, o)).ToList().AsReadOnly();
+        var networkObjects = objects.SelectMany(FindNetworks).ToList();
+        _networks = networkObjects.Select((o, i) => new PlcNetwork(this, o,
+            networkObjects.Take(i).Count(previous => previous.Id == o.Id))).ToList().AsReadOnly();
     }
     private readonly byte[] OriginalBytes;
     private readonly XDocument _originalTree;
@@ -34,14 +36,23 @@ public sealed class PlcDocument
         if (network is null || string.IsNullOrWhiteSpace(field) || (field != "Title" && field != "Comment") ||
             string.IsNullOrWhiteSpace(culture) || text is null)
             throw new PlcXmlModelException("PLCXML_MUTATION_INVALID", "Mutation arguments are invalid.", SourceName, location: network?.Location);
-        var target = FindNetwork(_originalTree, network.Id);
-        var composition = FindCompositions(target, field);
+        XElement target;
+        XElement composition;
+        try
+        {
+            target = FindNetwork(_originalTree, network.Id, network.Occurrence, network.Location.Path);
+            composition = FindCompositions(target, field, network.Location.Path);
+        }
+        catch (PlcXmlModelException ex) when (ex.SourceName is null || ex.Location is null)
+        {
+            throw new PlcXmlModelException(ex.Code, ex.Message, SourceName, ex, network.Location);
+        }
         var items = FindCultureItems(composition, culture);
         if (items.Count == 0)
             throw new PlcXmlModelException("PLCXML_TEXT_TARGET_NOT_FOUND", $"No {field} text exists for culture '{culture}'.", SourceName, location: network.Location);
         if (items.Count > 1)
             throw new PlcXmlModelException("PLCXML_TEXT_TARGET_AMBIGUOUS", $"More than one {field} text exists for culture '{culture}'.", SourceName, location: network.Location);
-        var key = new MutationKey(network.Id!, field, culture);
+        var key = new MutationKey(network.Id!, network.Occurrence, field, culture, network.Location.Path);
         if (_mutations.Any(m => m.Key.Equals(key)))
             throw new PlcXmlModelException("PLCXML_TEXT_TARGET_AMBIGUOUS", "The same text target was already mutated.", SourceName, location: network.Location);
         if (items[0].Elements().FirstOrDefault(e => e.Name.LocalName == "AttributeList")?.Elements()
@@ -59,8 +70,8 @@ public sealed class PlcDocument
             var clone = new XDocument(_originalTree);
             foreach (var mutation in _mutations)
             {
-                var network = FindNetwork(clone, mutation.Key.NetworkId);
-                var composition = FindCompositions(network, mutation.Key.Field);
+                var network = FindNetwork(clone, mutation.Key.NetworkId, mutation.Key.Occurrence, mutation.Key.ModelPath);
+                var composition = FindCompositions(network, mutation.Key.Field, mutation.Key.ModelPath);
                 var item = FindCultureItems(composition, mutation.Key.Culture).Single();
                 var text = item.Elements().First(e => e.Name.LocalName == "AttributeList").Elements()
                     .First(e => e.Name.LocalName == "Text");
@@ -96,26 +107,24 @@ public sealed class PlcDocument
             ? new[] { value }
             : value.Compositions.SelectMany(FindNetworks);
 
-    private static XElement FindNetwork(XDocument tree, string? id)
+    private static XElement FindNetwork(XDocument tree, string? id, int occurrence, string modelPath)
     {
         var matches = tree.Descendants().Where(e => e.Name.LocalName == "SW.Blocks.CompileUnit" &&
             (string?)e.Attribute("ID") == id).ToList();
-        if (matches.Count == 0)
-            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_NOT_FOUND", $"Network '{id}' was not found.");
-        if (matches.Count > 1)
-            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_AMBIGUOUS", $"Network '{id}' is ambiguous.");
-        return matches[0];
+        if (matches.Count <= occurrence)
+            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_NOT_FOUND", $"Network '{id}' at {modelPath} was not found.");
+        return matches[occurrence];
     }
 
-    private static XElement FindCompositions(XElement network, string field)
+    private static XElement FindCompositions(XElement network, string field, string modelPath)
     {
         var list = network.Elements().FirstOrDefault(e => e.Name.LocalName == "ObjectList");
         var matches = list?.Elements().Where(e => e.Name.LocalName == "MultilingualText" &&
             (string?)e.Attribute("CompositionName") == field).ToList() ?? new List<XElement>();
         if (matches.Count == 0)
-            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_NOT_FOUND", $"Network has no {field} composition.");
+            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_NOT_FOUND", $"Network at {modelPath} has no {field} composition.");
         if (matches.Count > 1)
-            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_AMBIGUOUS", $"Network has multiple {field} compositions.");
+            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_AMBIGUOUS", $"Network at {modelPath} has multiple {field} compositions.");
         return matches[0];
     }
 
@@ -135,6 +144,6 @@ public sealed class PlcDocument
         try { return Encoding.GetEncoding(name); } catch (ArgumentException) { return new UTF8Encoding(bom); }
     }
 
-    private readonly record struct MutationKey(string NetworkId, string Field, string Culture);
+    private readonly record struct MutationKey(string NetworkId, int Occurrence, string Field, string Culture, string ModelPath);
     private sealed record TextMutation(MutationKey Key, string Text);
 }

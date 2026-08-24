@@ -2,14 +2,16 @@ namespace PlcXml.Model;
 
 public sealed class PlcNetwork
 {
-    internal PlcNetwork(PlcDocument document, PlcObject source)
+    internal PlcNetwork(PlcDocument document, PlcObject source, int occurrence)
     {
         Document = document;
         Source = source;
+        Occurrence = occurrence;
     }
 
     private PlcDocument Document { get; }
     internal PlcObject Source { get; }
+    internal int Occurrence { get; }
     public string? Id => Source.Id;
     public PlcLocation Location => Source.Location;
 

@@ -67,6 +67,37 @@ public sealed class PlcMutationTests
         Assert.Equal(source, document.SerializeOriginal());
     }
 
+    [Fact]
+    public void Duplicate_network_ids_resolve_by_selected_model_occurrence()
+    {
+        var xml = "<Document><SW.Blocks.OB ID=\"B\"><ObjectList>" +
+            NetworkXml("same", "first") + NetworkXml("same", "second") +
+            "</ObjectList></SW.Blocks.OB></Document>";
+        var document = PlcXmlParser.Parse(Encoding.UTF8.GetBytes(xml), "duplicate.xml");
+
+        Assert.Equal(2, document.Networks.Count);
+        document.Networks[1].SetTitleText("en-US", "changed");
+
+        var resultXml = Encoding.UTF8.GetString(document.SerializeMutated());
+        Assert.Contains("<Text>first</Text>", resultXml);
+        Assert.Contains("<Text>changed</Text>", resultXml);
+    }
+
+    [Fact]
+    public void Missing_target_diagnostic_includes_source_and_model_location()
+    {
+        var document = PlcXmlParser.Parse(Encoding.UTF8.GetBytes("<Document><SW.Blocks.OB ID=\"B\"><ObjectList>" +
+            NetworkXml("N1", "first") + "</ObjectList></SW.Blocks.OB></Document>"), "missing.xml");
+        var error = Assert.Throws<PlcXmlModelException>(() => document.Networks[0].SetCommentText("de-DE", "x"));
+        Assert.Equal("missing.xml", error.SourceName);
+        Assert.Contains(document.Networks[0].Location.Path, error.Message);
+    }
+
+    private static string NetworkXml(string id, string title) =>
+        $"<SW.Blocks.CompileUnit ID=\"{id}\" CompositionName=\"CompileUnits\"><ObjectList>" +
+        $"<MultilingualText ID=\"{id}T\" CompositionName=\"Title\"><ObjectList><MultilingualTextItem ID=\"{id}I\"><AttributeList><Culture>en-US</Culture><Text>{title}</Text></AttributeList></MultilingualTextItem></ObjectList></MultilingualText>" +
+        "</ObjectList></SW.Blocks.CompileUnit>";
+
     private static void AssertOnlyTextDelta(XDocument source, XDocument result, string field, string culture, string replacement)
     {
         Assert.NotNull(source.Root);
