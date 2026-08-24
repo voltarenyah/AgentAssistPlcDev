@@ -27,7 +27,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task TimelineMarksOnlyRevisionStateCommitsWithChecksumAndSvnLink()
+    public async Task TimelineUsesOnlyTaggedCommitStateForChecksumAndKeepsSvnLink()
     {
         var fixture = Fixture.Create(root);
         var workbench = RegisterTimelineWorkbench(fixture);
@@ -66,6 +66,22 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     }
                     """,
             })
+            .Respond("vc_commit_state_get", args =>
+                Property<string>(args, "commitSha") == "git-only"
+                    ? new ConsistencyValidationEvidence
+                    {
+                        CommitSha = "git-only",
+                        Devices =
+                        [
+                            new ConsistencyValidationDevice
+                            {
+                                DeviceId = "device-1",
+                                PlcName = "PLC_1",
+                                ProjectChecksum = "tag-checksum-1",
+                            },
+                        ],
+                    }
+                    : null!)
             .Respond("svn_log", new TimelineSvnLogResult
             {
                 Entries =
@@ -91,9 +107,9 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         var result = await coordinator.ListVersionControlTimelineAsync("wb-1", "wt-1");
 
-        Assert.Null(result.GitCommits[0].TiaChecksum);
+        Assert.Equal("PLC_1:tag-checksum-1", result.GitCommits[0].TiaChecksum);
         Assert.Null(result.GitCommits[0].SvnRevision);
-        Assert.Equal("PLC_1:checksum-1", result.GitCommits[1].TiaChecksum);
+        Assert.Null(result.GitCommits[1].TiaChecksum);
         Assert.Equal(184, result.GitCommits[1].SvnRevision);
         var svn = Assert.Single(result.SvnRevisions);
         Assert.Equal(184, svn.Revision);
@@ -644,6 +660,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "version:svn_checkout",
                 "version:svn_commit",
                 "version:vc_commit_selected",
+                "version:vc_commit_state_create",
             },
             calls);
         Assert.Equal(
@@ -702,6 +719,17 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Contains("devices/PLC_1/source/Blocks/Main.xml", committedPaths);
         Assert.Contains("devices/PLC_2/source/Blocks/Main.xml", committedPaths);
         Assert.Contains("hardware/project.aml", committedPaths);
+        var stateArgs = versionControl.CallArgs["vc_commit_state_create"].Single();
+        Assert.Equal("baseline-sha", Property<string>(stateArgs, "commitSha"));
+        Assert.Equal(result.Workbench.WorkbenchId, Property<string>(stateArgs, "workbenchId"));
+        var stateDevices = Property<object[]>(stateArgs, "devices");
+        Assert.Equal(2, stateDevices.Length);
+        Assert.Contains(stateDevices, item =>
+            Property<string>(item, "plcName") == "PLC_1"
+            && Property<string>(item, "projectChecksum") == "checksum-PLC_1");
+        Assert.Contains(stateDevices, item =>
+            Property<string>(item, "plcName") == "PLC_2"
+            && Property<string>(item, "projectChecksum") == "checksum-PLC_2");
         Assert.True(File.Exists(Path.Combine(result.Workbench.RootPath, "worktrees", "master", "hardware", "project.aml")));
         Assert.All(result.Devices, device =>
         {
@@ -856,7 +884,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit",
-                "vc_commit_selected", "vc_add_worktree",
+                "vc_commit_selected", "vc_commit_state_create", "vc_add_worktree",
             },
             versionControl.Calls);
     }
@@ -897,7 +925,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit",
-                "vc_commit_selected", "vc_add_worktree", "vc_remove_worktree",
+                "vc_commit_selected", "vc_commit_state_create", "vc_add_worktree", "vc_remove_worktree",
             },
             versionControl.Calls);
         var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
@@ -937,7 +965,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit",
-                "vc_commit_selected", "vc_add_worktree", "vc_remove_worktree",
+                "vc_commit_selected", "vc_commit_state_create", "vc_add_worktree", "vc_remove_worktree",
             },
             versionControl.Calls);
         var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
@@ -1116,6 +1144,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "version:svn_checkout",
                 "version:svn_commit",
                 "version:vc_commit_selected",
+                "version:vc_commit_state_create",
             },
             calls);
         var managedPath = Assert.IsType<string>(result.Workbench.ManagedTiaProjectPath);
@@ -2352,7 +2381,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             .Respond("vc_commit_selected", new WorkbenchCommitResult(
                 "baseline-sha",
                 "Initial PLC source baseline",
-                new[] { EngineeringStateWriter.RelativePath }));
+                new[] { EngineeringStateWriter.RelativePath }))
+            .Respond("vc_commit_state_create", new object());
 
     private static object WriteCreateExport(object args)
     {
