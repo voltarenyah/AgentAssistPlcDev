@@ -291,6 +291,9 @@ public sealed class DeviceReconcilerTests : IDisposable
         Assert.Equal(
             "OrderNumber:6ES7 511-1AK02-0AB0/V2.9",
             device.GetProperty("typeIdentifier").GetString());
+        Assert.Equal(
+            fixture.Context.SourceRoot,
+            manifest.RootElement.GetProperty("exportRoot").GetString());
     }
 
     [Fact]

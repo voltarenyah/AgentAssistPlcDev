@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { GitCompare, Loader2, ShieldAlert, X } from 'lucide-react'
+import { Loader2, ShieldAlert } from 'lucide-react'
 import * as api from '@/api/client'
 import FeatureValidationDialog from './FeatureValidationDialog'
 
@@ -26,7 +26,6 @@ const displayError = (error: unknown) => error instanceof Error ? error.message 
 
 export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation }: Props) {
   const [started, setStarted] = useState(false)
-  const [dismissed, setDismissed] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
@@ -60,7 +59,6 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     if (signal === 0 || signal === handledSignal.current) return
     handledSignal.current = signal
     setStarted(true)
-    setDismissed(false)
     void compare()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signal])
@@ -100,7 +98,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     finally { setBusy(false) }
   }
 
-  if (!started || dismissed) return null
+  if (!started) return null
 
   const hardwareDiffers = comparison?.hardware != null && comparison.hardware.state !== 'in-sync'
   const differences = comparison?.differences ?? []
@@ -110,16 +108,8 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   if (cleanComparison) return null
 
   return (
-    <div className="shrink-0 border-b" style={{ borderColor: 'var(--border)' }} data-testid="vc-compare-result">
-      <div className="flex items-center gap-1.5 px-3.5 pb-1 pt-3 text-[11px] font-bold uppercase tracking-wide">
-        <GitCompare className="h-3.5 w-3.5 text-muted-foreground" />
-        Compare with TIA
-        <button type="button" className="icon-button ml-auto" title="Dismiss comparison" aria-label="Dismiss comparison" onClick={() => setDismissed(true)}>
-          <X className="h-3 w-3" />
-        </button>
-      </div>
-
-      <div className="px-3.5 pb-3">
+    <div className="shrink-0" data-testid="vc-compare-result">
+      <div className="px-2.5 pb-2.5">
         {busy && !comparison && (
           <div className="flex items-center gap-2 py-2 text-[10px] text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Comparing the connected TIA project with master...
@@ -173,9 +163,6 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
               </div>
             ) : (
               <>
-                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-[10px] text-amber-600">
-                  {comparison.state === 'Unavailable' ? 'TIA checksum unavailable.' : 'TIA differs from master. Select the source items to include in the global commit.'}
-                </div>
                 {differences.map(diff => {
                   const path = diff.relativePath
                   const disabled = !diff.supported || diff.kind === 'Deleted' || !path

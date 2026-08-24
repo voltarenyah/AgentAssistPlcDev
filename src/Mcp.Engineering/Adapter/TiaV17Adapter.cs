@@ -724,8 +724,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var results = new List<SyncResult>();
             foreach (var plc in plcs)
             {
-                // Per-device export-root subfolder (same rule as the export tools).
-                var dir = Path.Combine(outputDir, Sanitize(plc.Name));
+                // Match rebuild_export: a selected PLC is written directly to the supplied
+                // device export root. Only a project-wide sync uses per-device subfolders.
+                // Keeping this layout stable is required when the caller seeds an incremental
+                // export with the existing device staging tree.
+                var dir = plcName is null
+                    ? Path.Combine(outputDir, Sanitize(plc.Name))
+                    : outputDir;
                 results.Add(SyncExportForPlc(plc, dir, progress));
             }
             // Update project metadata with the complete device list discovered.

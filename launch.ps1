@@ -26,6 +26,63 @@ The LangGraph App Assistant is always started for development launches.
 
 $root = $PSScriptRoot
 
+function Test-StudioDependenciesReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StudioRoot
+    )
+
+    $packageLock = Join-Path $StudioRoot "package-lock.json"
+    $installedLock = Join-Path $StudioRoot "node_modules\.package-lock.json"
+    $viteCommand = Join-Path $StudioRoot "node_modules\.bin\vite.cmd"
+    if ((-not (Test-Path -LiteralPath $packageLock -PathType Leaf)) -or
+        (-not (Test-Path -LiteralPath $installedLock -PathType Leaf)) -or
+        (-not (Test-Path -LiteralPath $viteCommand -PathType Leaf))) {
+        return $false
+    }
+
+    try {
+        $checkedIn = Get-Content -Raw -LiteralPath $packageLock | ConvertFrom-Json -AsHashtable
+        $installed = Get-Content -Raw -LiteralPath $installedLock | ConvertFrom-Json -AsHashtable
+        foreach ($property in @("name", "lockfileVersion")) {
+            if ($checkedIn[$property] -ne $installed[$property]) {
+                return $false
+            }
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Install-StudioDependenciesIfNeeded {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StudioRoot
+    )
+
+    if (Test-StudioDependenciesReady -StudioRoot $StudioRoot) {
+        return
+    }
+
+    Write-Host ">>> Installing Studio dependencies (npm ci)..." -ForegroundColor Cyan
+    Push-Location $StudioRoot
+    try {
+        & npm.cmd ci --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "!!! Studio dependency installation failed." -ForegroundColor Red
+            exit 1
+        }
+    } finally {
+        Pop-Location
+    }
+
+    if (-not (Test-StudioDependenciesReady -StudioRoot $StudioRoot)) {
+        Write-Host "!!! Studio dependencies are still incomplete after npm ci." -ForegroundColor Red
+        exit 1
+    }
+}
+
 # 1. Kill lingering processes from the previous run (unless flagged off)
 #    Must happen BEFORE build to release locked binaries.
 if (-not $NoKill) {
@@ -262,6 +319,7 @@ $env:APP_ASSISTANT_DATA_DIR = $assistantDataDir
 # 5. Launch Studio Vite dev server in a new window
 Write-Host ">>> Starting Studio (port 5173)..." -ForegroundColor Cyan
 $studioRoot = Join-Path $root "studio"
+Install-StudioDependenciesIfNeeded -StudioRoot $studioRoot
 Start-Process `
     -WindowStyle Normal `
     -WorkingDirectory $studioRoot `

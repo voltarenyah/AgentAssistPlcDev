@@ -76,10 +76,21 @@ describe('VersionControlHistory', () => {
     const detail = host.querySelector('[data-testid="timeline-detail"]')!
     expect(detail.textContent).not.toContain('TIA validated')
     expect(detail.textContent).toContain('r4')
-    expect(detail.textContent).toContain('Git commit: abcdef1234567890')
-    expect(detail.textContent).toContain('TIA checksum:')
+    expect(detail.textContent).toContain('abcdef1')
+    expect(detail.textContent).not.toContain('abcdef1234567890')
+    expect(detail.textContent).toContain('TIA checksum')
     expect(detail.textContent).toContain('B3 35 56 49')
-    expect(detail.textContent).toContain('devices/PLC_1/source/Blocks/Main.xml')
+    expect(detail.textContent).toContain('Main')
+    expect(detail.textContent).not.toContain('Main.xml')
+    expect(detail.textContent).not.toContain('devices/PLC_1/source/Blocks/Main.xml')
+    expect(detail.querySelector('[data-testid="git-commit-badge"]')?.textContent).toBe('abcdef1')
+    expect(detail.textContent).not.toContain('Git commit')
+    expect(detail.querySelector('[data-testid="commit-badges"]')?.textContent).toContain('r4')
+    const checksumLabel = detail.querySelector('[data-testid="tia-checksum-label"]')!
+    const checksumSection = detail.querySelector('[data-testid="tia-checksum-section"]')!
+    const badges = detail.querySelector('[data-testid="commit-badges"]')!
+    expect(badges.compareDocumentPosition(checksumLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(checksumLabel.compareDocumentPosition(checksumSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('creates a rollback feature from selected files instead of restoring master', async () => {

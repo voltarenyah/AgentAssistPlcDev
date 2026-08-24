@@ -84,7 +84,8 @@ describe('VersionControlCompare (inline)', () => {
     expect(compare).toHaveBeenCalledTimes(1)
     expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
     expect(host.textContent).toContain('PLC_1 · Main')
-    expect(host.textContent).toContain('TIA differs from master')
+    expect(host.textContent).toContain('PLC_1 · Main')
+    expect(host.textContent).not.toContain('TIA differs from master')
   })
 
   it('asks before retrying a missing-checksum comparison with automatic compile and save', async () => {
@@ -99,7 +100,8 @@ describe('VersionControlCompare (inline)', () => {
     await click(host.querySelector('[aria-label="Compile and save in TIA, then compare"]')!)
 
     expect(compare).toHaveBeenNthCalledWith(2, 'wb-1', undefined, true)
-    expect(host.textContent).toContain('TIA differs from master')
+    expect(host.textContent).toContain('PLC_1 · Main')
+    expect(host.textContent).not.toContain('TIA differs from master')
   })
 
   it('does not offer a per-selection push-to-TIA action', async () => {
@@ -184,12 +186,4 @@ describe('VersionControlCompare (inline)', () => {
     expect(overwrite).toHaveBeenCalledWith('wb-1', 'wt-1', true, undefined, 'Add safety relay')
   })
 
-  it('dismisses the result section', async () => {
-    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
-    const { host } = await render({ signal: 1 })
-    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
-
-    await click(host.querySelector('button[aria-label="Dismiss comparison"]')!)
-    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
-  })
 })

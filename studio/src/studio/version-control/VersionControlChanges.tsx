@@ -210,19 +210,6 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
               </div>
             </div>
 
-            <VersionControlCompare
-              workbenchId={workbenchId}
-              worktreeId={worktreeId}
-              branch={branch}
-              signal={compareSignal}
-              commitMessage={message}
-              onSelectionChanged={(comparisonId, paths) => setTiaSelection(comparisonId && paths.length > 0 ? { comparisonId, paths } : null)}
-              onComparisonStateChanged={setTiaHasDifferences}
-              selectionResetSignal={tiaSelectionResetSignal}
-              onCommitted={onCommitted}
-              onBeginOperation={onBeginOperation}
-            />
-
             {(entries.length > 0 || tiaHasDifferences !== false) && (
               <div className="flex items-center gap-1.5 px-3.5 pb-1.5 pt-3.5 text-[11px] font-bold uppercase tracking-wide">
                 <span>Changes</span>
@@ -236,6 +223,19 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                 </button>
               </div>
             )}
+
+            <VersionControlCompare
+              workbenchId={workbenchId}
+              worktreeId={worktreeId}
+              branch={branch}
+              signal={compareSignal}
+              commitMessage={message}
+              onSelectionChanged={(comparisonId, paths) => setTiaSelection(comparisonId && paths.length > 0 ? { comparisonId, paths } : null)}
+              onComparisonStateChanged={setTiaHasDifferences}
+              selectionResetSignal={tiaSelectionResetSignal}
+              onCommitted={onCommitted}
+              onBeginOperation={onBeginOperation}
+            />
 
             <div className="px-2.5 pb-2.5">
               {groups.map(group => {
