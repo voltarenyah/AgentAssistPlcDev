@@ -99,12 +99,7 @@ public static class PlcXmlParser
             return null;
         }
 
-        // The network source wrapper is the usual envelope, while accepting the
-        // qualified payload itself keeps dispatch exact for generic direct values.
-        if (value.Name == FlgNetV4) return ParseLadder(value);
-        if (value.Name == StructuredTextV3) return ParseStructuredText(value);
-
-        if (value.Name.LocalName != "NetworkSource") return null;
+        if (value.Name != "NetworkSource") return null;
         var payload = value.Elements().SingleOrDefault(e => e.Name == FlgNetV4 || e.Name == StructuredTextV3);
         if (value.Elements().Count() != 1 || payload is null) return null;
         return payload.Name == FlgNetV4 ? ParseLadder(payload) : ParseStructuredText(payload);
@@ -121,15 +116,15 @@ public static class PlcXmlParser
         var typed = new List<PlcInterfaceSection>(); var raw = new List<PlcRawValue>();
         foreach (var child in sections.Elements())
         {
-            if (child.Name.LocalName != "Section") { raw.Add(new PlcRawValue(child)); continue; }
+            if (child.Name != InterfaceNs + "Section") { raw.Add(new PlcRawValue(child)); continue; }
             var members = new List<PlcInterfaceMember>(); var sectionRaw = new List<PlcRawValue>();
             foreach (var member in child.Elements())
             {
-                if (member.Name.LocalName == "Member")
+                if (member.Name == InterfaceNs + "Member")
                 {
                     var comment = member.Elements().FirstOrDefault(e => e.Name.LocalName == "Comment")?.Value;
                     members.Add(new PlcInterfaceMember(AttributesOf(member), member.Elements()
-                        .Where(e => e.Name.LocalName != "Comment" && e.Name.LocalName != "AttributeList")
+                        .Where(e => e.Name.LocalName != "Comment")
                         .Select(e => new PlcRawValue(e)), comment));
                 }
                 else sectionRaw.Add(new PlcRawValue(member));
@@ -145,23 +140,24 @@ public static class PlcXmlParser
         var wires = new List<LadderWire>(); var raw = new List<RawFlgNode>();
         foreach (var child in flgNet.Elements())
         {
-            if (child.Name.LocalName == "Parts")
+            if (child.Name == FlgNetV4.Namespace + "Parts")
             {
                 foreach (var node in child.Elements())
                 {
-                    switch (node.Name.LocalName)
+                    switch (node.Name)
                     {
-                        case "Access": accesses.Add(new LadderAccess(node)); break;
-                        case "Part": parts.Add(new LadderPart(node)); break;
-                        case "Call": calls.Add(new LadderCall(node)); break;
+                        case var name when name == FlgNetV4.Namespace + "Access": accesses.Add(new LadderAccess(node)); break;
+                        case var name when name == FlgNetV4.Namespace + "Part": parts.Add(new LadderPart(node)); break;
+                        case var name when name == FlgNetV4.Namespace + "Call": calls.Add(new LadderCall(node)); break;
                         default: raw.Add(new RawFlgNode(node)); break;
                     }
                 }
             }
-            else if (child.Name.LocalName == "Wires")
+            else if (child.Name == FlgNetV4.Namespace + "Wires")
             {
                 foreach (var node in child.Elements())
-                    if (node.Name.LocalName is "Powerrail" or "NameCon" or "IdentCon" or "OpenCon") wires.Add(new LadderWire(node));
+                    if (node.Name == FlgNetV4.Namespace + "Powerrail" || node.Name == FlgNetV4.Namespace + "NameCon" ||
+                        node.Name == FlgNetV4.Namespace + "IdentCon" || node.Name == FlgNetV4.Namespace + "OpenCon") wires.Add(new LadderWire(node));
                     else raw.Add(new RawFlgNode(node));
             }
             else raw.Add(new RawFlgNode(child));
@@ -175,8 +171,10 @@ public static class PlcXmlParser
         foreach (var child in structuredText.Elements())
             entries.Add(child.Name.LocalName switch
             {
-                "Token" => new StToken(child), "Blank" => new StBlank(child), "NewLine" => new StNewLine(child),
-                "Access" => new StAccess(child), _ => new StRaw(child)
+                "Token" when child.Name.Namespace == StructuredTextV3.Namespace => new StToken(child),
+                "Blank" when child.Name.Namespace == StructuredTextV3.Namespace => new StBlank(child),
+                "NewLine" when child.Name.Namespace == StructuredTextV3.Namespace => new StNewLine(child),
+                "Access" when child.Name.Namespace == StructuredTextV3.Namespace => new StAccess(child), _ => new StRaw(child)
             });
         return new StructuredTextNetwork(entries);
     }

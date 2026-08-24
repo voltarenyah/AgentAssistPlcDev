@@ -22,10 +22,11 @@ public sealed class PlcTypedPayloadTests
     [Fact]
     public void Supported_fixture_shapes_expose_interface_ladder_and_structured_text_payloads()
     {
-        var interfaceDocument = Parse("<Document><SW.Blocks.OB><AttributeList><Interface><Sections xmlns=\"http://www.siemens.com/automation/Openness/SW/Interface/v5\"><Section Name=\"Input\"><Member Name=\"Start\" Datatype=\"Bool\" /></Section></Sections></Interface></AttributeList></SW.Blocks.OB></Document>");
+        var interfaceDocument = Parse("<Document><SW.Blocks.OB><AttributeList><Interface><Sections xmlns=\"http://www.siemens.com/automation/Openness/SW/Interface/v5\"><Section Name=\"Input\"><Member Name=\"Start\" Datatype=\"Bool\"><AttributeList><Vendor /></AttributeList></Member></Section></Sections></Interface></AttributeList></SW.Blocks.OB></Document>");
         var plcInterface = Assert.IsType<PlcInterface>(Assert.Single(Assert.Single(interfaceDocument.Objects).Attributes).Payload);
         Assert.Equal("Input", Assert.Single(plcInterface.Sections).Name);
         Assert.Equal("Start", Assert.Single(Assert.Single(plcInterface.Sections).Members).Name);
+        Assert.Equal("AttributeList", Assert.Single(Assert.Single(Assert.Single(plcInterface.Sections).Members).RawValues).Name);
 
         var ladderDocument = Parse("<Document><SW.Blocks.OB><AttributeList><NetworkSource><FlgNet xmlns=\"http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4\"><Parts><Access Scope=\"LocalVariable\" /><Part Name=\"Contact\" /></Parts><Wires><Powerrail /><NameCon /></Wires></FlgNet></NetworkSource></AttributeList></SW.Blocks.OB></Document>");
         var ladder = Assert.IsType<LadderNetwork>(Assert.Single(Assert.Single(ladderDocument.Objects).Attributes).Payload);
@@ -46,6 +47,16 @@ public sealed class PlcTypedPayloadTests
         var typed = Parse("<Document><SW.Blocks.OB><AttributeList><NetworkSource><StructuredText xmlns=\"http://www.siemens.com/automation/Openness/SW/NetworkSource/StructuredText/v3\"><Token Text=\"x\" /><Vendor /><Blank Num=\"1\" /></StructuredText></NetworkSource></AttributeList></SW.Blocks.OB></Document>");
         var entries = Assert.IsType<StructuredTextNetwork>(Assert.Single(Assert.Single(typed.Objects).Attributes).Payload).Entries;
         Assert.Collection(entries, e => Assert.IsType<StToken>(e), e => Assert.IsType<StRaw>(e), e => Assert.IsType<StBlank>(e));
+
+        var foreign = Parse("<Document><SW.Blocks.OB><AttributeList><Interface><Sections xmlns=\"http://www.siemens.com/automation/Openness/SW/Interface/v5\"><Section Name=\"Input\"><Member Name=\"x\" xmlns=\"urn:foreign\" /></Section><Section xmlns=\"urn:foreign\" /></Sections></Interface><NetworkSource><FlgNet xmlns=\"http://www.siemens.com/automation/Openness/SW/NetworkSource/FlgNet/v4\"><Parts><Access xmlns=\"urn:foreign\" /></Parts></FlgNet></NetworkSource><NetworkSource><StructuredText xmlns=\"http://www.siemens.com/automation/Openness/SW/NetworkSource/StructuredText/v3\"><Token xmlns=\"urn:foreign\" /></StructuredText></NetworkSource></AttributeList></SW.Blocks.OB></Document>");
+        var foreignAttributes = Assert.Single(foreign.Objects).Attributes;
+        var foreignInterface = Assert.IsType<PlcInterface>(foreignAttributes[0].Payload);
+        Assert.Empty(foreignInterface.Sections[0].Members);
+        Assert.Single(foreignInterface.Sections[0].RawValues);
+        Assert.Single(foreignInterface.RawValues);
+        Assert.Empty(Assert.IsType<LadderNetwork>(foreignAttributes[1].Payload).Accesses);
+        Assert.Single(Assert.IsType<LadderNetwork>(foreignAttributes[1].Payload).RawNodes);
+        Assert.IsType<StRaw>(Assert.Single(Assert.IsType<StructuredTextNetwork>(foreignAttributes[2].Payload).Entries));
     }
 
     [Fact]
