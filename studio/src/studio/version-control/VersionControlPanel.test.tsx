@@ -131,7 +131,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.querySelector('[data-testid="savepoint-r4"]')).toBeTruthy()
 
     await click(host.querySelector('[data-testid="commit-abcdef1"]')!)
-    expect(host.querySelector('[data-testid="timeline-detail"]')?.textContent).toContain('PLC_1:AA BB')
+    expect(host.querySelector('[data-testid="timeline-detail"]')?.textContent).not.toContain('PLC_1:AA BB')
   })
 
   it('executes the TIA comparison directly from the header action', async () => {

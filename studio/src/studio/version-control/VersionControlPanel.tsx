@@ -98,7 +98,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
       author: commit.author,
       timestamp: commit.timestamp,
       files: commit.files,
-      tiaChecksum: commit.tiaChecksum ?? savepointBySha.get(commit.sha)?.projectChecksum ?? null,
+      tiaChecksum: commit.tiaChecksum ?? null,
       svnRevision: commit.svnRevision ?? savepointBySha.get(commit.sha)?.svnRevision ?? null,
       validationState: validationBySha.get(commit.sha) ?? 'Unlabeled',
     }))

@@ -774,13 +774,13 @@ public sealed class WorkbenchCoordinator
     /// (Phase 3): unlike the import baseline, a compile failure ABORTS the commit before
     /// anything is written to SVN or Git.
     /// </summary>
-    private async Task<(string CompileStatus, string? ProjectChecksum)> CompileManagedForCommitAsync(
+    private async Task<(string CompileStatus, string? ProjectChecksum, PlcChecksumInfo[] Checksums)> CompileManagedForCommitAsync(
         IReadOnlyList<string> plcNames,
         CancellationToken cancellationToken)
     {
         if (plcNames.Count == 0)
         {
-            return (EngineeringCompileStatus.NotRun, null);
+            return (EngineeringCompileStatus.NotRun, null, Array.Empty<PlcChecksumInfo>());
         }
 
         var failures = new List<string>();
@@ -809,7 +809,7 @@ public sealed class WorkbenchCoordinator
             "get_plc_checksums",
             new { plcName = (string?)null },
             cancellationToken).ConfigureAwait(false);
-        return (EngineeringCompileStatus.Success, AggregateProjectChecksum(checksums));
+        return (EngineeringCompileStatus.Success, AggregateProjectChecksum(checksums), checksums);
     }
 
     /// <summary>Deterministic single-string project checksum shared by bootstrap and commit.</summary>
@@ -2877,7 +2877,16 @@ public sealed class WorkbenchCoordinator
                     existing?.Validation?.CompileStatus ?? EngineeringCompileStatus.Success));
             }
 
+            var retryDevices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
             var retried = await CommitSelectedSourceAsync(worktreeRoot, commitPaths, message, token, author)
+                .ConfigureAwait(false);
+            await RecordCommitStateAsync(
+                    worktreeRoot,
+                    workbench.WorkbenchId,
+                    retried.Sha,
+                    retryDevices,
+                    ParseAggregatedProjectChecksum(existing?.Tia?.ProjectChecksum),
+                    token)
                 .ConfigureAwait(false);
             PendingCommitStore.Clear(worktreeRoot);
             return retried;
@@ -2887,6 +2896,7 @@ public sealed class WorkbenchCoordinator
         var devices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
         var compileStatus = EngineeringCompileStatus.NotRun;
         string? projectChecksum = null;
+        PlcChecksumInfo[] savepointChecksums = Array.Empty<PlcChecksumInfo>();
         if (devices.Count > 0)
         {
             await engineeringSession.WaitAsync(token).ConfigureAwait(false);
@@ -2895,7 +2905,7 @@ public sealed class WorkbenchCoordinator
                 await EnsureActiveProjectMatchesWorktreeAsync(devices[0].Context, token, null)
                     .ConfigureAwait(false);
                 await engineering.CallAsync<object>("save_project", new { }, token).ConfigureAwait(false);
-                (compileStatus, projectChecksum) = await CompileManagedForCommitAsync(
+                (compileStatus, projectChecksum, savepointChecksums) = await CompileManagedForCommitAsync(
                     devices.Select(device => device.Metadata.PlcName).ToArray(),
                     token).ConfigureAwait(false);
             }
@@ -2950,9 +2960,10 @@ public sealed class WorkbenchCoordinator
             fSignature,
             compileStatus));
 
+        WorkbenchCommitResult commit;
         try
         {
-            return await CommitSelectedSourceAsync(worktreeRoot, commitPaths, message, token, author)
+            commit = await CommitSelectedSourceAsync(worktreeRoot, commitPaths, message, token, author)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -2966,6 +2977,73 @@ public sealed class WorkbenchCoordinator
                 + "the commit to finish the git side with the same SVN revision. "
                 + $"Cause: {exception.Message}");
         }
+
+        await RecordCommitStateAsync(
+                worktreeRoot,
+                workbench.WorkbenchId,
+                commit.Sha,
+                devices,
+                savepointChecksums,
+                token)
+            .ConfigureAwait(false);
+        return commit;
+    }
+
+    private async Task RecordCommitStateAsync(
+        string repoPath,
+        string workbenchId,
+        string commitSha,
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
+        IEnumerable<PlcChecksumInfo> checksums,
+        CancellationToken token)
+    {
+        var stateDevices = checksums
+            .Where(checksum => checksum.IsCompiled)
+            .Select(checksum =>
+            {
+                var device = devices.FirstOrDefault(item =>
+                    string.Equals(item.Metadata.PlcName, checksum.PlcName, StringComparison.Ordinal));
+                return device.Metadata is null
+                    ? null
+                    : new
+                    {
+                        deviceId = device.Metadata.DeviceId,
+                        plcName = checksum.PlcName,
+                        projectChecksum = checksum.SoftwareChecksum,
+                    };
+            })
+            .Where(item => item is not null)
+            .ToArray();
+        if (stateDevices.Length == 0)
+        {
+            return;
+        }
+
+        await versionControl.CallAsync<object>(
+                "vc_commit_state_create",
+                new { repoPath, commitSha, workbenchId, devices = stateDevices },
+                token)
+            .ConfigureAwait(false);
+    }
+
+    private static IEnumerable<PlcChecksumInfo> ParseAggregatedProjectChecksum(string? aggregate)
+    {
+        if (string.IsNullOrWhiteSpace(aggregate))
+        {
+            return Array.Empty<PlcChecksumInfo>();
+        }
+
+        return aggregate
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(item => item.Split(':', 2, StringSplitOptions.TrimEntries))
+            .Where(parts => parts.Length == 2
+                && !string.IsNullOrWhiteSpace(parts[0])
+                && !string.IsNullOrWhiteSpace(parts[1]))
+            .Select(parts => new PlcChecksumInfo
+            {
+                PlcName = parts[0],
+                SoftwareChecksum = parts[1],
+            });
     }
 
     private static string FormatClassification(EngineeringChangeClassification classification)

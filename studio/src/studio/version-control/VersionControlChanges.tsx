@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Check, ChevronDown, FileCode2, Folder, HardDrive, Loader2, Plus } from 'lucide-react'
 import * as api from '@/api/client'
 import { toast } from 'sonner'
@@ -69,6 +69,11 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
   const [commitMenuOpen, setCommitMenuOpen] = useState(false)
   const [snapshotMessage, setSnapshotMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [allCommitted, setAllCommitted] = useState(false)
+
+  useEffect(() => {
+    if (compareSignal > 0) setAllCommitted(false)
+  }, [compareSignal])
 
   const groups = useMemo(() => {
     const grouped = new Map<string, VersionControlSourceEntry[]>()
@@ -116,7 +121,6 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
         committedFiles = [...committedFiles, ...tiaPaths]
         commitSha = result.commitSha ?? null
         setTiaSelection(null)
-        setTiaSelectionResetSignal(previous => previous + 1)
       }
       if (localPaths.length > 0) {
         const result = await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim())
@@ -124,8 +128,10 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
         commitSha = result.sha
       }
       const committed = new Set(committedFiles)
+      setAllCommitted(committedFiles.length > 0 && entries.every(entry => committed.has(entry.filePath)))
       setSelectedPaths(previous => new Set([...previous].filter(path => !committed.has(path))))
       setMessage('')
+      setTiaSelectionResetSignal(previous => previous + 1)
       if (commitSha) toast.success(`Committed ${commitSha.slice(0, 8)}`)
       await onCommitted?.()
     } catch (cause) {
@@ -153,7 +159,17 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="version-control-changes">
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
-        {entries.length === 0 && compareSignal === 0 ? (
+        {entries.length === 0 && allCommitted ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" data-testid="vc-committed-empty">
+            <div className="grid h-10 w-10 place-items-center rounded-full border border-emerald-500/35 bg-emerald-500/10">
+              <Check className="h-4.5 w-4.5 text-emerald-500" />
+            </div>
+            <h3 className="text-[13px] font-semibold">All files committed</h3>
+            <p className="max-w-[230px] text-[11px] leading-relaxed text-muted-foreground">
+              The selected changes are now recorded in this worktree.
+            </p>
+          </div>
+        ) : entries.length === 0 && compareSignal === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" data-testid="vc-changes-empty">
             <div className="grid h-10 w-10 place-items-center rounded-full border border-emerald-500/35 bg-emerald-500/10">
               <Check className="h-4.5 w-4.5 text-emerald-500" />
