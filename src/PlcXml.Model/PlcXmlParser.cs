@@ -35,7 +35,7 @@ public static class PlcXmlParser
         {
             if (IsRootObjectCandidate(child))
             {
-                var item = ParseObject(child, $"/Document/{child.Name.LocalName}[{roots.Count}]");
+                var item = ParseObject(child, $"/Document/{child.Name.LocalName}[{roots.Count}]", sourceName);
                 roots.Add(item); children.Add(item);
             }
             else
@@ -52,7 +52,7 @@ public static class PlcXmlParser
             hasBom, DetectCrLf(original));
     }
 
-    private static PlcObject ParseObject(XElement element, string path)
+    private static PlcObject ParseObject(XElement element, string path, string? sourceName)
     {
         var attrs = new List<PlcAttribute>(); var compositions = new List<PlcObject>();
         var raw = new List<PlcRawValue>(); var children = new List<PlcNode>();
@@ -63,7 +63,7 @@ public static class PlcXmlParser
                 foreach (var value in child.Elements())
                 {
                     var attribute = new PlcAttribute(value.Name.LocalName, value.Value, value.Elements().Any() ? value : null);
-                    attribute.Payload = ParsePayload(value);
+                    attribute.Payload = ParsePayload(value, $"{path}/AttributeList/{value.Name.LocalName}[{attrs.Count}]", sourceName);
                     attrs.Add(attribute); children.Add(attribute);
                 }
             }
@@ -73,7 +73,7 @@ public static class PlcXmlParser
                 {
                     if (IsObjectCandidate(nested))
                     {
-                        var item = ParseObject(nested, $"{path}/ObjectList/{nested.Name.LocalName}[{compositions.Count}]");
+                        var item = ParseObject(nested, $"{path}/ObjectList/{nested.Name.LocalName}[{compositions.Count}]", sourceName);
                         compositions.Add(item); children.Add(item);
                     }
                     else { var value = new PlcRawValue(nested); raw.Add(value); children.Add(value); }
@@ -87,23 +87,32 @@ public static class PlcXmlParser
             compositions.AsReadOnly(), raw.AsReadOnly(), new ReadOnlyDictionary<string, string>(xmlAttributes), children.AsReadOnly());
     }
 
-    private static PlcTypedPayload? ParsePayload(XElement value)
+    private static PlcTypedPayload? ParsePayload(XElement value, string path, string? sourceName)
     {
         // Interface is intentionally an un-namespaced wrapper. Qualification comes
         // only from its one direct, exact Interface/v5 Sections child.
         if (value.Name == "Interface")
         {
             var sections = value.Elements().Where(e => e.Name == InterfaceSections).ToList();
+            if (sections.Count > 0 && (value.Elements().Count() != 1 || sections.Count != 1))
+                throw PayloadInvalid("Interface", path, sourceName);
             if (value.Elements().Count() == 1 && sections.Count == 1)
                 return ParseInterface(sections[0]);
             return null;
         }
 
         if (value.Name != "NetworkSource") return null;
-        var payload = value.Elements().SingleOrDefault(e => e.Name == FlgNetV4 || e.Name == StructuredTextV3);
+        var payloads = value.Elements().Where(e => e.Name == FlgNetV4 || e.Name == StructuredTextV3).ToList();
+        if (payloads.Count > 0 && (value.Elements().Count() != 1 || payloads.Count != 1))
+            throw PayloadInvalid("NetworkSource", path, sourceName);
+        var payload = payloads.SingleOrDefault();
         if (value.Elements().Count() != 1 || payload is null) return null;
         return payload.Name == FlgNetV4 ? ParseLadder(payload) : ParseStructuredText(payload);
     }
+
+    private static PlcXmlModelException PayloadInvalid(string kind, string path, string? sourceName) =>
+        new("PLCXML_PAYLOAD_INVALID", $"The supported {kind} payload is structurally malformed.", sourceName,
+            location: new PlcLocation(path, null));
 
     private static readonly XNamespace InterfaceNs = "http://www.siemens.com/automation/Openness/SW/Interface/v5";
     private static readonly XNamespace NetworkNs = "http://www.siemens.com/automation/Openness/SW/NetworkSource";

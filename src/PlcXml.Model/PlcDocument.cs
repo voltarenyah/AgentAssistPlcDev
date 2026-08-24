@@ -33,20 +33,20 @@ public sealed class PlcDocument
     {
         if (network is null || string.IsNullOrWhiteSpace(field) || (field != "Title" && field != "Comment") ||
             string.IsNullOrWhiteSpace(culture) || text is null)
-            throw new PlcXmlModelException("PLCXML_MUTATION_INVALID", "Mutation arguments are invalid.", SourceName);
+            throw new PlcXmlModelException("PLCXML_MUTATION_INVALID", "Mutation arguments are invalid.", SourceName, location: network?.Location);
         var target = FindNetwork(_originalTree, network.Id);
         var composition = FindCompositions(target, field);
         var items = FindCultureItems(composition, culture);
         if (items.Count == 0)
-            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_NOT_FOUND", $"No {field} text exists for culture '{culture}'.", SourceName);
+            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_NOT_FOUND", $"No {field} text exists for culture '{culture}'.", SourceName, location: network.Location);
         if (items.Count > 1)
-            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_AMBIGUOUS", $"More than one {field} text exists for culture '{culture}'.", SourceName);
+            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_AMBIGUOUS", $"More than one {field} text exists for culture '{culture}'.", SourceName, location: network.Location);
         var key = new MutationKey(network.Id!, field, culture);
         if (_mutations.Any(m => m.Key.Equals(key)))
-            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_AMBIGUOUS", "The same text target was already mutated.", SourceName);
+            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_AMBIGUOUS", "The same text target was already mutated.", SourceName, location: network.Location);
         if (items[0].Elements().FirstOrDefault(e => e.Name.LocalName == "AttributeList")?.Elements()
                 .FirstOrDefault(e => e.Name.LocalName == "Text") is null)
-            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_NOT_FOUND", "The text target has no direct Text element.", SourceName);
+            throw new PlcXmlModelException("PLCXML_TEXT_TARGET_NOT_FOUND", "The text target has no direct Text element.", SourceName, location: network.Location);
         _mutations.Add(new TextMutation(key, text));
     }
 
