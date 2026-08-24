@@ -934,6 +934,20 @@ public sealed class WorkbenchCoordinator
         foreach (var commit in commits)
         {
             var files = commit.Files ?? Array.Empty<string>();
+            ConsistencyValidationEvidence? commitState = null;
+            try
+            {
+                commitState = await versionControl.CallAsync<ConsistencyValidationEvidence?>(
+                    "vc_commit_state_get",
+                    new { repoPath = worktreeRoot, commitSha = commit.Sha },
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Older version-control sidecars do not expose commit-state tags; revision.json
+                // remains the compatibility source for those environments.
+            }
+
             var revisionStateChanged = files.Any(path =>
                 string.Equals(path, EngineeringStateWriter.RelativePath, StringComparison.OrdinalIgnoreCase));
             EngineeringRevisionState? state = null;
@@ -958,6 +972,9 @@ public sealed class WorkbenchCoordinator
                 }
             }
 
+            var tiaChecksum = AggregateCommitStateChecksum(commitState)
+                ?? state?.Tia?.ProjectChecksum;
+
             long? linkedRevision = null;
             if (revisionStateChanged
                 && state?.Svn?.Revision is { } revision
@@ -968,7 +985,7 @@ public sealed class WorkbenchCoordinator
                 candidates.Add(new TimelineSvnCandidate(
                     revision,
                     svnUrl,
-                    state.Tia?.ProjectChecksum,
+                    tiaChecksum,
                     commit.Sha,
                     commit.Author,
                     commit.Message,
@@ -981,7 +998,7 @@ public sealed class WorkbenchCoordinator
                 commit.Message,
                 commit.Timestamp,
                 files,
-                revisionStateChanged ? state?.Tia?.ProjectChecksum : null,
+                tiaChecksum,
                 linkedRevision));
         }
 
@@ -1051,6 +1068,21 @@ public sealed class WorkbenchCoordinator
         string Author,
         string Message,
         string Timestamp);
+
+    private static string? AggregateCommitStateChecksum(ConsistencyValidationEvidence? evidence)
+    {
+        if (evidence?.Devices is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        var aggregate = string.Join(';', evidence.Devices
+            .Where(device => !string.IsNullOrWhiteSpace(device.PlcName)
+                && !string.IsNullOrWhiteSpace(device.ProjectChecksum))
+            .OrderBy(device => device.PlcName, StringComparer.Ordinal)
+            .Select(device => $"{device.PlcName}:{device.ProjectChecksum}"));
+        return aggregate.Length == 0 ? null : aggregate;
+    }
 
     /// <summary>
     /// Reads engineering-state/revision.json at a Git commit through the VC boundary. At HEAD the

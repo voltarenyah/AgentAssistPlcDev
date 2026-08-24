@@ -66,6 +66,22 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     }
                     """,
             })
+            .Respond("vc_commit_state_get", args =>
+                Property<string>(args, "commitSha") == "git-only"
+                    ? new ConsistencyValidationEvidence
+                    {
+                        CommitSha = "git-only",
+                        Devices =
+                        [
+                            new ConsistencyValidationDevice
+                            {
+                                DeviceId = "device-1",
+                                PlcName = "PLC_1",
+                                ProjectChecksum = "tag-checksum-1",
+                            },
+                        ],
+                    }
+                    : null!)
             .Respond("svn_log", new TimelineSvnLogResult
             {
                 Entries =
@@ -91,7 +107,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
         var result = await coordinator.ListVersionControlTimelineAsync("wb-1", "wt-1");
 
-        Assert.Null(result.GitCommits[0].TiaChecksum);
+        Assert.Equal("PLC_1:tag-checksum-1", result.GitCommits[0].TiaChecksum);
         Assert.Null(result.GitCommits[0].SvnRevision);
         Assert.Equal("PLC_1:checksum-1", result.GitCommits[1].TiaChecksum);
         Assert.Equal(184, result.GitCommits[1].SvnRevision);
