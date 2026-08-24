@@ -35,6 +35,8 @@ public sealed class PlcObject : PlcNode
     public IReadOnlyList<PlcRawValue> RawValues { get; }
     public IReadOnlyDictionary<string, string> XmlAttributes { get; }
     public IReadOnlyList<PlcNode> Children { get; }
+    public PlcTypedPayload? Payload { get; internal set; }
+    public PlcTypedPayload? TypedPayload => Payload;
 }
 
 public sealed class PlcAttribute : PlcNode
@@ -44,6 +46,8 @@ public sealed class PlcAttribute : PlcNode
     public string Value { get; }
     public XElement? RawValue => RawElement is null ? null : new XElement(RawElement);
     internal XElement? RawElement { get; }
+    public PlcTypedPayload? Payload { get; internal set; }
+    public PlcTypedPayload? TypedPayload => Payload;
 }
 
 public sealed class PlcRawValue : PlcNode
