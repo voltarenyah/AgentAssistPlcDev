@@ -378,6 +378,7 @@ public sealed class WorkbenchCoordinator
             Directory.CreateDirectory(tiaStore);
 
             string? projectChecksum;
+            PlcChecksumInfo[] baselineChecksums;
             string compileStatus;
             ProjectInfo managedProject;
             string? originProjectPath;
@@ -450,7 +451,7 @@ public sealed class WorkbenchCoordinator
                         + $"The active project is still '{managedProject.Path}'.");
                 }
 
-                (compileStatus, projectChecksum) = await CompileManagedBaselineAsync(
+                (compileStatus, projectChecksum, baselineChecksums) = await CompileManagedBaselineAsync(
                     managedProject.PlcDevices, progress, cancellationToken).ConfigureAwait(false);
             }
             finally
@@ -630,12 +631,43 @@ public sealed class WorkbenchCoordinator
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToArray();
-            await CommitSelectedSourceAsync(
+            var baselineCommit = await CommitSelectedSourceAsync(
                     masterPath,
                     baselinePaths,
                     "Initial PLC source baseline",
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            var baselineStateDevices = baselineChecksums
+                .Where(checksum => checksum.IsCompiled)
+                .Select(checksum =>
+                {
+                    var device = devices.SingleOrDefault(item =>
+                        string.Equals(item.PlcName, checksum.PlcName, StringComparison.Ordinal));
+                    return device is null
+                        ? null
+                        : new
+                        {
+                            deviceId = device.DeviceId,
+                            plcName = checksum.PlcName,
+                            projectChecksum = checksum.SoftwareChecksum,
+                        };
+                })
+                .Where(item => item is not null)
+                .ToArray();
+            if (baselineStateDevices.Length > 0)
+            {
+                await versionControl.CallAsync<object>(
+                    "vc_commit_state_create",
+                    new
+                    {
+                        repoPath = masterPath,
+                        commitSha = baselineCommit.Sha,
+                        workbenchId = workbench.WorkbenchId,
+                        devices = baselineStateDevices,
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             RegisterWorkbench(workbench);
             var initializedDevices = devices
@@ -692,14 +724,14 @@ public sealed class WorkbenchCoordinator
     /// Optional compile of every PLC on the MANAGED project copy. A compile failure is recorded
     /// as FAILED in revision.json and never fails the import; the checksum stays null then.
     /// </summary>
-    private async Task<(string CompileStatus, string? ProjectChecksum)> CompileManagedBaselineAsync(
+    private async Task<(string CompileStatus, string? ProjectChecksum, PlcChecksumInfo[] Checksums)> CompileManagedBaselineAsync(
         IReadOnlyList<string> plcNames,
         IOperationProgress? progress,
         CancellationToken cancellationToken)
     {
         if (plcNames.Count == 0)
         {
-            return (EngineeringCompileStatus.NotRun, null);
+            return (EngineeringCompileStatus.NotRun, null, Array.Empty<PlcChecksumInfo>());
         }
 
         try
@@ -721,19 +753,19 @@ public sealed class WorkbenchCoordinator
 
             if (failed)
             {
-                return (EngineeringCompileStatus.Failed, null);
+                return (EngineeringCompileStatus.Failed, null, Array.Empty<PlcChecksumInfo>());
             }
 
             var checksums = await engineering.CallAsync<PlcChecksumInfo[]>(
                 "get_plc_checksums",
                 new { plcName = (string?)null },
                 cancellationToken).ConfigureAwait(false);
-            return (EngineeringCompileStatus.Success, AggregateProjectChecksum(checksums));
+            return (EngineeringCompileStatus.Success, AggregateProjectChecksum(checksums), checksums);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             // Compile evidence is best-effort: a broken compile never blocks the import.
-            return (EngineeringCompileStatus.Failed, null);
+            return (EngineeringCompileStatus.Failed, null, Array.Empty<PlcChecksumInfo>());
         }
     }
 
@@ -944,8 +976,9 @@ public sealed class WorkbenchCoordinator
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                // Older version-control sidecars do not expose commit-state tags; revision.json
-                // remains the compatibility source for those environments.
+                // A missing/unsupported state tag means the checksum is unavailable. Do not
+                // substitute revision.json: that file is not cryptographically bound to this
+                // Git commit and may describe a different TIA state.
             }
 
             var revisionStateChanged = files.Any(path =>
@@ -972,8 +1005,7 @@ public sealed class WorkbenchCoordinator
                 }
             }
 
-            var tiaChecksum = AggregateCommitStateChecksum(commitState)
-                ?? state?.Tia?.ProjectChecksum;
+            var tiaChecksum = AggregateCommitStateChecksum(commitState);
 
             long? linkedRevision = null;
             if (revisionStateChanged
