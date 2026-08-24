@@ -122,9 +122,9 @@ public static class PlcXmlParser
             {
                 if (member.Name == InterfaceNs + "Member")
                 {
-                    var comment = member.Elements().FirstOrDefault(e => e.Name.LocalName == "Comment")?.Value;
+                    var comment = member.Elements().FirstOrDefault(e => e.Name == InterfaceNs + "Comment")?.Value;
                     members.Add(new PlcInterfaceMember(AttributesOf(member), member.Elements()
-                        .Where(e => e.Name.LocalName != "Comment")
+                        .Where(e => e.Name != InterfaceNs + "Comment")
                         .Select(e => new PlcRawValue(e)), comment));
                 }
                 else sectionRaw.Add(new PlcRawValue(member));

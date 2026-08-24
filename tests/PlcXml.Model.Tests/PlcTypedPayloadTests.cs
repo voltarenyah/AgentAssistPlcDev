@@ -57,6 +57,11 @@ public sealed class PlcTypedPayloadTests
         Assert.Empty(Assert.IsType<LadderNetwork>(foreignAttributes[1].Payload).Accesses);
         Assert.Single(Assert.IsType<LadderNetwork>(foreignAttributes[1].Payload).RawNodes);
         Assert.IsType<StRaw>(Assert.Single(Assert.IsType<StructuredTextNetwork>(foreignAttributes[2].Payload).Entries));
+
+        var foreignComment = Parse("<Document><SW.Blocks.OB><AttributeList><Interface><Sections xmlns=\"http://www.siemens.com/automation/Openness/SW/Interface/v5\"><Section Name=\"Input\"><Member Name=\"x\"><Comment xmlns=\"urn:foreign\">raw</Comment></Member></Section></Sections></Interface></AttributeList></SW.Blocks.OB></Document>");
+        var member = Assert.Single(Assert.Single(Assert.IsType<PlcInterface>(foreignComment.Objects[0].Attributes[0].Payload).Sections).Members);
+        Assert.Null(member.Comment);
+        Assert.Equal("Comment", Assert.Single(member.RawValues).Name);
     }
 
     [Fact]
