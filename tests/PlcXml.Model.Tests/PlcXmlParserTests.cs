@@ -49,6 +49,30 @@ public sealed class PlcXmlParserTests
         Assert.Equal("C1", root.Compositions[0].Location.Id);
     }
 
+    [Fact]
+    public void Parse_retains_root_metadata_as_ordered_raw_content()
+    {
+        var input = Encoding.UTF8.GetBytes("<Document><DocumentInfo><Created>today</Created></DocumentInfo><SW.Blocks.OB ID=\"1\" /><Engineering><Version>17</Version></Engineering><VendorExtension /></Document>");
+
+        var document = PlcXmlParser.Parse(input);
+
+        Assert.Equal(new[] { "DocumentInfo", "SW.Blocks.OB", "Engineering", "VendorExtension" }, document.Children.Select(child => child.Name));
+        Assert.Equal(new[] { "DocumentInfo", "Engineering", "VendorExtension" }, document.RawValues.Select(value => value.Name));
+        Assert.Contains("today", document.RawValues.Single(value => value.Name == "DocumentInfo").Element.ToString());
+    }
+
+    [Fact]
+    public void Parse_uses_xml_declaration_encoding_when_bom_is_absent()
+    {
+        var input = Encoding.Unicode.GetBytes("<?xml version=\"1.0\" encoding=\"utf-16\"?><Document><SW.Blocks.OB ID=\"1\" /></Document>");
+
+        var document = PlcXmlParser.Parse(input, "utf16-declaration.xml");
+
+        Assert.Equal("utf-16", document.EncodingName);
+        Assert.False(document.HasBom);
+        Assert.Equal(input, document.SerializeOriginal());
+    }
+
     [Theory]
     [InlineData("<NotAPlcDocument />", "PLCXML_ROOT_UNSUPPORTED")]
     [InlineData("<Document><Broken></Document>", "PLCXML_PARSE_INVALID")]

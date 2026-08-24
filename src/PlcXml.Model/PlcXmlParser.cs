@@ -30,17 +30,25 @@ public static class PlcXmlParser
 
         var roots = new List<PlcObject>();
         var raw = new List<PlcRawValue>();
+        var children = new List<PlcNode>();
         foreach (var child in tree.Root.Elements())
         {
-            if (child.Name.LocalName is "DocumentInfo" or "Engineering") continue;
-            if (IsObjectCandidate(child)) roots.Add(ParseObject(child, $"/Document/{child.Name.LocalName}[{roots.Count}]"));
-            else raw.Add(new PlcRawValue(child));
+            if (IsRootObjectCandidate(child))
+            {
+                var item = ParseObject(child, $"/Document/{child.Name.LocalName}[{roots.Count}]");
+                roots.Add(item); children.Add(item);
+            }
+            else
+            {
+                var value = new PlcRawValue(child);
+                raw.Add(value); children.Add(value);
+            }
         }
         var hasBom = original.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF })
             || original.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE })
             || original.AsSpan().StartsWith(new byte[] { 0xFE, 0xFF });
-        var encoding = DetectEncoding(original);
-        return new PlcDocument(original, sourceName, roots.AsReadOnly(), raw.AsReadOnly(), encoding.WebName,
+        var encoding = DetectEncoding(original, tree.Declaration?.Encoding);
+        return new PlcDocument(original, tree, sourceName, roots.AsReadOnly(), raw.AsReadOnly(), children.AsReadOnly(), encoding.WebName,
             hasBom, DetectCrLf(original));
     }
 
@@ -79,11 +87,17 @@ public static class PlcXmlParser
     }
 
     private static bool IsObjectCandidate(XElement element) => element.Name.LocalName is not ("DocumentInfo" or "Engineering" or "AttributeList" or "ObjectList");
-    private static Encoding DetectEncoding(byte[] bytes)
+    private static bool IsRootObjectCandidate(XElement element) => IsObjectCandidate(element) && element.Name.LocalName.StartsWith("SW.", StringComparison.Ordinal);
+    private static Encoding DetectEncoding(byte[] bytes, string? declarationEncoding)
     {
         if (bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE })) return Encoding.Unicode;
         if (bytes.AsSpan().StartsWith(new byte[] { 0xFE, 0xFF })) return Encoding.BigEndianUnicode;
         if (bytes.AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF })) return new UTF8Encoding(true);
+        if (!string.IsNullOrWhiteSpace(declarationEncoding))
+        {
+            try { return Encoding.GetEncoding(declarationEncoding); }
+            catch (ArgumentException) { }
+        }
         return new UTF8Encoding(false);
     }
     private static bool DetectCrLf(byte[] bytes)
