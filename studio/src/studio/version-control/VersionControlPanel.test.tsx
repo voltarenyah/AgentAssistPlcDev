@@ -175,7 +175,8 @@ describe('VersionControlPanel (worktree dock)', () => {
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
 
     expect(host.querySelector('[data-testid="vc-changes-empty"]')).toBeNull()
-    expect(host.textContent).toContain('TIA differs from master')
+    expect(host.textContent).toContain('PLC_1 · Main')
+    expect(host.textContent).not.toContain('TIA differs from master')
   })
 
   it('does not re-run the TIA comparison when switching between pages', async () => {

@@ -168,6 +168,7 @@ describe('VersionControlChanges', () => {
     expect(compare).toHaveBeenCalledTimes(1)
     expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
     expect(host.textContent).toContain('PLC_1 · Main')
+    expect(host.textContent).not.toContain('TIA differs from master')
     const commitControls = host.querySelector('[data-testid="vc-commit-controls"]')!
     const compareResult = host.querySelector('[data-testid="vc-compare-result"]')!
     expect(commitControls.compareDocumentPosition(compareResult) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
