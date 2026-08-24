@@ -99,6 +99,45 @@ public sealed class DeviceMetadataManifestTests : IDisposable
     }
 
     [Fact]
+    public void WriteAll_RefreshesExportRootWhenManifestIsReusedAtAnotherPath()
+    {
+        Directory.CreateDirectory(_root);
+        var originalRoot = Path.Combine(_root, "old-staging");
+        var currentRoot = Path.Combine(_root, "new-staging");
+        Directory.CreateDirectory(originalRoot);
+        Directory.CreateDirectory(currentRoot);
+        var record = new ExportMetadataRecord { Id = "id1", Name = "A", Category = "FB", Status = "Exported" };
+
+        ExportManifest.WriteAll(originalRoot, DateTimeOffset.UtcNow, new List<ExportMetadataRecord> { record },
+            ExportManifest.BlockCategories);
+        File.Copy(Path.Combine(originalRoot, ExportManifest.MetadataFileName),
+            Path.Combine(currentRoot, ExportManifest.MetadataFileName));
+        ExportManifest.WriteAll(currentRoot, DateTimeOffset.UtcNow, new List<ExportMetadataRecord> { record },
+            ExportManifest.BlockCategories);
+
+        Assert.Equal(currentRoot, ExportManifestJson(currentRoot).ExportRoot);
+    }
+
+    [Fact]
+    public void Upsert_RefreshesExportRootWhenManifestIsReusedAtAnotherPath()
+    {
+        Directory.CreateDirectory(_root);
+        var originalRoot = Path.Combine(_root, "old-staging");
+        var currentRoot = Path.Combine(_root, "new-staging");
+        Directory.CreateDirectory(originalRoot);
+        Directory.CreateDirectory(currentRoot);
+        var record = new ExportMetadataRecord { Id = "id1", Name = "A", Category = "FB", Status = "Exported" };
+
+        ExportManifest.WriteAll(originalRoot, DateTimeOffset.UtcNow, new List<ExportMetadataRecord> { record },
+            ExportManifest.BlockCategories);
+        File.Copy(Path.Combine(originalRoot, ExportManifest.MetadataFileName),
+            Path.Combine(currentRoot, ExportManifest.MetadataFileName));
+        ExportManifest.Upsert(currentRoot, record);
+
+        Assert.Equal(currentRoot, ExportManifestJson(currentRoot).ExportRoot);
+    }
+
+    [Fact]
     public void Upsert_PreservesExistingDevice_WhenNoCaptureProvided()
     {
         Directory.CreateDirectory(_root);
@@ -127,6 +166,10 @@ public sealed class DeviceMetadataManifestTests : IDisposable
     private ExportMetadataDocument Read() =>
         ExportMetadataJsonSerializer.Deserialize(
             File.ReadAllText(Path.Combine(_root, ExportManifest.MetadataFileName)));
+
+    private static ExportMetadataDocument ExportManifestJson(string root) =>
+        ExportMetadataJsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(root, ExportManifest.MetadataFileName)));
 
     private static DeviceMetadata Sample() => new()
     {

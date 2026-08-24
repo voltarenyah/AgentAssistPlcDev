@@ -1,6 +1,7 @@
 using Agent.Mcp;
 using Contracts.Engineering;
 using ModelContextProtocol;
+using System.Text.Json.Nodes;
 
 namespace Agent.Workbench;
 
@@ -191,6 +192,7 @@ public sealed class SafeDeviceExportStager
                     "The selected PLC export did not produce a component manifest; previous staging was preserved.");
             }
 
+            NormalizeManifestExportRoot(incoming, device.StagingRoot);
             ReplaceStaging(device, incoming);
             return selected;
         }
@@ -198,6 +200,20 @@ public sealed class SafeDeviceExportStager
         {
             TryDeleteTree(incoming);
         }
+    }
+
+    private static void NormalizeManifestExportRoot(string incoming, string stagingRoot)
+    {
+        var manifestPath = Path.Combine(incoming, "metadata.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))?.AsObject()
+            ?? throw new WorkbenchLifecycleException(
+                "DEVICE_EXPORT_INCOMPLETE",
+                $"The export manifest '{manifestPath}' is not a JSON object.");
+        manifest["exportRoot"] = stagingRoot;
+        File.WriteAllText(manifestPath, manifest.ToJsonString(new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+        }));
     }
 
     /// <summary>Creates a short directory junction (<c>%TEMP%\awst-xxxxxxxx</c>) pointing at the

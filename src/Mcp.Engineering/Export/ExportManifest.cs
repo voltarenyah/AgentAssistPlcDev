@@ -172,7 +172,10 @@ internal static class ExportManifest
         {
             ExportStartedUtc = existing?.ExportStartedUtc ?? exportStartedUtc,
             ExportFinishedUtc = DateTimeOffset.UtcNow,
-            ExportRoot = existing?.ExportRoot ?? exportRoot,
+            // The manifest may have been copied from another staging/export directory before
+            // an incremental export. The current writer owns the root value; preserving the old
+            // absolute path leaves metadata pointing at a deleted temp/junction directory.
+            ExportRoot = exportRoot,
             Device = device ?? existing?.Device,
             Components = records
                 .Concat(existing?.Components.Where(r => !replacedCategories.Contains(r.Category))
@@ -190,6 +193,7 @@ internal static class ExportManifest
         if (File.Exists(path))
         {
             document = ExportMetadataJsonSerializer.Deserialize(File.ReadAllText(path));
+            document.ExportRoot = exportRoot;
             var index = document.Components.FindIndex(r => r.Id == record.Id);
             if (index >= 0)
                 document.Components[index] = record;

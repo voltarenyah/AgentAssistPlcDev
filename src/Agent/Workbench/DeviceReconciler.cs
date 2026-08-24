@@ -374,6 +374,11 @@ public sealed class DeviceReconciler
             outputRoot["device"] = stagedDevice.DeepClone();
         }
 
+        // exportRoot is document metadata, not a component path. The staged manifest was
+        // produced in a temporary incoming/junction directory, so carrying it into source would
+        // leave the tracked baseline pointing at a deleted path.
+        outputRoot["exportRoot"] = context.SourceRoot;
+
         var baselineByPath = IndexManifestNodes(
             baselineRoot?["components"]?.AsArray(),
             context.SourceRoot);
