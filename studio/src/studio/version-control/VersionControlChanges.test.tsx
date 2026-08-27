@@ -194,14 +194,6 @@ describe('VersionControlChanges', () => {
           supported: true,
         }],
       })
-      .mockResolvedValueOnce({
-        comparisonId: 'comparison-2',
-        masterSha: 'commit-2',
-        fastGatePassed: true,
-        state: 'Consistent',
-        liveChecksums: {},
-        differences: [],
-      })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
     const accept = vi.spyOn(api, 'acceptTiaSynchronization').mockResolvedValue({
       comparisonId: 'comparison-1',
@@ -223,8 +215,10 @@ describe('VersionControlChanges', () => {
       'Accept Main from TIA',
     )
     expect(commit).not.toHaveBeenCalled()
-    expect(host.querySelector('[data-testid="vc-compare-result"] input[type="checkbox"]')).toBeNull()
-    expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeTruthy()
+    expect(api.compareMasterWithTia).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('input[type="checkbox"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-committed-empty"]')?.textContent).toContain('All files committed')
   })
 
   it('keeps the commit button disabled with a message but zero selected paths until the untrackable checkbox is ticked', async () => {
