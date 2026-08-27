@@ -1188,6 +1188,7 @@ export type VersionControlTimelineGitCommit = {
   files: string[]
   tiaChecksum: string | null
   svnRevision: number | null
+  untrackableChange: boolean | null
 }
 export type VersionControlTimelineSvnRevision = {
   revision: number
@@ -1846,10 +1847,10 @@ export const getWorktreeVcDiff = (workbenchId: string, worktreeId: string, fileP
   if (newSha) params.set('newSha', newSha)
   return workbenchRequest<VcDiffResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/diff?${params}`)
 }
-export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string) =>
+export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string, untrackableChange = false) =>
   workbenchRequest<{ sha: string; message: string; files: string[] }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/commit`,
-    jsonRequest('POST', { paths, message }),
+    jsonRequest('POST', { paths, message, untrackableChange }),
   )
 export const getVcValidation = (workbenchId: string, worktreeId: string, sha: string) =>
   workbenchRequest<VcValidationEvidence | null>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/validation/${encodeURIComponent(sha)}`)

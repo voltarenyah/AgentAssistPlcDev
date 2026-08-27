@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FocusEvent, type MouseEvent } from 'react'
-import { AlertCircle, GitBranch, Loader2, RefreshCw } from 'lucide-react'
+import { AlertCircle, GitBranch, Loader2, RefreshCw, TriangleAlert } from 'lucide-react'
 import * as api from '@/api/client'
 import { buildTimelineColumns, type TimelineColumn } from './versionControlTimeline'
 
@@ -117,6 +117,11 @@ function TimelineColumnView({
   const checksumText = displayChecksum(sharedChecksum)
   return (
     <div data-timeline-column className="relative flex min-w-[176px] flex-1 flex-col items-center rounded-lg border bg-muted/20 px-1 py-1" style={{ borderColor: 'var(--border)' }}>
+      {column.git.untrackableChange && (
+        <span className="absolute right-1.5 top-1.5 z-20" title="Untrackable change — no git-file diff" data-testid="vc-untrackable-marker">
+          <TriangleAlert className="h-3 w-3 text-amber-500" />
+        </span>
+      )}
       <div className="relative z-10 flex h-16 items-start justify-center pt-2">
         <GitShape event={column.git} onActivate={onActivate} />
       </div>

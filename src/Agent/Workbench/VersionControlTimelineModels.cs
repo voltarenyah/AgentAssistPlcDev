@@ -12,7 +12,8 @@ public sealed record VersionControlTimelineGitCommit(
     string Timestamp,
     IReadOnlyList<string> Files,
     string? TiaChecksum,
-    long? SvnRevision);
+    long? SvnRevision,
+    bool UntrackableChange);
 
 public sealed record VersionControlTimelineSvnRevision(
     long Revision,
@@ -25,6 +26,13 @@ public sealed record VersionControlTimelineSvnRevision(
 internal sealed class TimelineSvnLogResult
 {
     public TimelineSvnLogEntry[] Entries { get; set; } = Array.Empty<TimelineSvnLogEntry>();
+}
+
+/// <summary>Result of the <c>vc_untrackable_change_get</c> tool: whether the commit carries
+/// an untrackable-change marker tag.</summary>
+internal sealed class TimelineUntrackableChangeResult
+{
+    public bool UntrackableChange { get; set; }
 }
 
 internal sealed class TimelineSvnLogEntry

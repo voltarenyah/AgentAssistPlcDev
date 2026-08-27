@@ -110,6 +110,18 @@ SVN working copy or changed project checksum). A savepoint with no safety or
 native change is rejected as nothing-to-commit. A safety-only change still
 produces a Git commit containing only `revision.json`.
 
+### Untrackable-change commits
+
+Not every TIA change produces a git-file diff (hardware AML and most XML are
+covered, and the software checksum reflects software changes — but some changes
+are not detectable). The VC panel's **Untrackable change** checkbox lets the
+user commit a message with zero selected paths: the result is an empty Git
+commit carrying an annotated marker tag `untrackable-change/{sha}`. Both
+timelines show an amber marker on such commits, and the savepoint area warns
+that the change is not covered by any SVN savepoint until one is created —
+because nothing in git records the TIA-side change, only a native snapshot makes
+it restorable. Without the checkbox, empty commits are still rejected.
+
 Master write rules: TIA-accepted files keep staleness checks; direct local edits
 commit freely as unlabeled savepoints (see Master and feature write rules). The
 TIA session stays disconnected after a savepoint; the next TIA operation reopens

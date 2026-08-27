@@ -109,9 +109,6 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   const hardwareDiffers = comparison?.hardware != null && comparison.hardware.state !== 'in-sync'
   const differences = comparison?.differences ?? []
   const titleMissing = commitMessage.trim().length === 0
-  const cleanComparison = comparison != null && comparison.state !== 'Unavailable' && differences.length === 0 && !hardwareDiffers
-
-  if (cleanComparison) return null
 
   return (
     <div className="shrink-0" data-testid="vc-compare-result">
@@ -165,6 +162,9 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                 </div>
                 <div className="mt-1 text-[9px]">
                   {comparison.fastGatePassed ? 'All device checksums match; no full object scan was required.' : 'A full object scan found no remaining differences.'}
+                </div>
+                <div className="mt-1 text-[9px]">
+                  Some TIA changes leave no git diff — tick “Untrackable change” above to record a message-only commit.
                 </div>
               </div>
             ) : (

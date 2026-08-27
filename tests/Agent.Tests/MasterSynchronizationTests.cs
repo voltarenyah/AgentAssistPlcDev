@@ -57,6 +57,42 @@ public sealed class MasterSynchronizationTests : IDisposable
         Assert.Equal("direct edit", fixture.VersionControl.CommitMessage);
     }
 
+    [Fact]
+    public async Task MasterCommitWithUntrackableChangePermitsEmptyPathsAndForwardsFlags()
+    {
+        var coordinator = fixture.CreateCoordinator();
+
+        var result = await coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            Array.Empty<string>(),
+            "TIA change git cannot track",
+            CancellationToken.None,
+            untrackableChange: true);
+
+        Assert.Equal("head-2", result.Sha);
+        Assert.Equal("TIA change git cannot track", fixture.VersionControl.CommitMessage);
+        var commitArgs = Assert.IsAssignableFrom<object>(fixture.VersionControl.CommitArgs);
+        Assert.Empty(Property<IReadOnlyList<string>>(commitArgs, "paths"));
+        Assert.True(Property<bool>(commitArgs, "allowEmpty"));
+        Assert.True(Property<bool>(commitArgs, "untrackableChange"));
+    }
+
+    [Fact]
+    public async Task MasterCommitWithoutUntrackableChangeStillRequiresPaths()
+    {
+        var coordinator = fixture.CreateCoordinator();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            Array.Empty<string>(),
+            "message-only without the flag",
+            CancellationToken.None));
+
+        Assert.DoesNotContain("vc_commit_selected", fixture.VersionControl.Calls);
+    }
+
     public void Dispose() => fixture.Dispose();
 
     [Fact]
@@ -193,6 +229,7 @@ public sealed class MasterSynchronizationTests : IDisposable
         public List<string> Calls { get; } = new();
         public string Head { get; private set; } = "head-1";
         public string? CommitMessage { get; private set; }
+        public object? CommitArgs { get; private set; }
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
@@ -206,6 +243,7 @@ public sealed class MasterSynchronizationTests : IDisposable
             }
             if (tool == "vc_commit_selected")
             {
+                CommitArgs = args;
                 CommitMessage = args.GetType().GetProperty("message")?.GetValue(args) as string;
                 Head = "head-2";
                 return Task.FromResult((T)(object)new WorkbenchCommitResult(

@@ -30,6 +30,8 @@ export type VersionControlChangesProps = {
   entries: VersionControlSourceEntry[]
   compareSignal: number
   snapshot: VersionControlSnapshotInfo
+  /** True when an untrackable-change commit exists that no SVN savepoint covers yet. */
+  untrackablePendingSavepoint?: boolean
   onCommitted?: () => void | Promise<void>
   /** Starts a title-bar operation and returns its id so the full compare reports live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
@@ -59,12 +61,13 @@ const groupLabel = (entry: VersionControlSourceEntry) =>
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
 
-export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, snapshot, onCommitted, onBeginOperation }: VersionControlChangesProps) {
+export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation }: VersionControlChangesProps) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [tiaSelection, setTiaSelection] = useState<{ comparisonId: string; paths: string[] } | null>(null)
   const [tiaHasDifferences, setTiaHasDifferences] = useState<boolean | null>(null)
   const [tiaSelectionResetSignal, setTiaSelectionResetSignal] = useState(0)
   const [message, setMessage] = useState('')
+  const [untrackable, setUntrackable] = useState(false)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [commitMenuOpen, setCommitMenuOpen] = useState(false)
   const [snapshotMessage, setSnapshotMessage] = useState('')
@@ -87,7 +90,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
   }, [entries])
 
   const selectedCommitPaths = new Set([...selectedPaths, ...(tiaSelection?.paths ?? [])])
-  const canCommit = selectedCommitPaths.size > 0 && message.trim().length > 0 && !busy
+  const canCommit = (selectedCommitPaths.size > 0 || untrackable) && message.trim().length > 0 && !busy
 
   const togglePath = (filePath: string) => {
     setSelectedPaths(previous => {
@@ -110,7 +113,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
   const commit = async (localSelection = [...selectedPaths]) => {
     const tiaPaths = tiaSelection?.paths ?? []
     const localPaths = localSelection.filter(path => !tiaPaths.includes(path))
-    if (tiaPaths.length === 0 && localPaths.length === 0 || !message.trim() || busy) return
+    if ((!untrackable && tiaPaths.length === 0 && localPaths.length === 0) || !message.trim() || busy) return
     setBusy(true)
     setCommitMenuOpen(false)
     try {
@@ -122,15 +125,16 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
         commitSha = result.commitSha ?? null
         setTiaSelection(null)
       }
-      if (localPaths.length > 0) {
-        const result = await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim())
+      if (localPaths.length > 0 || untrackable) {
+        const result = await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable)
         committedFiles = [...committedFiles, ...result.files]
         commitSha = result.sha
       }
       const committed = new Set(committedFiles)
-      setAllCommitted(committedFiles.length > 0 && entries.every(entry => committed.has(entry.filePath)))
+      setAllCommitted((committedFiles.length > 0 || untrackable) && entries.every(entry => committed.has(entry.filePath)))
       setSelectedPaths(previous => new Set([...previous].filter(path => !committed.has(path))))
       setMessage('')
+      setUntrackable(false)
       setTiaSelectionResetSignal(previous => previous + 1)
       if (commitSha) toast.success(`Committed ${commitSha.slice(0, 8)}`)
       await onCommitted?.()
@@ -190,6 +194,18 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                 className="h-[52px] w-full resize-none rounded-[9px] border bg-white/[0.03] px-2.5 py-2 text-[11px] outline-none placeholder:text-neutral-500 focus:border-white/20"
                 style={{ borderColor: 'var(--border)' }}
               />
+              <label className="mt-1.5 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2">
+                <input
+                  type="checkbox"
+                  data-testid="vc-untrackable-change"
+                  checked={untrackable}
+                  onChange={event => setUntrackable(event.target.checked)}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[10px] font-medium text-amber-600">Untrackable change</span>
+                  <span className="block text-[9px] text-muted-foreground">Record a TIA change that leaves no git file diff — the commit stores only this message.</span>
+                </span>
+              </label>
               <div className="relative mt-1.5 flex rounded-[9px] border bg-white/[0.03]" style={{ borderColor: 'var(--border)' }}>
                 <button
                   type="button"
@@ -314,6 +330,11 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
             </span>
           )}
         </div>
+        {untrackablePendingSavepoint && (
+          <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-[10px] text-amber-600" data-testid="vc-untrackable-savepoint-warning">
+            An untrackable change is not covered by any SVN savepoint — create a savepoint as soon as possible to keep this TIA state restorable.
+          </div>
+        )}
         <div className="mt-2 flex gap-1.5">
           <input
             aria-label="Description for TIA snapshot"
