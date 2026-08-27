@@ -26,7 +26,7 @@ const comparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): ap
   ...overrides,
 })
 
-const render = async (props: { signal?: number; commitMessage?: string; branch?: string; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string; onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void } = {}) => {
+const render = async (props: { signal?: number; commitMessage?: string; branch?: string; selectionResetSignal?: number; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string; onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void } = {}) => {
   vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue({
     revision: {
       schemaVersion: 1,
@@ -51,6 +51,7 @@ const render = async (props: { signal?: number; commitMessage?: string; branch?:
       branch={props.branch ?? 'master'}
       signal={props.signal ?? 1}
       commitMessage={props.commitMessage ?? ''}
+      selectionResetSignal={props.selectionResetSignal}
       onCommitted={props.onCommitted}
       onBeginOperation={props.onBeginOperation}
       onSelectionChanged={props.onSelectionChanged}
@@ -138,6 +139,26 @@ describe('VersionControlCompare (inline)', () => {
     expect(compare).toHaveBeenCalledWith('wb-1', 'op-42')
   })
 
+  it('clears a committed comparison without running another TIA export', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    const { host, root } = await render({ signal: 1 })
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
+
+    await act(async () => root.render(
+      <VersionControlCompare
+        workbenchId="wb-1"
+        worktreeId="wt-1"
+        branch="master"
+        signal={1}
+        commitMessage=""
+        selectionResetSignal={1}
+      />,
+    ))
+
+    expect(compare).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
+  })
+
   it('hides the clean comparison when only the TIA checksum drifts', async () => {
     vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
       differences: [],
@@ -184,6 +205,7 @@ describe('VersionControlCompare (inline)', () => {
     await click(host.querySelector('button[aria-label="Accept TIA hardware configuration"]')!)
 
     expect(overwrite).toHaveBeenCalledWith('wb-1', 'wt-1', true, undefined, 'Add safety relay')
+    expect(api.compareMasterWithTia).toHaveBeenCalledTimes(1)
   })
 
 })

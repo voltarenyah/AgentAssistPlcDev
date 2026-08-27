@@ -66,8 +66,12 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   useEffect(() => {
     if (selectionResetSignal === 0) return
     setSelected(new Set())
+    setComparison(null)
+    setStarted(false)
+    setError(null)
+    setNeedsCompileConfirmation(false)
     onSelectionChanged?.(null, [])
-    void compare()
+    onComparisonStateChanged?.(false)
     // The reset signal is the only trigger; the parent callback is intentionally a render-local handler.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionResetSignal])
@@ -85,7 +89,9 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     setBusy(true); setError(null)
     try {
       await api.overwriteHardwareConfiguration(workbenchId, worktreeId, true, undefined, commitMessage.trim())
-      await compare()
+      setComparison(null)
+      setStarted(false)
+      onComparisonStateChanged?.(false)
       await onCommitted?.()
     }
     catch (reason) { setError(displayError(reason)) }

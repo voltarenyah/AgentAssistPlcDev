@@ -41,6 +41,13 @@ public sealed class CombinedCommitTests : IDisposable
         Assert.Equal("PLC_1:new-checksum", revision.Tia.ProjectChecksum);
         Assert.Equal(EngineeringCompileStatus.Success, revision.Validation.CompileStatus);
 
+        var stateArgs = versionControl.CallArgs["vc_commit_state_create"].Single();
+        Assert.Equal("head-2", Property<string>(stateArgs, "commitSha"));
+        var stateDevices = Property<object[]>(stateArgs, "devices");
+        Assert.Contains(stateDevices, item =>
+            Property<string>(item, "plcName") == "PLC_1"
+            && Property<string>(item, "projectChecksum") == "new-checksum");
+
         var commitPaths = Property<string[]>(
             versionControl.CallArgs["vc_commit_selected"].Single(), "paths");
         Assert.Contains(EngineeringStateWriter.RelativePath, commitPaths);
@@ -111,6 +118,7 @@ public sealed class CombinedCommitTests : IDisposable
                 "head-2",
                 "accept Main change",
                 new[] { CombinedFixture.SourcePath, EngineeringStateWriter.RelativePath }))
+            .Respond("vc_commit_state_create", new object())
             .Respond("vc_log", new ConsistencyLogResult
             {
                 Commits = new[] { new ConsistencyCommit { Sha = "head-2" } },
@@ -127,6 +135,12 @@ public sealed class CombinedCommitTests : IDisposable
         Assert.DoesNotContain("svn_commit", retryVersionControl.Calls);
         Assert.DoesNotContain("svn_status", retryVersionControl.Calls);
         Assert.Equal(2, fixture.ReadRevisionState().Svn.Revision);
+        var retryStateArgs = retryVersionControl.CallArgs["vc_commit_state_create"].Single();
+        Assert.Equal("head-2", Property<string>(retryStateArgs, "commitSha"));
+        var retryStateDevices = Property<object[]>(retryStateArgs, "devices");
+        Assert.Contains(retryStateDevices, item =>
+            Property<string>(item, "plcName") == "PLC_1"
+            && Property<string>(item, "projectChecksum") == "new-checksum");
         Assert.False(File.Exists(PendingCommitStore.PathFor(fixture.MasterRoot)));
         Assert.Single(fixture.ReadPendingSync());
     }
@@ -373,7 +387,9 @@ public sealed class CombinedCommitTests : IDisposable
                     new[] { SourcePath, EngineeringStateWriter.RelativePath }));
             }
 
-            return caller.Respond("vc_log", new ConsistencyLogResult
+            return caller
+                .Respond("vc_commit_state_create", new object())
+                .Respond("vc_log", new ConsistencyLogResult
             {
                 Commits = new[] { new ConsistencyCommit { Sha = "head-2" } },
             });
