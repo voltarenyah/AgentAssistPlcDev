@@ -981,6 +981,20 @@ public sealed class WorkbenchCoordinator
                 // Git commit and may describe a different TIA state.
             }
 
+            var untrackableChange = false;
+            try
+            {
+                untrackableChange = (await versionControl.CallAsync<TimelineUntrackableChangeResult>(
+                        "vc_untrackable_change_get",
+                        new { repoPath = worktreeRoot, commitSha = commit.Sha },
+                        token).ConfigureAwait(false))?.UntrackableChange == true;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // A missing/unsupported marker tag means the commit is an ordinary tracked
+                // change; the timeline row simply carries no untrackable-change marker.
+            }
+
             var revisionStateChanged = files.Any(path =>
                 string.Equals(path, EngineeringStateWriter.RelativePath, StringComparison.OrdinalIgnoreCase));
             EngineeringRevisionState? state = null;
@@ -1031,7 +1045,8 @@ public sealed class WorkbenchCoordinator
                 commit.Timestamp,
                 files,
                 tiaChecksum,
-                linkedRevision));
+                linkedRevision,
+                untrackableChange));
         }
 
         var svnMetadata = new Dictionary<long, TimelineSvnLogEntry>();
@@ -2734,7 +2749,8 @@ public sealed class WorkbenchCoordinator
         IReadOnlyList<string> paths,
         string message,
         CancellationToken token = default,
-        string? author = null)
+        string? author = null,
+        bool untrackableChange = false)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A commit message is required.", nameof(message));
@@ -2745,7 +2761,11 @@ public sealed class WorkbenchCoordinator
         var worktree = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
         // Ordinary commits are git-only: git history records what was done; native SVN
         // snapshots are created only by the explicit savepoint action (CreateNativeSavepointAsync).
-        var selected = NormalizeSourcePaths(paths);
+        // An untrackable change leaves no git-tracked file diff, so an empty path list is
+        // allowed and commits message-only with an untrackable-change marker tag.
+        var selected = untrackableChange && paths.Count == 0
+            ? Array.Empty<string>()
+            : NormalizeSourcePaths(paths);
         var isMaster = string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase);
 
         if (isMaster)
@@ -2773,7 +2793,9 @@ public sealed class WorkbenchCoordinator
                     "Master advanced after TIA authorization; compare TIA with master again before committing.");
         }
 
-        var result = await CommitSelectedSourceAsync(worktreeRoot, selected, message, token, author)
+        var result = await CommitSelectedSourceAsync(
+                worktreeRoot, selected, message, token, author,
+                allowEmpty: untrackableChange, untrackableChange: untrackableChange)
             .ConfigureAwait(false);
 
         if (isMaster)
@@ -3016,11 +3038,13 @@ public sealed class WorkbenchCoordinator
         IReadOnlyList<string> paths,
         string message,
         CancellationToken token,
-        string? author = null)
+        string? author = null,
+        bool allowEmpty = false,
+        bool untrackableChange = false)
     {
         return await versionControl.CallAsync<WorkbenchCommitResult>(
                 "vc_commit_selected",
-                new { repoPath = worktreeRoot, paths, message, author },
+                new { repoPath = worktreeRoot, paths, message, author, allowEmpty, untrackableChange },
                 token)
             .ConfigureAwait(false);
     }

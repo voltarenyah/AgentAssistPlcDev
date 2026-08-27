@@ -1923,6 +1923,35 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task WorktreeCommitWithUntrackableChangeRoutesThroughCoordinator()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            versionControlJson: """
+                {"Sha":"commit-1","Message":"TIA change git cannot track","Files":[],"Commits":[{"Sha":"head-1"}]}
+                """);
+        var prefix = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/vc";
+
+        (await fixture.Client.PostAsJsonAsync($"{prefix}/commit", new
+        {
+            paths = Array.Empty<string>(),
+            message = "TIA change git cannot track",
+            untrackableChange = true,
+        })).EnsureSuccessStatusCode();
+
+        // The coordinator path (not the legacy gateway fallback) reads the master head via
+        // vc_log and always forwards the untrackable-change flags on vc_commit_selected.
+        Assert.Contains("vc_log", fixture.VersionControl.Calls);
+        var commitIndex = fixture.VersionControl.Calls.IndexOf("vc_commit_selected");
+        Assert.True(commitIndex >= 0);
+        var args = fixture.VersionControl.Arguments[commitIndex];
+        Assert.Empty(args.GetProperty("paths").EnumerateArray());
+        Assert.True(args.GetProperty("allowEmpty").GetBoolean());
+        Assert.True(args.GetProperty("untrackableChange").GetBoolean());
+    }
+
+    [Fact]
     public async Task ValidationEndpointReturnsNullForAnUnlabeledCommit()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(

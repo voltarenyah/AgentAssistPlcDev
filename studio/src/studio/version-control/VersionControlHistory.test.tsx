@@ -16,6 +16,7 @@ const commit = (overrides: Partial<Extract<VcTimelineItem, { kind: 'commit' }>> 
   files: ['devices/PLC_1/source/Blocks/Main.xml'],
   tiaChecksum: 'B3 35 56 49',
   svnRevision: 4,
+  untrackableChange: false,
   validationState: 'Validated',
   ...overrides,
 })
@@ -91,6 +92,18 @@ describe('VersionControlHistory', () => {
     const badges = detail.querySelector('[data-testid="commit-badges"]')!
     expect(badges.compareDocumentPosition(checksumLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(checksumLabel.compareDocumentPosition(checksumSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('marks untrackable commits on the row and in the expanded detail', async () => {
+    const { host } = await render([commit({ untrackableChange: true, files: [] })])
+
+    // The marker is visible without expanding the item.
+    const marker = host.querySelector('[data-testid="vc-untrackable-marker"]')!
+    expect(marker.textContent).toContain('untrackable')
+
+    await click(host.querySelector('[data-testid="commit-abcdef1"]')!)
+
+    expect(host.querySelector('[data-testid="vc-untrackable-note"]')?.textContent).toContain('No git-tracked files changed')
   })
 
   it('creates a rollback feature from selected files instead of restoring master', async () => {

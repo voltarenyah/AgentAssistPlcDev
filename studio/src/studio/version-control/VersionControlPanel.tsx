@@ -100,6 +100,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
       files: commit.files,
       tiaChecksum: commit.tiaChecksum ?? savepointBySha.get(commit.sha)?.projectChecksum ?? null,
       svnRevision: commit.svnRevision ?? savepointBySha.get(commit.sha)?.svnRevision ?? null,
+      untrackableChange: commit.untrackableChange ?? false,
       validationState: validationBySha.get(commit.sha) ?? 'Unlabeled',
     }))
     const revisions: VcTimelineItem[] = (timeline?.svnRevisions ?? []).map(revision => ({
@@ -130,6 +131,17 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
     const index = log.findIndex(commit => commit.sha === lastSavepoint.sha)
     return index >= 0 ? index : log.length
   }, [lastSavepoint, log])
+  // An untrackable commit is only covered once a savepoint newer than it
+  // exists; log is newest-first, so anything before the boundary is uncovered.
+  const untrackablePendingSavepoint = useMemo(() => {
+    const untrackableShas = (timeline?.gitCommits ?? []).filter(commit => commit.untrackableChange === true).map(commit => commit.sha)
+    if (untrackableShas.length === 0) return false
+    if (commitsSinceSavepoint === null) return true
+    return untrackableShas.some(sha => {
+      const index = log.findIndex(commit => commit.sha === sha)
+      return index >= 0 && index < commitsSinceSavepoint
+    })
+  }, [timeline, commitsSinceSavepoint, log])
   const hardwareDiffers = useMemo(() => entries.some(entry => entry.category === 'Hardware'), [entries])
 
 
@@ -198,6 +210,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
               commitsSince: commitsSinceSavepoint,
               hardwareDiffers,
             }}
+            untrackablePendingSavepoint={untrackablePendingSavepoint}
             onCommitted={() => void refresh()}
             onBeginOperation={onBeginOperation}
           />

@@ -150,9 +150,8 @@ describe('VersionControlPanel (worktree dock)', () => {
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
 
     expect(compare).toHaveBeenCalledTimes(1)
-    // A clean comparison leaves the changes dock empty without a result banner.
-    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
-    expect(host.textContent).not.toContain('TIA matches master')
+    // A clean comparison now shows the clean-state block instead of a blank area.
+    expect(host.querySelector('[data-testid="vc-clean-state"]')?.textContent).toContain('TIA matches master')
     expect(host.querySelector('[data-testid="vc-changes-empty"]')).toBeNull()
   })
 
@@ -200,7 +199,95 @@ describe('VersionControlPanel (worktree dock)', () => {
     await click(host.querySelector('[data-testid="vc-tab-changes"]')!)
 
     expect(compare).toHaveBeenCalledTimes(1)
-    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
-    expect(host.textContent).not.toContain('TIA matches master')
+    expect(host.querySelector('[data-testid="vc-clean-state"]')?.textContent).toContain('TIA matches master')
+  })
+
+  const logCommit = (sha: string): api.VcCommitEntry => ({
+    sha,
+    author: 'PLC Assistant',
+    message: sha,
+    timestamp: '2026-08-23T08:00:00.000Z',
+    files: [],
+    validationState: 'Unlabeled',
+    evidenceKind: null,
+  })
+  const timelineCommit = (sha: string, untrackableChange: boolean | null): api.VersionControlTimelineGitCommit => ({
+    sha,
+    author: 'PLC Assistant',
+    message: sha,
+    timestamp: '2026-08-23T08:00:00.000Z',
+    files: [],
+    tiaChecksum: null,
+    svnRevision: null,
+    untrackableChange,
+  })
+  const savepointAt = (sha: string, revision: number): api.SavepointInfo => ({
+    sha,
+    message: sha,
+    svnUrl: '^/native/main',
+    svnRevision: revision,
+    projectChecksum: null,
+    compileStatus: 'SUCCESS',
+    fSignature: null,
+  })
+
+  it('maps the untrackable-change flag onto the history timeline', async () => {
+    mockVcState({
+      commits: [logCommit('untrackable-1')],
+      timeline: {
+        gitCommits: [timelineCommit('untrackable-1', true)],
+        svnRevisions: [],
+        hasMore: false,
+      },
+    })
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
+
+    expect(host.querySelector('[data-testid="vc-untrackable-marker"]')?.textContent).toContain('untrackable')
+  })
+
+  it('warns about a pending savepoint when an untrackable commit is newer than the savepoint boundary', async () => {
+    mockVcState({
+      commits: [logCommit('new-untrackable'), logCommit('snapshot-r3'), logCommit('old-r2')],
+      savepoints: [savepointAt('snapshot-r3', 3), savepointAt('old-r2', 2)],
+      timeline: {
+        gitCommits: [timelineCommit('new-untrackable', true), timelineCommit('snapshot-r3', null), timelineCommit('old-r2', null)],
+        svnRevisions: [],
+        hasMore: false,
+      },
+    })
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    expect(host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')).toBeTruthy()
+  })
+
+  it('stays quiet when the untrackable commit is older than the savepoint boundary', async () => {
+    mockVcState({
+      commits: [logCommit('snapshot-r3'), logCommit('old-untrackable')],
+      savepoints: [savepointAt('snapshot-r3', 3)],
+      timeline: {
+        gitCommits: [timelineCommit('snapshot-r3', null), timelineCommit('old-untrackable', true)],
+        svnRevisions: [],
+        hasMore: false,
+      },
+    })
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    expect(host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')).toBeNull()
+  })
+
+  it('warns about a pending savepoint when an untrackable commit exists and no savepoint exists at all', async () => {
+    mockVcState({
+      commits: [logCommit('new-untrackable')],
+      timeline: {
+        gitCommits: [timelineCommit('new-untrackable', true)],
+        svnRevisions: [],
+        hasMore: false,
+      },
+    })
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    expect(host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')).toBeTruthy()
   })
 })

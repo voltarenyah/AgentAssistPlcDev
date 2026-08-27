@@ -118,6 +118,56 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task TimelineMarksUntrackableChangeCommits()
+    {
+        var fixture = Fixture.Create(root);
+        var workbench = RegisterTimelineWorkbench(fixture);
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_log", new ConsistencyLogResult
+            {
+                Commits =
+                [
+                    new ConsistencyCommit
+                    {
+                        Sha = "untrackable",
+                        Author = "Ansel",
+                        Message = "TIA change git cannot track",
+                        Timestamp = "2026-08-10T09:00:00Z",
+                        Files = [],
+                    },
+                    new ConsistencyCommit
+                    {
+                        Sha = "ordinary",
+                        Author = "Ansel",
+                        Message = "Edit local XML",
+                        Timestamp = "2026-08-10T08:00:00Z",
+                        Files = ["devices/PLC_1/source/Blocks/Main.xml"],
+                    },
+                ],
+            })
+            .Respond("vc_commit_state_get", _ => null!)
+            .Respond("vc_untrackable_change_get", args =>
+                new TimelineUntrackableChangeResult
+                {
+                    UntrackableChange = Property<string>(args, "commitSha") == "untrackable",
+                });
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "timeline-untrackable-catalog")),
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        coordinator.RegisterWorkbench(workbench);
+
+        var result = await coordinator.ListVersionControlTimelineAsync("wb-1", "wt-1");
+
+        Assert.True(result.GitCommits[0].UntrackableChange);
+        Assert.False(result.GitCommits[1].UntrackableChange);
+    }
+
+    [Fact]
     public async Task OpenProjectInTiaUsesRegisteredProjectWithUi()
     {
         var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");

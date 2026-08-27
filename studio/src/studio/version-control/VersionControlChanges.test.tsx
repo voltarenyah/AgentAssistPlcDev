@@ -20,7 +20,7 @@ const entry = (overrides: Partial<VersionControlSourceEntry> = {}): VersionContr
 
 const snapshot = { revision: 3, commitsSince: 2, hardwareDiffers: false }
 
-const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0) => {
+const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -33,6 +33,7 @@ const render = async (entries: VersionControlSourceEntry[], snapshotOverride = s
         entries={entries}
         compareSignal={compareSignal}
         snapshot={snapshotOverride}
+        untrackablePendingSavepoint={untrackablePendingSavepoint}
       />,
     )
   })
@@ -92,7 +93,7 @@ describe('VersionControlChanges', () => {
     await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'change A')
     await click(host.querySelector('[data-testid="vc-commit-selected"]')!)
 
-    expect(commit).toHaveBeenCalledWith('wb-1', 'wt-1', ['devices/PLC_1/source/Blocks/A.xml'], 'change A')
+    expect(commit).toHaveBeenCalledWith('wb-1', 'wt-1', ['devices/PLC_1/source/Blocks/A.xml'], 'change A', false)
   })
 
   it('commits all changes through the split-button menu', async () => {
@@ -113,7 +114,7 @@ describe('VersionControlChanges', () => {
     expect(commit).toHaveBeenCalledWith('wb-1', 'wt-1', [
       'devices/PLC_1/source/Blocks/A.xml',
       'devices/PLC_1/source/Blocks/B.xml',
-    ], 'all')
+    ], 'all', false)
   })
 
   it('shows the clean-state hero when there are no changes', async () => {
@@ -210,7 +211,7 @@ describe('VersionControlChanges', () => {
     const commit = vi.spyOn(api, 'commitVcPaths')
     const { host } = await render([], snapshot, 1)
 
-    await click(host.querySelector('input[type="checkbox"]')!)
+    await click(host.querySelector('[data-testid="vc-compare-result"] input[type="checkbox"]')!)
     await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'Accept Main from TIA')
     expect(host.textContent).toContain('Commit selected (1)')
     await click(host.querySelector('[data-testid="vc-commit-selected"]')!)
@@ -222,7 +223,54 @@ describe('VersionControlChanges', () => {
       'Accept Main from TIA',
     )
     expect(commit).not.toHaveBeenCalled()
-    expect(host.querySelector('input[type="checkbox"]')).toBeNull()
-    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-compare-result"] input[type="checkbox"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeTruthy()
+  })
+
+  it('keeps the commit button disabled with a message but zero selected paths until the untrackable checkbox is ticked', async () => {
+    const { host } = await render([entry()])
+
+    const commitButton = host.querySelector('[data-testid="vc-commit-selected"]') as HTMLButtonElement
+    expect(commitButton.disabled).toBe(true)
+
+    await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'TIA-only change')
+    expect(commitButton.disabled).toBe(true)
+
+    const checkbox = host.querySelector('[data-testid="vc-untrackable-change"]') as HTMLInputElement
+    expect(checkbox.checked).toBe(false)
+    await click(checkbox)
+
+    expect(checkbox.checked).toBe(true)
+    expect((host.querySelector('[data-testid="vc-commit-selected"]') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('commits an untrackable message-only change with empty paths and clears message and checkbox on success', async () => {
+    const commit = vi.spyOn(api, 'commitVcPaths').mockResolvedValue({
+      sha: 'deadbeefcafe',
+      message: 'TIA-only change',
+      files: [],
+    })
+    const { host } = await render([entry()])
+
+    await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'TIA-only change')
+    await click(host.querySelector('[data-testid="vc-untrackable-change"]')!)
+    await click(host.querySelector('[data-testid="vc-commit-selected"]')!)
+
+    expect(commit).toHaveBeenCalledWith('wb-1', 'wt-1', [], 'TIA-only change', true)
+    expect((host.querySelector('textarea[aria-label="Commit message"]') as HTMLTextAreaElement).value).toBe('')
+    expect((host.querySelector('[data-testid="vc-untrackable-change"]') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('warns in the snapshot area when an untrackable change has no savepoint coverage', async () => {
+    const { host } = await render([entry()], snapshot, 0, true)
+
+    const warning = host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')!
+    expect(warning.textContent).toContain('not covered by any SVN savepoint')
+  })
+
+  it('hides the savepoint warning when every untrackable change is covered', async () => {
+    const { host } = await render([entry()])
+
+    expect(host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')).toBeNull()
   })
 })

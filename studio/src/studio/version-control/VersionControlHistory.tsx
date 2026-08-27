@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronRight, Copy, Download, Loader2 } from 'lucide-react'
+import { ChevronRight, Copy, Download, Loader2, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
@@ -15,6 +15,7 @@ export type VcTimelineItem =
       files: string[]
       tiaChecksum: string | null
       svnRevision: number | null
+      untrackableChange: boolean
       validationState: api.VcValidationState
     }
   | {
@@ -174,6 +175,16 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                 >
                   <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
                   <span className={`min-w-0 flex-1 truncate text-[12px] ${isSavepoint ? 'text-violet-400' : ''}`}>{item.message}</span>
+                  {!isSavepoint && item.untrackableChange && (
+                    <span
+                      className="flex shrink-0 items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-500"
+                      title="Untrackable change — no git-file diff"
+                      data-testid="vc-untrackable-marker"
+                    >
+                      <TriangleAlert className="h-3 w-3" />
+                      untrackable
+                    </span>
+                  )}
                   {isSavepoint ? (
                     <span className="shrink-0 rounded-full border border-violet-400/35 bg-violet-400/10 px-2 py-0.5 font-mono text-[10px] font-bold text-violet-400">r{item.revision}</span>
                   ) : key === headKey && branch ? (
@@ -192,6 +203,12 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                         {item.tiaChecksum && <div className="mb-1 text-[9px] uppercase tracking-wide text-muted-foreground" data-testid="tia-checksum-label">TIA checksum</div>}
                         {item.tiaChecksum && <div className="mb-1.5" data-testid="tia-checksum-section"><ChecksumRows value={item.tiaChecksum} /></div>}
                         <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Changed files · {item.files.length}</div>
+                        {item.untrackableChange && (
+                          <div className="mb-1 flex items-center gap-1 text-[10px] text-amber-500" data-testid="vc-untrackable-note">
+                            <TriangleAlert className="h-3 w-3 shrink-0" />
+                            No git-tracked files changed; create an SVN savepoint to persist this TIA state.
+                          </div>
+                        )}
                         {item.files.map(file => (
                           <button
                             key={file}

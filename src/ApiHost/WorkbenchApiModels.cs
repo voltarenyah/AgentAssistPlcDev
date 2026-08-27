@@ -25,7 +25,7 @@ public sealed record RefreshApplyApiRequest(
     string[]? ApprovedRemovalPaths = null,
     string? CommitMessage = null);
 public sealed record SourcePathApiRequest(string RelativePath);
-public sealed record CommitSourceApiRequest(string[] Paths, string Message);
+public sealed record CommitSourceApiRequest(string[] Paths, string Message, bool UntrackableChange);
 public sealed record RestoreTiaProjectApiRequest(string? GitCommit = null);
 public sealed record NativeSavepointApiRequest(string Message);
 public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths, string Message);
@@ -737,14 +737,18 @@ public static class WorkbenchEndpoints
                     return false;
                 }
             });
-            if (hasExistingSource)
+            if (hasExistingSource || body.UntrackableChange)
             {
                 // All registered worktrees commit through the coordinator: master enforces the
                 // TIA-authorization gate, and SVN-managed workbenches (master or feature) run
-                // the combined SVN+Git transaction. The gateway fallback below only remains for
-                // empty/legacy worktrees without on-disk source files.
+                // the combined SVN+Git transaction. Untrackable-change commits always take this
+                // path so the master write gate still applies to message-only commits. The
+                // gateway fallback below only remains for empty/legacy worktrees without
+                // on-disk source files.
                 coordinator.RegisterWorkbench(s.Workbench(workbenchId));
-                return Results.Ok(await coordinator.CommitSourceAsync(workbenchId, worktreeId, body.Paths, body.Message, ct));
+                return Results.Ok(await coordinator.CommitSourceAsync(
+                    workbenchId, worktreeId, body.Paths, body.Message, ct,
+                    untrackableChange: body.UntrackableChange));
             }
 
             // Compatibility for an empty/legacy worktree: the version-control server still

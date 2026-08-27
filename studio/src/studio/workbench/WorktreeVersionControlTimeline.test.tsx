@@ -15,6 +15,7 @@ const gitCommit = (index: number, overrides: Partial<api.VersionControlTimelineG
   files: ['devices/PLC_1/source/Blocks/Main.xml'],
   tiaChecksum: null,
   svnRevision: null,
+  untrackableChange: null,
   ...overrides,
 })
 
@@ -112,6 +113,24 @@ describe('WorktreeVersionControlTimeline', () => {
     expect(host.querySelectorAll('[data-timeline-git]').length).toBe(11)
     expect(host.textContent).toContain('abcdef1')
     expect(host.querySelector('[data-testid="timeline-load-more"]')).toBeNull()
+  })
+
+  it('marks columns whose commit records an untrackable change', async () => {
+    vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue({
+      ...firstPage,
+      gitCommits: [
+        gitCommit(0, { sha: 'untrackable-1', untrackableChange: true }),
+        gitCommit(1, { sha: 'ordinary-1' }),
+      ],
+      svnRevisions: [],
+      hasMore: false,
+    })
+    const { host } = await render()
+
+    const markers = host.querySelectorAll('[data-testid="vc-untrackable-marker"]')
+    expect(markers.length).toBe(1)
+    expect(markers[0].getAttribute('title')).toBe('Untrackable change — no git-file diff')
+    expect(markers[0].closest('[data-timeline-column]')?.querySelector('[data-timeline-git-hash]')?.textContent).toBe('untrack')
   })
 
   it('shows event details when a Git shape receives focus', async () => {

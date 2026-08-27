@@ -138,7 +138,7 @@ describe('VersionControlCompare (inline)', () => {
     expect(compare).toHaveBeenCalledWith('wb-1', 'op-42')
   })
 
-  it('hides the clean comparison when only the TIA checksum drifts', async () => {
+  it('shows the clean state when only the TIA checksum drifts', async () => {
     vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
       differences: [],
       state: 'Different',
@@ -146,8 +146,7 @@ describe('VersionControlCompare (inline)', () => {
     }))
     const { host } = await render({ signal: 1 })
 
-    expect(host.textContent).not.toContain('TIA matches master')
-    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-clean-state"]')?.textContent).toContain('TIA matches master')
   })
 
   it('reports TIA matches master when checksums match and no differences exist', async () => {
@@ -158,8 +157,9 @@ describe('VersionControlCompare (inline)', () => {
     }))
     const { host } = await render({ signal: 1 })
 
-    expect(host.textContent).not.toContain('TIA matches master')
-    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
+    const cleanState = host.querySelector('[data-testid="vc-clean-state"]')!
+    expect(cleanState.textContent).toContain('TIA matches master')
+    expect(cleanState.textContent).toContain('Untrackable change')
   })
 
   it('accepts project hardware changes with the commit message as title', async () => {

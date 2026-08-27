@@ -571,46 +571,69 @@ internal static class RepositoryService
         return new VcCommitResult { Sha = commit.Sha, Message = message, Files = files };
     }
 
-    /// <summary>Commit exactly the requested changed PLC source XML paths.</summary>
+    /// <summary>Commit exactly the requested changed PLC source XML paths. When
+    /// <paramref name="allowEmpty"/> is set and no paths are given, creates an empty
+    /// message-only commit instead of failing with SOURCE_PATHS_REQUIRED. When
+    /// <paramref name="untrackableChange"/> is set, records an immutable untrackable-change
+    /// marker tag on the new commit.</summary>
     public static VcCommitResult CommitSelected(
         string repoPath,
         string[] paths,
         string message,
-        string? author = null)
+        string? author = null,
+        bool allowEmpty = false,
+        bool untrackableChange = false)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new VcInternalException("MESSAGE_REQUIRED", "Commit message must not be empty.");
-        if (paths == null || paths.Length == 0)
+        var emptyCommit = allowEmpty && (paths == null || paths.Length == 0);
+        if (!emptyCommit && (paths == null || paths.Length == 0))
             throw new VcInternalException("SOURCE_PATHS_REQUIRED", "At least one PLC source XML path is required.");
 
-        var selected = paths
-            .Select(SourcePathPolicy.Require)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToArray();
+        var selected = emptyCommit
+            ? Array.Empty<string>()
+            : paths!
+                .Select(SourcePathPolicy.Require)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
 
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
-        var unchanged = selected
-            .Where(path => ByteContentEquals(
-                ReadTreeFile(repo.Head?.Tip?.Tree, path),
-                ReadWorkingFile(repo, path)))
-            .ToArray();
-        if (unchanged.Length > 0)
+        if (!emptyCommit)
         {
-            throw new VcInternalException(
-                "SOURCE_PATH_UNCHANGED",
-                $"Selected PLC source path(s) have no HEAD-to-working-tree change: {string.Join(", ", unchanged)}.");
+            var unchanged = selected
+                .Where(path => ByteContentEquals(
+                    ReadTreeFile(repo.Head?.Tip?.Tree, path),
+                    ReadWorkingFile(repo, path)))
+                .ToArray();
+            if (unchanged.Length > 0)
+            {
+                throw new VcInternalException(
+                    "SOURCE_PATH_UNCHANGED",
+                    $"Selected PLC source path(s) have no HEAD-to-working-tree change: {string.Join(", ", unchanged)}.");
+            }
         }
 
         var indexSnapshot = CaptureIndex(repo);
         try
         {
             ResetIndexToHead(repo);
-            Commands.Stage(repo, selected);
+            if (!emptyCommit)
+            {
+                Commands.Stage(repo, selected);
+            }
+
             var signature = ResolveAuthor(repo, author);
-            var commit = repo.Commit(message, signature, signature);
-            var files = GetCommitFiles(repo, commit);
+            var commit = emptyCommit
+                ? repo.Commit(message, signature, signature, new CommitOptions { AllowEmptyCommit = true })
+                : repo.Commit(message, signature, signature);
+            var files = emptyCommit ? Array.Empty<string>() : GetCommitFiles(repo, commit);
+            if (untrackableChange)
+            {
+                UntrackableChangeTagStore.Create(repo, commit.Sha);
+            }
+
             return new VcCommitResult { Sha = commit.Sha, Message = message, Files = files };
         }
         catch
@@ -703,6 +726,14 @@ internal static class RepositoryService
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
         return CommitStateTagStore.Read(repo, commitSha);
+    }
+
+    /// <summary>Read the untrackable-change marker for a commit; absent or invalid returns false.</summary>
+    public static bool GetUntrackableChange(string repoPath, string commitSha)
+    {
+        EnsureRepo(repoPath);
+        using var repo = new Repository(repoPath);
+        return UntrackableChangeTagStore.Read(repo, commitSha) != null;
     }
 
     /// <summary>Read a git-tracked text file at a specific commit (or HEAD). Returns null when

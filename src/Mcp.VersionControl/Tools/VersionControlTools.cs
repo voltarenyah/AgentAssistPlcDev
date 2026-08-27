@@ -116,13 +116,15 @@ public sealed class VersionControlTools
         => Invoke(() => RepositoryService.Commit(repoPath, message, author));
 
     [McpServerTool(Name = "vc_commit_selected")]
-    [Description("Atomically commit exactly the selected changed PLC source XML paths. Existing staging is cleared without changing working files; unselected changes remain uncommitted.")]
+    [Description("Atomically commit exactly the selected changed PLC source XML paths. Existing staging is cleared without changing working files; unselected changes remain uncommitted. With allowEmpty and no paths, creates an empty message-only commit; untrackableChange records an immutable marker tag on the new commit.")]
     public CallToolResult VcCommitSelected(
         [Description("Path to the git repository or linked worktree.")] string repoPath,
         [Description("One or more changed devices/<device>/source/**/*.xml paths relative to the worktree root.")] string[] paths,
         [Description("Required commit message.")] string message,
-        [Description("Optional author string in 'Name <email>' format.")] string? author = null)
-        => Invoke(() => RepositoryService.CommitSelected(repoPath, paths, message, author));
+        [Description("Optional author string in 'Name <email>' format.")] string? author = null,
+        [Description("When true, an empty paths list creates an empty message-only commit instead of failing SOURCE_PATHS_REQUIRED.")] bool allowEmpty = false,
+        [Description("When true, records an immutable untrackable-change marker tag on the new commit.")] bool untrackableChange = false)
+        => Invoke(() => RepositoryService.CommitSelected(repoPath, paths, message, author, allowEmpty, untrackableChange));
 
     [McpServerTool(Name = "vc_commit_hardware")]
     [Description("App-internal: atomically commit exactly the given hardware configuration paths (hardware/**). Existing staging is cleared without changing working files.")]
@@ -171,6 +173,13 @@ public sealed class VersionControlTools
         [Description("Path to the git repository.")] string repoPath,
         [Description("Commit SHA to inspect.")] string commitSha)
         => Invoke(() => RepositoryService.GetCommitState(repoPath, commitSha)!);
+
+    [McpServerTool(Name = "vc_untrackable_change_get")]
+    [Description("Read the untrackable-change marker for a commit; returns untrackableChange=false when absent or invalid.")]
+    public CallToolResult VcUntrackableChangeGet(
+        [Description("Path to the git repository.")] string repoPath,
+        [Description("Commit SHA to inspect.")] string commitSha)
+        => Invoke(() => new { untrackableChange = RepositoryService.GetUntrackableChange(repoPath, commitSha) });
 
     [McpServerTool(Name = "vc_diff")]
     [Description("Show an XML source diff and semantic summary. No refs compares HEAD to working tree; oldSha only compares that ref to working tree; both refs compare them; newSha only compares HEAD to that ref.")]

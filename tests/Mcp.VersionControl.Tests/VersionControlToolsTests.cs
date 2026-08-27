@@ -453,6 +453,64 @@ public sealed class VersionControlToolsTests : IDisposable
         Assert.False(IsIndexChange(status[selectedPath].State));
     }
 
+    [Fact]
+    public void CommitSelected_AllowEmptyCreatesEmptyCommitWithUntrackableMarker()
+    {
+        var baseSha = _fixture.CommitSource("a", "base");
+
+        var result = _tools.VcCommitSelected(
+            _fixture.RootPath,
+            Array.Empty<string>(),
+            "TIA change that git cannot track",
+            allowEmpty: true,
+            untrackableChange: true);
+
+        Assert.False(result.IsError == true);
+        var commit = Unwrap<VcCommitResult>(result)!;
+        Assert.Empty(commit.Files);
+        using var repo = new Repository(_fixture.RootPath);
+        var tip = repo.Head.Tip;
+        Assert.Equal(commit.Sha, tip.Sha);
+        var parent = Assert.Single(tip.Parents);
+        Assert.Equal(baseSha, parent.Sha);
+        Assert.Equal(parent.Tree.Id, tip.Tree.Id);
+        Assert.NotNull(repo.Tags[UntrackableChangeTagStore.TagName(commit.Sha)]);
+    }
+
+    [Fact]
+    public void CommitSelected_EmptyPathsWithoutAllowEmptyStillRequirePaths()
+    {
+        _fixture.CommitSource("a", "base");
+
+        var result = _tools.VcCommitSelected(
+            _fixture.RootPath,
+            Array.Empty<string>(),
+            "untrackable marker without allowEmpty",
+            untrackableChange: true);
+
+        Assert.True(result.IsError == true);
+        Assert.Equal("SOURCE_PATHS_REQUIRED", ErrorCode(result));
+    }
+
+    [Fact]
+    public void UntrackableChangeGet_ReportsMarkerPresence()
+    {
+        var marked = _fixture.CommitSource("a", "base");
+        var unmarked = _fixture.CommitSource("b", "second");
+        using (var repo = new Repository(_fixture.RootPath))
+        {
+            UntrackableChangeTagStore.Create(repo, marked);
+        }
+
+        var markedResult = _tools.VcUntrackableChangeGet(_fixture.RootPath, marked);
+        Assert.False(markedResult.IsError);
+        Assert.True(Unwrap<UntrackableChangeResult>(markedResult)!.UntrackableChange);
+
+        var unmarkedResult = _tools.VcUntrackableChangeGet(_fixture.RootPath, unmarked);
+        Assert.False(unmarkedResult.IsError);
+        Assert.False(Unwrap<UntrackableChangeResult>(unmarkedResult)!.UntrackableChange);
+    }
+
     /* ── vc_commit_hardware ─────────────────────────────── */
 
     [Fact]
@@ -924,6 +982,10 @@ public sealed class VersionControlToolsTests : IDisposable
         Assert.Equal("v1", File.ReadAllText(Path.Combine(workingCopy, "Line.ap17")));
     }
 
+    private sealed class UntrackableChangeResult
+    {
+        public bool UntrackableChange { get; set; }
+    }
     private static string? ErrorCode(CallToolResult result)
     {
         var block = Assert.IsType<TextContentBlock>(Assert.Single(result.Content!));
