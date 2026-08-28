@@ -60,6 +60,30 @@ public sealed class CombinedCommitTests : IDisposable
     }
 
     [Fact]
+    public async Task NativeSavepointRecordsFSignatureAndClassifiesSafetyChange()
+    {
+        var fixture = CombinedFixture.Create(root);
+        // The seeded baseline revision.json has no F-signature; the live read returns one,
+        // so the savepoint must classify as a safety change.
+        var engineering = fixture.ScriptEngineering(new FakeToolCaller(), fSignature: "0A1B2C3D");
+        var versionControl = fixture.ScriptVersionControl(new FakeToolCaller());
+        var coordinator = fixture.CreateCoordinator(engineering, versionControl);
+
+        var result = await coordinator.CreateNativeSavepointAsync(
+            CombinedFixture.WorkbenchId,
+            CombinedFixture.WorktreeId,
+            "accept Main change",
+            CancellationToken.None);
+
+        Assert.Equal("head-2", result.Sha);
+        var revision = fixture.ReadRevisionState();
+        Assert.Equal("PLC_1:0A1B2C3D", revision.Safety.FSignature);
+        var svnMessage = Property<string>(
+            versionControl.CallArgs["svn_commit"].Single(), "message");
+        Assert.Contains("safety", svnMessage);
+    }
+
+    [Fact]
     public async Task NativeSavepointAbortsOnCompileFailureWithoutTouchingEitherStore()
     {
         var fixture = CombinedFixture.Create(root);
@@ -334,7 +358,8 @@ public sealed class CombinedCommitTests : IDisposable
 
         /// <summary>Scripts the engineering side: active project already matches, save,
         /// compile, checksums, disconnect.</summary>
-        public FakeToolCaller ScriptEngineering(FakeToolCaller caller, string compileState = "success") =>
+        public FakeToolCaller ScriptEngineering(
+            FakeToolCaller caller, string compileState = "success", string? fSignature = null) =>
             caller
                 .Respond("get_project_info", new ProjectInfo
                 {
@@ -346,7 +371,12 @@ public sealed class CombinedCommitTests : IDisposable
                 .Respond("compile_plc", new CompileResult { State = compileState })
                 .Respond("get_plc_checksums", new[]
                 {
-                    new PlcChecksumInfo { PlcName = "PLC_1", SoftwareChecksum = "new-checksum" },
+                    new PlcChecksumInfo
+                    {
+                        PlcName = "PLC_1",
+                        SoftwareChecksum = "new-checksum",
+                        FSignature = fSignature,
+                    },
                 })
                 .Respond("disconnect", new object());
 

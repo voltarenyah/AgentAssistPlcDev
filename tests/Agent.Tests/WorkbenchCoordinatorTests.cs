@@ -792,6 +792,34 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateRecordsAggregatedFSignatureBaselineForFailsafePlcs()
+    {
+        var versionControl = ScriptCreateVersionControl(new FakeToolCaller());
+        var engineering = ScriptCreateEngineering(
+            new FakeToolCaller(), new[] { "PLC_1", "PLC_2" }, failsafe: true);
+        var knowledge = ScriptCreateKnowledge(new FakeToolCaller(), 2);
+        var catalog = new WorkbenchCatalog(
+            new AtomicJsonStore(),
+            Path.Combine(root, "catalog"));
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            knowledge,
+            versionControl,
+            catalog,
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+
+        var result = await coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest("Line", Path.Combine(root, "failsafe"), 42, null));
+
+        var revision = EngineeringStateWriter.Read(Path.Combine(
+            result.Workbench.RootPath, "worktrees", "master", "engineering-state", "revision.json"));
+        Assert.Equal("PLC_1:fsig-PLC_1;PLC_2:fsig-PLC_2", revision.Safety.FSignature);
+        Assert.Equal(EngineeringCompileStatus.Success, revision.Validation.CompileStatus);
+    }
+
+    [Fact]
     public async Task CreateCompileFailureStillCompletesImportWithFailedStatus()
     {
         var versionControl = ScriptCreateVersionControl(new FakeToolCaller());
@@ -2348,7 +2376,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         FakeToolCaller caller,
         string[] plcs,
         string originPath = @"C:\Projects\Line.ap17",
-        string compileState = "success")
+        string compileState = "success",
+        bool failsafe = false)
     {
         string? managedPath = null;
         caller
@@ -2390,7 +2419,12 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         }
 
         caller.Respond("get_plc_checksums", plcs
-            .Select(plc => new PlcChecksumInfo { PlcName = plc, SoftwareChecksum = $"checksum-{plc}" })
+            .Select(plc => new PlcChecksumInfo
+            {
+                PlcName = plc,
+                SoftwareChecksum = $"checksum-{plc}",
+                FSignature = failsafe ? $"fsig-{plc}" : null,
+            })
             .ToArray());
         foreach (var plc in plcs)
         {

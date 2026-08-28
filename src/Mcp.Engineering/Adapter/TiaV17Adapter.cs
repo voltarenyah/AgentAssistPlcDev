@@ -9,6 +9,7 @@ using Siemens.Engineering;
 using Siemens.Engineering.Cax;
 using Siemens.Engineering.Compiler;
 using Siemens.Engineering.HW;
+using Siemens.Engineering.Safety;
 using Siemens.Engineering.SW;
 using Siemens.Engineering.SW.Blocks;
 using Siemens.Engineering.SW.Tags;
@@ -542,6 +543,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     PlcName = plc.Name,
                     ProjectIdentity = projectIdentity,
                     SoftwareChecksum = TryReadSoftwareChecksum(plc),
+                    FSignature = TryReadSafetySignature(plc),
                 })
                 .OrderBy(info => info.PlcName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -1532,6 +1534,27 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         try
         {
             return plc.GetService<PlcChecksumProvider>()?.Software;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Offline collective F-signature (SafetySignatureProvider.Signatures →
+    /// BlockOfflineSignature, an undocumented Siemens.Engineering.Safety surface found in the
+    /// installed V17 assembly on 2026-08-28 — see scripts/Probe-SafetySignature.ps1). Rendered as
+    /// uppercase hex so it compares byte-stable across sessions. Null for non-failsafe PLCs
+    /// (GetService → null) and on any read failure — a missing signature must never break the
+    /// checksum read.</summary>
+    private static string? TryReadSafetySignature(PlcSoftware plc)
+    {
+        try
+        {
+            var signature = plc.GetService<SafetySignatureProvider>()
+                ?.Signatures
+                ?.Find(SafetySignatureType.BlockOfflineSignature);
+            return signature?.Value.ToString("X8");
         }
         catch
         {

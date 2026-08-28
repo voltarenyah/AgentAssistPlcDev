@@ -459,12 +459,10 @@ public sealed class WorkbenchCoordinator
                 engineeringSession.Release();
             }
 
-            // F-signature: not readable through the Openness surface wrapped today, so the
-            // safety baseline is recorded as null.
-            // TODO(extension point): probe scripts/Dump-OpennessApi.ps1 output for a stable
-            // safety signature (e.g. Safety Administration collective F-signature); when one is
-            // reliably readable, capture it here so revision.json records it from day one.
-            string? fSignature = null;
+            // F-signature: read via the (undocumented) SafetySignatureProvider surface found in
+            // the installed V17 assembly — see scripts/Probe-SafetySignature.ps1. Non-failsafe
+            // PLCs contribute nothing, so the aggregate stays null on standard-only projects.
+            string? fSignature = AggregateFSignature(baselineChecksums);
 
             progress?.Report("Creating device folders...");
             var worktreeId = Guid.NewGuid().ToString("N");
@@ -819,6 +817,17 @@ public sealed class WorkbenchCoordinator
             .Where(checksum => checksum.IsCompiled)
             .OrderBy(checksum => checksum.PlcName, StringComparer.Ordinal)
             .Select(checksum => $"{checksum.PlcName}:{checksum.SoftwareChecksum}"));
+        return aggregate.Length == 0 ? null : aggregate;
+    }
+
+    /// <summary>Deterministic single-string F-signature aggregate (same shape as
+    /// <see cref="AggregateProjectChecksum"/>); null when no PLC exposes a safety signature.</summary>
+    private static string? AggregateFSignature(IEnumerable<PlcChecksumInfo> checksums)
+    {
+        var aggregate = string.Join(";", checksums
+            .Where(checksum => !string.IsNullOrWhiteSpace(checksum.FSignature))
+            .OrderBy(checksum => checksum.PlcName, StringComparer.Ordinal)
+            .Select(checksum => $"{checksum.PlcName}:{checksum.FSignature}"));
         return aggregate.Length == 0 ? null : aggregate;
     }
 
@@ -2950,9 +2959,9 @@ public sealed class WorkbenchCoordinator
             }
         }
 
-        // F-signature: still not readable via Openness — same extension point as the bootstrap
-        // (see CreateWorkbenchAsync). Recorded as null until the probe lands.
-        string? fSignature = null;
+        // F-signature: same SafetySignatureProvider read as the bootstrap (see
+        // CreateWorkbenchAsync); aggregated from the post-compile checksums.
+        string? fSignature = AggregateFSignature(savepointChecksums);
 
         // Rule 8: quiesce the TIA session before the native commit so no TIA process can still
         // write the managed tree while SVN snapshots it.

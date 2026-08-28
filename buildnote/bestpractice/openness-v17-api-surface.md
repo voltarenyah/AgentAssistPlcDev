@@ -231,6 +231,35 @@ on `IEngineeringServiceProvider`).
   mismatch nominate even when fingerprints still match (hash decides; compile ripples degrade to
   "touched").
 
+## 11. Safety / failsafe (`Siemens.Engineering.Safety`, reflection-probed 2026-08-28)
+
+Found by a full-assembly type scan for `Safety|Failsafe|Signature` (this dump previously missed the
+namespace — it is **not** part of the documented V17 Openness surface). Runtime verification against
+a live F-CPU project is still pending (no failsafe project available at probe time); use
+`scripts/Probe-SafetySignature.ps1` with a failsafe project open to confirm the read paths below.
+
+- **`SafetySignatureProvider`** (`IEngineeringService`, like `PlcChecksumProvider`) — expected access
+  pattern `plc.GetService<SafetySignatureProvider>()`. Property `Signatures`
+  (`SafetySignatureComposition`, read-only list) → `Find(SafetySignatureType)`. The V17 enum has a
+  single member, **`BlockOfflineSignature`**, and `SafetySignature.Value` is a `UInt64` — this is the
+  offline collective F-signature of the safety program, i.e. exactly the value needed for safety
+  change detection without F-block export.
+- **`SafetyAdministration`** (also an `IEngineeringService` on the PLC software) — `Settings`
+  (`SafetySettings.SafetySystemVersion.Value`), `RuntimeGroups` (`Name`, `MainSafetyBlockName`,
+  `FOBName`, `MaximumCycleTime`, ...), `IsSafetyOfflineProgramPasswordSet`,
+  `IsLoggedOnToSafetyOfflineProgram`, and offline-program login/logoff/password methods. Reading the
+  signature must not require logging on to the safety program — verify with the probe.
+- Also present: `SafetyPrintout` (safety printout to file), plus a large set of
+  `Siemens.Engineering.HW.Failsafe_*` enums (F-I/O channel parameters).
+- Wired up: `get_plc_checksums` now also returns `FSignature` per PLC
+  (`TiaV17Adapter.TryReadSafetySignature`, uppercase hex of `BlockOfflineSignature`; null on
+  non-failsafe PLCs or any read failure).
+- **Still unknown (probe with an F-project):** whether `GetService<SafetySignatureProvider>()` returns
+  null or throws on standard PLCs, whether the signature moves on safety-parameter-only edits, and
+  whether `FingerprintProvider.GetFingerprints()` works on F-blocks (fallback change signal, since
+  F-block export is refused). The `.ap17` ZIP-parse fallback remains unimplemented and unnecessary if
+  the provider read verifies.
+
 ## Key findings
 
 **(a) Compile: synchronous.** `ICompilable.Compile()` is parameterless, blocks, and returns
