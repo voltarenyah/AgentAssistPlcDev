@@ -2708,7 +2708,8 @@ public sealed class WorkbenchCoordinator
                 master.WorktreeId,
                 selected,
                 message.Trim(),
-                token)
+                token,
+                recordTiaState: false)
             .ConfigureAwait(false);
 
         // Record TIA state (per-device checksums) for this commit so it can be traced later.
@@ -2750,7 +2751,8 @@ public sealed class WorkbenchCoordinator
         string message,
         CancellationToken token = default,
         string? author = null,
-        bool untrackableChange = false)
+        bool untrackableChange = false,
+        bool recordTiaState = true)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A commit message is required.", nameof(message));
@@ -2808,6 +2810,17 @@ public sealed class WorkbenchCoordinator
                 WorkbenchWritePolicy.PendingSchemaVersion,
                 worktree.WorktreeId,
                 remaining.Select(item => item with { MasterHeadSha = newHead }).ToArray()));
+        }
+
+        if (recordTiaState)
+        {
+            // Every commit records the live TIA device checksums so the timeline can identify
+            // the software state it captured — untrackable and mixed untrackable/tracked
+            // commits leave no (or only a partial) git-tracked diff, so the checksum is the
+            // only software-state evidence bound to the commit.
+            await TryRecordLiveCommitStateAsync(
+                    workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha, token)
+                .ConfigureAwait(false);
         }
 
         return result;
@@ -3009,6 +3022,53 @@ public sealed class WorkbenchCoordinator
                 token)
             .ConfigureAwait(false);
         return commit;
+    }
+
+    /// <summary>
+    /// Best-effort: reads the live compiled software checksums from TIA and binds them to the
+    /// commit via a commit-state tag. The commit has already succeeded, so any TIA problem (no
+    /// session, project not open, checksums unreadable) is swallowed rather than reported.
+    /// </summary>
+    private async Task TryRecordLiveCommitStateAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree,
+        string worktreeRoot,
+        string worktreeRelativePath,
+        string commitSha,
+        CancellationToken token)
+    {
+        try
+        {
+            var devices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
+            if (devices.Count == 0)
+            {
+                return;
+            }
+
+            PlcChecksumInfo[] checksums;
+            await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                await EnsureActiveProjectMatchesWorktreeAsync(devices[0].Context, token, null)
+                    .ConfigureAwait(false);
+                checksums = await engineering.CallAsync<PlcChecksumInfo[]>(
+                        "get_plc_checksums",
+                        new { plcName = (string?)null },
+                        token)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                engineeringSession.Release();
+            }
+
+            await RecordCommitStateAsync(worktreeRoot, workbench.WorkbenchId, commitSha, devices, checksums, token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Best-effort evidence only — never turn a successful commit into a failure.
+        }
     }
 
     private async Task RecordCommitStateAsync(

@@ -1134,6 +1134,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit", "vc_commit_selected",
+                "vc_commit_state_create",
             },
             versionControl.Calls);
         var workbenchRoot = Path.Combine(root, "wb-from-path");

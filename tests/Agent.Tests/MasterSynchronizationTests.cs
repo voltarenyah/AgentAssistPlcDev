@@ -1,3 +1,4 @@
+using System.Linq;
 using Agent.Mcp;
 using Agent.Workbench;
 using Contracts.Knowledge;
@@ -92,6 +93,74 @@ public sealed class MasterSynchronizationTests : IDisposable
 
         Assert.DoesNotContain("vc_commit_selected", fixture.VersionControl.Calls);
     }
+
+    [Fact]
+    public async Task MasterCommitRecordsTheLiveTiaChecksumStateOnTheCommit()
+    {
+        var coordinator = fixture.CreateCoordinator(TiaEngineering());
+
+        var result = await coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            [fixture.Path("Blocks/A.xml")],
+            "direct edit",
+            CancellationToken.None);
+
+        Assert.Equal("head-2", result.Sha);
+        Assert.Contains("vc_commit_state_create", fixture.VersionControl.Calls);
+        var devices = Assert.IsAssignableFrom<System.Collections.IEnumerable>(
+            Property<object>(fixture.VersionControl.StateCreateArgs!, "devices"));
+        var device = Assert.Single(devices.Cast<object>());
+        Assert.Equal("device-1", Property<string>(device, "deviceId"));
+        Assert.Equal("PLC_1", Property<string>(device, "plcName"));
+        Assert.Equal("abc123", Property<string>(device, "projectChecksum"));
+    }
+
+    [Fact]
+    public async Task MasterCommitWithUntrackableChangeRecordsTheLiveTiaChecksumState()
+    {
+        var coordinator = fixture.CreateCoordinator(TiaEngineering());
+
+        var result = await coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            Array.Empty<string>(),
+            "TIA change git cannot track",
+            CancellationToken.None,
+            untrackableChange: true);
+
+        Assert.Equal("head-2", result.Sha);
+        Assert.Contains("vc_commit_state_create", fixture.VersionControl.Calls);
+    }
+
+    [Fact]
+    public async Task MasterCommitSucceedsWithoutChecksumStateWhenTiaIsUnavailable()
+    {
+        var coordinator = fixture.CreateCoordinator();
+
+        var result = await coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            [fixture.Path("Blocks/A.xml")],
+            "direct edit",
+            CancellationToken.None);
+
+        Assert.Equal("head-2", result.Sha);
+        Assert.DoesNotContain("vc_commit_state_create", fixture.VersionControl.Calls);
+    }
+
+    private static FakeToolCaller TiaEngineering() =>
+        new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("get_plc_checksums", new[]
+            {
+                new Contracts.Engineering.PlcChecksumInfo { PlcName = "PLC_1", SoftwareChecksum = "abc123" },
+            });
 
     public void Dispose() => fixture.Dispose();
 
@@ -230,6 +299,7 @@ public sealed class MasterSynchronizationTests : IDisposable
         public string Head { get; private set; } = "head-1";
         public string? CommitMessage { get; private set; }
         public object? CommitArgs { get; private set; }
+        public object? StateCreateArgs { get; private set; }
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
@@ -250,6 +320,15 @@ public sealed class MasterSynchronizationTests : IDisposable
                     Head,
                     CommitMessage ?? string.Empty,
                     new[] { "devices/PLC_1/source/Blocks/A.xml" }));
+            }
+            if (tool == "vc_commit_state_get")
+            {
+                return Task.FromResult((T)(object)null!);
+            }
+            if (tool == "vc_commit_state_create")
+            {
+                StateCreateArgs = args;
+                return Task.FromResult((T)(object)new object());
             }
             throw new InvalidOperationException(tool);
         }
