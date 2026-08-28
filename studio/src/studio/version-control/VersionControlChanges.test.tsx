@@ -255,11 +255,11 @@ describe('VersionControlChanges', () => {
     expect((host.querySelector('[data-testid="vc-untrackable-change"]') as HTMLInputElement).checked).toBe(false)
   })
 
-  it('warns in the snapshot area when an untrackable change has no savepoint coverage', async () => {
+  it('shows an untrackable-change badge in the snapshot row when an untrackable change has no savepoint coverage', async () => {
     const { host } = await render([entry()], snapshot, 0, true)
 
-    const warning = host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')!
-    expect(warning.textContent).toContain('not covered by any SVN savepoint')
+    const badge = host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')!
+    expect(badge.textContent).toContain('untrackable change')
   })
 
   it('hides the savepoint warning when every untrackable change is covered', async () => {

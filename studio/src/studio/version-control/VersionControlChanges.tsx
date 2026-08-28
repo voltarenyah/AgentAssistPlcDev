@@ -324,17 +324,21 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
               {snapshot.commitsSince} commit{snapshot.commitsSince === 1 ? '' : 's'} since
             </span>
           )}
+          {untrackablePendingSavepoint && (
+            <span
+              className={`rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-500 ${snapshot.commitsSince === null && !snapshot.hardwareDiffers ? 'ml-auto' : ''}`}
+              data-testid="vc-untrackable-savepoint-warning"
+              title="Not covered by any SVN savepoint — create a savepoint as soon as possible to keep this TIA state restorable."
+            >
+              untrackable change
+            </span>
+          )}
           {snapshot.hardwareDiffers && (
             <span className={`rounded bg-red-500/10 px-1.5 py-0.5 font-mono text-[10px] text-red-500 ${snapshot.commitsSince === null ? 'ml-auto' : ''}`} data-testid="vc-hardware-differs">
               hardware different
             </span>
           )}
         </div>
-        {untrackablePendingSavepoint && (
-          <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2 text-[10px] text-amber-600" data-testid="vc-untrackable-savepoint-warning">
-            An untrackable change is not covered by any SVN savepoint — create a savepoint as soon as possible to keep this TIA state restorable.
-          </div>
-        )}
         <div className="mt-2 flex gap-1.5">
           <input
             aria-label="Description for TIA snapshot"
