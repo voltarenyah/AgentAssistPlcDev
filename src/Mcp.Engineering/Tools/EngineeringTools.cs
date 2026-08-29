@@ -197,7 +197,7 @@ public sealed class EngineeringTools
         => Invoke("rebuild_export", () => _adapter.RebuildExport(outputDir, plcName, ToEngineeringProgress(progress)), ("outputDir", outputDir));
 
     [McpServerTool(Name = "export_hardware_configuration")]
-    [Description("Export the TIA V17 CAx hardware configuration as a canonical project AML and, optionally, one AML per device under Devices. Read-only with respect to the project.")]
+    [Description("Export the TIA V17 CAx hardware configuration as a canonical project AML and, optionally, one AML per device under Devices. Also writes network-configuration.txt, a canonical fingerprint of the communication/network configuration (subnets, PROFINET device names/IPs, IO-system assignments, port topology, MRP domains, OPC UA server interfaces). Read-only with respect to the project.")]
     public CallToolResult ExportHardwareConfiguration(
         [Description("Export root directory. The project AML is written directly under outputDir/project.aml.")] string outputDir,
         [Description("Also export one AML per TIA device under outputDir/Devices. Default false — project-level AML only; per-device CAx is slow on big projects.")] bool includeDeviceExports = false,
