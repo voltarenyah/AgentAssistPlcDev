@@ -14,6 +14,7 @@ export type VcTimelineItem =
       timestamp: string
       files: string[]
       tiaChecksum: string | null
+      tiaContentFingerprint: string | null
       svnRevision: number | null
       untrackableChange: boolean
       validationState: api.VcValidationState
@@ -25,6 +26,7 @@ export type VcTimelineItem =
       author: string
       timestamp: string
       tiaChecksum: string | null
+      tiaContentFingerprint: string | null
       gitCommitSha: string
     }
 
@@ -202,6 +204,8 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                         </div>
                         {item.tiaChecksum && <div className="mb-1 text-[9px] uppercase tracking-wide text-muted-foreground" data-testid="tia-checksum-label">TIA checksum</div>}
                         {item.tiaChecksum && <div className="mb-1.5" data-testid="tia-checksum-section"><ChecksumRows value={item.tiaChecksum} /></div>}
+                        {item.tiaContentFingerprint && <div className="mb-1 text-[9px] uppercase tracking-wide text-muted-foreground" data-testid="tia-content-fingerprint-label">Content fingerprint</div>}
+                        {item.tiaContentFingerprint && <div className="mb-1.5" data-testid="tia-content-fingerprint-section"><ChecksumRows value={item.tiaContentFingerprint} /></div>}
                         <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Changed files · {item.files.length}</div>
                         {item.untrackableChange && (
                           <div className="mb-1 flex items-center gap-1 text-[10px] text-amber-500" data-testid="vc-untrackable-note">
@@ -254,6 +258,7 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                           <span className="rounded bg-sky-500/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-sky-500" title={`Linked git commit ${item.gitCommitSha}`}>git {item.gitCommitSha.slice(0, 7)}</span>
                         </div>
                         {item.tiaChecksum && <div className="mb-1.5"><ChecksumRows value={item.tiaChecksum} /></div>}
+                        {item.tiaContentFingerprint && <div className="mb-1.5" data-testid="tia-content-fingerprint-section"><ChecksumRows value={item.tiaContentFingerprint} /></div>}
                         <div className="text-[9px] italic text-muted-foreground">Right-click to export this saved project</div>
                       </>
                     )}

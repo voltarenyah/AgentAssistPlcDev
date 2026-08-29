@@ -46,7 +46,8 @@ public sealed class CombinedCommitTests : IDisposable
         var stateDevices = Property<object[]>(stateArgs, "devices");
         Assert.Contains(stateDevices, item =>
             Property<string>(item, "plcName") == "PLC_1"
-            && Property<string>(item, "projectChecksum") == "new-checksum");
+            && Property<string>(item, "projectChecksum") == "new-checksum"
+            && Property<string>(item, "contentFingerprint") == "new-fingerprint");
 
         var commitPaths = Property<string[]>(
             versionControl.CallArgs["vc_commit_selected"].Single(), "paths");
@@ -346,7 +347,12 @@ public sealed class CombinedCommitTests : IDisposable
                 .Respond("compile_plc", new CompileResult { State = compileState })
                 .Respond("get_plc_checksums", new[]
                 {
-                    new PlcChecksumInfo { PlcName = "PLC_1", SoftwareChecksum = "new-checksum" },
+                    new PlcChecksumInfo
+                    {
+                        PlcName = "PLC_1",
+                        SoftwareChecksum = "new-checksum",
+                        ContentFingerprint = "new-fingerprint",
+                    },
                 })
                 .Respond("disconnect", new object());
 

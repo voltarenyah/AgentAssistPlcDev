@@ -179,6 +179,7 @@ function EventDetails({ active, position }: { active: ActiveEvent; position: Det
         <span>Author: {event.author || 'Unknown author'}</span>
         <span>Time: {formatTimestamp(event.timestamp)}</span>
         <span>TIA checksum: {event.tiaChecksum ?? '—'}</span>
+        <span>Content fingerprint: {event.tiaContentFingerprint ?? '—'}</span>
         {!isGit && 'gitCommitSha' in event && <span title={event.gitCommitSha}>Git commit: {shortGitHash(event.gitCommitSha)}</span>}
         {isGit && 'files' in event && event.files.length > 0 && <span>Changed files: {event.files.length}</span>}
       </div>

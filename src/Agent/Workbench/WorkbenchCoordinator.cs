@@ -1020,6 +1020,7 @@ public sealed class WorkbenchCoordinator
             }
 
             var tiaChecksum = AggregateCommitStateChecksum(commitState);
+            var tiaContentFingerprint = AggregateCommitStateContentFingerprint(commitState);
 
             long? linkedRevision = null;
             if (revisionStateChanged
@@ -1032,6 +1033,7 @@ public sealed class WorkbenchCoordinator
                     revision,
                     svnUrl,
                     tiaChecksum,
+                    tiaContentFingerprint,
                     commit.Sha,
                     commit.Author,
                     commit.Message,
@@ -1046,7 +1048,8 @@ public sealed class WorkbenchCoordinator
                 files,
                 tiaChecksum,
                 linkedRevision,
-                untrackableChange));
+                untrackableChange,
+                tiaContentFingerprint));
         }
 
         var svnMetadata = new Dictionary<long, TimelineSvnLogEntry>();
@@ -1088,7 +1091,8 @@ public sealed class WorkbenchCoordinator
                         entry.Message,
                         entry.Time.ToUniversalTime().ToString("O"),
                         candidate.TiaChecksum,
-                        candidate.GitCommitSha);
+                        candidate.GitCommitSha,
+                        candidate.TiaContentFingerprint);
                 }
 
                 return new VersionControlTimelineSvnRevision(
@@ -1097,7 +1101,8 @@ public sealed class WorkbenchCoordinator
                     candidate.Message,
                     candidate.Timestamp,
                     candidate.TiaChecksum,
-                    candidate.GitCommitSha);
+                    candidate.GitCommitSha,
+                    candidate.TiaContentFingerprint);
             })
             .ToArray();
 
@@ -1111,6 +1116,7 @@ public sealed class WorkbenchCoordinator
         long Revision,
         string Url,
         string? TiaChecksum,
+        string? TiaContentFingerprint,
         string GitCommitSha,
         string Author,
         string Message,
@@ -1128,6 +1134,21 @@ public sealed class WorkbenchCoordinator
                 && !string.IsNullOrWhiteSpace(device.ProjectChecksum))
             .OrderBy(device => device.PlcName, StringComparer.Ordinal)
             .Select(device => $"{device.PlcName}:{device.ProjectChecksum}"));
+        return aggregate.Length == 0 ? null : aggregate;
+    }
+
+    private static string? AggregateCommitStateContentFingerprint(ConsistencyValidationEvidence? evidence)
+    {
+        if (evidence?.Devices is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        var aggregate = string.Join(';', evidence.Devices
+            .Where(device => !string.IsNullOrWhiteSpace(device.PlcName)
+                && !string.IsNullOrWhiteSpace(device.ContentFingerprint))
+            .OrderBy(device => device.PlcName, StringComparer.Ordinal)
+            .Select(device => $"{device.PlcName}:{device.ContentFingerprint}"));
         return aggregate.Length == 0 ? null : aggregate;
     }
 
@@ -3092,6 +3113,7 @@ public sealed class WorkbenchCoordinator
                         deviceId = device.Metadata.DeviceId,
                         plcName = checksum.PlcName,
                         projectChecksum = checksum.SoftwareChecksum,
+                        contentFingerprint = checksum.ContentFingerprint,
                     };
             })
             .Where(item => item is not null)
