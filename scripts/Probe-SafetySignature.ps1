@@ -68,6 +68,22 @@ function Test-FailSafeBlock {
         -or $name.StartsWith('FDB_', 'OrdinalIgnoreCase')
 }
 
+function Show-SafetyDetection {
+    param($Plc)
+    # Detection rule used by TiaV17Adapter.ReadSafety: a PLC is a safety device when the
+    # SafetyAdministration or SafetySignatureProvider service is present on its PlcSoftware.
+    try {
+        $admin = Get-ServiceInstance -Obj $Plc -ServiceType ([Siemens.Engineering.Safety.SafetyAdministration])
+        $provider = Get-ServiceInstance -Obj $Plc -ServiceType ([Siemens.Engineering.Safety.SafetySignatureProvider])
+        $isSafety = ($null -ne $admin) -or ($null -ne $provider)
+        Write-Output ("  [{0}] DETECTION: safetyDevice={1} (SafetyAdministration present: {2}, SafetySignatureProvider present: {3})" -f `
+            $Plc.Name, $isSafety, ($null -ne $admin), ($null -ne $provider))
+    }
+    catch {
+        Write-Output "  [$($Plc.Name)] DETECTION: read failed (treated as read-failed): $($_.Exception.Message)"
+    }
+}
+
 function Show-SafetySignature {
     param($Plc)
     $provider = Get-ServiceInstance -Obj $Plc -ServiceType ([Siemens.Engineering.Safety.SafetySignatureProvider])
@@ -151,7 +167,15 @@ function Search-ProjectFileForSignature {
     param([string]$Path)
     Write-Output "--- project file scan: $Path"
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+    $zip = $null
+    try {
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($Path)
+    }
+    catch {
+        Write-Output "  NOT A PLAIN ZIP: $($_.Exception.Message)"
+        Write-Output "  (The .ap17 envelope is proprietary - the naive unzip fallback does not work directly.)"
+        return
+    }
     try {
         $hits = 0
         foreach ($entry in $zip.Entries) {
@@ -175,7 +199,7 @@ function Search-ProjectFileForSignature {
         Write-Output "  project file scan hits: $hits (capped at 50)"
     }
     finally {
-        $zip.Dispose()
+        if ($null -ne $zip) { $zip.Dispose() }
     }
 }
 
@@ -199,6 +223,7 @@ foreach ($proc in $processes) {
         foreach ($grp in $project.DeviceGroups) { Find-InDeviceGroup -Group $grp -Acc $plcs }
         Write-Output "  PLCs found: $($plcs.Count)"
         foreach ($plc in $plcs) {
+            Show-SafetyDetection -Plc $plc
             Show-SafetySignature -Plc $plc
             Show-SafetyAdministration -Plc $plc
             Show-BlockFingerprints -Plc $plc

@@ -147,8 +147,13 @@ public sealed record VcCommitStateEvidence(
     string WorkbenchId,
     IReadOnlyList<VcCommitStateDevice> Devices);
 
-/// <summary>Per-device checksum recorded at commit time.</summary>
+/// <summary>Per-device checksum recorded at commit time. The safety fields are optional and
+/// additive: tags written by schema 1.0 (without them) still deserialize (nulls), and new tags
+/// keep schemaVersion "1.0" because no existing field changed meaning.</summary>
 public sealed record VcCommitStateDevice(
     string DeviceId,
     string PlcName,
-    string ProjectChecksum);
+    string ProjectChecksum,
+    bool? IsSafetyDevice = null,
+    string? FSignatureReadState = null,
+    string? FSignature = null);

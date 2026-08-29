@@ -10,6 +10,16 @@ public sealed class ContextCompareResult
     public bool ManifestExists { get; set; }
     public string? StoredChecksum { get; set; }
     public string? LiveChecksum { get; set; }
+
+    /// <summary>True when the PLC exposes the safety surface; null when read by an older adapter.</summary>
+    public bool? IsSafetyDevice { get; set; }
+
+    /// <summary>One of FSignatureReadState; null for non-safety devices.</summary>
+    public string? FSignatureReadState { get; set; }
+
+    /// <summary>Live offline collective F-signature (uppercase hex); null when unavailable.</summary>
+    public string? FSignature { get; set; }
+
     public ContextCompareEntry[] Components { get; set; } = Array.Empty<ContextCompareEntry>();
 }
 

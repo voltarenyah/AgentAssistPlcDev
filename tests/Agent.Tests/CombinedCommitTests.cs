@@ -78,9 +78,46 @@ public sealed class CombinedCommitTests : IDisposable
         Assert.Equal("head-2", result.Sha);
         var revision = fixture.ReadRevisionState();
         Assert.Equal("PLC_1:0A1B2C3D", revision.Safety.FSignature);
+        Assert.Equal(FSignatureReadState.Ok, revision.Safety.ReadState);
         var svnMessage = Property<string>(
             versionControl.CallArgs["svn_commit"].Single(), "message");
         Assert.Contains("safety", svnMessage);
+
+        // Per-device safety evidence is recorded in the commit-state tag too.
+        var stateArgs = versionControl.CallArgs["vc_commit_state_create"].Single();
+        var stateDevice = Assert.Single(Property<object[]>(stateArgs, "devices"));
+        Assert.True(Property<bool?>(stateDevice, "isSafetyDevice"));
+        Assert.Equal(FSignatureReadState.Ok, Property<string>(stateDevice, "fSignatureReadState"));
+        Assert.Equal("0A1B2C3D", Property<string>(stateDevice, "fSignature"));
+    }
+
+    [Fact]
+    public async Task NativeSavepointWithFailedSignatureReadStillCommitsAndFlagsSafety()
+    {
+        // Checksum unchanged and SVN clean: only the failed required F-signature read stands
+        // between this savepoint and COMMIT_NOTHING_TO_COMMIT — it must count as a safety change.
+        var fixture = CombinedFixture.Create(root, checksum: "PLC_1:steady");
+        var engineering = fixture.ScriptEngineering(
+            new FakeToolCaller(),
+            fSignatureReadState: FSignatureReadState.ReadFailed,
+            softwareChecksum: "steady");
+        var versionControl = fixture.ScriptVersionControl(new FakeToolCaller(), svnDirty: false);
+        var coordinator = fixture.CreateCoordinator(engineering, versionControl);
+
+        var result = await coordinator.CreateNativeSavepointAsync(
+            CombinedFixture.WorkbenchId,
+            CombinedFixture.WorktreeId,
+            "safety read probe",
+            CancellationToken.None);
+
+        Assert.Equal("head-2", result.Sha);
+        var revision = fixture.ReadRevisionState();
+        Assert.Null(revision.Safety.FSignature);
+        Assert.Equal(FSignatureReadState.ReadFailed, revision.Safety.ReadState);
+        var svnMessage = Property<string>(
+            versionControl.CallArgs["svn_commit"].Single(), "message");
+        Assert.Contains("safety", svnMessage);
+        Assert.DoesNotContain("native", svnMessage);
     }
 
     [Fact]
@@ -359,8 +396,14 @@ public sealed class CombinedCommitTests : IDisposable
         /// <summary>Scripts the engineering side: active project already matches, save,
         /// compile, checksums, disconnect.</summary>
         public FakeToolCaller ScriptEngineering(
-            FakeToolCaller caller, string compileState = "success", string? fSignature = null) =>
-            caller
+            FakeToolCaller caller,
+            string compileState = "success",
+            string? fSignature = null,
+            string? fSignatureReadState = null,
+            string softwareChecksum = "new-checksum")
+        {
+            var isSafety = fSignature is not null || fSignatureReadState is not null;
+            return caller
                 .Respond("get_project_info", new ProjectInfo
                 {
                     Name = "Line",
@@ -374,11 +417,15 @@ public sealed class CombinedCommitTests : IDisposable
                     new PlcChecksumInfo
                     {
                         PlcName = "PLC_1",
-                        SoftwareChecksum = "new-checksum",
+                        SoftwareChecksum = softwareChecksum,
+                        IsSafetyDevice = isSafety ? true : null,
+                        FSignatureReadState = fSignatureReadState
+                            ?? (fSignature is not null ? FSignatureReadState.Ok : null),
                         FSignature = fSignature,
                     },
                 })
                 .Respond("disconnect", new object());
+        }
 
         /// <summary>Scripts the version-control side: master-gate vc_log, svn status/commit,
         /// git commit, post-commit vc_log.</summary>

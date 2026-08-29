@@ -538,12 +538,18 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var projectIdentity = project.Path?.FullName ?? project.Name;
 
             return plcs
-                .Select(plc => new PlcChecksumInfo
+                .Select(plc =>
                 {
-                    PlcName = plc.Name,
-                    ProjectIdentity = projectIdentity,
-                    SoftwareChecksum = TryReadSoftwareChecksum(plc),
-                    FSignature = TryReadSafetySignature(plc),
+                    var safety = ReadSafety(plc);
+                    return new PlcChecksumInfo
+                    {
+                        PlcName = plc.Name,
+                        ProjectIdentity = projectIdentity,
+                        SoftwareChecksum = TryReadSoftwareChecksum(plc),
+                        IsSafetyDevice = safety.IsSafetyDevice,
+                        FSignatureReadState = safety.ReadState,
+                        FSignature = safety.Signature,
+                    };
                 })
                 .OrderBy(info => info.PlcName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -1327,6 +1333,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 // Per-device export-root subfolder (same rule as the export/sync tools).
                 var dir = Path.Combine(outputDir, Sanitize(plc.Name));
                 var liveChecksum = TryReadSoftwareChecksum(plc);
+                var safety = ReadSafety(plc);
                 var manifestExists = ExportManifest.TryRead(dir, out var manifest) && manifest is not null;
                 var records = manifestExists ? manifest!.Components : new List<ExportMetadataRecord>();
                 var plan = SyncPlanner.Plan(records, CaptureLiveSnapshot(plc).Live, VerifiedLocalFileIds(dir, records));
@@ -1358,6 +1365,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     ManifestExists = manifestExists,
                     StoredChecksum = ProjectMetadata.GetPlcSoftwareChecksum(outputDir, plc.Name),
                     LiveChecksum = liveChecksum,
+                    IsSafetyDevice = safety.IsSafetyDevice,
+                    FSignatureReadState = safety.ReadState,
+                    FSignature = safety.Signature,
                     Components = entries,
                 });
             }
@@ -1400,6 +1410,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 // Per-device export-root subfolder (same rule as the export/sync tools).
                 var dir = Path.Combine(outputDir, Sanitize(plc.Name));
                 var liveChecksum = TryReadSoftwareChecksum(plc);
+                var safety = ReadSafety(plc);
                 var manifestExists = ExportManifest.TryRead(dir, out var manifest) && manifest is not null;
                 var storedChecksum = ProjectMetadata.GetPlcSoftwareChecksum(outputDir, plc.Name);
                 results.Add(new ContextStatusResult
@@ -1410,6 +1421,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     ComponentCount = manifestExists ? manifest!.Components.Count : 0,
                     StoredChecksum = storedChecksum,
                     LiveChecksum = liveChecksum,
+                    IsSafetyDevice = safety.IsSafetyDevice,
+                    FSignatureReadState = safety.ReadState,
+                    FSignature = safety.Signature,
                     State = !manifestExists
                         ? "no-baseline"
                         : liveChecksum is null || storedChecksum is null
@@ -1541,24 +1555,33 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
-    /// <summary>Offline collective F-signature (SafetySignatureProvider.Signatures →
-    /// BlockOfflineSignature, an undocumented Siemens.Engineering.Safety surface found in the
-    /// installed V17 assembly on 2026-08-28 — see scripts/Probe-SafetySignature.ps1). Rendered as
-    /// uppercase hex so it compares byte-stable across sessions. Null for non-failsafe PLCs
-    /// (GetService → null) and on any read failure — a missing signature must never break the
-    /// checksum read.</summary>
-    private static string? TryReadSafetySignature(PlcSoftware plc)
+    /// <summary>Offline collective F-signature read via the undocumented
+    /// Siemens.Engineering.Safety surface found in the installed V17 assembly on 2026-08-28
+    /// (scripts/Probe-SafetySignature.ps1). Detection: a PLC is a safety device when the
+    /// SafetyAdministration or SafetySignatureProvider service is present on its PlcSoftware
+    /// (same GetService-returns-null-when-unsupported convention as PlcChecksumProvider). The
+    /// signature is rendered as uppercase hex so it compares byte-stable across sessions. Any
+    /// failure while touching the safety surface yields ReadFailed rather than "not a safety
+    /// device" — a failed required read must never masquerade as an ordinary PLC.</summary>
+    private static (bool IsSafetyDevice, string? ReadState, string? Signature) ReadSafety(PlcSoftware plc)
     {
         try
         {
-            var signature = plc.GetService<SafetySignatureProvider>()
-                ?.Signatures
-                ?.Find(SafetySignatureType.BlockOfflineSignature);
-            return signature?.Value.ToString("X8");
+            var administration = plc.GetService<SafetyAdministration>();
+            var provider = plc.GetService<SafetySignatureProvider>();
+            if (administration is null && provider is null)
+            {
+                return (false, null, null);
+            }
+
+            var signature = provider?.Signatures?.Find(SafetySignatureType.BlockOfflineSignature);
+            return signature is null
+                ? (true, FSignatureReadState.NoSignature, null)
+                : (true, FSignatureReadState.Ok, signature.Value.ToString("X8"));
         }
         catch
         {
-            return null;
+            return (true, FSignatureReadState.ReadFailed, null);
         }
     }
 

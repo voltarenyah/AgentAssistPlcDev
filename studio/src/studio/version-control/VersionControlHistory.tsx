@@ -26,6 +26,8 @@ export type VcTimelineItem =
       timestamp: string
       tiaChecksum: string | null
       gitCommitSha: string
+      safetyChanged: boolean
+      safetyReadState: string | null
     }
 
 type Props = {
@@ -185,6 +187,26 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                       untrackable
                     </span>
                   )}
+                  {isSavepoint && item.safetyChanged && (
+                    <span
+                      className="flex shrink-0 items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-500"
+                      title="Safety program changed — F-signature differs from the previous savepoint"
+                      data-testid="vc-safety-change-marker"
+                    >
+                      <TriangleAlert className="h-3 w-3" />
+                      Safety change
+                    </span>
+                  )}
+                  {isSavepoint && item.safetyReadState === 'read-failed' && (
+                    <span
+                      className="flex shrink-0 items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-500"
+                      title="Safety signature unavailable — F-signature read failed at commit time"
+                      data-testid="vc-safety-unavailable-marker"
+                    >
+                      <TriangleAlert className="h-3 w-3" />
+                      Safety signature unavailable
+                    </span>
+                  )}
                   {isSavepoint ? (
                     <span className="shrink-0 rounded-full border border-violet-400/35 bg-violet-400/10 px-2 py-0.5 font-mono text-[10px] font-bold text-violet-400">r{item.revision}</span>
                   ) : key === headKey && branch ? (
@@ -254,6 +276,18 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                           <span className="rounded bg-sky-500/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-sky-500" title={`Linked git commit ${item.gitCommitSha}`}>git {item.gitCommitSha.slice(0, 7)}</span>
                         </div>
                         {item.tiaChecksum && <div className="mb-1.5"><ChecksumRows value={item.tiaChecksum} /></div>}
+                        {item.safetyChanged && (
+                          <div className="mb-1 flex items-center gap-1 text-[10px] text-amber-500" data-testid="vc-safety-change-note">
+                            <TriangleAlert className="h-3 w-3 shrink-0" />
+                            Safety program changed (F-signature). Create a full TIA project archive to solidify this safety change.
+                          </div>
+                        )}
+                        {item.safetyReadState === 'read-failed' && (
+                          <div className="mb-1 flex items-center gap-1 text-[10px] text-amber-500" data-testid="vc-safety-unavailable-note">
+                            <TriangleAlert className="h-3 w-3 shrink-0" />
+                            The F-signature could not be read for a safety PLC. Verify the safety program in TIA Portal and create a full project archive.
+                          </div>
+                        )}
                         <div className="text-[9px] italic text-muted-foreground">Right-click to export this saved project</div>
                       </>
                     )}

@@ -168,6 +168,67 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task SavepointsDeriveSafetyChangeAndReadStateFromRevisionState()
+    {
+        var fixture = Fixture.Create(root);
+        var workbench = RegisterTimelineWorkbench(fixture);
+        string JsonValue(string? value) => value is null ? "null" : $"\"{value}\"";
+        string RevisionJson(string? fSignature, string? readState) => $$"""
+            {
+              "schemaVersion": 1,
+              "svn": { "url": "^/native/main", "revision": 184 },
+              "tia": { "projectChecksum": "PLC_1:checksum-1" },
+              "safety": { "fSignature": {{JsonValue(fSignature)}}, "readState": {{JsonValue(readState)}} },
+              "validation": { "compileStatus": "SUCCESS" }
+            }
+            """;
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_log", new ConsistencyLogResult
+            {
+                Commits =
+                [
+                    // newest first: read-failed safety savepoint with a changed signature,
+                    // then the unchanged middle, then the baseline.
+                    new ConsistencyCommit { Sha = "savepoint-3", Message = "savepoint 3" },
+                    new ConsistencyCommit { Sha = "savepoint-2", Message = "savepoint 2" },
+                    new ConsistencyCommit { Sha = "savepoint-1", Message = "savepoint 1" },
+                ],
+            })
+            // FakeToolCaller dequeues one scripted response per call — one per commit, in order.
+            .Respond("vc_show_file", new ShowFileResult
+            {
+                Content = RevisionJson("sig-b", FSignatureReadState.ReadFailed),
+            })
+            .Respond("vc_show_file", new ShowFileResult
+            {
+                Content = RevisionJson("sig-a", FSignatureReadState.Ok),
+            })
+            .Respond("vc_show_file", new ShowFileResult
+            {
+                Content = RevisionJson("sig-a", FSignatureReadState.Ok),
+            });
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "savepoint-safety-catalog")),
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        coordinator.RegisterWorkbench(workbench);
+
+        var savepoints = await coordinator.ListSavepointsAsync("wb-1", "wt-1");
+
+        Assert.Equal(3, savepoints.Count);
+        Assert.True(savepoints[0].SafetyChanged);
+        Assert.Equal(FSignatureReadState.ReadFailed, savepoints[0].SafetyReadState);
+        Assert.False(savepoints[1].SafetyChanged);
+        Assert.Equal(FSignatureReadState.Ok, savepoints[1].SafetyReadState);
+        // The oldest savepoint has no predecessor and is never "changed".
+        Assert.False(savepoints[2].SafetyChanged);
+    }
+
+    [Fact]
     public async Task OpenProjectInTiaUsesRegisteredProjectWithUi()
     {
         var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
@@ -816,7 +877,17 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var revision = EngineeringStateWriter.Read(Path.Combine(
             result.Workbench.RootPath, "worktrees", "master", "engineering-state", "revision.json"));
         Assert.Equal("PLC_1:fsig-PLC_1;PLC_2:fsig-PLC_2", revision.Safety.FSignature);
+        Assert.Equal(FSignatureReadState.Ok, revision.Safety.ReadState);
         Assert.Equal(EngineeringCompileStatus.Success, revision.Validation.CompileStatus);
+
+        var stateArgs = versionControl.CallArgs["vc_commit_state_create"].Single();
+        var stateDevices = Property<object[]>(stateArgs, "devices");
+        Assert.All(stateDevices, item =>
+        {
+            Assert.True(Property<bool?>(item, "isSafetyDevice"));
+            Assert.Equal(FSignatureReadState.Ok, Property<string>(item, "fSignatureReadState"));
+            Assert.StartsWith("fsig-", Property<string>(item, "fSignature"));
+        });
     }
 
     [Fact]
@@ -2423,6 +2494,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             {
                 PlcName = plc,
                 SoftwareChecksum = $"checksum-{plc}",
+                IsSafetyDevice = failsafe ? true : null,
+                FSignatureReadState = failsafe ? FSignatureReadState.Ok : null,
                 FSignature = failsafe ? $"fsig-{plc}" : null,
             })
             .ToArray());

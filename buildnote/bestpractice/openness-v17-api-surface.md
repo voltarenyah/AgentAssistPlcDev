@@ -238,12 +238,17 @@ namespace — it is **not** part of the documented V17 Openness surface). Runtim
 a live F-CPU project is still pending (no failsafe project available at probe time); use
 `scripts/Probe-SafetySignature.ps1` with a failsafe project open to confirm the read paths below.
 
-- **`SafetySignatureProvider`** (`IEngineeringService`, like `PlcChecksumProvider`) — expected access
-  pattern `plc.GetService<SafetySignatureProvider>()`. Property `Signatures`
+- **Safety device detection:** a PLC is treated as a safety device when the `SafetyAdministration`
+  or `SafetySignatureProvider` service is present on its `PlcSoftware` (same
+  GetService-returns-null-when-unsupported convention as `PlcChecksumProvider`, verified for
+  checksums in §10; safety-side verification pending a live F-project). Any exception while
+  touching the safety surface is reported as read-failed, never as "ordinary PLC".
+- **`SafetySignatureProvider`** (`IEngineeringService`, like `PlcChecksumProvider`) — access via
+  `plc.GetService<SafetySignatureProvider>()`. Property `Signatures`
   (`SafetySignatureComposition`, read-only list) → `Find(SafetySignatureType)`. The V17 enum has a
-  single member, **`BlockOfflineSignature`**, and `SafetySignature.Value` is a `UInt64` — this is the
-  offline collective F-signature of the safety program, i.e. exactly the value needed for safety
-  change detection without F-block export.
+  single member, **`BlockOfflineSignature`**, and `SafetySignature.Value` is a `UInt64` — this is
+  the offline collective F-signature of the safety program, i.e. exactly the value needed for
+  safety change detection without F-block export.
 - **`SafetyAdministration`** (also an `IEngineeringService` on the PLC software) — `Settings`
   (`SafetySettings.SafetySystemVersion.Value`), `RuntimeGroups` (`Name`, `MainSafetyBlockName`,
   `FOBName`, `MaximumCycleTime`, ...), `IsSafetyOfflineProgramPasswordSet`,
@@ -251,14 +256,24 @@ a live F-CPU project is still pending (no failsafe project available at probe ti
   signature must not require logging on to the safety program — verify with the probe.
 - Also present: `SafetyPrintout` (safety printout to file), plus a large set of
   `Siemens.Engineering.HW.Failsafe_*` enums (F-I/O channel parameters).
-- Wired up: `get_plc_checksums` now also returns `FSignature` per PLC
-  (`TiaV17Adapter.TryReadSafetySignature`, uppercase hex of `BlockOfflineSignature`; null on
-  non-failsafe PLCs or any read failure).
-- **Still unknown (probe with an F-project):** whether `GetService<SafetySignatureProvider>()` returns
-  null or throws on standard PLCs, whether the signature moves on safety-parameter-only edits, and
-  whether `FingerprintProvider.GetFingerprints()` works on F-blocks (fallback change signal, since
-  F-block export is refused). The `.ap17` ZIP-parse fallback remains unimplemented and unnecessary if
-  the provider read verifies.
+- Wired up: `get_plc_checksums` returns `IsSafetyDevice`, `FSignatureReadState`
+  (`ok` / `no-signature` / `read-failed`) and `FSignature` per PLC
+  (`TiaV17Adapter.ReadSafety`, uppercase hex of `BlockOfflineSignature`); the same evidence is on
+  `get_context_status` / `compare_context`. The workbench compare
+  (`WorkbenchConsistencyService.CompareAsync`) checks the live signature against master's
+  revision.json on every compare: a changed signature makes the result `Different` +
+  `SafetyChanged`, and a failed required read makes it `Unavailable` — never silently consistent.
+  `revision.json` additionally records `safety.readState`; per-device safety fields ride along in
+  the `tia-state/{sha}` commit-state tags (schema stays "1.0", fields additive-optional).
+- **Still unknown (probe with an F-project):** whether `GetService<SafetySignatureProvider>()`
+  returns null vs throws on standard PLCs (the detection rule assumes null), whether the signature
+  moves on safety-parameter-only edits, and whether `FingerprintProvider.GetFingerprints()` works
+  on F-blocks (fallback change signal, since F-block export is refused).
+- **`.ap17` ZIP fallback — refuted (verified 2026-08-28):** `ZipFile.OpenRead` on a real V17
+  project (`PEI_SinoARP_Master_V4.1.3.ap17`) fails with "End of Central Directory record could
+  not be found" — the `.ap17` envelope is **not** a plain ZIP, so the naive unzip-and-parse
+  fallback from the blind-spots doc does not work directly. The Openness safety surface above is
+  the viable channel.
 
 ## Key findings
 

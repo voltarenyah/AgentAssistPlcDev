@@ -12,13 +12,49 @@ public sealed class EngineeringStateWriterTests : IDisposable
     public void WriteReadRoundTripsAllFields()
     {
         var state = EngineeringStateWriter.Create(
-            "^/native/main", 25, "PLC_1:abc123", "F-SIG-4711", EngineeringCompileStatus.Success);
+            "^/native/main", 25, "PLC_1:abc123", "F-SIG-4711", EngineeringCompileStatus.Success, "ok");
 
         EngineeringStateWriter.Write(root, state);
         var loaded = EngineeringStateWriter.Read(
             Path.Combine(root, "engineering-state", "revision.json"));
 
         Assert.Equal(state, loaded);
+    }
+
+    [Fact]
+    public void ReadToleratesLegacyStateWithoutSafetyReadState()
+    {
+        var path = Path.Combine(root, "revision.json");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(path, """
+            {
+              "schemaVersion": 1,
+              "svn": { "url": "^/native/main", "revision": 25 },
+              "tia": { "projectChecksum": "PLC_1:abc123" },
+              "safety": { "fSignature": "F-SIG-4711" },
+              "validation": { "compileStatus": "SUCCESS" }
+            }
+            """);
+
+        var loaded = EngineeringStateWriter.Read(path);
+
+        Assert.Equal("F-SIG-4711", loaded.Safety.FSignature);
+        Assert.Null(loaded.Safety.ReadState);
+    }
+
+    [Fact]
+    public void ClassifyFlagsFailedRequiredSignatureReadAsSafetyChange()
+    {
+        var baseline = EngineeringStateWriter.Create(
+            "^/native/main", 25, "c1", "s1", EngineeringCompileStatus.Success);
+
+        var classification = EngineeringStateWriter.Classify(
+            baseline, "c1", "s1", svnWorkingCopyDirty: false, semanticDiffChanged: false,
+            fSignatureReadFailed: true);
+
+        Assert.True(classification.SafetyChanged);
+        Assert.False(classification.SemanticChanged);
+        Assert.False(classification.NativeChanged);
     }
 
     [Fact]
@@ -46,7 +82,7 @@ public sealed class EngineeringStateWriterTests : IDisposable
         var expectedOrder = new[]
         {
             "\"schemaVersion\"", "\"svn\"", "\"url\"", "\"revision\"",
-            "\"tia\"", "\"projectChecksum\"", "\"safety\"", "\"fSignature\"",
+            "\"tia\"", "\"projectChecksum\"", "\"safety\"", "\"fSignature\"", "\"readState\"",
             "\"validation\"", "\"compileStatus\"",
         };
         var positions = expectedOrder

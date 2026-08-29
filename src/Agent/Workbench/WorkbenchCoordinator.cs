@@ -463,6 +463,7 @@ public sealed class WorkbenchCoordinator
             // the installed V17 assembly — see scripts/Probe-SafetySignature.ps1. Non-failsafe
             // PLCs contribute nothing, so the aggregate stays null on standard-only projects.
             string? fSignature = AggregateFSignature(baselineChecksums);
+            string? fSignatureReadState = AggregateFSignatureReadState(baselineChecksums);
 
             progress?.Report("Creating device folders...");
             var worktreeId = Guid.NewGuid().ToString("N");
@@ -620,7 +621,8 @@ public sealed class WorkbenchCoordinator
                 nativeBaseline.Revision,
                 projectChecksum,
                 fSignature,
-                compileStatus));
+                compileStatus,
+                fSignatureReadState));
 
             progress?.Report("Creating the initial PLC source baseline commit...");
             var baselinePaths = initialSourcePaths
@@ -649,6 +651,9 @@ public sealed class WorkbenchCoordinator
                             deviceId = device.DeviceId,
                             plcName = checksum.PlcName,
                             projectChecksum = checksum.SoftwareChecksum,
+                            isSafetyDevice = checksum.IsSafetyDevice,
+                            fSignatureReadState = checksum.FSignatureReadState,
+                            fSignature = checksum.FSignature,
                         };
                 })
                 .Where(item => item is not null)
@@ -831,6 +836,22 @@ public sealed class WorkbenchCoordinator
         return aggregate.Length == 0 ? null : aggregate;
     }
 
+    /// <summary>Aggregate F-signature read state: null when no PLC is a safety device,
+    /// read-failed when any safety device's required signature read failed, otherwise ok.</summary>
+    private static string? AggregateFSignatureReadState(IEnumerable<PlcChecksumInfo> checksums)
+    {
+        var safetyDevices = checksums.Where(checksum => checksum.IsSafetyDevice == true).ToArray();
+        if (safetyDevices.Length == 0)
+        {
+            return null;
+        }
+
+        return safetyDevices.Any(checksum =>
+                string.Equals(checksum.FSignatureReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal))
+            ? FSignatureReadState.ReadFailed
+            : FSignatureReadState.Ok;
+    }
+
     /// <summary>
     /// Restores the native TIA project state recorded by revision.json at a Git commit
     /// (default HEAD) as a lean svn export (no .svn metadata): resolves the SVN url+revision and
@@ -935,7 +956,22 @@ public sealed class WorkbenchCoordinator
                 state?.Svn?.Revision,
                 state?.Tia?.ProjectChecksum,
                 state?.Validation?.CompileStatus,
-                state?.Safety?.FSignature));
+                state?.Safety?.FSignature,
+                SafetyReadState: state?.Safety?.ReadState));
+        }
+
+        // The log is newest-first: a savepoint is a safety change when its F-signature differs
+        // from the next-older one (null-safe, mirroring EngineeringStateWriter.Classify; the
+        // oldest savepoint has no predecessor and is never "changed").
+        for (var index = 0; index < savepoints.Count - 1; index++)
+        {
+            if (!string.Equals(
+                    savepoints[index].FSignature ?? string.Empty,
+                    savepoints[index + 1].FSignature ?? string.Empty,
+                    StringComparison.Ordinal))
+            {
+                savepoints[index] = savepoints[index] with { SafetyChanged = true };
+            }
         }
 
         return savepoints;
@@ -2729,7 +2765,17 @@ public sealed class WorkbenchCoordinator
                 var plcName = comparison.Differences
                     .FirstOrDefault(d => d.DeviceId == item.Key)?.PlcName
                     ?? ReadDevice(contexts[item.Key]).PlcName;
-                return new { deviceId = item.Key, plcName, projectChecksum = item.Value };
+                var safety = comparison.Safety?.FirstOrDefault(entry =>
+                    string.Equals(entry.DeviceId, item.Key, StringComparison.Ordinal));
+                return new
+                {
+                    deviceId = item.Key,
+                    plcName,
+                    projectChecksum = item.Value,
+                    isSafetyDevice = safety?.IsSafetyDevice,
+                    fSignatureReadState = safety?.ReadState,
+                    fSignature = safety?.FSignature,
+                };
             })
             .ToArray();
         if (stateDevices.Length > 0)
@@ -2918,7 +2964,8 @@ public sealed class WorkbenchCoordinator
                     pending.SvnRevision,
                     existing?.Tia?.ProjectChecksum,
                     existing?.Safety?.FSignature,
-                    existing?.Validation?.CompileStatus ?? EngineeringCompileStatus.Success));
+                    existing?.Validation?.CompileStatus ?? EngineeringCompileStatus.Success,
+                    existing?.Safety?.ReadState));
             }
 
             var retryDevices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
@@ -2962,6 +3009,7 @@ public sealed class WorkbenchCoordinator
         // F-signature: same SafetySignatureProvider read as the bootstrap (see
         // CreateWorkbenchAsync); aggregated from the post-compile checksums.
         string? fSignature = AggregateFSignature(savepointChecksums);
+        string? fSignatureReadState = AggregateFSignatureReadState(savepointChecksums);
 
         // Rule 8: quiesce the TIA session before the native commit so no TIA process can still
         // write the managed tree while SVN snapshots it.
@@ -2981,7 +3029,9 @@ public sealed class WorkbenchCoordinator
             projectChecksum,
             fSignature,
             svnWorkingCopyDirty: !svnStatus.IsClean,
-            semanticDiffChanged: selected.Count > 0);
+            semanticDiffChanged: selected.Count > 0,
+            fSignatureReadFailed: string.Equals(
+                fSignatureReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal));
         if (selected.Count == 0 && !classification.SafetyChanged && !classification.NativeChanged)
         {
             throw new WorkbenchLifecycleException(
@@ -3002,7 +3052,8 @@ public sealed class WorkbenchCoordinator
             svnCommit.Revision,
             projectChecksum,
             fSignature,
-            compileStatus));
+            compileStatus,
+            fSignatureReadState));
 
         WorkbenchCommitResult commit;
         try
@@ -3101,6 +3152,9 @@ public sealed class WorkbenchCoordinator
                         deviceId = device.Metadata.DeviceId,
                         plcName = checksum.PlcName,
                         projectChecksum = checksum.SoftwareChecksum,
+                        isSafetyDevice = checksum.IsSafetyDevice,
+                        fSignatureReadState = checksum.FSignatureReadState,
+                        fSignature = checksum.FSignature,
                     };
             })
             .Where(item => item is not null)
