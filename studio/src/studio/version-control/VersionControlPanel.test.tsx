@@ -247,6 +247,54 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.querySelector('[data-testid="vc-untrackable-marker"]')?.textContent).toContain('untrackable')
   })
 
+  it('maps the savepoint safety fields onto the history timeline', async () => {
+    mockVcState({
+      savepoints: [{ ...savepointAt('safety-1', 5), safetyChanged: true, safetyReadState: 'read-failed' }],
+      timeline: {
+        gitCommits: [],
+        svnRevisions: [{
+          revision: 5,
+          author: 'PLC Assistant',
+          message: 'safety-1',
+          timestamp: '2026-08-23T08:00:00.000Z',
+          tiaChecksum: null,
+          gitCommitSha: 'safety-1',
+        }],
+        hasMore: false,
+      },
+    })
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-change-marker"]')?.textContent).toContain('Safety change')
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')?.textContent).toContain('Safety signature unavailable')
+  })
+
+  it('renders no safety badges for a savepoint without safety findings', async () => {
+    mockVcState({
+      savepoints: [{ ...savepointAt('plain-1', 5), safetyReadState: 'ok' }],
+      timeline: {
+        gitCommits: [],
+        svnRevisions: [{
+          revision: 5,
+          author: 'PLC Assistant',
+          message: 'plain-1',
+          timestamp: '2026-08-23T08:00:00.000Z',
+          tiaChecksum: null,
+          gitCommitSha: 'plain-1',
+        }],
+        hasMore: false,
+      },
+    })
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-change-marker"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')).toBeNull()
+  })
+
   it('warns about a pending savepoint when an untrackable commit is newer than the savepoint boundary', async () => {
     mockVcState({
       commits: [logCommit('new-untrackable'), logCommit('snapshot-r3'), logCommit('old-r2')],

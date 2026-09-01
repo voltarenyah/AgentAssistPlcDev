@@ -31,6 +31,8 @@ const savepoint = (overrides: Partial<Extract<VcTimelineItem, { kind: 'savepoint
   tiaChecksum: 'B3 35 56 49',
   tiaContentFingerprint: 'AA BB CC DD',
   gitCommitSha: 'abcdef1234567890',
+  safetyChanged: false,
+  safetyReadState: null,
   ...overrides,
 })
 
@@ -108,6 +110,56 @@ describe('VersionControlHistory', () => {
     await click(host.querySelector('[data-testid="commit-abcdef1"]')!)
 
     expect(host.querySelector('[data-testid="vc-untrackable-note"]')?.textContent).toContain('No git-tracked files changed')
+  })
+
+  it('marks a safety-program change on the savepoint row and in the expanded detail', async () => {
+    const { host } = await render([savepoint({ safetyChanged: true, safetyReadState: 'ok' })])
+
+    const marker = host.querySelector('[data-testid="vc-safety-change-marker"]')!
+    expect(marker.textContent).toContain('Safety change')
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')).toBeNull()
+
+    await click(host.querySelector('[data-testid="savepoint-r4"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-change-note"]')?.textContent).toContain('Safety program changed (F-signature)')
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-note"]')).toBeNull()
+  })
+
+  it('marks a failed safety-signature read on the savepoint row and in the expanded detail', async () => {
+    const { host } = await render([savepoint({ safetyReadState: 'read-failed' })])
+
+    const marker = host.querySelector('[data-testid="vc-safety-unavailable-marker"]')!
+    expect(marker.textContent).toContain('Safety signature unavailable')
+    expect(host.querySelector('[data-testid="vc-safety-change-marker"]')).toBeNull()
+
+    await click(host.querySelector('[data-testid="savepoint-r4"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-note"]')?.textContent).toContain('F-signature could not be read')
+    expect(host.querySelector('[data-testid="vc-safety-change-note"]')).toBeNull()
+  })
+
+  it('renders both safety badges on a savepoint that changed and failed to read', async () => {
+    const { host } = await render([savepoint({ safetyChanged: true, safetyReadState: 'read-failed' })])
+
+    expect(host.querySelector('[data-testid="vc-safety-change-marker"]')).toBeTruthy()
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')).toBeTruthy()
+
+    await click(host.querySelector('[data-testid="savepoint-r4"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-change-note"]')).toBeTruthy()
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-note"]')).toBeTruthy()
+  })
+
+  it('renders no safety badges for an ordinary savepoint', async () => {
+    const { host } = await render([savepoint(), savepoint({ revision: 3, safetyReadState: 'ok' })])
+
+    expect(host.querySelector('[data-testid="vc-safety-change-marker"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')).toBeNull()
+
+    await click(host.querySelector('[data-testid="savepoint-r4"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-change-note"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-note"]')).toBeNull()
   })
 
   it('creates a rollback feature from selected files instead of restoring master', async () => {

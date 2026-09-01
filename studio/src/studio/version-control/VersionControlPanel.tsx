@@ -113,6 +113,8 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
       tiaChecksum: revision.tiaChecksum,
       tiaContentFingerprint: revision.tiaContentFingerprint,
       gitCommitSha: revision.gitCommitSha,
+      safetyChanged: savepointBySha.get(revision.gitCommitSha)?.safetyChanged ?? false,
+      safetyReadState: savepointBySha.get(revision.gitCommitSha)?.safetyReadState ?? null,
     }))
     return [...commits, ...revisions].sort((left, right) => right.timestamp.localeCompare(left.timestamp))
   }, [timeline, log, savepoints])

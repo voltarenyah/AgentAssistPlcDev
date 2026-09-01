@@ -20,6 +20,15 @@ public sealed class ContextStatusResult
     /// <summary>Checksum read from TIA right now; null when unsupported or not compiled.</summary>
     public string? LiveChecksum { get; set; }
 
+    /// <summary>True when the PLC exposes the safety surface; null when read by an older adapter.</summary>
+    public bool? IsSafetyDevice { get; set; }
+
+    /// <summary>One of FSignatureReadState; null for non-safety devices.</summary>
+    public string? FSignatureReadState { get; set; }
+
+    /// <summary>Live offline collective F-signature (uppercase hex); null when unavailable.</summary>
+    public string? FSignature { get; set; }
+
     /// <summary>"no-baseline" | "in-sync" | "changed" | "unknown" (live checksum unavailable, or
     /// legacy manifest without a stored checksum — only a sync's detailed diff can decide).</summary>
     public string State { get; set; } = string.Empty;

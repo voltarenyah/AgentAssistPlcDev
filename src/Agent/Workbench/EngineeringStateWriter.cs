@@ -15,7 +15,11 @@ public sealed record EngineeringSvnLink(string? Url, long? Revision);
 
 public sealed record EngineeringTiaState(string? ProjectChecksum);
 
-public sealed record EngineeringSafetyState(string? FSignature);
+/// <summary>Safety evidence: the aggregated offline collective F-signature plus the aggregate
+/// read state (null on legacy files, "ok" when every safety device's signature was read or no
+/// safety device exists, "read-failed" when a required read failed — see
+/// Contracts.Engineering.FSignatureReadState).</summary>
+public sealed record EngineeringSafetyState(string? FSignature, string? ReadState = null);
 
 public sealed record EngineeringValidationState(string CompileStatus);
 
@@ -59,7 +63,8 @@ public static class EngineeringStateWriter
         long? svnRevision,
         string? projectChecksum,
         string? fSignature,
-        string compileStatus)
+        string compileStatus,
+        string? fSignatureReadState = null)
     {
         if (string.IsNullOrWhiteSpace(compileStatus))
         {
@@ -70,7 +75,7 @@ public static class EngineeringStateWriter
             SchemaVersion,
             new EngineeringSvnLink(svnUrl, svnRevision),
             new EngineeringTiaState(projectChecksum),
-            new EngineeringSafetyState(fSignature),
+            new EngineeringSafetyState(fSignature, fSignatureReadState),
             new EngineeringValidationState(compileStatus));
     }
 
@@ -171,20 +176,22 @@ public static class EngineeringStateWriter
     /// <summary>
     /// Classifies a savepoint against its base revision.json: semanticChanged comes from the
     /// exported-XML diff, safetyChanged from the F-signature (null-safe: a signature appearing
-    /// or disappearing counts as a change), nativeChanged from a dirty SVN working copy or a
-    /// changed project checksum.
+    /// or disappearing counts as a change; a failed required read also counts as a safety
+    /// change because it cannot prove the safety program unchanged), nativeChanged from a
+    /// dirty SVN working copy or a changed project checksum.
     /// </summary>
     public static EngineeringChangeClassification Classify(
         EngineeringRevisionState baseline,
         string? currentProjectChecksum,
         string? currentFSignature,
         bool svnWorkingCopyDirty,
-        bool semanticDiffChanged)
+        bool semanticDiffChanged,
+        bool fSignatureReadFailed = false)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         return new EngineeringChangeClassification(
             semanticDiffChanged,
-            !StateValueEquals(baseline.Safety?.FSignature, currentFSignature),
+            fSignatureReadFailed || !StateValueEquals(baseline.Safety?.FSignature, currentFSignature),
             svnWorkingCopyDirty || !StateValueEquals(baseline.Tia?.ProjectChecksum, currentProjectChecksum));
     }
 

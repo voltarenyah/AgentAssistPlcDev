@@ -1890,6 +1890,8 @@ export type SavepointInfo = {
   projectChecksum: string | null
   compileStatus: string | null
   fSignature: string | null
+  safetyChanged?: boolean
+  safetyReadState?: string | null
 }
 
 export const getWorktreeEngineeringState = (workbenchId: string, worktreeId: string) =>

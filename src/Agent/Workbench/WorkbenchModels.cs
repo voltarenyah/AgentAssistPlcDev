@@ -172,7 +172,9 @@ public sealed class ShowFileResult
 }
 
 /// <summary>One restore-able engineering savepoint: a git commit plus the native-state link and
-/// evidence recorded by revision.json at that commit (null fields predate revision.json).</summary>
+/// evidence recorded by revision.json at that commit (null fields predate revision.json).
+/// SafetyChanged is derived by comparing the F-signature with the next-older savepoint;
+/// SafetyReadState comes from revision.json ("read-failed" surfaces a required-read failure).</summary>
 public sealed record SavepointInfo(
     string Sha,
     string Message,
@@ -180,7 +182,9 @@ public sealed record SavepointInfo(
     long? SvnRevision,
     string? ProjectChecksum,
     string? CompileStatus,
-    string? FSignature);
+    string? FSignature,
+    bool SafetyChanged = false,
+    string? SafetyReadState = null);
 
 /// <summary>Outcome of one object in a local → TIA push.</summary>
 public sealed record PushToTiaObjectOutcome(string Path, bool Success, string? Message);

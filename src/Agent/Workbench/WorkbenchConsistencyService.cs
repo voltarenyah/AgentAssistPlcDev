@@ -144,6 +144,41 @@ public sealed class WorkbenchConsistencyService
                 string.Equals(checksum.PlcName, item.Metadata.PlcName, StringComparison.OrdinalIgnoreCase))?.SoftwareChecksum,
             StringComparer.Ordinal);
 
+        // Safety evidence: the offline collective F-signature is read for every PLC on every
+        // compare (get_plc_checksums above) and checked against master's revision.json. A changed
+        // signature must make the result non-consistent even when checksums and XML are unchanged;
+        // a failed required read must never pass as consistent. Three distinct situations:
+        // - live signature present and different (or newly appearing) -> Changed.
+        // - baseline signature present but the live device no longer reports a safety surface
+        //   (F-CPU replaced by a standard CPU / safety program deleted) -> Changed.
+        // - baseline signature present, live still a safety device, but no live signature
+        //   (the SafetySignatureProvider is license-gated: no STEP 7 Safety license on the
+        //   comparing machine, verified 2026-09-01) -> degraded evidence, Unavailable below,
+        //   never a phantom change.
+        var baselineFSignatures = ReadBaselineFSignatures(masterRoot);
+        var safety = devices.Select(item =>
+            {
+                var live = checksums.FirstOrDefault(checksum =>
+                    string.Equals(checksum.PlcName, item.Metadata.PlcName, StringComparison.OrdinalIgnoreCase));
+                baselineFSignatures.TryGetValue(item.Metadata.PlcName, out var baselineFSignature);
+                return new DeviceSafetyEvidence(
+                    item.Metadata.DeviceId,
+                    item.Metadata.PlcName,
+                    live?.IsSafetyDevice == true,
+                    live?.FSignatureReadState,
+                    live?.FSignature,
+                    baselineFSignature,
+                    Changed: (live?.FSignature is not null
+                            && !string.Equals(live.FSignature, baselineFSignature ?? string.Empty, StringComparison.Ordinal))
+                        || (live?.IsSafetyDevice != true && baselineFSignature is not null));
+            })
+            .ToArray();
+        var safetyChanged = safety.Any(item => item.Changed);
+        var safetyReadFailed = safety.Any(item =>
+            item.IsSafetyDevice
+            && (string.Equals(item.ReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal)
+                || (item.BaselineFSignature is not null && item.FSignature is null)));
+
         var sourceClean = !status.Entries.Any(entry => IsManagedSourceXml(entry.FilePath));
         var evidenceCurrent = evidence is not null
             && string.Equals(evidence.CommitSha, head.Sha, StringComparison.OrdinalIgnoreCase)
@@ -159,14 +194,21 @@ public sealed class WorkbenchConsistencyService
 
         if (evidenceCurrent && sourceClean && checksumsMatch)
         {
+            var fastState = safetyChanged || hardware.State != "in-sync"
+                ? ConsistencyState.Different
+                : safetyReadFailed
+                    ? ConsistencyState.Unavailable
+                    : ConsistencyState.Consistent;
             return Persist(workbench, new WorkbenchConsistencyResult(
                 Guid.NewGuid().ToString("N"),
                 head.Sha,
                 true,
-                hardware.State == "in-sync" ? ConsistencyState.Consistent : ConsistencyState.Different,
+                fastState,
                 liveChecksums,
                 Array.Empty<SourceDifference>(),
-                hardware));
+                hardware,
+                safety,
+                safetyChanged));
         }
 
         var evidenceSourceCanNarrow = evidenceCurrent && sourceClean;
@@ -216,8 +258,10 @@ public sealed class WorkbenchConsistencyService
 
         var state = scans.Values.Any(scan => scan.UnsupportedObjects.Count > 0)
             ? ConsistencyState.ScanRequired
-            : differences.Count == 0 && hardware.State == "in-sync"
-                ? ConsistencyState.Consistent
+            : differences.Count == 0 && hardware.State == "in-sync" && !safetyChanged
+                ? safetyReadFailed
+                    ? ConsistencyState.Unavailable
+                    : ConsistencyState.Consistent
                 : ConsistencyState.Different;
         return Persist(workbench, new WorkbenchConsistencyResult(
             Guid.NewGuid().ToString("N"),
@@ -226,7 +270,36 @@ public sealed class WorkbenchConsistencyService
             state,
             liveChecksums,
             differences,
-            hardware));
+            hardware,
+            safety,
+            safetyChanged));
+    }
+
+    /// <summary>Per-PLC baseline F-signatures from master's revision.json ("PLC:SIG;PLC2:SIG2").
+    /// Missing/legacy revision state yields an empty map — a signature appearing since then then
+    /// correctly reads as a change.</summary>
+    private static IReadOnlyDictionary<string, string> ReadBaselineFSignatures(string masterRoot)
+    {
+        var path = WorkbenchPaths.ResolveRevisionState(masterRoot);
+        var aggregate = File.Exists(path)
+            ? EngineeringStateWriter.TryParse(File.ReadAllText(path))?.Safety?.FSignature
+            : null;
+        if (string.IsNullOrWhiteSpace(aggregate))
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in aggregate.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = entry.Split(':', 2, StringSplitOptions.TrimEntries);
+            if (parts.Length == 2 && parts[0].Length > 0 && parts[1].Length > 0)
+            {
+                result[parts[0]] = parts[1];
+            }
+        }
+
+        return result;
     }
 
     private async Task<HardwareConfigurationCompareResult> CompareHardwareAsync(

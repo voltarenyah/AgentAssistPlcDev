@@ -231,6 +231,59 @@ on `IEngineeringServiceProvider`).
   mismatch nominate even when fingerprints still match (hash decides; compile ripples degrade to
   "touched").
 
+## 11. Safety / failsafe (`Siemens.Engineering.Safety`, reflection-probed 2026-08-28, runtime-verified 2026-09-01)
+
+Found by a full-assembly type scan for `Safety|Failsafe|Signature` (this dump previously missed the
+namespace — it is **not** part of the documented V17 Openness surface). Runtime-verified against
+`PEI_SinoARP_Master_V4.1.3` (CPU 1515F-2 PN, 6ES7 515-2FM01-0AB0/V2.9, 1152 blocks of which 55
+failsafe, safety system V2.4) in both `WithoutUserInterface` and UI mode with
+`scripts/Probe-SafetySignature.ps1`.
+
+- **Safety device detection — anchor is the DeviceItem, NOT the PlcSoftware (verified):**
+  `plcSoftware.GetService<SafetyAdministration>()` / `GetService<SafetySignatureProvider>()`
+  always return **null**, even on a genuine F-CPU. The same `GetService` calls on the PLC's
+  **DeviceItem** (walk `plc.Parent` up to the first `DeviceItem`) return the services. The
+  detection rule is unchanged otherwise: service present → safety device; any exception →
+  read-failed, never "ordinary PLC". (On this F-CPU: `SafetyAdministration` and `SafetyPrintout`
+  present on the DeviceItem.)
+- **`SafetySignatureProvider` is license-gated (verified):** on a machine with STEP 7 Safety
+  V17 *installed but no valid license*, the provider is null on both anchors — pre/post a
+  successful software compile, logged off *and* logged on to the safety program, headless and
+  UI mode. `LoginToSafetyOfflineProgram(SecureString)` itself fails with "No safety license
+  available". On licensed machines the provider is expected to expose `Signatures` →
+  `Find(SafetySignatureType.BlockOfflineSignature)` (`UInt64`, rendered `X8` hex); that last
+  step remains unverified (no licensed machine available) and is the remaining probe item.
+  Unlicensed machines therefore report `no-signature` — the compare treats "baseline signature
+  present but live signature missing on a still-safety device" as degraded evidence
+  (`Unavailable`), never as a phantom change.
+- **`SafetyAdministration`** reads work **without** a license and without safety login:
+  `IsSafetyOfflineProgramPasswordSet`, `IsLoggedOnToSafetyOfflineProgram`,
+  `Settings.SafetySystemVersion` (V2.4), `RuntimeGroups` (`F-SAFETY-Group`,
+  mainSafetyBlock `000_Main_Safety`, FOB `FOB_SAFETY`, maxCycleTime 200 ms).
+- **`FingerprintProvider.GetFingerprints()` works on F-blocks (verified):** all 55 F-blocks
+  (F_LAD/F_FBD) returned Comments/Interface/Code/Properties/LibraryType fingerprints without a
+  license. Since F-block export is refused, this is the viable per-block change signal when the
+  collective signature is unavailable (not yet wired into compare — follow-up).
+- **Compile:** `plc.GetService<ICompilable>().Compile()` (`Siemens.Engineering.Compiler`)
+  succeeded headless in 20 s with 0 errors — no safety license needed for compiling.
+- Wired up: `get_plc_checksums` returns `IsSafetyDevice`, `FSignatureReadState`
+  (`ok` / `no-signature` / `read-failed`) and `FSignature` per PLC
+  (`TiaV17Adapter.ReadSafety`, DeviceItem anchor, uppercase hex of `BlockOfflineSignature`); the
+  same evidence is on `get_context_status` / `compare_context`. The workbench compare
+  (`WorkbenchConsistencyService.CompareAsync`) checks the live signature against master's
+  revision.json on every compare: a changed signature, or a lost safety surface on a device that
+  had a baseline signature, makes the result `Different` + `SafetyChanged`; a failed required
+  read or degraded evidence (baseline signature present, live read empty) makes it
+  `Unavailable` — never silently consistent.
+  `revision.json` additionally records `safety.readState`; per-device safety fields ride along in
+  the `tia-state/{sha}` commit-state tags (additive-optional; schema "1.1" since the #68
+  content-fingerprint addition, safety fields join it without a further bump).
+- **`.ap17` ZIP fallback — refuted (verified 2026-08-28):** `ZipFile.OpenRead` on a real V17
+  project (`PEI_SinoARP_Master_V4.1.3.ap17`) fails with "End of Central Directory record could
+  not be found" — the `.ap17` envelope is **not** a plain ZIP, so the naive unzip-and-parse
+  fallback from the blind-spots doc does not work directly. The Openness safety surface above is
+  the viable channel.
+
 ## Key findings
 
 **(a) Compile: synchronous.** `ICompilable.Compile()` is parameterless, blocks, and returns
