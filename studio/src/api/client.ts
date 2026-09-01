@@ -1189,6 +1189,7 @@ export type VersionControlTimelineGitCommit = {
   tiaChecksum: string | null
   svnRevision: number | null
   untrackableChange: boolean | null
+  tiaContentFingerprint: string | null
 }
 export type VersionControlTimelineSvnRevision = {
   revision: number
@@ -1197,6 +1198,7 @@ export type VersionControlTimelineSvnRevision = {
   timestamp: string
   tiaChecksum: string | null
   gitCommitSha: string
+  tiaContentFingerprint: string | null
 }
 export type VersionControlTimelineResult = {
   gitCommits: VersionControlTimelineGitCommit[]
@@ -1888,6 +1890,8 @@ export type SavepointInfo = {
   projectChecksum: string | null
   compileStatus: string | null
   fSignature: string | null
+  safetyChanged?: boolean
+  safetyReadState?: string | null
 }
 
 export const getWorktreeEngineeringState = (workbenchId: string, worktreeId: string) =>

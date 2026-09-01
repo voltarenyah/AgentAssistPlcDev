@@ -15,6 +15,7 @@ const commit = (overrides: Partial<Extract<VcTimelineItem, { kind: 'commit' }>> 
   timestamp: '2026-08-04T08:00:00.000Z',
   files: ['devices/PLC_1/source/Blocks/Main.xml'],
   tiaChecksum: 'B3 35 56 49',
+  tiaContentFingerprint: 'AA BB CC DD',
   svnRevision: 4,
   untrackableChange: false,
   validationState: 'Validated',
@@ -28,7 +29,10 @@ const savepoint = (overrides: Partial<Extract<VcTimelineItem, { kind: 'savepoint
   author: 'PLC Assistant',
   timestamp: '2026-08-04T08:01:00.000Z',
   tiaChecksum: 'B3 35 56 49',
+  tiaContentFingerprint: 'AA BB CC DD',
   gitCommitSha: 'abcdef1234567890',
+  safetyChanged: false,
+  safetyReadState: null,
   ...overrides,
 })
 
@@ -81,6 +85,8 @@ describe('VersionControlHistory', () => {
     expect(detail.textContent).not.toContain('abcdef1234567890')
     expect(detail.textContent).toContain('TIA checksum')
     expect(detail.textContent).toContain('B3 35 56 49')
+    expect(detail.textContent).toContain('Content fingerprint')
+    expect(detail.textContent).toContain('AA BB CC DD')
     expect(detail.textContent).toContain('Main')
     expect(detail.textContent).not.toContain('Main.xml')
     expect(detail.textContent).not.toContain('devices/PLC_1/source/Blocks/Main.xml')
@@ -104,6 +110,56 @@ describe('VersionControlHistory', () => {
     await click(host.querySelector('[data-testid="commit-abcdef1"]')!)
 
     expect(host.querySelector('[data-testid="vc-untrackable-note"]')?.textContent).toContain('No git-tracked files changed')
+  })
+
+  it('marks a safety-program change on the savepoint row and in the expanded detail', async () => {
+    const { host } = await render([savepoint({ safetyChanged: true, safetyReadState: 'ok' })])
+
+    const marker = host.querySelector('[data-testid="vc-safety-change-marker"]')!
+    expect(marker.textContent).toContain('Safety change')
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')).toBeNull()
+
+    await click(host.querySelector('[data-testid="savepoint-r4"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-change-note"]')?.textContent).toContain('Safety program changed (F-signature)')
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-note"]')).toBeNull()
+  })
+
+  it('marks a failed safety-signature read on the savepoint row and in the expanded detail', async () => {
+    const { host } = await render([savepoint({ safetyReadState: 'read-failed' })])
+
+    const marker = host.querySelector('[data-testid="vc-safety-unavailable-marker"]')!
+    expect(marker.textContent).toContain('Safety signature unavailable')
+    expect(host.querySelector('[data-testid="vc-safety-change-marker"]')).toBeNull()
+
+    await click(host.querySelector('[data-testid="savepoint-r4"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-note"]')?.textContent).toContain('F-signature could not be read')
+    expect(host.querySelector('[data-testid="vc-safety-change-note"]')).toBeNull()
+  })
+
+  it('renders both safety badges on a savepoint that changed and failed to read', async () => {
+    const { host } = await render([savepoint({ safetyChanged: true, safetyReadState: 'read-failed' })])
+
+    expect(host.querySelector('[data-testid="vc-safety-change-marker"]')).toBeTruthy()
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')).toBeTruthy()
+
+    await click(host.querySelector('[data-testid="savepoint-r4"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-change-note"]')).toBeTruthy()
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-note"]')).toBeTruthy()
+  })
+
+  it('renders no safety badges for an ordinary savepoint', async () => {
+    const { host } = await render([savepoint(), savepoint({ revision: 3, safetyReadState: 'ok' })])
+
+    expect(host.querySelector('[data-testid="vc-safety-change-marker"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')).toBeNull()
+
+    await click(host.querySelector('[data-testid="savepoint-r4"]')!)
+
+    expect(host.querySelector('[data-testid="vc-safety-change-note"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-safety-unavailable-note"]')).toBeNull()
   })
 
   it('creates a rollback feature from selected files instead of restoring master', async () => {

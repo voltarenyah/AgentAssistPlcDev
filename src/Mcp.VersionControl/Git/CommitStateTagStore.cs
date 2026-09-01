@@ -11,7 +11,7 @@ namespace Mcp.VersionControl.Git;
 internal static class CommitStateTagStore
 {
     public const string TagPrefix = "tia-state/";
-    public const string SchemaVersion = "1.0";
+    public const string SchemaVersion = "1.1";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -147,8 +147,16 @@ public sealed record VcCommitStateEvidence(
     string WorkbenchId,
     IReadOnlyList<VcCommitStateDevice> Devices);
 
-/// <summary>Per-device checksum recorded at commit time.</summary>
+/// <summary>Per-device checksum recorded at commit time. The safety and content-fingerprint
+/// fields are optional and additive: tags written by schema 1.0 (without them) still deserialize
+/// (nulls); the store stamps new tags with schema "1.1" (fingerprint addition, #68), which the
+/// safety fields (#67) join without a further bump since no existing field changed
+/// meaning.</summary>
 public sealed record VcCommitStateDevice(
     string DeviceId,
     string PlcName,
-    string ProjectChecksum);
+    string ProjectChecksum,
+    bool? IsSafetyDevice = null,
+    string? FSignatureReadState = null,
+    string? FSignature = null,
+    string? ContentFingerprint = null);

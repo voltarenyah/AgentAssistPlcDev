@@ -21,6 +21,18 @@ public sealed class PlcChecksumContractTests
     }
 
     [Fact]
+    public void PlcChecksumInfoCarriesAnOptionalContentFingerprint()
+    {
+        var property = typeof(PlcChecksumInfo).GetProperty(nameof(PlcChecksumInfo.ContentFingerprint));
+
+        Assert.NotNull(property);
+        Assert.Equal(typeof(string), property!.PropertyType);
+        // Optional by contract: null when no object yielded a readable fingerprint.
+        Assert.Null(new PlcChecksumInfo().ContentFingerprint);
+        Assert.Equal("fingerprint", new PlcChecksumInfo { ContentFingerprint = "fingerprint" }.ContentFingerprint);
+    }
+
+    [Fact]
     public void PlatformExposesOptionalPlcNameForChecksumReads()
     {
         var method = typeof(IEngineeringPlatform).GetMethod(nameof(IEngineeringPlatform.GetPlcChecksums));

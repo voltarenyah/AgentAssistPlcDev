@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using Contracts;
 using Contracts.Engineering;
@@ -10,6 +11,7 @@ using Siemens.Engineering;
 using Siemens.Engineering.Cax;
 using Siemens.Engineering.Compiler;
 using Siemens.Engineering.HW;
+using Siemens.Engineering.Safety;
 using Siemens.Engineering.SW;
 using Siemens.Engineering.SW.Blocks;
 using Siemens.Engineering.SW.Tags;
@@ -538,11 +540,19 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var projectIdentity = project.Path?.FullName ?? project.Name;
 
             return plcs
-                .Select(plc => new PlcChecksumInfo
+                .Select(plc =>
                 {
-                    PlcName = plc.Name,
-                    ProjectIdentity = projectIdentity,
-                    SoftwareChecksum = TryReadSoftwareChecksum(plc),
+                    var safety = ReadSafety(plc);
+                    return new PlcChecksumInfo
+                    {
+                        PlcName = plc.Name,
+                        ProjectIdentity = projectIdentity,
+                        SoftwareChecksum = TryReadSoftwareChecksum(plc),
+                        IsSafetyDevice = safety.IsSafetyDevice,
+                        FSignatureReadState = safety.ReadState,
+                        FSignature = safety.Signature,
+                        ContentFingerprint = TryReadContentFingerprint(plc),
+                    };
                 })
                 .OrderBy(info => info.PlcName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -1348,6 +1358,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 // Per-device export-root subfolder (same rule as the export/sync tools).
                 var dir = Path.Combine(outputDir, Sanitize(plc.Name));
                 var liveChecksum = TryReadSoftwareChecksum(plc);
+                var safety = ReadSafety(plc);
                 var manifestExists = ExportManifest.TryRead(dir, out var manifest) && manifest is not null;
                 var records = manifestExists ? manifest!.Components : new List<ExportMetadataRecord>();
                 var plan = SyncPlanner.Plan(records, CaptureLiveSnapshot(plc).Live, VerifiedLocalFileIds(dir, records));
@@ -1379,6 +1390,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     ManifestExists = manifestExists,
                     StoredChecksum = ProjectMetadata.GetPlcSoftwareChecksum(outputDir, plc.Name),
                     LiveChecksum = liveChecksum,
+                    IsSafetyDevice = safety.IsSafetyDevice,
+                    FSignatureReadState = safety.ReadState,
+                    FSignature = safety.Signature,
                     Components = entries,
                 });
             }
@@ -1421,6 +1435,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 // Per-device export-root subfolder (same rule as the export/sync tools).
                 var dir = Path.Combine(outputDir, Sanitize(plc.Name));
                 var liveChecksum = TryReadSoftwareChecksum(plc);
+                var safety = ReadSafety(plc);
                 var manifestExists = ExportManifest.TryRead(dir, out var manifest) && manifest is not null;
                 var storedChecksum = ProjectMetadata.GetPlcSoftwareChecksum(outputDir, plc.Name);
                 results.Add(new ContextStatusResult
@@ -1431,6 +1446,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     ComponentCount = manifestExists ? manifest!.Components.Count : 0,
                     StoredChecksum = storedChecksum,
                     LiveChecksum = liveChecksum,
+                    IsSafetyDevice = safety.IsSafetyDevice,
+                    FSignatureReadState = safety.ReadState,
+                    FSignature = safety.Signature,
                     State = !manifestExists
                         ? "no-baseline"
                         : liveChecksum is null || storedChecksum is null
@@ -1555,6 +1573,113 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         try
         {
             return plc.GetService<PlcChecksumProvider>()?.Software;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Offline collective F-signature read via the undocumented
+    /// Siemens.Engineering.Safety surface found in the installed V17 assembly on 2026-08-28
+    /// (scripts/Probe-SafetySignature.ps1). The safety services are anchored on the PLC's
+    /// DeviceItem, not on the PlcSoftware — verified 2026-09-01 against a live F-CPU project
+    /// (PEI_SinoARP_Master_V4.1.3, CPU 1515F-2 PN) in headless and UI mode: GetService on
+    /// PlcSoftware always returns null, GetService on the DeviceItem returns the services.
+    /// Detection: a PLC is a safety device when the SafetyAdministration or
+    /// SafetySignatureProvider service is present on that anchor (same
+    /// GetService-returns-null-when-unsupported convention as PlcChecksumProvider). The
+    /// signature is rendered as uppercase hex so it compares byte-stable across sessions. Any
+    /// failure while touching the safety surface yields ReadFailed rather than "not a safety
+    /// device" — a failed required read must never masquerade as an ordinary PLC.</summary>
+    private static (bool IsSafetyDevice, string? ReadState, string? Signature) ReadSafety(PlcSoftware plc)
+    {
+        try
+        {
+            DeviceItem? anchor = null;
+            for (var node = plc.Parent; node is not null; node = node.Parent)
+            {
+                if (node is DeviceItem item)
+                {
+                    anchor = item;
+                    break;
+                }
+            }
+
+            if (anchor is null)
+            {
+                // A PlcSoftware without a DeviceItem ancestor means the device tree is broken;
+                // the safety state is then unreadable, not "ordinary PLC".
+                return (true, FSignatureReadState.ReadFailed, null);
+            }
+
+            var administration = anchor.GetService<SafetyAdministration>();
+            var provider = anchor.GetService<SafetySignatureProvider>();
+            if (administration is null && provider is null)
+            {
+                return (false, null, null);
+            }
+
+            var signature = provider?.Signatures?.Find(SafetySignatureType.BlockOfflineSignature);
+            return signature is null
+                ? (true, FSignatureReadState.NoSignature, null)
+                : (true, FSignatureReadState.Ok, signature.Value.ToString("X8"));
+        }
+        catch
+        {
+            return (true, FSignatureReadState.ReadFailed, null);
+        }
+    }
+
+    /// <summary>Content fingerprint for a PLC: folds every readable per-object
+    /// FingerprintProvider value (blocks, UDTs, tag tables) into one SHA-256, formatted as
+    /// spaced uppercase hex pairs like the software checksum. Detects comment/text/interface
+    /// edits that never move the compiled software checksum (issue #68). Tag tables return a
+    /// null provider on V17, so their comments are a documented gap
+    /// (docs/tiasoftwarechecksumblindpoints.md). Best-effort like the software checksum: any
+    /// failure or a PLC with zero readable fingerprints degrades to null.</summary>
+    private static string? TryReadContentFingerprint(PlcSoftware plc)
+    {
+        try
+        {
+            var lines = new List<string>();
+
+            foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
+            {
+                var fingerprints = FingerprintReader.TryRead(block);
+                if (fingerprints is not null)
+                {
+                    lines.Add($"{ExportManifest.CategoryOf(block)}/{ExportManifest.SourcePathOf(block.Name, groupPath)}|{fingerprints}");
+                }
+            }
+
+            foreach (var (type, groupPath) in PlcTypeEnumerator.Enumerate(plc.TypeGroup))
+            {
+                var fingerprints = FingerprintReader.TryRead(type);
+                if (fingerprints is not null)
+                {
+                    lines.Add($"UDT/{ExportManifest.SourcePathOf(type.Name, groupPath)}|{fingerprints}");
+                }
+            }
+
+            foreach (var (table, groupPath) in TagTableEnumerator.Enumerate(plc.TagTableGroup))
+            {
+                var fingerprints = FingerprintReader.TryRead(table);
+                if (fingerprints is not null)
+                {
+                    lines.Add($"Tags/{ExportManifest.SourcePathOf(table.Name, groupPath)}|{fingerprints}");
+                }
+            }
+
+            if (lines.Count == 0)
+            {
+                return null;
+            }
+
+            lines.Sort(StringComparer.Ordinal);
+            using var sha256 = SHA256.Create();
+            var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", lines)));
+            return string.Join(" ", hash.Select(b => b.ToString("X2")));
         }
         catch
         {

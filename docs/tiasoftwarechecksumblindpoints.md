@@ -10,6 +10,14 @@ This document lists modifications that **cannot** be reliably detected using onl
 
 ## 1. Program and Code Related (Non-Compiled Content)
 
+> **Coverage note (2026-08, issue #68):** block/network comments, interface and UDT texts,
+> symbolic names, and technology-object parameters on blocks/UDTs are now covered by the
+> **content fingerprint** channel (`get_plc_checksums` → `PlcChecksumInfo.ContentFingerprint`,
+> folded from per-object `FingerprintProvider` values and recorded in the `tia-state/{sha}`
+> commit-state tag). **Remaining gap:** tag-table comments — `GetService<FingerprintProvider>()`
+> returns null on tag tables in Openness V17, so tag comment edits are still invisible to both
+> channels.
+
 | Item | Data not tracked | Accessibility | Recommended difference/verification method |
 |------|------------------|---------------|---------------------------------------------|
 | Block comment | FB/FC/OB/DB block comments | Openness: `IBlock.Comment` or `IBlock.GetAttribute("Comment")` | Read all block comments, generate text hash (e.g., SHA-256) and compare |
@@ -75,6 +83,16 @@ This document lists modifications that **cannot** be reliably detected using onl
 ---
 
 ## 5. Safety Program / Failsafe
+
+> **Update 2026-09-01 (issue #67, runtime-verified):** the V17 assembly contains an undocumented
+> `Siemens.Engineering.Safety` namespace — `SafetySignatureProvider.Signatures.Find(BlockOfflineSignature)`
+> gives the offline collective F-signature per PLC. It is wired into `get_plc_checksums`
+> (`PlcChecksumInfo.FSignature`) and recorded in `revision.json`; safety-only edits now classify
+> as `SafetyChanged`. Verified against a live F-CPU project (CPU 1515F-2 PN): the safety services
+> are anchored on the PLC's **DeviceItem** (not the PlcSoftware), and `SafetySignatureProvider`
+> is **license-gated** — null on machines without a STEP 7 Safety license, where F-block
+> fingerprints remain the fallback signal. See
+> `buildnote/bestpractice/openness-v17-api-surface.md` §11 and `scripts/Probe-SafetySignature.ps1`.
 
 | Item | Data not tracked | Accessibility | Recommended difference/verification method |
 |------|------------------|---------------|---------------------------------------------|
