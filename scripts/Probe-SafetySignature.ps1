@@ -1,9 +1,13 @@
 # Attaches to every running TIA Portal instance and probes the failsafe (F-) surface:
-#   1. SafetySignatureProvider on each PlcSoftware (offline collective F-signature,
+#   1. SafetySignatureProvider on each PLC's DeviceItem anchor (offline collective F-signature,
 #      SafetySignatureType.BlockOfflineSignature) — the source wired into get_plc_checksums.
+#      NOTE: the safety services are anchored on the DeviceItem, NOT the PlcSoftware, and the
+#      provider is license-gated (null without a STEP 7 Safety license) — verified 2026-09-01
+#      against PEI_SinoARP_Master_V4.1.3 (CPU 1515F-2 PN), headless and UI mode.
 #   2. SafetyAdministration (password state, safety system version, runtime groups).
 #   3. Whether FingerprintProvider.GetFingerprints() returns values for F-blocks
-#      (F-blocks cannot be exported, so fingerprints would be the fallback change signal).
+#      (F-blocks cannot be exported, so fingerprints would be the fallback change signal;
+#      verified working on all 55 F-blocks of the probe project, no license needed).
 #   4. Optional: with -ProjectFilePath, unzips the .ap17/.apXX project and searches the XML
 #      for signature-looking values (fallback channel if Openness exposes nothing).
 # Run with a failsafe (F-CPU) project open in TIA Portal.
@@ -68,16 +72,30 @@ function Test-FailSafeBlock {
         -or $name.StartsWith('FDB_', 'OrdinalIgnoreCase')
 }
 
+function Get-DeviceItemAnchor {
+    param($Plc)
+    # Verified 2026-09-01 against a live F-CPU (CPU 1515F-2 PN, PEI_SinoARP_Master_V4.1.3):
+    # the Siemens.Engineering.Safety services are anchored on the PLC's DeviceItem, NOT on
+    # the PlcSoftware (GetService on PlcSoftware returns null for both).
+    $node = $Plc.Parent
+    while ($null -ne $node) {
+        if ($node -is [Siemens.Engineering.HW.DeviceItem]) { return $node }
+        $node = $node.Parent
+    }
+    return $null
+}
+
 function Show-SafetyDetection {
     param($Plc)
     # Detection rule used by TiaV17Adapter.ReadSafety: a PLC is a safety device when the
-    # SafetyAdministration or SafetySignatureProvider service is present on its PlcSoftware.
+    # SafetyAdministration or SafetySignatureProvider service is present on its DeviceItem anchor.
     try {
-        $admin = Get-ServiceInstance -Obj $Plc -ServiceType ([Siemens.Engineering.Safety.SafetyAdministration])
-        $provider = Get-ServiceInstance -Obj $Plc -ServiceType ([Siemens.Engineering.Safety.SafetySignatureProvider])
+        $anchor = Get-DeviceItemAnchor -Plc $Plc
+        $admin = Get-ServiceInstance -Obj $anchor -ServiceType ([Siemens.Engineering.Safety.SafetyAdministration])
+        $provider = Get-ServiceInstance -Obj $anchor -ServiceType ([Siemens.Engineering.Safety.SafetySignatureProvider])
         $isSafety = ($null -ne $admin) -or ($null -ne $provider)
-        Write-Output ("  [{0}] DETECTION: safetyDevice={1} (SafetyAdministration present: {2}, SafetySignatureProvider present: {3})" -f `
-            $Plc.Name, $isSafety, ($null -ne $admin), ($null -ne $provider))
+        Write-Output ("  [{0}] DETECTION: safetyDevice={1} (SafetyAdministration present: {2}, SafetySignatureProvider present: {3}, anchor: {4})" -f `
+            $Plc.Name, $isSafety, ($null -ne $admin), ($null -ne $provider), $(if ($null -ne $anchor) { $anchor.Name } else { 'none' }))
     }
     catch {
         Write-Output "  [$($Plc.Name)] DETECTION: read failed (treated as read-failed): $($_.Exception.Message)"
@@ -86,9 +104,10 @@ function Show-SafetyDetection {
 
 function Show-SafetySignature {
     param($Plc)
-    $provider = Get-ServiceInstance -Obj $Plc -ServiceType ([Siemens.Engineering.Safety.SafetySignatureProvider])
+    $anchor = Get-DeviceItemAnchor -Plc $Plc
+    $provider = Get-ServiceInstance -Obj $anchor -ServiceType ([Siemens.Engineering.Safety.SafetySignatureProvider])
     if ($null -eq $provider) {
-        Write-Output "  [$($Plc.Name)] SafetySignatureProvider: null (not a failsafe PLC or unsupported)"
+        Write-Output "  [$($Plc.Name)] SafetySignatureProvider: null (not a failsafe PLC, or no STEP 7 Safety license - the provider is license-gated)"
         return
     }
     try {
@@ -112,7 +131,8 @@ function Show-SafetySignature {
 
 function Show-SafetyAdministration {
     param($Plc)
-    $admin = Get-ServiceInstance -Obj $Plc -ServiceType ([Siemens.Engineering.Safety.SafetyAdministration])
+    $anchor = Get-DeviceItemAnchor -Plc $Plc
+    $admin = Get-ServiceInstance -Obj $anchor -ServiceType ([Siemens.Engineering.Safety.SafetyAdministration])
     if ($null -eq $admin) {
         Write-Output "  [$($Plc.Name)] SafetyAdministration: null"
         return

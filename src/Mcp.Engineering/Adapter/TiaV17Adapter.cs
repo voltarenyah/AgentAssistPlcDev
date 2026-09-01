@@ -1557,9 +1557,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
     /// <summary>Offline collective F-signature read via the undocumented
     /// Siemens.Engineering.Safety surface found in the installed V17 assembly on 2026-08-28
-    /// (scripts/Probe-SafetySignature.ps1). Detection: a PLC is a safety device when the
-    /// SafetyAdministration or SafetySignatureProvider service is present on its PlcSoftware
-    /// (same GetService-returns-null-when-unsupported convention as PlcChecksumProvider). The
+    /// (scripts/Probe-SafetySignature.ps1). The safety services are anchored on the PLC's
+    /// DeviceItem, not on the PlcSoftware — verified 2026-09-01 against a live F-CPU project
+    /// (PEI_SinoARP_Master_V4.1.3, CPU 1515F-2 PN) in headless and UI mode: GetService on
+    /// PlcSoftware always returns null, GetService on the DeviceItem returns the services.
+    /// Detection: a PLC is a safety device when the SafetyAdministration or
+    /// SafetySignatureProvider service is present on that anchor (same
+    /// GetService-returns-null-when-unsupported convention as PlcChecksumProvider). The
     /// signature is rendered as uppercase hex so it compares byte-stable across sessions. Any
     /// failure while touching the safety surface yields ReadFailed rather than "not a safety
     /// device" — a failed required read must never masquerade as an ordinary PLC.</summary>
@@ -1567,8 +1571,25 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     {
         try
         {
-            var administration = plc.GetService<SafetyAdministration>();
-            var provider = plc.GetService<SafetySignatureProvider>();
+            DeviceItem? anchor = null;
+            for (var node = plc.Parent; node is not null; node = node.Parent)
+            {
+                if (node is DeviceItem item)
+                {
+                    anchor = item;
+                    break;
+                }
+            }
+
+            if (anchor is null)
+            {
+                // A PlcSoftware without a DeviceItem ancestor means the device tree is broken;
+                // the safety state is then unreadable, not "ordinary PLC".
+                return (true, FSignatureReadState.ReadFailed, null);
+            }
+
+            var administration = anchor.GetService<SafetyAdministration>();
+            var provider = anchor.GetService<SafetySignatureProvider>();
             if (administration is null && provider is null)
             {
                 return (false, null, null);

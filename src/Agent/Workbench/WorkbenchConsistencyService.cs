@@ -146,7 +146,14 @@ public sealed class WorkbenchConsistencyService
         // Safety evidence: the offline collective F-signature is read for every PLC on every
         // compare (get_plc_checksums above) and checked against master's revision.json. A changed
         // signature must make the result non-consistent even when checksums and XML are unchanged;
-        // a failed required read must never pass as consistent.
+        // a failed required read must never pass as consistent. Three distinct situations:
+        // - live signature present and different (or newly appearing) -> Changed.
+        // - baseline signature present but the live device no longer reports a safety surface
+        //   (F-CPU replaced by a standard CPU / safety program deleted) -> Changed.
+        // - baseline signature present, live still a safety device, but no live signature
+        //   (the SafetySignatureProvider is license-gated: no STEP 7 Safety license on the
+        //   comparing machine, verified 2026-09-01) -> degraded evidence, Unavailable below,
+        //   never a phantom change.
         var baselineFSignatures = ReadBaselineFSignatures(masterRoot);
         var safety = devices.Select(item =>
             {
@@ -160,13 +167,16 @@ public sealed class WorkbenchConsistencyService
                     live?.FSignatureReadState,
                     live?.FSignature,
                     baselineFSignature,
-                    Changed: !string.Equals(live?.FSignature ?? string.Empty, baselineFSignature ?? string.Empty, StringComparison.Ordinal));
+                    Changed: (live?.FSignature is not null
+                            && !string.Equals(live.FSignature, baselineFSignature ?? string.Empty, StringComparison.Ordinal))
+                        || (live?.IsSafetyDevice != true && baselineFSignature is not null));
             })
             .ToArray();
         var safetyChanged = safety.Any(item => item.Changed);
         var safetyReadFailed = safety.Any(item =>
             item.IsSafetyDevice
-            && string.Equals(item.ReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal));
+            && (string.Equals(item.ReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal)
+                || (item.BaselineFSignature is not null && item.FSignature is null)));
 
         var sourceClean = !status.Entries.Any(entry => IsManagedSourceXml(entry.FilePath));
         var evidenceCurrent = evidence is not null

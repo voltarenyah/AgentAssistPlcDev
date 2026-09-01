@@ -7,7 +7,9 @@ public static class FSignatureReadState
     /// <summary>Safety device; the offline collective F-signature was read.</summary>
     public const string Ok = "ok";
 
-    /// <summary>Safety device, but no signature is available (e.g. safety program not compiled).</summary>
+    /// <summary>Safety device, but no signature is available (e.g. safety program not compiled,
+    /// or the SafetySignatureProvider is license-gated and no STEP 7 Safety license is
+    /// installed — verified 2026-09-01).</summary>
     public const string NoSignature = "no-signature";
 
     /// <summary>Safety device whose signature read failed — never treat as an ordinary PLC.</summary>

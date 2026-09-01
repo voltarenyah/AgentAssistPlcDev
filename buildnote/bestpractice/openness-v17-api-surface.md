@@ -231,44 +231,52 @@ on `IEngineeringServiceProvider`).
   mismatch nominate even when fingerprints still match (hash decides; compile ripples degrade to
   "touched").
 
-## 11. Safety / failsafe (`Siemens.Engineering.Safety`, reflection-probed 2026-08-28)
+## 11. Safety / failsafe (`Siemens.Engineering.Safety`, reflection-probed 2026-08-28, runtime-verified 2026-09-01)
 
 Found by a full-assembly type scan for `Safety|Failsafe|Signature` (this dump previously missed the
-namespace — it is **not** part of the documented V17 Openness surface). Runtime verification against
-a live F-CPU project is still pending (no failsafe project available at probe time); use
-`scripts/Probe-SafetySignature.ps1` with a failsafe project open to confirm the read paths below.
+namespace — it is **not** part of the documented V17 Openness surface). Runtime-verified against
+`PEI_SinoARP_Master_V4.1.3` (CPU 1515F-2 PN, 6ES7 515-2FM01-0AB0/V2.9, 1152 blocks of which 55
+failsafe, safety system V2.4) in both `WithoutUserInterface` and UI mode with
+`scripts/Probe-SafetySignature.ps1`.
 
-- **Safety device detection:** a PLC is treated as a safety device when the `SafetyAdministration`
-  or `SafetySignatureProvider` service is present on its `PlcSoftware` (same
-  GetService-returns-null-when-unsupported convention as `PlcChecksumProvider`, verified for
-  checksums in §10; safety-side verification pending a live F-project). Any exception while
-  touching the safety surface is reported as read-failed, never as "ordinary PLC".
-- **`SafetySignatureProvider`** (`IEngineeringService`, like `PlcChecksumProvider`) — access via
-  `plc.GetService<SafetySignatureProvider>()`. Property `Signatures`
-  (`SafetySignatureComposition`, read-only list) → `Find(SafetySignatureType)`. The V17 enum has a
-  single member, **`BlockOfflineSignature`**, and `SafetySignature.Value` is a `UInt64` — this is
-  the offline collective F-signature of the safety program, i.e. exactly the value needed for
-  safety change detection without F-block export.
-- **`SafetyAdministration`** (also an `IEngineeringService` on the PLC software) — `Settings`
-  (`SafetySettings.SafetySystemVersion.Value`), `RuntimeGroups` (`Name`, `MainSafetyBlockName`,
-  `FOBName`, `MaximumCycleTime`, ...), `IsSafetyOfflineProgramPasswordSet`,
-  `IsLoggedOnToSafetyOfflineProgram`, and offline-program login/logoff/password methods. Reading the
-  signature must not require logging on to the safety program — verify with the probe.
-- Also present: `SafetyPrintout` (safety printout to file), plus a large set of
-  `Siemens.Engineering.HW.Failsafe_*` enums (F-I/O channel parameters).
+- **Safety device detection — anchor is the DeviceItem, NOT the PlcSoftware (verified):**
+  `plcSoftware.GetService<SafetyAdministration>()` / `GetService<SafetySignatureProvider>()`
+  always return **null**, even on a genuine F-CPU. The same `GetService` calls on the PLC's
+  **DeviceItem** (walk `plc.Parent` up to the first `DeviceItem`) return the services. The
+  detection rule is unchanged otherwise: service present → safety device; any exception →
+  read-failed, never "ordinary PLC". (On this F-CPU: `SafetyAdministration` and `SafetyPrintout`
+  present on the DeviceItem.)
+- **`SafetySignatureProvider` is license-gated (verified):** on a machine with STEP 7 Safety
+  V17 *installed but no valid license*, the provider is null on both anchors — pre/post a
+  successful software compile, logged off *and* logged on to the safety program, headless and
+  UI mode. `LoginToSafetyOfflineProgram(SecureString)` itself fails with "No safety license
+  available". On licensed machines the provider is expected to expose `Signatures` →
+  `Find(SafetySignatureType.BlockOfflineSignature)` (`UInt64`, rendered `X8` hex); that last
+  step remains unverified (no licensed machine available) and is the remaining probe item.
+  Unlicensed machines therefore report `no-signature` — the compare treats "baseline signature
+  present but live signature missing on a still-safety device" as degraded evidence
+  (`Unavailable`), never as a phantom change.
+- **`SafetyAdministration`** reads work **without** a license and without safety login:
+  `IsSafetyOfflineProgramPasswordSet`, `IsLoggedOnToSafetyOfflineProgram`,
+  `Settings.SafetySystemVersion` (V2.4), `RuntimeGroups` (`F-SAFETY-Group`,
+  mainSafetyBlock `000_Main_Safety`, FOB `FOB_SAFETY`, maxCycleTime 200 ms).
+- **`FingerprintProvider.GetFingerprints()` works on F-blocks (verified):** all 55 F-blocks
+  (F_LAD/F_FBD) returned Comments/Interface/Code/Properties/LibraryType fingerprints without a
+  license. Since F-block export is refused, this is the viable per-block change signal when the
+  collective signature is unavailable (not yet wired into compare — follow-up).
+- **Compile:** `plc.GetService<ICompilable>().Compile()` (`Siemens.Engineering.Compiler`)
+  succeeded headless in 20 s with 0 errors — no safety license needed for compiling.
 - Wired up: `get_plc_checksums` returns `IsSafetyDevice`, `FSignatureReadState`
   (`ok` / `no-signature` / `read-failed`) and `FSignature` per PLC
-  (`TiaV17Adapter.ReadSafety`, uppercase hex of `BlockOfflineSignature`); the same evidence is on
-  `get_context_status` / `compare_context`. The workbench compare
+  (`TiaV17Adapter.ReadSafety`, DeviceItem anchor, uppercase hex of `BlockOfflineSignature`); the
+  same evidence is on `get_context_status` / `compare_context`. The workbench compare
   (`WorkbenchConsistencyService.CompareAsync`) checks the live signature against master's
-  revision.json on every compare: a changed signature makes the result `Different` +
-  `SafetyChanged`, and a failed required read makes it `Unavailable` — never silently consistent.
+  revision.json on every compare: a changed signature, or a lost safety surface on a device that
+  had a baseline signature, makes the result `Different` + `SafetyChanged`; a failed required
+  read or degraded evidence (baseline signature present, live read empty) makes it
+  `Unavailable` — never silently consistent.
   `revision.json` additionally records `safety.readState`; per-device safety fields ride along in
   the `tia-state/{sha}` commit-state tags (schema stays "1.0", fields additive-optional).
-- **Still unknown (probe with an F-project):** whether `GetService<SafetySignatureProvider>()`
-  returns null vs throws on standard PLCs (the detection rule assumes null), whether the signature
-  moves on safety-parameter-only edits, and whether `FingerprintProvider.GetFingerprints()` works
-  on F-blocks (fallback change signal, since F-block export is refused).
 - **`.ap17` ZIP fallback — refuted (verified 2026-08-28):** `ZipFile.OpenRead` on a real V17
   project (`PEI_SinoARP_Master_V4.1.3.ap17`) fails with "End of Central Directory record could
   not be found" — the `.ap17` envelope is **not** a plain ZIP, so the naive unzip-and-parse

@@ -208,6 +208,31 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task MissingLiveSignatureAgainstBaselineIsUnavailableNotPhantomChange()
+    {
+        // License-missing scenario (verified 2026-09-01: the SafetySignatureProvider is
+        // license-gated): baseline recorded a signature, the live device is still a safety
+        // device, but the provider returns no signature. Degraded evidence must surface as
+        // Unavailable, never as Different (phantom change) and never as Consistent.
+        fixture.WriteBaselineFSignature("PLC_1:AAAA1111");
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.NoSignature, null);
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.Equal(ConsistencyState.Unavailable, result.State);
+        Assert.False(result.SafetyChanged);
+        var plc1 = Assert.Single(result.Safety!, item => item.PlcName == "PLC_1");
+        Assert.True(plc1.IsSafetyDevice);
+        Assert.Equal(FSignatureReadState.NoSignature, plc1.ReadState);
+        Assert.Null(plc1.FSignature);
+        Assert.Equal("AAAA1111", plc1.BaselineFSignature);
+        Assert.False(plc1.Changed);
+    }
+
+    [Fact]
     public async Task LostSafetyApplicabilityCountsAsSafetyChange()
     {
         // Baseline recorded an F-signature for PLC_1; the live read no longer reports a safety
