@@ -13,7 +13,8 @@ public sealed record VersionControlTimelineGitCommit(
     IReadOnlyList<string> Files,
     string? TiaChecksum,
     long? SvnRevision,
-    bool UntrackableChange);
+    bool UntrackableChange,
+    string? TiaContentFingerprint = null);
 
 public sealed record VersionControlTimelineSvnRevision(
     long Revision,
@@ -21,7 +22,8 @@ public sealed record VersionControlTimelineSvnRevision(
     string Message,
     string Timestamp,
     string? TiaChecksum,
-    string GitCommitSha);
+    string GitCommitSha,
+    string? TiaContentFingerprint = null);
 
 internal sealed class TimelineSvnLogResult
 {

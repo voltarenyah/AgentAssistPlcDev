@@ -276,7 +276,8 @@ failsafe, safety system V2.4) in both `WithoutUserInterface` and UI mode with
   read or degraded evidence (baseline signature present, live read empty) makes it
   `Unavailable` — never silently consistent.
   `revision.json` additionally records `safety.readState`; per-device safety fields ride along in
-  the `tia-state/{sha}` commit-state tags (schema stays "1.0", fields additive-optional).
+  the `tia-state/{sha}` commit-state tags (additive-optional; schema "1.1" since the #68
+  content-fingerprint addition, safety fields join it without a further bump).
 - **`.ap17` ZIP fallback — refuted (verified 2026-08-28):** `ZipFile.OpenRead` on a real V17
   project (`PEI_SinoARP_Master_V4.1.3.ap17`) fails with "End of Central Directory record could
   not be found" — the `.ap17` envelope is **not** a plain ZIP, so the naive unzip-and-parse

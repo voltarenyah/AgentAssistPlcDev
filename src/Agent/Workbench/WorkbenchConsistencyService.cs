@@ -28,6 +28,7 @@ public sealed class ConsistencyValidationDevice
     public string DeviceId { get; set; } = string.Empty;
     public string PlcName { get; set; } = string.Empty;
     public string ProjectChecksum { get; set; } = string.Empty;
+    public string? ContentFingerprint { get; set; }
 }
 
 public sealed class ConsistencyStatusResult

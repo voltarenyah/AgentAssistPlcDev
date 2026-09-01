@@ -78,6 +78,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                                 DeviceId = "device-1",
                                 PlcName = "PLC_1",
                                 ProjectChecksum = "tag-checksum-1",
+                                ContentFingerprint = "tag-fingerprint-1",
                             },
                         ],
                     }
@@ -108,8 +109,10 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         var result = await coordinator.ListVersionControlTimelineAsync("wb-1", "wt-1");
 
         Assert.Equal("PLC_1:tag-checksum-1", result.GitCommits[0].TiaChecksum);
+        Assert.Equal("PLC_1:tag-fingerprint-1", result.GitCommits[0].TiaContentFingerprint);
         Assert.Null(result.GitCommits[0].SvnRevision);
         Assert.Null(result.GitCommits[1].TiaChecksum);
+        Assert.Null(result.GitCommits[1].TiaContentFingerprint);
         Assert.Equal(184, result.GitCommits[1].SvnRevision);
         var svn = Assert.Single(result.SvnRevisions);
         Assert.Equal(184, svn.Revision);
