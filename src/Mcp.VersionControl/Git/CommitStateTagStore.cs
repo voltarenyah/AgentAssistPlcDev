@@ -11,7 +11,7 @@ namespace Mcp.VersionControl.Git;
 internal static class CommitStateTagStore
 {
     public const string TagPrefix = "tia-state/";
-    public const string SchemaVersion = "1.0";
+    public const string SchemaVersion = "1.1";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -151,4 +151,5 @@ public sealed record VcCommitStateEvidence(
 public sealed record VcCommitStateDevice(
     string DeviceId,
     string PlcName,
-    string ProjectChecksum);
+    string ProjectChecksum,
+    string? ContentFingerprint = null);

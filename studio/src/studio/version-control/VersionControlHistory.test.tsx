@@ -15,6 +15,7 @@ const commit = (overrides: Partial<Extract<VcTimelineItem, { kind: 'commit' }>> 
   timestamp: '2026-08-04T08:00:00.000Z',
   files: ['devices/PLC_1/source/Blocks/Main.xml'],
   tiaChecksum: 'B3 35 56 49',
+  tiaContentFingerprint: 'AA BB CC DD',
   svnRevision: 4,
   untrackableChange: false,
   validationState: 'Validated',
@@ -28,6 +29,7 @@ const savepoint = (overrides: Partial<Extract<VcTimelineItem, { kind: 'savepoint
   author: 'PLC Assistant',
   timestamp: '2026-08-04T08:01:00.000Z',
   tiaChecksum: 'B3 35 56 49',
+  tiaContentFingerprint: 'AA BB CC DD',
   gitCommitSha: 'abcdef1234567890',
   ...overrides,
 })
@@ -81,6 +83,8 @@ describe('VersionControlHistory', () => {
     expect(detail.textContent).not.toContain('abcdef1234567890')
     expect(detail.textContent).toContain('TIA checksum')
     expect(detail.textContent).toContain('B3 35 56 49')
+    expect(detail.textContent).toContain('Content fingerprint')
+    expect(detail.textContent).toContain('AA BB CC DD')
     expect(detail.textContent).toContain('Main')
     expect(detail.textContent).not.toContain('Main.xml')
     expect(detail.textContent).not.toContain('devices/PLC_1/source/Blocks/Main.xml')

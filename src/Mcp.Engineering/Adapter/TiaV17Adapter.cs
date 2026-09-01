@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using Contracts;
 using Contracts.Engineering;
 using Mcp.Engineering.Export;
@@ -542,6 +544,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     PlcName = plc.Name,
                     ProjectIdentity = projectIdentity,
                     SoftwareChecksum = TryReadSoftwareChecksum(plc),
+                    ContentFingerprint = TryReadContentFingerprint(plc),
                 })
                 .OrderBy(info => info.PlcName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -1532,6 +1535,62 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         try
         {
             return plc.GetService<PlcChecksumProvider>()?.Software;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Content fingerprint for a PLC: folds every readable per-object
+    /// FingerprintProvider value (blocks, UDTs, tag tables) into one SHA-256, formatted as
+    /// spaced uppercase hex pairs like the software checksum. Detects comment/text/interface
+    /// edits that never move the compiled software checksum (issue #68). Tag tables return a
+    /// null provider on V17, so their comments are a documented gap
+    /// (docs/tiasoftwarechecksumblindpoints.md). Best-effort like the software checksum: any
+    /// failure or a PLC with zero readable fingerprints degrades to null.</summary>
+    private static string? TryReadContentFingerprint(PlcSoftware plc)
+    {
+        try
+        {
+            var lines = new List<string>();
+
+            foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
+            {
+                var fingerprints = FingerprintReader.TryRead(block);
+                if (fingerprints is not null)
+                {
+                    lines.Add($"{ExportManifest.CategoryOf(block)}/{ExportManifest.SourcePathOf(block.Name, groupPath)}|{fingerprints}");
+                }
+            }
+
+            foreach (var (type, groupPath) in PlcTypeEnumerator.Enumerate(plc.TypeGroup))
+            {
+                var fingerprints = FingerprintReader.TryRead(type);
+                if (fingerprints is not null)
+                {
+                    lines.Add($"UDT/{ExportManifest.SourcePathOf(type.Name, groupPath)}|{fingerprints}");
+                }
+            }
+
+            foreach (var (table, groupPath) in TagTableEnumerator.Enumerate(plc.TagTableGroup))
+            {
+                var fingerprints = FingerprintReader.TryRead(table);
+                if (fingerprints is not null)
+                {
+                    lines.Add($"Tags/{ExportManifest.SourcePathOf(table.Name, groupPath)}|{fingerprints}");
+                }
+            }
+
+            if (lines.Count == 0)
+            {
+                return null;
+            }
+
+            lines.Sort(StringComparer.Ordinal);
+            using var sha256 = SHA256.Create();
+            var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", lines)));
+            return string.Join(" ", hash.Select(b => b.ToString("X2")));
         }
         catch
         {

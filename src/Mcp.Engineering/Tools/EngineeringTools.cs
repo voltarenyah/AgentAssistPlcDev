@@ -136,7 +136,7 @@ public sealed class EngineeringTools
         => Invoke("list_blocks", () => _adapter.ListBlocks(plcName));
 
     [McpServerTool(Name = "get_plc_checksums")]
-    [Description("Read the current compiled software checksum for one or all PLC devices. No exports or writes.")]
+    [Description("Read the current compiled software checksum plus a content fingerprint (detects comment/text/interface edits the checksum misses) for one or all PLC devices. No exports or writes.")]
     public CallToolResult GetPlcChecksums(
         [Description("PLC device name; omit to read every PLC device.")] string? plcName = null)
         => Invoke("get_plc_checksums", () => _adapter.GetPlcChecksums(plcName));
