@@ -231,7 +231,51 @@ on `IEngineeringServiceProvider`).
   mismatch nominate even when fingerprints still match (hash decides; compile ripples degrade to
   "touched").
 
-## 11. Safety / failsafe (`Siemens.Engineering.Safety`, reflection-probed 2026-08-28, runtime-verified 2026-09-01)
+## 11. Communication & network configuration (dumped 2026-08-29, issue #69)
+
+Full-assembly type scan (`GetTypes()` filtered for `Connection|Topology|OpcUa|NetworkInterface|Subnet|Port|Mrp|Web`)
+plus member dumps of every match. Implemented consumer: `src/Mcp.Engineering/Export/NetworkConfigurationFingerprint.cs`
+(writes `network-configuration.txt` + `networkConfigurationHash` into the hardware manifest).
+
+**No S7/TCP/UDP connection API.** There is **no** `Siemens.Engineering.Connections` namespace and no
+`IConnection` type. What exists instead is HMI-only: `Siemens.Engineering.Connection.*` (singular) =
+HMI runtime connection configuration (`ConnectionConfiguration`: `Modes`, `EnableLegacyCommunication`,
+`IsConfigured`, `ApplyConfiguration()`; plus `ConfigurationAddress/Gateway/Mode/PcInterface/Subnet/TargetInterface`
+compositions), and `Siemens.Engineering.Hmi.Communication.Connection` (HMI tag connections, `Name` only).
+**S7/TCP/UDP/ISO-on-TCP connection parameters (partner, TSAP, rack/slot) cannot be read in V17.**
+
+Readable surface:
+
+- `ProjectBase.Subnets` → `Subnet`: `Name`, `NetType` (enum `Unknown/Profibus/Mpi/Ethernet/Asi/Ptp/Link/
+  PcInternal/ProfibusIntegrated/Wan/ProfidriveIntegrated`), `TypeIdentifier`, `Nodes`, `IoSystems`
+  (`IoSystem`: `Name`, `Number`, `Subnet`, `ConnectedIoDevices`, `HwIdentifiers`), plus generic attributes.
+- `DeviceItem.GetService<NetworkInterface>()` (`HW.Features.NetworkInterface : DeviceItemFeature`):
+  `InterfaceType`, `InterfaceOperatingMode` (`None/IoController/IoDevice`), `Nodes`, `Ports`,
+  `IoControllers` (`IoController.IoSystem`), `IoConnectors` (`IoConnector.ConnectedToIoSystem`),
+  `TransferAreas`. PROFINET device name/IP/subnet mask live as **attributes** on the interface/node —
+  enumerate via `GetAttributeInfos()` (`EngineeringAttributeInfo.Name`, `AccessMode` enum
+  `None/Read/Write/ReadWrite`) + `GetAttribute(name)`; some advertised attributes throw per object type.
+- `Node`: `Name`, `NodeId`, `NodeType`, `ConnectedSubnet`, `ConnectToSubnet()`/`DisconnectFromSubnet()`.
+- `NetworkPort`: **`ConnectedPorts` — the topology port pairs are readable**; `ConnectToPort`/
+  `DisconnectFromPort` (write). `DeviceItemFeature.OwnedBy` gives the owning `DeviceItem`, so every
+  port/interface maps back to its device via the `HardwareObject.Parent` chain. There is no `ITopology`
+  type — `HW.View.Topology` is only a `ShowInEditor` target — but `ConnectedPorts` covers the links.
+- MRP: `Subnet.GetService<MrpDomainOwner>()` (`MrpDomainOwner : SubnetFeature`) → `MrpDomains` →
+  `MrpDomain`: `Name`, attributes, `DomainParticipants` (`NetworkInterfaceAssociation`).
+- OPC UA (PLC software): `PlcSoftware.GetService<OpcUaProvider>()` (`SW.OpcUa.OpcUaProvider`, has
+  `GetAttribute`) → `CommunicationGroup` → `ServerInterfaceGroup` → `ServerInterfaces` /
+  `SimaticInterfaces`: `Name`, `Enabled`, `Author`, `CreationTime`, `LastModified`, and
+  **`Export(FileInfo)`** (interface definition as XML — hashable). Also `HW.Features.OpcUaUserManagement`
+  (`OpcUaUsers`) and `HW.Utilities.OpcUaExportProvider.Export(DeviceItem, FileInfo)` (exists;
+  acquisition path not verified, not used). **No OPC UA *client* types exist in V17.**
+- Web server: only `HW.Features.WebserverUserManagement` (`WebserverUsers`) and
+  `WebserverUserDefinedPages` (`GenerateBlocks(...)` — write). No enable/port/security-policy read API.
+
+**Remains undetectable offline (documented per issue #69 acceptance):** S7/TCP/UDP/ISO-on-TCP connection
+parameters; OPC UA client configuration; web server enable/port/security settings and custom web page
+content; firewall/VPN/NAT rules. (PN device name/IP, subnets, IO-system assignments, MRP domains,
+port topology, and OPC UA server interfaces are now fingerprinted.)
+## 12. Safety / failsafe (`Siemens.Engineering.Safety`, reflection-probed 2026-08-28, runtime-verified 2026-09-01)
 
 Found by a full-assembly type scan for `Safety|Failsafe|Signature` (this dump previously missed the
 namespace — it is **not** part of the documented V17 Openness surface). Runtime-verified against

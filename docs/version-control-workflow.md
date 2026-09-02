@@ -22,7 +22,7 @@ Git commit → revision.json → SVN revision → TIA project
       engineering-state/
         revision.json             # GIT-TRACKED: svn url+revision, checksums, compile status
       devices/<plc>/source/**     # git-tracked exported PLC XML
-      hardware/                   # git-tracked project hardware export (project.aml only)
+      hardware/                   # git-tracked project hardware export (project.aml + network-configuration.txt)
       tia/                        # SVN working copy of ^/native/main (never git-tracked)
     feature-x/
       engineering-state/revision.json
@@ -35,7 +35,10 @@ no `svn merge`, no branch cleanup; branches simply remain. `worktree.json`,
 `device.json`, staging (including `hardware/staging/`), knowledge databases,
 `.automation/`, `repository.svn/`, and `tia/` are runtime artifacts and are
 excluded from Git. Hardware exports produce the project-level `project.aml`
-only (per-device CAx is skipped — slow on big projects).
+plus `network-configuration.txt`, the canonical communication/network
+fingerprint (subnets, PROFINET names/IPs, IO-system assignments, port topology,
+MRP domains, OPC UA server interfaces — issue #69); per-device CAx is skipped —
+slow on big projects.
 
 `revision.json` (schemaVersion 1, deterministic property order, nulls explicit):
 

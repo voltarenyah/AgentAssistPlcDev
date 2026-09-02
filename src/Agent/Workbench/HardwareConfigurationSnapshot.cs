@@ -46,6 +46,21 @@ internal sealed record HardwareConfigurationSnapshot(
                 }
             }
 
+            // Network/communication fingerprint (issue #69). Recompute from the artifact when
+            // present so a stale manifest hash cannot keep an outdated value alive; fall back to
+            // the manifest value (same pattern as the project AML hash above).
+            var networkHash = OptionalString(json, "networkConfigurationHash");
+            var networkPath = HardwareConfigurationExport.ResolveArtifactPath(
+                root, HardwareConfigurationExport.NetworkConfigurationFileName);
+            if (File.Exists(networkPath))
+            {
+                networkHash = TextContentHash.TryComputeFile(networkPath) ?? networkHash;
+            }
+            if (networkHash is not null || File.Exists(networkPath))
+            {
+                artifacts[NetworkKey] = networkHash;
+            }
+
             return new HardwareConfigurationSnapshot(artifacts);
         }
         catch (Exception exception) when (
@@ -81,6 +96,18 @@ internal sealed record HardwareConfigurationSnapshot(
             if (HardwareConfigurationExport.IsUsableProjectAml(projectAmlPath))
             {
                 artifacts["project"] = XmlContentHash.TryComputeFile(projectAmlPath);
+            }
+        }
+
+        // Network/communication fingerprint (issue #69): recompute from the freshly exported
+        // artifact so the live side never trusts a hash stamped by the exporter.
+        if (exportRoot is not null)
+        {
+            var networkHash = TextContentHash.TryComputeFile(HardwareConfigurationExport.ResolveArtifactPath(
+                exportRoot, HardwareConfigurationExport.NetworkConfigurationFileName));
+            if (networkHash is not null)
+            {
+                artifacts[NetworkKey] = networkHash;
             }
         }
 
@@ -121,6 +148,10 @@ internal sealed record HardwareConfigurationSnapshot(
 
     public static string DeviceKey(string name) => "device:" + name;
 
+    /// <summary>Artifact key for the project-level network/communication fingerprint (issue #69).
+    /// Not device-prefixed, so it surfaces as a project-scope compare artifact.</summary>
+    public const string NetworkKey = "network";
+
     private static string? OptionalString(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value)
         && value.ValueKind == JsonValueKind.String
@@ -130,6 +161,10 @@ internal sealed record HardwareConfigurationSnapshot(
 
 internal static class HardwareConfigurationExport
 {
+    /// <summary>File name of the network/communication fingerprint artifact written by
+    /// mcp-engineering next to project.aml (NetworkConfigurationFingerprint.FileName).</summary>
+    public const string NetworkConfigurationFileName = "network-configuration.txt";
+
     public static IReadOnlyList<string> EnsureSucceeded(
         HardwareExportResult[] results,
         string outputRoot)

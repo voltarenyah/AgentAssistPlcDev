@@ -12,6 +12,11 @@ public sealed class HardwareExportManifest
     public bool ProjectSuccess { get; set; }
     public string? ProjectError { get; set; }
     public string? ProjectContentHash { get; set; }
+    /// <summary>Network/communication fingerprint artifact (network-configuration.txt), issue #69.</summary>
+    public string? NetworkConfigurationFile { get; set; }
+    public string? NetworkConfigurationHash { get; set; }
+    /// <summary>Set when the network fingerprint capture failed; the AML export still succeeded.</summary>
+    public string? NetworkConfigurationError { get; set; }
     public DateTimeOffset ExportedAt { get; set; }
     public List<HardwareExportManifestDevice> Devices { get; set; } = new();
 }

@@ -50,4 +50,34 @@ public sealed class HardwareExportManifestTests
         Assert.Contains("\n", json);
         Assert.Contains("\"schemaVersion\"", json);
     }
+
+    [Fact]
+    public void ManifestRoundTripsNetworkConfigurationFields()
+    {
+        var manifest = new HardwareExportManifest
+        {
+            NetworkConfigurationFile = "network-configuration.txt",
+            NetworkConfigurationHash = "network-hash",
+            NetworkConfigurationError = "capture failed",
+        };
+
+        var roundTripped = HardwareExportManifestJsonSerializer.Deserialize(
+            HardwareExportManifestJsonSerializer.Serialize(manifest));
+
+        Assert.Equal("network-configuration.txt", roundTripped.NetworkConfigurationFile);
+        Assert.Equal("network-hash", roundTripped.NetworkConfigurationHash);
+        Assert.Equal("capture failed", roundTripped.NetworkConfigurationError);
+    }
+
+    [Fact]
+    public void ManifestWrittenBeforeNetworkFingerprintDeserializesWithNullFields()
+    {
+        var roundTripped = HardwareExportManifestJsonSerializer.Deserialize("""
+            { "projectAmlFile": "project.aml", "projectSuccess": true }
+            """);
+
+        Assert.Null(roundTripped.NetworkConfigurationFile);
+        Assert.Null(roundTripped.NetworkConfigurationHash);
+        Assert.Null(roundTripped.NetworkConfigurationError);
+    }
 }

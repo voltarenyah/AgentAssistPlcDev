@@ -1065,6 +1065,28 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             ProjectContentHash = projectResult.ContentHash,
         };
 
+        // Communication/network fingerprint (issue #69): subnets, PN device names/IPs, IO-system
+        // assignments, port topology and OPC UA server interfaces are invisible to both the
+        // software checksum and (unreliably) the CAx AML. Captured via Openness reads (not CAx),
+        // so it also runs when includeDeviceExports is false. Supplemental evidence: a capture
+        // failure is recorded on the manifest but must not fail the AML export.
+        progress?.Report(new EngineeringProgress("Capturing network configuration fingerprint..."));
+        try
+        {
+            var fingerprint = NetworkConfigurationFingerprint.Capture(
+                project, EnumerateDevices(project), PlcSoftwareResolver.FindAll(project), _logger);
+            var networkText = fingerprint.Serialize();
+            var networkPath = Path.Combine(hardwareRoot, NetworkConfigurationFingerprint.FileName);
+            File.WriteAllText(networkPath, networkText, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            manifest.NetworkConfigurationFile = ToManifestPath(hardwareRoot, networkPath);
+            manifest.NetworkConfigurationHash = TextContentHash.Compute(networkText);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "export_hardware_configuration: network configuration fingerprint capture failed");
+            manifest.NetworkConfigurationError = exception.Message;
+        }
+
         if (includeDeviceExports)
         {
             var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
