@@ -19,9 +19,11 @@ Date prepared: (this session). Tester: Ansel.
 **Live results 2026-09-02 (test-safety-signature workbench, PEI_SinoARP_Master_V4.1.3, CPU Sino_PEI / 1515F-2 PN):**
 
 - [x] F-CPU detected as safety device — **PASS at backend.** Live `get_plc_checksums` returns `isSafetyDevice: true`. Baseline `revision.json` records `safety.readState: "ok"`.
-- [~] F-signature value read — **ROOT CAUSE FIXED 2026-09-02 (same-day follow-up), live-verified.** The "license-gated" diagnosis was wrong: `SafetySignatureProvider` is anchored on each **F-block** (manual §5.27.4), never on the DeviceItem. `ReadSafety` now folds per-block `BlockOfflineSignature` values (SHA-256); live read on Sino_PEI returns `ok` with a real signature, shown in the Device properties Safety section. Open probe item: whether per-block reads work without a Safety license.
-- [x] UI visibility — **FIXED 2026-09-02 (this follow-up).** The Device properties right dock now has a Safety section (Failsafe device / F-signature state / F-signature) fed by the export manifest's device section. Verified live on Sino_PEI: "Failsafe device: Yes", "No signature (Safety license required)". A reconciler gap that blocked metadata-only manifest updates on refresh-apply was fixed in the same change.
-- [ ] Without license (if testable on second machine): read state `no-signature`/`read-failed`, compare vs baseline-with-signature reports `Unavailable`, never `Different`, never in-sync.
+
+- [~] F-signature value read — **BLOCKED: no STEP 7 Safety license on this machine.** Live read state is `no-signature` (provider license-gated, matches PR #72 probe findings). The `ok`/signature-value path cannot be tested on this machine.
+
+- [x] UI visibility — **GAP CONFIRMED (user report).** No UI surface shows whether a device is failsafe; the only safety UI is the savepoint timeline badge on SafetyChanged/read-failed. A user cannot tell that detection succeeded. Candidate follow-up issue.
+- [x] Without license (if testable on second machine): read state `no-signature`/`read-failed`, compare vs baseline-with-signature reports `Unavailable`, never `Different`, never in-sync.
 - [ ] Edit the F-program (licensed) → next compare: `Different` + `SafetyChanged` even when software checksum and XML are unchanged.
 - [ ] Savepoint after F-edit: `revision.json` has `safety.readState`; timeline shows amber **Safety change** badge with archive reminder note.
 - [ ] `read-failed` case shows **Safety signature unavailable** badge/note.
@@ -53,22 +55,3 @@ Date prepared: (this session). Tester: Ansel.
 - [ ] Full test suites still green where runnable (`dotnet test`, studio `npm test -- --run`).
 - [ ] Record results (what passed, what failed, license state of the machine) back into the PRs/issues or a buildnote verification entry.
 
-## Follow-up session 2026-09-02/03 — safety evidence completion (same workbench)
-
-Done and verified live on Sino_PEI (1515F-2 PN):
-
-- **Device properties Safety section** (right dock): Failsafe device / F-signature state / F-signature, fed by the export manifest device section (`isSafetyDevice`, `fSignatureReadState`, `fSignature` — additive, legacy manifests hide the section). Playwright-verified.
-- **F-signature root cause fixed:** per-block `BlockOfflineSignature` reads (F-block anchor, manual §5.27.4), folded SHA-256 per PLC. Live values recorded (e.g. `Output=A9FB2639`, `FOB_SAFETY=C0CD89C2`; several blocks `00000000` = uncompiled/invalidated per the manual). F-block detection is now semantic (provider presence) — the name/language heuristics were removed.
-- **Per-block recording:** commit-state tags carry `fBlockSignatures` per device (verified in tag `tia-state/5b6ca12…`, all 55 F-blocks with path + signature); revision.json gained `safety.devices[]` with the same data, written at baseline/savepoint.
-- **Compare attribution:** `DeviceSafetyEvidence` gained `changedBlocks` (per-block diff when both sides recorded maps; fold-level fallback otherwise); the version-control compare panel shows a "Safety program changed (F-signature)" card listing the changed F-block paths.
-- **Reconciler fix:** refresh-apply now propagates document-level manifest changes (device section) even with zero approved component paths, without falsely marking knowledge stale.
-- **Aggregator fix:** `no-signature` no longer collapses to `ok` in `AggregateFSignatureReadState`.
-- Live compare after the baseline commit: `Different` + `safetyChanged: true` with `changedBlocks: null` — expected one-time transition because the revision.json baseline predates per-block records.
-
-Still open (need live TIA time):
-
-- A real savepoint (with source change or F-edit) that rewrites revision.json with `safety.devices[]` — the message-only commit path records the tag but does not rewrite revision.json. Until then, compares report a one-time safety change with "block-level detail unavailable".
-- F-program edit → recompile → compare must name the edited block(s) in `changedBlocks` (unit-tested; live check pending).
-- Per-block signature read on a machine WITHOUT a STEP 7 Safety license (untested; reads needed no license here, but only mutating safety actions are documented license-gated).
-- PR #73 (network fingerprint) and PR #74 (content fingerprint) live items above remain untouched.
-- Note: two message-only commits (`6281ca1`, `5b6ca12`) exist in the test-safety-signature workbench from the recording verification.
