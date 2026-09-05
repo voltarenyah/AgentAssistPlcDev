@@ -968,10 +968,13 @@ public sealed class VersionControlToolsTests : IDisposable
     {
         var init = Unwrap<SvnSharedInitResult>(_tools.SvnInitShared(
             Path.Combine(_fixture.RootPath, "workbench")));
+        var source = Path.Combine(_fixture.RootPath, "baseline-source");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "Line.ap17"), "v1");
+        var first = Unwrap<SvnCommitResult>(_tools.SvnCommitNativeBaseline(
+            init!.RepositoryUri, source, "baseline"));
         var workingCopy = Path.Combine(_fixture.RootPath, "wc");
-        _tools.SvnCheckout(init!.RepositoryUri.TrimEnd('/') + "/native/main", workingCopy);
-        File.WriteAllText(Path.Combine(workingCopy, "Line.ap17"), "v1");
-        var first = Unwrap<SvnCommitResult>(_tools.SvnCommit(workingCopy, "baseline"));
+        _tools.SvnCheckout(init.RepositoryUri.TrimEnd('/') + "/native/main", workingCopy);
         File.WriteAllText(Path.Combine(workingCopy, "Line.ap17"), "v2");
         _tools.SvnCommit(workingCopy, "later change");
 

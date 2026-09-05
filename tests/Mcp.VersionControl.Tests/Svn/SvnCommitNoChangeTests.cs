@@ -35,12 +35,15 @@ public sealed class SvnCommitNoChangeTests : IDisposable
     {
         var shared = _svn.CreateShared(Path.Combine(_root, "workbench"));
         var mainUrl = shared.RepositoryUri.TrimEnd('/') + "/native/main";
+        var source = Path.Combine(_root, "baseline-source");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "Line.ap17"), "v1");
+        var baseline = _svn.CommitNativeBaseline(shared.RepositoryUri, source, "baseline");
+        Assert.True(baseline.Committed);
+        Assert.Equal(1, baseline.Revision);
+
         var workingCopy = Path.Combine(_root, "tia");
         _svn.Checkout(mainUrl, workingCopy);
-        File.WriteAllText(Path.Combine(workingCopy, "Line.ap17"), "v1");
-        _svn.AddRecursive(workingCopy);
-        var baseline = _svn.Commit(workingCopy, "baseline");
-        Assert.True(baseline.Committed);
 
         var noChange = _svn.Commit(workingCopy, "nothing to commit");
 

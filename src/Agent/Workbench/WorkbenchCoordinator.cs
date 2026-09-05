@@ -372,9 +372,8 @@ public sealed class WorkbenchCoordinator
                 "svn_init_shared",
                 new { workbenchRoot = workbench.RootPath },
                 cancellationToken).ConfigureAwait(false);
-            var svnMainUrl = svn.RepositoryUri.TrimEnd('/') + "/native/main";
             // The tia/ store must be a plain EMPTY directory here: TIA refuses SaveAs into a
-            // non-empty directory, so the SVN checkout happens only after the freeze below.
+            // non-empty directory, so the SVN baseline staging happens only after the freeze below.
             Directory.CreateDirectory(tiaStore);
 
             string? projectChecksum;
@@ -601,19 +600,13 @@ public sealed class WorkbenchCoordinator
                 progress?.Report(note);
             }
 
-            // Bring the saved project under SVN control: native/main is guaranteed empty (the
-            // repo was just created), so an obstruction-allowing checkout into the non-empty
-            // tia/ dir is safe and only adds the .svn metadata.
-            progress?.Report("Bringing the managed project under SVN control...");
-            await versionControl.CallAsync<object>(
-                "svn_checkout",
-                new { url = svnMainUrl, path = tiaStore, allowObstructions = true },
-                cancellationToken).ConfigureAwait(false);
-
+            // The SVN repository starts empty at r0 (no scaffolding commit): the baseline
+            // commit itself creates native/main together with the project content, so the
+            // baseline lands as r1 and tia/ becomes its working copy in the same step.
             progress?.Report("Committing the native TIA baseline to SVN...");
             var nativeBaseline = await versionControl.CallAsync<CoordinatorSvnCommitResult>(
-                "svn_commit",
-                new { path = tiaStore, message = "native: initial managed TIA project baseline" },
+                "svn_commit_native_baseline",
+                new { repoUrl = svn.RepositoryUri, path = tiaStore, message = "native: initial managed TIA project baseline" },
                 cancellationToken).ConfigureAwait(false);
 
             EngineeringStateWriter.Write(masterPath, EngineeringStateWriter.Create(

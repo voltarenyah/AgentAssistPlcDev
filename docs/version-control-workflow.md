@@ -31,7 +31,10 @@ Git commit → revision.json → SVN revision → TIA project
 ```
 
 The SVN layout is `native/main` plus `native/branches/<feature>` only — no tags,
-no `svn merge`, no branch cleanup; branches simply remain. `worktree.json`,
+no `svn merge`, no branch cleanup; branches simply remain. The native baseline
+commit is the repository's first revision (r1); workbenches created before this
+numbering change carry a `Create native store layout` scaffolding commit at r1
+and their baseline at r2 — both forms work identically at runtime. `worktree.json`,
 `device.json`, staging (including `hardware/staging/`), knowledge databases,
 `.automation/`, `repository.svn/`, and `tia/` are runtime artifacts and are
 excluded from Git. Hardware exports produce the project-level `project.aml`
@@ -60,9 +63,11 @@ Creating a workbench from an existing `.ap17` imports it into managed storage:
 
 1. Validate the origin path (sandbox jail + must exist). The origin is
    bootstrap-only and is never needed again after step 4.
-2. Create the catalog entry, the bare Git repository, and the SVN native store;
-   create `worktrees/master/tia/` as a plain empty directory. TIA refuses Save As
-   into a non-empty directory, so no SVN checkout happens yet.
+2. Create the catalog entry, the bare Git repository, and the SVN native store
+   (an empty repository at r0 — no scaffolding commit, so the baseline lands as
+   r1; `native/main` and `native/branches` are created on demand); create
+   `worktrees/master/tia/` as a plain empty directory. TIA refuses Save As
+   into a non-empty directory, so no SVN operation happens yet.
 3. Open the origin project headless (`withUI: false`); a session attach works too.
 4. TIA Save As into the empty `tia/` directory; verify the managed copy
    independently (the active project must match the path TIA reported). Failure
@@ -83,11 +88,14 @@ Creating a workbench from an existing `.ap17` imports it into managed storage:
    ours (schemaVersion plus exportRoot/components); anything unrecognized is kept
    and a removal failure never aborts the import. Everything TIA-native (`System`,
    `IM`, `UserFiles`, `Vci`, `XRef`, `TMP`, `Logs`, `AdditionalFiles`, …) stays.
-10. Bring the saved project under SVN control: `native/main` is still empty, so an
-   obstruction-allowing checkout into the now non-empty `tia/` directory is safe
-   and only adds the `.svn` metadata. Then commit the native baseline, write
-   `revision.json`, and create the Git baseline commit containing the source XML,
-   `hardware/project.aml`, and `revision.json`.
+10. Commit the native baseline as r1: `svn import` cannot create the missing
+   `native/` parent, so `tia/` is staged through a scratch working copy of the
+   repository root — `native/main` and the project content land in a single
+   commit. A fresh checkout of `^/native/main` then restores `tia/` as a clean
+   working copy at its original path. On failure the tree is moved back before
+   the workbench rollback runs. Finally write `revision.json` and create the
+   Git baseline commit containing the source XML, `hardware/project.aml`, and
+   `revision.json`.
 
 Any failure rolls the workbench back completely (Git repo, SVN store, worktrees).
 The origin path and import time are kept as provenance (`originProjectPath`,

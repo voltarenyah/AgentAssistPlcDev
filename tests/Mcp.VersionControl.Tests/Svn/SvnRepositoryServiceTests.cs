@@ -50,21 +50,32 @@ public sealed class SvnRepositoryServiceTests : IDisposable
         return result;
     }
 
+    /// <summary>Create a fresh repository and commit a minimal native baseline (lands as r1).</summary>
+    private SvnSharedInitResult CreateSharedWithMain()
+    {
+        var shared = CreateShared();
+        var source = Path.Combine(_root, "baseline-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "seed.txt"), "seed");
+        var baseline = _svn.CommitNativeBaseline(shared.RepositoryUri, source, "native: seed baseline");
+        Assert.Equal(1, baseline.Revision);
+        return shared;
+    }
+
     private string MainUrl(SvnSharedInitResult shared) => shared.RepositoryUri.TrimEnd('/') + "/native/main";
 
     [Fact]
-    public void CreateShared_CreatesRepositoryAndLayoutDirs()
+    public void CreateShared_CreatesEmptyRepositoryWithoutScaffoldCommit()
     {
         var shared = CreateShared();
 
         Assert.True(shared.Initialized);
         Assert.StartsWith("file:///", shared.RepositoryUri);
 
-        // The layout dirs must exist in the repository: check out ^/native and inspect.
-        var nativeCheckout = Path.Combine(_root, "native-wc");
-        _svn.Checkout(shared.RepositoryUri.TrimEnd('/') + "/native", nativeCheckout);
-        Assert.True(Directory.Exists(Path.Combine(nativeCheckout, "main")));
-        Assert.True(Directory.Exists(Path.Combine(nativeCheckout, "branches")));
+        // No scaffolding commit: native/main does not exist until the native baseline is committed.
+        var error = Assert.Throws<Git.VcInternalException>(
+            () => _svn.Checkout(MainUrl(shared), Path.Combine(_root, "native-wc")));
+        Assert.Equal("SVN_CHECKOUT_FAILED", error.Code);
     }
 
     [Fact]
@@ -77,49 +88,99 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     }
 
     [Fact]
-    public void Checkout_EmptyMain_CreatesCleanWorkingCopy()
+    public void CommitNativeBaseline_FreshRepository_LandsAsRevision1()
     {
         var shared = CreateShared();
-        var workingCopy = Path.Combine(_root, "tia");
+        var source = Path.Combine(_root, "tia");
+        Directory.CreateDirectory(Path.Combine(source, "IM"));
+        File.WriteAllText(Path.Combine(source, "Line.ap17"), "project");
+        File.WriteAllText(Path.Combine(source, "IM", "data.bin"), "data");
 
-        var result = _svn.Checkout(MainUrl(shared), workingCopy);
+        var baseline = _svn.CommitNativeBaseline(
+            shared.RepositoryUri, source, "native: initial managed TIA project baseline");
 
-        Assert.True(Directory.Exists(workingCopy));
-        Assert.True(result.Revision >= 0);
-        var status = _svn.Status(workingCopy);
-        Assert.True(status.IsClean);
-        Assert.Empty(status.Entries);
-    }
+        Assert.True(baseline.Committed);
+        Assert.Equal(1, baseline.Revision);
 
-    [Fact]
-    public void Checkout_AllowObstructions_AdaptsNonEmptyDirectory()
-    {
-        var shared = CreateShared();
-        var workingCopy = Path.Combine(_root, "tia");
-        Directory.CreateDirectory(workingCopy);
-        File.WriteAllText(Path.Combine(workingCopy, "Line.ap17"), "project");
-        Directory.CreateDirectory(Path.Combine(workingCopy, "IM"));
-        File.WriteAllText(Path.Combine(workingCopy, "IM", "data.bin"), "data");
+        // The source tree is back at its original path as a clean native/main working copy.
+        Assert.True(_svn.Status(source).IsClean);
+        var info = _svn.Info(source);
+        Assert.Equal(MainUrl(shared), info.Uri);
+        Assert.Equal(1, info.Revision);
 
-        var result = _svn.Checkout(MainUrl(shared), workingCopy, allowObstructions: true);
+        // The single commit created native/main together with the content — no scaffold commit.
+        var log = _svn.Log(MainUrl(shared), allHistory: true);
+        var entry = Assert.Single(log.Entries);
+        Assert.Equal(1, entry.Revision);
+        Assert.Equal("native: initial managed TIA project baseline", entry.Message);
 
-        Assert.True(result.Revision >= 0);
-        // The pre-existing project files are unversioned until added; then the whole tree commits.
-        Assert.False(_svn.Status(workingCopy).IsClean);
-        _svn.AddRecursive(workingCopy);
-        var commit = _svn.Commit(workingCopy, "adopt project");
-        Assert.True(commit.Committed);
-        Assert.True(_svn.Status(workingCopy).IsClean);
+        // A fresh checkout round-trips the content.
         var roundTrip = Path.Combine(_root, "roundtrip");
         _svn.Checkout(MainUrl(shared), roundTrip);
         Assert.Equal("project", File.ReadAllText(Path.Combine(roundTrip, "Line.ap17")));
         Assert.Equal("data", File.ReadAllText(Path.Combine(roundTrip, "IM", "data.bin")));
+
+        // The scratch working copy was cleaned up.
+        Assert.Empty(Directory.GetDirectories(_root, ".svn-native-baseline-*"));
+    }
+
+    [Fact]
+    public void CommitNativeBaseline_InvalidRepository_ThrowsAndLeavesTreeUntouched()
+    {
+        var source = Path.Combine(_root, "tia");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "Line.ap17"), "project");
+        var missingRepoUri = new Uri(Path.GetFullPath(Path.Combine(_root, "no-repo"))).ToString();
+
+        var error = Assert.Throws<Git.VcInternalException>(
+            () => _svn.CommitNativeBaseline(missingRepoUri, source, "baseline"));
+
+        Assert.Equal("SVN_CHECKOUT_FAILED", error.Code);
+        Assert.Equal("project", File.ReadAllText(Path.Combine(source, "Line.ap17")));
+    }
+
+    [Fact]
+    public void CommitNativeBaseline_FinalCheckoutFailure_RestoresSourceTree()
+    {
+        var shared = CreateShared();
+        var source = Path.Combine(_root, "tia");
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "Line.ap17"), "project");
+
+        SvnRepositoryService? service = null;
+        var checkoutCalls = 0;
+        service = new SvnRepositoryService((url, path, allowObstructions) =>
+        {
+            checkoutCalls++;
+            if (checkoutCalls == 2)
+            {
+                throw new Git.VcInternalException(
+                    "SVN_CHECKOUT_FAILED",
+                    "simulated final checkout failure");
+            }
+
+            return service!.Checkout(url, path, allowObstructions);
+        });
+
+        var error = Assert.Throws<Git.VcInternalException>(() => service.CommitNativeBaseline(
+            shared.RepositoryUri,
+            source,
+            "native: initial managed TIA project baseline"));
+
+        Assert.Equal("SVN_CHECKOUT_FAILED", error.Code);
+        Assert.Equal(2, checkoutCalls);
+        Assert.True(Directory.Exists(source));
+        Assert.Equal("project", File.ReadAllText(Path.Combine(source, "Line.ap17")));
+        Assert.Empty(Directory.GetDirectories(_root, ".svn-native-*"));
+
+        var log = _svn.Log(MainUrl(shared), allHistory: true);
+        Assert.Single(log.Entries);
     }
 
     [Fact]
     public void Commit_TextAndBinaryFiles_ReturnsIncrementingRevisions()
     {
-        var shared = CreateShared();
+        var shared = CreateSharedWithMain();
         var workingCopy = Path.Combine(_root, "tia");
         _svn.Checkout(MainUrl(shared), workingCopy);
 
@@ -146,7 +207,7 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     [Fact]
     public void Commit_ReadOnlyWorkingCopyMetadata_StillReturnsCommittedRevision()
     {
-        var shared = CreateShared();
+        var shared = CreateSharedWithMain();
         var workingCopy = Path.Combine(_root, "tia-read-only");
         _svn.Checkout(MainUrl(shared), workingCopy);
 
@@ -172,13 +233,14 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     [Fact]
     public void CopyBranch_CommitOnBranch_DoesNotAdvanceMain()
     {
-        var shared = CreateShared();
+        var shared = CreateSharedWithMain();
         var main = Path.Combine(_root, "tia-main");
         _svn.Checkout(MainUrl(shared), main);
         File.WriteAllText(Path.Combine(main, "base.txt"), "base");
         _svn.AddRecursive(main);
         var baseCommit = _svn.Commit(main, "baseline");
 
+        // native/branches does not exist yet: the copy creates it on demand.
         var copy = _svn.CopyBranch(MainUrl(shared), baseCommit.Revision, "feature-x", "branch feature-x");
         Assert.EndsWith("/native/branches/feature-x", copy.BranchUrl);
         Assert.True(copy.Revision > baseCommit.Revision);
@@ -203,7 +265,7 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     [Fact]
     public void Log_AllHistoryReturnsEveryEntry()
     {
-        var shared = CreateShared();
+        var shared = CreateSharedWithMain();
         var workingCopy = Path.Combine(_root, "tia-all-history");
         _svn.Checkout(MainUrl(shared), workingCopy);
 
@@ -225,7 +287,7 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     [Fact]
     public void Log_ReadsHistoryFromAWorkingCopyPath()
     {
-        var shared = CreateShared();
+        var shared = CreateSharedWithMain();
         var workingCopy = Path.Combine(_root, "tia-working-copy-log");
         _svn.Checkout(MainUrl(shared), workingCopy);
 
@@ -244,7 +306,7 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     [Fact]
     public void UpdateToRevision_MovesWorkingCopyBackAndForward()
     {
-        var shared = CreateShared();
+        var shared = CreateSharedWithMain();
         var workingCopy = Path.Combine(_root, "tia");
         _svn.Checkout(MainUrl(shared), workingCopy);
 
@@ -268,7 +330,7 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     [Fact]
     public void Status_ReportsCleanAndDirty()
     {
-        var shared = CreateShared();
+        var shared = CreateSharedWithMain();
         var workingCopy = Path.Combine(_root, "tia");
         _svn.Checkout(MainUrl(shared), workingCopy);
 
@@ -283,14 +345,14 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     [Fact]
     public void Info_ReturnsUrlAndRevision()
     {
-        var shared = CreateShared();
+        var shared = CreateSharedWithMain();
         var workingCopy = Path.Combine(_root, "tia");
         _svn.Checkout(MainUrl(shared), workingCopy);
 
         var info = _svn.Info(workingCopy);
 
         Assert.EndsWith("/native/main", info.Uri);
-        Assert.True(info.Revision >= 0);
+        Assert.True(info.Revision >= 1);
     }
 
     [Fact]

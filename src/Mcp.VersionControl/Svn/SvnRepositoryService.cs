@@ -11,9 +11,24 @@ namespace Mcp.VersionControl.Svn;
 /// </summary>
 internal sealed class SvnRepositoryService
 {
+    private readonly Func<string, string, bool, SvnCheckoutResult> _checkout;
+
+    public SvnRepositoryService()
+        : this(null)
+    {
+    }
+
+    internal SvnRepositoryService(
+        Func<string, string, bool, SvnCheckoutResult>? checkout)
+    {
+        _checkout = checkout ?? Checkout;
+    }
+
     /// <summary>
-    /// Create a local SVN repository at &lt;workbenchRoot&gt;/repository.svn and the
-    /// initial native/main and native/branches directories. Returns the file:// URI.
+    /// Create a local SVN repository at &lt;workbenchRoot&gt;/repository.svn and return the
+    /// file:// URI. No scaffolding commit is made: the repository stays at r0 so the native
+    /// baseline lands as r1. The native/main and native/branches directories are created on
+    /// demand — by CommitNativeBaseline and by CopyBranch, both of which create parents.
     /// </summary>
     public SvnSharedInitResult CreateShared(string workbenchRoot)
     {
@@ -38,20 +53,6 @@ internal sealed class SvnRepositoryService
             {
                 repositoryClient.CreateRepository(repositoryPath, new SvnCreateRepositoryArgs());
             }
-
-            using var client = CreateClient();
-            var repositoryBase = new Uri(repositoryUri.ToString().TrimEnd('/') + "/");
-            client.RemoteCreateDirectories(
-                new Collection<Uri>
-                {
-                    new(repositoryBase, "native/main"),
-                    new(repositoryBase, "native/branches"),
-                },
-                new SvnCreateDirectoryArgs
-                {
-                    CreateParents = true,
-                    LogMessage = "Create native store layout",
-                });
         });
 
         return new SvnSharedInitResult
@@ -64,8 +65,8 @@ internal sealed class SvnRepositoryService
 
     /// <summary>
     /// Checkout a repository or branch URL into a local working copy. With
-    /// <paramref name="allowObstructions"/>, the target may be non-empty (used to bring a
-    /// freshly SaveAs'd TIA project under SVN control; only safe while the URL is empty).
+    /// <paramref name="allowObstructions"/>, the target may be non-empty when its content
+    /// matches the checkout (only the .svn metadata is added then).
     /// </summary>
     public SvnCheckoutResult Checkout(string url, string localPath, bool allowObstructions = false)
     {
@@ -107,6 +108,103 @@ internal sealed class SvnRepositoryService
         });
 
         return new SvnAddResult { Path = path };
+    }
+
+    /// <summary>
+    /// Commit the native baseline of a fresh repository (still at r0) as revision r1:
+    /// stages native/main plus the full project tree in a single commit, then restores
+    /// &lt;localPath&gt; as a clean native/main working copy. svn import cannot create the
+    /// missing native/ parent, so the staging goes through a scratch working copy of the
+    /// repository root. On failure the project tree is moved back to &lt;localPath&gt;.
+    /// </summary>
+    public SvnCommitResult CommitNativeBaseline(string repositoryUrl, string localPath, string message)
+    {
+        var uri = RequireUri(repositoryUrl, nameof(repositoryUrl));
+        var path = RequirePath(localPath, nameof(localPath));
+        if (string.IsNullOrWhiteSpace(message))
+            throw new VcInternalException("MESSAGE_REQUIRED", "message must not be empty.");
+        if (!Directory.Exists(path))
+            throw new VcInternalException("PATH_REQUIRED", $"'{localPath}' does not exist.");
+
+        var rootUri = new Uri(uri.ToString().TrimEnd('/') + "/");
+        var mainUri = new Uri(rootUri, "native/main");
+        var scratch = Path.Combine(
+            Path.GetDirectoryName(path)!,
+            ".svn-native-baseline-" + Guid.NewGuid().ToString("N"));
+        var stagedMain = Path.Combine(scratch, "native", "main");
+        var restoredCheckout = Path.Combine(
+            Path.GetDirectoryName(path)!,
+            ".svn-native-restore-" + Guid.NewGuid().ToString("N"));
+        var moved = false;
+        long revision;
+
+        try
+        {
+            _checkout(rootUri.ToString(), scratch, false);
+            Directory.CreateDirectory(Path.Combine(scratch, "native"));
+            Directory.Move(path, stagedMain);
+            moved = true;
+            AddRecursive(scratch);
+            var committed = Commit(scratch, message);
+            if (!committed.Committed)
+            {
+                throw new VcInternalException(
+                    "SVN_BASELINE_FAILED",
+                    $"The native baseline commit of '{localPath}' reported no changes.");
+            }
+
+            revision = committed.Revision;
+
+            // Restore through a temporary sibling so a failed checkout cannot leave a
+            // partial directory at the caller's original path before rollback runs.
+            _checkout(mainUri.ToString(), restoredCheckout, false);
+            Directory.Move(restoredCheckout, path);
+        }
+        catch
+        {
+            if (moved && !Directory.Exists(path) && Directory.Exists(stagedMain))
+            {
+                ClearReadOnlyAttributes(stagedMain);
+                Directory.Move(stagedMain, path);
+            }
+
+            throw;
+        }
+        finally
+        {
+            ClearReadOnlyAttributes(restoredCheckout);
+            if (Directory.Exists(restoredCheckout))
+            {
+                try
+                {
+                    Directory.Delete(restoredCheckout, recursive: true);
+                }
+                catch
+                {
+                    // best-effort cleanup of a failed temporary checkout
+                }
+            }
+
+            if (Directory.Exists(scratch))
+            {
+                ClearReadOnlyAttributes(scratch);
+                try
+                {
+                    Directory.Delete(scratch, recursive: true);
+                }
+                catch
+                {
+                    // best-effort cleanup of the scratch working copy
+                }
+            }
+        }
+
+        return new SvnCommitResult
+        {
+            Path = path,
+            Committed = true,
+            Revision = revision,
+        };
     }
 
     /// <summary>

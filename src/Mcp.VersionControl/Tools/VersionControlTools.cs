@@ -243,13 +243,21 @@ public sealed class VersionControlTools
         => Invoke(() => RepositoryService.Config(repoPath, key, value));
 
     [McpServerTool(Name = "svn_init_shared")]
-    [Description("Create the shared local SVN native store (repository.svn with native/main and native/branches) inside a workbench root. Returns the file:// repository URI.")]
+    [Description("Create the shared local SVN native store (repository.svn) inside a workbench root. The repository starts empty at r0 — no scaffolding commit; native/main and native/branches are created on demand by svn_import and svn_copy_branch. Returns the file:// repository URI.")]
     public CallToolResult SvnInitShared(
         [Description("Root directory of the workbench.")] string workbenchRoot)
         => Invoke(() => _svn.CreateShared(workbenchRoot));
 
+    [McpServerTool(Name = "svn_commit_native_baseline")]
+    [Description("Commit the native baseline of a fresh repository as r1: stages native/main plus the local project tree in a single commit (svn import cannot create the missing native/ parent), then restores the local path as a clean native/main working copy.")]
+    public CallToolResult SvnCommitNativeBaseline(
+        [Description("Repository file:// URI, e.g. file:///.../repository.svn.")] string repoUrl,
+        [Description("Local path of the project tree to adopt as native/main.")] string path,
+        [Description("Commit message.")] string message)
+        => Invoke(() => _svn.CommitNativeBaseline(repoUrl, path, message));
+
     [McpServerTool(Name = "svn_checkout")]
-    [Description("Check out a repository or branch URL into a local SVN working copy. allowObstructions permits a non-empty target (only safe while the URL is empty, e.g. adopting a freshly saved TIA project).")]
+    [Description("Check out a repository or branch URL into a local SVN working copy. allowObstructions permits a non-empty target whose content matches the checkout (e.g. adopting an identical on-disk tree).")]
     public CallToolResult SvnCheckout(
         [Description("Repository file:// URI or branch URL, e.g. file:///.../repository.svn/native/main.")] string url,
         [Description("Local path for the working copy.")] string path,
