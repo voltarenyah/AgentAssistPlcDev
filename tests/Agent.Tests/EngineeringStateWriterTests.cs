@@ -40,6 +40,37 @@ public sealed class EngineeringStateWriterTests : IDisposable
 
         Assert.Equal("F-SIG-4711", loaded.Safety.FSignature);
         Assert.Null(loaded.Safety.ReadState);
+        Assert.Null(loaded.Safety.Devices);
+    }
+
+    [Fact]
+    public void SafetyDevicesRoundTripWithBlockSignatures()
+    {
+        var state = EngineeringStateWriter.Create(
+            "^/native/main", 25, "PLC_1:abc123", "PLC_1:fold-1", EngineeringCompileStatus.Success, "ok",
+            new[]
+            {
+                new EngineeringSafetyDevice("PLC_1", "ok", "fold-1", new[]
+                {
+                    new Contracts.Engineering.FBlockSignatureInfo
+                    {
+                        Path = "Program blocks/F_Main",
+                        Signature = "0A1B2C3D",
+                    },
+                }),
+            });
+
+        EngineeringStateWriter.Write(root, state);
+        var loaded = EngineeringStateWriter.Read(
+            Path.Combine(root, "engineering-state", "revision.json"));
+
+        var device = Assert.Single(loaded.Safety.Devices!);
+        Assert.Equal("PLC_1", device.PlcName);
+        Assert.Equal("ok", device.ReadState);
+        Assert.Equal("fold-1", device.FSignature);
+        var block = Assert.Single(device.BlockSignatures!);
+        Assert.Equal("Program blocks/F_Main", block.Path);
+        Assert.Equal("0A1B2C3D", block.Signature);
     }
 
     [Fact]

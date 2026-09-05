@@ -152,25 +152,33 @@ public sealed class WorkbenchConsistencyService
         // - baseline signature present but the live device no longer reports a safety surface
         //   (F-CPU replaced by a standard CPU / safety program deleted) -> Changed.
         // - baseline signature present, live still a safety device, but no live signature
-        //   (the SafetySignatureProvider is license-gated: no STEP 7 Safety license on the
-        //   comparing machine, verified 2026-09-01) -> degraded evidence, Unavailable below,
+        //   (no F-block exposed a BlockOfflineSignature in this session, e.g. the safety
+        //   program was never compiled here) -> degraded evidence, Unavailable below,
         //   never a phantom change.
-        var baselineFSignatures = ReadBaselineFSignatures(masterRoot);
+        // When both sides recorded per-F-block signatures, the change is additionally attributed
+        // to individual blocks (ChangedBlocks); a 0 signature means "missing or invalidated by a
+        // recent change" (TIA Openness manual §5.27.4) and diffs like any other value.
+        var baselineSafety = ReadBaselineSafety(masterRoot);
         var safety = devices.Select(item =>
             {
                 var live = checksums.FirstOrDefault(checksum =>
                     string.Equals(checksum.PlcName, item.Metadata.PlcName, StringComparison.OrdinalIgnoreCase));
-                baselineFSignatures.TryGetValue(item.Metadata.PlcName, out var baselineFSignature);
+                baselineSafety.TryGetValue(item.Metadata.PlcName, out var baseline);
+                var changedBlocks = DiffFBlockSignatures(baseline?.BlockSignatures, live?.FBlockSignatures);
                 return new DeviceSafetyEvidence(
                     item.Metadata.DeviceId,
                     item.Metadata.PlcName,
                     live?.IsSafetyDevice == true,
                     live?.FSignatureReadState,
                     live?.FSignature,
-                    baselineFSignature,
-                    Changed: (live?.FSignature is not null
-                            && !string.Equals(live.FSignature, baselineFSignature ?? string.Empty, StringComparison.Ordinal))
-                        || (live?.IsSafetyDevice != true && baselineFSignature is not null));
+                    baseline?.FSignature,
+                    Changed: changedBlocks is not null
+                        ? changedBlocks.Count > 0
+                        : (live?.FSignature is not null
+                            && !string.Equals(live.FSignature, baseline?.FSignature ?? string.Empty, StringComparison.Ordinal))
+                        || (live?.IsSafetyDevice != true && baseline?.FSignature is not null),
+                    live?.FBlockSignatures,
+                    changedBlocks);
             })
             .ToArray();
         var safetyChanged = safety.Any(item => item.Changed);
@@ -278,29 +286,79 @@ public sealed class WorkbenchConsistencyService
     /// <summary>Per-PLC baseline F-signatures from master's revision.json ("PLC:SIG;PLC2:SIG2").
     /// Missing/legacy revision state yields an empty map — a signature appearing since then then
     /// correctly reads as a change.</summary>
-    private static IReadOnlyDictionary<string, string> ReadBaselineFSignatures(string masterRoot)
+    /// <summary>Baseline safety evidence per PLC name from master's revision.json. Prefers the
+    /// per-device <see cref="EngineeringSafetyState.Devices"/> entries (with per-block
+    /// signatures); legacy files carry only the aggregate "Plc:fold;…" string, which is parsed
+    /// without block detail.</summary>
+    private static IReadOnlyDictionary<string, BaselineSafety> ReadBaselineSafety(string masterRoot)
     {
+        var result = new Dictionary<string, BaselineSafety>(StringComparer.OrdinalIgnoreCase);
         var path = WorkbenchPaths.ResolveRevisionState(masterRoot);
-        var aggregate = File.Exists(path)
-            ? EngineeringStateWriter.TryParse(File.ReadAllText(path))?.Safety?.FSignature
-            : null;
-        if (string.IsNullOrWhiteSpace(aggregate))
+        if (!File.Exists(path))
         {
-            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            return result;
         }
 
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in aggregate.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        var state = EngineeringStateWriter.TryParse(File.ReadAllText(path))?.Safety;
+        if (state is null)
         {
-            var parts = entry.Split(':', 2, StringSplitOptions.TrimEntries);
-            if (parts.Length == 2 && parts[0].Length > 0 && parts[1].Length > 0)
+            return result;
+        }
+
+        if (state.Devices is not null)
+        {
+            foreach (var device in state.Devices)
             {
-                result[parts[0]] = parts[1];
+                result[device.PlcName] = new BaselineSafety(device.FSignature, device.BlockSignatures);
+            }
+
+            return result;
+        }
+
+        if (!string.IsNullOrWhiteSpace(state.FSignature))
+        {
+            foreach (var entry in state.FSignature.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var parts = entry.Split(':', 2, StringSplitOptions.TrimEntries);
+                if (parts.Length == 2 && parts[0].Length > 0 && parts[1].Length > 0)
+                {
+                    result[parts[0]] = new BaselineSafety(parts[1], null);
+                }
             }
         }
 
         return result;
     }
+
+    /// <summary>Diffs baseline vs live per-block signatures: paths whose signature changed,
+    /// appeared, or disappeared (sorted, ordinal). Null when either side has no per-block record —
+    /// the caller then falls back to comparing the folded PLC-level signatures.</summary>
+    private static IReadOnlyList<string>? DiffFBlockSignatures(
+        IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? baseline,
+        IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? live)
+    {
+        if (baseline is null || live is null)
+        {
+            return null;
+        }
+
+        var baselineByPath = baseline.ToDictionary(block => block.Path, block => block.Signature, StringComparer.Ordinal);
+        var liveByPath = live.ToDictionary(block => block.Path, block => block.Signature, StringComparer.Ordinal);
+        var changed = baselineByPath.Keys
+            .Concat(liveByPath.Keys)
+            .Distinct(StringComparer.Ordinal)
+            .Where(path =>
+                !baselineByPath.TryGetValue(path, out var baselineSignature)
+                || !liveByPath.TryGetValue(path, out var liveSignature)
+                || !string.Equals(baselineSignature, liveSignature, StringComparison.Ordinal))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        return changed;
+    }
+
+    private sealed record BaselineSafety(
+        string? FSignature,
+        IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? BlockSignatures);
 
     private async Task<HardwareConfigurationCompareResult> CompareHardwareAsync(
         string masterRoot,

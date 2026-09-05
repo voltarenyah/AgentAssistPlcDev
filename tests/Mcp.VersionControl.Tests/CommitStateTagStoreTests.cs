@@ -74,6 +74,36 @@ public sealed class CommitStateTagStoreTests : IDisposable
     }
 
     [Fact]
+    public void FBlockSignaturesRoundTripWithPathCasingIntact()
+    {
+        var commit = _fixture.CommitFile("devices/PLC_1/source/Blocks/A.xml", "a", "base");
+        var devices = new[]
+        {
+            new VcCommitStateDevice(
+                "device-1", "PLC_1", "checksum-1",
+                IsSafetyDevice: true,
+                FSignatureReadState: "ok",
+                FSignature: "fold-1",
+                FBlockSignatures: new[]
+                {
+                    new Contracts.Engineering.FBlockSignatureInfo
+                    {
+                        Path = "Program blocks/Safety/F_Main",
+                        Signature = "0A1B2C3D",
+                    },
+                }),
+        };
+
+        RepositoryService.CreateCommitState(_fixture.RootPath, commit, "wb-1", devices);
+        var loaded = RepositoryService.GetCommitState(_fixture.RootPath, commit);
+
+        var block = Assert.Single(Assert.Single(loaded!.Devices).FBlockSignatures!);
+        // The store camelCases dictionary keys; the pair-list shape must keep block paths intact.
+        Assert.Equal("Program blocks/Safety/F_Main", block.Path);
+        Assert.Equal("0A1B2C3D", block.Signature);
+    }
+
+    [Fact]
     public void LegacySchemaTagWithoutFingerprintStillLoads()
     {
         var commit = _fixture.CommitFile("devices/PLC_1/source/Blocks/A.xml", "a", "base");

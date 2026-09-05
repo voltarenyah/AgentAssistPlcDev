@@ -46,9 +46,10 @@ public sealed record SourceDifference(
 /// recorded in master's revision.json, and whether the signature changed. Changed covers a live
 /// signature that differs from the baseline and a lost safety surface (baseline signature with
 /// no live safety device). A baseline signature with no live signature on a still-present safety
-/// device (e.g. the comparing machine lacks the STEP 7 Safety license — the provider is
-/// license-gated, verified 2026-09-01) is degraded evidence and surfaces as Unavailable, not as
-/// a phantom change.</summary>
+/// device (e.g. the safety program was never compiled on the comparing machine's session) is
+/// degraded evidence and surfaces as Unavailable, not as a phantom change.
+/// <see cref="ChangedBlocks"/> attributes the change to individual F-blocks when both sides
+/// recorded per-block signatures (additive 2026-09-02; null when either side lacks them).</summary>
 public sealed record DeviceSafetyEvidence(
     string DeviceId,
     string PlcName,
@@ -56,7 +57,9 @@ public sealed record DeviceSafetyEvidence(
     string? ReadState,
     string? FSignature,
     string? BaselineFSignature,
-    bool Changed);
+    bool Changed,
+    IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? FBlockSignatures = null,
+    IReadOnlyList<string>? ChangedBlocks = null);
 
 public sealed record WorkbenchConsistencyResult(
     string ComparisonId,

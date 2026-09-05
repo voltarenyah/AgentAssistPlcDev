@@ -622,7 +622,8 @@ public sealed class WorkbenchCoordinator
                 projectChecksum,
                 fSignature,
                 compileStatus,
-                fSignatureReadState));
+                fSignatureReadState,
+                BuildSafetyDevices(baselineChecksums)));
 
             progress?.Report("Creating the initial PLC source baseline commit...");
             var baselinePaths = initialSourcePaths
@@ -654,6 +655,7 @@ public sealed class WorkbenchCoordinator
                             isSafetyDevice = checksum.IsSafetyDevice,
                             fSignatureReadState = checksum.FSignatureReadState,
                             fSignature = checksum.FSignature,
+                            fBlockSignatures = checksum.FBlockSignatures,
                         };
                 })
                 .Where(item => item is not null)
@@ -837,7 +839,8 @@ public sealed class WorkbenchCoordinator
     }
 
     /// <summary>Aggregate F-signature read state: null when no PLC is a safety device,
-    /// read-failed when any safety device's required signature read failed, otherwise ok.</summary>
+    /// read-failed when any safety device's required signature read failed, no-signature when
+    /// any safety device reported no signature, otherwise ok.</summary>
     private static string? AggregateFSignatureReadState(IEnumerable<PlcChecksumInfo> checksums)
     {
         var safetyDevices = checksums.Where(checksum => checksum.IsSafetyDevice == true).ToArray();
@@ -846,10 +849,34 @@ public sealed class WorkbenchCoordinator
             return null;
         }
 
+        if (safetyDevices.Any(checksum =>
+                string.Equals(checksum.FSignatureReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal)))
+        {
+            return FSignatureReadState.ReadFailed;
+        }
+
         return safetyDevices.Any(checksum =>
-                string.Equals(checksum.FSignatureReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal))
-            ? FSignatureReadState.ReadFailed
+                string.Equals(checksum.FSignatureReadState, FSignatureReadState.NoSignature, StringComparison.Ordinal))
+            ? FSignatureReadState.NoSignature
             : FSignatureReadState.Ok;
+    }
+
+    /// <summary>Per-device safety detail for revision.json: one entry per safety device with its
+    /// folded signature, read state, and the per-F-block signatures behind the fold (change
+    /// attribution on later compares). Null when no PLC is a safety device.</summary>
+    private static IReadOnlyList<EngineeringSafetyDevice>? BuildSafetyDevices(
+        IEnumerable<PlcChecksumInfo> checksums)
+    {
+        var devices = checksums
+            .Where(checksum => checksum.IsSafetyDevice == true)
+            .OrderBy(checksum => checksum.PlcName, StringComparer.Ordinal)
+            .Select(checksum => new EngineeringSafetyDevice(
+                checksum.PlcName,
+                checksum.FSignatureReadState,
+                checksum.FSignature,
+                checksum.FBlockSignatures))
+            .ToArray();
+        return devices.Length == 0 ? null : devices;
     }
 
     /// <summary>
@@ -1953,8 +1980,18 @@ public sealed class WorkbenchCoordinator
                     device,
                     approval.Preview,
                     approval.ApprovedPaths);
-                if (outcome.ChangedPaths.Count == 0)
+                var changedPaths = outcome.ChangedPaths
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .ToArray();
+                var sourcePaths = changedPaths
+                    .Where(IsManagedSourceXml)
+                    .ToArray();
+                if (sourcePaths.Length == 0)
                 {
+                    // No source XML changed. The apply may still have propagated document-level
+                    // manifest sections (device metadata, exportRoot) — that alone must not mark
+                    // the knowledge DB stale, since knowledge is derived from the source XML.
                     progress?.Report("PLC source is already current.");
                     return new RefreshApplyResult(
                         RefreshApplyState.NoChanges,
@@ -1975,17 +2012,9 @@ public sealed class WorkbenchCoordinator
                             BaselineStale = true,
                         },
                     });
-                var changedPaths = outcome.ChangedPaths
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(path => path, StringComparer.Ordinal)
-                    .ToArray();
-                var sourcePaths = changedPaths
-                    .Where(IsManagedSourceXml)
-                    .ToArray();
-                string? commitSha = null;
                 var worktree = store.Read<WorktreeMetadata>(Path.Combine(device.WorktreeRoot, "worktree.json"));
-                if (sourcePaths.Length > 0
-                    && string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase)
+                string? commitSha = null;
+                if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase)
                     && !string.IsNullOrWhiteSpace(commitMessage))
                 {
                     progress?.Report("Committing the confirmed TIA source changes...");
@@ -2796,6 +2825,7 @@ public sealed class WorkbenchCoordinator
                     isSafetyDevice = safety?.IsSafetyDevice,
                     fSignatureReadState = safety?.ReadState,
                     fSignature = safety?.FSignature,
+                    fBlockSignatures = safety?.FBlockSignatures,
                 };
             })
             .ToArray();
@@ -2986,7 +3016,8 @@ public sealed class WorkbenchCoordinator
                     existing?.Tia?.ProjectChecksum,
                     existing?.Safety?.FSignature,
                     existing?.Validation?.CompileStatus ?? EngineeringCompileStatus.Success,
-                    existing?.Safety?.ReadState));
+                    existing?.Safety?.ReadState,
+                    existing?.Safety?.Devices));
             }
 
             var retryDevices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
@@ -3074,7 +3105,8 @@ public sealed class WorkbenchCoordinator
             projectChecksum,
             fSignature,
             compileStatus,
-            fSignatureReadState));
+            fSignatureReadState,
+            BuildSafetyDevices(savepointChecksums)));
 
         WorkbenchCommitResult commit;
         try
@@ -3176,6 +3208,7 @@ public sealed class WorkbenchCoordinator
                         isSafetyDevice = checksum.IsSafetyDevice,
                         fSignatureReadState = checksum.FSignatureReadState,
                         fSignature = checksum.FSignature,
+                        fBlockSignatures = checksum.FBlockSignatures,
                         contentFingerprint = checksum.ContentFingerprint,
                     };
             })

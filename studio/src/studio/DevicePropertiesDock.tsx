@@ -41,6 +41,18 @@ export default function DevicePropertiesDock({ meta, info, hidden }: Props) {
         ['PLC type', meta.typeIdentifier?.replace(/^OrderNumber:/, '') ?? null],
       ]
     : []
+  const fSignatureStates: Record<string, string> = {
+    ok: 'OK',
+    'no-signature': 'No signature (Safety license required)',
+    'read-failed': 'Read failed',
+  }
+  const safetyRows: [string, string | null][] = meta
+    ? [
+        ['Failsafe device', meta.isSafetyDevice == null ? null : meta.isSafetyDevice ? 'Yes' : 'No'],
+        ['F-signature state', meta.fSignatureReadState ? (fSignatureStates[meta.fSignatureReadState] ?? meta.fSignatureReadState) : null],
+        ['F-signature', meta.fSignature],
+      ]
+    : []
   const pathRows: [string, string | null][] = [
     ['TIA project', info?.sourceProjectPath ?? null],
     ['PLC source', info?.sourceRoot ?? null],
@@ -74,6 +86,15 @@ export default function DevicePropertiesDock({ meta, info, hidden }: Props) {
                   <div className="mt-0.5 text-[8px] text-muted-foreground">Captured at last export</div>
                 </div>
                 <PropertyRows rows={deviceRows} />
+              </section>
+            )}
+            {meta && safetyRows.some(([, value]) => value) && (
+              <section className="rounded-md border bg-background" style={{ borderColor: 'var(--border)' }} data-testid="device-safety-section">
+                <div className="border-b px-2 py-1.5" style={{ borderColor: 'var(--border)' }}>
+                  <div className="text-[10px] font-medium">Safety</div>
+                  <div className="mt-0.5 text-[8px] text-muted-foreground">Captured at last export</div>
+                </div>
+                <PropertyRows rows={safetyRows} mono />
               </section>
             )}
             {meta && projectRows.some(([, value]) => value) && (

@@ -17,8 +17,12 @@ public sealed class ContextCompareResult
     /// <summary>One of FSignatureReadState; null for non-safety devices.</summary>
     public string? FSignatureReadState { get; set; }
 
-    /// <summary>Live offline collective F-signature (uppercase hex); null when unavailable.</summary>
+    /// <summary>Live offline collective F-signature (folded per-block, spaced hex); null when
+    /// unavailable.</summary>
     public string? FSignature { get; set; }
+
+    /// <summary>Per-F-block signatures behind <see cref="FSignature"/>; null when unavailable.</summary>
+    public IReadOnlyList<FBlockSignatureInfo>? FBlockSignatures { get; set; }
 
     public ContextCompareEntry[] Components { get; set; } = Array.Empty<ContextCompareEntry>();
 }

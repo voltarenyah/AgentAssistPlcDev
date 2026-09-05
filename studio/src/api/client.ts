@@ -461,6 +461,18 @@ export type SourceDifferenceKind = 'Unchanged' | 'Changed' | 'Added' | 'Deleted'
 
 export type ConsistencyState = 'Consistent' | 'Different' | 'ScanRequired' | 'Unavailable'
 
+export type DeviceSafetyEvidence = {
+  deviceId: string
+  plcName: string
+  isSafetyDevice: boolean
+  readState: string | null
+  fSignature: string | null
+  baselineFSignature: string | null
+  changed: boolean
+  /** F-block paths whose signature changed vs baseline; null when either side predates per-block records. */
+  changedBlocks?: string[] | null
+}
+
 export type WorkbenchConsistencyResult = {
   comparisonId: string
   masterSha: string
@@ -469,6 +481,8 @@ export type WorkbenchConsistencyResult = {
   liveChecksums: Record<string, string | null>
   differences: SourceDifference[]
   hardware?: HardwareConfigurationCompareResult | null
+  safety?: DeviceSafetyEvidence[] | null
+  safetyChanged?: boolean
 }
 
 export type PendingSynchronizationResult = {
@@ -538,6 +552,9 @@ export type DeviceExportMetadata = {
   projectCreationTime: string | null
   projectLastModified: string | null
   projectLastModifiedBy: string | null
+  isSafetyDevice: boolean | null
+  fSignatureReadState: string | null
+  fSignature: string | null
 }
 
 export type SourceObjectInfo = {

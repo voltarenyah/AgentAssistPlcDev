@@ -170,7 +170,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         fixture.WriteBaselineFSignature("PLC_1:AAAA1111");
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
         var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
-        engineering.Safety["PLC_1"] = (true, FSignatureReadState.Ok, "BBBB2222");
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.Ok, "BBBB2222", null);
         var service = new WorkbenchConsistencyService(engineering, versionControl);
 
         var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
@@ -194,7 +194,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         fixture.WriteBaselineFSignature(null);
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
         var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
-        engineering.Safety["PLC_1"] = (true, FSignatureReadState.ReadFailed, null);
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.ReadFailed, null, null);
         var service = new WorkbenchConsistencyService(engineering, versionControl);
 
         var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
@@ -210,14 +210,14 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     [Fact]
     public async Task MissingLiveSignatureAgainstBaselineIsUnavailableNotPhantomChange()
     {
-        // License-missing scenario (verified 2026-09-01: the SafetySignatureProvider is
-        // license-gated): baseline recorded a signature, the live device is still a safety
-        // device, but the provider returns no signature. Degraded evidence must surface as
-        // Unavailable, never as Different (phantom change) and never as Consistent.
+        // Degraded-evidence scenario: baseline recorded a signature, the live device is still a
+        // safety device, but no live signature was read (e.g. the safety program was never
+        // compiled in this session). Degraded evidence must surface as Unavailable, never as
+        // Different (phantom change) and never as Consistent.
         fixture.WriteBaselineFSignature("PLC_1:AAAA1111");
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
         var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
-        engineering.Safety["PLC_1"] = (true, FSignatureReadState.NoSignature, null);
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.NoSignature, null, null);
         var service = new WorkbenchConsistencyService(engineering, versionControl);
 
         var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
@@ -230,6 +230,63 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         Assert.Null(plc1.FSignature);
         Assert.Equal("AAAA1111", plc1.BaselineFSignature);
         Assert.False(plc1.Changed);
+    }
+
+    [Fact]
+    public async Task PerBlockSignaturesAttributeTheSafetyChangeToChangedBlocks()
+    {
+        fixture.WriteBaselineSafetyDevices(new EngineeringSafetyDevice(
+            "PLC_1",
+            FSignatureReadState.Ok,
+            "fold-old",
+            new[]
+            {
+                new FBlockSignatureInfo { Path = "Program blocks/F_Main", Signature = "AAAA1111" },
+                new FBlockSignatureInfo { Path = "Program blocks/F_Output", Signature = "CCCC3333" },
+            }));
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.Ok, "fold-new", new[]
+        {
+            new FBlockSignatureInfo { Path = "Program blocks/F_Main", Signature = "BBBB2222" },
+            new FBlockSignatureInfo { Path = "Program blocks/F_Output", Signature = "CCCC3333" },
+        });
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.Equal(ConsistencyState.Different, result.State);
+        Assert.True(result.SafetyChanged);
+        var plc1 = Assert.Single(result.Safety!, item => item.PlcName == "PLC_1");
+        Assert.True(plc1.Changed);
+        Assert.Equal("fold-old", plc1.BaselineFSignature);
+        var changedBlock = Assert.Single(plc1.ChangedBlocks!);
+        Assert.Equal("Program blocks/F_Main", changedBlock);
+        Assert.Equal(2, plc1.FBlockSignatures!.Count);
+        Assert.DoesNotContain("sync_export", engineering.Calls);
+    }
+
+    [Fact]
+    public async Task MatchingPerBlockSignaturesKeepCompareConsistent()
+    {
+        var blocks = new[]
+        {
+            new FBlockSignatureInfo { Path = "Program blocks/F_Main", Signature = "AAAA1111" },
+        };
+        fixture.WriteBaselineSafetyDevices(new EngineeringSafetyDevice(
+            "PLC_1", FSignatureReadState.Ok, "fold-same", blocks));
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.Ok, "fold-same", blocks);
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.Equal(ConsistencyState.Consistent, result.State);
+        Assert.False(result.SafetyChanged);
+        var plc1 = Assert.Single(result.Safety!, item => item.PlcName == "PLC_1");
+        Assert.False(plc1.Changed);
+        Assert.Empty(plc1.ChangedBlocks!);
     }
 
     [Fact]
@@ -319,8 +376,8 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         public List<string> Calls { get; } = new();
         public string ProjectXml { get; init; } = "<CAEXFile><Device Name=\"PLC_1\" /></CAEXFile>";
 
-        /// <summary>Optional per-PLC safety surface: (isSafetyDevice, readState, fSignature).</summary>
-        public Dictionary<string, (bool IsSafety, string? ReadState, string? FSignature)> Safety { get; } = new();
+        /// <summary>Optional per-PLC safety surface: (isSafetyDevice, readState, fSignature, blockSignatures).</summary>
+        public Dictionary<string, (bool IsSafety, string? ReadState, string? FSignature, IReadOnlyList<FBlockSignatureInfo>? Blocks)> Safety { get; } = new();
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
@@ -341,6 +398,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                             IsSafetyDevice = Safety.ContainsKey(item.Key) ? safety.IsSafety : null,
                             FSignatureReadState = safety.ReadState,
                             FSignature = safety.FSignature,
+                            FBlockSignatures = safety.Blocks,
                         };
                     })
                     .ToArray();
@@ -446,6 +504,22 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                     "PLC_1:one;PLC_2:two",
                     fSignature,
                     EngineeringCompileStatus.Success));
+
+        /// <summary>Writes master's revision.json with per-device safety detail (incl. per-block
+        /// signatures), as produced by a current-build savepoint.</summary>
+        public void WriteBaselineSafetyDevices(params EngineeringSafetyDevice[] devices) =>
+            EngineeringStateWriter.Write(
+                Path.Combine(Root, "worktrees", "master"),
+                EngineeringStateWriter.Create(
+                    "^/native/main",
+                    1,
+                    "PLC_1:one;PLC_2:two",
+                    string.Join(";", devices.Select(device => $"{device.PlcName}:{device.FSignature}")),
+                    EngineeringCompileStatus.Success,
+                    devices.Select(device => device.ReadState).Contains(FSignatureReadState.ReadFailed)
+                        ? FSignatureReadState.ReadFailed
+                        : FSignatureReadState.Ok,
+                    devices));
 
         public void Dispose()
         {

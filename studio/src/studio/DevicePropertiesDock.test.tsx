@@ -19,6 +19,9 @@ const meta: api.DeviceExportMetadata = {
   projectCreationTime: null,
   projectLastModified: null,
   projectLastModifiedBy: null,
+  isSafetyDevice: null,
+  fSignatureReadState: null,
+  fSignature: null,
 }
 
 const info = {
@@ -93,5 +96,53 @@ describe('DevicePropertiesDock', () => {
 
     expect(host.textContent).not.toContain('Copyright')
     expect(host.textContent).not.toContain('Project comment')
+  })
+
+  it('shows failsafe state and F-signature for a safety device', async () => {
+    const { host } = await render(
+      <DevicePropertiesDock
+        meta={{ ...meta, isSafetyDevice: true, fSignatureReadState: 'ok', fSignature: '1A2B3C4D' }}
+        info={info}
+        hidden={false}
+      />,
+    )
+
+    expect(host.querySelector('[data-testid="device-safety-section"]')).not.toBeNull()
+    expect(host.textContent).toContain('Failsafe device')
+    expect(host.textContent).toContain('Yes')
+    expect(host.textContent).toContain('OK')
+    expect(host.textContent).toContain('1A2B3C4D')
+  })
+
+  it('explains a license-gated F-signature read state', async () => {
+    const { host } = await render(
+      <DevicePropertiesDock
+        meta={{ ...meta, isSafetyDevice: true, fSignatureReadState: 'no-signature' }}
+        info={info}
+        hidden={false}
+      />,
+    )
+
+    const section = host.querySelector('[data-testid="device-safety-section"]')
+    expect(section).not.toBeNull()
+    expect(section!.textContent).toContain('No signature (Safety license required)')
+    expect(section!.textContent).not.toContain('1A2B3C4D')
+  })
+
+  it('marks an ordinary PLC as not failsafe', async () => {
+    const { host } = await render(
+      <DevicePropertiesDock meta={{ ...meta, isSafetyDevice: false }} info={info} hidden={false} />,
+    )
+
+    const section = host.querySelector('[data-testid="device-safety-section"]')
+    expect(section).not.toBeNull()
+    expect(section!.textContent).toContain('No')
+    expect(section!.textContent).not.toContain('F-signature state')
+  })
+
+  it('hides the safety section for legacy manifests without safety fields', async () => {
+    const { host } = await render(<DevicePropertiesDock meta={meta} info={info} hidden={false} />)
+
+    expect(host.querySelector('[data-testid="device-safety-section"]')).toBeNull()
   })
 })

@@ -551,6 +551,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                         IsSafetyDevice = safety.IsSafetyDevice,
                         FSignatureReadState = safety.ReadState,
                         FSignature = safety.Signature,
+                        FBlockSignatures = safety.Blocks,
                         ContentFingerprint = TryReadContentFingerprint(plc),
                     };
                 })
@@ -1393,6 +1394,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     IsSafetyDevice = safety.IsSafetyDevice,
                     FSignatureReadState = safety.ReadState,
                     FSignature = safety.Signature,
+                    FBlockSignatures = safety.Blocks,
                     Components = entries,
                 });
             }
@@ -1449,6 +1451,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     IsSafetyDevice = safety.IsSafetyDevice,
                     FSignatureReadState = safety.ReadState,
                     FSignature = safety.Signature,
+                    FBlockSignatures = safety.Blocks,
                     State = !manifestExists
                         ? "no-baseline"
                         : liveChecksum is null || storedChecksum is null
@@ -1580,19 +1583,18 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
-    /// <summary>Offline collective F-signature read via the undocumented
-    /// Siemens.Engineering.Safety surface found in the installed V17 assembly on 2026-08-28
-    /// (scripts/Probe-SafetySignature.ps1). The safety services are anchored on the PLC's
-    /// DeviceItem, not on the PlcSoftware — verified 2026-09-01 against a live F-CPU project
-    /// (PEI_SinoARP_Master_V4.1.3, CPU 1515F-2 PN) in headless and UI mode: GetService on
-    /// PlcSoftware always returns null, GetService on the DeviceItem returns the services.
-    /// Detection: a PLC is a safety device when the SafetyAdministration or
-    /// SafetySignatureProvider service is present on that anchor (same
-    /// GetService-returns-null-when-unsupported convention as PlcChecksumProvider). The
-    /// signature is rendered as uppercase hex so it compares byte-stable across sessions. Any
+    /// <summary>Offline F-signature evidence for a PLC, via the documented
+    /// Siemens.Engineering.Safety surface (TIA Openness manual §5.27). Detection: a PLC is a
+    /// safety device when the SafetyAdministration or SafetySignatureProvider service is present
+    /// on the PLC's DeviceItem anchor (GetService on PlcSoftware always returns null — verified
+    /// 2026-09-01 against a live F-CPU project, PEI_SinoARP_Master_V4.1.3, CPU 1515F-2 PN). The
+    /// signature itself is folded from the per-block BlockOfflineSignature values
+    /// (<see cref="ReadCollectiveFSignature"/>): the provider is anchored on each F-block, NOT on
+    /// the DeviceItem — the DeviceItem anchor always returns null for it (verified 2026-09-02;
+    /// the earlier "license-gated provider" reading was an artifact of that wrong anchor). Any
     /// failure while touching the safety surface yields ReadFailed rather than "not a safety
     /// device" — a failed required read must never masquerade as an ordinary PLC.</summary>
-    private static (bool IsSafetyDevice, string? ReadState, string? Signature) ReadSafety(PlcSoftware plc)
+    private static (bool IsSafetyDevice, string? ReadState, string? Signature, IReadOnlyList<FBlockSignatureInfo>? Blocks) ReadSafety(PlcSoftware plc)
     {
         try
         {
@@ -1610,25 +1612,64 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             {
                 // A PlcSoftware without a DeviceItem ancestor means the device tree is broken;
                 // the safety state is then unreadable, not "ordinary PLC".
-                return (true, FSignatureReadState.ReadFailed, null);
+                return (true, FSignatureReadState.ReadFailed, null, null);
             }
 
             var administration = anchor.GetService<SafetyAdministration>();
             var provider = anchor.GetService<SafetySignatureProvider>();
             if (administration is null && provider is null)
             {
-                return (false, null, null);
+                return (false, null, null, null);
             }
 
-            var signature = provider?.Signatures?.Find(SafetySignatureType.BlockOfflineSignature);
-            return signature is null
-                ? (true, FSignatureReadState.NoSignature, null)
-                : (true, FSignatureReadState.Ok, signature.Value.ToString("X8"));
+            var blocks = ReadFBlockSignatures(plc);
+            return blocks is null
+                ? (true, FSignatureReadState.NoSignature, null, null)
+                : (true, FSignatureReadState.Ok, FoldFBlockSignatures(blocks), blocks);
         }
         catch
         {
-            return (true, FSignatureReadState.ReadFailed, null);
+            return (true, FSignatureReadState.ReadFailed, null, null);
         }
+    }
+
+    /// <summary>Per-F-block offline signatures (SafetySignatureProvider anchored on the PlcBlock
+    /// per TIA Openness manual §5.27.4 — null on non-F-blocks, which is also the semantic F-block
+    /// detector). A block signature of 0 means "missing or invalidated by a recent change"
+    /// (manual) and is recorded as-is, so an uncompiled F-program edit still shows up. Null when
+    /// no block exposes a signature at all (e.g. safety program never compiled).</summary>
+    private static List<FBlockSignatureInfo>? ReadFBlockSignatures(PlcSoftware plc)
+    {
+        var signatures = new List<FBlockSignatureInfo>();
+        foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
+        {
+            var signature = block.GetService<SafetySignatureProvider>()
+                ?.Signatures?.Find(SafetySignatureType.BlockOfflineSignature);
+            if (signature is not null)
+            {
+                signatures.Add(new FBlockSignatureInfo
+                {
+                    Path = ExportManifest.SourcePathOf(block.Name, groupPath),
+                    Signature = signature.Value.ToString("X8"),
+                });
+            }
+        }
+
+        return signatures.Count == 0 ? null : signatures;
+    }
+
+    /// <summary>Collective offline F-signature for a PLC: folds the per-block signatures into
+    /// one SHA-256, formatted as spaced uppercase hex pairs like the content fingerprint, so the
+    /// PLC-level value moves whenever any F-block signature changes.</summary>
+    private static string FoldFBlockSignatures(IReadOnlyList<FBlockSignatureInfo> blocks)
+    {
+        var lines = blocks
+            .Select(block => $"{block.Path}|{block.Signature}")
+            .OrderBy(line => line, StringComparer.Ordinal)
+            .ToArray();
+        using var sha256 = SHA256.Create();
+        var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", lines)));
+        return string.Join(" ", hash.Select(b => b.ToString("X2")));
     }
 
     /// <summary>Content fingerprint for a PLC: folds every readable per-object
@@ -1688,7 +1729,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     }
 
     /// <summary>Project- and device-level metadata for the manifest's device section (lets a UI
-    /// page display PLC type / project author/comment/version without a live TIA session).
+    /// page display PLC type / project author/comment/version and the failsafe/F-signature state
+    /// without a live TIA session).
     /// Guarded throughout — a failed Openness read degrades the capture to null rather than
     /// failing the export it rides along with.</summary>
     private static DeviceMetadata? CaptureDeviceMetadata(Project project, PlcSoftware plc)
@@ -1696,6 +1738,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         try
         {
             var (deviceName, typeIdentifier) = ReadDeviceIdentity(plc);
+            var safety = ReadSafety(plc);
             return new DeviceMetadata
             {
                 PlcName = plc.Name,
@@ -1709,6 +1752,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 ProjectCreationTime = TryRead(() => (DateTimeOffset?)project.CreationTime),
                 ProjectLastModified = TryRead(() => (DateTimeOffset?)project.LastModified),
                 ProjectLastModifiedBy = TryRead(() => project.LastModifiedBy),
+                IsSafetyDevice = safety.IsSafetyDevice,
+                FSignatureReadState = safety.ReadState,
+                FSignature = safety.Signature,
             };
         }
         catch
