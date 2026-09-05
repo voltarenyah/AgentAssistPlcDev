@@ -102,6 +102,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
       tiaContentFingerprint: commit.tiaContentFingerprint ?? null,
       svnRevision: commit.svnRevision ?? savepointBySha.get(commit.sha)?.svnRevision ?? null,
       untrackableChange: commit.untrackableChange ?? false,
+      safetyChange: commit.safetyChange ?? false,
       validationState: validationBySha.get(commit.sha) ?? 'Unlabeled',
     }))
     const revisions: VcTimelineItem[] = (timeline?.svnRevisions ?? []).map(revision => ({

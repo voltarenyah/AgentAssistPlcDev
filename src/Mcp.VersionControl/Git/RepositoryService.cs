@@ -558,7 +558,6 @@ internal static class RepositoryService
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new VcInternalException("MESSAGE_REQUIRED", "Commit message must not be empty.");
-
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
         EnsureOnlyAllowedPathsAreStaged(repo);
@@ -582,10 +581,13 @@ internal static class RepositoryService
         string message,
         string? author = null,
         bool allowEmpty = false,
-        bool untrackableChange = false)
+        bool untrackableChange = false,
+        bool safetyChange = false)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new VcInternalException("MESSAGE_REQUIRED", "Commit message must not be empty.");
+        if (untrackableChange && safetyChange)
+            throw new VcInternalException("COMMIT_CLASSIFICATION_CONFLICT", "A commit cannot be both an untrackable change and a safety change.");
         var emptyCommit = allowEmpty && (paths == null || paths.Length == 0);
         if (!emptyCommit && (paths == null || paths.Length == 0))
             throw new VcInternalException("SOURCE_PATHS_REQUIRED", "At least one PLC source XML path is required.");
@@ -632,6 +634,10 @@ internal static class RepositoryService
             if (untrackableChange)
             {
                 UntrackableChangeTagStore.Create(repo, commit.Sha);
+            }
+            if (safetyChange)
+            {
+                SafetyChangeTagStore.Create(repo, commit.Sha);
             }
 
             return new VcCommitResult { Sha = commit.Sha, Message = message, Files = files };
@@ -734,6 +740,13 @@ internal static class RepositoryService
         EnsureRepo(repoPath);
         using var repo = new Repository(repoPath);
         return UntrackableChangeTagStore.Read(repo, commitSha) != null;
+    }
+
+    public static bool GetSafetyChange(string repoPath, string commitSha)
+    {
+        EnsureRepo(repoPath);
+        using var repo = new Repository(repoPath);
+        return SafetyChangeTagStore.Exists(repo, commitSha);
     }
 
     /// <summary>Read a git-tracked text file at a specific commit (or HEAD). Returns null when

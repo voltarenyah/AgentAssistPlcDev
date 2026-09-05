@@ -471,6 +471,14 @@ export type DeviceSafetyEvidence = {
   changed: boolean
   /** F-block paths whose signature changed vs baseline; null when either side predates per-block records. */
   changedBlocks?: string[] | null
+  blockDifferences?: SafetyBlockDifference[] | null
+}
+
+export type SafetyBlockDifference = {
+  path: string
+  baselineSignature: string | null
+  currentSignature: string | null
+  kind: 'Changed' | 'Added' | 'Removed' | 'Invalidated' | number
 }
 
 export type WorkbenchConsistencyResult = {
@@ -1207,6 +1215,7 @@ export type VersionControlTimelineGitCommit = {
   svnRevision: number | null
   untrackableChange: boolean | null
   tiaContentFingerprint: string | null
+  safetyChange?: boolean | null
 }
 export type VersionControlTimelineSvnRevision = {
   revision: number
@@ -1866,10 +1875,10 @@ export const getWorktreeVcDiff = (workbenchId: string, worktreeId: string, fileP
   if (newSha) params.set('newSha', newSha)
   return workbenchRequest<VcDiffResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/diff?${params}`)
 }
-export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string, untrackableChange = false) =>
+export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string, untrackableChange = false, safetyChange = false) =>
   workbenchRequest<{ sha: string; message: string; files: string[] }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/commit`,
-    jsonRequest('POST', { paths, message, untrackableChange }),
+    jsonRequest('POST', { paths, message, untrackableChange, safetyChange }),
   )
 export const getVcValidation = (workbenchId: string, worktreeId: string, sha: string) =>
   workbenchRequest<VcValidationEvidence | null>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/validation/${encodeURIComponent(sha)}`)

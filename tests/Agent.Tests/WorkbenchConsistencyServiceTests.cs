@@ -290,6 +290,26 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task MatchingInvalidatedPerBlockSignaturesKeepCompareConsistent()
+    {
+        var blocks = new[]
+        {
+            new FBlockSignatureInfo { Path = "Program blocks/F_Main", Signature = "00000000" },
+        };
+        fixture.WriteBaselineSafetyDevices(new EngineeringSafetyDevice(
+            "PLC_1", FSignatureReadState.Ok, "fold-same", blocks));
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.Ok, "fold-same", blocks);
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.False(result.SafetyChanged);
+        Assert.Empty(Assert.Single(result.Safety!, item => item.PlcName == "PLC_1").ChangedBlocks!);
+    }
+
+    [Fact]
     public async Task LostSafetyApplicabilityCountsAsSafetyChange()
     {
         // Baseline recorded an F-signature for PLC_1; the live read no longer reports a safety

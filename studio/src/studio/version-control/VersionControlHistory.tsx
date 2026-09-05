@@ -17,6 +17,7 @@ export type VcTimelineItem =
       tiaContentFingerprint: string | null
       svnRevision: number | null
       untrackableChange: boolean
+      safetyChange?: boolean
       validationState: api.VcValidationState
     }
   | {
@@ -189,6 +190,12 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                       untrackable
                     </span>
                   )}
+                  {!isSavepoint && item.safetyChange && (
+                    <span className="flex shrink-0 items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-500" title="Safety change — F-signature evidence recorded in Git" data-testid="vc-safety-change-marker">
+                      <TriangleAlert className="h-3 w-3" />
+                      Safety change
+                    </span>
+                  )}
                   {isSavepoint && item.safetyChanged && (
                     <span
                       className="flex shrink-0 items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-500"
@@ -233,6 +240,12 @@ export default function VersionControlHistory({ workbenchId, worktreeId, branch,
                           <div className="mb-1 flex items-center gap-1 text-[10px] text-amber-500" data-testid="vc-untrackable-note">
                             <TriangleAlert className="h-3 w-3 shrink-0" />
                             No git-tracked files changed; create an SVN savepoint to persist this TIA state.
+                          </div>
+                        )}
+                        {item.safetyChange && (
+                          <div className="mb-1 flex items-center gap-1 text-[10px] text-amber-500" data-testid="vc-safety-change-note">
+                            <TriangleAlert className="h-3 w-3 shrink-0" />
+                            Safety change committed to Git. Create an SVN savepoint separately to capture the TIA project.
                           </div>
                         )}
                         {item.files.map(file => (

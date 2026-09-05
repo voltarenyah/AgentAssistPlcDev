@@ -122,6 +122,11 @@ function TimelineColumnView({
           <TriangleAlert className="h-3 w-3 text-amber-500" />
         </span>
       )}
+      {column.git.safetyChange && (
+        <span className="absolute right-1.5 top-5 z-20" title="Safety change — F-signature evidence recorded in Git" data-testid="vc-safety-change-marker">
+          <TriangleAlert className="h-3 w-3 text-amber-500" />
+        </span>
+      )}
       <div className="relative z-10 flex h-16 items-start justify-center pt-2">
         <GitShape event={column.git} onActivate={onActivate} />
       </div>

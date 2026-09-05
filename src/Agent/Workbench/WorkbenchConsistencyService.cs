@@ -164,7 +164,8 @@ public sealed class WorkbenchConsistencyService
                 var live = checksums.FirstOrDefault(checksum =>
                     string.Equals(checksum.PlcName, item.Metadata.PlcName, StringComparison.OrdinalIgnoreCase));
                 baselineSafety.TryGetValue(item.Metadata.PlcName, out var baseline);
-                var changedBlocks = DiffFBlockSignatures(baseline?.BlockSignatures, live?.FBlockSignatures);
+                var blockDifferences = DiffFBlockSignatures(baseline?.BlockSignatures, live?.FBlockSignatures);
+                var changedBlocks = blockDifferences?.Select(item => item.Path).ToArray();
                 return new DeviceSafetyEvidence(
                     item.Metadata.DeviceId,
                     item.Metadata.PlcName,
@@ -173,12 +174,13 @@ public sealed class WorkbenchConsistencyService
                     live?.FSignature,
                     baseline?.FSignature,
                     Changed: changedBlocks is not null
-                        ? changedBlocks.Count > 0
+                        ? changedBlocks.Length > 0
                         : (live?.FSignature is not null
                             && !string.Equals(live.FSignature, baseline?.FSignature ?? string.Empty, StringComparison.Ordinal))
                         || (live?.IsSafetyDevice != true && baseline?.FSignature is not null),
                     live?.FBlockSignatures,
-                    changedBlocks);
+                    changedBlocks,
+                    blockDifferences);
             })
             .ToArray();
         var safetyChanged = safety.Any(item => item.Changed);
@@ -330,10 +332,9 @@ public sealed class WorkbenchConsistencyService
         return result;
     }
 
-    /// <summary>Diffs baseline vs live per-block signatures: paths whose signature changed,
-    /// appeared, or disappeared (sorted, ordinal). Null when either side has no per-block record —
-    /// the caller then falls back to comparing the folded PLC-level signatures.</summary>
-    private static IReadOnlyList<string>? DiffFBlockSignatures(
+    /// <summary>Diffs baseline vs live per-block signatures. Null when either side has no
+    /// per-block record, so callers retain the aggregate-only legacy fallback.</summary>
+    private static IReadOnlyList<SafetyBlockDifference>? DiffFBlockSignatures(
         IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? baseline,
         IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? live)
     {
@@ -347,11 +348,26 @@ public sealed class WorkbenchConsistencyService
         var changed = baselineByPath.Keys
             .Concat(liveByPath.Keys)
             .Distinct(StringComparer.Ordinal)
-            .Where(path =>
-                !baselineByPath.TryGetValue(path, out var baselineSignature)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Where(path => !baselineByPath.TryGetValue(path, out var baselineSignature)
                 || !liveByPath.TryGetValue(path, out var liveSignature)
                 || !string.Equals(baselineSignature, liveSignature, StringComparison.Ordinal))
-            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path =>
+            {
+                baselineByPath.TryGetValue(path, out var baselineSignature);
+                liveByPath.TryGetValue(path, out var liveSignature);
+                if (baselineSignature is null)
+                    return new SafetyBlockDifference(path, null, liveSignature, SafetyBlockDifferenceKind.Added);
+                if (liveSignature is null)
+                    return new SafetyBlockDifference(path, baselineSignature, null, SafetyBlockDifferenceKind.Removed);
+                return new SafetyBlockDifference(
+                    path,
+                    baselineSignature,
+                    liveSignature,
+                    string.Equals(liveSignature, "00000000", StringComparison.Ordinal)
+                        ? SafetyBlockDifferenceKind.Invalidated
+                        : SafetyBlockDifferenceKind.Changed);
+            })
             .ToArray();
         return changed;
     }

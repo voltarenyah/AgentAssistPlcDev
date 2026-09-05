@@ -1067,6 +1067,19 @@ public sealed class WorkbenchCoordinator
                 // change; the timeline row simply carries no untrackable-change marker.
             }
 
+            var safetyChange = false;
+            try
+            {
+                safetyChange = (await versionControl.CallAsync<TimelineSafetyChangeResult>(
+                        "vc_safety_change_get",
+                        new { repoPath = worktreeRoot, commitSha = commit.Sha },
+                        token).ConfigureAwait(false))?.SafetyChange == true;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Older version-control servers do not expose safety markers; keep history readable.
+            }
+
             var revisionStateChanged = files.Any(path =>
                 string.Equals(path, EngineeringStateWriter.RelativePath, StringComparison.OrdinalIgnoreCase));
             EngineeringRevisionState? state = null;
@@ -1121,7 +1134,8 @@ public sealed class WorkbenchCoordinator
                 tiaChecksum,
                 linkedRevision,
                 untrackableChange,
-                tiaContentFingerprint));
+                tiaContentFingerprint,
+                safetyChange));
         }
 
         var svnMetadata = new Dictionary<long, TimelineSvnLogEntry>();
@@ -2858,6 +2872,7 @@ public sealed class WorkbenchCoordinator
         CancellationToken token = default,
         string? author = null,
         bool untrackableChange = false,
+        bool safetyChange = false,
         bool recordTiaState = true)
     {
         if (string.IsNullOrWhiteSpace(message))
@@ -2871,7 +2886,9 @@ public sealed class WorkbenchCoordinator
         // snapshots are created only by the explicit savepoint action (CreateNativeSavepointAsync).
         // An untrackable change leaves no git-tracked file diff, so an empty path list is
         // allowed and commits message-only with an untrackable-change marker tag.
-        var selected = untrackableChange && paths.Count == 0
+        if (untrackableChange && safetyChange)
+            throw new WorkbenchLifecycleException("COMMIT_CLASSIFICATION_CONFLICT", "A commit cannot be both an untrackable change and a safety change.");
+        var selected = (untrackableChange || safetyChange) && paths.Count == 0
             ? Array.Empty<string>()
             : NormalizeSourcePaths(paths);
         var isMaster = string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase);
@@ -2903,7 +2920,9 @@ public sealed class WorkbenchCoordinator
 
         var result = await CommitSelectedSourceAsync(
                 worktreeRoot, selected, message, token, author,
-                allowEmpty: untrackableChange, untrackableChange: untrackableChange)
+                allowEmpty: untrackableChange || safetyChange,
+                untrackableChange: untrackableChange,
+                safetyChange: safetyChange)
             .ConfigureAwait(false);
 
         if (isMaster)
@@ -3296,11 +3315,12 @@ public sealed class WorkbenchCoordinator
         CancellationToken token,
         string? author = null,
         bool allowEmpty = false,
-        bool untrackableChange = false)
+        bool untrackableChange = false,
+        bool safetyChange = false)
     {
         return await versionControl.CallAsync<WorkbenchCommitResult>(
                 "vc_commit_selected",
-                new { repoPath = worktreeRoot, paths, message, author, allowEmpty, untrackableChange },
+                new { repoPath = worktreeRoot, paths, message, author, allowEmpty, untrackableChange, safetyChange },
                 token)
             .ConfigureAwait(false);
     }

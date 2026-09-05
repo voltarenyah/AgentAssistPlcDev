@@ -31,6 +31,20 @@ public enum SourceDifferenceKind
     Deleted,
 }
 
+public enum SafetyBlockDifferenceKind
+{
+    Changed,
+    Added,
+    Removed,
+    Invalidated,
+}
+
+public sealed record SafetyBlockDifference(
+    string Path,
+    string? BaselineSignature,
+    string? CurrentSignature,
+    SafetyBlockDifferenceKind Kind);
+
 public sealed record SourceDifference(
     string DeviceId,
     string PlcName,
@@ -59,7 +73,8 @@ public sealed record DeviceSafetyEvidence(
     string? BaselineFSignature,
     bool Changed,
     IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? FBlockSignatures = null,
-    IReadOnlyList<string>? ChangedBlocks = null);
+    IReadOnlyList<string>? ChangedBlocks = null,
+    IReadOnlyList<SafetyBlockDifference>? BlockDifferences = null);
 
 public sealed record WorkbenchConsistencyResult(
     string ComparisonId,

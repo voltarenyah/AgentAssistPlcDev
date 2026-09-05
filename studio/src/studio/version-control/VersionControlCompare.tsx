@@ -12,7 +12,7 @@ type Props = {
   /** The changes page commit message — reused as the title for accept actions. */
   commitMessage: string
   /** Reports the TIA paths selected for the global commit action. */
-  onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void
+  onSelectionChanged?: (comparisonId: string | null, paths: string[], safetyPaths?: string[]) => void
   /** Reports whether the completed comparison has anything to display. */
   onComparisonStateChanged?: (hasDifferences: boolean) => void
   /** Incremented by the global commit flow after selected TIA sources are committed. */
@@ -24,10 +24,16 @@ type Props = {
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
 
+const safetyKindLabel = (kind: api.SafetyBlockDifference['kind']) => {
+  if (typeof kind === 'string') return kind
+  return ['Changed', 'Added', 'Removed', 'Invalidated'][kind] ?? 'Changed'
+}
+
 export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation }: Props) {
   const [started, setStarted] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [selectedSafety, setSelectedSafety] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [plan, setPlan] = useState<api.FeatureImportPlan | null>(null)
@@ -42,8 +48,9 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
         ? api.compareMasterWithTia(workbenchId, operationId, true)
         : api.compareMasterWithTia(workbenchId, operationId))
       setComparison(nextComparison)
-      onComparisonStateChanged?.(nextComparison.state === 'Unavailable' || nextComparison.differences.length > 0 || nextComparison.hardware?.state === 'changed')
+      onComparisonStateChanged?.(nextComparison.state === 'Unavailable' || nextComparison.differences.length > 0 || nextComparison.hardware?.state === 'changed' || nextComparison.safetyChanged === true)
       setSelected(new Set())
+      setSelectedSafety(new Set())
       onSelectionChanged?.(nextComparison.comparisonId, [])
     } catch (reason) {
       if (reason instanceof api.WorkbenchApiError && reason.code === 'PLC_CHECKSUM_UNAVAILABLE') {
@@ -66,6 +73,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   useEffect(() => {
     if (selectionResetSignal === 0) return
     setSelected(new Set())
+    setSelectedSafety(new Set())
     setComparison(null)
     setStarted(false)
     setError(null)
@@ -81,7 +89,18 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     if (checked) next.add(path)
     else next.delete(path)
     setSelected(next)
-    if (comparison) onSelectionChanged?.(comparison.comparisonId, [...next])
+    if (comparison) {
+      if (selectedSafety.size > 0) onSelectionChanged?.(comparison.comparisonId, [...next], [...selectedSafety])
+      else onSelectionChanged?.(comparison.comparisonId, [...next])
+    }
+  }
+
+  const toggleSafetySelection = (key: string, checked: boolean) => {
+    const next = new Set(selectedSafety)
+    if (checked) next.add(key)
+    else next.delete(key)
+    setSelectedSafety(next)
+    if (comparison) onSelectionChanged?.(comparison.comparisonId, [...selected], [...next])
   }
 
   const acceptHardware = async () => {
@@ -144,16 +163,31 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                 {safetyChanges.map(entry => (
                   <div key={entry.deviceId} className="mt-1 text-[9px]">
                     <div className="font-medium">{entry.plcName}</div>
-                    {entry.changedBlocks ? (
+                    {entry.blockDifferences ? (
+                      <div className="mt-1 space-y-1">
+                        {entry.blockDifferences.map(diff => {
+                          const key = `${entry.deviceId}:${diff.path}`
+                          return <label key={key} className="flex cursor-pointer items-start gap-2 rounded border border-amber-500/25 bg-amber-500/5 p-1.5">
+                            <input type="checkbox" checked={selectedSafety.has(key)} onChange={event => toggleSafetySelection(key, event.target.checked)} />
+                            <span className="min-w-0 flex-1">
+                              <span className="block break-all font-mono">{diff.path}</span>
+                              <span className="block text-[8px] text-muted-foreground">Safety change · {safetyKindLabel(diff.kind)}</span>
+                              <span className="block break-all font-mono text-[8px]">Baseline: {diff.baselineSignature ?? 'not present'}</span>
+                              <span className="block break-all font-mono text-[8px]">Current: {diff.currentSignature ?? 'not present'}</span>
+                            </span>
+                          </label>
+                        })}
+                      </div>
+                    ) : entry.changedBlocks ? (
                       <ul className="mt-0.5 space-y-0.5 font-mono">
                         {entry.changedBlocks.map(path => <li key={path} className="break-all">{path}</li>)}
                       </ul>
                     ) : (
-                      <div className="text-muted-foreground">Block-level detail unavailable — the baseline predates per-block signature records.</div>
+                      <div className="text-muted-foreground">Block-level detail unavailable — the baseline predates per-block signature records. Baseline: {entry.baselineFSignature ?? 'unavailable'}; current: {entry.fSignature ?? 'unavailable'}.</div>
                     )}
                   </div>
                 ))}
-                <div className="mt-1 text-[9px]">F-blocks are not exportable — save a snapshot to archive the PLC source alongside this safety change.</div>
+                <div className="mt-1 text-[9px]">Select safety items to record their F-signature evidence in Git.</div>
               </div>
             )}
 
@@ -184,7 +218,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                   {comparison.fastGatePassed ? 'All device checksums match; no full object scan was required.' : 'A full object scan found no remaining differences.'}
                 </div>
                 <div className="mt-1 text-[9px]">
-                  Some TIA changes leave no git diff — tick “Untrackable change” above to record a message-only commit.
+                  {safetyChanges.length > 0 ? 'Select Safety change items to commit their F-signature evidence.' : 'Some TIA changes leave no git diff — tick “Untrackable change” above to record a message-only commit.'}
                 </div>
               </div>
             ) : (

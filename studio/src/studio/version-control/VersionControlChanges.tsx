@@ -63,7 +63,7 @@ const displayError = (error: unknown) => error instanceof Error ? error.message 
 
 export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation }: VersionControlChangesProps) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
-  const [tiaSelection, setTiaSelection] = useState<{ comparisonId: string; paths: string[] } | null>(null)
+  const [tiaSelection, setTiaSelection] = useState<{ comparisonId: string; paths: string[]; safetyPaths: string[] } | null>(null)
   const [tiaHasDifferences, setTiaHasDifferences] = useState<boolean | null>(null)
   const [tiaSelectionResetSignal, setTiaSelectionResetSignal] = useState(0)
   const [message, setMessage] = useState('')
@@ -90,7 +90,8 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
   }, [entries])
 
   const selectedCommitPaths = new Set([...selectedPaths, ...(tiaSelection?.paths ?? [])])
-  const canCommit = (selectedCommitPaths.size > 0 || untrackable) && message.trim().length > 0 && !busy
+  const selectedSafetyCount = tiaSelection?.safetyPaths.length ?? 0
+  const canCommit = (selectedCommitPaths.size > 0 || selectedSafetyCount > 0 || untrackable) && message.trim().length > 0 && !busy
 
   const togglePath = (filePath: string) => {
     setSelectedPaths(previous => {
@@ -112,8 +113,9 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
 
   const commit = async (localSelection = [...selectedPaths]) => {
     const tiaPaths = tiaSelection?.paths ?? []
+    const safetyPaths = tiaSelection?.safetyPaths ?? []
     const localPaths = localSelection.filter(path => !tiaPaths.includes(path))
-    if ((!untrackable && tiaPaths.length === 0 && localPaths.length === 0) || !message.trim() || busy) return
+    if ((!untrackable && safetyPaths.length === 0 && tiaPaths.length === 0 && localPaths.length === 0) || !message.trim() || busy) return
     setBusy(true)
     setCommitMenuOpen(false)
     try {
@@ -125,18 +127,21 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
         commitSha = result.commitSha ?? null
         setTiaSelection(null)
       }
-      if (localPaths.length > 0 || untrackable) {
-        const result = await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable)
+      if (localPaths.length > 0 || untrackable || safetyPaths.length > 0) {
+        const result = safetyPaths.length > 0
+          ? await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable, true)
+          : await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable)
         committedFiles = [...committedFiles, ...result.files]
         commitSha = result.sha
       }
       const committed = new Set(committedFiles)
-      setAllCommitted((committedFiles.length > 0 || untrackable) && entries.every(entry => committed.has(entry.filePath)))
+      setAllCommitted((committedFiles.length > 0 || untrackable || safetyPaths.length > 0) && entries.every(entry => committed.has(entry.filePath)))
       setSelectedPaths(previous => new Set([...previous].filter(path => !committed.has(path))))
       setMessage('')
       setUntrackable(false)
       setTiaSelectionResetSignal(previous => previous + 1)
-      if (commitSha) toast.success(`Committed ${commitSha.slice(0, 8)}`)
+      if (safetyPaths.length > 0) toast.success('Safety change committed to Git. Create an SVN savepoint separately to capture the TIA project.')
+      else if (commitSha) toast.success(`Committed ${commitSha.slice(0, 8)}`)
       await onCommitted?.()
     } catch (cause) {
       showErrorToast(`Commit failed: ${displayError(cause)}`)
@@ -194,7 +199,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                 className="h-[52px] w-full resize-none rounded-[9px] border bg-white/[0.03] px-2.5 py-2 text-[11px] outline-none placeholder:text-neutral-500 focus:border-white/20"
                 style={{ borderColor: 'var(--border)' }}
               />
-              <label className="mt-1.5 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2">
+              {selectedSafetyCount === 0 && <label className="mt-1.5 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2">
                 <input
                   type="checkbox"
                   data-testid="vc-untrackable-change"
@@ -206,6 +211,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                   <span className="block text-[9px] text-muted-foreground">Record a TIA change that leaves no git file diff — the commit stores only this message.</span>
                 </span>
               </label>
+              }
               <div className="relative mt-1.5 flex rounded-[9px] border bg-white/[0.03]" style={{ borderColor: 'var(--border)' }}>
                 <button
                   type="button"
@@ -215,7 +221,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                   className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-l-[9px] text-[11px] font-semibold hover:bg-white/5 disabled:opacity-40 disabled:hover:bg-transparent"
                 >
                   {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                  Commit selected ({selectedCommitPaths.size})
+                  Commit selected ({selectedCommitPaths.size + selectedSafetyCount})
                 </button>
                 <button
                   type="button"
@@ -262,7 +268,10 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
               branch={branch}
               signal={compareSignal}
               commitMessage={message}
-              onSelectionChanged={(comparisonId, paths) => setTiaSelection(comparisonId && paths.length > 0 ? { comparisonId, paths } : null)}
+              onSelectionChanged={(comparisonId, paths, safetyPaths = []) => {
+                setTiaSelection(comparisonId && (paths.length > 0 || safetyPaths.length > 0) ? { comparisonId, paths, safetyPaths } : null)
+                if (safetyPaths.length > 0) setUntrackable(false)
+              }}
               onComparisonStateChanged={setTiaHasDifferences}
               selectionResetSignal={tiaSelectionResetSignal}
               onCommitted={onCommitted}

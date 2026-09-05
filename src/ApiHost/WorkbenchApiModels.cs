@@ -25,7 +25,7 @@ public sealed record RefreshApplyApiRequest(
     string[]? ApprovedRemovalPaths = null,
     string? CommitMessage = null);
 public sealed record SourcePathApiRequest(string RelativePath);
-public sealed record CommitSourceApiRequest(string[] Paths, string Message, bool UntrackableChange);
+public sealed record CommitSourceApiRequest(string[] Paths, string Message, bool UntrackableChange, bool SafetyChange = false);
 public sealed record RestoreTiaProjectApiRequest(string? GitCommit = null);
 public sealed record NativeSavepointApiRequest(string Message);
 public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths, string Message);
@@ -737,7 +737,7 @@ public static class WorkbenchEndpoints
                     return false;
                 }
             });
-            if (hasExistingSource || body.UntrackableChange)
+            if (hasExistingSource || body.UntrackableChange || body.SafetyChange)
             {
                 // All registered worktrees commit through the coordinator: master enforces the
                 // TIA-authorization gate, and SVN-managed workbenches (master or feature) run
@@ -748,7 +748,8 @@ public static class WorkbenchEndpoints
                 coordinator.RegisterWorkbench(s.Workbench(workbenchId));
                 return Results.Ok(await coordinator.CommitSourceAsync(
                     workbenchId, worktreeId, body.Paths, body.Message, ct,
-                    untrackableChange: body.UntrackableChange));
+                    untrackableChange: body.UntrackableChange,
+                    safetyChange: body.SafetyChange));
             }
 
             // Compatibility for an empty/legacy worktree: the version-control server still
