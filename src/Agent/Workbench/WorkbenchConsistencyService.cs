@@ -113,6 +113,11 @@ public sealed class WorkbenchConsistencyService
                 new { repoPath = masterRoot, commitSha = head.Sha },
                 cancellationToken)
             .ConfigureAwait(false);
+        var untrackableChange = await versionControl.CallAsync<TimelineUntrackableChangeResult>(
+                "vc_untrackable_change_get",
+                new { repoPath = masterRoot, commitSha = head.Sha },
+                cancellationToken)
+            .ConfigureAwait(false);
         var status = await versionControl.CallAsync<ConsistencyStatusResult>(
                 "vc_status",
                 new { repoPath = masterRoot },
@@ -190,7 +195,11 @@ public sealed class WorkbenchConsistencyService
                 || (item.BaselineFSignature is not null && item.FSignature is null)));
 
         var sourceClean = !status.Entries.Any(entry => IsManagedSourceXml(entry.FilePath));
-        var evidenceCurrent = evidence is not null
+        // A message-only untrackable commit records the live TIA checksum but no source
+        // content. It must not certify the source tree for the checksum fast path; otherwise a
+        // pending trackable TIA diff remains invisible until a later checksum change.
+        var evidenceCurrent = !untrackableChange.UntrackableChange
+            && evidence is not null
             && string.Equals(evidence.CommitSha, head.Sha, StringComparison.OrdinalIgnoreCase)
             && evidence.Devices.Length == devices.Count;
         var checksumsMatch = evidenceCurrent && devices.All(item =>

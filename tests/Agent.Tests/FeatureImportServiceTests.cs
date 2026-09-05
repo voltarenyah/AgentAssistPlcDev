@@ -321,6 +321,7 @@ public sealed class FeatureImportServiceTests : IDisposable
                         },
                     },
                 },
+                "vc_untrackable_change_get" => new { untrackableChange = false },
                 "vc_merge_preview" => new
                 {
                     targetBranch = "master",

@@ -247,9 +247,12 @@ the commit title.
 
 Compare with TIA first checks the saved checksum evidence for each PLC, then
 also exports and compares the project-level hardware AML. A checksum match is
-not sufficient to declare the project clean when hardware differs. A mismatch
-runs a full source scan and presents individual block, DB, UDT, and tag-table
-differences. Hardware differences are shown separately with the staged AML;
+not sufficient to declare the project clean when hardware differs. An
+untrackable-change commit is also never treated as source evidence, even when
+its recorded checksum matches, so Compare with TIA performs a full source scan
+to find any pending trackable diff. Other checksum mismatches run the same full
+source scan and present individual block, DB, UDT, and tag-table differences.
+Hardware differences are shown separately with the staged AML;
 accepting them requires an explanatory commit message and creates a hardware
 commit. Both source directions are offered:
 accepting selected TIA changes into the local repo (with a commit title), or
