@@ -369,15 +369,14 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var created = await coordinator.CreateWorkbenchAsync(new(
             "Native baseline line", Path.Combine(root, "native-baseline"), 42, null));
 
-        // TIA Save As must run into the EMPTY tia/ dir; the SVN checkout (allowObstructions)
-        // only adopts the saved project after the TIA session is closed.
+        // TIA Save As must run into the EMPTY tia/ dir; the native baseline commit (which
+        // stages tia/ into a scratch working copy and checks it back out) runs only after
+        // the TIA session is closed and disconnected.
         Assert.True(order.IndexOf("engineering:save_project_as") >= 0);
         Assert.True(
-            order.IndexOf("engineering:save_project_as") < order.IndexOf("version:svn_checkout"));
+            order.IndexOf("engineering:save_project_as") < order.IndexOf("version:svn_commit_native_baseline"));
         Assert.True(
-            order.IndexOf("engineering:disconnect") < order.IndexOf("version:svn_checkout"));
-        Assert.True(
-            order.IndexOf("version:svn_checkout") < order.IndexOf("version:svn_commit"));
+            order.IndexOf("engineering:disconnect") < order.IndexOf("version:svn_commit_native_baseline"));
 
         var workbenchRoot = created.Workbench.RootPath;
         var masterRoot = WorkbenchPaths.ResolveWorktree(workbenchRoot, "master");
@@ -400,7 +399,8 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var revision = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
         Assert.Equal(1, revision.SchemaVersion);
         Assert.Equal("^/native/main", revision.Svn.Url);
-        Assert.True(revision.Svn.Revision >= 1);
+        // No scaffolding commit: the native baseline itself is the repository's first revision.
+        Assert.Equal(1, revision.Svn.Revision);
         Assert.Equal("PLC_1:checksum-PLC_1;PLC_2:checksum-PLC_2", revision.Tia.ProjectChecksum);
         Assert.Null(revision.Safety.FSignature);
         Assert.Equal(EngineeringCompileStatus.Success, revision.Validation.CompileStatus);
@@ -461,7 +461,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var revision = EngineeringStateWriter.Read(WorkbenchPaths.ResolveRevisionState(masterRoot));
         Assert.Equal(EngineeringCompileStatus.Failed, revision.Validation.CompileStatus);
         Assert.Null(revision.Tia.ProjectChecksum);
-        Assert.True(revision.Svn.Revision >= 1);
+        Assert.Equal(1, revision.Svn.Revision);
         Assert.Single(RepositoryService.Log(masterRoot, 10).Commits);
     }
 
@@ -1021,6 +1021,10 @@ public sealed class WorkbenchLifecycleTests : IDisposable
     private sealed class GitBoundary : IMcpToolCaller
     {
         private static readonly SvnRepositoryService Svn = new();
+        private static readonly JsonSerializerOptions CaseInsensitiveDevices = new()
+        {
+            PropertyNameCaseInsensitive = true,
+        };
         private readonly bool failAfterAddWorktree;
         private readonly List<string>? order;
 
@@ -1051,7 +1055,16 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                     args.GetType().GetProperty("sourceSha")?.GetValue(args) as string),
                 "vc_merge" => RepositoryService.Merge(
                     Property<string>(args, "targetWorktreePath"), Property<string>(args, "sourceBranch")),
+                "vc_commit_state_create" => RepositoryService.CreateCommitState(
+                    Property<string>(args, "repoPath"),
+                    Property<string>(args, "commitSha"),
+                    Property<string>(args, "workbenchId"),
+                    JsonSerializer.Deserialize<VcCommitStateDevice[]>(
+                        JsonSerializer.Serialize(
+                            args.GetType().GetProperty("devices")?.GetValue(args)),
+                        CaseInsensitiveDevices)!),
                 "svn_init_shared" => SvnInitShared(args),
+                "svn_commit_native_baseline" => SvnCommitNativeBaseline(args),
                 "svn_checkout" => Svn.Checkout(
                     Property<string>(args, "url"),
                     Property<string>(args, "path"),
@@ -1157,6 +1170,19 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             {
                 RepositoryPath = result.RepositoryPath,
                 RepositoryUri = result.RepositoryUri,
+            };
+        }
+
+        private static object SvnCommitNativeBaseline(object args)
+        {
+            var result = Svn.CommitNativeBaseline(
+                Property<string>(args, "repoUrl"),
+                Property<string>(args, "path"),
+                Property<string>(args, "message"));
+            return new CoordinatorSvnCommitResult
+            {
+                Committed = result.Committed,
+                Revision = result.Revision,
             };
         }
 

@@ -1133,7 +1133,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(
             new[]
             {
-                "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit", "vc_commit_selected",
+                "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline", "vc_commit_selected",
                 "vc_commit_state_create",
             },
             versionControl.Calls);
@@ -2180,6 +2180,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                     RepositoryPath = "repository.svn",
                     RepositoryUri = "file:///repository.svn/",
                 },
+                "svn_commit_native_baseline" => new CoordinatorSvnCommitResult { Committed = true, Revision = 1 },
                 "svn_commit" => new CoordinatorSvnCommitResult { Committed = true, Revision = 1 },
                 "vc_commit_selected" => new WorkbenchCommitResult(
                     "baseline-sha",

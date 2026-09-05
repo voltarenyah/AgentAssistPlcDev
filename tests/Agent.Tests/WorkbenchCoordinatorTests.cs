@@ -771,8 +771,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "knowledge:ingest_source",
                 "knowledge:ingest_source",
                 "engineering:disconnect",
-                "version:svn_checkout",
-                "version:svn_commit",
+                "version:svn_commit_native_baseline",
                 "version:vc_commit_selected",
                 "version:vc_commit_state_create",
             },
@@ -1035,7 +1034,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal(
             new[]
             {
-                "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit",
+                "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline",
                 "vc_commit_selected", "vc_commit_state_create", "vc_add_worktree",
             },
             versionControl.Calls);
@@ -1076,7 +1075,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal(
             new[]
             {
-                "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit",
+                "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline",
                 "vc_commit_selected", "vc_commit_state_create", "vc_add_worktree", "vc_remove_worktree",
             },
             versionControl.Calls);
@@ -1116,7 +1115,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal(
             new[]
             {
-                "vc_init_shared", "svn_init_shared", "svn_checkout", "svn_commit",
+                "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline",
                 "vc_commit_selected", "vc_commit_state_create", "vc_add_worktree", "vc_remove_worktree",
             },
             versionControl.Calls);
@@ -1293,8 +1292,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "knowledge:ingest_source",
                 "engineering:close_session",
                 "engineering:disconnect",
-                "version:svn_checkout",
-                "version:svn_commit",
+                "version:svn_commit_native_baseline",
                 "version:vc_commit_selected",
                 "version:vc_commit_state_create",
             },
@@ -2536,8 +2534,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 RepositoryPath = "repository.svn",
                 RepositoryUri = "file:///repository.svn/",
             })
-            .Respond("svn_checkout", new object())
-            .Respond("svn_commit", new CoordinatorSvnCommitResult { Committed = true, Revision = 1 })
+            .Respond("svn_commit_native_baseline", new CoordinatorSvnCommitResult { Committed = true, Revision = 1 })
             .Respond("vc_commit_selected", new WorkbenchCommitResult(
                 "baseline-sha",
                 "Initial PLC source baseline",
@@ -2622,6 +2619,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 RepositoryPath = "repository.svn",
                 RepositoryUri = "file:///repository.svn/",
             },
+            "svn_commit_native_baseline" => new CoordinatorSvnCommitResult { Committed = true, Revision = 1 },
             "svn_commit" => new CoordinatorSvnCommitResult { Committed = true, Revision = 1 },
             "vc_commit_selected" => new WorkbenchCommitResult(
                 "baseline-sha",
