@@ -11,6 +11,19 @@ namespace Mcp.VersionControl.Svn;
 /// </summary>
 internal sealed class SvnRepositoryService
 {
+    private readonly Func<string, string, bool, SvnCheckoutResult> _checkout;
+
+    public SvnRepositoryService()
+        : this(null)
+    {
+    }
+
+    internal SvnRepositoryService(
+        Func<string, string, bool, SvnCheckoutResult>? checkout)
+    {
+        _checkout = checkout ?? Checkout;
+    }
+
     /// <summary>
     /// Create a local SVN repository at &lt;workbenchRoot&gt;/repository.svn and return the
     /// file:// URI. No scaffolding commit is made: the repository stays at r0 so the native
@@ -119,12 +132,15 @@ internal sealed class SvnRepositoryService
             Path.GetDirectoryName(path)!,
             ".svn-native-baseline-" + Guid.NewGuid().ToString("N"));
         var stagedMain = Path.Combine(scratch, "native", "main");
+        var restoredCheckout = Path.Combine(
+            Path.GetDirectoryName(path)!,
+            ".svn-native-restore-" + Guid.NewGuid().ToString("N"));
         var moved = false;
         long revision;
 
         try
         {
-            Checkout(rootUri.ToString(), scratch);
+            _checkout(rootUri.ToString(), scratch, false);
             Directory.CreateDirectory(Path.Combine(scratch, "native"));
             Directory.Move(path, stagedMain);
             moved = true;
@@ -138,6 +154,11 @@ internal sealed class SvnRepositoryService
             }
 
             revision = committed.Revision;
+
+            // Restore through a temporary sibling so a failed checkout cannot leave a
+            // partial directory at the caller's original path before rollback runs.
+            _checkout(mainUri.ToString(), restoredCheckout, false);
+            Directory.Move(restoredCheckout, path);
         }
         catch
         {
@@ -151,6 +172,19 @@ internal sealed class SvnRepositoryService
         }
         finally
         {
+            ClearReadOnlyAttributes(restoredCheckout);
+            if (Directory.Exists(restoredCheckout))
+            {
+                try
+                {
+                    Directory.Delete(restoredCheckout, recursive: true);
+                }
+                catch
+                {
+                    // best-effort cleanup of a failed temporary checkout
+                }
+            }
+
             if (Directory.Exists(scratch))
             {
                 ClearReadOnlyAttributes(scratch);
@@ -164,9 +198,6 @@ internal sealed class SvnRepositoryService
                 }
             }
         }
-
-        // Fresh checkout restores the identical tree at the original path as a working copy.
-        Checkout(mainUri.ToString(), path);
 
         return new SvnCommitResult
         {
