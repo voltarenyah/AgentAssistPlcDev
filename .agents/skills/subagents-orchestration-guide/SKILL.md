@@ -86,6 +86,18 @@ Close a running subagent only when the user redirects the workflow, the orchestr
 
 Spawn agents using natural language prompts. Provide clear context about what the agent should accomplish. Apply the Spawn rule above.
 
+### Model-Bearing Sidebar Names [REQUIRED DEFAULT]
+
+Every subagent must receive a sidebar title that identifies its effective model and role. Apply the title immediately after each spawn; the user does not need to request this behavior.
+
+1. Resolve the effective model before spawning. Use the explicit model override when present; otherwise use the fixed `model` in `.codex/agents/<agent_type>.toml`. Do not guess an inherited model. If the runtime cannot establish the inherited model, report that limitation instead of presenting an unverified model name.
+2. Preserve the selected model. Pass it explicitly to `multi_agent_v1__spawn_agent` when the role or user configuration provides it; otherwise allow the normal inherited-model behavior and use the verified inherited value for the title.
+3. Normalize model IDs to the display tags `gpt-5.6-luna` -> `luna`, `gpt-5.6-terra` -> `Terra`, and `gpt-5.6-sol` -> `Sol`. Use the user's requested role suffix when supplied; otherwise derive a short role slug from `agent_type` (for example, `code-reviewer` -> `reviewer` and `task-executor` -> `programmer`).
+4. After `multi_agent_v1__spawn_agent` returns, call `mcp__codex_app__set_thread_title` with the returned `agent_id` as `threadId` and the title `<model-tag>-<role-slug>`, such as `luna-reviewer` or `Terra-programmer`.
+5. If the post-spawn rename fails or the returned ID cannot be resolved as a task, do not claim the sidebar was renamed. Include the resolved model and requested role in the worker's initial prompt and report the rename limitation.
+
+This is a post-creation rename because the subagent spawn interface returns an ID and generated nickname but does not accept a sidebar display-name field. `create_thread` supports a title for a top-level task; it is a separate API and does not replace the post-spawn subagent rename procedure.
+
 ### Spawn Prompt Requirements
 
 - Each spawn prompt must name the target deliverable, input paths, and expected result.
