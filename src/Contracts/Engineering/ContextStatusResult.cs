@@ -26,8 +26,12 @@ public sealed class ContextStatusResult
     /// <summary>One of FSignatureReadState; null for non-safety devices.</summary>
     public string? FSignatureReadState { get; set; }
 
-    /// <summary>Live offline collective F-signature (uppercase hex); null when unavailable.</summary>
+    /// <summary>Live offline collective F-signature (folded per-block, spaced hex); null when
+    /// unavailable.</summary>
     public string? FSignature { get; set; }
+
+    /// <summary>Per-F-block signatures behind <see cref="FSignature"/>; null when unavailable.</summary>
+    public IReadOnlyList<FBlockSignatureInfo>? FBlockSignatures { get; set; }
 
     /// <summary>"no-baseline" | "in-sync" | "changed" | "unknown" (live checksum unavailable, or
     /// legacy manifest without a stored checksum — only a sync's detailed diff can decide).</summary>

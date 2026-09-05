@@ -20,7 +20,10 @@ public sealed record DeviceExportMetadata(
     string? ProjectCopyright,
     DateTimeOffset? ProjectCreationTime,
     DateTimeOffset? ProjectLastModified,
-    string? ProjectLastModifiedBy);
+    string? ProjectLastModifiedBy,
+    bool? IsSafetyDevice,
+    string? FSignatureReadState,
+    string? FSignature);
 
 public sealed record OfflineBlockInfo(
     string Id,
@@ -144,7 +147,10 @@ public sealed class DeviceSnapshotReader
                 ReadString(device, "projectCopyright"),
                 ReadDate(device, "projectCreationTime"),
                 ReadDate(device, "projectLastModified"),
-                ReadString(device, "projectLastModifiedBy"));
+                ReadString(device, "projectLastModifiedBy"),
+                ReadBool(device, "isSafetyDevice"),
+                ReadString(device, "fSignatureReadState"),
+                ReadString(device, "fSignature"));
         }
         catch (Exception ex) when (ex is JsonException or IOException)
         {

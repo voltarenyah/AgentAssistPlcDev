@@ -18,8 +18,21 @@ public sealed record EngineeringTiaState(string? ProjectChecksum);
 /// <summary>Safety evidence: the aggregated offline collective F-signature plus the aggregate
 /// read state (null on legacy files, "ok" when every safety device's signature was read or no
 /// safety device exists, "read-failed" when a required read failed — see
-/// Contracts.Engineering.FSignatureReadState).</summary>
-public sealed record EngineeringSafetyState(string? FSignature, string? ReadState = null);
+/// Contracts.Engineering.FSignatureReadState). <see cref="Devices"/> carries the per-device
+/// detail including per-F-block signatures for change attribution; null on legacy files.</summary>
+public sealed record EngineeringSafetyState(
+    string? FSignature,
+    string? ReadState = null,
+    IReadOnlyList<EngineeringSafetyDevice>? Devices = null);
+
+/// <summary>Per-device safety evidence within <see cref="EngineeringSafetyState"/> (additive
+/// 2026-09-02): the folded F-signature, its read state, and the per-F-block signatures the fold
+/// was built from, so a later compare can attribute a safety change to individual blocks.</summary>
+public sealed record EngineeringSafetyDevice(
+    string PlcName,
+    string? ReadState,
+    string? FSignature,
+    IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? BlockSignatures);
 
 public sealed record EngineeringValidationState(string CompileStatus);
 
@@ -64,7 +77,8 @@ public static class EngineeringStateWriter
         string? projectChecksum,
         string? fSignature,
         string compileStatus,
-        string? fSignatureReadState = null)
+        string? fSignatureReadState = null,
+        IReadOnlyList<EngineeringSafetyDevice>? safetyDevices = null)
     {
         if (string.IsNullOrWhiteSpace(compileStatus))
         {
@@ -75,7 +89,7 @@ public static class EngineeringStateWriter
             SchemaVersion,
             new EngineeringSvnLink(svnUrl, svnRevision),
             new EngineeringTiaState(projectChecksum),
-            new EngineeringSafetyState(fSignature, fSignatureReadState),
+            new EngineeringSafetyState(fSignature, fSignatureReadState, safetyDevices),
             new EngineeringValidationState(compileStatus));
     }
 

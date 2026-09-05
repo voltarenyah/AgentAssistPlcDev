@@ -1,43 +1,44 @@
+using Siemens.Engineering.Safety;
 using Siemens.Engineering.SW.Blocks;
 
 namespace Mcp.Engineering.Adapter;
 
 /// <summary>
-/// Detects fail-safe (F-) blocks. TIA Openness refuses to export them
-/// ("The export of block '...' is not permitted.", Siemens support entry 274091) and there is
-/// no ExportOptions flag to allow it, so the export pipeline skips them instead of failing the
-/// whole device export. Openness reports the fail-safe dialect through ProgrammingLanguage
-/// (F_LAD/F_FBD/F_DB/... — F_LAD observed in a real V17 manifest). Generated F-system blocks
-/// can nevertheless surface as ordinary block types (for example FOB_SAFETY as an OB), so the
-/// conventional F-block name prefixes are a second, conservative discriminator.
+/// Detects fail-safe (F-) blocks semantically: per the TIA Portal Openness manual (§5.27.4,
+/// "SafetySignatureProvider"), the SafetySignatureProvider service is present exactly on the
+/// F-blocks of an F-CPU and null on any other block ("If the block is not an F-block or not a
+/// block of an F-CPU S7-1200/1500, the returned signatureProvider equals to null."). Verified
+/// 2026-09-02 against PEI_SinoARP_Master_V4.1.3 (CPU 1515F-2 PN): all sampled F-blocks —
+/// including generated ones like FOB_SAFETY that report a non-F ProgrammingLanguage (SCL) —
+/// returned the provider; standard blocks returned null. This replaces the earlier language/
+/// name-prefix heuristics, which misclassified generated F-system blocks and user blocks that
+/// merely start with an F-prefix.
+///
+/// TIA Openness refuses to export F-blocks ("The export of block '...' is not permitted.",
+/// Siemens support entry 274091) and there is no ExportOptions flag to allow it, so the export
+/// pipeline skips them instead of failing the whole device export. A failed service probe must
+/// not skip the block: it is treated as exportable, and a true F-block is still caught by
+/// <see cref="IsExportNotPermitted"/> when Openness refuses the export.
 /// </summary>
 internal static class FailSafeBlocks
 {
-    public static bool IsFailSafe(PlcBlock block) =>
-        IsFailSafeLanguage(block.ProgrammingLanguage.ToString())
-        || IsFailSafeName(block.Name);
-
-    public static bool IsFailSafeLanguage(string? programmingLanguage) =>
-        !string.IsNullOrWhiteSpace(programmingLanguage)
-        && programmingLanguage!.StartsWith("F_", StringComparison.Ordinal);
-
-    public static bool IsFailSafeName(string? blockName)
+    /// <summary>True when the block carries the SafetySignatureProvider service, i.e. it is an
+    /// F-block of an F-CPU.</summary>
+    public static bool IsFailSafe(PlcBlock block)
     {
-        if (string.IsNullOrWhiteSpace(blockName))
+        try
+        {
+            return block.GetService<SafetySignatureProvider>() is not null;
+        }
+        catch
+        {
             return false;
-
-        var name = blockName!.Trim();
-        return name.StartsWith("FOB_", StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith("FFB_", StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith("FFC_", StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith("FDB_", StringComparison.OrdinalIgnoreCase);
+        }
     }
 
-    /// <summary>
-    /// Belt-and-braces companion to <see cref="IsFailSafe"/>: matches the exact Openness refusal
-    /// ("The export of block '...' is not permitted.") so a block that slips past the language
-    /// prefix check is still skipped instead of failing the whole device export.
-    /// </summary>
+    /// <summary>Belt-and-braces companion to <see cref="IsFailSafe"/>: matches the exact Openness
+    /// refusal ("The export of block '...' is not permitted.") so a block whose provider probe
+    /// failed is still skipped instead of failing the whole device export.</summary>
     public static bool IsExportNotPermitted(Exception ex) =>
         ex.Message.IndexOf("is not permitted", StringComparison.OrdinalIgnoreCase) >= 0;
 }

@@ -1,9 +1,9 @@
 # Attaches to every running TIA Portal instance and probes the failsafe (F-) surface:
-#   1. SafetySignatureProvider on each PLC's DeviceItem anchor (offline collective F-signature,
-#      SafetySignatureType.BlockOfflineSignature) — the source wired into get_plc_checksums.
-#      NOTE: the safety services are anchored on the DeviceItem, NOT the PlcSoftware, and the
-#      provider is license-gated (null without a STEP 7 Safety license) — verified 2026-09-01
-#      against PEI_SinoARP_Master_V4.1.3 (CPU 1515F-2 PN), headless and UI mode.
+#   1. SafetySignatureProvider per F-block (PlcBlock anchor per TIA Openness manual §5.27.4;
+#      the provider is null on non-F-blocks AND on the DeviceItem/PlcSoftware anchors — verified
+#      2026-09-02 against PEI_SinoARP_Master_V4.1.3, CPU 1515F-2 PN). A block signature of 0
+#      means "missing or invalidated by a recent change". This is the source folded into
+#      get_plc_checksums' FSignature.
 #   2. SafetyAdministration (password state, safety system version, runtime groups).
 #   3. Whether FingerprintProvider.GetFingerprints() returns values for F-blocks
 #      (F-blocks cannot be exported, so fingerprints would be the fallback change signal;
@@ -61,8 +61,9 @@ function Find-Blocks {
 
 function Test-FailSafeBlock {
     param($Block)
-    # Mirrors src/Mcp.Engineering/Adapter/FailSafeBlocks.cs: F_* programming language or the
-    # conventional generated-block name prefixes.
+    # Display-only sampling heuristic for this probe (F_* language or generated-block name
+    # prefixes). Production detection is semantic: SafetySignatureProvider present on the block
+    # (src/Mcp.Engineering/Adapter/FailSafeBlocks.cs).
     $language = $Block.ProgrammingLanguage.ToString()
     if ($language.StartsWith('F_')) { return $true }
     $name = $Block.Name.Trim()
@@ -104,28 +105,32 @@ function Show-SafetyDetection {
 
 function Show-SafetySignature {
     param($Plc)
-    $anchor = Get-DeviceItemAnchor -Plc $Plc
-    $provider = Get-ServiceInstance -Obj $anchor -ServiceType ([Siemens.Engineering.Safety.SafetySignatureProvider])
-    if ($null -eq $provider) {
-        Write-Output "  [$($Plc.Name)] SafetySignatureProvider: null (not a failsafe PLC, or no STEP 7 Safety license - the provider is license-gated)"
-        return
+    # Per TIA Openness manual §5.27.4 the provider lives on each F-block (PlcBlock); it is null
+    # on non-F-blocks and on the DeviceItem/PlcSoftware anchors (verified 2026-09-02).
+    $blocks = New-Object 'System.Collections.Generic.List[object]'
+    Find-Blocks -Group $Plc.BlockGroup -Acc $blocks
+    $found = 0
+    foreach ($block in $blocks) {
+        try {
+            $provider = Get-ServiceInstance -Obj $block -ServiceType ([Siemens.Engineering.Safety.SafetySignatureProvider])
+        }
+        catch {
+            Write-Output "  [$($Plc.Name)] $($block.Name): provider read failed: $($_.Exception.Message)"
+            continue
+        }
+        if ($null -eq $provider) { continue }  # not an F-block
+        $found++
+        $sig = $null
+        try { $sig = $provider.Signatures.Find([Siemens.Engineering.Safety.SafetySignatureType]::BlockOfflineSignature) } catch { }
+        if ($null -eq $sig) {
+            Write-Output ("  [{0}] {1}: F-block, no BlockOfflineSignature entry" -f $Plc.Name, $block.Name)
+        } else {
+            # 0 = signature missing or invalidated by a recent change (manual §5.27.4)
+            Write-Output ("  [{0}] {1}: BlockOfflineSignature = 0x{2}" -f $Plc.Name, $block.Name, $sig.Value.ToString('X8'))
+        }
     }
-    try {
-        $signatures = $provider.Signatures
-        if ($null -eq $signatures -or $signatures.Count -eq 0) {
-            Write-Output "  [$($Plc.Name)] SafetySignatureProvider: present, but no signatures (safety program compiled?)"
-            return
-        }
-        foreach ($sig in $signatures) {
-            Write-Output ("  [{0}] signature {1} = 0x{2}" -f $Plc.Name, $sig.Type, $sig.Value.ToString('X8'))
-        }
-        $offline = $signatures.Find([Siemens.Engineering.Safety.SafetySignatureType]::BlockOfflineSignature)
-        if ($null -eq $offline) {
-            Write-Output "  [$($Plc.Name)] WARNING: no BlockOfflineSignature entry"
-        }
-    }
-    catch {
-        Write-Output "  [$($Plc.Name)] SafetySignatureProvider read failed: $($_.Exception.GetType().Name): $($_.Exception.Message)"
+    if ($found -eq 0) {
+        Write-Output "  [$($Plc.Name)] no F-block signatures (not a failsafe PLC, or safety program never compiled)"
     }
 }
 

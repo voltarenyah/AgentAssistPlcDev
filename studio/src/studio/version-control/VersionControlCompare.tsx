@@ -107,6 +107,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   if (!started) return null
 
   const hardwareDiffers = comparison?.hardware != null && comparison.hardware.state !== 'in-sync'
+  const safetyChanges = comparison?.safety?.filter(entry => entry.changed) ?? []
   const differences = comparison?.differences ?? []
   const titleMissing = commitMessage.trim().length === 0
 
@@ -137,6 +138,25 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
 
         {comparison && (
           <div className="space-y-2">
+            {safetyChanges.length > 0 && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600" data-testid="vc-safety-diff">
+                <div className="font-medium">Safety program changed (F-signature)</div>
+                {safetyChanges.map(entry => (
+                  <div key={entry.deviceId} className="mt-1 text-[9px]">
+                    <div className="font-medium">{entry.plcName}</div>
+                    {entry.changedBlocks ? (
+                      <ul className="mt-0.5 space-y-0.5 font-mono">
+                        {entry.changedBlocks.map(path => <li key={path} className="break-all">{path}</li>)}
+                      </ul>
+                    ) : (
+                      <div className="text-muted-foreground">Block-level detail unavailable — the baseline predates per-block signature records.</div>
+                    )}
+                  </div>
+                ))}
+                <div className="mt-1 text-[9px]">F-blocks are not exportable — save a snapshot to archive the PLC source alongside this safety change.</div>
+              </div>
+            )}
+
             {hardwareDiffers && comparison.hardware && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600">
                 <div className="font-medium">Project hardware differs from TIA</div>
@@ -157,8 +177,8 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
 
             {differences.length === 0 ? (
               <div className="px-3.5 py-5 text-center text-[10px] text-muted-foreground" data-testid="vc-clean-state">
-                <div className={`font-medium ${hardwareDiffers ? 'text-muted-foreground' : 'text-emerald-600'}`}>
-                  {hardwareDiffers ? 'Tracked PLC source matches master' : 'TIA matches master'}
+                <div className={`font-medium ${hardwareDiffers || safetyChanges.length > 0 ? 'text-muted-foreground' : 'text-emerald-600'}`}>
+                  {hardwareDiffers || safetyChanges.length > 0 ? 'Tracked PLC source matches master' : 'TIA matches master'}
                 </div>
                 <div className="mt-1 text-[9px]">
                   {comparison.fastGatePassed ? 'All device checksums match; no full object scan was required.' : 'A full object scan found no remaining differences.'}

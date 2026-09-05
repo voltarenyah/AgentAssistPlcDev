@@ -208,4 +208,55 @@ describe('VersionControlCompare (inline)', () => {
     expect(api.compareMasterWithTia).toHaveBeenCalledTimes(1)
   })
 
+  it('lists changed F-blocks when the safety signature moved', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
+      differences: [],
+      state: 'Different',
+      safetyChanged: true,
+      safety: [{
+        deviceId: 'dev-1',
+        plcName: 'PLC_1',
+        isSafetyDevice: true,
+        readState: 'ok',
+        fSignature: 'new-fold',
+        baselineFSignature: 'old-fold',
+        changed: true,
+        changedBlocks: ['Program blocks/F_Main [FB1]', 'Program blocks/FOB_SAFETY [OB321]'],
+      }],
+    }))
+    const { host } = await render({ signal: 1 })
+
+    const card = host.querySelector('[data-testid="vc-safety-diff"]')
+    expect(card).toBeTruthy()
+    expect(card!.textContent).toContain('Safety program changed')
+    expect(card!.textContent).toContain('PLC_1')
+    expect(card!.textContent).toContain('Program blocks/F_Main [FB1]')
+    expect(card!.textContent).toContain('Program blocks/FOB_SAFETY [OB321]')
+    // With a safety-only change the headline must not claim a full match.
+    expect(host.querySelector('[data-testid="vc-clean-state"]')?.textContent)
+      .toContain('Tracked PLC source matches master')
+  })
+
+  it('notes when block-level safety detail is unavailable', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
+      differences: [],
+      state: 'Different',
+      safetyChanged: true,
+      safety: [{
+        deviceId: 'dev-1',
+        plcName: 'PLC_1',
+        isSafetyDevice: true,
+        readState: 'ok',
+        fSignature: 'new-fold',
+        baselineFSignature: 'old-fold',
+        changed: true,
+        changedBlocks: null,
+      }],
+    }))
+    const { host } = await render({ signal: 1 })
+
+    expect(host.querySelector('[data-testid="vc-safety-diff"]')?.textContent)
+      .toContain('Block-level detail unavailable')
+  })
+
 })

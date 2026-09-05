@@ -245,6 +245,9 @@ public sealed class DeviceSnapshotReaderTests
                     projectCreationTime = "2026-07-01T08:00:00.0000000+00:00",
                     projectLastModified = "2026-07-30T09:30:00.0000000+00:00",
                     projectLastModifiedBy = "Ansel",
+                    isSafetyDevice = true,
+                    fSignatureReadState = "ok",
+                    fSignature = "1A2B3C4D",
                 },
                 components = Array.Empty<object>(),
             }));
@@ -263,6 +266,30 @@ public sealed class DeviceSnapshotReaderTests
         Assert.Equal(new DateTimeOffset(2026, 7, 1, 8, 0, 0, TimeSpan.Zero), snapshot.Device.ProjectCreationTime);
         Assert.Equal(new DateTimeOffset(2026, 7, 30, 9, 30, 0, TimeSpan.Zero), snapshot.Device.ProjectLastModified);
         Assert.Equal("Ansel", snapshot.Device.ProjectLastModifiedBy);
+        Assert.True(snapshot.Device.IsSafetyDevice);
+        Assert.Equal("ok", snapshot.Device.FSignatureReadState);
+        Assert.Equal("1A2B3C4D", snapshot.Device.FSignature);
+    }
+
+    [Fact]
+    public void ReadDeviceSectionWithoutSafetyFields_ToleratesLegacyManifest()
+    {
+        using var fixture = SnapshotFixture.Create();
+        File.WriteAllText(
+            Path.Combine(fixture.Context.SourceRoot, "metadata.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                device = new { plcName = "PLC_1" },
+                components = Array.Empty<object>(),
+            }));
+
+        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+
+        Assert.NotNull(snapshot.Device);
+        Assert.Null(snapshot.Device!.IsSafetyDevice);
+        Assert.Null(snapshot.Device.FSignatureReadState);
+        Assert.Null(snapshot.Device.FSignature);
     }
 
     [Fact]

@@ -50,6 +50,9 @@ public sealed class DeviceMetadataManifestTests : IDisposable
         Assert.Equal(new DateTimeOffset(2026, 7, 1, 8, 0, 0, TimeSpan.Zero), device.ProjectCreationTime);
         Assert.Equal(new DateTimeOffset(2026, 7, 30, 9, 30, 0, TimeSpan.Zero), device.ProjectLastModified);
         Assert.Equal("Ansel", device.ProjectLastModifiedBy);
+        Assert.True(device.IsSafetyDevice);
+        Assert.Equal("no-signature", device.FSignatureReadState);
+        Assert.Null(device.FSignature);
     }
 
     [Fact]
@@ -184,5 +187,8 @@ public sealed class DeviceMetadataManifestTests : IDisposable
         ProjectCreationTime = new DateTimeOffset(2026, 7, 1, 8, 0, 0, TimeSpan.Zero),
         ProjectLastModified = new DateTimeOffset(2026, 7, 30, 9, 30, 0, TimeSpan.Zero),
         ProjectLastModifiedBy = "Ansel",
+        IsSafetyDevice = true,
+        FSignatureReadState = "no-signature",
+        FSignature = null,
     };
 }

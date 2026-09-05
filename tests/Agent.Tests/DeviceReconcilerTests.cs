@@ -255,6 +255,73 @@ public sealed class DeviceReconcilerTests : IDisposable
     }
 
     [Fact]
+    public void ApplyWithoutApprovedChangesStillCarriesStagedDeviceSection()
+    {
+        // 2026-09-02: document-level sections (device metadata, exportRoot) always follow the
+        // staged manifest — a refresh whose only delta is device metadata (e.g. safety fields
+        // captured by a newer app build) must reach the baseline even with zero approved
+        // component paths. The unchanged source file must stay untouched.
+        var fixture = CreateFixture();
+        fixture.WriteBaseline("Blocks/Same.xml", "same");
+        fixture.WriteBaselineManifest(Component("same", "Blocks/Same.xml"));
+        fixture.WriteStaging("Blocks/Same.xml", "same");
+        File.WriteAllText(
+            fixture.StagingPath("metadata.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                device = new
+                {
+                    plcName = "PLC_1",
+                    isSafetyDevice = true,
+                    fSignatureReadState = "ok",
+                    fSignature = "1A2B3C4D",
+                },
+                components = new[] { Component("same", "Blocks/Same.xml") },
+            }));
+        var unchangedPath = fixture.BaselinePath("Blocks/Same.xml");
+        var oldTimestamp = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(unchangedPath, oldTimestamp);
+        var reconciler = new DeviceReconciler();
+        var preview = reconciler.Preview(fixture.Context);
+
+        var outcome = reconciler.Apply(
+            fixture.Context,
+            preview,
+            new HashSet<string>(StringComparer.Ordinal));
+
+        Assert.Equal("same", File.ReadAllText(unchangedPath));
+        Assert.Equal(oldTimestamp, File.GetLastWriteTimeUtc(unchangedPath));
+        var changedPath = Assert.Single(outcome.ChangedPaths);
+        Assert.EndsWith("source/metadata.json", changedPath, StringComparison.Ordinal);
+        using var manifest = JsonDocument.Parse(
+            File.ReadAllText(fixture.BaselinePath("metadata.json")));
+        var device = manifest.RootElement.GetProperty("device");
+        Assert.True(device.GetProperty("isSafetyDevice").GetBoolean());
+        Assert.Equal("ok", device.GetProperty("fSignatureReadState").GetString());
+        Assert.Equal("1A2B3C4D", device.GetProperty("fSignature").GetString());
+    }
+
+    [Fact]
+    public void ApplyWithoutApprovedChangesAndIdenticalManifestWritesNothing()
+    {
+        var fixture = CreateFixture();
+        fixture.WriteBaseline("Blocks/Same.xml", "same");
+        fixture.WriteBaselineManifest(Component("same", "Blocks/Same.xml"));
+        fixture.WriteStaging("Blocks/Same.xml", "same");
+        fixture.WriteStagingManifest(Component("same", "Blocks/Same.xml"));
+        var reconciler = new DeviceReconciler();
+        var preview = reconciler.Preview(fixture.Context);
+
+        var outcome = reconciler.Apply(
+            fixture.Context,
+            preview,
+            new HashSet<string>(StringComparer.Ordinal));
+
+        Assert.Empty(outcome.ChangedPaths);
+    }
+
+    [Fact]
     public void ApplyCarriesStagedDeviceSectionIntoBaselineManifest()
     {
         // 2026-07-31: the baseline manifest is rebuilt from a baseline clone, so a staged

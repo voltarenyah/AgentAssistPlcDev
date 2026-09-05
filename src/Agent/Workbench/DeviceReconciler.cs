@@ -297,11 +297,10 @@ public sealed class DeviceReconciler
         IReadOnlySet<string> approvedPaths,
         ISet<string> artifacts)
     {
-        if (approvedPaths.Count == 0)
-        {
-            return null;
-        }
-
+        // The manifest merge runs even with zero approved component paths: the document-level
+        // sections ("device", "exportRoot") always follow the staged manifest, so a refresh whose
+        // only delta is device metadata (e.g. newly captured safety fields after an app upgrade)
+        // must still reach the baseline. A content-identical merge is suppressed below.
         var sourcePath = ResolveControlledPath(context.StagingRoot, MetadataFileName);
         var destinationPath =
             ResolveControlledPath(context.SourceRoot, MetadataFileName);

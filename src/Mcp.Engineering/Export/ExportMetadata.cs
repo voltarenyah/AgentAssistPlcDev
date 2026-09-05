@@ -64,6 +64,19 @@ public sealed class DeviceMetadata
 
     /// <summary>ProjectBase.LastModifiedBy.</summary>
     public string? ProjectLastModifiedBy { get; set; }
+
+    /// <summary>True when the PLC carries the Safety services (F-CPU); false for ordinary PLCs;
+    /// null on manifests written before this field existed (additive 2026-09-02, same tolerance
+    /// rule as the device section itself).</summary>
+    public bool? IsSafetyDevice { get; set; }
+
+    /// <summary><see cref="Contracts.Engineering.FSignatureReadState"/> value ("ok" /
+    /// "no-signature" / "read-failed"); null for ordinary PLCs and legacy manifests.</summary>
+    public string? FSignatureReadState { get; set; }
+
+    /// <summary>Offline collective F-signature (uppercase hex) at export time; null unless the
+    /// read state is "ok".</summary>
+    public string? FSignature { get; set; }
 }
 
 public sealed class ExportMetadataRecord
@@ -239,6 +252,9 @@ internal static class ExportMetadataJsonSerializer
             ProjectCreationTime = GetDate(device, "projectCreationTime"),
             ProjectLastModified = GetDate(device, "projectLastModified"),
             ProjectLastModifiedBy = GetString(device, "projectLastModifiedBy"),
+            IsSafetyDevice = GetBool(device, "isSafetyDevice"),
+            FSignatureReadState = GetString(device, "fSignatureReadState"),
+            FSignature = GetString(device, "fSignature"),
         };
     }
 
@@ -262,7 +278,10 @@ internal static class ExportMetadataJsonSerializer
         WriteProperty(builder, 2, "projectCopyright", device.ProjectCopyright, appendComma: true);
         WriteProperty(builder, 2, "projectCreationTime", device.ProjectCreationTime?.ToString("O"), appendComma: true);
         WriteProperty(builder, 2, "projectLastModified", device.ProjectLastModified?.ToString("O"), appendComma: true);
-        WriteProperty(builder, 2, "projectLastModifiedBy", device.ProjectLastModifiedBy, appendComma: false);
+        WriteProperty(builder, 2, "projectLastModifiedBy", device.ProjectLastModifiedBy, appendComma: true);
+        WriteProperty(builder, 2, "isSafetyDevice", device.IsSafetyDevice, appendComma: true);
+        WriteProperty(builder, 2, "fSignatureReadState", device.FSignatureReadState, appendComma: true);
+        WriteProperty(builder, 2, "fSignature", device.FSignature, appendComma: false);
         Indent(builder, 1).AppendLine("},");
     }
 
