@@ -27,6 +27,27 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UntrackableCommitDoesNotMaskPendingTrackableDiff()
+    {
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence())
+        {
+            UntrackableChange = true,
+        };
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"))
+        {
+            SourceXml = "<Document><SW.Blocks.OB ID=\"1\" Comment=\"changed\" /></Document>",
+        };
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.False(result.FastGatePassed);
+        Assert.Equal(ConsistencyState.Different, result.State);
+        Assert.Contains(result.Differences, difference => difference.Kind == SourceDifferenceKind.Changed);
+        Assert.Equal(2, engineering.Calls.Count(call => call == "sync_export"));
+    }
+
+    [Fact]
     public async Task UnlabeledMasterScansEveryDeviceWithSyncExport()
     {
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
@@ -351,6 +372,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         }
 
         public bool DirtySource { get; set; }
+        public bool UntrackableChange { get; set; }
         public List<string> Calls { get; } = new();
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
@@ -360,6 +382,10 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
             {
                 "vc_log" => new ConsistencyLogResult { Commits = new[] { new ConsistencyCommit { Sha = head } } },
                 "vc_validation_get" => evidence!,
+                "vc_untrackable_change_get" => new TimelineUntrackableChangeResult
+                {
+                    UntrackableChange = UntrackableChange,
+                },
                 "vc_status" => new ConsistencyStatusResult
                 {
                     Entries = DirtySource
@@ -395,6 +421,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
 
         public List<string> Calls { get; } = new();
         public string ProjectXml { get; init; } = "<CAEXFile><Device Name=\"PLC_1\" /></CAEXFile>";
+        public string SourceXml { get; init; } = "<Document><SW.Blocks.OB ID=\"1\" /></Document>";
 
         /// <summary>Optional per-PLC safety surface: (isSafetyDevice, readState, fSignature, blockSignatures).</summary>
         public Dictionary<string, (bool IsSafety, string? ReadState, string? FSignature, IReadOnlyList<FBlockSignatureInfo>? Blocks)> Safety { get; } = new();
@@ -429,7 +456,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
             {
                 var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
                 Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
-                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<Document><SW.Blocks.OB ID=\"1\" /></Document>");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), SourceXml);
                 File.WriteAllText(Path.Combine(outputDir, "metadata.json"), "{}");
                 var plcName = (string)args.GetType().GetProperty("plcName")!.GetValue(args)!;
                 return Task.FromResult((T)(object)new[]
