@@ -552,7 +552,6 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                         FSignatureReadState = safety.ReadState,
                         FSignature = safety.Signature,
                         FBlockSignatures = safety.Blocks,
-                        ContentFingerprint = TryReadContentFingerprint(plc),
                     };
                 })
                 .OrderBy(info => info.PlcName, StringComparer.OrdinalIgnoreCase)
@@ -1659,8 +1658,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     }
 
     /// <summary>Collective offline F-signature for a PLC: folds the per-block signatures into
-    /// one SHA-256, formatted as spaced uppercase hex pairs like the content fingerprint, so the
-    /// PLC-level value moves whenever any F-block signature changes.</summary>
+    /// one SHA-256 formatted as spaced uppercase hex pairs, so the PLC-level value moves whenever
+    /// any F-block signature changes.</summary>
     private static string FoldFBlockSignatures(IReadOnlyList<FBlockSignatureInfo> blocks)
     {
         var lines = blocks
@@ -1670,62 +1669,6 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         using var sha256 = SHA256.Create();
         var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", lines)));
         return string.Join(" ", hash.Select(b => b.ToString("X2")));
-    }
-
-    /// <summary>Content fingerprint for a PLC: folds every readable per-object
-    /// FingerprintProvider value (blocks, UDTs, tag tables) into one SHA-256, formatted as
-    /// spaced uppercase hex pairs like the software checksum. Detects comment/text/interface
-    /// edits that never move the compiled software checksum (issue #68). Tag tables return a
-    /// null provider on V17, so their comments are a documented gap
-    /// (docs/tiasoftwarechecksumblindpoints.md). Best-effort like the software checksum: any
-    /// failure or a PLC with zero readable fingerprints degrades to null.</summary>
-    private static string? TryReadContentFingerprint(PlcSoftware plc)
-    {
-        try
-        {
-            var lines = new List<string>();
-
-            foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
-            {
-                var fingerprints = FingerprintReader.TryRead(block);
-                if (fingerprints is not null)
-                {
-                    lines.Add($"{ExportManifest.CategoryOf(block)}/{ExportManifest.SourcePathOf(block.Name, groupPath)}|{fingerprints}");
-                }
-            }
-
-            foreach (var (type, groupPath) in PlcTypeEnumerator.Enumerate(plc.TypeGroup))
-            {
-                var fingerprints = FingerprintReader.TryRead(type);
-                if (fingerprints is not null)
-                {
-                    lines.Add($"UDT/{ExportManifest.SourcePathOf(type.Name, groupPath)}|{fingerprints}");
-                }
-            }
-
-            foreach (var (table, groupPath) in TagTableEnumerator.Enumerate(plc.TagTableGroup))
-            {
-                var fingerprints = FingerprintReader.TryRead(table);
-                if (fingerprints is not null)
-                {
-                    lines.Add($"Tags/{ExportManifest.SourcePathOf(table.Name, groupPath)}|{fingerprints}");
-                }
-            }
-
-            if (lines.Count == 0)
-            {
-                return null;
-            }
-
-            lines.Sort(StringComparer.Ordinal);
-            using var sha256 = SHA256.Create();
-            var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(string.Join("\n", lines)));
-            return string.Join(" ", hash.Select(b => b.ToString("X2")));
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     /// <summary>Project- and device-level metadata for the manifest's device section (lets a UI

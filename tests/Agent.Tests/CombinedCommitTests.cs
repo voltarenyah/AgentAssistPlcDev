@@ -46,8 +46,7 @@ public sealed class CombinedCommitTests : IDisposable
         var stateDevices = Property<object[]>(stateArgs, "devices");
         Assert.Contains(stateDevices, item =>
             Property<string>(item, "plcName") == "PLC_1"
-            && Property<string>(item, "projectChecksum") == "new-checksum"
-            && Property<string>(item, "contentFingerprint") == "new-fingerprint");
+            && Property<string>(item, "projectChecksum") == "new-checksum");
 
         var commitPaths = Property<string[]>(
             versionControl.CallArgs["vc_commit_selected"].Single(), "paths");
@@ -423,7 +422,6 @@ public sealed class CombinedCommitTests : IDisposable
                         FSignatureReadState = fSignatureReadState
                             ?? (fSignature is not null ? FSignatureReadState.Ok : null),
                         FSignature = fSignature,
-                        ContentFingerprint = "new-fingerprint",
                     },
                 })
                 .Respond("disconnect", new object());

@@ -19,6 +19,8 @@ internal static class CommitStateTagStore
         DictionaryKeyPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = false,
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+        // Keep the tag envelope strict. VcCommitStateDevice has extension data only for fields
+        // from removed, device-level legacy evidence.
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 
@@ -147,11 +149,8 @@ public sealed record VcCommitStateEvidence(
     string WorkbenchId,
     IReadOnlyList<VcCommitStateDevice> Devices);
 
-/// <summary>Per-device checksum recorded at commit time. The safety and content-fingerprint
-/// fields are optional and additive: tags written by schema 1.0 (without them) still deserialize
-/// (nulls); the store stamps new tags with schema "1.1" (fingerprint addition, #68), which the
-/// safety fields (#67) and per-block signatures join without a further bump since no existing
-/// field changed meaning.</summary>
+/// <summary>Per-device checksum and safety evidence recorded at commit time. Legacy tags may
+/// contain the removed aggregate contentFingerprint field; it is intentionally ignored.</summary>
 public sealed record VcCommitStateDevice(
     string DeviceId,
     string PlcName,
@@ -159,5 +158,10 @@ public sealed record VcCommitStateDevice(
     bool? IsSafetyDevice = null,
     string? FSignatureReadState = null,
     string? FSignature = null,
-    string? ContentFingerprint = null,
-    IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? FBlockSignatures = null);
+    IReadOnlyList<Contracts.Engineering.FBlockSignatureInfo>? FBlockSignatures = null)
+{
+    /// <summary>Consumes removed device-level evidence fields when reading older tags without
+    /// adding them to newly written tags.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? IgnoredLegacyFields { get; set; }
+}

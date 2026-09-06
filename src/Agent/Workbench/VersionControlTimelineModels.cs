@@ -14,7 +14,6 @@ public sealed record VersionControlTimelineGitCommit(
     string? TiaChecksum,
     long? SvnRevision,
     bool UntrackableChange,
-    string? TiaContentFingerprint = null,
     bool SafetyChange = false);
 
 public sealed record VersionControlTimelineSvnRevision(
@@ -23,8 +22,7 @@ public sealed record VersionControlTimelineSvnRevision(
     string Message,
     string Timestamp,
     string? TiaChecksum,
-    string GitCommitSha,
-    string? TiaContentFingerprint = null);
+    string GitCommitSha);
 
 internal sealed class TimelineSvnLogResult
 {

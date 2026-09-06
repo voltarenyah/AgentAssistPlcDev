@@ -1214,7 +1214,6 @@ export type VersionControlTimelineGitCommit = {
   tiaChecksum: string | null
   svnRevision: number | null
   untrackableChange: boolean | null
-  tiaContentFingerprint: string | null
   safetyChange?: boolean | null
 }
 export type VersionControlTimelineSvnRevision = {
@@ -1224,7 +1223,6 @@ export type VersionControlTimelineSvnRevision = {
   timestamp: string
   tiaChecksum: string | null
   gitCommitSha: string
-  tiaContentFingerprint: string | null
 }
 export type VersionControlTimelineResult = {
   gitCommits: VersionControlTimelineGitCommit[]

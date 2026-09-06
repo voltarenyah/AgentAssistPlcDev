@@ -39,14 +39,16 @@ Date prepared: (this session). Tester: Ansel.
 - [ ] Known gap: S7/TCP/UDP connection changes remain undetectable — confirm documented behavior, no crash.
 - [ ] Capture failure (if inducible) records `networkConfigurationError` on the manifest and does not fail the AML export.
 
-## PR #74 — Content fingerprint (#68)
+## PR #74 — Per-object fingerprint comparison (#68)
 
-- [ ] Comment-only edit on a block → `ContentFingerprint` changes, software checksum unchanged; detected/attributed to the right PLC on next commit/compare.
-- [ ] Interface edit (add/remove block param) → content fingerprint changes.
-- [ ] UDT comment/member edit → fingerprint changes.
-- [ ] Tag-table comment edit → NOT detected (documented gap; verify no error).
-- [ ] Timeline shows both channels per PLC (software checksum + content fingerprint); history detail shows "Content fingerprint" section.
-- [ ] Commit-state tags with `contentFingerprint` load in this build; legacy tags without it still load.
+The aggregate PLC-level fingerprint channel proposed by PR #74 has been removed. The live
+checks below apply to the retained per-object fingerprints in each device's `metadata.json`:
+
+- [ ] Comment-only edit on a block → that block's metadata fingerprint changes while the software checksum may remain unchanged; the changed object is attributed on the next compare.
+- [ ] Interface edit (add/remove block parameter) → the affected block fingerprint changes.
+- [ ] UDT comment/member edit → the affected UDT fingerprint changes.
+- [ ] Tag-table comment edit → NOT detected when Openness V17 provides no tag-table fingerprint (documented gap; verify no error).
+- [ ] Commit-state tags written by this build contain software checksum and safety evidence only; older tags containing the removed aggregate field still load.
 
 ## Cross-cutting
 
@@ -54,4 +56,3 @@ Date prepared: (this session). Tester: Ansel.
 - [ ] No regression on ordinary (non-F) PLC flows: baseline, compare, savepoint, master-sync.
 - [ ] Full test suites still green where runnable (`dotnet test`, studio `npm test -- --run`).
 - [ ] Record results (what passed, what failed, license state of the machine) back into the PRs/issues or a buildnote verification entry.
-

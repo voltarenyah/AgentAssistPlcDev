@@ -11,41 +11,6 @@ public sealed class CommitStateTagStoreTests : IDisposable
     public void Dispose() => _fixture.Dispose();
 
     [Fact]
-    public void CommitStateRoundTripsWithContentFingerprint()
-    {
-        var commit = _fixture.CommitFile("devices/PLC_1/source/Blocks/A.xml", "a", "base");
-        var devices = new[]
-        {
-            new VcCommitStateDevice("device-1", "PLC_1", "checksum-1", ContentFingerprint: "fingerprint-1"),
-        };
-
-        RepositoryService.CreateCommitState(_fixture.RootPath, commit, "wb-1", devices);
-        var loaded = RepositoryService.GetCommitState(_fixture.RootPath, commit);
-
-        Assert.NotNull(loaded);
-        Assert.Equal("1.1", loaded!.SchemaVersion);
-        var device = Assert.Single(loaded.Devices);
-        Assert.Equal("checksum-1", device.ProjectChecksum);
-        Assert.Equal("fingerprint-1", device.ContentFingerprint);
-    }
-
-    [Fact]
-    public void CommitStateWithoutFingerprintReadsBackAsNull()
-    {
-        var commit = _fixture.CommitFile("devices/PLC_1/source/Blocks/A.xml", "a", "base");
-        var devices = new[]
-        {
-            new VcCommitStateDevice("device-1", "PLC_1", "checksum-1"),
-        };
-
-        RepositoryService.CreateCommitState(_fixture.RootPath, commit, "wb-1", devices);
-        var loaded = RepositoryService.GetCommitState(_fixture.RootPath, commit);
-
-        Assert.NotNull(loaded);
-        Assert.Null(Assert.Single(loaded!.Devices).ContentFingerprint);
-    }
-
-    [Fact]
     public void SafetyFieldsRoundTripFromAnnotatedTag()
     {
         var commit = _fixture.CommitFile("devices/PLC_1/source/Blocks/A.xml", "a", "base");
@@ -104,12 +69,12 @@ public sealed class CommitStateTagStoreTests : IDisposable
     }
 
     [Fact]
-    public void LegacySchemaTagWithoutFingerprintStillLoads()
+    public void LegacyTagWithRemovedAggregateFingerprintStillLoads()
     {
         var commit = _fixture.CommitFile("devices/PLC_1/source/Blocks/A.xml", "a", "base");
-        // Schema 1.0 tag JSON: no contentFingerprint member at all.
+        // Older tags may still contain the removed aggregate contentFingerprint member.
         var legacyJson = "{\"schemaVersion\":\"1.0\",\"commitSha\":\"" + commit
-            + "\",\"workbenchId\":\"wb-1\",\"devices\":[{\"deviceId\":\"device-1\",\"plcName\":\"PLC_1\",\"projectChecksum\":\"checksum-1\"}]}";
+            + "\",\"workbenchId\":\"wb-1\",\"devices\":[{\"deviceId\":\"device-1\",\"plcName\":\"PLC_1\",\"projectChecksum\":\"checksum-1\",\"contentFingerprint\":\"legacy-fingerprint\"}]}";
         using (var repo = new Repository(_fixture.RootPath))
         {
             repo.ApplyTag(
@@ -125,7 +90,6 @@ public sealed class CommitStateTagStoreTests : IDisposable
         Assert.Equal("1.1", loaded!.SchemaVersion);
         var device = Assert.Single(loaded.Devices);
         Assert.Equal("checksum-1", device.ProjectChecksum);
-        Assert.Null(device.ContentFingerprint);
     }
 
     [Fact]
@@ -153,6 +117,5 @@ public sealed class CommitStateTagStoreTests : IDisposable
         Assert.Null(device.IsSafetyDevice);
         Assert.Null(device.FSignatureReadState);
         Assert.Null(device.FSignature);
-        Assert.Null(device.ContentFingerprint);
     }
 }

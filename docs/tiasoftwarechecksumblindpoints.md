@@ -10,13 +10,12 @@ This document lists modifications that **cannot** be reliably detected using onl
 
 ## 1. Program and Code Related (Non-Compiled Content)
 
-> **Coverage note (2026-08, issue #68):** block/network comments, interface and UDT texts,
-> symbolic names, and technology-object parameters on blocks/UDTs are now covered by the
-> **content fingerprint** channel (`get_plc_checksums` → `PlcChecksumInfo.ContentFingerprint`,
-> folded from per-object `FingerprintProvider` values and recorded in the `tia-state/{sha}`
-> commit-state tag). **Remaining gap:** tag-table comments — `GetService<FingerprintProvider>()`
-> returns null on tag tables in Openness V17, so tag comment edits are still invisible to both
-> channels.
+> **Coverage note (2026-09):** per-object fingerprints are captured in each device's
+> `metadata.json` component records and are compared as part of the object-level export
+> reconciliation. This keeps the comparison evidence attributable to the changed block, UDT,
+> or tag table instead of folding it into a second PLC-level checksum. **Remaining gap:**
+> tag-table comments — `GetService<FingerprintProvider>()` returns null on tag tables in
+> Openness V17, so those edits remain invisible to the fingerprint evidence.
 
 | Item | Data not tracked | Accessibility | Recommended difference/verification method |
 |------|------------------|---------------|---------------------------------------------|
