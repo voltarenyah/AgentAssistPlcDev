@@ -162,7 +162,7 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     }
 
     [Fact]
-    public void CommitNativeBaseline_FinalCheckoutFailure_RestoresSourceTree()
+    public void CommitNativeBaseline_FinalCheckoutFailure_LeavesOriginalSourceTreeUntouched()
     {
         var shared = CreateShared();
         var source = Path.Combine(_root, "tia");
@@ -171,11 +171,13 @@ public sealed class SvnRepositoryServiceTests : IDisposable
 
         SvnRepositoryService? service = null;
         var checkoutCalls = 0;
+        var finalCheckoutAllowsObstructions = false;
         service = new SvnRepositoryService((url, path, allowObstructions) =>
         {
             checkoutCalls++;
             if (checkoutCalls == 2)
             {
+                finalCheckoutAllowsObstructions = allowObstructions;
                 throw new Git.VcInternalException(
                     "SVN_CHECKOUT_FAILED",
                     "simulated final checkout failure");
@@ -191,6 +193,7 @@ public sealed class SvnRepositoryServiceTests : IDisposable
 
         Assert.Equal("SVN_CHECKOUT_FAILED", error.Code);
         Assert.Equal(2, checkoutCalls);
+        Assert.True(finalCheckoutAllowsObstructions);
         Assert.True(Directory.Exists(source));
         Assert.Equal("project", File.ReadAllText(Path.Combine(source, "Line.ap17")));
         Assert.Empty(Directory.GetDirectories(_root, ".svn-native-*"));
