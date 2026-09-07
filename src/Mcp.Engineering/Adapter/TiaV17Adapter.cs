@@ -311,27 +311,40 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
     public void CloseSession(int sessionId)
     {
-        // Use System.Diagnostics.Process to send a close signal (WM_CLOSE) to the TIA window.
-        // This is the same as clicking the X button — the user can save or discard changes.
-        // For headless sessions (our own), disposal during disconnect already cleans up.
+        // Use System.Diagnostics.Process to send a close signal (WM_CLOSE) to the TIA window,
+        // then wait for it to leave. A successful CloseMainWindow only means that Windows
+        // accepted the signal; TIA can still hold project files for several seconds while it
+        // shuts down. Callers that replace the project directory (native SVN baseline creation)
+        // must not proceed until that hold is released.
         lock (_gate)
         {
             try
             {
-                var process = Process.GetProcessById(sessionId);
-                if (!process.CloseMainWindow())
+                using var process = Process.GetProcessById(sessionId);
+                var closeRequested = process.CloseMainWindow();
+                var gracefulTimeout = closeRequested ? 30000 : 3000;
+                if (!process.WaitForExit(gracefulTimeout))
                 {
-                    // CloseMainWindow returned false (no window or already closing).
-                    // If still running after a short wait, the session may be headless.
-                    if (!process.WaitForExit(3000))
+                    // A process without a UI is an owned/headless instance that cannot answer
+                    // a close request. End it after the bounded graceful wait; a visible
+                    // portal instead gets a clear timeout so we never race its save dialog.
+                    if (process.MainWindowHandle == IntPtr.Zero)
                     {
-                        // Force-close only headless sessions (no window) that linger
-                        if (process.MainWindowHandle == IntPtr.Zero)
+                        process.Kill();
+                        if (!process.WaitForExit(10000))
                         {
-                            process.Kill();
-                            process.WaitForExit(3000);
+                            throw new AdapterException(
+                                "CLOSE_FAILED",
+                                $"TIA session {sessionId} did not exit after it was force-closed.");
                         }
+
+                        return;
                     }
+
+                    throw new AdapterException(
+                        "CLOSE_FAILED",
+                        $"TIA session {sessionId} did not exit within 30 seconds after the close request. "
+                        + "Complete or cancel any TIA dialog, then retry.");
                 }
             }
             catch (ArgumentException ex)
@@ -341,6 +354,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             }
             catch (Exception ex)
             {
+                if (ex is AdapterException adapterException)
+                    throw adapterException;
                 throw new AdapterException("CLOSE_FAILED",
                     $"Failed to close TIA session {sessionId}: {ex.Message}");
             }
@@ -557,6 +572,246 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 .OrderBy(info => info.PlcName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }
+    }
+
+    public SourceEvidenceCaptureResult CaptureSourceEvidence(string? plcName = null)
+    {
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var plc = PlcSoftwareResolver.Resolve(project, plcName);
+            using var exclusiveAccess = _portal!.ExclusiveAccess("Capture managed-source evidence");
+            return new SourceEvidenceCaptureResult
+            {
+                Snapshot = CaptureManagedSourceEvidence(project, plc).Snapshot,
+            };
+        }
+    }
+
+    public SourceEvidenceCaptureResult CompareSourceEvidence(
+        SourceEvidenceSnapshot baseline,
+        string outputDir,
+        string? plcName = null)
+    {
+        if (baseline is null)
+            throw new ArgumentNullException(nameof(baseline));
+        if (string.IsNullOrWhiteSpace(outputDir))
+            throw new AdapterException("CANDIDATE_OUTPUT_REQUIRED", "A fresh candidate output directory is required.");
+
+        lock (_gate)
+        {
+            var project = RequireProject();
+            var plc = PlcSoftwareResolver.Resolve(project, plcName);
+            if (!string.IsNullOrWhiteSpace(baseline.PlcName) &&
+                !string.Equals(baseline.PlcName, plc.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new AdapterException(
+                    "EVIDENCE_PLC_MISMATCH",
+                    $"Baseline evidence belongs to PLC '{baseline.PlcName}', not '{plc.Name}'.");
+            }
+
+            using var exclusiveAccess = _portal!.ExclusiveAccess("Compare managed-source evidence");
+            var liveCapture = CaptureManagedSourceEvidence(project, plc);
+            var live = liveCapture.Snapshot;
+            var checksumChanged = !string.Equals(
+                baseline.Checksum?.SoftwareChecksum,
+                live.Checksum.SoftwareChecksum,
+                StringComparison.Ordinal);
+            var comparison = SourceEvidencePlanner.Compare(baseline.Objects, live.Objects, checksumChanged);
+            var candidateExports = ExportEvidenceCandidates(comparison, liveCapture.LiveObjects, outputDir);
+
+            return new SourceEvidenceCaptureResult
+            {
+                Snapshot = live,
+                Candidates = comparison.Candidates,
+                CandidateExports = candidateExports,
+                IsUntrackable = comparison.IsUntrackable,
+            };
+        }
+    }
+
+    private static ManagedSourceCapture CaptureManagedSourceEvidence(Project project, PlcSoftware plc)
+    {
+        var safety = ReadSafety(plc);
+        var checksum = new PlcChecksumInfo
+        {
+            PlcName = plc.Name,
+            ProjectIdentity = project.Path?.FullName ?? project.Name,
+            SoftwareChecksum = TryReadSoftwareChecksum(plc),
+            IsSafetyDevice = safety.IsSafetyDevice,
+            FSignatureReadState = safety.ReadState,
+            FSignature = safety.Signature,
+            FBlockSignatures = safety.Blocks,
+        };
+        if (!checksum.IsCompiled)
+        {
+            throw new AdapterException(
+                "PLC_NOT_COMPILED",
+                $"PLC '{plc.Name}' has no readable software checksum. Compile it before capturing source evidence.");
+        }
+
+        var source = CaptureLiveSnapshot(plc);
+        var objects = new List<ManagedSourceEvidenceObject>();
+        foreach (var component in source.Live)
+        {
+            var kind = component.Category switch
+            {
+                "Tags" => ManagedSourceEvidenceKind.TagTable,
+                "UDT" => ManagedSourceEvidenceKind.Udt,
+                _ when string.Equals(component.SiemensTypeName, "InstanceDB", StringComparison.Ordinal) => ManagedSourceEvidenceKind.InstanceDb,
+                _ => ManagedSourceEvidenceKind.StandardBlock,
+            };
+            if (string.Equals(kind, ManagedSourceEvidenceKind.InstanceDb, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var readable = kind switch
+            {
+                ManagedSourceEvidenceKind.TagTable => component.ModifiedDate is not null,
+                ManagedSourceEvidenceKind.StandardBlock or ManagedSourceEvidenceKind.Udt => component.FingerprintComponents is not null,
+                _ => true,
+            };
+            objects.Add(new ManagedSourceEvidenceObject
+            {
+                Id = component.Id,
+                Name = component.Name,
+                SourcePath = component.SourcePath,
+                Category = component.Category,
+                Kind = kind,
+                ReadState = readable ? ManagedSourceEvidenceReadState.Readable : ManagedSourceEvidenceReadState.Unreadable,
+                Fingerprints = component.FingerprintComponents,
+                ModifiedTimeStamp = kind == ManagedSourceEvidenceKind.TagTable ? component.ModifiedDate : null,
+            });
+        }
+
+        foreach (var signature in safety.Blocks ?? Array.Empty<FBlockSignatureInfo>())
+        {
+            objects.Add(new ManagedSourceEvidenceObject
+            {
+                Id = StableId.Create("F", signature.Path),
+                Name = signature.Path.Split('/').Last(),
+                SourcePath = signature.Path,
+                Category = "F",
+                Kind = ManagedSourceEvidenceKind.FBlock,
+                ReadState = safety.ReadState == FSignatureReadState.Ok
+                    ? ManagedSourceEvidenceReadState.Readable
+                    : ManagedSourceEvidenceReadState.Unreadable,
+                FSignature = safety.ReadState == FSignatureReadState.Ok ? signature.Signature : null,
+            });
+        }
+
+        return new ManagedSourceCapture
+        {
+            LiveObjects = source,
+            Snapshot = new SourceEvidenceSnapshot
+            {
+                PlcName = plc.Name,
+                Checksum = checksum,
+                Objects = objects.OrderBy(item => item.Id, StringComparer.Ordinal).ToArray(),
+            },
+        };
+    }
+
+    private static IReadOnlyList<SourceEvidenceCandidateExport> ExportEvidenceCandidates(
+        SourceEvidenceComparisonResult comparison,
+        LiveSnapshot source,
+        string outputDir)
+    {
+        var xmlCandidates = comparison.XmlCandidates.ToArray();
+        if (xmlCandidates.Length == 0)
+        {
+            return Array.Empty<SourceEvidenceCandidateExport>();
+        }
+
+        var finalRoot = Path.GetFullPath(outputDir);
+        if (Directory.Exists(finalRoot) || File.Exists(finalRoot))
+        {
+            throw new AdapterException(
+                "CANDIDATE_OUTPUT_NOT_FRESH",
+                $"Candidate output directory '{finalRoot}' already exists. Supply a fresh directory.");
+        }
+
+        var parent = Path.GetDirectoryName(finalRoot);
+        if (string.IsNullOrWhiteSpace(parent))
+        {
+            throw new AdapterException("CANDIDATE_OUTPUT_INVALID", "Candidate output directory must have a parent directory.");
+        }
+
+        var temporaryRoot = Path.Combine(parent, "." + Path.GetFileName(finalRoot) + ".capture-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temporaryRoot);
+        try
+        {
+            var byId = source.Live.ToDictionary(component => component.Id, component => component, StringComparer.Ordinal);
+            var exports = new List<SourceEvidenceCandidateExport>();
+            foreach (var candidate in xmlCandidates)
+            {
+                if (candidate.Live is null || !byId.TryGetValue(candidate.Id, out var live))
+                {
+                    throw new AdapterException(
+                        "EVIDENCE_CANDIDATE_UNAVAILABLE",
+                        $"Candidate '{candidate.Id}' is no longer available for XML export inside the capture lock.");
+                }
+
+                var record = ReExportComponent(
+                    temporaryRoot,
+                    live,
+                    source.BlocksById,
+                    source.TablesById,
+                    source.TypesById,
+                    progress: null,
+                    out var export);
+                if (!export.Success)
+                {
+                    throw new AdapterException(
+                        "EVIDENCE_CANDIDATE_EXPORT_FAILED",
+                        $"Could not export candidate '{candidate.Live.SourcePath}': {export.Error ?? "unknown export error"}");
+                }
+
+                exports.Add(new SourceEvidenceCandidateExport
+                {
+                    Id = candidate.Id,
+                    SourcePath = candidate.Live.SourcePath,
+                    Export = export,
+                });
+            }
+
+            Directory.Move(temporaryRoot, finalRoot);
+            return exports.Select(candidate => new SourceEvidenceCandidateExport
+            {
+                Id = candidate.Id,
+                SourcePath = candidate.SourcePath,
+                Export = PromoteExportResult(candidate.Export, temporaryRoot, finalRoot),
+            }).ToArray();
+        }
+        finally
+        {
+            if (Directory.Exists(temporaryRoot))
+            {
+                Directory.Delete(temporaryRoot, recursive: true);
+            }
+        }
+    }
+
+    private static ExportResult PromoteExportResult(ExportResult export, string temporaryRoot, string finalRoot)
+    {
+        var path = export.Path;
+        if (!string.IsNullOrWhiteSpace(path) &&
+            path.StartsWith(temporaryRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            path = finalRoot + path.Substring(temporaryRoot.Length);
+        }
+
+        return new ExportResult
+        {
+            BlockName = export.BlockName,
+            BlockNumber = export.BlockNumber,
+            BlockType = export.BlockType,
+            Path = path,
+            NetworkCount = export.NetworkCount,
+            Success = export.Success,
+            Error = export.Error,
+            ExportedAt = export.ExportedAt,
+        };
     }
 
     public ExportResult ExportBlock(string blockName, string outputDir)
@@ -1261,6 +1516,14 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         return relative.Replace(Path.DirectorySeparatorChar, '/');
     }
 
+    /// <summary>One locked managed-source read together with the live object handles needed for
+    /// exporting only its evidence-nominated XML candidates.</summary>
+    private sealed class ManagedSourceCapture
+    {
+        public SourceEvidenceSnapshot Snapshot { get; set; } = new();
+        public LiveSnapshot LiveObjects { get; set; } = new();
+    }
+
     /// <summary>Live enumeration shared by sync and compare: blocks + tag tables + UDTs flattened
     /// to <see cref="SyncLiveComponent"/>, plus the object lookups the export cores need.</summary>
     private sealed class LiveSnapshot
@@ -1634,9 +1897,9 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
     /// <summary>Per-F-block offline signatures (SafetySignatureProvider anchored on the PlcBlock
     /// per TIA Openness manual §5.27.4 — null on non-F-blocks, which is also the semantic F-block
-    /// detector). A block signature of 0 means "missing or invalidated by a recent change"
-    /// (manual) and is recorded as-is, so an uncompiled F-program edit still shows up. Null when
-    /// no block exposes a signature at all (e.g. safety program never compiled).</summary>
+    /// detector). A block signature of 0 is a normal value for an uncalled F-block and is recorded
+    /// as-is; equality, including zero-to-zero, is the only unchanged rule. Null when no block
+    /// exposes a signature at all (e.g. safety program never compiled).</summary>
     private static List<FBlockSignatureInfo>? ReadFBlockSignatures(PlcSoftware plc)
     {
         var signatures = new List<FBlockSignatureInfo>();

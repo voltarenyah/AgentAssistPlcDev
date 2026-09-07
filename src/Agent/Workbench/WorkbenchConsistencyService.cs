@@ -1,5 +1,6 @@
 using Agent.Mcp;
 using Contracts.Engineering;
+using System.Diagnostics;
 
 namespace Agent.Workbench;
 
@@ -19,7 +20,10 @@ public sealed class ConsistencyCommit
 
 public sealed class ConsistencyValidationEvidence
 {
+    public string SchemaVersion { get; set; } = string.Empty;
+    public string EvidenceKind { get; set; } = string.Empty;
     public string CommitSha { get; set; } = string.Empty;
+    public bool? ManagedSourceConsistent { get; set; }
     public ConsistencyValidationDevice[] Devices { get; set; } = Array.Empty<ConsistencyValidationDevice>();
 }
 
@@ -28,6 +32,7 @@ public sealed class ConsistencyValidationDevice
     public string DeviceId { get; set; } = string.Empty;
     public string PlcName { get; set; } = string.Empty;
     public string ProjectChecksum { get; set; } = string.Empty;
+    public ManagedSourceEvidenceObject[]? SourceEvidence { get; set; }
 }
 
 public sealed class ConsistencyStatusResult
@@ -50,6 +55,9 @@ public sealed class TiaSyncEvidence
     public string ConfirmedAt { get; set; } = string.Empty;
     public string ConfirmedBy { get; set; } = string.Empty;
     public bool MachineValidated { get; set; }
+    /// <summary>Schema v2 verdict for the Git-managed portion of the TIA project. Native-only
+    /// changes remain separately represented by their timeline/savepoint evidence.</summary>
+    public bool? ManagedSourceConsistent { get; set; }
     public IReadOnlyList<TiaSyncEvidenceDevice> Devices { get; set; } = Array.Empty<TiaSyncEvidenceDevice>();
 }
 
@@ -60,6 +68,7 @@ public sealed class TiaSyncEvidenceDevice
     public string ProjectIdentity { get; set; } = string.Empty;
     public string ProjectChecksum { get; set; } = string.Empty;
     public IReadOnlyList<TiaSyncEvidenceObject> Objects { get; set; } = Array.Empty<TiaSyncEvidenceObject>();
+    public IReadOnlyList<ManagedSourceEvidenceObject>? SourceEvidence { get; set; }
 }
 
 public sealed class TiaSyncEvidenceObject
@@ -104,43 +113,110 @@ public sealed class WorkbenchConsistencyService
         if (!string.Equals(workbench.WorkbenchId, master.WorkbenchId, StringComparison.Ordinal))
             throw new WorkbenchCatalogException("WORKBENCH_RELATIONSHIP_MISMATCH", "The master worktree belongs to another workbench.");
 
+        var timings = new List<ComparisonTiming>();
         var masterRoot = ResolveMasterRoot(workbench, master);
-        var head = await ReadHeadAsync(masterRoot, cancellationToken).ConfigureAwait(false);
-        var hardware = await CompareHardwareAsync(masterRoot, cancellationToken, progress).ConfigureAwait(false);
-        var evidence = await versionControl.CallAsync<ConsistencyValidationEvidence?>(
-                "vc_validation_get",
-                new { repoPath = masterRoot, commitSha = head.Sha },
-                cancellationToken)
+        var head = await MeasureAsync(
+                timings,
+                "master-head",
+                "Read the master commit that supplies the comparison baseline.",
+                null,
+                () => ReadHeadAsync(masterRoot, cancellationToken),
+                result => $"Comparing against {result.Sha[..Math.Min(7, result.Sha.Length)]}.")
             .ConfigureAwait(false);
-        var untrackableChange = await versionControl.CallAsync<TimelineUntrackableChangeResult>(
-                "vc_untrackable_change_get",
-                new { repoPath = masterRoot, commitSha = head.Sha },
-                cancellationToken)
+        var hardware = await MeasureAsync(
+                timings,
+                "hardware-export",
+                "Export and compare project AML plus the network configuration fingerprint.",
+                null,
+                () => CompareHardwareAsync(masterRoot, cancellationToken, progress),
+                DescribeHardwareOutcome)
             .ConfigureAwait(false);
-        var status = await versionControl.CallAsync<ConsistencyStatusResult>(
-                "vc_status",
-                new { repoPath = masterRoot },
-                cancellationToken)
+        var evidence = await MeasureAsync(
+                timings,
+                "validation-evidence-read",
+                "Read exact TIA validation evidence attached to the current master commit.",
+                null,
+                () => versionControl.CallAsync<ConsistencyValidationEvidence?>(
+                    "vc_validation_get",
+                    new { repoPath = masterRoot, commitSha = head.Sha },
+                    cancellationToken),
+                result => result is null ? "No evidence for this master commit." : $"Evidence covers {result.Devices.Length} PLC device(s).")
             .ConfigureAwait(false);
-        var devices = LoadDevices(workbench, master);
+        var untrackableChange = await MeasureAsync(
+                timings,
+                "untrackable-change-read",
+                "Check whether a message-only TIA change prevents trusting the checksum fast path.",
+                null,
+                () => versionControl.CallAsync<TimelineUntrackableChangeResult>(
+                    "vc_untrackable_change_get",
+                    new { repoPath = masterRoot, commitSha = head.Sha },
+                    cancellationToken),
+                result => result.UntrackableChange ? "Untrackable change is pending." : "No untrackable change is pending.")
+            .ConfigureAwait(false);
+        var status = await MeasureAsync(
+                timings,
+                "master-status-read",
+                "Check whether master has uncommitted managed source XML that invalidates a fast comparison.",
+                null,
+                () => versionControl.CallAsync<ConsistencyStatusResult>(
+                    "vc_status",
+                    new { repoPath = masterRoot },
+                    cancellationToken),
+                result => $"{result.Entries.Length} changed repository path(s).")
+            .ConfigureAwait(false);
+        var sourceClean = !status.Entries.Any(entry => IsManagedSourceXml(entry.FilePath));
+        var devices = Measure(
+            timings,
+            "device-baseline-load",
+            "Load the registered master devices and their source/staging roots.",
+            null,
+            () => LoadDevices(workbench, master),
+            result => $"Loaded {result.Count} PLC device(s).");
         if (allowCompile)
         {
-            await engineering.CallAsync<object>("save_project", new { }, cancellationToken).ConfigureAwait(false);
+            await MeasureAsync(
+                    timings,
+                    "project-save-before-compile",
+                    "Save TIA before the user-approved automatic compilation pass.",
+                    null,
+                    () => engineering.CallAsync<object>("save_project", new { }, cancellationToken),
+                    _ => "TIA project saved.")
+                .ConfigureAwait(false);
             foreach (var device in devices)
             {
-                var compile = await engineering.CallAsync<CompileResult>(
-                        "compile_plc",
-                        new { plcName = device.Metadata.PlcName },
-                        cancellationToken)
+                var compile = await MeasureAsync(
+                        timings,
+                        "plc-compile",
+                        "Compile the PLC because automatic compilation was explicitly approved for this compare.",
+                        device.Metadata.PlcName,
+                        () => engineering.CallAsync<CompileResult>("compile_plc", new { plcName = device.Metadata.PlcName }, cancellationToken),
+                        result => $"Compile state: {result.State}.")
                     .ConfigureAwait(false);
                 if (string.Equals(compile.State, "error", StringComparison.OrdinalIgnoreCase))
                     throw new WorkbenchLifecycleException("PLC_COMPILE_FAILED", $"Automatic PLC compile failed for '{device.Metadata.PlcName}'.");
             }
         }
-        var checksums = await engineering.CallAsync<PlcChecksumInfo[]>(
-                "get_plc_checksums",
-                new { },
-                cancellationToken)
+        if (!forceFullExport && sourceClean && HasFingerprintFirstEvidence(evidence, head, devices))
+        {
+            return await CompareFingerprintFirstAsync(
+                    workbench,
+                    master,
+                    head,
+                    hardware,
+                    evidence!,
+                    devices,
+                    untrackableChange.UntrackableChange,
+                    timings,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        var checksums = await MeasureAsync(
+                timings,
+                "checksum-read",
+                "Read every PLC software checksum and safety signature evidence from TIA.",
+                null,
+                () => engineering.CallAsync<PlcChecksumInfo[]>("get_plc_checksums", new { }, cancellationToken),
+                result => $"Read checksum evidence for {result.Length} PLC device(s).")
             .ConfigureAwait(false);
         var liveChecksums = devices.ToDictionary(
             item => item.Metadata.DeviceId,
@@ -193,7 +269,6 @@ public sealed class WorkbenchConsistencyService
             && (string.Equals(item.ReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal)
                 || (item.BaselineFSignature is not null && item.FSignature is null)));
 
-        var sourceClean = !status.Entries.Any(entry => IsManagedSourceXml(entry.FilePath));
         // A message-only untrackable commit records the live TIA checksum but no source
         // content. It must not certify the source tree for the checksum fast path; otherwise a
         // pending trackable TIA diff remains invisible until a later checksum change.
@@ -226,7 +301,8 @@ public sealed class WorkbenchConsistencyService
                 Array.Empty<SourceDifference>(),
                 hardware,
                 safety,
-                safetyChanged));
+                safetyChanged,
+                timings.ToArray()));
         }
 
         var evidenceSourceCanNarrow = evidenceCurrent && sourceClean;
@@ -245,33 +321,55 @@ public sealed class WorkbenchConsistencyService
         foreach (var device in devicesToScan)
         {
             scanProgress?.Report($"Comparing TIA source for {device.Metadata.PlcName}...");
-            scans[device.Metadata.DeviceId] = await scanner.ScanAsync(
-                    device.Context,
-                    cancellationToken,
-                    scanProgress,
+            var scan = await MeasureAsync(
+                    timings,
+                    "plc-source-scan",
+                    "Produce a checksum-stable staged source snapshot for this PLC before comparing XML.",
                     device.Metadata.PlcName,
-                    allowCompile,
-                    forceFullExport)
+                    () => scanner.ScanAsync(
+                        device.Context,
+                        cancellationToken,
+                        scanProgress,
+                        device.Metadata.PlcName,
+                        allowCompile,
+                        forceFullExport),
+                    result => $"Staged {result.Objects.Count} XML object(s); {result.UnsupportedObjects.Count} unsupported object(s).")
                 .ConfigureAwait(false);
+            scans[device.Metadata.DeviceId] = scan;
+            if (scan.Timings is not null)
+            {
+                timings.AddRange(scan.Timings);
+            }
             exportProgress?.DeviceCompleted();
         }
 
         var differences = new List<SourceDifference>();
         foreach (var device in devicesToScan)
         {
-            var masterObjects = new SourceTreeReader().Read(device.Context.SourceRoot);
-            var tiaObjects = scans[device.Metadata.DeviceId].Objects;
-            differences.AddRange(CompareDevice(device.Metadata, device.Context, masterObjects, tiaObjects));
-            differences.AddRange(scans[device.Metadata.DeviceId].UnsupportedObjects.Select(unsupported =>
-                new SourceDifference(
-                    device.Metadata.DeviceId,
-                    device.Metadata.PlcName,
-                    string.Empty,
-                    unsupported.Name,
-                    SourceDifferenceKind.Changed,
-                    null,
-                    null,
-                    false)));
+            var deviceDifferences = Measure(
+                timings,
+                "plc-xml-compare",
+                "Normalize and compare master XML with the staged TIA XML snapshot.",
+                device.Metadata.PlcName,
+                () =>
+                {
+                    var masterObjects = new SourceTreeReader().Read(device.Context.SourceRoot);
+                    var tiaObjects = scans[device.Metadata.DeviceId].Objects;
+                    return CompareDevice(device.Metadata, device.Context, masterObjects, tiaObjects)
+                        .Concat(scans[device.Metadata.DeviceId].UnsupportedObjects.Select(unsupported =>
+                            new SourceDifference(
+                                device.Metadata.DeviceId,
+                                device.Metadata.PlcName,
+                                string.Empty,
+                                unsupported.Name,
+                                SourceDifferenceKind.Changed,
+                                null,
+                                null,
+                                false)))
+                        .ToArray();
+                },
+                result => DescribeDifferences(result));
+            differences.AddRange(deviceDifferences);
         }
 
         var state = scans.Values.Any(scan => scan.UnsupportedObjects.Count > 0)
@@ -290,7 +388,8 @@ public sealed class WorkbenchConsistencyService
             differences,
             hardware,
             safety,
-            safetyChanged));
+            safetyChanged,
+            timings.ToArray()));
     }
 
     /// <summary>Per-PLC baseline F-signatures from master's revision.json ("PLC:SIG;PLC2:SIG2").
@@ -372,9 +471,7 @@ public sealed class WorkbenchConsistencyService
                     path,
                     baselineSignature,
                     liveSignature,
-                    string.Equals(liveSignature, "00000000", StringComparison.Ordinal)
-                        ? SafetyBlockDifferenceKind.Invalidated
-                        : SafetyBlockDifferenceKind.Changed);
+                    SafetyBlockDifferenceKind.Changed);
             })
             .ToArray();
         return changed;
@@ -512,6 +609,33 @@ public sealed class WorkbenchConsistencyService
             });
         }
 
+        // The exact XML scan above proves that the Git-managed source tree is equal to TIA.
+        // Capture the complete lightweight evidence only after that proof, so the resulting v2
+        // tag can be used as the next fingerprint-first compare baseline.
+        foreach (var evidenceDevice in evidenceDevices)
+        {
+            var capture = await engineering.CallAsync<SourceEvidenceCaptureResult>(
+                    "capture_source_evidence",
+                    new { plcName = evidenceDevice.PlcName },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!string.Equals(capture.Snapshot.PlcName, evidenceDevice.PlcName, StringComparison.Ordinal))
+            {
+                throw new WorkbenchLifecycleException(
+                    "SOURCE_EVIDENCE_PLC_MISMATCH",
+                    $"TIA returned source evidence for '{capture.Snapshot.PlcName}' while validating '{evidenceDevice.PlcName}'.");
+            }
+            if (!capture.Snapshot.Checksum.IsCompiled)
+            {
+                throw new WorkbenchLifecycleException(
+                    "SOURCE_EVIDENCE_UNCOMPILED",
+                    $"TIA did not return a compiled software checksum while validating '{evidenceDevice.PlcName}'.");
+            }
+
+            evidenceDevice.ProjectChecksum = capture.Snapshot.Checksum.SoftwareChecksum!;
+            evidenceDevice.SourceEvidence = capture.Snapshot.Objects ?? Array.Empty<ManagedSourceEvidenceObject>();
+        }
+
         var currentHead = await ReadHeadAsync(masterRoot, cancellationToken).ConfigureAwait(false);
         if (!string.Equals(head.Sha, currentHead.Sha, StringComparison.OrdinalIgnoreCase))
             throw new WorkbenchLifecycleException(
@@ -520,14 +644,15 @@ public sealed class WorkbenchConsistencyService
 
         var evidence = new TiaSyncEvidence
         {
-            SchemaVersion = "1.0",
-            EvidenceKind = "tia-sync",
+            SchemaVersion = "2.0",
+            EvidenceKind = "tia-managed-source",
             CommitSha = head.Sha,
             WorkbenchId = workbench.WorkbenchId,
             SourceWorktreeId = master.WorktreeId,
             ConfirmedAt = DateTimeOffset.UtcNow.ToString("O"),
             ConfirmedBy = confirmedBy,
             MachineValidated = false,
+            ManagedSourceConsistent = true,
             Devices = evidenceDevices.OrderBy(device => device.DeviceId, StringComparer.Ordinal).ToArray(),
         };
         return await versionControl.CallAsync<TiaSyncEvidence>(
@@ -627,6 +752,261 @@ public sealed class WorkbenchConsistencyService
             })
             .Where(item => item.Kind != SourceDifferenceKind.Unchanged)
             .ToArray();
+    }
+
+    private async Task<WorkbenchConsistencyResult> CompareFingerprintFirstAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata master,
+        ConsistencyCommit head,
+        HardwareConfigurationCompareResult hardware,
+        ConsistencyValidationEvidence evidence,
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
+        bool untrackableChange,
+        ICollection<ComparisonTiming> timings,
+        CancellationToken cancellationToken)
+    {
+        var differences = new List<SourceDifference>();
+        var liveChecksums = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var safety = new List<DeviceSafetyEvidence>();
+        var safetyReadFailed = false;
+        var untrackable = untrackableChange;
+
+        foreach (var device in devices)
+        {
+            var baselineDevice = evidence.Devices.Single(item =>
+                string.Equals(item.DeviceId, device.Metadata.DeviceId, StringComparison.Ordinal));
+            var candidateRoot = Path.Combine(
+                device.Context.StagingRoot,
+                ".fingerprint-candidates-" + Guid.NewGuid().ToString("N"));
+            var baseline = new SourceEvidenceSnapshot
+            {
+                PlcName = device.Metadata.PlcName,
+                Checksum = new PlcChecksumInfo
+                {
+                    PlcName = device.Metadata.PlcName,
+                    SoftwareChecksum = baselineDevice.ProjectChecksum,
+                },
+                Objects = baselineDevice.SourceEvidence!,
+            };
+            var capture = await MeasureAsync(
+                    timings,
+                    "plc-evidence-capture",
+                    "Read every lightweight fingerprint, tag timestamp, and F-block signature under one TIA lock; export XML only for nominated candidates.",
+                    device.Metadata.PlcName,
+                    () => engineering.CallAsync<SourceEvidenceCaptureResult>(
+                        "compare_source_evidence",
+                        new { baseline, outputDir = candidateRoot, plcName = device.Metadata.PlcName },
+                        cancellationToken),
+                    result => $"Read {result.Snapshot.Objects.Count} evidence object(s); nominated {result.Candidates.Count} candidate(s), exported {result.CandidateExports.Count} XML file(s).")
+                .ConfigureAwait(false);
+
+            liveChecksums[device.Metadata.DeviceId] = capture.Snapshot.Checksum.SoftwareChecksum;
+            untrackable |= capture.IsUntrackable;
+            var exports = capture.CandidateExports.ToDictionary(item => item.Id, item => item, StringComparer.Ordinal);
+            foreach (var candidate in capture.Candidates.Where(item => item.RequiresXmlExport))
+            {
+                if (!exports.TryGetValue(candidate.Id, out var export) || string.IsNullOrWhiteSpace(export.Export.Path))
+                {
+                    throw new WorkbenchLifecycleException(
+                        "CANDIDATE_XML_MISSING",
+                        $"Evidence candidate '{candidate.Id}' for '{device.Metadata.PlcName}' requires XML but the Engineering MCP result did not supply it.");
+                }
+
+                var difference = Measure(
+                    timings,
+                    "candidate-xml-compare",
+                    "Normalize and compare one evidence-nominated XML object with its master counterpart.",
+                    device.Metadata.PlcName,
+                    () => CompareCandidateXml(device.Metadata, device.Context, candidateRoot, export.Export.Path!),
+                    result => result is null ? "Candidate XML matches master." : $"{result.Kind} {result.Identity}.");
+                if (difference is not null)
+                {
+                    differences.Add(difference);
+                }
+            }
+
+            foreach (var candidate in capture.Candidates.Where(item =>
+                         string.Equals(item.Reason, SourceEvidenceCandidateReason.Removed, StringComparison.Ordinal)))
+            {
+                var baselineObject = candidate.Baseline;
+                if (baselineObject is null)
+                {
+                    continue;
+                }
+                var relativePath = ToRelativeXmlPath(baselineObject);
+                var masterObject = new SourceTreeReader().TryReadRelative(device.Context.SourceRoot, relativePath);
+                if (masterObject is not null)
+                {
+                    differences.Add(new SourceDifference(
+                        device.Metadata.DeviceId,
+                        device.Metadata.PlcName,
+                        SourcePathForResult(device.Context, relativePath),
+                        masterObject.Identity,
+                        SourceDifferenceKind.Deleted,
+                        masterObject.Sha256,
+                        null,
+                        true));
+                }
+            }
+
+            var fCandidates = capture.Candidates.Where(item => item.IsSafetyDifference).ToArray();
+            var blockDifferences = fCandidates.Select(candidate => new SafetyBlockDifference(
+                candidate.Live?.SourcePath ?? candidate.Baseline?.SourcePath ?? candidate.Id,
+                candidate.Baseline?.FSignature,
+                candidate.Live?.FSignature,
+                string.Equals(candidate.Reason, SourceEvidenceCandidateReason.New, StringComparison.Ordinal)
+                    ? SafetyBlockDifferenceKind.Added
+                    : string.Equals(candidate.Reason, SourceEvidenceCandidateReason.Removed, StringComparison.Ordinal)
+                        ? SafetyBlockDifferenceKind.Removed
+                        : SafetyBlockDifferenceKind.Changed)).ToArray();
+            var checksum = capture.Snapshot.Checksum;
+            safety.Add(new DeviceSafetyEvidence(
+                device.Metadata.DeviceId,
+                device.Metadata.PlcName,
+                checksum.IsSafetyDevice == true,
+                checksum.FSignatureReadState,
+                checksum.FSignature,
+                null,
+                fCandidates.Length > 0,
+                checksum.FBlockSignatures,
+                blockDifferences.Select(item => item.Path).ToArray(),
+                blockDifferences));
+            safetyReadFailed |= checksum.IsSafetyDevice == true
+                && string.Equals(checksum.FSignatureReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal);
+        }
+
+        var safetyChanged = safety.Any(item => item.Changed);
+        var state = differences.Count == 0 && hardware.State == "in-sync" && !safetyChanged
+            ? safetyReadFailed
+                ? ConsistencyState.Unavailable
+                : ConsistencyState.Consistent
+            : ConsistencyState.Different;
+        return Persist(workbench, new WorkbenchConsistencyResult(
+            Guid.NewGuid().ToString("N"),
+            head.Sha,
+            differences.Count == 0,
+            state,
+            liveChecksums,
+            differences,
+            hardware,
+            safety,
+            safetyChanged,
+            timings.ToArray(),
+            untrackable));
+    }
+
+    private static bool HasFingerprintFirstEvidence(
+        ConsistencyValidationEvidence? evidence,
+        ConsistencyCommit head,
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices) =>
+        evidence is not null
+        && string.Equals(evidence.SchemaVersion, "2.0", StringComparison.Ordinal)
+        && string.Equals(evidence.EvidenceKind, "tia-managed-source", StringComparison.Ordinal)
+        && evidence.ManagedSourceConsistent == true
+        && string.Equals(evidence.CommitSha, head.Sha, StringComparison.OrdinalIgnoreCase)
+        && evidence.Devices.Length == devices.Count
+        && devices.All(device => evidence.Devices.Any(candidate =>
+            string.Equals(candidate.DeviceId, device.Metadata.DeviceId, StringComparison.Ordinal)
+            && string.Equals(candidate.PlcName, device.Metadata.PlcName, StringComparison.Ordinal)
+            && candidate.SourceEvidence is not null));
+
+    private static SourceDifference? CompareCandidateXml(
+        DeviceMetadata metadata,
+        DeviceContext context,
+        string candidateRoot,
+        string candidatePath)
+    {
+        var relativePath = Path.GetRelativePath(candidateRoot, candidatePath).Replace('\\', '/');
+        if (relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal))
+        {
+            throw new WorkbenchPathException($"Candidate XML '{candidatePath}' is outside its declared candidate root.");
+        }
+
+        var reader = new SourceTreeReader();
+        var master = reader.TryReadRelative(context.SourceRoot, relativePath);
+        var live = reader.TryReadRelative(candidateRoot, relativePath)
+            ?? throw new WorkbenchLifecycleException("CANDIDATE_XML_NOT_FOUND", $"Candidate XML '{relativePath}' disappeared before comparison.");
+        var kind = master is null
+            ? SourceDifferenceKind.Added
+            : string.Equals(master.Sha256, live.Sha256, StringComparison.Ordinal)
+                ? SourceDifferenceKind.Unchanged
+                : SourceDifferenceKind.Changed;
+        return kind == SourceDifferenceKind.Unchanged
+            ? null
+            : new SourceDifference(
+                metadata.DeviceId,
+                metadata.PlcName,
+                SourcePathForResult(context, relativePath),
+                live.Identity,
+                kind,
+                master?.Sha256,
+                live.Sha256,
+                true);
+    }
+
+    private static string ToRelativeXmlPath(ManagedSourceEvidenceObject source)
+    {
+        var folder = source.Category switch
+        {
+            "DB" => "DB",
+            "Tags" => "Tags",
+            "UDT" => "UDT",
+            _ => "Blocks",
+        };
+        return $"{folder}/{source.SourcePath}.xml";
+    }
+
+    private static string SourcePathForResult(DeviceContext context, string relativePath) =>
+        $"{Path.GetRelativePath(context.WorktreeRoot, context.SourceRoot).Replace('\\', '/')}/{relativePath}";
+
+    private static async Task<T> MeasureAsync<T>(
+        ICollection<ComparisonTiming> timings,
+        string phase,
+        string purpose,
+        string? plcName,
+        Func<Task<T>> action,
+        Func<T, string> describe)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var result = await action().ConfigureAwait(false);
+        stopwatch.Stop();
+        timings.Add(new ComparisonTiming(phase, purpose, plcName, stopwatch.ElapsedMilliseconds, describe(result)));
+        return result;
+    }
+
+    private static T Measure<T>(
+        ICollection<ComparisonTiming> timings,
+        string phase,
+        string purpose,
+        string? plcName,
+        Func<T> action,
+        Func<T, string> describe)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var result = action();
+        stopwatch.Stop();
+        timings.Add(new ComparisonTiming(phase, purpose, plcName, stopwatch.ElapsedMilliseconds, describe(result)));
+        return result;
+    }
+
+    private static string DescribeDifferences(IReadOnlyCollection<SourceDifference> differences)
+    {
+        if (differences.Count == 0)
+        {
+            return "No XML differences found.";
+        }
+
+        var examples = differences
+            .Take(3)
+            .Select(difference => $"{difference.Kind} {difference.Identity}");
+        return $"Found {differences.Count} difference(s): {string.Join(", ", examples)}"
+            + (differences.Count > 3 ? ", …" : string.Empty);
+    }
+
+    private static string DescribeHardwareOutcome(HardwareConfigurationCompareResult result)
+    {
+        var changed = result.Artifacts.Count(artifact => !string.Equals(artifact.State, "same", StringComparison.Ordinal));
+        return $"Hardware state: {result.State}; {changed} artifact(s) differ.";
     }
 
     private static bool IsManagedSourceXml(string path)

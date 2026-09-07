@@ -125,6 +125,28 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void CommitNativeBaseline_ReadOnlySource_ClearsAttributesBeforeStaging()
+    {
+        var shared = CreateShared();
+        var source = Path.Combine(_root, "tia-read-only-baseline");
+        Directory.CreateDirectory(Path.Combine(source, "IM"));
+        File.WriteAllText(Path.Combine(source, "Line.ap17"), "project");
+        File.WriteAllText(Path.Combine(source, "IM", "data.bin"), "data");
+        SetReadOnlyRecursively(source);
+
+        var baseline = _svn.CommitNativeBaseline(
+            shared.RepositoryUri,
+            source,
+            "native: read-only baseline");
+
+        Assert.True(baseline.Committed);
+        Assert.Equal(1, baseline.Revision);
+        Assert.True(_svn.Status(source).IsClean);
+        Assert.False(File.GetAttributes(source).HasFlag(FileAttributes.ReadOnly));
+        Assert.False(File.GetAttributes(Path.Combine(source, "Line.ap17")).HasFlag(FileAttributes.ReadOnly));
+    }
+
+    [Fact]
     public void CommitNativeBaseline_InvalidRepository_ThrowsAndLeavesTreeUntouched()
     {
         var source = Path.Combine(_root, "tia");

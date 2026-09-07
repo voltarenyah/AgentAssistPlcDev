@@ -79,7 +79,15 @@ describe('VersionControlCompare (inline)', () => {
   })
 
   it('executes the comparison as soon as the signal arrives and lists differences', async () => {
-    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
+      timings: [{
+        phase: 'plc-evidence-capture',
+        purpose: 'Reading all readable block fingerprints',
+        plcName: 'PLC_1',
+        elapsedMilliseconds: 1430,
+        outcome: '132 blocks compared',
+      }],
+    }))
     const { host } = await render({ signal: 1 })
 
     expect(compare).toHaveBeenCalledTimes(1)
@@ -87,6 +95,8 @@ describe('VersionControlCompare (inline)', () => {
     expect(host.textContent).toContain('PLC_1 · Main')
     expect(host.textContent).toContain('PLC_1 · Main')
     expect(host.textContent).not.toContain('TIA differs from master')
+    expect(host.querySelector('[data-comparison-timings]')?.textContent).toContain('Reading all readable block fingerprints')
+    expect(host.querySelector('[data-comparison-timings]')?.textContent).toContain('1.4 s')
   })
 
   it('asks before retrying a missing-checksum comparison with automatic compile and save', async () => {

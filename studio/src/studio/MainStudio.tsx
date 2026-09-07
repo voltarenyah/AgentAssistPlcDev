@@ -2223,6 +2223,7 @@ export default function MainStudio() {
                   workbenchId={selection.workbenchId}
                   worktreeId={selection.worktreeId}
                   onBeginOperation={(kind, label) => beginOperation(kind, label).id}
+                  operationStatus={activeOperation?.kind === 'compare-tia' ? activeOperation.status : null}
                 />
               )}
               {contextDock.content.kind === 'sessions' && (

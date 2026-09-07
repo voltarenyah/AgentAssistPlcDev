@@ -35,6 +35,7 @@ export type VersionControlChangesProps = {
   onCommitted?: () => void | Promise<void>
   /** Starts a title-bar operation and returns its id so the full compare reports live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
+  operationStatus?: api.OperationStatus | null
 }
 
 const categoryOrder = ['Block', 'DB', 'Udt', 'Tags', 'Hardware']
@@ -61,7 +62,7 @@ const groupLabel = (entry: VersionControlSourceEntry) =>
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
 
-export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation }: VersionControlChangesProps) {
+export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation, operationStatus = null }: VersionControlChangesProps) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [tiaSelection, setTiaSelection] = useState<{ comparisonId: string; paths: string[]; safetyPaths: string[] } | null>(null)
   const [tiaHasDifferences, setTiaHasDifferences] = useState<boolean | null>(null)
@@ -276,6 +277,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
               selectionResetSignal={tiaSelectionResetSignal}
               onCommitted={onCommitted}
               onBeginOperation={onBeginOperation}
+              operationStatus={operationStatus}
             />
 
             <div className="px-2.5 pb-2.5">

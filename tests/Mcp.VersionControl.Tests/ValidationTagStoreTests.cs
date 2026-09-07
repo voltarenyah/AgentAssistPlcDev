@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Contracts.Engineering;
 using LibGit2Sharp;
 using Mcp.VersionControl.Git;
 using Mcp.VersionControl.Tools;
@@ -143,6 +144,87 @@ public sealed class ValidationTagStoreTests : IDisposable
         Assert.False(get.IsError);
         var loaded = Deserialize<VcValidationEvidence>(get);
         Assert.Equal("checksum-1", Assert.Single(loaded.Devices).ProjectChecksum);
+    }
+
+    [Fact]
+    public void V2ManagedSourceEvidence_RoundTripsWithItsCompletenessState()
+    {
+        var commit = _fixture.CommitSource("a", "base");
+        var device = new VcDeviceValidation(
+            "PLC_1",
+            "PLC 1",
+            "project-1",
+            "checksum-1",
+            Array.Empty<VcObjectFingerprint>())
+        {
+            SourceEvidence = new[]
+            {
+                new ManagedSourceEvidenceObject
+                {
+                    Id = "block-1",
+                    Name = "Main",
+                    SourcePath = "Program blocks/Main [FB1]",
+                    Category = "FB",
+                    Kind = ManagedSourceEvidenceKind.StandardBlock,
+                    ReadState = ManagedSourceEvidenceReadState.Readable,
+                    Fingerprints = FingerprintSet.Parse("Code=abc;Interface=def"),
+                },
+                new ManagedSourceEvidenceObject
+                {
+                    Id = "tag-1",
+                    Name = "Tags",
+                    SourcePath = "Tags",
+                    Category = "Tags",
+                    Kind = ManagedSourceEvidenceKind.TagTable,
+                    ReadState = ManagedSourceEvidenceReadState.Readable,
+                    ModifiedTimeStamp = new DateTimeOffset(2026, 9, 6, 0, 0, 0, TimeSpan.Zero),
+                },
+            },
+        };
+        var evidence = new VcValidationEvidence(
+            "2.0",
+            "tia-managed-source",
+            commit,
+            "wb-1",
+            null,
+            "2026-09-06T00:00:00Z",
+            "tester",
+            false,
+            new[] { device })
+        {
+            ManagedSourceConsistent = true,
+        };
+
+        RepositoryService.CreateValidation(_fixture.RootPath, evidence);
+        var loaded = RepositoryService.GetValidation(_fixture.RootPath, commit);
+        Assert.NotNull(loaded);
+
+        Assert.True(loaded!.ManagedSourceConsistent);
+        var loadedDevice = Assert.Single(loaded.Devices);
+        Assert.NotNull(loadedDevice.SourceEvidence);
+        var loadedEvidence = loadedDevice.SourceEvidence!;
+        Assert.Equal("abc", loadedEvidence.Single(item => item.Id == "block-1").Fingerprints!["Code"]);
+        Assert.Equal(ManagedSourceEvidenceKind.TagTable, loadedEvidence.Single(item => item.Id == "tag-1").Kind);
+    }
+
+    [Fact]
+    public void V2ManagedSourceEvidence_RejectsMissingEvidenceOrConsistencyState()
+    {
+        var commit = _fixture.CommitSource("a", "base");
+        var incomplete = new VcValidationEvidence(
+            "2.0",
+            "tia-managed-source",
+            commit,
+            "wb-1",
+            null,
+            "2026-09-06T00:00:00Z",
+            "tester",
+            false,
+            new[] { new VcDeviceValidation("PLC_1", "PLC 1", "project-1", "checksum-1", Array.Empty<VcObjectFingerprint>()) });
+
+        var error = Assert.Throws<VcInternalException>(() => RepositoryService.CreateValidation(_fixture.RootPath, incomplete));
+
+        Assert.Equal("VALIDATION_INVALID", error.Code);
     }
 
     private VcValidationEvidence Evidence(string commit, string kind, string checksum) => new(

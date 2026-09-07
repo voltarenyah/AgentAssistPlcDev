@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Loader2, ShieldAlert } from 'lucide-react'
 import * as api from '@/api/client'
 import FeatureValidationDialog from './FeatureValidationDialog'
+import OperationTimingList, { formatElapsed } from '@/studio/workbench/OperationTimingList'
 
 type Props = {
   workbenchId: string
@@ -20,6 +21,8 @@ type Props = {
   onCommitted?: () => void | Promise<void>
   /** Starts a title-bar operation and returns its id so the full compare reports live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
+  /** The polling status for this compare, including active and completed phase timings. */
+  operationStatus?: api.OperationStatus | null
 }
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
@@ -29,7 +32,7 @@ const safetyKindLabel = (kind: api.SafetyBlockDifference['kind']) => {
   return ['Changed', 'Added', 'Removed', 'Invalidated'][kind] ?? 'Changed'
 }
 
-export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation }: Props) {
+export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation, operationStatus = null }: Props) {
   const [started, setStarted] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -134,8 +137,11 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     <div className="shrink-0" data-testid="vc-compare-result">
       <div className="px-2.5 pb-2.5">
         {busy && !comparison && (
-          <div className="flex items-center gap-2 py-2 text-[10px] text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Comparing the connected TIA project with master...
+          <div className="py-2 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Comparing the connected TIA project with master...
+            </div>
+            <OperationTimingList status={operationStatus} className="mt-2" />
           </div>
         )}
         {error && <div className="py-1 text-[10px] text-destructive">{error}</div>}
@@ -157,6 +163,24 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
 
         {comparison && (
           <div className="space-y-2">
+            {comparison.timings && comparison.timings.length > 0 && (
+              <section className="rounded-lg border border-border/70 bg-muted/25 p-2.5 text-[9px]" data-comparison-timings aria-label="TIA comparison timings">
+                <div className="mb-1 text-[8px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Comparison timings</div>
+                <ol className="space-y-1">
+                  {comparison.timings.map((timing, index) => (
+                    <li key={`${timing.phase}:${timing.plcName ?? 'project'}:${index}`} className="flex items-start gap-2">
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-foreground">{timing.purpose}</span>
+                        <span className="block text-[8px] text-muted-foreground">
+                          {timing.plcName ? `${timing.plcName} · ` : ''}{timing.outcome}
+                        </span>
+                      </span>
+                      <time className="shrink-0 font-mono text-foreground/80">{formatElapsed(timing.elapsedMilliseconds)}</time>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
             {safetyChanges.length > 0 && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600" data-testid="vc-safety-diff">
                 <div className="font-medium">Safety program changed (F-signature)</div>

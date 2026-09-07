@@ -44,6 +44,17 @@ public interface IEngineeringPlatform : IDisposable
     BlockInfo[] ListBlocks(string? plcName);
     PlcChecksumInfo[] GetPlcChecksums(string? plcName = null);
 
+    /// <summary>Acquire one read-only TIA Exclusive Access lifetime and capture all lightweight
+    /// managed-source evidence for the selected PLC. Used to establish a new project's baseline.</summary>
+    SourceEvidenceCaptureResult CaptureSourceEvidence(string? plcName = null);
+
+    /// <summary>Acquire one read-only TIA Exclusive Access lifetime, capture all lightweight
+    /// evidence, and export XML only for candidates selected against <paramref name="baseline"/>.</summary>
+    SourceEvidenceCaptureResult CompareSourceEvidence(
+        SourceEvidenceSnapshot baseline,
+        string outputDir,
+        string? plcName = null);
+
     ExportResult ExportBlock(string blockName, string outputDir);
 
     /// <summary>Export exactly one block (category OB/FB/FC/DB), tag table (Tags), or UDT —

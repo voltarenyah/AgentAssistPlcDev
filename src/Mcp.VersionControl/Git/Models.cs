@@ -1,4 +1,5 @@
 using Contracts.Engineering;
+using System.Text.Json.Serialization;
 
 namespace Mcp.VersionControl.Git;
 
@@ -46,7 +47,12 @@ public sealed record VcDeviceValidation(
     string PlcName,
     string ProjectIdentity,
     string ProjectChecksum,
-    IReadOnlyList<VcObjectFingerprint> Objects);
+    IReadOnlyList<VcObjectFingerprint> Objects)
+{
+    /// <summary>Required complete lightweight source evidence for schema v2 tags.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ManagedSourceEvidenceObject>? SourceEvidence { get; init; }
+}
 
 public sealed record VcValidationEvidence(
     string SchemaVersion,
@@ -57,7 +63,12 @@ public sealed record VcValidationEvidence(
     string ConfirmedAt,
     string ConfirmedBy,
     bool MachineValidated,
-    IReadOnlyList<VcDeviceValidation> Devices);
+    IReadOnlyList<VcDeviceValidation> Devices)
+{
+    /// <summary>Required in schema v2. Native untrackable state does not change this managed-source verdict.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ManagedSourceConsistent { get; init; }
+}
 
 /// <summary>Result of vc_diff — structured hunks for one file.</summary>
 public sealed class VcDiffResult

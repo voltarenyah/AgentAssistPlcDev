@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Boxes, FileCode2, FolderOpen, Loader2, RefreshCw, Server, X } from 'lucide-react'
 import type { OperationStatus, SessionInfo } from '@/api/client'
 import OperationStatusLine from '@/studio/workbench/OperationStatusLine'
+import OperationTimingList from '@/studio/workbench/OperationTimingList'
 
 type Props = {
   sessions: SessionInfo[]
@@ -87,6 +88,30 @@ export default function CreateWorkbenchDialog({
     }
   }
 
+  if (busy) {
+    return (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-5 backdrop-blur-[2px]" data-creation-progress aria-live="polite">
+        <section className="flex h-[calc(100vh-2.5rem)] max-h-[44rem] w-full max-w-5xl flex-col overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }} role="dialog" aria-modal="true" aria-labelledby="creation-progress-title">
+          <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+            <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
+              <Loader2 className="h-4 w-4 animate-spin text-chart-2" aria-hidden="true" />
+            </div>
+            <div>
+              <h2 id="creation-progress-title" className="text-sm font-semibold">Creating workbench project…</h2>
+              <p className="text-[10px] text-muted-foreground">Repository, worktree, and TIA source evidence are being prepared.</p>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden p-5">
+            <OperationTimingList status={operationStatus} layout="dashboard" className="h-full" />
+          </div>
+          <div className="border-t bg-muted/25 px-5 py-3 text-[10px] text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
+            The active phase and elapsed time refresh automatically while setup continues.
+          </div>
+        </section>
+      </div>
+    )
+  }
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-5 backdrop-blur-[2px]">
       <div className="w-full max-w-[620px] overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
@@ -102,15 +127,6 @@ export default function CreateWorkbenchDialog({
         </div>
 
         <div className="space-y-4 p-5">
-          {busy && (
-            <div className="flex items-start gap-2 rounded-lg border border-chart-2/30 bg-chart-2/10 p-3 text-[10px]" data-creation-progress aria-live="polite">
-              <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-chart-2" />
-              <div className="min-w-0">
-                <div className="font-medium">Creating workbench project…</div>
-                <div className="mt-0.5 text-muted-foreground">Preparing the repository, linked worktree, and device context. This may take a little while.</div>
-              </div>
-            </div>
-          )}
           <label className="field-label">
             <span>Workbench name</span>
             <input className="field-input" value={name} onChange={event => setName(event.target.value)} placeholder="Line-7 commissioning" autoFocus />

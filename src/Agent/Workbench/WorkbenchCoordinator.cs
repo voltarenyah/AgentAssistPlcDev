@@ -544,6 +544,37 @@ public sealed class WorkbenchCoordinator
                 initialSourcePaths.AddRange(baseline.ChangedPaths.Where(IsManagedSourceXml));
             }
 
+            // A newly created workbench begins with one full lightweight capture. It is made
+            // after the source export that formed the Git baseline, but failure is diagnostic
+            // only: the already-created project must remain usable and can recapture later.
+            SourceEvidenceSnapshot[]? baselineSourceEvidence = null;
+            try
+            {
+                await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    baselineSourceEvidence = new SourceEvidenceSnapshot[devices.Length];
+                    for (var index = 0; index < devices.Length; index++)
+                    {
+                        var capture = await engineering.CallAsync<SourceEvidenceCaptureResult>(
+                                "capture_source_evidence",
+                                new { plcName = devices[index].PlcName },
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        baselineSourceEvidence[index] = capture.Snapshot;
+                    }
+                }
+                finally
+                {
+                    engineeringSession.Release();
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                baselineSourceEvidence = null;
+                progress?.Report($"Managed-source evidence was not captured for the initial baseline: {exception.Message}");
+            }
+
             var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(masterPath);
             Directory.CreateDirectory(hardwareRoot);
             var initialHardwarePaths = new List<string>();
@@ -575,13 +606,19 @@ public sealed class WorkbenchCoordinator
             }
 
             // Rule 8: close/quiesce the TIA session before the native baseline commit, so no
-            // TIA process can still write the managed tree while SVN snapshots it.
+            // TIA process can still write the managed tree while SVN snapshots it. Save As
+            // switches an attached user session to the managed copy too, so it must be closed
+            // just like a headless portal that this create operation opened itself.
             progress?.Report("Closing the TIA session...");
-            if (ownedPortalSessionId is int ownedSessionId)
+            var sessionToClose = ownedPortalSessionId
+                ?? (managedProjectPath is not null && hasSession
+                    ? request.EngineeringSessionId
+                    : null);
+            if (sessionToClose is int sessionId)
             {
                 await engineering.CallAsync<object>(
                     "close_session",
-                    new { sessionId = ownedSessionId },
+                    new { sessionId },
                     cancellationToken).ConfigureAwait(false);
                 ownedPortalSessionClosed = true;
             }
@@ -667,6 +704,22 @@ public sealed class WorkbenchCoordinator
                     cancellationToken).ConfigureAwait(false);
             }
 
+            if (baselineSourceEvidence is not null)
+            {
+                var evidenceWarning = await TryRecordManagedSourceEvidenceAsync(
+                        workbench,
+                        worktree,
+                        masterPath,
+                        registration.RelativePath,
+                        baselineCommit.Sha,
+                        managedSourceConsistent: true,
+                        baselineSourceEvidence,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (evidenceWarning is not null)
+                    progress?.Report(evidenceWarning);
+            }
+
             RegisterWorkbench(workbench);
             var initializedDevices = devices
                 .Select(device =>
@@ -677,7 +730,7 @@ public sealed class WorkbenchCoordinator
                 .ToArray();
             return new CreateWorkbenchResult(workbench, worktree, initializedDevices);
         }
-        catch
+        catch (Exception creationException)
         {
             // Best effort: release any TIA hold on the managed tree before deleting it.
             // A session-based create temporarily switches the user's attached portal to
@@ -713,7 +766,17 @@ public sealed class WorkbenchCoordinator
                 // The disconnect is cleanup only; the original failure decides the outcome.
             }
 
-            catalog.RollbackCreate(workbench);
+            try
+            {
+                catalog.RollbackCreate(workbench);
+            }
+            catch (Exception rollbackException)
+            {
+                // Cleanup must never replace the actual creation failure in the API response.
+                // Keep the cleanup detail with the original exception for diagnostic sinks while
+                // preserving the causal exception and its stack for the caller.
+                creationException.Data["rollbackCleanupError"] = rollbackException.Message;
+            }
             throw;
         }
     }
@@ -1650,10 +1713,11 @@ public sealed class WorkbenchCoordinator
         IOperationProgress? progress = null)
     {
         ArgumentNullException.ThrowIfNull(device);
+        HardwareConfigurationReloadResult result;
         await engineeringSession.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            return await operationLock.RunAsync(
+            result = await operationLock.RunAsync(
                 device,
                 async cancellationToken =>
                 {
@@ -1693,6 +1757,13 @@ public sealed class WorkbenchCoordinator
         {
             engineeringSession.Release();
         }
+
+        var evidenceWarning = await TryRecordManagedSourceEvidenceForDeviceCommitAsync(
+                device, result.CommitSha, token)
+            .ConfigureAwait(false);
+        return evidenceWarning is null
+            ? result
+            : result with { EvidenceWarnings = new[] { evidenceWarning } };
     }
 
     public async Task<HardwareConfigurationCompareResult> CompareHardwareAsync(
@@ -1811,7 +1882,13 @@ public sealed class WorkbenchCoordinator
                     },
                     cancellationToken).ConfigureAwait(false);
 
-                return new HardwareConfigurationOverwriteResult(root, stagedFiles.Length, commit.Sha);
+                var evidenceWarning = await TryRecordManagedSourceEvidenceForDeviceCommitAsync(
+                        device, commit.Sha, cancellationToken)
+                    .ConfigureAwait(false);
+                return evidenceWarning is null
+                    ? new HardwareConfigurationOverwriteResult(root, stagedFiles.Length, commit.Sha)
+                    : new HardwareConfigurationOverwriteResult(
+                        root, stagedFiles.Length, commit.Sha, new[] { evidenceWarning });
             },
             token);
 
@@ -2790,7 +2867,10 @@ public sealed class WorkbenchCoordinator
                 selected,
                 message.Trim(),
                 token,
-                recordTiaState: false)
+                recordTiaState: false,
+                managedSourceConsistent: CoversAllManagedSourceDifferences(
+                    comparison,
+                    selected.ToHashSet(StringComparer.Ordinal)))
             .ConfigureAwait(false);
 
         // Record TIA state (per-device checksums) for this commit so it can be traced later.
@@ -2836,6 +2916,23 @@ public sealed class WorkbenchCoordinator
             commit.Sha);
     }
 
+    /// <summary>
+    /// A compare can certify a new managed-source baseline only when the user accepted every
+    /// Git-representable source difference it found. Partial acceptance deliberately leaves the
+    /// next commit as captured-but-not-certified, forcing the next compare to re-establish proof.
+    /// </summary>
+    private static bool CoversAllManagedSourceDifferences(
+        WorkbenchConsistencyResult comparison,
+        IReadOnlySet<string> selected)
+    {
+        var differences = comparison.Differences;
+        return differences.Count > 0
+            && differences.All(difference =>
+                difference.Supported
+                && difference.Kind is SourceDifferenceKind.Changed or SourceDifferenceKind.Added
+                && selected.Contains(difference.RelativePath));
+    }
+
     public async Task<WorkbenchCommitResult> CommitSourceAsync(
         string workbenchId,
         string worktreeId,
@@ -2845,7 +2942,8 @@ public sealed class WorkbenchCoordinator
         string? author = null,
         bool untrackableChange = false,
         bool safetyChange = false,
-        bool recordTiaState = true)
+        bool recordTiaState = true,
+        bool managedSourceConsistent = false)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A commit message is required.", nameof(message));
@@ -2864,6 +2962,7 @@ public sealed class WorkbenchCoordinator
             ? Array.Empty<string>()
             : NormalizeSourcePaths(paths);
         var isMaster = string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase);
+        string? parentSha = null;
 
         if (isMaster)
         {
@@ -2884,6 +2983,7 @@ public sealed class WorkbenchCoordinator
             }
 
             var head = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
+            parentSha = head;
             if (authorized.Any(item => !string.Equals(item.MasterHeadSha, head, StringComparison.OrdinalIgnoreCase)))
                 throw new WorkbenchLifecycleException(
                     "MASTER_HEAD_CHANGED",
@@ -2909,16 +3009,47 @@ public sealed class WorkbenchCoordinator
                 remaining.Select(item => item with { MasterHeadSha = newHead }).ToArray()));
         }
 
+        var evidenceWarnings = new List<string>();
         if (recordTiaState)
         {
             // Every commit records the live TIA device checksums so the timeline can identify
             // the software state it captured — untrackable and mixed untrackable/tracked
             // commits leave no (or only a partial) git-tracked diff, so the checksum is the
             // only software-state evidence bound to the commit.
-            await TryRecordLiveCommitStateAsync(
+            var stateWarning = await TryRecordLiveCommitStateAsync(
                     workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha, token)
                 .ConfigureAwait(false);
+            if (stateWarning is not null)
+                evidenceWarnings.Add(stateWarning);
         }
+
+        // An untrackable marker represents a native-only observation: by definition it does not
+        // alter any managed source evidence. Carry a previously proven managed-source baseline
+        // forward, while retaining the separate untrackable timeline marker for the native state.
+        if (untrackableChange && isMaster && parentSha is not null)
+        {
+            managedSourceConsistent = await TryReadManagedSourceConsistencyAsync(
+                    worktreeRoot,
+                    parentSha,
+                    worktree,
+                    token)
+                .ConfigureAwait(false);
+        }
+
+        var managedSourceWarning = await TryRecordManagedSourceEvidenceAsync(
+                workbench,
+                worktree,
+                worktreeRoot,
+                registration.RelativePath,
+                result.Sha,
+                managedSourceConsistent,
+                captured: null,
+                token)
+            .ConfigureAwait(false);
+        if (managedSourceWarning is not null)
+            evidenceWarnings.Add(managedSourceWarning);
+        if (evidenceWarnings.Count > 0)
+            return result with { EvidenceWarnings = evidenceWarnings };
 
         return result;
     }
@@ -3019,11 +3150,17 @@ public sealed class WorkbenchCoordinator
                     workbench.WorkbenchId,
                     retried.Sha,
                     retryDevices,
-                    ParseAggregatedProjectChecksum(existing?.Tia?.ProjectChecksum),
-                    token)
+                ParseAggregatedProjectChecksum(existing?.Tia?.ProjectChecksum),
+                token)
+                .ConfigureAwait(false);
+            var retryEvidenceWarning = await TryRecordManagedSourceEvidenceAsync(
+                    workbench, worktree, worktreeRoot, worktreeRelativePath, retried.Sha,
+                    managedSourceConsistent: false, captured: null, token)
                 .ConfigureAwait(false);
             PendingCommitStore.Clear(worktreeRoot);
-            return retried;
+            return retryEvidenceWarning is null
+                ? retried
+                : retried with { EvidenceWarnings = new[] { retryEvidenceWarning } };
         }
 
         var baseline = TryReadRevisionState(worktreeRoot);
@@ -3125,7 +3262,13 @@ public sealed class WorkbenchCoordinator
                 savepointChecksums,
                 token)
             .ConfigureAwait(false);
-        return commit;
+        var evidenceWarning = await TryRecordManagedSourceEvidenceAsync(
+                workbench, worktree, worktreeRoot, worktreeRelativePath, commit.Sha,
+                managedSourceConsistent: false, captured: null, token)
+            .ConfigureAwait(false);
+        return evidenceWarning is null
+            ? commit
+            : commit with { EvidenceWarnings = new[] { evidenceWarning } };
     }
 
     /// <summary>
@@ -3133,7 +3276,7 @@ public sealed class WorkbenchCoordinator
     /// commit via a commit-state tag. The commit has already succeeded, so any TIA problem (no
     /// session, project not open, checksums unreadable) is swallowed rather than reported.
     /// </summary>
-    private async Task TryRecordLiveCommitStateAsync(
+    private async Task<string?> TryRecordLiveCommitStateAsync(
         WorkbenchMetadata workbench,
         WorktreeMetadata worktree,
         string worktreeRoot,
@@ -3146,7 +3289,7 @@ public sealed class WorkbenchCoordinator
             var devices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
             if (devices.Count == 0)
             {
-                return;
+                return null;
             }
 
             PlcChecksumInfo[] checksums;
@@ -3168,10 +3311,163 @@ public sealed class WorkbenchCoordinator
 
             await RecordCommitStateAsync(worktreeRoot, workbench.WorkbenchId, commitSha, devices, checksums, token)
                 .ConfigureAwait(false);
+            return null;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             // Best-effort evidence only — never turn a successful commit into a failure.
+            return $"Commit succeeded, but checksum evidence was not recorded: {exception.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Captures all lightweight managed-source evidence and attaches it to an already-created
+    /// commit. This is intentionally best effort: a commit remains valid when TIA is detached,
+    /// unavailable, or cannot provide compiled evidence. Callers choose whether their workflow
+    /// has independently proved that the Git-managed source tree is equal to TIA.
+    /// </summary>
+    private async Task<string?> TryRecordManagedSourceEvidenceForDeviceCommitAsync(
+        DeviceContext device,
+        string commitSha,
+        CancellationToken token)
+    {
+        try
+        {
+            var workbench = catalog.Load(device.WorkbenchRoot);
+            RegisterWorkbench(workbench);
+            var worktree = store.Read<WorktreeMetadata>(Path.Combine(device.WorktreeRoot, "worktree.json"));
+            return await TryRecordManagedSourceEvidenceAsync(
+                    workbench,
+                    worktree,
+                    device.WorktreeRoot,
+                    workbench.Worktrees.Single(item => item.WorktreeId == worktree.WorktreeId).RelativePath,
+                    commitSha,
+                    managedSourceConsistent: false,
+                    captured: null,
+                    token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"Commit succeeded, but managed-source evidence was not recorded: {exception.Message}";
+        }
+    }
+
+    private async Task<string?> TryRecordManagedSourceEvidenceAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree,
+        string worktreeRoot,
+        string worktreeRelativePath,
+        string commitSha,
+        bool managedSourceConsistent,
+        IReadOnlyList<SourceEvidenceSnapshot>? captured,
+        CancellationToken token)
+    {
+        try
+        {
+            var devices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
+            if (devices.Count == 0)
+                return null;
+
+            var snapshots = captured?.ToArray();
+            if (snapshots is null)
+            {
+                await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+                try
+                {
+                    await EnsureActiveProjectMatchesWorktreeAsync(devices[0].Context, token, null)
+                        .ConfigureAwait(false);
+                    snapshots = new SourceEvidenceSnapshot[devices.Count];
+                    for (var index = 0; index < devices.Count; index++)
+                    {
+                        var capture = await engineering.CallAsync<SourceEvidenceCaptureResult>(
+                                "capture_source_evidence",
+                                new { plcName = devices[index].Metadata.PlcName },
+                                token)
+                            .ConfigureAwait(false);
+                        snapshots[index] = capture.Snapshot;
+                    }
+                }
+                finally
+                {
+                    engineeringSession.Release();
+                }
+            }
+
+            if (snapshots.Length != devices.Count)
+                throw new WorkbenchLifecycleException("SOURCE_EVIDENCE_INCOMPLETE", "TIA did not return evidence for every registered PLC.");
+
+            var evidenceDevices = devices.Select(device =>
+                {
+                    var snapshot = snapshots.SingleOrDefault(item =>
+                        string.Equals(item.PlcName, device.Metadata.PlcName, StringComparison.Ordinal));
+                    if (snapshot is null || !snapshot.Checksum.IsCompiled)
+                    {
+                        throw new WorkbenchLifecycleException(
+                            "SOURCE_EVIDENCE_INCOMPLETE",
+                            $"TIA did not return compiled source evidence for '{device.Metadata.PlcName}'.");
+                    }
+
+                    return new TiaSyncEvidenceDevice
+                    {
+                        DeviceId = device.Metadata.DeviceId,
+                        PlcName = device.Metadata.PlcName,
+                        ProjectIdentity = snapshot.Checksum.ProjectIdentity,
+                        ProjectChecksum = snapshot.Checksum.SoftwareChecksum!,
+                        Objects = Array.Empty<TiaSyncEvidenceObject>(),
+                        SourceEvidence = snapshot.Objects,
+                    };
+                })
+                .ToArray();
+            var evidence = new TiaSyncEvidence
+            {
+                SchemaVersion = "2.0",
+                EvidenceKind = "tia-managed-source",
+                CommitSha = commitSha,
+                WorkbenchId = workbench.WorkbenchId,
+                SourceWorktreeId = worktree.WorktreeId,
+                ConfirmedAt = DateTimeOffset.UtcNow.ToString("O"),
+                ConfirmedBy = "Automation Workbench",
+                MachineValidated = false,
+                ManagedSourceConsistent = managedSourceConsistent,
+                Devices = evidenceDevices,
+            };
+            await versionControl.CallAsync<TiaSyncEvidence>(
+                    "vc_validation_create",
+                    new { repoPath = worktreeRoot, evidence },
+                    token)
+                .ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"Commit succeeded, but managed-source evidence was not recorded: {exception.Message}";
+        }
+    }
+
+    private async Task<bool> TryReadManagedSourceConsistencyAsync(
+        string worktreeRoot,
+        string parentSha,
+        WorktreeMetadata worktree,
+        CancellationToken token)
+    {
+        try
+        {
+            var evidence = await versionControl.CallAsync<ConsistencyValidationEvidence?>(
+                    "vc_validation_get",
+                    new { repoPath = worktreeRoot, commitSha = parentSha },
+                    token)
+                .ConfigureAwait(false);
+            return evidence is not null
+                && string.Equals(evidence.SchemaVersion, "2.0", StringComparison.Ordinal)
+                && string.Equals(evidence.EvidenceKind, "tia-managed-source", StringComparison.Ordinal)
+                && evidence.ManagedSourceConsistent == true
+                && string.Equals(evidence.CommitSha, parentSha, StringComparison.OrdinalIgnoreCase)
+                && evidence.Devices.Length == worktree.DeviceIds.Count;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return false;
         }
     }
 

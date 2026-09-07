@@ -27,6 +27,42 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task V2EvidenceReadsAllLightweightEvidenceAndExportsOnlyTheChangedCandidate()
+    {
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.FingerprintEvidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"))
+        {
+            SourceXml = "<Document><SW.Blocks.OB ID=\"1\" Comment=\"changed\" /></Document>",
+        };
+        engineering.ChangedEvidencePlcs.Add("PLC_1");
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.Equal(ConsistencyState.Different, result.State);
+        Assert.Contains(result.Differences, difference => difference.PlcName == "PLC_1" && difference.Kind == SourceDifferenceKind.Changed);
+        Assert.Equal(2, engineering.Calls.Count(call => call == "compare_source_evidence"));
+        Assert.DoesNotContain("sync_export", engineering.Calls);
+        Assert.DoesNotContain("rebuild_export", engineering.Calls);
+    }
+
+    [Fact]
+    public async Task CompareReturnsPhaseTimingsForAProfilingReport()
+    {
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        var timings = Assert.IsAssignableFrom<IReadOnlyList<ComparisonTiming>>(result.Timings);
+        Assert.NotEmpty(timings);
+        Assert.Contains(timings, timing => timing.Phase == "hardware-export");
+        Assert.Contains(timings, timing => timing.Phase == "checksum-read");
+        Assert.All(timings, timing => Assert.True(timing.ElapsedMilliseconds >= 0));
+    }
+
+    [Fact]
     public async Task UntrackableCommitDoesNotMaskPendingTrackableDiff()
     {
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence())
@@ -179,7 +215,8 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
             "Test User <test@example.local>",
             CancellationToken.None);
 
-        Assert.Equal("tia-sync", evidence.EvidenceKind);
+        Assert.Equal("tia-managed-source", evidence.EvidenceKind);
+        Assert.True(evidence.ManagedSourceConsistent);
         Assert.False(evidence.MachineValidated);
         Assert.Equal(2, evidence.Devices.Count);
         Assert.Contains("vc_validation_create", versionControl.Calls);
@@ -392,16 +429,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                         ? new[] { new ConsistencyStatusEntry { FilePath = "devices/PLC_1/source/Blocks/Main.xml" } }
                         : Array.Empty<ConsistencyStatusEntry>(),
                 },
-                "vc_validation_create" => new TiaSyncEvidence
-                {
-                    EvidenceKind = "tia-sync",
-                    MachineValidated = false,
-                    Devices = new[]
-                    {
-                        new TiaSyncEvidenceDevice { DeviceId = "device-1" },
-                        new TiaSyncEvidenceDevice { DeviceId = "device-2" },
-                    },
-                },
+                "vc_validation_create" => args.GetType().GetProperty("evidence")!.GetValue(args)!,
                 _ => throw new InvalidOperationException(tool),
             };
             return Task.FromResult((T)result);
@@ -425,6 +453,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
 
         /// <summary>Optional per-PLC safety surface: (isSafetyDevice, readState, fSignature, blockSignatures).</summary>
         public Dictionary<string, (bool IsSafety, string? ReadState, string? FSignature, IReadOnlyList<FBlockSignatureInfo>? Blocks)> Safety { get; } = new();
+        public HashSet<string> ChangedEvidencePlcs { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
@@ -462,6 +491,92 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                 return Task.FromResult((T)(object)new[]
                 {
                     new SyncResult { PlcName = plcName, ExportRoot = outputDir, Status = "updated" },
+                });
+            }
+
+            if (tool == "compare_source_evidence")
+            {
+                var plcName = (string)args.GetType().GetProperty("plcName")!.GetValue(args)!;
+                var baseline = (SourceEvidenceSnapshot)args.GetType().GetProperty("baseline")!.GetValue(args)!;
+                var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
+                var changed = ChangedEvidencePlcs.Contains(plcName);
+                var liveObjects = baseline.Objects.Select(item => new ManagedSourceEvidenceObject
+                {
+                    Id = item.Id,
+                    Name = item.Name,
+                    SourcePath = item.SourcePath,
+                    Category = item.Category,
+                    Kind = item.Kind,
+                    ReadState = item.ReadState,
+                    Fingerprints = item.Fingerprints,
+                    ModifiedTimeStamp = item.ModifiedTimeStamp,
+                    FSignature = item.FSignature,
+                }).ToArray();
+                var candidates = changed
+                    ? new[]
+                    {
+                        new SourceEvidenceCandidate
+                        {
+                            Id = liveObjects[0].Id,
+                            Reason = SourceEvidenceCandidateReason.FingerprintChanged,
+                            RequiresXmlExport = true,
+                            Live = liveObjects[0],
+                            Baseline = baseline.Objects[0],
+                        },
+                    }
+                    : Array.Empty<SourceEvidenceCandidate>();
+                var exports = Array.Empty<SourceEvidenceCandidateExport>();
+                if (changed)
+                {
+                    Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
+                    var path = Path.Combine(outputDir, "Blocks", "Main.xml");
+                    File.WriteAllText(path, SourceXml);
+                    exports = new[]
+                    {
+                        new SourceEvidenceCandidateExport
+                        {
+                            Id = liveObjects[0].Id,
+                            SourcePath = liveObjects[0].SourcePath,
+                            Export = new ExportResult { BlockName = "Main", Path = path, Success = true },
+                        },
+                    };
+                }
+                return Task.FromResult((T)(object)new SourceEvidenceCaptureResult
+                {
+                    Snapshot = new SourceEvidenceSnapshot
+                    {
+                        PlcName = plcName,
+                        Checksum = new PlcChecksumInfo { PlcName = plcName, SoftwareChecksum = checksums[plcName] },
+                        Objects = liveObjects,
+                    },
+                    Candidates = candidates,
+                    CandidateExports = exports,
+                });
+            }
+
+            if (tool == "capture_source_evidence")
+            {
+                var plcName = (string)args.GetType().GetProperty("plcName")!.GetValue(args)!;
+                return Task.FromResult((T)(object)new SourceEvidenceCaptureResult
+                {
+                    Snapshot = new SourceEvidenceSnapshot
+                    {
+                        PlcName = plcName,
+                        Checksum = new PlcChecksumInfo { PlcName = plcName, SoftwareChecksum = checksums[plcName] },
+                        Objects = new[]
+                        {
+                            new ManagedSourceEvidenceObject
+                            {
+                                Id = $"{plcName}-main",
+                                Name = "Main",
+                                SourcePath = "Blocks/Main.xml",
+                                Category = "OB",
+                                Kind = ManagedSourceEvidenceKind.StandardBlock,
+                                ReadState = ManagedSourceEvidenceReadState.Readable,
+                                Fingerprints = new FingerprintSet { ["code"] = checksums[plcName] },
+                            },
+                        },
+                    },
                 });
             }
 
@@ -538,6 +653,39 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
             {
                 new ConsistencyValidationDevice { DeviceId = "device-1", PlcName = "PLC_1", ProjectChecksum = "one" },
                 new ConsistencyValidationDevice { DeviceId = "device-2", PlcName = "PLC_2", ProjectChecksum = "two" },
+            },
+        };
+
+        public ConsistencyValidationEvidence FingerprintEvidence() => new()
+        {
+            SchemaVersion = "2.0",
+            EvidenceKind = "tia-managed-source",
+            CommitSha = Head,
+            ManagedSourceConsistent = true,
+            Devices = new[]
+            {
+                FingerprintDevice("device-1", "PLC_1", "one"),
+                FingerprintDevice("device-2", "PLC_2", "two"),
+            },
+        };
+
+        private static ConsistencyValidationDevice FingerprintDevice(string deviceId, string plcName, string checksum) => new()
+        {
+            DeviceId = deviceId,
+            PlcName = plcName,
+            ProjectChecksum = checksum,
+            SourceEvidence = new[]
+            {
+                new ManagedSourceEvidenceObject
+                {
+                    Id = $"{deviceId}-main",
+                    Name = "Main",
+                    SourcePath = "Main",
+                    Category = "OB",
+                    Kind = ManagedSourceEvidenceKind.StandardBlock,
+                    ReadState = ManagedSourceEvidenceReadState.Readable,
+                    Fingerprints = new FingerprintSet { ["code"] = "same" },
+                },
             },
         };
 

@@ -34,6 +34,23 @@ public sealed class IngestSourceToolTests
         Assert.Single(SqliteSemanticGraphStore.Load(dbPath).ComponentImports);
     }
 
+    [Fact]
+    public void IngestSourceReleasesTheDatabaseHandleBeforeReturning()
+    {
+        using var tree = new TempExportTree();
+        tree.AddFixture(FixtureFiles.MainObPath, "Blocks/Main.xml");
+        var dbPath = Path.Combine(tree.Root, "plc-knowledge.db");
+
+        ToolResults.OkJson(new KnowledgeTools().IngestSource(tree.Root, dbPath));
+
+        using var exclusive = new FileStream(
+            dbPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        Assert.True(exclusive.Length > 0);
+    }
+
     [Theory]
     [InlineData("exportedSourceRoot")]
     [InlineData("modifiedSourceRoot")]

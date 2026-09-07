@@ -142,7 +142,7 @@ internal sealed class SvnRepositoryService
         {
             _checkout(rootUri.ToString(), scratch, false);
             Directory.CreateDirectory(Path.Combine(scratch, "native"));
-            Directory.Move(path, stagedMain);
+            StageNativeBaselineTree(path, stagedMain);
             moved = true;
             AddRecursive(scratch);
             var committed = Commit(scratch, message);
@@ -205,6 +205,27 @@ internal sealed class SvnRepositoryService
             Committed = true,
             Revision = revision,
         };
+    }
+
+    /// <summary>
+    /// Move the TIA tree into the temporary SVN working copy. TIA project files can inherit
+    /// read-only attributes from their source location; clear those attributes before the move
+    /// so Windows does not reject the replacement during baseline creation.
+    /// </summary>
+    private static void StageNativeBaselineTree(string sourcePath, string stagedPath)
+    {
+        try
+        {
+            ClearReadOnlyAttributes(sourcePath);
+            Directory.Move(sourcePath, stagedPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new VcInternalException(
+                "SVN_BASELINE_STAGE_FAILED",
+                $"Could not stage the native TIA project directory '{sourcePath}' for its initial SVN baseline: {exception.Message}",
+                "Close TIA and any process using the project, then ensure the current user can modify the tia directory and retry.");
+        }
     }
 
     /// <summary>

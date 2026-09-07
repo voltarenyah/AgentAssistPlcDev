@@ -491,6 +491,16 @@ export type WorkbenchConsistencyResult = {
   hardware?: HardwareConfigurationCompareResult | null
   safety?: DeviceSafetyEvidence[] | null
   safetyChanged?: boolean
+  timings?: ComparisonTiming[] | null
+  untrackableChange?: boolean
+}
+
+export type ComparisonTiming = {
+  phase: string
+  purpose: string
+  plcName: string | null
+  elapsedMilliseconds: number
+  outcome: string
 }
 
 export type PendingSynchronizationResult = {
@@ -743,6 +753,13 @@ export type ImportModifiedResult = {
 
 export type OperationState = 'running' | 'succeeded' | 'failed'
 
+export type OperationPhaseTiming = {
+  message: string
+  startedAt: string
+  completedAt: string | null
+  elapsedMilliseconds: number
+}
+
 export type OperationStatus = {
   operationId: string
   operationType: string
@@ -750,6 +767,8 @@ export type OperationStatus = {
   message: string
   updatedAt: string
   errorMessage: string | null
+  completedPhases?: OperationPhaseTiming[] | null
+  currentPhase?: OperationPhaseTiming | null
 }
 
 export class WorkbenchApiError extends Error {

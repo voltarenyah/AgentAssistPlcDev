@@ -9,6 +9,7 @@ export type VersionControlPanelProps = {
   worktreeId: string
   /** Starts a title-bar operation and returns its id, so the full TIA compare shows live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
+  operationStatus?: api.OperationStatus | null
 }
 
 type VersionControlTab = 'changes' | 'history'
@@ -47,7 +48,7 @@ function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSo
   }
 }
 
-export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOperation }: VersionControlPanelProps) {
+export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOperation, operationStatus = null }: VersionControlPanelProps) {
   const [status, setStatus] = useState<api.VcStatusResult | null>(null)
   const [log, setLog] = useState<api.VcCommitEntry[]>([])
   const [timeline, setTimeline] = useState<api.VersionControlTimelineResult | null>(null)
@@ -216,6 +217,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
             untrackablePendingSavepoint={untrackablePendingSavepoint}
             onCommitted={() => void refresh()}
             onBeginOperation={onBeginOperation}
+            operationStatus={operationStatus}
           />
         </div>
         <div className={tab === 'history' ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'hidden'}>
