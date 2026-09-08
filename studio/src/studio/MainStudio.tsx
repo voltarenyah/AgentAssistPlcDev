@@ -675,6 +675,7 @@ export default function MainStudio() {
       return
     }
 
+    setNavigatorFilterResults(null)
     setNavigatorFilterError(null)
     try {
       const results = await api.searchWorkbenches(tagIds)
