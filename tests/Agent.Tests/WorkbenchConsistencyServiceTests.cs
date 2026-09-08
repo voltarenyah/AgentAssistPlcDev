@@ -485,6 +485,83 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         Assert.True(plc1.Changed);
     }
 
+    [Fact]
+    public async Task ManifestSafetyBaselineTakesPrecedenceOverRevisionState()
+    {
+        // The manifest baseline matches live; the stale revision.json baseline must be ignored.
+        fixture.WriteBaselineFSignature("PLC_1:STALE1111");
+        fixture.WriteSourceManifest("PLC_1", """
+            { "device": { "plcName": "PLC_1", "isSafetyDevice": true, "fSignatureReadState": "ok", "fSignature": "BBBB2222" } }
+            """);
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.Ok, "BBBB2222", null);
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.Equal(ConsistencyState.Consistent, result.State);
+        Assert.False(result.SafetyChanged);
+        var plc1 = Assert.Single(result.Safety!, item => item.PlcName == "PLC_1");
+        Assert.False(plc1.Changed);
+        Assert.Equal("BBBB2222", plc1.BaselineFSignature);
+    }
+
+    [Fact]
+    public async Task ManifestBaselineAttributesTheSafetyChangeToChangedBlocks()
+    {
+        fixture.WriteSourceManifest("PLC_1", """
+            {
+              "device": {
+                "plcName": "PLC_1",
+                "isSafetyDevice": true,
+                "fSignatureReadState": "ok",
+                "fSignature": "fold-old",
+                "fBlockSignatures": [
+                  { "path": "Program blocks/F_Main", "signature": "AAAA1111" },
+                  { "path": "Program blocks/F_Output", "signature": "CCCC3333" }
+                ]
+              }
+            }
+            """);
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.Ok, "fold-new", new[]
+        {
+            new FBlockSignatureInfo { Path = "Program blocks/F_Main", Signature = "BBBB2222" },
+            new FBlockSignatureInfo { Path = "Program blocks/F_Output", Signature = "CCCC3333" },
+        });
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.Equal(ConsistencyState.Different, result.State);
+        Assert.True(result.SafetyChanged);
+        var plc1 = Assert.Single(result.Safety!, item => item.PlcName == "PLC_1");
+        Assert.True(plc1.Changed);
+        Assert.Equal("fold-old", plc1.BaselineFSignature);
+        Assert.Equal("Program blocks/F_Main", Assert.Single(plc1.ChangedBlocks!));
+    }
+
+    [Fact]
+    public async Task ManifestWithoutSafetyIdentityFallsBackToTheRevisionStateBaseline()
+    {
+        // A manifest without safety identity (pre-safety export) is not a baseline: the legacy
+        // revision.json baseline applies until a safety-accepting commit writes the manifest.
+        fixture.WriteBaselineFSignature("PLC_1:AAAA1111");
+        fixture.WriteSourceManifest("PLC_1", """{ "device": { "plcName": "PLC_1" } }""");
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        engineering.Safety["PLC_1"] = (true, FSignatureReadState.Ok, "BBBB2222", null);
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.Equal(ConsistencyState.Different, result.State);
+        Assert.True(result.SafetyChanged);
+        Assert.Equal("AAAA1111", Assert.Single(result.Safety!, item => item.PlcName == "PLC_1").BaselineFSignature);
+    }
+
     public void Dispose() => fixture.Dispose();
 
     private static string LegacyHardwareHash(string xml)

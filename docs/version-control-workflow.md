@@ -94,8 +94,8 @@ Creating a workbench from an existing `.ap17` imports it into managed storage:
    commit. A fresh checkout of `^/native/main` then restores `tia/` as a clean
    working copy at its original path. On failure the tree is moved back before
    the workbench rollback runs. Finally write `revision.json` and create the
-   Git baseline commit containing the source XML, `hardware/project.aml`, and
-   `revision.json`.
+   Git baseline commit containing the source XML, the per-device source
+   manifests, `hardware/project.aml`, and `revision.json`.
 
 Any failure rolls the workbench back completely (Git repo, SVN store, worktrees).
 The origin path and import time are kept as provenance (`originProjectPath`,
@@ -110,16 +110,38 @@ transaction runs only for the explicit **Create SVN savepoint** action (Native t
 and the workbench baseline: TIA Save → compile (success is required; a compile
 failure aborts before anything is committed) → read the aggregated project
 checksum → read the F-signature (null in V1) → disconnect TIA (freeze) → SVN
-commit of the worktree's `tia/` copy → write `revision.json` → Git commit of
-`revision.json` (plus any selected source paths) — binding the TIA state to a
-restorable SVN revision.
+commit of the worktree's `tia/` copy → write `revision.json` and advance the
+source-manifest safety baselines → Git commit of both (plus any selected source
+paths) — binding the TIA state to a restorable SVN revision.
+
+### Safety-change commits and the safety baseline
+
+The compare's F-signature baseline lives in the git-tracked per-device source
+manifest (`devices/<plc>/source/metadata.json`, "device" section: the folded
+F-signature, its read state, and the per-F-block signatures behind the fold).
+Every TIA export refreshes the staging manifest with the live values; the
+baseline advances when a commit writes them into the source manifest. Manifests
+written before safety data existed fall back to the legacy `revision.json`
+baseline until the first safety-accepting commit.
+
+Selecting safety rows in the TIA compare and committing them creates a Git-only
+safety-change commit (marker tag `safety-change/{sha}`, empty path list
+allowed): it reads the live F-signature evidence (required — an unreadable
+signature aborts the commit before anything is written), writes it into each
+device's source manifest, and includes the manifests in the commit. The next
+compare then baselines against the new signatures instead of reporting the same
+safety differences again. The TIA project itself is not snapshotted — an SVN
+savepoint is still a separate, explicit action. `revision.json` keeps its
+`safety` section purely as the savepoint record (classification and timeline
+derivation); it is no longer the compare baseline.
 
 The SVN message carries the change classification, never a Git SHA:
 `"<message> [native]"`. Classification compares the fresh state against the base
 `revision.json`: `safetyChanged` (F-signature difference), `nativeChanged` (dirty
 SVN working copy or changed project checksum). A savepoint with no safety or
 native change is rejected as nothing-to-commit. A safety-only change still
-produces a Git commit containing only `revision.json`.
+produces a Git commit containing `revision.json` and the updated source
+manifests.
 
 ### Untrackable-change commits
 

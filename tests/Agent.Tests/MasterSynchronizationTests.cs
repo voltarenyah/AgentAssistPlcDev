@@ -226,6 +226,125 @@ public sealed class MasterSynchronizationTests : IDisposable
         Assert.DoesNotContain("vc_commit_state_create", fixture.VersionControl.Calls);
     }
 
+    [Fact]
+    public async Task MasterCommitWithSafetyChangeAdvancesTheSourceManifestSafetyBaseline()
+    {
+        var masterRoot = System.IO.Path.Combine(fixture.Root, "worktrees", "master");
+        // Seed a tracked source manifest with the old safety baseline plus a marker component
+        // that must survive the baseline advance.
+        File.WriteAllText(fixture.MasterSource("metadata.json"), """
+            {
+              "schemaVersion": "1.0",
+              "device": {
+                "plcName": "PLC_1",
+                "isSafetyDevice": true,
+                "fSignatureReadState": "ok",
+                "fSignature": "OLDSIG",
+                "fBlockSignatures": [
+                  { "path": "Program blocks/Safety/FbA", "signature": "AAAAAAAA" }
+                ]
+              },
+              "components": [ { "id": "keep-me" } ]
+            }
+            """);
+        var engineering = SafetyEngineering();
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        var result = await coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            Array.Empty<string>(),
+            "Record safety change",
+            CancellationToken.None,
+            safetyChange: true);
+
+        Assert.Equal("head-2", result.Sha);
+        var baseline = DeviceManifestSafety.TryReadBaseline(
+            System.IO.Path.GetDirectoryName(fixture.MasterSource("metadata.json"))!);
+        Assert.NotNull(baseline);
+        Assert.Equal("NEWSIG", baseline!.FSignature);
+        Assert.Equal(2, baseline.BlockSignatures!.Count);
+        Assert.Contains(baseline.BlockSignatures, block =>
+            block.Path == "Program blocks/Safety/FbB" && block.Signature == "CCCCCCCC");
+        // The rest of the manifest is preserved; a safety commit never touches revision.json.
+        Assert.Contains("keep-me", File.ReadAllText(fixture.MasterSource("metadata.json")));
+        Assert.False(File.Exists(WorkbenchPaths.ResolveRevisionState(masterRoot)));
+        var commitArgs = Assert.IsAssignableFrom<object>(fixture.VersionControl.CommitArgs);
+        Assert.Contains(
+            "devices/PLC_1/source/metadata.json",
+            Property<IReadOnlyList<string>>(commitArgs, "paths"));
+        Assert.True(Property<bool>(commitArgs, "safetyChange"));
+        // The live checksums read for the baseline are reused for the commit-state tag.
+        Assert.Single(engineering.CallArgs["get_plc_checksums"]);
+        Assert.Contains("vc_commit_state_create", fixture.VersionControl.Calls);
+    }
+
+    [Fact]
+    public async Task MasterCommitWithSafetyChangeAbortsWhenLiveEvidenceIsUnreadable()
+    {
+        var masterRoot = System.IO.Path.Combine(fixture.Root, "worktrees", "master");
+        var coordinator = fixture.CreateCoordinator();
+
+        var exception = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() => coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            Array.Empty<string>(),
+            "Record safety change",
+            CancellationToken.None,
+            safetyChange: true));
+
+        Assert.Equal("SAFETY_EVIDENCE_UNAVAILABLE", exception.Code);
+        Assert.DoesNotContain("vc_commit_selected", fixture.VersionControl.Calls);
+        Assert.False(File.Exists(fixture.MasterSource("metadata.json")));
+        Assert.False(File.Exists(WorkbenchPaths.ResolveRevisionState(masterRoot)));
+    }
+
+    private static FakeToolCaller SafetyEngineering() =>
+        new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("get_plc_checksums", new[]
+            {
+                new Contracts.Engineering.PlcChecksumInfo
+                {
+                    PlcName = "PLC_1",
+                    ProjectIdentity = "project-1",
+                    SoftwareChecksum = "abc123",
+                    IsSafetyDevice = true,
+                    FSignatureReadState = Contracts.Engineering.FSignatureReadState.Ok,
+                    FSignature = "NEWSIG",
+                    FBlockSignatures = new[]
+                    {
+                        new Contracts.Engineering.FBlockSignatureInfo { Path = "Program blocks/Safety/FbA", Signature = "BBBBBBBB" },
+                        new Contracts.Engineering.FBlockSignatureInfo { Path = "Program blocks/Safety/FbB", Signature = "CCCCCCCC" },
+                    },
+                },
+            })
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("capture_source_evidence", new Contracts.Engineering.SourceEvidenceCaptureResult
+            {
+                Snapshot = new Contracts.Engineering.SourceEvidenceSnapshot
+                {
+                    PlcName = "PLC_1",
+                    Checksum = new Contracts.Engineering.PlcChecksumInfo
+                    {
+                        PlcName = "PLC_1",
+                        ProjectIdentity = "project-1",
+                        SoftwareChecksum = "abc123",
+                    },
+                    Objects = Array.Empty<Contracts.Engineering.ManagedSourceEvidenceObject>(),
+                },
+            });
+
     private static FakeToolCaller TiaEngineering() =>
         new FakeToolCaller()
             .Respond("get_project_info", new Contracts.Engineering.ProjectInfo

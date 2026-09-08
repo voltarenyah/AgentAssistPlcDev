@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Contracts.Engineering;
 using Mcp.Engineering.Export;
 using Xunit;
 
@@ -53,6 +54,32 @@ public sealed class DeviceMetadataManifestTests : IDisposable
         Assert.True(device.IsSafetyDevice);
         Assert.Equal("no-signature", device.FSignatureReadState);
         Assert.Null(device.FSignature);
+        Assert.Equal(2, device.FBlockSignatures!.Count);
+        Assert.Equal("Program blocks/F_Main", device.FBlockSignatures[0].Path);
+        Assert.Equal("AAAA1111", device.FBlockSignatures[0].Signature);
+        Assert.Equal("Program blocks/F_Output", device.FBlockSignatures[1].Path);
+        Assert.Equal("CCCC3333", device.FBlockSignatures[1].Signature);
+    }
+
+    [Fact]
+    public void SerializeDeserialize_ToleratesLegacyDeviceSectionWithoutBlockSignatures()
+    {
+        const string legacy = """
+            {
+              "schemaVersion": "1.0",
+              "exportStartedUtc": "2026-07-18T06:00:00.0000000+00:00",
+              "exportFinishedUtc": "2026-07-18T06:01:00.0000000+00:00",
+              "exportRoot": "/exports/PLC_1",
+              "device": { "plcName": "PLC_1", "isSafetyDevice": true, "fSignatureReadState": "ok", "fSignature": "AAAA1111" },
+              "components": []
+            }
+            """;
+
+        var document = ExportMetadataJsonSerializer.Deserialize(legacy);
+
+        Assert.NotNull(document.Device);
+        Assert.Equal("AAAA1111", document.Device!.FSignature);
+        Assert.Null(document.Device.FBlockSignatures);
     }
 
     [Fact]
@@ -190,5 +217,10 @@ public sealed class DeviceMetadataManifestTests : IDisposable
         IsSafetyDevice = true,
         FSignatureReadState = "no-signature",
         FSignature = null,
+        FBlockSignatures = new List<FBlockSignatureInfo>
+        {
+            new() { Path = "Program blocks/F_Main", Signature = "AAAA1111" },
+            new() { Path = "Program blocks/F_Output", Signature = "CCCC3333" },
+        },
     };
 }

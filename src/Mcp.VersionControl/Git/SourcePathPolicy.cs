@@ -3,8 +3,10 @@ namespace Mcp.VersionControl.Git;
 /// <summary>
 /// Defines the repository-relative paths that version-control read and
 /// write surfaces may expose: PLC source XML under devices/&lt;device&gt;/source/**/*.xml,
-/// hardware configuration exports under hardware/** (except the ignored hardware/staging/
-/// scratch area), and the single engineering-state/revision.json metadata file.
+/// the per-device source manifest devices/&lt;device&gt;/source/metadata.json (it carries the
+/// compare's safety baseline, so it must be committable), hardware configuration exports under
+/// hardware/** (except the ignored hardware/staging/ scratch area), and the single
+/// engineering-state/revision.json metadata file.
 /// Git paths are returned with forward slashes.
 /// </summary>
 internal static class SourcePathPolicy
@@ -42,6 +44,16 @@ internal static class SourcePathPolicy
             && segments[0].Equals("hardware", StringComparison.OrdinalIgnoreCase)
             && !segments[1].Equals("staging", StringComparison.OrdinalIgnoreCase)
             && segments[^1].Contains('.', StringComparison.Ordinal))
+        {
+            return normalized;
+        }
+
+        // The per-device source manifest: records the safety baseline (F-signature evidence)
+        // the next compare runs against, so it is tracked like the source XML itself.
+        if (segments.Length == 4
+            && segments[0].Equals("devices", StringComparison.OrdinalIgnoreCase)
+            && segments[2].Equals("source", StringComparison.OrdinalIgnoreCase)
+            && segments[3].Equals("metadata.json", StringComparison.OrdinalIgnoreCase))
         {
             return normalized;
         }

@@ -1961,6 +1961,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 IsSafetyDevice = safety.IsSafetyDevice,
                 FSignatureReadState = safety.ReadState,
                 FSignature = safety.Signature,
+                FBlockSignatures = safety.Blocks?.ToList(),
             };
         }
         catch

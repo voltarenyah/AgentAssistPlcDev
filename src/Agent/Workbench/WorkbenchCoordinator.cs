@@ -605,6 +605,12 @@ public sealed class WorkbenchCoordinator
                 await RebuildKnowledgeAsync(context, cancellationToken, progress).ConfigureAwait(false);
             }
 
+            // The source manifest carries the compare's safety baseline — track it from the start.
+            initialSourcePaths.AddRange(devices
+                .Select(device => catalog.ResolveDevice(workbench, worktree, device))
+                .Select(context => SourceManifestRelativePath(masterPath, context))
+                .Where(path => File.Exists(WorkbenchPaths.ResolveRelative(masterPath, path))));
+
             // Rule 8: close/quiesce the TIA session before the native baseline commit, so no
             // TIA process can still write the managed tree while SVN snapshots it. Save As
             // switches an attached user session to the managed copy too, so it must be closed
@@ -2991,8 +2997,32 @@ public sealed class WorkbenchCoordinator
                     "Master advanced after TIA authorization; compare TIA with master again before committing.");
         }
 
+        // A safety-change commit must also advance the F-signature baseline: the next compare
+        // reads its per-device safety baseline from the git-tracked source manifests
+        // (devices/<plc>/source/metadata.json), which otherwise still hold the old signatures
+        // and report the same safety differences again on every compare. The live evidence read
+        // is required — without it there is no new baseline to record, so the commit aborts
+        // before anything is written.
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)>? safetyDevices = null;
+        PlcChecksumInfo[]? safetyChecksums = null;
+        string[]? safetyManifestPaths = null;
+        if (safetyChange)
+        {
+            safetyDevices = LoadWorktreeDeviceContexts(workbench, worktree, registration.RelativePath);
+            safetyChecksums = await ReadLiveSafetyEvidenceAsync(safetyDevices, token)
+                .ConfigureAwait(false);
+            safetyManifestPaths = WriteSafetyBaselines(worktreeRoot, safetyDevices, safetyChecksums);
+        }
+
+        var commitPaths = safetyChange
+            ? selected
+                .Concat(safetyManifestPaths!)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray()
+            : selected;
         var result = await CommitSelectedSourceAsync(
-                worktreeRoot, selected, message, token, author,
+                worktreeRoot, commitPaths, message, token, author,
                 allowEmpty: untrackableChange || safetyChange,
                 untrackableChange: untrackableChange,
                 safetyChange: safetyChange)
@@ -3017,9 +3047,13 @@ public sealed class WorkbenchCoordinator
             // the software state it captured — untrackable and mixed untrackable/tracked
             // commits leave no (or only a partial) git-tracked diff, so the checksum is the
             // only software-state evidence bound to the commit.
-            var stateWarning = await TryRecordLiveCommitStateAsync(
-                    workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha, token)
-                .ConfigureAwait(false);
+            var stateWarning = safetyChecksums is not null && safetyDevices is not null
+                ? await TryRecordCommitStateAsync(
+                        worktreeRoot, workbench.WorkbenchId, result.Sha, safetyDevices, safetyChecksums, token)
+                    .ConfigureAwait(false)
+                : await TryRecordLiveCommitStateAsync(
+                        workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha, token)
+                    .ConfigureAwait(false);
             if (stateWarning is not null)
                 evidenceWarnings.Add(stateWarning);
         }
@@ -3118,11 +3152,7 @@ public sealed class WorkbenchCoordinator
         CancellationToken token,
         string? author)
     {
-        var commitPaths = selected
-            .Append(EngineeringStateWriter.RelativePath)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToArray();
+        var commitDevices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
 
         var pending = PendingCommitStore.Read(worktreeRoot);
         if (pending is not null)
@@ -3143,14 +3173,14 @@ public sealed class WorkbenchCoordinator
                     existing?.Safety?.Devices));
             }
 
-            var retryDevices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
-            var retried = await CommitSelectedSourceAsync(worktreeRoot, commitPaths, message, token, author)
+            var retryPaths = BuildCombinedCommitPaths(worktreeRoot, selected, commitDevices);
+            var retried = await CommitSelectedSourceAsync(worktreeRoot, retryPaths, message, token, author)
                 .ConfigureAwait(false);
             await RecordCommitStateAsync(
                     worktreeRoot,
                     workbench.WorkbenchId,
                     retried.Sha,
-                    retryDevices,
+                    commitDevices,
                 ParseAggregatedProjectChecksum(existing?.Tia?.ProjectChecksum),
                 token)
                 .ConfigureAwait(false);
@@ -3165,7 +3195,7 @@ public sealed class WorkbenchCoordinator
         }
 
         var baseline = TryReadRevisionState(worktreeRoot);
-        var devices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
+        var devices = commitDevices;
         var compileStatus = EngineeringCompileStatus.NotRun;
         string? projectChecksum = null;
         PlcChecksumInfo[] savepointChecksums = Array.Empty<PlcChecksumInfo>();
@@ -3237,6 +3267,12 @@ public sealed class WorkbenchCoordinator
             fSignatureReadState,
             BuildSafetyDevices(savepointChecksums)));
 
+        // The compare's safety baseline lives in the git-tracked source manifests — advance it
+        // together with the savepoint's revision.json record so the next compare does not
+        // re-flag the safety change this savepoint captured.
+        WriteSafetyBaselines(worktreeRoot, devices, savepointChecksums);
+        var commitPaths = BuildCombinedCommitPaths(worktreeRoot, selected, devices);
+
         WorkbenchCommitResult commit;
         try
         {
@@ -3270,6 +3306,118 @@ public sealed class WorkbenchCoordinator
         return evidenceWarning is null
             ? commit
             : commit with { EvidenceWarnings = new[] { evidenceWarning } };
+    }
+
+    /// <summary>Writes the live safety evidence into every device's git-tracked source manifest
+    /// (the compare's safety baseline) and returns the worktree-relative manifest paths. Devices
+    /// without a live checksum entry keep their previous baseline.</summary>
+    private static string[] WriteSafetyBaselines(
+        string worktreeRoot,
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
+        IEnumerable<PlcChecksumInfo> checksums)
+    {
+        var paths = new List<string>();
+        foreach (var device in devices)
+        {
+            var live = checksums.FirstOrDefault(checksum =>
+                string.Equals(checksum.PlcName, device.Metadata.PlcName, StringComparison.OrdinalIgnoreCase));
+            if (live is null)
+            {
+                continue;
+            }
+
+            DeviceManifestSafety.WriteSafety(device.Context.SourceRoot, live);
+            paths.Add(SourceManifestRelativePath(worktreeRoot, device.Context));
+        }
+
+        return paths.ToArray();
+    }
+
+    private static string SourceManifestRelativePath(string worktreeRoot, DeviceContext context) =>
+        Path.GetRelativePath(worktreeRoot, context.SourceRoot).Replace('\\', '/')
+        + "/" + DeviceManifestSafety.ManifestFileName;
+
+    /// <summary>Savepoint commit paths: the selected sources, revision.json, and every existing
+    /// source manifest (they carry the safety baseline). Built after the manifest/revision-state
+    /// writes so newly created files are included; the retry branch rebuilds the same set.</summary>
+    private static string[] BuildCombinedCommitPaths(
+        string worktreeRoot,
+        IReadOnlyList<string> selected,
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices) =>
+        selected
+            .Append(EngineeringStateWriter.RelativePath)
+            .Concat(devices
+                .Select(device => SourceManifestRelativePath(worktreeRoot, device.Context))
+                .Where(path => File.Exists(WorkbenchPaths.ResolveRelative(worktreeRoot, path))))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+    /// <summary>
+    /// Required live safety-evidence read for a safety-change commit: the commit's whole purpose
+    /// is to record the live F-signature baseline, so a failed read aborts the commit before
+    /// anything is written (unlike the best-effort post-commit checksum evidence).
+    /// </summary>
+    private async Task<PlcChecksumInfo[]> ReadLiveSafetyEvidenceAsync(
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
+        CancellationToken token)
+    {
+        if (devices.Count == 0)
+        {
+            throw new WorkbenchLifecycleException(
+                "SAFETY_EVIDENCE_UNAVAILABLE",
+                "A safety-change commit requires live F-signature evidence, but the worktree has no registered PLC devices.");
+        }
+
+        try
+        {
+            await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                await EnsureActiveProjectMatchesWorktreeAsync(devices[0].Context, token, null)
+                    .ConfigureAwait(false);
+                return await engineering.CallAsync<PlcChecksumInfo[]>(
+                        "get_plc_checksums",
+                        new { plcName = (string?)null },
+                        token)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                engineeringSession.Release();
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException and not WorkbenchLifecycleException)
+        {
+            throw new WorkbenchLifecycleException(
+                "SAFETY_EVIDENCE_UNAVAILABLE",
+                "A safety-change commit requires the live F-signature evidence, but it could not be read: "
+                + exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort wrapper around <see cref="RecordCommitStateAsync"/> for callers that already
+    /// hold the live checksums: a recording problem never fails the finished commit.
+    /// </summary>
+    private async Task<string?> TryRecordCommitStateAsync(
+        string worktreeRoot,
+        string workbenchId,
+        string commitSha,
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
+        IEnumerable<PlcChecksumInfo> checksums,
+        CancellationToken token)
+    {
+        try
+        {
+            await RecordCommitStateAsync(worktreeRoot, workbenchId, commitSha, devices, checksums, token)
+                .ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"Commit succeeded, but checksum evidence was not recorded: {exception.Message}";
+        }
     }
 
     /// <summary>

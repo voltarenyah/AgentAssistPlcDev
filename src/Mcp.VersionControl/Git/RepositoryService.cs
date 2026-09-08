@@ -45,13 +45,20 @@ internal static class RepositoryService
         "tasks.json",
         "devices/*/device.json",
         "devices/*/staging/",
-        "devices/*/source/metadata.json",
         "devices/*/plc-knowledge.db*",
         ".automation/",
         "sessionexport/",
         "hardware/staging/",
         "repository.svn/",
         "tia/",
+    };
+
+    /// <summary>Rules older repos carry in .git/info/exclude that must be removed again:
+    /// the source manifest became tracked when it started carrying the compare's safety
+    /// baseline, so a leftover exclude entry would silently keep it uncommittable.</summary>
+    private static readonly string[] RetiredExcludeRules =
+    {
+        "devices/*/source/metadata.json",
     };
 
     /// <summary>Init a git repo at repoPath. Idempotent: no-op if .git already exists.</summary>
@@ -1085,7 +1092,8 @@ internal static class RepositoryService
     }
 
     private static void WriteSharedExclude(string repositoryPath)
-    {        var infoDirectory = Path.Combine(repositoryPath, "info");
+    {
+        var infoDirectory = Path.Combine(repositoryPath, "info");
         Directory.CreateDirectory(infoDirectory);
         var excludePath = Path.Combine(infoDirectory, "exclude");
         var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
@@ -1095,31 +1103,28 @@ internal static class RepositoryService
         }
 
         var content = File.ReadAllText(excludePath);
-        var existingRules = content
+        var lines = content
             .Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
-            .ToHashSet(StringComparer.Ordinal);
+            .ToList();
+        // Retired rules must be actively removed: repos initialized while the source manifest
+        // was still excluded would otherwise keep it ignored and uncommittable forever.
+        var removedRetired = lines.RemoveAll(line => RetiredExcludeRules.Contains(line, StringComparer.Ordinal)) > 0;
+        var existingRules = lines.ToHashSet(StringComparer.Ordinal);
         var missingRules = SharedExcludeRules
             .Where(rule => !existingRules.Contains(rule))
             .ToArray();
-        if (missingRules.Length == 0)
+        if (!removedRetired && missingRules.Length == 0)
         {
             return;
         }
 
-        var append = new StringBuilder();
-        if (content.Length > 0 &&
-            !content.EndsWith("\r", StringComparison.Ordinal) &&
-            !content.EndsWith("\n", StringComparison.Ordinal))
+        while (lines.Count > 0 && lines[^1].Length == 0)
         {
-            append.Append(Environment.NewLine);
-        }
-        foreach (var rule in missingRules)
-        {
-            append.Append(rule);
-            append.Append(Environment.NewLine);
+            lines.RemoveAt(lines.Count - 1);
         }
 
-        File.AppendAllText(excludePath, append.ToString(), encoding);
+        lines.AddRange(missingRules);
+        File.WriteAllText(excludePath, string.Join(Environment.NewLine, lines) + Environment.NewLine, encoding);
     }
 
     private static string[] EnumerateAllowedChangedPaths(Repository repo) =>

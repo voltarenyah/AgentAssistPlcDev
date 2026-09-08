@@ -235,6 +235,26 @@ public sealed class LinkedWorktreeTests : IDisposable
         Assert.Contains("sessionexport/", exclude);
         Assert.Contains("repository.svn/", exclude);
         Assert.Contains("tia/", exclude);
+        // The source manifest is tracked: it carries the compare's safety baseline.
+        Assert.DoesNotContain("devices/*/source/metadata.json", exclude);
+    }
+
+    [Fact]
+    public void InitSharedRemovesRetiredExcludeRulesFromExistingRepos()
+    {
+        var workbenchRoot = Path.Combine(root, "workbench");
+        var masterPath = Path.Combine(workbenchRoot, "worktrees", "master");
+        var result = RepositoryService.InitShared(workbenchRoot, masterPath);
+        var excludePath = Path.Combine(result.RepositoryPath, "info", "exclude");
+        File.WriteAllText(excludePath, "# user rules\r\ndevices/*/source/metadata.json\r\n*.custom\r\n");
+
+        RepositoryService.InitShared(workbenchRoot, masterPath);
+
+        var exclude = File.ReadAllText(excludePath);
+        Assert.DoesNotContain("devices/*/source/metadata.json", exclude);
+        Assert.Contains("# user rules", exclude);
+        Assert.Contains("*.custom", exclude);
+        Assert.Contains("worktree.json", exclude);
     }
 
     [Fact]

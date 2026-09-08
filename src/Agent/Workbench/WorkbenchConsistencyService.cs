@@ -242,7 +242,9 @@ public sealed class WorkbenchConsistencyService
             StringComparer.Ordinal);
 
         // Safety evidence: the offline collective F-signature is read for every PLC on every
-        // compare (get_plc_checksums above) and checked against master's revision.json. A changed
+        // compare (get_plc_checksums above) and checked against the safety baseline recorded in
+        // the device's git-tracked source manifest (legacy workbenches: master's revision.json).
+        // A changed
         // signature must make the result non-consistent even when checksums and XML are unchanged;
         // a failed required read must never pass as consistent. Three distinct situations:
         // - live signature present and different (or newly appearing) -> Changed.
@@ -255,12 +257,19 @@ public sealed class WorkbenchConsistencyService
         // When both sides recorded per-F-block signatures, the change is additionally attributed
         // to individual blocks (ChangedBlocks); a 0 signature means "missing or invalidated by a
         // recent change" (TIA Openness manual §5.27.4) and diffs like any other value.
-        var baselineSafety = ReadBaselineSafety(masterRoot);
+        var legacyBaselineSafety = ReadBaselineSafety(masterRoot);
         var safety = devices.Select(item =>
             {
                 var live = checksums.FirstOrDefault(checksum =>
                     string.Equals(checksum.PlcName, item.Metadata.PlcName, StringComparison.OrdinalIgnoreCase));
-                baselineSafety.TryGetValue(item.Metadata.PlcName, out var baseline);
+                // Baseline: the device's git-tracked source manifest, advanced by every
+                // safety-accepting commit; workbenches whose manifests predate safety data fall
+                // back to master's revision.json.
+                var baseline = DeviceManifestSafety.TryReadBaseline(item.Context.SourceRoot) is { } manifestBaseline
+                    ? new BaselineSafety(manifestBaseline.FSignature, manifestBaseline.BlockSignatures)
+                    : legacyBaselineSafety.TryGetValue(item.Metadata.PlcName, out var legacy)
+                        ? legacy
+                        : null;
                 var blockDifferences = DiffFBlockSignatures(baseline?.BlockSignatures, live?.FBlockSignatures);
                 var changedBlocks = blockDifferences?.Select(item => item.Path).ToArray();
                 return new DeviceSafetyEvidence(
@@ -415,10 +424,9 @@ public sealed class WorkbenchConsistencyService
             HardwareChecked: includeHardware));
     }
 
-    /// <summary>Per-PLC baseline F-signatures from master's revision.json ("PLC:SIG;PLC2:SIG2").
-    /// Missing/legacy revision state yields an empty map — a signature appearing since then then
-    /// correctly reads as a change.</summary>
-    /// <summary>Baseline safety evidence per PLC name from master's revision.json. Prefers the
+    /// <summary>Legacy fallback safety baseline per PLC name from master's revision.json, used
+    /// only while a device's source manifest carries no safety data (workbenches created before
+    /// the manifest baseline existed). Prefers the
     /// per-device <see cref="EngineeringSafetyState.Devices"/> entries (with per-block
     /// signatures); legacy files carry only the aggregate "Plc:fold;…" string, which is parsed
     /// without block detail.</summary>

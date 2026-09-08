@@ -77,6 +77,11 @@ public sealed class DeviceMetadata
     /// <summary>Offline collective F-signature (uppercase hex) at export time; null unless the
     /// read state is "ok".</summary>
     public string? FSignature { get; set; }
+
+    /// <summary>The per-F-block signatures the fold was built from (additive 2026-09-08, same
+    /// tolerance rule as the device section): the compare's safety baseline attributes a change
+    /// to individual blocks. Null for ordinary PLCs and legacy manifests.</summary>
+    public List<FBlockSignatureInfo>? FBlockSignatures { get; set; }
 }
 
 public sealed class ExportMetadataRecord
@@ -255,7 +260,33 @@ internal static class ExportMetadataJsonSerializer
             IsSafetyDevice = GetBool(device, "isSafetyDevice"),
             FSignatureReadState = GetString(device, "fSignatureReadState"),
             FSignature = GetString(device, "fSignature"),
+            FBlockSignatures = GetFBlockSignatures(device),
         };
+    }
+
+    private static List<FBlockSignatureInfo>? GetFBlockSignatures(JsonElement device)
+    {
+        if (!device.TryGetProperty("fBlockSignatures", out var blocks) || blocks.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var result = new List<FBlockSignatureInfo>();
+        foreach (var block in blocks.EnumerateArray())
+        {
+            if (block.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            result.Add(new FBlockSignatureInfo
+            {
+                Path = GetString(block, "path") ?? string.Empty,
+                Signature = GetString(block, "signature") ?? string.Empty,
+            });
+        }
+
+        return result;
     }
 
     private static void WriteDevice(StringBuilder builder, DeviceMetadata? device)
@@ -281,8 +312,35 @@ internal static class ExportMetadataJsonSerializer
         WriteProperty(builder, 2, "projectLastModifiedBy", device.ProjectLastModifiedBy, appendComma: true);
         WriteProperty(builder, 2, "isSafetyDevice", device.IsSafetyDevice, appendComma: true);
         WriteProperty(builder, 2, "fSignatureReadState", device.FSignatureReadState, appendComma: true);
-        WriteProperty(builder, 2, "fSignature", device.FSignature, appendComma: false);
+        WriteProperty(builder, 2, "fSignature", device.FSignature, appendComma: true);
+        WriteFBlockSignatures(builder, device.FBlockSignatures);
         Indent(builder, 1).AppendLine("},");
+    }
+
+    private static void WriteFBlockSignatures(StringBuilder builder, IReadOnlyList<FBlockSignatureInfo>? blocks)
+    {
+        if (blocks is null)
+        {
+            WriteProperty(builder, 2, "fBlockSignatures", (string?)null, appendComma: false);
+            return;
+        }
+
+        Indent(builder, 2).AppendLine("\"fBlockSignatures\": [");
+        for (var index = 0; index < blocks.Count; index++)
+        {
+            Indent(builder, 3).AppendLine("{");
+            WriteProperty(builder, 4, "path", blocks[index].Path, appendComma: true);
+            WriteProperty(builder, 4, "signature", blocks[index].Signature, appendComma: false);
+            Indent(builder, 3).Append('}');
+            if (index < blocks.Count - 1)
+            {
+                builder.Append(',');
+            }
+
+            builder.AppendLine();
+        }
+
+        Indent(builder, 2).AppendLine("]");
     }
 
     private static void WriteRecord(StringBuilder builder, ExportMetadataRecord record, bool appendComma)
