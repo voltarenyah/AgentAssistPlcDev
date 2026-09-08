@@ -108,12 +108,50 @@ public sealed class WorkbenchTagServiceTests : IDisposable
         Assert.Equal(2, new WorkbenchTagStore(_path).Load().Assignments.Count);
 
         service.UnassignWorkbenchTag(workbenchTag.TagId, "wb-1");
+        service.UnassignWorkbenchTag(workbenchTag.TagId, "wb-1");
         Assert.Equal([worktreeTag.TagId], service.GetWorktreeTags("wb-1", "wt-1").EffectiveTagIds);
         Assert.Single(new WorkbenchTagStore(_path).Load().Assignments);
+
+        service.UnassignWorktreeTag(worktreeTag.TagId, "wb-1", "wt-1");
+        service.UnassignWorktreeTag(worktreeTag.TagId, "wb-1", "wt-1");
+        Assert.Empty(service.GetWorktreeTags("wb-1", "wt-1").DirectTagIds);
+        Assert.Empty(service.GetWorktreeTags("wb-1", "wt-1").EffectiveTagIds);
+        Assert.Empty(new WorkbenchTagStore(_path).Load().Assignments);
 
         var mismatch = Assert.Throws<WorkbenchTagDomainException>(() =>
             service.AssignWorktreeTag(worktreeTag.TagId, "wb-other", "wt-1"));
         Assert.Equal("worktree_not_found", mismatch.Code);
+    }
+
+    [Fact]
+    public void CatalogAdapterResolvesRegisteredWorktreeAndRejectsMismatchedOwner()
+    {
+        var catalogRoot = Path.Combine(Path.GetTempPath(), $"workbench-tag-catalog-{Guid.NewGuid():N}");
+        try
+        {
+            var catalog = new WorkbenchCatalog(new AtomicJsonStore(), catalogRoot);
+            var workbench = catalog.Create("fixture", Path.Combine(catalogRoot, "fixture"));
+            workbench = catalog.RegisterWorktree(workbench, new WorkbenchWorktreeRegistration(
+                "wt-1", "Feature", "feature", "worktrees/feature"));
+            var service = new WorkbenchTagService(
+                new WorkbenchTagStore(_path),
+                new WorkbenchCatalogTagEntityLookup(catalog, [workbench.RootPath]));
+            var tag = service.CreatePath("catalog/verified");
+
+            service.AssignWorktreeTag(tag.TagId, workbench.WorkbenchId, "wt-1");
+            Assert.Equal([tag.TagId], service.GetWorktreeTags(workbench.WorkbenchId, "wt-1").EffectiveTagIds);
+
+            var mismatch = Assert.Throws<WorkbenchTagDomainException>(() =>
+                service.AssignWorktreeTag(tag.TagId, "other-workbench", "wt-1"));
+            Assert.Equal("worktree_not_found", mismatch.Code);
+        }
+        finally
+        {
+            if (Directory.Exists(catalogRoot))
+            {
+                Directory.Delete(catalogRoot, recursive: true);
+            }
+        }
     }
 
     public void Dispose()
