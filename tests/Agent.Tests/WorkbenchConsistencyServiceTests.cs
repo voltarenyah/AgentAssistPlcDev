@@ -40,10 +40,33 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
 
         Assert.Equal(ConsistencyState.Different, result.State);
-        Assert.Contains(result.Differences, difference => difference.PlcName == "PLC_1" && difference.Kind == SourceDifferenceKind.Changed);
+        var difference = Assert.Single(result.Differences, difference => difference.PlcName == "PLC_1" && difference.Kind == SourceDifferenceKind.Changed);
+        Assert.NotNull(difference.FingerprintComponents);
+        Assert.False(difference.FingerprintComponents!["Code"].Matches);
+        Assert.True(difference.FingerprintComponents["Comments"].Matches);
         Assert.Equal(2, engineering.Calls.Count(call => call == "compare_source_evidence"));
         Assert.DoesNotContain("sync_export", engineering.Calls);
         Assert.DoesNotContain("rebuild_export", engineering.Calls);
+    }
+
+    [Fact]
+    public async Task V2EvidenceMarksChangedTagTablesForContentHashDisplay()
+    {
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.FingerprintEvidence(ManagedSourceEvidenceKind.TagTable));
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"))
+        {
+            SourceXml = "<Document><SW.Tags.PlcTagTable ID=\"1\" Name=\"Plant\" /></Document>",
+        };
+        engineering.ChangedEvidencePlcs.Add("PLC_1");
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        var difference = Assert.Single(result.Differences, difference => difference.PlcName == "PLC_1");
+        Assert.Equal(ManagedSourceEvidenceKind.TagTable, difference.EvidenceKind);
+        Assert.Null(difference.FingerprintComponents);
+        Assert.NotNull(difference.MasterFingerprint);
+        Assert.NotNull(difference.TiaFingerprint);
     }
 
     [Fact]
@@ -508,7 +531,9 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                     Category = item.Category,
                     Kind = item.Kind,
                     ReadState = item.ReadState,
-                    Fingerprints = item.Fingerprints,
+                    Fingerprints = changed && string.Equals(item.Kind, ManagedSourceEvidenceKind.StandardBlock, StringComparison.Ordinal)
+                        ? new FingerprintSet { ["Code"] = "changed", ["Comments"] = "same" }
+                        : item.Fingerprints,
                     ModifiedTimeStamp = item.ModifiedTimeStamp,
                     FSignature = item.FSignature,
                 }).ToArray();
@@ -656,7 +681,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
             },
         };
 
-        public ConsistencyValidationEvidence FingerprintEvidence() => new()
+        public ConsistencyValidationEvidence FingerprintEvidence(string evidenceKind = ManagedSourceEvidenceKind.StandardBlock) => new()
         {
             SchemaVersion = "2.0",
             EvidenceKind = "tia-managed-source",
@@ -664,12 +689,12 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
             ManagedSourceConsistent = true,
             Devices = new[]
             {
-                FingerprintDevice("device-1", "PLC_1", "one"),
-                FingerprintDevice("device-2", "PLC_2", "two"),
+                FingerprintDevice("device-1", "PLC_1", "one", evidenceKind),
+                FingerprintDevice("device-2", "PLC_2", "two", evidenceKind),
             },
         };
 
-        private static ConsistencyValidationDevice FingerprintDevice(string deviceId, string plcName, string checksum) => new()
+        private static ConsistencyValidationDevice FingerprintDevice(string deviceId, string plcName, string checksum, string evidenceKind) => new()
         {
             DeviceId = deviceId,
             PlcName = plcName,
@@ -681,10 +706,15 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                     Id = $"{deviceId}-main",
                     Name = "Main",
                     SourcePath = "Main",
-                    Category = "OB",
-                    Kind = ManagedSourceEvidenceKind.StandardBlock,
+                    Category = string.Equals(evidenceKind, ManagedSourceEvidenceKind.TagTable, StringComparison.Ordinal) ? "Tags" : "OB",
+                    Kind = evidenceKind,
                     ReadState = ManagedSourceEvidenceReadState.Readable,
-                    Fingerprints = new FingerprintSet { ["code"] = "same" },
+                    Fingerprints = string.Equals(evidenceKind, ManagedSourceEvidenceKind.StandardBlock, StringComparison.Ordinal)
+                        ? new FingerprintSet { ["Code"] = "same", ["Comments"] = "same" }
+                        : null,
+                    ModifiedTimeStamp = string.Equals(evidenceKind, ManagedSourceEvidenceKind.TagTable, StringComparison.Ordinal)
+                        ? DateTimeOffset.UnixEpoch
+                        : null,
                 },
             },
         };

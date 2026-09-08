@@ -94,9 +94,48 @@ describe('VersionControlCompare (inline)', () => {
     expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
     expect(host.textContent).toContain('PLC_1 · Main')
     expect(host.textContent).toContain('PLC_1 · Main')
+    expect(host.textContent).toContain('Detailed fingerprint evidence unavailable')
     expect(host.textContent).not.toContain('TIA differs from master')
     expect(host.querySelector('[data-comparison-timings]')?.textContent).toContain('Reading all readable block fingerprints')
     expect(host.querySelector('[data-comparison-timings]')?.textContent).toContain('1.4 s')
+  })
+
+  it('labels changed fingerprint components and tag-table content hashes', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
+      differences: [
+        {
+          deviceId: 'dev-1',
+          plcName: 'PLC_1',
+          relativePath: 'devices/PLC_1/source/Blocks/Main.xml',
+          identity: 'Main',
+          kind: 'Changed',
+          masterFingerprint: 'old',
+          tiaFingerprint: 'new',
+          supported: true,
+          fingerprintComponents: {
+            Code: { stored: 'old-code', live: 'new-code', matches: false },
+            Comments: { stored: 'same', live: 'same', matches: true },
+          },
+        },
+        {
+          deviceId: 'dev-1',
+          plcName: 'PLC_1',
+          relativePath: 'devices/PLC_1/source/Tags/Plant.xml',
+          identity: 'Plant',
+          kind: 'Changed',
+          masterFingerprint: '1234567890',
+          tiaFingerprint: 'abcdef0123',
+          supported: true,
+          evidenceKind: 'tag-table',
+        },
+      ],
+    }))
+
+    const { host } = await render({ signal: 1 })
+
+    expect(host.textContent).toContain('Changed: Code')
+    expect(host.textContent).not.toContain('Changed: Comments')
+    expect(host.textContent).toContain('Content hash: 1234567 → abcdef0')
   })
 
   it('asks before retrying a missing-checksum comparison with automatic compile and save', async () => {
