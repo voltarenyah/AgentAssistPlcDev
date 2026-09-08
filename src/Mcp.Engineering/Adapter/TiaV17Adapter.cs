@@ -632,7 +632,16 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
     private static ManagedSourceCapture CaptureManagedSourceEvidence(Project project, PlcSoftware plc)
     {
-        var safety = ReadSafety(plc);
+        var safetySurface = ReadSafetySurface(plc);
+        var source = CaptureLiveSnapshot(
+            plc,
+            safetySurface,
+            out var fBlockSignatures,
+            out var fBlockReadFailed);
+        var safety = CompleteSafety(
+            safetySurface,
+            fBlockSignatures,
+            fBlockReadFailed);
         var checksum = new PlcChecksumInfo
         {
             PlcName = plc.Name,
@@ -650,7 +659,6 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 $"PLC '{plc.Name}' has no readable software checksum. Compile it before capturing source evidence.");
         }
 
-        var source = CaptureLiveSnapshot(plc);
         var objects = new List<ManagedSourceEvidenceObject>();
         foreach (var component in source.Live)
         {
@@ -1546,14 +1554,73 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         public Dictionary<string, (PlcType Type, string? GroupPath)> TypesById { get; } = new(StringComparer.Ordinal);
     }
 
+    private sealed class SafetySurface
+    {
+        public SafetySurface(bool isSafetyDevice, string? readState, bool readBlockSignatures)
+        {
+            IsSafetyDevice = isSafetyDevice;
+            ReadState = readState;
+            ReadBlockSignatures = readBlockSignatures;
+        }
+
+        public bool IsSafetyDevice { get; }
+        public string? ReadState { get; }
+        public bool ReadBlockSignatures { get; }
+    }
+
     private static LiveSnapshot CaptureLiveSnapshot(PlcSoftware plc)
     {
+        return CaptureLiveSnapshot(
+            plc,
+            safetySurface: null,
+            out _,
+            out _);
+    }
+
+    /// <summary>Captures the managed-source live snapshot and, when requested by the safety
+    /// surface, the F-block signatures in one block enumeration. The ordinary live-snapshot
+    /// callers keep their existing fail-safe probe behavior; only source-evidence capture uses
+    /// the combined path.</summary>
+    private static LiveSnapshot CaptureLiveSnapshot(
+        PlcSoftware plc,
+        SafetySurface? safetySurface,
+        out List<FBlockSignatureInfo>? fBlockSignatures,
+        out bool fBlockReadFailed)
+    {
         var snapshot = new LiveSnapshot();
+        fBlockSignatures = safetySurface?.ReadBlockSignatures == true
+            ? new List<FBlockSignatureInfo>()
+            : null;
+        fBlockReadFailed = false;
         foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
         {
             // F-blocks cannot be exported via Openness; exclude them from sync planning.
-            if (FailSafeBlocks.IsFailSafe(block))
+            SafetySignatureProvider? safetyProvider = null;
+            var isFailSafe = safetySurface is null
+                ? FailSafeBlocks.IsFailSafe(block)
+                : TryGetSafetySignatureProvider(block, out safetyProvider, ref fBlockReadFailed);
+            if (isFailSafe)
             {
+                if (fBlockSignatures is not null && safetyProvider is not null)
+                {
+                    try
+                    {
+                        var signature = safetyProvider.Signatures?.Find(
+                            SafetySignatureType.BlockOfflineSignature);
+                        if (signature is not null)
+                        {
+                            fBlockSignatures.Add(new FBlockSignatureInfo
+                            {
+                                Path = ExportManifest.SourcePathOf(block.Name, groupPath),
+                                Signature = signature.Value.ToString("X8"),
+                            });
+                        }
+                    }
+                    catch
+                    {
+                        fBlockReadFailed = true;
+                    }
+                }
                 continue;
             }
 
@@ -1614,6 +1681,24 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
 
         return snapshot;
+    }
+
+    private static bool TryGetSafetySignatureProvider(
+        PlcBlock block,
+        out SafetySignatureProvider? provider,
+        ref bool readFailed)
+    {
+        try
+        {
+            provider = block.GetService<SafetySignatureProvider>();
+            return provider is not null;
+        }
+        catch
+        {
+            provider = null;
+            readFailed = true;
+            return false;
+        }
     }
 
     /// <summary>Read-only per-component diff (buildnote/plan/export-sync.md §Compare): runs the same
@@ -1857,18 +1942,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
-    /// <summary>Offline F-signature evidence for a PLC, via the documented
-    /// Siemens.Engineering.Safety surface (TIA Openness manual §5.27). Detection: a PLC is a
-    /// safety device when the SafetyAdministration or SafetySignatureProvider service is present
-    /// on the PLC's DeviceItem anchor (GetService on PlcSoftware always returns null — verified
-    /// 2026-09-01 against a live F-CPU project, PEI_SinoARP_Master_V4.1.3, CPU 1515F-2 PN). The
-    /// signature itself is folded from the per-block BlockOfflineSignature values
-    /// (<see cref="ReadCollectiveFSignature"/>): the provider is anchored on each F-block, NOT on
-    /// the DeviceItem — the DeviceItem anchor always returns null for it (verified 2026-09-02;
-    /// the earlier "license-gated provider" reading was an artifact of that wrong anchor). Any
-    /// failure while touching the safety surface yields ReadFailed rather than "not a safety
-    /// device" — a failed required read must never masquerade as an ordinary PLC.</summary>
-    private static (bool IsSafetyDevice, string? ReadState, string? Signature, IReadOnlyList<FBlockSignatureInfo>? Blocks) ReadSafety(PlcSoftware plc)
+    private static SafetySurface ReadSafetySurface(PlcSoftware plc)
     {
         try
         {
@@ -1884,18 +1958,72 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
             if (anchor is null)
             {
-                // A PlcSoftware without a DeviceItem ancestor means the device tree is broken;
-                // the safety state is then unreadable, not "ordinary PLC".
-                return (true, FSignatureReadState.ReadFailed, null, null);
+                return new SafetySurface(
+                    isSafetyDevice: true,
+                    readState: FSignatureReadState.ReadFailed,
+                    readBlockSignatures: false);
             }
 
             var administration = anchor.GetService<SafetyAdministration>();
             var provider = anchor.GetService<SafetySignatureProvider>();
-            if (administration is null && provider is null)
-            {
-                return (false, null, null, null);
-            }
+            return administration is null && provider is null
+                ? new SafetySurface(false, null, false)
+                : new SafetySurface(true, null, true);
+        }
+        catch
+        {
+            return new SafetySurface(
+                isSafetyDevice: true,
+                readState: FSignatureReadState.ReadFailed,
+                readBlockSignatures: false);
+        }
+    }
 
+    private static (bool IsSafetyDevice, string? ReadState, string? Signature, IReadOnlyList<FBlockSignatureInfo>? Blocks)
+        CompleteSafety(
+            SafetySurface surface,
+            IReadOnlyList<FBlockSignatureInfo>? blocks,
+            bool blockReadFailed)
+    {
+        if (!surface.ReadBlockSignatures)
+        {
+            return (surface.IsSafetyDevice, surface.ReadState, null, null);
+        }
+
+        if (blockReadFailed)
+        {
+            return (true, FSignatureReadState.ReadFailed, null, null);
+        }
+
+        if (blocks is null || blocks.Count == 0)
+        {
+            return (true, FSignatureReadState.NoSignature, null, null);
+        }
+
+        return (true, FSignatureReadState.Ok, FoldFBlockSignatures(blocks), blocks);
+    }
+
+    /// <summary>Offline F-signature evidence for a PLC, via the documented
+    /// Siemens.Engineering.Safety surface (TIA Openness manual §5.27). Detection: a PLC is a
+    /// safety device when the SafetyAdministration or SafetySignatureProvider service is present
+    /// on the PLC's DeviceItem anchor (GetService on PlcSoftware always returns null — verified
+    /// 2026-09-01 against a live F-CPU project, PEI_SinoARP_Master_V4.1.3, CPU 1515F-2 PN). The
+    /// signature itself is folded from the per-block BlockOfflineSignature values
+    /// (<see cref="ReadCollectiveFSignature"/>): the provider is anchored on each F-block, NOT on
+    /// the DeviceItem — the DeviceItem anchor always returns null for it (verified 2026-09-02;
+    /// the earlier "license-gated provider" reading was an artifact of that wrong anchor). Any
+    /// failure while touching the safety surface yields ReadFailed rather than "not a safety
+    /// device" — a failed required read must never masquerade as an ordinary PLC.</summary>
+    private static (bool IsSafetyDevice, string? ReadState, string? Signature, IReadOnlyList<FBlockSignatureInfo>? Blocks) ReadSafety(PlcSoftware plc)
+    {
+        var surface = ReadSafetySurface(plc);
+        if (!surface.ReadBlockSignatures)
+        {
+            return (surface.IsSafetyDevice, surface.ReadState, null, null);
+        }
+
+        try
+        {
             var blocks = ReadFBlockSignatures(plc);
             return blocks is null
                 ? (true, FSignatureReadState.NoSignature, null, null)
