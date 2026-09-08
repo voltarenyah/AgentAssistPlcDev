@@ -27,6 +27,11 @@ const getByRole = (role: string, name?: string) => {
   return candidates[0] as HTMLElement
 }
 
+const getAllByRole = (role: string) => Array.from(document.body.getElementsByTagName('*')).filter(element => {
+  const elementRole = element.getAttribute('role') ?? (element.tagName === 'BUTTON' ? 'button' : element.tagName === 'INPUT' ? 'combobox' : '')
+  return elementRole === role
+})
+
 const getByLabel = (label: string) => getByRole('combobox', label) as HTMLInputElement
 
 const type = async (input: HTMLInputElement, value: string) => {
@@ -69,6 +74,8 @@ describe('TagPicker', () => {
     })
     expect(onAssign).toHaveBeenCalledWith('b')
     expect(getByRole('listitem', 'Machine')).toBeTruthy()
+    expect(getAllByRole('listitem')).toHaveLength(1)
+    expect(getAllByRole('listitem').some(item => item.getAttribute('aria-label') === 'Machine/Press')).toBe(false)
     expect(vi.mocked(showErrorToast)).toHaveBeenCalledWith('offline')
     expect(getByLabel('Search tags')).toBeTruthy()
     await act(async () => root.unmount())

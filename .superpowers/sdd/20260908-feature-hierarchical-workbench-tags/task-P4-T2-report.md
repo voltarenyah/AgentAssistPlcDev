@@ -15,6 +15,7 @@
 - `git diff --check` — passed.
 - Review fix: picker tests now use semantic role/label helpers for Add tag, command search, create action, keyboard search/selection, and a controlled current-assignment harness with visible retry recovery.
 - Re-review fix: rejected assignment is now verified through the mocked `showErrorToast` boundary (`offline`), while the controlled assignment list and open search UI remain unchanged.
+- Final coverage fix: recovery proof asserts the Current tags list remains exactly one pre-action item and excludes the rejected `Machine/Press` assignment.
 
 ## Scope / concerns
 
@@ -23,4 +24,4 @@
 
 ## Commit
 
-- Commits: `f6347f2` initial implementation; `1637448` semantic picker proof; final follow-up verifies toast-boundary recovery.
+- Commits: `f6347f2` initial implementation; `1637448` semantic picker proof; `27a6682` toast-boundary recovery; final follow-up strengthens unchanged-list coverage.
