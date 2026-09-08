@@ -455,6 +455,8 @@ export type SourceDifference = {
   masterFingerprint: string | null
   tiaFingerprint: string | null
   supported: boolean
+  fingerprintComponents?: Record<string, FingerprintComponentComparison> | null
+  evidenceKind?: string | null
 }
 
 export type SourceDifferenceKind = 'Unchanged' | 'Changed' | 'Added' | 'Deleted'

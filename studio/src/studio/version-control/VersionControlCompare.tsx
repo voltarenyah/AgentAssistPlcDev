@@ -32,6 +32,8 @@ const safetyKindLabel = (kind: api.SafetyBlockDifference['kind']) => {
   return ['Changed', 'Added', 'Removed', 'Invalidated'][kind] ?? 'Changed'
 }
 
+const shortFingerprint = (value: string) => value.slice(0, 7)
+
 export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation, operationStatus = null }: Props) {
   const [started, setStarted] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
@@ -250,6 +252,23 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                 {differences.map(diff => {
                   const path = diff.relativePath
                   const disabled = !diff.supported || diff.kind === 'Deleted' || !path
+                  const changedComponents = Object.entries(diff.fingerprintComponents ?? {})
+                    .filter(([, component]) => component.matches === false)
+                  const changedComponentTitle = changedComponents
+                    .map(([name, component]) => `${name}\nBaseline: ${component.stored ?? 'Unavailable'}\nCurrent: ${component.live ?? 'Unavailable'}`)
+                    .join('\n\n')
+                  const tagHashes = diff.evidenceKind === 'tag-table'
+                    && diff.masterFingerprint != null
+                    && diff.tiaFingerprint != null
+                    ? { master: diff.masterFingerprint, tia: diff.tiaFingerprint }
+                    : null
+                  const fingerprintDetailsUnavailable = diff.kind === 'Changed'
+                    && diff.evidenceKind !== 'tag-table'
+                    && changedComponents.length === 0
+                    && (!diff.fingerprintComponents || Object.values(diff.fingerprintComponents).some(component => component.matches == null))
+                  const tagHashUnavailable = diff.kind === 'Changed'
+                    && diff.evidenceKind === 'tag-table'
+                    && !tagHashes
                   return (
                     <label key={`${diff.deviceId}:${path}:${diff.identity}`} className={`flex items-start gap-2 rounded-lg border p-2 ${disabled ? 'opacity-60' : 'cursor-pointer hover:bg-white/5'}`} style={{ borderColor: 'var(--border)' }}>
                       <input
@@ -262,6 +281,24 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                         <span className="block text-[10px] font-medium">{diff.plcName} · {diff.identity || diff.relativePath}</span>
                         <span className="block truncate font-mono text-[9px] text-muted-foreground">{path || 'Source coverage unavailable'}</span>
                         <span className="block text-[9px] text-muted-foreground">{diff.supported ? diff.kind : 'Source coverage unavailable'}</span>
+                        {changedComponents.length > 0 && (
+                          <span
+                            className="mt-1 inline-flex rounded border border-amber-500/40 px-1.5 py-0.5 text-[8px] text-amber-500"
+                            title={changedComponentTitle}
+                          >
+                            Changed: {changedComponents.map(([name]) => name).join(', ')}
+                          </span>
+                        )}
+                        {tagHashes && (
+                          <span
+                            className="mt-1 inline-flex rounded border border-amber-500/40 px-1.5 py-0.5 font-mono text-[8px] text-amber-500"
+                            title={`Baseline: ${tagHashes.master}\nCurrent: ${tagHashes.tia}`}
+                          >
+                            Content hash: {shortFingerprint(tagHashes.master)} → {shortFingerprint(tagHashes.tia)}
+                          </span>
+                        )}
+                        {fingerprintDetailsUnavailable && <span className="mt-1 block text-[8px] text-muted-foreground">Detailed fingerprint evidence unavailable</span>}
+                        {tagHashUnavailable && <span className="mt-1 block text-[8px] text-muted-foreground">Content hash evidence unavailable</span>}
                       </span>
                       {!diff.supported && <ShieldAlert className="h-3 w-3 text-amber-500" />}
                     </label>

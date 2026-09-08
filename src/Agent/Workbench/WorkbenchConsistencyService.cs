@@ -748,7 +748,8 @@ public sealed class WorkbenchConsistencyService
                     kind,
                     left?.Sha256,
                     right?.Sha256,
-                    true);
+                    true,
+                    EvidenceKind: EvidenceKindForCategory(right?.Category ?? left?.Category));
             })
             .Where(item => item.Kind != SourceDifferenceKind.Unchanged)
             .ToArray();
@@ -817,7 +818,7 @@ public sealed class WorkbenchConsistencyService
                     "candidate-xml-compare",
                     "Normalize and compare one evidence-nominated XML object with its master counterpart.",
                     device.Metadata.PlcName,
-                    () => CompareCandidateXml(device.Metadata, device.Context, candidateRoot, export.Export.Path!),
+                    () => CompareCandidateXml(device.Metadata, device.Context, candidateRoot, export.Export.Path!, candidate),
                     result => result is null ? "Candidate XML matches master." : $"{result.Kind} {result.Identity}.");
                 if (difference is not null)
                 {
@@ -845,7 +846,8 @@ public sealed class WorkbenchConsistencyService
                         SourceDifferenceKind.Deleted,
                         masterObject.Sha256,
                         null,
-                        true));
+                        true,
+                        EvidenceKind: baselineObject.Kind));
                 }
             }
 
@@ -914,7 +916,8 @@ public sealed class WorkbenchConsistencyService
         DeviceMetadata metadata,
         DeviceContext context,
         string candidateRoot,
-        string candidatePath)
+        string candidatePath,
+        SourceEvidenceCandidate candidate)
     {
         var relativePath = Path.GetRelativePath(candidateRoot, candidatePath).Replace('\\', '/');
         if (relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal))
@@ -941,8 +944,15 @@ public sealed class WorkbenchConsistencyService
                 kind,
                 master?.Sha256,
                 live.Sha256,
-                true);
+                true,
+                FingerprintComparison.Compare(candidate.Baseline?.Fingerprints, candidate.Live?.Fingerprints),
+                candidate.Live?.Kind ?? candidate.Baseline?.Kind);
     }
+
+    private static string? EvidenceKindForCategory(string? category) =>
+        string.Equals(category, "Tags", StringComparison.Ordinal)
+            ? ManagedSourceEvidenceKind.TagTable
+            : null;
 
     private static string ToRelativeXmlPath(ManagedSourceEvidenceObject source)
     {

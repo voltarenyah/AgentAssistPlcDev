@@ -1,3 +1,5 @@
+using Contracts.Engineering;
+
 namespace Agent.Workbench;
 
 public sealed record SourceObjectSnapshot(
@@ -61,7 +63,9 @@ public sealed record SourceDifference(
     SourceDifferenceKind Kind,
     string? MasterFingerprint,
     string? TiaFingerprint,
-    bool Supported);
+    bool Supported,
+    Dictionary<string, FingerprintComponentComparison>? FingerprintComponents = null,
+    string? EvidenceKind = null);
 
 /// <summary>Per-device safety evidence gathered during a compare: whether the PLC is a safety
 /// device, the F-signature read state, the live offline collective F-signature, the baseline
