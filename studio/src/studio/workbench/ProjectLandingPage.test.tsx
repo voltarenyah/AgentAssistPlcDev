@@ -318,4 +318,32 @@ describe('ProjectLandingPage', () => {
 
     await act(async () => root.unmount())
   })
+
+  it('does not let a stale A mutation reload or overwrite B tags', async () => {
+    const assignA = deferred<void>()
+    vi.mocked(api.getTagTaxonomy).mockResolvedValue({ nodes: tagNodes })
+    vi.mocked(api.getWorkbenchTags).mockImplementation(async workbenchId => ({
+      direct: workbenchId === 'wb-a' ? ['tag-press'] : ['tag-state'],
+      inherited: [],
+      effective: workbenchId === 'wb-a' ? ['tag-press'] : ['tag-state'],
+    }))
+    vi.mocked(api.assignWorkbenchTag).mockImplementation(() => assignA.promise)
+
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb-a" onSelectWorktree={() => {}} />)
+    const add = host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement
+    await act(async () => add.click())
+    await act(async () => (document.body.querySelector('button[aria-label="Select State"]') as HTMLButtonElement).click())
+    await act(async () => root.render(<ProjectLandingPage workbenchId="wb-b" onSelectWorktree={() => {}} />))
+    await act(async () => {})
+
+    assignA.resolve()
+    await act(async () => {})
+
+    expect(api.getWorkbenchTags).toHaveBeenCalledTimes(2)
+    expect(host.querySelector('[data-tag-id="tag-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-tag-id="tag-press"]')).toBeNull()
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+
+    await act(async () => root.unmount())
+  })
 })

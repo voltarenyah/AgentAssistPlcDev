@@ -38,6 +38,8 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
   const [tagsLoading, setTagsLoading] = useState(true)
   const [tagsError, setTagsError] = useState<string | null>(null)
   const tagLoadGeneration = useRef(0)
+  const activeWorkbenchId = useRef(workbenchId)
+  activeWorkbenchId.current = workbenchId
 
   const reload = useCallback(async () => {
     try {
@@ -74,7 +76,7 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
 
   const reloadTags = useCallback(async () => {
     const generation = ++tagLoadGeneration.current
-    const isCurrent = () => generation === tagLoadGeneration.current
+    const isCurrent = () => generation === tagLoadGeneration.current && activeWorkbenchId.current === workbenchId
     setTagsLoading(true)
     try {
       const [taxonomy, assignments] = await Promise.all([
@@ -118,15 +120,17 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
 
   const assignTag = async (tagId: string) => {
     await api.assignWorkbenchTag(workbenchId, tagId)
-    await reloadTags()
+    if (activeWorkbenchId.current === workbenchId) await reloadTags()
   }
 
   const removeTag = async (tagId: string) => {
     try {
       await api.unassignWorkbenchTag(workbenchId, tagId)
-      await reloadTags()
+      if (activeWorkbenchId.current === workbenchId) await reloadTags()
     } catch (removeError) {
-      showErrorToast(`Tag could not be removed: ${displayError(removeError)}`)
+      if (activeWorkbenchId.current === workbenchId) {
+        showErrorToast(`Tag could not be removed: ${displayError(removeError)}`)
+      }
     }
   }
 
