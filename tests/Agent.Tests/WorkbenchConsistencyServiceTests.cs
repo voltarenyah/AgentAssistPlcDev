@@ -132,6 +132,16 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         var timings = Assert.IsAssignableFrom<IReadOnlyList<ComparisonTiming>>(result.Timings);
         Assert.NotEmpty(timings);
         Assert.Contains(timings, timing => timing.Phase == "hardware-export");
+        Assert.Contains(timings, timing =>
+            timing.Phase == "hardware-aml-export"
+            && timing.ElapsedMilliseconds == 1234
+            && timing.Outcome == "Project CAx export completed.");
+        Assert.Contains(timings, timing =>
+            timing.Phase == "hardware-network-fingerprint"
+            && timing.ElapsedMilliseconds == 567);
+        Assert.Contains(timings, timing =>
+            timing.Phase == "hardware-local-compare"
+            && timing.Outcome == "Compared 1 hardware artifact(s).");
         Assert.Contains(timings, timing => timing.Phase == "checksum-read");
         Assert.All(timings, timing => Assert.True(timing.ElapsedMilliseconds >= 0));
     }
@@ -771,6 +781,8 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
                         Scope = "project",
                         Success = true,
                         AmlFilePath = projectAml,
+                        DurationMs = 1234,
+                        NetworkConfigurationDurationMs = 567,
                     },
                 });
             }

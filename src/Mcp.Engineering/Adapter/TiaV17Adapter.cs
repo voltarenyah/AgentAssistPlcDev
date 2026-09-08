@@ -1301,6 +1301,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         var projectAml = Path.Combine(hardwareRoot, "project.aml");
         var projectLog = Path.Combine(hardwareRoot, "project-export.log");
         progress?.Report(new EngineeringProgress("Exporting hardware configuration (project)..."));
+        var projectStopwatch = Stopwatch.StartNew();
         var projectResult = ExportCax(
             "project",
             null,
@@ -1308,6 +1309,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             projectAml,
             projectLog,
             export: cax => cax.Export(project, new FileInfo(projectAml), new FileInfo(projectLog)));
+        projectStopwatch.Stop();
+        projectResult.DurationMs = projectStopwatch.ElapsedMilliseconds;
         results.Add(projectResult);
 
         var manifest = new HardwareExportManifest
@@ -1326,6 +1329,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         // so it also runs when includeDeviceExports is false. Supplemental evidence: a capture
         // failure is recorded on the manifest but must not fail the AML export.
         progress?.Report(new EngineeringProgress("Capturing network configuration fingerprint..."));
+        var networkStopwatch = Stopwatch.StartNew();
         try
         {
             var fingerprint = NetworkConfigurationFingerprint.Capture(
@@ -1340,6 +1344,11 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         {
             _logger.LogWarning(exception, "export_hardware_configuration: network configuration fingerprint capture failed");
             manifest.NetworkConfigurationError = exception.Message;
+        }
+        finally
+        {
+            networkStopwatch.Stop();
+            projectResult.NetworkConfigurationDurationMs = networkStopwatch.ElapsedMilliseconds;
         }
 
         if (includeDeviceExports)
@@ -1356,6 +1365,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 var typeIdentifier = ReadDeviceTypeIdentifier(device);
                 progress?.Report(new EngineeringProgress($"Exporting hardware configuration (device {deviceName})..."));
 
+                var deviceStopwatch = Stopwatch.StartNew();
                 var result = ExportCax(
                     "device",
                     deviceName,
@@ -1363,6 +1373,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                     amlPath,
                     logPath,
                     export: cax => cax.Export(device, new FileInfo(amlPath), new FileInfo(logPath)));
+                deviceStopwatch.Stop();
+                result.DurationMs = deviceStopwatch.ElapsedMilliseconds;
                 results.Add(result);
                 manifest.Devices.Add(new HardwareExportManifestDevice
                 {

@@ -132,7 +132,7 @@ public sealed class WorkbenchConsistencyService
                     "hardware-export",
                     "Export and compare project AML plus the network configuration fingerprint.",
                     null,
-                    () => CompareHardwareAsync(masterRoot, cancellationToken, progress),
+                    () => CompareHardwareAsync(masterRoot, cancellationToken, progress, timings),
                     DescribeHardwareOutcome)
                 .ConfigureAwait(false);
         }
@@ -515,7 +515,8 @@ public sealed class WorkbenchConsistencyService
     private async Task<HardwareConfigurationCompareResult> CompareHardwareAsync(
         string masterRoot,
         CancellationToken cancellationToken,
-        IOperationProgress? progress)
+        IOperationProgress? progress,
+        ICollection<ComparisonTiming> timings)
     {
         var root = WorkbenchPaths.ResolveHardwareRoot(masterRoot);
         var stagingRoot = WorkbenchPaths.ResolveHardwareStagingRoot(masterRoot);
@@ -528,9 +529,42 @@ public sealed class WorkbenchConsistencyService
                 cancellationToken)
             .ConfigureAwait(false);
         var warnings = HardwareConfigurationExport.EnsureSucceeded(liveResults, stagingRoot);
-        var local = HardwareConfigurationSnapshot.Read(root);
-        var live = HardwareConfigurationSnapshot.FromResults(liveResults, stagingRoot);
-        var artifacts = HardwareConfigurationSnapshot.Compare(local, live);
+        var projectExport = liveResults.FirstOrDefault(result =>
+            string.Equals(result.Scope, "project", StringComparison.OrdinalIgnoreCase));
+        timings.Add(new ComparisonTiming(
+            "hardware-aml-export",
+            "Export the project CAx/AML artifact from TIA.",
+            null,
+            projectExport?.DurationMs ?? 0,
+            projectExport is null
+                ? "Project export result was not returned."
+                : projectExport.Success
+                    ? "Project CAx export completed."
+                    : $"Project CAx export failed: {projectExport.Error ?? "unknown error"}."));
+        timings.Add(new ComparisonTiming(
+            "hardware-network-fingerprint",
+            "Capture the project network-configuration fingerprint from TIA.",
+            null,
+            projectExport?.NetworkConfigurationDurationMs ?? 0,
+            projectExport?.NetworkConfigurationDurationMs is null
+                ? "Network timing was not supplied by the exporter."
+                : "Network fingerprint capture completed; any capture warning is retained in the manifest."));
+
+        var localComparison = Measure(
+            timings,
+            "hardware-local-compare",
+            "Hash staged artifacts and compare them with the saved hardware baseline.",
+            null,
+            () =>
+            {
+                var local = HardwareConfigurationSnapshot.Read(root);
+                var live = HardwareConfigurationSnapshot.FromResults(liveResults, stagingRoot);
+                var artifacts = HardwareConfigurationSnapshot.Compare(local, live);
+                return (Local: local, Artifacts: artifacts);
+            },
+            result => $"Compared {result.Artifacts.Count} hardware artifact(s).");
+        var local = localComparison.Local;
+        var artifacts = localComparison.Artifacts;
         var state = artifacts.All(artifact => artifact.State == "same")
             ? "in-sync"
             : local is null
