@@ -1913,6 +1913,75 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteWorkbenchCleansTagAssignmentsAfterCoordinatorSucceedsAndKeepsTaxonomy()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
+        var workbenchTag = await CreateTagPathAsync(fixture.Client, "lifecycle/workbench");
+        var worktreeTag = await CreateTagPathAsync(fixture.Client, "lifecycle/master");
+
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/tags/{workbenchTag}", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/tags/{worktreeTag}", null)).StatusCode);
+
+        var response = await fixture.Client.DeleteAsync($"/api/workbenches/{fixture.Context.WorkbenchId}");
+
+        response.EnsureSuccessStatusCode();
+        await AssertTaxonomyContainsAsync(fixture.Client, workbenchTag, worktreeTag);
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"/api/tags/{workbenchTag}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"/api/tags/{worktreeTag}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteLinkedWorktreeCleansOnlyMatchingTagAssignmentsAndKeepsTaxonomy()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
+        fixture.AddWorktree("wt-2", "feature", @"C:\Projects\Feature.ap17");
+        _ = await fixture.Client.GetFromJsonAsync<JsonElement[]>("/api/workbenches");
+        var removedTag = await CreateTagPathAsync(fixture.Client, "lifecycle/feature");
+        var retainedTag = await CreateTagPathAsync(fixture.Client, "lifecycle/master");
+
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/wt-2/tags/{removedTag}", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/tags/{retainedTag}", null)).StatusCode);
+
+        var response = await fixture.Client.DeleteAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/wt-2");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal([retainedTag], await DirectTagIdsAsync(
+            fixture.Client,
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/tags"));
+        await AssertTaxonomyContainsAsync(fixture.Client, removedTag, retainedTag);
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"/api/tags/{removedTag}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await fixture.Client.DeleteAsync($"/api/tags/{retainedTag}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task FailedLinkedWorktreeDeletionLeavesTagAssignmentsUntouched()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            root,
+            databaseExists: true,
+            versionControlFailure: new ToolCallException("VC_REMOVE_FAILED", "Simulated deletion failure.", null));
+        fixture.AddWorktree("wt-2", "feature", @"C:\Projects\Feature.ap17");
+        _ = await fixture.Client.GetFromJsonAsync<JsonElement[]>("/api/workbenches");
+        var tag = await CreateTagPathAsync(fixture.Client, "lifecycle/failed-delete");
+        var route = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/wt-2/tags";
+
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync($"{route}/{tag}", null)).StatusCode);
+        Assert.Equal([tag], await DirectTagIdsAsync(fixture.Client, route));
+
+        var response = await fixture.Client.DeleteAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/wt-2");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal([tag], await DirectTagIdsAsync(fixture.Client, route));
+        Assert.Equal(HttpStatusCode.Conflict, (await fixture.Client.DeleteAsync($"/api/tags/{tag}")).StatusCode);
+    }
+
+    [Fact]
     public async Task DeleteUnknownWorkbenchMapsToNotFound()
     {
         await using var factory = new WebApplicationFactory<Program>()
@@ -1922,6 +1991,33 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var response = await client.DeleteAsync("/api/workbenches/missing");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    private static async Task<string> CreateTagPathAsync(HttpClient client, string path)
+    {
+        using var response = await client.PostAsJsonAsync("/api/tags/path", new { path });
+        response.EnsureSuccessStatusCode();
+        var node = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return node.GetProperty("tagId").GetString()!;
+    }
+
+    private static async Task<string[]> DirectTagIdsAsync(HttpClient client, string route)
+    {
+        using var response = await client.GetAsync(route);
+        response.EnsureSuccessStatusCode();
+        var tags = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return tags.GetProperty("direct").EnumerateArray().Select(tag => tag.GetString()!).ToArray();
+    }
+
+    private static async Task AssertTaxonomyContainsAsync(HttpClient client, params string[] tagIds)
+    {
+        using var response = await client.GetAsync("/api/tags");
+        response.EnsureSuccessStatusCode();
+        var taxonomy = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var actual = taxonomy.GetProperty("nodes").EnumerateArray()
+            .Select(node => node.GetProperty("tagId").GetString())
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.All(tagIds, tagId => Assert.Contains(tagId, actual));
     }
 
     [Fact]
@@ -2072,7 +2168,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         SqliteConnection.ClearAllPools();
     }
 
-    private sealed class RecordingToolCaller(string json = "{}") : IMcpToolCaller
+    private sealed class RecordingToolCaller(string json = "{}", Exception? failure = null) : IMcpToolCaller
     {
         public List<string> Calls { get; } = [];
         public List<JsonElement> Arguments { get; } = [];
@@ -2080,6 +2176,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         {
             Calls.Add(tool);
             Arguments.Add(JsonSerializer.SerializeToElement(args));
+            if (failure is not null)
+                throw failure;
             if (typeof(T) == typeof(JsonElement))
             {
                 if (string.Equals(json.Trim(), "null", StringComparison.Ordinal))
@@ -2264,7 +2362,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             bool engineeringOffline = true,
             string? sourceProjectPath = null,
             Action<string, string>? stageExport = null,
-            string? versionControlJson = null)
+            string? versionControlJson = null,
+            Exception? versionControlFailure = null)
         {
             var store = new AtomicJsonStore();
             var catalog = new WorkbenchCatalog(store, fixtureRoot);
@@ -2308,7 +2407,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             var engineering = new ThrowingToolCaller(engineeringOffline, stageExport, sourceProjectPath);
             var versionControl = new RecordingToolCaller(versionControlJson ?? """
                 {"Sha":"baseline-1","Message":"Initial PLC source baseline","Files":["devices/PLC_1/source/Blocks/Main.xml"]}
-                """);
+                """, versionControlFailure);
+            var tagFile = Path.Combine(fixtureRoot, "tags", Guid.NewGuid().ToString("N"), "tags.json");
             var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
             {
                 host.UseEnvironment("Testing");
@@ -2319,9 +2419,11 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                     services.RemoveAll<WorkbenchApiState>();
                     services.RemoveAll<ApiMcpGateway>();
                     services.RemoveAll<WorkbenchCoordinator>();
+                    services.RemoveAll<WorkbenchTagStore>();
                     services.AddSingleton(store);
                     services.AddSingleton(catalog);
                     services.AddSingleton<WorkbenchApiState>();
+                    services.AddSingleton(new WorkbenchTagStore(tagFile, store));
                     services.AddSingleton(new ApiMcpGateway(
                         engineering,
                         new RecordingToolCaller(),

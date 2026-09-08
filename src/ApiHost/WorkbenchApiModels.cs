@@ -496,6 +496,7 @@ public static class WorkbenchEndpoints
             string id,
             WorkbenchApiState s,
             WorkbenchCoordinator c,
+            WorkbenchTagService tags,
             OperationStatusRegistry operations,
             HttpContext http,
             CancellationToken ct) =>
@@ -508,6 +509,7 @@ public static class WorkbenchEndpoints
                 async progress =>
                 {
                     await c.DeleteWorkbenchAsync(s.Workbench(id), ct, progress).ConfigureAwait(false);
+                    tags.RemoveWorkbenchAssignments(id);
                     return new { deleted = true };
                 },
                 "Workbench deleted.").ConfigureAwait(false);
@@ -704,6 +706,7 @@ public static class WorkbenchEndpoints
             string wt,
             WorkbenchApiState s,
             WorkbenchCoordinator c,
+            WorkbenchTagService tags,
             OperationStatusRegistry operations,
             HttpContext http,
             CancellationToken ct) =>
@@ -716,6 +719,7 @@ public static class WorkbenchEndpoints
                 async progress =>
                 {
                     await c.DeleteWorktreeAsync(s.Workbench(id), wt, ct, progress).ConfigureAwait(false);
+                    tags.RemoveWorktreeAssignments(id, wt);
                     return new { deleted = true };
                 },
                 "Worktree removed.").ConfigureAwait(false);

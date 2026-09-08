@@ -133,6 +133,34 @@ public sealed class WorkbenchTagService
         Unassign(tagId, TagEntityType.Worktree, worktreeId, workbenchId);
     }
 
+    /// <summary>Removes direct assignments owned by a deleted Workbench, including its Worktrees.</summary>
+    public void RemoveWorkbenchAssignments(string workbenchId)
+    {
+        ValidateId(workbenchId, "workbenchId");
+        _store.Mutate(document => document with
+        {
+            Assignments = document.Assignments.Where(assignment =>
+                !(assignment.EntityType == TagEntityType.Workbench
+                    && string.Equals(assignment.EntityId, workbenchId, StringComparison.Ordinal))
+                && !(assignment.EntityType == TagEntityType.Worktree
+                    && string.Equals(assignment.WorkbenchId, workbenchId, StringComparison.Ordinal))).ToList(),
+        });
+    }
+
+    /// <summary>Removes direct assignments owned by one deleted Worktree.</summary>
+    public void RemoveWorktreeAssignments(string workbenchId, string worktreeId)
+    {
+        ValidateId(workbenchId, "workbenchId");
+        ValidateId(worktreeId, "worktreeId");
+        _store.Mutate(document => document with
+        {
+            Assignments = document.Assignments.Where(assignment =>
+                !(assignment.EntityType == TagEntityType.Worktree
+                    && string.Equals(assignment.EntityId, worktreeId, StringComparison.Ordinal)
+                    && string.Equals(assignment.WorkbenchId, workbenchId, StringComparison.Ordinal))).ToList(),
+        });
+    }
+
     public WorkbenchTagProjection GetWorkbenchTags(string workbenchId)
     {
         ValidateId(workbenchId, "workbenchId");
