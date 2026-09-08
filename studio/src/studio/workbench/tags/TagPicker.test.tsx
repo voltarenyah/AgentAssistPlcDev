@@ -12,36 +12,65 @@ const nodes: TagNode[] = [
 
 afterEach(() => { document.body.innerHTML = '' })
 
+const getByRole = (role: string, name?: string) => {
+  const candidates = Array.from(document.body.getElementsByTagName('*')).filter(element => {
+    const elementRole = element.getAttribute('role') ?? (element.tagName === 'BUTTON' ? 'button' : element.tagName === 'INPUT' ? 'combobox' : '')
+    if (elementRole !== role) return false
+    if (!name) return true
+    const accessibleName = element.getAttribute('aria-label') ?? element.textContent?.trim() ?? ''
+    return typeof name === 'string' ? accessibleName === name : false
+  })
+  expect(candidates.length, `role ${role} name ${name}`).toBeGreaterThan(0)
+  return candidates[0] as HTMLElement
+}
+
+const getByLabel = (label: string) => getByRole('combobox', label) as HTMLInputElement
+
+const type = async (input: HTMLInputElement, value: string) => {
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    setValue?.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
 describe('TagPicker', () => {
   it('shows one create action for a valid absent slash path', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
     await act(async () => root.render(<TagPicker nodes={nodes} onAssign={() => {}} onCreate={() => ({ tagId: 'c', parentTagId: 'b', name: 'Hydraulic', normalizedName: 'hydraulic' })} />))
-    await act(async () => (host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement).click())
-    const input = document.body.querySelector('input[aria-label="Search tags"]') as HTMLInputElement
-    await act(async () => {
-      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-      setValue?.call(input, 'Machine/Press/Hydraulic')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    expect(document.body.querySelectorAll('[cmdk-item]').length).toBeGreaterThan(0)
-    expect(Array.from(document.body.querySelectorAll('[cmdk-item]')).filter(item => item.textContent?.includes('Create')).length).toBe(1)
+    await act(async () => getByRole('button', 'Add tag').click())
+    await type(getByLabel('Search tags'), 'Machine/Press/Hydraulic')
+    expect(getByRole('option', 'Create tag Machine/Press/Hydraulic')).toBeTruthy()
     await act(async () => root.unmount())
   })
 
-  it('assigns an existing node by keyboard command selection and keeps assignments on error', async () => {
+  it('assigns an existing node by keyboard search and keeps controlled assignments on error', async () => {
     const onAssign = vi.fn(async () => { throw new Error('offline') })
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
-    await act(async () => root.render(<TagPicker nodes={nodes} currentTagIds={['a']} onAssign={onAssign} />))
-    await act(async () => (host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement).click())
-    const item = Array.from(document.body.querySelectorAll<HTMLElement>('[cmdk-item]')).find(element => element.textContent?.includes('Machine/Press'))
-    expect(item).toBeTruthy()
-    await act(async () => item?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    const retry = vi.fn()
+    function Harness() {
+      const [currentTagIds] = React.useState(['a'])
+      return <TagPicker nodes={nodes} currentTagIds={currentTagIds} onAssign={onAssign} error="Tag API offline" onRetry={retry} />
+    }
+    await act(async () => root.render(<Harness />))
+    expect(getByRole('listitem', 'Machine')).toBeTruthy()
+    await act(async () => getByRole('button', 'Add tag').click())
+    const input = getByLabel('Search tags')
+    await type(input, 'Machine/Press')
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
     expect(onAssign).toHaveBeenCalledWith('b')
-    expect(document.body.textContent).toContain('Machine/Press')
+    expect(getByRole('listitem', 'Machine')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Machine/Press\n')
+    expect(getByRole('alert')).toBeTruthy()
+    await act(async () => getByRole('button', 'Retry').click())
+    expect(retry).toHaveBeenCalledOnce()
     await act(async () => root.unmount())
   })
 })

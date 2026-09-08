@@ -51,6 +51,11 @@ export function TagPicker({ nodes, currentTagIds = [], onAssign, onCreate, loadi
 
   return (
     <>
+      <div role="list" aria-label="Current tags" className="flex flex-wrap gap-1">
+        {nodes.filter(node => current.has(node.tagId)).map(node => (
+          <div role="listitem" aria-label={paths.get(node.tagId) ?? node.name} key={node.tagId}>{paths.get(node.tagId) ?? node.name}</div>
+        ))}
+      </div>
       <Button type="button" variant="outline" disabled={disabled || loading} onClick={() => setOpen(true)} aria-label={loading ? 'Add tag (loading)' : 'Add tag'}>
         {loading ? 'Loading tags…' : 'Add tag'}
       </Button>

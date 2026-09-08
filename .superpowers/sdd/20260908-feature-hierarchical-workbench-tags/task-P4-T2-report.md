@@ -13,6 +13,7 @@
 - `npm run build` (studio) — passed.
 - `npm test -- --run` (studio) — 72 files / 401 tests passed; existing test environment emitted unhandled `ECONNREFUSED localhost:3000` errors from `MainStudio.apiKey.test.tsx` during teardown.
 - `git diff --check` — passed.
+- Review fix: picker tests now use semantic role/label helpers for Add tag, command search, create action, keyboard search/selection, and a controlled current-assignment harness with visible retry recovery.
 
 ## Scope / concerns
 
@@ -21,4 +22,4 @@
 
 ## Commit
 
-- Pending scoped commit on the task branch.
+- Commits: `f6347f2` initial implementation; follow-up review fix commit adds semantic picker proof and controlled error-recovery coverage.
