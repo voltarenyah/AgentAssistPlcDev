@@ -60,6 +60,20 @@ public sealed class WorkbenchTagStoreTests : IDisposable
     }
 
     [Fact]
+    public void NumericEntityTypeRaisesDefinedErrorAndIsNotReset()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        const string numeric = "{\"schemaVersion\":\"1.0\",\"nodes\":[],\"assignments\":[{\"tagId\":\"tag-1\",\"entityType\":999,\"entityId\":\"wb-1\",\"workbenchId\":null}]}";
+        File.WriteAllText(_path, numeric);
+
+        var error = Assert.Throws<WorkbenchTagStoreException>(
+            () => new WorkbenchTagStore(_path).Load());
+
+        Assert.Contains("could not be read", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(numeric, File.ReadAllText(_path));
+    }
+
+    [Fact]
     public async Task ConcurrentMutationsAreSerializedWithoutLostUpdates()
     {
         var store = new WorkbenchTagStore(_path);

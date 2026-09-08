@@ -23,7 +23,9 @@ public enum TagEntityType
 }
 
 public sealed class TagEntityTypeJsonConverter()
-    : JsonStringEnumConverter<TagEntityType>(System.Text.Json.JsonNamingPolicy.CamelCase);
+    : JsonStringEnumConverter<TagEntityType>(
+        System.Text.Json.JsonNamingPolicy.CamelCase,
+        allowIntegerValues: false);
 
 /// <summary>A direct assignment. Worktree assignments carry their owning WorkbenchId.</summary>
 public sealed record TagAssignment(

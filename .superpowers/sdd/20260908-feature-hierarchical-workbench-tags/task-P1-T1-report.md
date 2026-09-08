@@ -35,3 +35,10 @@ DONE
 ## Concerns
 
 None for the P1-T1 scope. Later service work should use `Mutate` for all assignment/node changes rather than mutating a loaded document outside the store lock.
+
+## Review fix
+
+- Changed `TagEntityTypeJsonConverter` to disallow integer enum values while preserving camelCase string serialization.
+- Added `NumericEntityTypeRaisesDefinedErrorAndIsNotReset` to prove a numeric `entityType` is rejected and the source file is preserved.
+- Focused validation: `dotnet test tests/Agent.Tests/Agent.Tests.csproj --filter FullyQualifiedName~WorkbenchTagStoreTests -v q` — 5 passed.
+- Full validation: `dotnet test tests/Agent.Tests/Agent.Tests.csproj --no-build -v q` — 404 passed.
