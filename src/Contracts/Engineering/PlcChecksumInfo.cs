@@ -17,8 +17,8 @@ public static class FSignatureReadState
 
 /// <summary>One F-block's offline signature (SafetySignatureProvider on the block, TIA Openness
 /// manual §5.27.4). A pair list rather than a map so block paths survive serializers that
-/// camelCase dictionary keys. "00000000" means the block's signature is missing or invalidated
-/// by an uncompiled change.</summary>
+/// camelCase dictionary keys. "00000000" is a normal signature value for an uncalled F-block
+/// and is compared by equality like every other signature.</summary>
 public sealed class FBlockSignatureInfo
 {
     /// <summary>Block source path ("Program blocks/&lt;group&gt;/&lt;name&gt;").</summary>

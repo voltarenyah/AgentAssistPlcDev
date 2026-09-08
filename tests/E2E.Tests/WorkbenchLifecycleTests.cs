@@ -611,6 +611,11 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var baselineSvnRevision = EngineeringStateWriter.Read(
             WorkbenchPaths.ResolveRevisionState(masterRoot)).Svn.Revision!.Value;
         var headBefore = RepositoryService.Log(masterRoot, 1).Commits.Single().Sha;
+        var initialEvidence = RepositoryService.GetValidation(masterRoot, headBefore);
+        Assert.NotNull(initialEvidence);
+        Assert.Equal("2.0", initialEvidence!.SchemaVersion);
+        Assert.Equal("tia-managed-source", initialEvidence.EvidenceKind);
+        Assert.True(initialEvidence.ManagedSourceConsistent);
 
         // Simulate an authorized TIA change: the managed project changed natively and the
         // accepted source XML is written into master with the master-gate pending records.
@@ -641,6 +646,12 @@ public sealed class WorkbenchLifecycleTests : IDisposable
         var sourceCommit = RepositoryService.Log(masterRoot, 1).Commits.Single();
         Assert.Equal(commit.Sha, sourceCommit.Sha);
         Assert.Contains(sourcePath, sourceCommit.Files);
+        Assert.True(
+            (commit.EvidenceWarnings ?? Array.Empty<string>()).Count == 0,
+            string.Join(Environment.NewLine, commit.EvidenceWarnings ?? Array.Empty<string>()));
+        var commitEvidence = RepositoryService.GetValidation(masterRoot, commit.Sha);
+        Assert.NotNull(commitEvidence);
+        Assert.False(commitEvidence!.ManagedSourceConsistent);
 
         // The explicit savepoint binds the TIA state: SVN revision + revision.json + git commit.
         var savepoint = await coordinator.CreateNativeSavepointAsync(
@@ -1063,6 +1074,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                         JsonSerializer.Serialize(
                             args.GetType().GetProperty("devices")?.GetValue(args)),
                         CaseInsensitiveDevices)!),
+                "vc_validation_create" => CreateValidation(args),
                 "svn_init_shared" => SvnInitShared(args),
                 "svn_commit_native_baseline" => SvnCommitNativeBaseline(args),
                 "svn_checkout" => Svn.Checkout(
@@ -1163,6 +1175,16 @@ public sealed class WorkbenchLifecycleTests : IDisposable
             };
         }
 
+        private static object CreateValidation(object args)
+        {
+            var source = args.GetType().GetProperty("evidence")!.GetValue(args)!;
+            var evidence = JsonSerializer.Deserialize<VcValidationEvidence>(
+                JsonSerializer.Serialize(source),
+                CaseInsensitiveDevices);
+            _ = RepositoryService.CreateValidation(Property<string>(args, "repoPath"), evidence);
+            return source;
+        }
+
         private static object SvnInitShared(object args)
         {
             var result = Svn.CreateShared(Property<string>(args, "workbenchRoot"));
@@ -1247,6 +1269,7 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                 "save_project_as" => SaveProjectAs(args),
                 "compile_plc" => new CompileResult { State = compileState },
                 "get_plc_checksums" => Checksums(),
+                "capture_source_evidence" => CaptureSourceEvidence(args),
                 "rebuild_export" => Export(args),
                 "export_hardware_configuration" => ExportHardware(args),
                 "import_block" => Import(args),
@@ -1302,6 +1325,37 @@ public sealed class WorkbenchLifecycleTests : IDisposable
                     SoftwareChecksum = $"checksum-{plc}",
                 })
                 .ToArray();
+
+        private static SourceEvidenceCaptureResult CaptureSourceEvidence(object args)
+        {
+            var plc = Property<string>(args, "plcName");
+            return new SourceEvidenceCaptureResult
+            {
+                Snapshot = new SourceEvidenceSnapshot
+                {
+                    PlcName = plc,
+                    Checksum = new PlcChecksumInfo
+                    {
+                        PlcName = plc,
+                        ProjectIdentity = "fixture-project",
+                        SoftwareChecksum = $"checksum-{plc}",
+                    },
+                    Objects = new[]
+                    {
+                        new ManagedSourceEvidenceObject
+                        {
+                            Id = "main",
+                            Name = "Main",
+                            SourcePath = "Program blocks/Main",
+                            Category = "OB",
+                            Kind = ManagedSourceEvidenceKind.StandardBlock,
+                            ReadState = ManagedSourceEvidenceReadState.Readable,
+                            Fingerprints = new FingerprintSet { ["code"] = "fixture" },
+                        },
+                    },
+                },
+            };
+        }
 
         private SyncResult[] Export(object args)
         {

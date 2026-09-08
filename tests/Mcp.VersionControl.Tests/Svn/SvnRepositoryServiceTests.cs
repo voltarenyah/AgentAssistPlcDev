@@ -125,6 +125,28 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void CommitNativeBaseline_ReadOnlySource_ClearsAttributesBeforeStaging()
+    {
+        var shared = CreateShared();
+        var source = Path.Combine(_root, "tia-read-only-baseline");
+        Directory.CreateDirectory(Path.Combine(source, "IM"));
+        File.WriteAllText(Path.Combine(source, "Line.ap17"), "project");
+        File.WriteAllText(Path.Combine(source, "IM", "data.bin"), "data");
+        SetReadOnlyRecursively(source);
+
+        var baseline = _svn.CommitNativeBaseline(
+            shared.RepositoryUri,
+            source,
+            "native: read-only baseline");
+
+        Assert.True(baseline.Committed);
+        Assert.Equal(1, baseline.Revision);
+        Assert.True(_svn.Status(source).IsClean);
+        Assert.False(File.GetAttributes(source).HasFlag(FileAttributes.ReadOnly));
+        Assert.False(File.GetAttributes(Path.Combine(source, "Line.ap17")).HasFlag(FileAttributes.ReadOnly));
+    }
+
+    [Fact]
     public void CommitNativeBaseline_InvalidRepository_ThrowsAndLeavesTreeUntouched()
     {
         var source = Path.Combine(_root, "tia");
@@ -140,7 +162,7 @@ public sealed class SvnRepositoryServiceTests : IDisposable
     }
 
     [Fact]
-    public void CommitNativeBaseline_FinalCheckoutFailure_RestoresSourceTree()
+    public void CommitNativeBaseline_FinalCheckoutFailure_LeavesOriginalSourceTreeUntouched()
     {
         var shared = CreateShared();
         var source = Path.Combine(_root, "tia");
@@ -149,11 +171,13 @@ public sealed class SvnRepositoryServiceTests : IDisposable
 
         SvnRepositoryService? service = null;
         var checkoutCalls = 0;
+        var finalCheckoutAllowsObstructions = false;
         service = new SvnRepositoryService((url, path, allowObstructions) =>
         {
             checkoutCalls++;
             if (checkoutCalls == 2)
             {
+                finalCheckoutAllowsObstructions = allowObstructions;
                 throw new Git.VcInternalException(
                     "SVN_CHECKOUT_FAILED",
                     "simulated final checkout failure");
@@ -169,6 +193,7 @@ public sealed class SvnRepositoryServiceTests : IDisposable
 
         Assert.Equal("SVN_CHECKOUT_FAILED", error.Code);
         Assert.Equal(2, checkoutCalls);
+        Assert.True(finalCheckoutAllowsObstructions);
         Assert.True(Directory.Exists(source));
         Assert.Equal("project", File.ReadAllText(Path.Combine(source, "Line.ap17")));
         Assert.Empty(Directory.GetDirectories(_root, ".svn-native-*"));

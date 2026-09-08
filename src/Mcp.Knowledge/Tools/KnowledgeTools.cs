@@ -1718,5 +1718,12 @@ public sealed class KnowledgeTools
         {
             return ToolJson.Fail("UNEXPECTED_ERROR", ex.Message);
         }
+        finally
+        {
+            // This server stays alive for the whole app session. Microsoft.Data.Sqlite
+            // otherwise keeps disposed connections in its pool, which leaves a Windows
+            // handle on device-local plc-knowledge.db and prevents failed-create rollback.
+            SqliteConnection.ClearAllPools();
+        }
     }
 }

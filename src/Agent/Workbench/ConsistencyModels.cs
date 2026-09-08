@@ -36,7 +36,6 @@ public enum SafetyBlockDifferenceKind
     Changed,
     Added,
     Removed,
-    Invalidated,
 }
 
 public sealed record SafetyBlockDifference(
@@ -44,6 +43,15 @@ public sealed record SafetyBlockDifference(
     string? BaselineSignature,
     string? CurrentSignature,
     SafetyBlockDifferenceKind Kind);
+
+/// <summary>One observable phase of a TIA comparison, retained with the comparison result so a
+/// diagnostic report can explain both elapsed time and the evidence produced by that phase.</summary>
+public sealed record ComparisonTiming(
+    string Phase,
+    string Purpose,
+    string? PlcName,
+    long ElapsedMilliseconds,
+    string Outcome);
 
 public sealed record SourceDifference(
     string DeviceId,
@@ -85,4 +93,6 @@ public sealed record WorkbenchConsistencyResult(
     IReadOnlyList<SourceDifference> Differences,
     HardwareConfigurationCompareResult? Hardware = null,
     IReadOnlyList<DeviceSafetyEvidence>? Safety = null,
-    bool SafetyChanged = false);
+    bool SafetyChanged = false,
+    IReadOnlyList<ComparisonTiming>? Timings = null,
+    bool UntrackableChange = false);

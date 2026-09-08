@@ -112,10 +112,11 @@ internal sealed class SvnRepositoryService
 
     /// <summary>
     /// Commit the native baseline of a fresh repository (still at r0) as revision r1:
-    /// stages native/main plus the full project tree in a single commit, then restores
-    /// &lt;localPath&gt; as a clean native/main working copy. svn import cannot create the
-    /// missing native/ parent, so the staging goes through a scratch working copy of the
-    /// repository root. On failure the project tree is moved back to &lt;localPath&gt;.
+    /// copies native/main plus the full project tree into a scratch working copy in a single
+    /// commit, then adopts the unchanged original tree as a clean native/main working copy.
+    /// svn import cannot create the missing native/ parent, so staging goes through a scratch
+    /// working copy of the repository root. The original TIA directory is never renamed:
+    /// FileStorage can retain a directory handle briefly after TIA has released project files.
     /// </summary>
     public SvnCommitResult CommitNativeBaseline(string repositoryUrl, string localPath, string message)
     {
@@ -132,18 +133,13 @@ internal sealed class SvnRepositoryService
             Path.GetDirectoryName(path)!,
             ".svn-native-baseline-" + Guid.NewGuid().ToString("N"));
         var stagedMain = Path.Combine(scratch, "native", "main");
-        var restoredCheckout = Path.Combine(
-            Path.GetDirectoryName(path)!,
-            ".svn-native-restore-" + Guid.NewGuid().ToString("N"));
-        var moved = false;
         long revision;
 
         try
         {
             _checkout(rootUri.ToString(), scratch, false);
             Directory.CreateDirectory(Path.Combine(scratch, "native"));
-            Directory.Move(path, stagedMain);
-            moved = true;
+            CopyNativeBaselineTree(path, stagedMain);
             AddRecursive(scratch);
             var committed = Commit(scratch, message);
             if (!committed.Committed)
@@ -155,36 +151,12 @@ internal sealed class SvnRepositoryService
 
             revision = committed.Revision;
 
-            // Restore through a temporary sibling so a failed checkout cannot leave a
-            // partial directory at the caller's original path before rollback runs.
-            _checkout(mainUri.ToString(), restoredCheckout, false);
-            Directory.Move(restoredCheckout, path);
-        }
-        catch
-        {
-            if (moved && !Directory.Exists(path) && Directory.Exists(stagedMain))
-            {
-                ClearReadOnlyAttributes(stagedMain);
-                Directory.Move(stagedMain, path);
-            }
-
-            throw;
+            // The local TIA tree stayed in place. Its content is exactly what was committed,
+            // so allow SVN to add its working-copy metadata around the existing files.
+            _checkout(mainUri.ToString(), path, true);
         }
         finally
         {
-            ClearReadOnlyAttributes(restoredCheckout);
-            if (Directory.Exists(restoredCheckout))
-            {
-                try
-                {
-                    Directory.Delete(restoredCheckout, recursive: true);
-                }
-                catch
-                {
-                    // best-effort cleanup of a failed temporary checkout
-                }
-            }
-
             if (Directory.Exists(scratch))
             {
                 ClearReadOnlyAttributes(scratch);
@@ -205,6 +177,50 @@ internal sealed class SvnRepositoryService
             Committed = true,
             Revision = revision,
         };
+    }
+
+    /// <summary>
+    /// Copy the TIA tree into the temporary SVN working copy without renaming its root. TIA
+    /// project files can inherit read-only attributes from their source location; clear those
+    /// attributes before SVN later adopts the original directory as a working copy.
+    /// </summary>
+    private static void CopyNativeBaselineTree(string sourcePath, string stagedPath)
+    {
+        try
+        {
+            ClearReadOnlyAttributes(sourcePath);
+            CopyDirectoryContents(sourcePath, stagedPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new VcInternalException(
+                "SVN_BASELINE_STAGE_FAILED",
+                $"Could not copy the native TIA project directory '{sourcePath}' for its initial SVN baseline: {exception.Message}",
+                "Close TIA and any process using the project, then ensure the current user can read and modify the tia directory and retry.");
+        }
+    }
+
+    private static void CopyDirectoryContents(string sourcePath, string destinationPath)
+    {
+        Directory.CreateDirectory(destinationPath);
+        foreach (var sourceEntry in Directory.EnumerateFileSystemEntries(sourcePath))
+        {
+            var destinationEntry = Path.Combine(destinationPath, Path.GetFileName(sourceEntry));
+            var attributes = File.GetAttributes(sourceEntry);
+            if (attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                throw new IOException($"The native TIA baseline cannot include reparse point '{sourceEntry}'.");
+            }
+
+            if (Directory.Exists(sourceEntry))
+            {
+                CopyDirectoryContents(sourceEntry, destinationEntry);
+            }
+            else
+            {
+                File.Copy(sourceEntry, destinationEntry, overwrite: false);
+            }
+        }
     }
 
     /// <summary>

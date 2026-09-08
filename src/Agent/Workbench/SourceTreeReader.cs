@@ -36,19 +36,38 @@ public sealed class SourceTreeReader
 
                 var relativePath = Path.GetRelativePath(validatedRoot, entry).Replace(Path.DirectorySeparatorChar, '/');
                 _ = WorkbenchPaths.ResolveRelativeBelowValidatedRoot(validatedRoot, relativePath);
-                var xml = File.ReadAllText(entry);
-                var identity = Describe(xml, relativePath, out var category, out var name);
-                snapshots.Add(new SourceObjectSnapshot(
-                    identity,
-                    relativePath,
-                    category,
-                    name,
-                    ComputeHexHash(XmlCompare.Normalize(xml)),
-                    new FileInfo(entry).Length));
+                snapshots.Add(ReadFile(entry, relativePath));
             }
         }
 
         return snapshots.OrderBy(item => item.RelativePath, StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>Read and normalize exactly one known candidate path without enumerating its tree.</summary>
+    public SourceObjectSnapshot? TryReadRelative(string root, string relativePath)
+    {
+        var validatedRoot = WorkbenchPaths.ValidateResolvedRoot(root);
+        var normalized = relativePath.Replace('\\', '/');
+        var path = WorkbenchPaths.ResolveRelativeBelowValidatedRoot(validatedRoot, normalized);
+        if (!File.Exists(path))
+            return null;
+        RejectReparsePoint(path);
+        if (!string.Equals(Path.GetExtension(path), ".xml", StringComparison.OrdinalIgnoreCase))
+            throw new WorkbenchPathException($"Candidate source path '{relativePath}' is not an XML file.");
+        return ReadFile(path, normalized);
+    }
+
+    private static SourceObjectSnapshot ReadFile(string path, string relativePath)
+    {
+        var xml = File.ReadAllText(path);
+        var identity = Describe(xml, relativePath, out var category, out var name);
+        return new SourceObjectSnapshot(
+            identity,
+            relativePath,
+            category,
+            name,
+            ComputeHexHash(XmlCompare.Normalize(xml)),
+            new FileInfo(path).Length);
     }
 
     private static string Describe(string xml, string relativePath, out string category, out string name)

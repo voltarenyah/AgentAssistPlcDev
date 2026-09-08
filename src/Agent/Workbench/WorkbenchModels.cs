@@ -137,7 +137,8 @@ public sealed record TiaSynchronizationResult(
 public sealed record WorkbenchCommitResult(
     string Sha,
     string Message,
-    IReadOnlyList<string> Files);
+    IReadOnlyList<string> Files,
+    IReadOnlyList<string>? EvidenceWarnings = null);
 
 public sealed class CoordinatorGitCommitResult
 {
@@ -229,7 +230,8 @@ public sealed record HardwareConfigurationReloadResult(
     int ArtifactCount,
     int DeviceCount,
     string CommitSha,
-    IReadOnlyList<string>? Warnings = null);
+    IReadOnlyList<string>? Warnings = null,
+    IReadOnlyList<string>? EvidenceWarnings = null);
 
 public sealed record HardwareConfigurationCompareArtifact(
     string Scope,
@@ -247,4 +249,5 @@ public sealed record HardwareConfigurationCompareResult(
 public sealed record HardwareConfigurationOverwriteResult(
     string RootPath,
     int ArtifactCount,
-    string CommitSha);
+    string CommitSha,
+    IReadOnlyList<string>? EvidenceWarnings = null);

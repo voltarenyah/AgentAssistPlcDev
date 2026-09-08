@@ -660,7 +660,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             engineering.Calls.Take(6).ToArray());
         // The engineering session is released between the managed-copy phase and the export,
         // so the waiting OpenProjectInTia connect interleaves with the bootstrap tail.
-        Assert.Equal(11, engineering.Calls.Count);
+        Assert.Equal(13, engineering.Calls.Count);
         Assert.Equal(2, engineering.Calls.Count(call => call == "connect"));
         Assert.True(
             engineering.Calls.IndexOf("rebuild_export") < engineering.Calls.IndexOf("disconnect"));
@@ -764,13 +764,17 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "engineering:rebuild_export",
                 "engineering:get_project_info",
                 "engineering:rebuild_export",
+                "engineering:capture_source_evidence",
+                "engineering:capture_source_evidence",
                 "engineering:export_hardware_configuration",
                 "knowledge:ingest_source",
                 "knowledge:ingest_source",
+                "engineering:close_session",
                 "engineering:disconnect",
                 "version:svn_commit_native_baseline",
                 "version:vc_commit_selected",
                 "version:vc_commit_state_create",
+                "version:vc_validation_create",
             },
             calls);
         Assert.Equal(
@@ -795,6 +799,9 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.Equal(
             42,
             Property<int>(engineering.CallArgs["connect"].Single(), "sessionId"));
+        Assert.Equal(
+            42,
+            Property<int>(engineering.CallArgs["close_session"].Single(), "sessionId"));
         Assert.Equal(2, result.Devices.Count);
         Assert.All(result.Devices, device =>
         {
@@ -1032,7 +1039,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline",
-                "vc_commit_selected", "vc_commit_state_create", "vc_add_worktree",
+                "vc_commit_selected", "vc_commit_state_create", "vc_validation_create", "vc_add_worktree",
             },
             versionControl.Calls);
     }
@@ -1073,7 +1080,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline",
-                "vc_commit_selected", "vc_commit_state_create", "vc_add_worktree", "vc_remove_worktree",
+                "vc_commit_selected", "vc_commit_state_create", "vc_validation_create", "vc_add_worktree", "vc_remove_worktree",
             },
             versionControl.Calls);
         var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
@@ -1113,7 +1120,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline",
-                "vc_commit_selected", "vc_commit_state_create", "vc_add_worktree", "vc_remove_worktree",
+                "vc_commit_selected", "vc_commit_state_create", "vc_validation_create", "vc_add_worktree", "vc_remove_worktree",
             },
             versionControl.Calls);
         var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
@@ -1285,6 +1292,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "engineering:get_plc_checksums",
                 "engineering:get_project_info",
                 "engineering:rebuild_export",
+                "engineering:capture_source_evidence",
                 "engineering:export_hardware_configuration",
                 "knowledge:ingest_source",
                 "engineering:close_session",
@@ -1292,6 +1300,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "version:svn_commit_native_baseline",
                 "version:vc_commit_selected",
                 "version:vc_commit_state_create",
+                "version:vc_validation_create",
             },
             calls);
         var managedPath = Assert.IsType<string>(result.Workbench.ManagedTiaProjectPath);
@@ -2440,7 +2449,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
 
     /// <summary>Scripts the 1.2 create flow on an engineering caller: connect, origin
     /// get_project_info, save_project_as into the tia/ store, managed verify, per-PLC
-    /// compile_plc + get_plc_checksums, rebuild_export per PLC, project hardware export, disconnect.</summary>
+    /// compile_plc + get_plc_checksums, rebuild_export per PLC, project hardware export,
+    /// close_session, then disconnect.</summary>
     private static FakeToolCaller ScriptCreateEngineering(
         FakeToolCaller caller,
         string[] plcs,
@@ -2502,8 +2512,32 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             caller.Respond("rebuild_export", (Func<object, object>)WriteCreateExport);
         }
 
+        foreach (var plc in plcs)
+        {
+            caller.Respond("capture_source_evidence", args =>
+            {
+                var plcName = Property<string>(args, "plcName");
+                return new SourceEvidenceCaptureResult
+                {
+                    Snapshot = new SourceEvidenceSnapshot
+                    {
+                        PlcName = plcName,
+                        Checksum = new PlcChecksumInfo
+                        {
+                            PlcName = plcName,
+                            ProjectIdentity = "project-1",
+                            SoftwareChecksum = $"checksum-{plcName}",
+                        },
+                        Objects = Array.Empty<ManagedSourceEvidenceObject>(),
+                    },
+                };
+            });
+        }
+
         caller.Respond("export_hardware_configuration", (Func<object, object>)WriteCreateHardwareExport);
-        return caller.Respond("disconnect", new object());
+        return caller
+            .Respond("close_session", new object())
+            .Respond("disconnect", new object());
     }
 
     private static FakeToolCaller ScriptCreateKnowledge(FakeToolCaller caller, int deviceCount)
@@ -2536,7 +2570,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 "baseline-sha",
                 "Initial PLC source baseline",
                 new[] { EngineeringStateWriter.RelativePath }))
-            .Respond("vc_commit_state_create", new object());
+            .Respond("vc_commit_state_create", new object())
+            .Respond("vc_validation_create", args => args.GetType().GetProperty("evidence")!.GetValue(args)!);
 
     private static object WriteCreateExport(object args)
     {
@@ -3097,6 +3132,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             switch (tool)
             {
                 case "connect":
+                case "close_session":
                 case "disconnect":
                     return (T)(object)new object();
                 case "get_project_info":
@@ -3139,6 +3175,24 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     };
                 case "rebuild_export":
                     return (T)WriteCreateExport(args);
+                case "capture_source_evidence":
+                {
+                    var plcName = Property<string>(args, "plcName");
+                    return (T)(object)new SourceEvidenceCaptureResult
+                    {
+                        Snapshot = new SourceEvidenceSnapshot
+                        {
+                            PlcName = plcName,
+                            Checksum = new PlcChecksumInfo
+                            {
+                                PlcName = plcName,
+                                ProjectIdentity = "project-1",
+                                SoftwareChecksum = $"checksum-{plcName}",
+                            },
+                            Objects = Array.Empty<ManagedSourceEvidenceObject>(),
+                        },
+                    };
+                }
                 case "export_hardware_configuration":
                     return (T)WriteCreateHardwareExport(args);
                 default:

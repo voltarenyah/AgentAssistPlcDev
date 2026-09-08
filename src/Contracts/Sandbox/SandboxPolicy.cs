@@ -39,6 +39,8 @@ public sealed class SandboxPolicy
             ["get_project_capabilities"] = SandboxTier.Read,
             ["list_blocks"] = SandboxTier.Read,
             ["get_plc_checksums"] = SandboxTier.Read,
+            ["capture_source_evidence"] = SandboxTier.Read,
+            ["compare_source_evidence"] = SandboxTier.Read,
             ["export_block"] = SandboxTier.Read,
             ["export_source_object"] = SandboxTier.Read,
             ["export_all_blocks"] = SandboxTier.Read,

@@ -477,7 +477,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var registry = new OperationStatusRegistry(clock);
 
         registry.Start("op-1", "create-workbench", "Preparing workbench storage...");
+        clock.Advance(TimeSpan.FromSeconds(2));
         registry.Report("op-1", "Initializing Git repository...");
+
+        clock.Advance(TimeSpan.FromMilliseconds(750));
 
         Assert.True(registry.TryGet("op-1", out var running));
         Assert.Equal("op-1", running.OperationId);
@@ -485,8 +488,20 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal("running", running.State);
         Assert.Equal("Initializing Git repository...", running.Message);
         Assert.Null(running.ErrorMessage);
+        var preparing = Assert.Single(running.CompletedPhases!);
+        Assert.Equal("Preparing workbench storage...", preparing.Message);
+        Assert.Equal(2000, preparing.ElapsedMilliseconds);
+        Assert.NotNull(running.CurrentPhase);
+        Assert.Equal("Initializing Git repository...", running.CurrentPhase!.Message);
+        Assert.Equal(750, running.CurrentPhase.ElapsedMilliseconds);
 
+        clock.Advance(TimeSpan.FromMilliseconds(250));
         registry.Succeed("op-1", "Workbench created.");
+        Assert.True(registry.TryGet("op-1", out var completed));
+        var completedPhases = completed.CompletedPhases!;
+        Assert.Equal(2, completedPhases.Count);
+        Assert.Null(completed.CurrentPhase);
+        Assert.Equal(1000, completedPhases[1].ElapsedMilliseconds);
         registry.Dismiss("op-1");
 
         Assert.False(registry.TryGet("op-1", out _));
@@ -510,6 +525,25 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         clock.Advance(TimeSpan.FromMinutes(61));
 
         Assert.False(registry.TryGet("op-1", out _));
+    }
+
+    [Fact]
+    public void OperationRegistryKeepsExportCountersWithinTheActivePhase()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.Parse("2026-07-28T00:00:00Z"));
+        var registry = new OperationStatusRegistry(clock);
+
+        registry.Start("op-1", "compare-tia", "Comparing master with TIA Portal...");
+        clock.Advance(TimeSpan.FromSeconds(1));
+        registry.Report("op-1", "Comparing TIA source for PLC_1...");
+        clock.Advance(TimeSpan.FromSeconds(2));
+        registry.Report("op-1", "Exported PLC source files: 12 of 100");
+
+        Assert.True(registry.TryGet("op-1", out var snapshot));
+        Assert.Single(snapshot.CompletedPhases!);
+        Assert.Equal("Exported PLC source files: 12 of 100", snapshot.Message);
+        Assert.Equal("Comparing TIA source for PLC_1...", snapshot.CurrentPhase!.Message);
+        Assert.Equal(2000, snapshot.CurrentPhase.ElapsedMilliseconds);
     }
 
     [Theory]
@@ -1125,7 +1159,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             {
                 "connect", "get_current_session", "get_project_info", "save_project_as", "get_project_info",
                 "compile_plc", "get_plc_checksums", "get_project_info", "rebuild_export",
-                "export_hardware_configuration", "close_session", "disconnect",
+                "capture_source_evidence", "export_hardware_configuration", "close_session", "disconnect",
             },
             engineering.Calls);
         Assert.Equal(projectPath, engineering.Arguments[0].GetProperty("projectPath").GetString());

@@ -34,6 +34,58 @@ public sealed class MasterSynchronizationTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyOfEverySourceDifferenceCreatesAConsistentFingerprintBaseline()
+    {
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("capture_source_evidence", new Contracts.Engineering.SourceEvidenceCaptureResult
+            {
+                Snapshot = new Contracts.Engineering.SourceEvidenceSnapshot
+                {
+                    PlcName = "PLC_1",
+                    Checksum = new Contracts.Engineering.PlcChecksumInfo
+                    {
+                        PlcName = "PLC_1",
+                        ProjectIdentity = "project-1",
+                        SoftwareChecksum = "checksum-1",
+                    },
+                    Objects = new[]
+                    {
+                        new Contracts.Engineering.ManagedSourceEvidenceObject
+                        {
+                            Id = "main",
+                            Name = "Main",
+                            SourcePath = "Program blocks/Main",
+                            Category = "OB",
+                            Kind = Contracts.Engineering.ManagedSourceEvidenceKind.StandardBlock,
+                            ReadState = Contracts.Engineering.ManagedSourceEvidenceReadState.Readable,
+                            Fingerprints = new Contracts.Engineering.FingerprintSet { ["code"] = "new" },
+                        },
+                    },
+                },
+            });
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        await coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml"), fixture.Path("Blocks/B.xml")],
+            "Accept every TIA source change",
+            CancellationToken.None);
+
+        var evidence = fixture.VersionControl.ValidationEvidence;
+        Assert.NotNull(evidence);
+        Assert.Equal("2.0", evidence!.SchemaVersion);
+        Assert.Equal("tia-managed-source", evidence.EvidenceKind);
+        Assert.True(evidence.ManagedSourceConsistent);
+    }
+
+    [Fact]
     public async Task MasterCommitAllowsADirectLocalEdit()
     {
         var coordinator = fixture.CreateCoordinator();
@@ -134,6 +186,31 @@ public sealed class MasterSynchronizationTests : IDisposable
     }
 
     [Fact]
+    public async Task UntrackableCommitCarriesForwardAnAlreadyProvenManagedSourceBaseline()
+    {
+        fixture.VersionControl.SeedValidation(new TiaSyncEvidence
+        {
+            SchemaVersion = "2.0",
+            EvidenceKind = "tia-managed-source",
+            CommitSha = "head-1",
+            ManagedSourceConsistent = true,
+            Devices = new[] { new TiaSyncEvidenceDevice { DeviceId = "device-1" } },
+        });
+        var coordinator = fixture.CreateCoordinator(TiaEngineering());
+
+        await coordinator.CommitSourceAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            Array.Empty<string>(),
+            "native-only TIA change",
+            CancellationToken.None,
+            untrackableChange: true);
+
+        Assert.NotNull(fixture.VersionControl.ValidationEvidence);
+        Assert.True(fixture.VersionControl.ValidationEvidence!.ManagedSourceConsistent);
+    }
+
+    [Fact]
     public async Task MasterCommitSucceedsWithoutChecksumStateWhenTiaIsUnavailable()
     {
         var coordinator = fixture.CreateCoordinator();
@@ -160,6 +237,26 @@ public sealed class MasterSynchronizationTests : IDisposable
             .Respond("get_plc_checksums", new[]
             {
                 new Contracts.Engineering.PlcChecksumInfo { PlcName = "PLC_1", SoftwareChecksum = "abc123" },
+            })
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("capture_source_evidence", new Contracts.Engineering.SourceEvidenceCaptureResult
+            {
+                Snapshot = new Contracts.Engineering.SourceEvidenceSnapshot
+                {
+                    PlcName = "PLC_1",
+                    Checksum = new Contracts.Engineering.PlcChecksumInfo
+                    {
+                        PlcName = "PLC_1",
+                        ProjectIdentity = "project-1",
+                        SoftwareChecksum = "abc123",
+                    },
+                    Objects = Array.Empty<Contracts.Engineering.ManagedSourceEvidenceObject>(),
+                },
             });
 
     public void Dispose() => fixture.Dispose();
@@ -300,6 +397,9 @@ public sealed class MasterSynchronizationTests : IDisposable
         public string? CommitMessage { get; private set; }
         public object? CommitArgs { get; private set; }
         public object? StateCreateArgs { get; private set; }
+        public TiaSyncEvidence? ValidationEvidence { get; private set; }
+
+        public void SeedValidation(TiaSyncEvidence evidence) => ValidationEvidence = evidence;
 
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
         {
@@ -325,10 +425,33 @@ public sealed class MasterSynchronizationTests : IDisposable
             {
                 return Task.FromResult((T)(object)null!);
             }
+            if (tool == "vc_validation_get")
+            {
+                if (typeof(T) == typeof(ConsistencyValidationEvidence))
+                {
+                    return Task.FromResult((T)(object)new ConsistencyValidationEvidence
+                    {
+                        SchemaVersion = ValidationEvidence?.SchemaVersion ?? string.Empty,
+                        EvidenceKind = ValidationEvidence?.EvidenceKind ?? string.Empty,
+                        CommitSha = ValidationEvidence?.CommitSha ?? string.Empty,
+                        ManagedSourceConsistent = ValidationEvidence?.ManagedSourceConsistent,
+                        Devices = (ValidationEvidence?.Devices ?? Array.Empty<TiaSyncEvidenceDevice>())
+                            .Select(device => new ConsistencyValidationDevice { DeviceId = device.DeviceId })
+                            .ToArray(),
+                    });
+                }
+
+                return Task.FromResult((T)(object?)ValidationEvidence!);
+            }
             if (tool == "vc_commit_state_create")
             {
                 StateCreateArgs = args;
                 return Task.FromResult((T)(object)new object());
+            }
+            if (tool == "vc_validation_create")
+            {
+                ValidationEvidence = (TiaSyncEvidence)args.GetType().GetProperty("evidence")!.GetValue(args)!;
+                return Task.FromResult((T)(object)ValidationEvidence);
             }
             throw new InvalidOperationException(tool);
         }
