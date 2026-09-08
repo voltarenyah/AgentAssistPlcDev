@@ -4,6 +4,8 @@ import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import InlineEdit from './InlineEdit'
 import StatusBadge from './StatusBadge'
+import TagChip from './tags/TagChip'
+import TagPicker from './tags/TagPicker'
 
 type Props = {
   workbenchId: string
@@ -31,6 +33,10 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
   const [overview, setOverview] = useState<api.WorkbenchOverview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [tagNodes, setTagNodes] = useState<api.TagNode[]>([])
+  const [directTagIds, setDirectTagIds] = useState<string[]>([])
+  const [tagsLoading, setTagsLoading] = useState(true)
+  const [tagsError, setTagsError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     try {
@@ -65,6 +71,27 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
     return () => { cancelled = true }
   }, [workbenchId])
 
+  const reloadTags = useCallback(async () => {
+    setTagsLoading(true)
+    try {
+      const [taxonomy, assignments] = await Promise.all([
+        api.getTagTaxonomy(),
+        api.getWorkbenchTags(workbenchId),
+      ])
+      setTagNodes(taxonomy.nodes)
+      setDirectTagIds(assignments.direct)
+      setTagsError(null)
+    } catch (loadError) {
+      setTagsError(displayError(loadError))
+    } finally {
+      setTagsLoading(false)
+    }
+  }, [workbenchId])
+
+  useEffect(() => {
+    void reloadTags()
+  }, [reloadTags])
+
   const orderedWorktrees = useMemo(
     () => (overview ? orderWorktrees(overview.worktrees) : []),
     [overview],
@@ -82,6 +109,20 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
   const changeWorktreeStatus = async (worktree: api.WorktreeOverview, status: api.WorktreeStatus) => {
     await api.updateWorktree(workbenchId, worktree.worktreeId, { status })
     await reload()
+  }
+
+  const assignTag = async (tagId: string) => {
+    await api.assignWorkbenchTag(workbenchId, tagId)
+    await reloadTags()
+  }
+
+  const removeTag = async (tagId: string) => {
+    try {
+      await api.unassignWorkbenchTag(workbenchId, tagId)
+      await reloadTags()
+    } catch (removeError) {
+      showErrorToast(`Tag could not be removed: ${displayError(removeError)}`)
+    }
   }
 
   if (loading && !overview) {
@@ -153,6 +194,25 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
               value={overview.owner ?? ''}
               onSave={owner => saveWorkbenchField({ owner })}
             />
+          </div>
+          <div className="w-full border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+            <div className="mb-2 text-[9px] uppercase tracking-wide text-muted-foreground">Tags</div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {directTagIds.map(tagId => {
+                const node = tagNodes.find(candidate => candidate.tagId === tagId)
+                return node ? (
+                  <TagChip key={tagId} node={node} nodes={tagNodes} removable onRemove={removeTag} />
+                ) : null
+              })}
+              <TagPicker
+                nodes={tagNodes}
+                currentTagIds={directTagIds}
+                onAssign={assignTag}
+                loading={tagsLoading}
+                error={tagsError}
+                onRetry={() => void reloadTags()}
+              />
+            </div>
           </div>
         </section>
 
