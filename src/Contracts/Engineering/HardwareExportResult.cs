@@ -12,4 +12,12 @@ public sealed class HardwareExportResult
     public string? Error { get; set; }
     public string? ContentHash { get; set; }
     public DateTime ExportedAt { get; set; }
+
+    /// <summary>Wall-clock duration of the CAx export operation for this artifact.</summary>
+    public long? DurationMs { get; set; }
+
+    /// <summary>Wall-clock duration of the project-level network fingerprint capture. This is
+    /// populated on the project result because the fingerprint is a project-level supplement,
+    /// not a CAx artifact of its own.</summary>
+    public long? NetworkConfigurationDurationMs { get; set; }
 }
