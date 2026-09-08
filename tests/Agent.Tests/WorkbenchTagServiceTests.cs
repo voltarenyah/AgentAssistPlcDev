@@ -136,7 +136,7 @@ public sealed class WorkbenchTagServiceTests : IDisposable
                 "wt-1", "Feature", "feature", "worktrees/feature"));
             var service = new WorkbenchTagService(
                 new WorkbenchTagStore(_path),
-                new WorkbenchCatalogTagEntityLookup(catalog, [workbench.RootPath]));
+                new WorkbenchCatalogTagEntityLookup(catalog, [workbench.RootPath, otherWorkbench.RootPath]));
             var tag = service.CreatePath("catalog/verified");
 
             service.AssignWorktreeTag(tag.TagId, workbench.WorkbenchId, "wt-1");
