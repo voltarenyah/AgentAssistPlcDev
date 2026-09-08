@@ -131,6 +131,7 @@ public sealed class WorkbenchTagServiceTests : IDisposable
         {
             var catalog = new WorkbenchCatalog(new AtomicJsonStore(), catalogRoot);
             var workbench = catalog.Create("fixture", Path.Combine(catalogRoot, "fixture"));
+            var otherWorkbench = catalog.Create("other", Path.Combine(catalogRoot, "other"));
             workbench = catalog.RegisterWorktree(workbench, new WorkbenchWorktreeRegistration(
                 "wt-1", "Feature", "feature", "worktrees/feature"));
             var service = new WorkbenchTagService(
@@ -142,7 +143,7 @@ public sealed class WorkbenchTagServiceTests : IDisposable
             Assert.Equal([tag.TagId], service.GetWorktreeTags(workbench.WorkbenchId, "wt-1").EffectiveTagIds);
 
             var mismatch = Assert.Throws<WorkbenchTagDomainException>(() =>
-                service.AssignWorktreeTag(tag.TagId, "other-workbench", "wt-1"));
+                service.AssignWorktreeTag(tag.TagId, otherWorkbench.WorkbenchId, "wt-1"));
             Assert.Equal("worktree_not_found", mismatch.Code);
         }
         finally
