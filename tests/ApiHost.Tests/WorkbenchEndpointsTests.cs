@@ -1916,20 +1916,29 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public async Task DeleteWorkbenchCleansTagAssignmentsAfterCoordinatorSucceedsAndKeepsTaxonomy()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
+        var unrelated = fixture.AddUnrelatedWorkbench();
+        _ = await fixture.Client.GetFromJsonAsync<JsonElement[]>("/api/workbenches");
         var workbenchTag = await CreateTagPathAsync(fixture.Client, "lifecycle/workbench");
         var worktreeTag = await CreateTagPathAsync(fixture.Client, "lifecycle/master");
+        var unrelatedTag = await CreateTagPathAsync(fixture.Client, "lifecycle/unrelated");
 
         Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync(
             $"/api/workbenches/{fixture.Context.WorkbenchId}/tags/{workbenchTag}", null)).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync(
             $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/tags/{worktreeTag}", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync(
+            $"/api/workbenches/{unrelated.WorkbenchId}/worktrees/{unrelated.WorktreeId}/tags/{unrelatedTag}", null)).StatusCode);
 
         var response = await fixture.Client.DeleteAsync($"/api/workbenches/{fixture.Context.WorkbenchId}");
 
         response.EnsureSuccessStatusCode();
-        await AssertTaxonomyContainsAsync(fixture.Client, workbenchTag, worktreeTag);
+        Assert.Equal([unrelatedTag], await DirectTagIdsAsync(
+            fixture.Client,
+            $"/api/workbenches/{unrelated.WorkbenchId}/worktrees/{unrelated.WorktreeId}/tags"));
+        await AssertTaxonomyContainsAsync(fixture.Client, workbenchTag, worktreeTag, unrelatedTag);
         Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"/api/tags/{workbenchTag}")).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"/api/tags/{worktreeTag}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await fixture.Client.DeleteAsync($"/api/tags/{unrelatedTag}")).StatusCode);
     }
 
     [Fact]
@@ -2552,6 +2561,23 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             var baseRoute =
                 $"/api/workbenches/{workbench.WorkbenchId}/worktrees/{worktreeId}/devices/{context.DeviceId}";
             return ($"{baseRoute}/select", baseRoute);
+        }
+
+        public (string WorkbenchId, string WorktreeId) AddUnrelatedWorkbench()
+        {
+            var workbench = catalog.Create("Unrelated", null);
+            const string worktreeId = "wt-unrelated";
+            workbench = catalog.RegisterWorktree(
+                workbench,
+                new WorkbenchWorktreeRegistration(worktreeId, "unrelated", "unrelated", "unrelated"));
+            var worktreeRoot = Path.Combine(workbench.RootPath, "worktrees", "unrelated");
+            Directory.CreateDirectory(worktreeRoot);
+            new AtomicJsonStore().Write(
+                Path.Combine(worktreeRoot, "worktree.json"),
+                new WorktreeMetadata(
+                    "1.0", worktreeId, workbench.WorkbenchId, "unrelated", "unrelated",
+                    DateTimeOffset.UtcNow.ToString("O"), null, null, null, [], null));
+            return (workbench.WorkbenchId, worktreeId);
         }
 
         public async ValueTask DisposeAsync()
