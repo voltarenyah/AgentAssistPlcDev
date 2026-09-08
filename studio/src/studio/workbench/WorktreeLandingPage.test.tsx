@@ -82,6 +82,12 @@ vi.mock('@/api/client', async importOriginal => {
     ...actual,
     getWorktreeDetail: vi.fn(async () => detail),
     getTagTaxonomy: vi.fn(async () => ({ nodes: tagNodes })),
+    createTagPath: vi.fn(async (path: string) => ({
+      tagId: 'tag-created',
+      parentTagId: 'tag-machine',
+      name: path.split('/').at(-1)!,
+      normalizedName: path.split('/').at(-1)!.toLowerCase(),
+    })),
     getWorktreeTags: vi.fn(async () => ({ direct: ['tag-press'], inherited: ['tag-state'], effective: ['tag-press', 'tag-state'] })),
     assignWorktreeTag: vi.fn(async () => undefined),
     unassignWorktreeTag: vi.fn(async () => undefined),
@@ -178,6 +184,27 @@ describe('WorktreeLandingPage', () => {
     expect(api.unassignWorktreeTag).toHaveBeenCalledWith('wb1', 'wt1', 'tag-press')
     expect(api.unassignWorkbenchTag).not.toHaveBeenCalled()
     expect(host.querySelector('[data-tag-id="tag-state"] button')).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('creates an absent hierarchical path and assigns the returned tag', async () => {
+    const { host, root } = await renderPage()
+    const add = host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement
+    await act(async () => add.click())
+    const input = document.body.querySelector('input[aria-label="Search tags"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    setter.call(input, 'Machine/New')
+    await act(async () => input.dispatchEvent(new Event('input', { bubbles: true })))
+
+    const create = document.body.querySelector('[role="option"][aria-label="Create tag Machine/New"]') as HTMLElement
+    expect(create).not.toBeNull()
+    await act(async () => create.click())
+    await act(async () => {})
+
+    expect(api.createTagPath).toHaveBeenCalledWith('Machine/New')
+    expect(api.assignWorktreeTag).toHaveBeenCalledWith('wb1', 'wt1', 'tag-created')
+    expect(host.textContent).toContain('feature-a')
 
     await act(async () => root.unmount())
   })

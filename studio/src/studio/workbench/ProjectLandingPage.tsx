@@ -217,6 +217,7 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
                 nodes={tagNodes}
                 currentTagIds={directTagIds}
                 onAssign={assignTag}
+                onCreate={api.createTagPath}
                 loading={tagsLoading}
                 error={tagsError}
                 onRetry={() => void reloadTags()}

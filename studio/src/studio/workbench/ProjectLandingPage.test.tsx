@@ -71,6 +71,12 @@ vi.mock('@/api/client', async importOriginal => {
     ...actual,
     getWorkbenchOverview: vi.fn(async () => overview),
     getTagTaxonomy: vi.fn(async () => ({ nodes: tagNodes })),
+    createTagPath: vi.fn(async (path: string) => ({
+      tagId: 'tag-created',
+      parentTagId: 'tag-machine',
+      name: path.split('/').at(-1)!,
+      normalizedName: path.split('/').at(-1)!.toLowerCase(),
+    })),
     getWorkbenchTags: vi.fn(async () => ({ direct: ['tag-press'], inherited: [], effective: ['tag-press'] })),
     assignWorkbenchTag: vi.fn(async () => undefined),
     unassignWorkbenchTag: vi.fn(async () => undefined),
@@ -155,6 +161,25 @@ describe('ProjectLandingPage', () => {
     expect(host.querySelectorAll('tbody tr')).toHaveLength(3)
     expect(host.querySelector('[data-tag-id="tag-state"]')).not.toBeNull()
     expect(api.getWorkbenchOverview).toHaveBeenCalledTimes(1)
+
+    await act(async () => root.unmount())
+  })
+
+  it('creates an absent hierarchical path and assigns the returned tag', async () => {
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
+    const add = host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement
+    await act(async () => add.click())
+    const input = document.body.querySelector('input[aria-label="Search tags"]') as HTMLInputElement
+    await act(async () => setInputValue(input, 'Machine/New'))
+
+    const create = document.body.querySelector('[role="option"][aria-label="Create tag Machine/New"]') as HTMLElement
+    expect(create).not.toBeNull()
+    await act(async () => create.click())
+    await act(async () => {})
+
+    expect(api.createTagPath).toHaveBeenCalledWith('Machine/New')
+    expect(api.assignWorkbenchTag).toHaveBeenCalledWith('wb1', 'tag-created')
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(3)
 
     await act(async () => root.unmount())
   })
