@@ -28,7 +28,7 @@ public interface IWorkbenchTagSearchEntityLookup : IWorkbenchTagEntityLookup
 /// <summary>Catalog-backed lookup adapter. The catalog remains the owner of entity lifecycle.</summary>
 public sealed class WorkbenchCatalogTagEntityLookup : IWorkbenchTagSearchEntityLookup
 {
-    private readonly IReadOnlyList<WorkbenchMetadata> _workbenches;
+    private readonly Func<IReadOnlyList<WorkbenchMetadata>> _workbenches;
 
     public WorkbenchCatalogTagEntityLookup(WorkbenchCatalog catalog, IEnumerable<string> workbenchRoots)
         : this((workbenchRoots ?? throw new ArgumentNullException(nameof(workbenchRoots))).Select(catalog.Load))
@@ -39,16 +39,23 @@ public sealed class WorkbenchCatalogTagEntityLookup : IWorkbenchTagSearchEntityL
     public WorkbenchCatalogTagEntityLookup(IEnumerable<WorkbenchMetadata> workbenches)
     {
         ArgumentNullException.ThrowIfNull(workbenches);
-        _workbenches = workbenches.ToArray();
+        var registeredWorkbenches = workbenches.ToArray();
+        _workbenches = () => registeredWorkbenches;
+    }
+
+    /// <summary>Uses a host-owned registration projection that can change during process lifetime.</summary>
+    public WorkbenchCatalogTagEntityLookup(Func<IReadOnlyList<WorkbenchMetadata>> workbenches)
+    {
+        _workbenches = workbenches ?? throw new ArgumentNullException(nameof(workbenches));
     }
 
     /// <summary>Registered catalog entities used by the server-side tag search.</summary>
-    public IReadOnlyList<WorkbenchMetadata> RegisteredWorkbenches => _workbenches;
+    public IReadOnlyList<WorkbenchMetadata> RegisteredWorkbenches => _workbenches();
 
-    public bool WorkbenchExists(string workbenchId) => _workbenches.Any(workbench =>
+    public bool WorkbenchExists(string workbenchId) => RegisteredWorkbenches.Any(workbench =>
         string.Equals(workbench.WorkbenchId, workbenchId, StringComparison.Ordinal));
 
-    public bool WorktreeBelongsToWorkbench(string workbenchId, string worktreeId) => _workbenches.Any(workbench =>
+    public bool WorktreeBelongsToWorkbench(string workbenchId, string worktreeId) => RegisteredWorkbenches.Any(workbench =>
         string.Equals(workbench.WorkbenchId, workbenchId, StringComparison.Ordinal)
         && workbench.Worktrees.Any(worktree =>
             string.Equals(worktree.WorktreeId, worktreeId, StringComparison.Ordinal)));
@@ -56,6 +63,7 @@ public sealed class WorkbenchCatalogTagEntityLookup : IWorkbenchTagSearchEntityL
 
 public sealed record WorkbenchTagProjection(
     IReadOnlyList<string> DirectTagIds,
+    IReadOnlyList<string> InheritedTagIds,
     IReadOnlyList<string> EffectiveTagIds);
 
 /// <summary>Owns taxonomy mutations while the store owns durable document concurrency.</summary>
@@ -130,7 +138,7 @@ public sealed class WorkbenchTagService
         ValidateId(workbenchId, "workbenchId");
         EnsureWorkbench(workbenchId);
         var direct = DirectTagIds(TagEntityType.Workbench, workbenchId, null);
-        return new(direct, direct);
+        return new(direct, [], direct);
     }
 
     public WorkbenchTagProjection GetWorktreeTags(string workbenchId, string worktreeId)
@@ -155,9 +163,13 @@ public sealed class WorkbenchTagService
         var inherited = document.Assignments
             .Where(assignment => assignment.EntityType == TagEntityType.Workbench
                 && string.Equals(assignment.EntityId, workbenchId, StringComparison.Ordinal))
-            .Select(assignment => assignment.TagId);
-        return new(direct, inherited.Concat(direct).Distinct(StringComparer.Ordinal).ToArray());
+            .Select(assignment => assignment.TagId)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return new(direct, inherited, inherited.Concat(direct).Distinct(StringComparer.Ordinal).ToArray());
     }
+
+    public IReadOnlyList<TagNode> GetTaxonomy() => _store.Load().Nodes;
 
     /// <summary>
     /// Searches registered entities using server-owned descendant expansion and AND semantics.

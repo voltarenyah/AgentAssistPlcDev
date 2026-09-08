@@ -63,6 +63,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorktreeTaskStore>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
+builder.Services.AddSingleton<WorkbenchTagStore>();
 builder.Services.AddSingleton(_ => new TrustedWorkbenchRootRegistry(
     builder.Configuration["Sandbox:TrustedRootsFile"]
     ?? (builder.Environment.IsEnvironment("Testing")
@@ -149,6 +150,10 @@ builder.Services.AddSingleton<WorkbenchApiState>(services =>
         services.GetRequiredService<WorkbenchRuntimeStateCoordinator>());
     return state;
 });
+builder.Services.AddSingleton<IWorkbenchTagEntityLookup>(services =>
+    new WorkbenchCatalogTagEntityLookup(
+        () => services.GetRequiredService<WorkbenchApiState>().List()));
+builder.Services.AddSingleton<WorkbenchTagService>();
 builder.Services.AddSingleton<CompatibilityRuntimeState>();
 builder.Services.AddSingleton(_ => new CompatibilityConfigStore());
 // LangGraph may need longer than the normal API request window while the
