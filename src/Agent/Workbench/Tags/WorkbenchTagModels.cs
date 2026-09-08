@@ -33,3 +33,20 @@ public sealed record TagAssignment(
     TagEntityType EntityType,
     string EntityId,
     string? WorkbenchId);
+
+/// <summary>Structured tag-filter input. Matching is an AND across the selected tag IDs.</summary>
+public sealed record WorkbenchTagSearchQuery(IReadOnlyList<string> TagIds);
+
+/// <summary>A tag-filtered Workbench or Worktree projection.</summary>
+public sealed record WorkbenchTagSearchResult(
+    TagEntityType EntityType,
+    string EntityId,
+    string? WorkbenchId,
+    IReadOnlyList<string> DirectTagIds,
+    IReadOnlyList<string> EffectiveTagIds,
+    bool Available);
+
+/// <summary>Server-owned results for the structured Workbench/worktree tag filter.</summary>
+public sealed record WorkbenchTagSearchResults(
+    IReadOnlyList<WorkbenchTagSearchResult> Workbenches,
+    IReadOnlyList<WorkbenchTagSearchResult> Worktrees);

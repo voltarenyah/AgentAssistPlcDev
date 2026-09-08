@@ -19,8 +19,14 @@ public interface IWorkbenchTagEntityLookup
     bool WorktreeBelongsToWorkbench(string workbenchId, string worktreeId);
 }
 
+/// <summary>Entity enumeration required by server-side tag search.</summary>
+public interface IWorkbenchTagSearchEntityLookup : IWorkbenchTagEntityLookup
+{
+    IReadOnlyList<WorkbenchMetadata> RegisteredWorkbenches { get; }
+}
+
 /// <summary>Catalog-backed lookup adapter. The catalog remains the owner of entity lifecycle.</summary>
-public sealed class WorkbenchCatalogTagEntityLookup : IWorkbenchTagEntityLookup
+public sealed class WorkbenchCatalogTagEntityLookup : IWorkbenchTagSearchEntityLookup
 {
     private readonly IReadOnlyList<WorkbenchMetadata> _workbenches;
 
@@ -35,6 +41,9 @@ public sealed class WorkbenchCatalogTagEntityLookup : IWorkbenchTagEntityLookup
         ArgumentNullException.ThrowIfNull(workbenches);
         _workbenches = workbenches.ToArray();
     }
+
+    /// <summary>Registered catalog entities used by the server-side tag search.</summary>
+    public IReadOnlyList<WorkbenchMetadata> RegisteredWorkbenches => _workbenches;
 
     public bool WorkbenchExists(string workbenchId) => _workbenches.Any(workbench =>
         string.Equals(workbench.WorkbenchId, workbenchId, StringComparison.Ordinal));
@@ -148,6 +157,124 @@ public sealed class WorkbenchTagService
                 && string.Equals(assignment.EntityId, workbenchId, StringComparison.Ordinal))
             .Select(assignment => assignment.TagId);
         return new(direct, inherited.Concat(direct).Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    /// <summary>
+    /// Searches registered entities using server-owned descendant expansion and AND semantics.
+    /// Workbench results use only direct Workbench assignments; Worktree results use effective
+    /// (Workbench plus direct Worktree) assignments. Catalog registration remains authoritative
+    /// even when a registered worktree directory or metadata file is unavailable.
+    /// </summary>
+    public WorkbenchTagSearchResults Search(IEnumerable<string> tagIds)
+    {
+        ArgumentNullException.ThrowIfNull(tagIds);
+        var selected = tagIds
+            .Where(tagId => !string.IsNullOrWhiteSpace(tagId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var document = _store.Load();
+        var nodes = document.Nodes.ToDictionary(node => node.TagId, StringComparer.Ordinal);
+        foreach (var tagId in selected)
+        {
+            if (!nodes.ContainsKey(tagId))
+            {
+                throw new WorkbenchTagDomainException("tag_not_found", $"Tag '{tagId}' was not found.");
+            }
+        }
+
+        var children = document.Nodes
+            .Where(node => node.ParentTagId is not null)
+            .GroupBy(node => node.ParentTagId!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Select(node => node.TagId).ToArray(), StringComparer.Ordinal);
+        var expanded = selected.Select(tagId => Expand(tagId, children)).ToArray();
+        var workbenchAssignments = document.Assignments
+            .Where(assignment => assignment.EntityType == TagEntityType.Workbench)
+            .GroupBy(assignment => assignment.EntityId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Select(assignment => assignment.TagId).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
+        var worktreeAssignments = document.Assignments
+            .Where(assignment => assignment.EntityType == TagEntityType.Worktree)
+            .GroupBy(assignment => (assignment.WorkbenchId, assignment.EntityId))
+            .ToDictionary(group => group.Key, group => group.Select(assignment => assignment.TagId).Distinct(StringComparer.Ordinal).ToArray());
+
+        if (_entityLookup is not IWorkbenchTagSearchEntityLookup searchLookup)
+        {
+            throw new WorkbenchTagDomainException(
+                "tag_search_unavailable",
+                "The tag entity lookup does not support registered entity enumeration.");
+        }
+
+        var catalog = searchLookup.RegisteredWorkbenches;
+        var workbenches = new List<WorkbenchTagSearchResult>();
+        var worktrees = new List<WorkbenchTagSearchResult>();
+        foreach (var workbench in catalog)
+        {
+            workbenchAssignments.TryGetValue(workbench.WorkbenchId, out var direct);
+            direct ??= Array.Empty<string>();
+            if (Matches(direct, expanded))
+            {
+                workbenches.Add(new(
+                    TagEntityType.Workbench,
+                    workbench.WorkbenchId,
+                    null,
+                    direct,
+                    direct,
+                    Directory.Exists(workbench.RootPath)
+                        && File.Exists(Path.Combine(workbench.RootPath, "workbench.json"))));
+            }
+
+            foreach (var registration in workbench.Worktrees)
+            {
+                worktreeAssignments.TryGetValue((workbench.WorkbenchId, registration.WorktreeId), out var directWorktree);
+                directWorktree ??= Array.Empty<string>();
+                var effective = workbenchAssignments.TryGetValue(workbench.WorkbenchId, out var inherited)
+                    ? inherited.Concat(directWorktree).Distinct(StringComparer.Ordinal).ToArray()
+                    : directWorktree;
+                if (!Matches(effective, expanded))
+                {
+                    continue;
+                }
+
+                var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+                worktrees.Add(new(
+                    TagEntityType.Worktree,
+                    registration.WorktreeId,
+                    workbench.WorkbenchId,
+                    directWorktree,
+                    effective,
+                    Directory.Exists(worktreeRoot)
+                        && File.Exists(Path.Combine(worktreeRoot, "worktree.json"))));
+            }
+        }
+
+        return new(workbenches, worktrees);
+    }
+
+    public WorkbenchTagSearchResults Search(WorkbenchTagSearchQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return Search(query.TagIds);
+    }
+
+    private static bool Matches(IReadOnlyCollection<string> entityTags, IReadOnlyList<HashSet<string>> expanded) =>
+        expanded.All(selected => entityTags.Any(selected.Contains));
+
+    private static HashSet<string> Expand(string root, IReadOnlyDictionary<string, string[]> children)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal) { root };
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.TryPop(out var current) && children.TryGetValue(current, out var descendants))
+        {
+            foreach (var descendant in descendants)
+            {
+                if (result.Add(descendant))
+                {
+                    pending.Push(descendant);
+                }
+            }
+        }
+
+        return result;
     }
 
     private void Assign(string tagId, TagAssignment assignment)

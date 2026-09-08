@@ -155,6 +155,66 @@ public sealed class WorkbenchTagServiceTests : IDisposable
         }
     }
 
+    [Fact]
+    public void SearchExpandsDescendantsAndAppliesAndSemanticsWithoutInferringWorkbenchMatches()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"workbench-tag-search-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var workbenchRoot = Path.Combine(root, "fixture");
+            Directory.CreateDirectory(Path.Combine(workbenchRoot, "worktrees", "present"));
+            File.WriteAllText(Path.Combine(workbenchRoot, "workbench.json"), "{}");
+            File.WriteAllText(Path.Combine(workbenchRoot, "worktrees", "present", "worktree.json"), "{}");
+            var metadata = new WorkbenchMetadata(
+                WorkbenchSchema.CurrentVersion, "wb-1", "Fixture", "now", workbenchRoot, "repo", null, null,
+                [
+                    new WorkbenchWorktreeRegistration("wt-present", "Present", "feature", "present"),
+                    new WorkbenchWorktreeRegistration("wt-missing", "Missing", "feature", "missing"),
+                ]);
+            var service = new WorkbenchTagService(
+                new WorkbenchTagStore(_path),
+                new SearchLookup([metadata]));
+            var parent = service.CreatePath("area");
+            var child = service.CreatePath("area/assembly");
+            var sibling = service.CreatePath("area/packaging");
+            var priority = service.CreatePath("priority/high");
+            var unassigned = service.CreatePath("unassigned");
+            service.AssignWorkbenchTag(child.TagId, "wb-1");
+            service.AssignWorktreeTag(sibling.TagId, "wb-1", "wt-present");
+            service.AssignWorktreeTag(priority.TagId, "wb-1", "wt-missing");
+
+            var descendant = service.Search([parent.TagId]);
+            var workbench = Assert.Single(descendant.Workbenches);
+            Assert.Equal([child.TagId], workbench.DirectTagIds);
+            Assert.Equal([child.TagId], workbench.EffectiveTagIds);
+            Assert.Contains(descendant.Worktrees, result => result.EntityId == "wt-present");
+
+            var and = service.Search([parent.TagId, priority.TagId]);
+            var missing = Assert.Single(and.Worktrees);
+            Assert.Equal("wt-missing", missing.EntityId);
+            Assert.Equal("wb-1", missing.WorkbenchId);
+            Assert.False(missing.Available);
+
+            var siblingSearch = service.Search([sibling.TagId]);
+            var present = Assert.Single(siblingSearch.Worktrees);
+            Assert.Equal("wt-present", present.EntityId);
+            Assert.True(present.Available);
+            Assert.Empty(siblingSearch.Workbenches);
+
+            var noMatch = service.Search([unassigned.TagId]);
+            Assert.Empty(noMatch.Workbenches);
+            Assert.Empty(noMatch.Worktrees);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     public void Dispose()
     {
         var root = Path.GetDirectoryName(_path);
@@ -162,5 +222,18 @@ public sealed class WorkbenchTagServiceTests : IDisposable
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    private sealed class SearchLookup(IReadOnlyList<WorkbenchMetadata> workbenches)
+        : IWorkbenchTagSearchEntityLookup
+    {
+        public IReadOnlyList<WorkbenchMetadata> RegisteredWorkbenches { get; } = workbenches;
+
+        public bool WorkbenchExists(string workbenchId) => RegisteredWorkbenches.Any(
+            workbench => string.Equals(workbench.WorkbenchId, workbenchId, StringComparison.Ordinal));
+
+        public bool WorktreeBelongsToWorkbench(string workbenchId, string worktreeId) => RegisteredWorkbenches.Any(
+            workbench => string.Equals(workbench.WorkbenchId, workbenchId, StringComparison.Ordinal)
+                && workbench.Worktrees.Any(worktree => string.Equals(worktree.WorktreeId, worktreeId, StringComparison.Ordinal)));
     }
 }
