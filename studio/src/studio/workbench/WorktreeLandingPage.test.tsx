@@ -44,6 +44,12 @@ const taskList: api.WorktreeTaskList = {
   ],
 }
 
+const tagNodes: api.TagNode[] = [
+  { tagId: 'tag-machine', parentTagId: null, name: 'Machine', normalizedName: 'machine' },
+  { tagId: 'tag-press', parentTagId: 'tag-machine', name: 'Press', normalizedName: 'press' },
+  { tagId: 'tag-state', parentTagId: null, name: 'State', normalizedName: 'state' },
+]
+
 const snapshot = (deviceId: string, plcName: string, modified: string[]): api.DeviceSnapshot => ({
   workbenchId: 'wb1',
   worktreeId: 'wt1',
@@ -75,6 +81,11 @@ vi.mock('@/api/client', async importOriginal => {
   return {
     ...actual,
     getWorktreeDetail: vi.fn(async () => detail),
+    getTagTaxonomy: vi.fn(async () => ({ nodes: tagNodes })),
+    getWorktreeTags: vi.fn(async () => ({ direct: ['tag-press'], inherited: ['tag-state'], effective: ['tag-press', 'tag-state'] })),
+    assignWorktreeTag: vi.fn(async () => undefined),
+    unassignWorktreeTag: vi.fn(async () => undefined),
+    unassignWorkbenchTag: vi.fn(async () => undefined),
     updateWorktree: vi.fn(async (_wb: string, _wt: string, patch: { status?: api.WorktreeStatus }) => ({
       ...detail,
       status: patch.status ?? detail.status,
@@ -129,6 +140,71 @@ beforeEach(() => {
 })
 
 describe('WorktreeLandingPage', () => {
+  it('renders direct tags as removable and inherited tags as labelled non-removable chips', async () => {
+    const { host, root } = await renderPage()
+
+    expect(host.querySelector('[data-tag-id="tag-press"]')?.textContent).toContain('Machine/Press')
+    expect(host.querySelector('button[aria-label="Remove tag Machine/Press"]')).not.toBeNull()
+    expect(host.querySelector('[data-tag-id="tag-state"]')?.textContent).toContain('Inherited from Project')
+    expect(host.querySelectorAll('[data-tag-id="tag-state"]')).toHaveLength(1)
+    expect(host.textContent?.match(/Inherited from Project/g)).toHaveLength(1)
+    expect(host.querySelector('[data-tag-id="tag-state"] button')).toBeNull()
+    expect(host.querySelector('button[aria-label="Add tag"]')).not.toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('assigns and removes only direct Worktree tags while preserving the page', async () => {
+    vi.mocked(api.getWorktreeTags)
+      .mockResolvedValueOnce({ direct: ['tag-press'], inherited: ['tag-state'], effective: ['tag-press', 'tag-state'] })
+      .mockResolvedValueOnce({ direct: ['tag-press', 'tag-machine'], inherited: ['tag-state'], effective: ['tag-press', 'tag-machine', 'tag-state'] })
+      .mockResolvedValueOnce({ direct: [], inherited: ['tag-state'], effective: ['tag-state'] })
+    const { host, root } = await renderPage()
+
+    const add = host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement
+    await act(async () => add.click())
+    const machineOption = document.body.querySelector('button[aria-label="Select Machine"]') as HTMLElement
+    await act(async () => machineOption?.click())
+    await act(async () => {})
+
+    expect(api.assignWorktreeTag).toHaveBeenCalledWith('wb1', 'wt1', 'tag-machine')
+    expect(api.unassignWorkbenchTag).not.toHaveBeenCalled()
+    expect(host.querySelector('input[aria-label="Worktree owner"]')).toHaveProperty('value', 'Bo')
+    expect(host.querySelector('[data-tag-id="tag-machine"]')).not.toBeNull()
+
+    const remove = host.querySelector('button[aria-label="Remove tag Machine/Press"]') as HTMLButtonElement
+    await act(async () => remove.click())
+    await act(async () => {})
+    expect(api.unassignWorktreeTag).toHaveBeenCalledWith('wb1', 'wt1', 'tag-press')
+    expect(api.unassignWorkbenchTag).not.toHaveBeenCalled()
+    expect(host.querySelector('[data-tag-id="tag-state"] button')).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows tag loading and recovers from a tag API error without hiding worktree details', async () => {
+    let resolveTags!: (value: api.EntityTags) => void
+    vi.mocked(api.getWorktreeTags).mockReturnValueOnce(new Promise(resolve => { resolveTags = resolve }))
+    const { host, root } = await renderPage()
+    expect(host.querySelector('button[aria-label="Add tag (loading)"]') ?? host.querySelector('button[aria-label="Add tag"]')).not.toBeNull()
+    resolveTags({ direct: ['tag-press'], inherited: ['tag-state'], effective: ['tag-press', 'tag-state'] })
+    await act(async () => {})
+    expect(host.textContent).toContain('Machine/Press')
+    expect(host.textContent).toContain('feature-a')
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows a tag API error while preserving loaded worktree details', async () => {
+    vi.mocked(api.getTagTaxonomy).mockRejectedValueOnce(new Error('tag service down'))
+    const { host, root } = await renderPage()
+
+    expect(host.textContent).toContain('feature-a')
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('tag service down')
+
+    await act(async () => root.unmount())
+  })
+
   it('renders the header card and metadata fields', async () => {
     const { host, root } = await renderPage()
 

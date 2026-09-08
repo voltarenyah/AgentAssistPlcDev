@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, Cpu, FileCode2, GitBranch, LayoutDashboard, ListTodo, Loader2 } from 'lucide-react'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import InlineEdit from './InlineEdit'
 import StatusBadge from './StatusBadge'
+import TagChip from './tags/TagChip'
+import TagPicker from './tags/TagPicker'
 import WorktreeTasksPanel from './WorktreeTasksPanel'
 import { rememberDeviceSnapshot } from '@/studio/deviceSnapshot'
 
@@ -44,6 +46,14 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
   const [tasksLoading, setTasksLoading] = useState(true)
   const [tasksError, setTasksError] = useState<string | null>(null)
   const [modifiedDevices, setModifiedDevices] = useState<ModifiedDevice[] | null>(null)
+  const [tagNodes, setTagNodes] = useState<api.TagNode[]>([])
+  const [directTagIds, setDirectTagIds] = useState<string[]>([])
+  const [inheritedTagIds, setInheritedTagIds] = useState<string[]>([])
+  const [tagsLoading, setTagsLoading] = useState(true)
+  const [tagsError, setTagsError] = useState<string | null>(null)
+  const tagLoadGeneration = useRef(0)
+  const activeSelection = useRef({ workbenchId, worktreeId })
+  activeSelection.current = { workbenchId, worktreeId }
 
   useEffect(() => {
     let cancelled = false
@@ -63,6 +73,34 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
       })
     return () => { cancelled = true }
   }, [workbenchId, worktreeId])
+
+  const reloadTags = useCallback(async () => {
+    const generation = ++tagLoadGeneration.current
+    const isCurrent = () => generation === tagLoadGeneration.current
+      && activeSelection.current.workbenchId === workbenchId
+      && activeSelection.current.worktreeId === worktreeId
+    setTagsLoading(true)
+    try {
+      const [taxonomy, assignments] = await Promise.all([
+        api.getTagTaxonomy(),
+        api.getWorktreeTags(workbenchId, worktreeId),
+      ])
+      if (isCurrent()) {
+        setTagNodes(taxonomy.nodes)
+        setDirectTagIds(assignments.direct)
+        setInheritedTagIds(assignments.inherited)
+        setTagsError(null)
+      }
+    } catch (loadError) {
+      if (isCurrent()) setTagsError(displayError(loadError))
+    } finally {
+      if (isCurrent()) setTagsLoading(false)
+    }
+  }, [workbenchId, worktreeId])
+
+  useEffect(() => {
+    void reloadTags()
+  }, [reloadTags])
 
   const reloadTasks = useCallback(async () => {
     try {
@@ -135,6 +173,26 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
       setDetail(updated)
     } catch (saveError) {
       showErrorToast(`Worktree metadata could not be saved: ${displayError(saveError)}`)
+    }
+  }
+
+  const assignTag = async (tagId: string) => {
+    await api.assignWorktreeTag(workbenchId, worktreeId, tagId)
+    if (activeSelection.current.workbenchId === workbenchId && activeSelection.current.worktreeId === worktreeId) {
+      await reloadTags()
+    }
+  }
+
+  const removeTag = async (tagId: string) => {
+    try {
+      await api.unassignWorktreeTag(workbenchId, worktreeId, tagId)
+      if (activeSelection.current.workbenchId === workbenchId && activeSelection.current.worktreeId === worktreeId) {
+        await reloadTags()
+      }
+    } catch (removeError) {
+      if (activeSelection.current.workbenchId === workbenchId && activeSelection.current.worktreeId === worktreeId) {
+        showErrorToast(`Tag could not be removed: ${displayError(removeError)}`)
+      }
     }
   }
 
@@ -261,6 +319,30 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                 </dl>
               </div>
             )}
+            <div className={`mt-4 border-t pt-3 ${tab === 'overview' ? 'col-span-full' : ''}`} style={{ borderColor: 'var(--border)' }}>
+              <div className="mb-2 text-[9px] uppercase tracking-wide text-muted-foreground">Tags</div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {directTagIds.map(tagId => {
+                  const node = tagNodes.find(candidate => candidate.tagId === tagId)
+                  return node ? (
+                    <TagChip key={tagId} node={node} nodes={tagNodes} removable onRemove={removeTag} />
+                  ) : null
+                })}
+                {inheritedTagIds.map(tagId => {
+                  const node = tagNodes.find(candidate => candidate.tagId === tagId)
+                  return node ? (
+                    <TagChip key={`inherited-${tagId}`} node={node} nodes={tagNodes} inherited />
+                  ) : null
+                })}
+                <TagPicker
+                  nodes={tagNodes}
+                  onAssign={assignTag}
+                  loading={tagsLoading}
+                  error={tagsError}
+                  onRetry={() => void reloadTags()}
+                />
+              </div>
+            </div>
           </section>
 
           {tab === 'overview' && (
