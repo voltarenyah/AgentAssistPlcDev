@@ -10,6 +10,8 @@ type Props = {
   branch: string
   /** Increment to trigger a comparison (the panel's Compare with TIA action). */
   signal: number
+  /** Whether the user wants the optional project AML/network verification. */
+  verifyHardware?: boolean
   /** The changes page commit message — reused as the title for accept actions. */
   commitMessage: string
   /** Reports the TIA paths selected for the global commit action. */
@@ -34,7 +36,7 @@ const safetyKindLabel = (kind: api.SafetyBlockDifference['kind']) => {
 
 const shortFingerprint = (value: string) => value.slice(0, 7)
 
-export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation, operationStatus = null }: Props) {
+export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, verifyHardware = true, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation, operationStatus = null }: Props) {
   const [started, setStarted] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -49,9 +51,11 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     setBusy(true); setError(null); setNeedsCompileConfirmation(false)
     const operationId = onBeginOperation?.('compare-tia', 'Comparing master with TIA Portal...')
     try {
-      const nextComparison = await (allowCompile
-        ? api.compareMasterWithTia(workbenchId, operationId, true)
-        : api.compareMasterWithTia(workbenchId, operationId))
+      const nextComparison = await (!verifyHardware
+        ? api.compareMasterWithTia(workbenchId, operationId, allowCompile, false)
+        : allowCompile
+          ? api.compareMasterWithTia(workbenchId, operationId, true)
+          : api.compareMasterWithTia(workbenchId, operationId))
       setComparison(nextComparison)
       onComparisonStateChanged?.(nextComparison.state === 'Unavailable' || nextComparison.differences.length > 0 || nextComparison.hardware?.state === 'changed' || nextComparison.safetyChanged === true)
       setSelected(new Set())
@@ -131,6 +135,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   if (!started) return null
 
   const hardwareDiffers = comparison?.hardware != null && comparison.hardware.state !== 'in-sync'
+  const hardwareChecked = comparison?.hardwareChecked !== false
   const safetyChanges = comparison?.safety?.filter(entry => entry.changed) ?? []
   const differences = comparison?.differences ?? []
   const titleMissing = commitMessage.trim().length === 0
@@ -238,10 +243,12 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
             {differences.length === 0 ? (
               <div className="px-3.5 py-5 text-center text-[10px] text-muted-foreground" data-testid="vc-clean-state">
                 <div className={`font-medium ${hardwareDiffers || safetyChanges.length > 0 ? 'text-muted-foreground' : 'text-emerald-600'}`}>
-                  {hardwareDiffers || safetyChanges.length > 0 ? 'Tracked PLC source matches master' : 'TIA matches master'}
+                  {!hardwareChecked ? 'Managed source and safety match master' : hardwareDiffers || safetyChanges.length > 0 ? 'Tracked PLC source matches master' : 'TIA matches master'}
                 </div>
                 <div className="mt-1 text-[9px]">
-                  {comparison.fastGatePassed ? 'All device checksums match; no full object scan was required.' : 'A full object scan found no remaining differences.'}
+                  {!hardwareChecked
+                    ? 'Hardware configuration was not checked.'
+                    : comparison.fastGatePassed ? 'All device checksums match; no full object scan was required.' : 'A full object scan found no remaining differences.'}
                 </div>
                 <div className="mt-1 text-[9px]">
                   {safetyChanges.length > 0 ? 'Select Safety change items to commit their F-signature evidence.' : 'Some TIA changes leave no git diff — tick “Untrackable change” above to record a message-only commit.'}

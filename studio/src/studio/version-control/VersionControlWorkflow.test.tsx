@@ -29,6 +29,18 @@ describe('version-control workflow API sequence', () => {
     expect(calls).toEqual(['status', 'compare-tia', 'import-plan', 'import', 'validate-merge', 'merge-validated', 'log'])
   })
 
+  it('sends the explicit hardware opt-out query only when requested', async () => {
+    let requestPath = ''
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      requestPath = String(input)
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+
+    await api.compareMasterWithTia('wb-1', undefined, false, false)
+
+    expect(requestPath).toContain('/vc/compare-tia?includeHardware=false')
+  })
+
   it('sends the required commit title when accepting TIA synchronization', async () => {
     let requestBody: { paths?: string[]; message?: string } | undefined
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -26,7 +26,7 @@ const comparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): ap
   ...overrides,
 })
 
-const render = async (props: { signal?: number; commitMessage?: string; branch?: string; selectionResetSignal?: number; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string; onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void } = {}) => {
+const render = async (props: { signal?: number; verifyHardware?: boolean; commitMessage?: string; branch?: string; selectionResetSignal?: number; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string; onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void } = {}) => {
   vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue({
     revision: {
       schemaVersion: 1,
@@ -50,6 +50,7 @@ const render = async (props: { signal?: number; commitMessage?: string; branch?:
       worktreeId="wt-1"
       branch={props.branch ?? 'master'}
       signal={props.signal ?? 1}
+      verifyHardware={props.verifyHardware}
       commitMessage={props.commitMessage ?? ''}
       selectionResetSignal={props.selectionResetSignal}
       onCommitted={props.onCommitted}
@@ -230,6 +231,23 @@ describe('VersionControlCompare (inline)', () => {
     const cleanState = host.querySelector('[data-testid="vc-clean-state"]')!
     expect(cleanState.textContent).toContain('TIA matches master')
     expect(cleanState.textContent).toContain('Untrackable change')
+  })
+
+  it('reports partial coverage when hardware verification was skipped', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
+      differences: [],
+      state: 'Consistent',
+      hardware: null,
+      hardwareChecked: false,
+    }))
+    const { host } = await render({ verifyHardware: false })
+
+    expect(compare).toHaveBeenCalledWith('wb-1', undefined, false, false)
+    const cleanState = host.querySelector('[data-testid="vc-clean-state"]')!
+    expect(cleanState.textContent).toContain('Managed source and safety match master')
+    expect(cleanState.textContent).toContain('Hardware configuration was not checked.')
+    expect(cleanState.textContent).not.toContain('TIA matches master')
+    expect(host.querySelector('[aria-label="Accept TIA hardware configuration"]')).toBeNull()
   })
 
   it('accepts project hardware changes with the commit message as title', async () => {

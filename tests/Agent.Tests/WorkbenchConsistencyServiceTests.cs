@@ -86,6 +86,29 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SkippingHardwareVerificationKeepsSourceAndSafetyCoverageWithoutExportingAml()
+    {
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.FingerprintEvidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(
+            fixture.Workbench,
+            fixture.Master,
+            CancellationToken.None,
+            includeHardware: false);
+
+        Assert.Equal(ConsistencyState.Consistent, result.State);
+        Assert.False(result.HardwareChecked);
+        Assert.Null(result.Hardware);
+        Assert.DoesNotContain("export_hardware_configuration", engineering.Calls);
+        Assert.Contains(result.Timings!, timing =>
+            timing.Phase == "hardware-export"
+            && timing.Outcome == "Hardware verification was not checked.");
+        Assert.Equal(2, engineering.Calls.Count(call => call == "compare_source_evidence"));
+    }
+
+    [Fact]
     public async Task UntrackableCommitDoesNotMaskPendingTrackableDiff()
     {
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.Evidence())

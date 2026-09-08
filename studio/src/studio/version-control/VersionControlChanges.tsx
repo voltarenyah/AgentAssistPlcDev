@@ -29,6 +29,7 @@ export type VersionControlChangesProps = {
   branch: string
   entries: VersionControlSourceEntry[]
   compareSignal: number
+  verifyHardware?: boolean
   snapshot: VersionControlSnapshotInfo
   /** True when an untrackable-change commit exists that no SVN savepoint covers yet. */
   untrackablePendingSavepoint?: boolean
@@ -62,7 +63,7 @@ const groupLabel = (entry: VersionControlSourceEntry) =>
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
 
-export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation, operationStatus = null }: VersionControlChangesProps) {
+export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, verifyHardware = true, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation, operationStatus = null }: VersionControlChangesProps) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [tiaSelection, setTiaSelection] = useState<{ comparisonId: string; paths: string[]; safetyPaths: string[] } | null>(null)
   const [tiaHasDifferences, setTiaHasDifferences] = useState<boolean | null>(null)
@@ -268,6 +269,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
               worktreeId={worktreeId}
               branch={branch}
               signal={compareSignal}
+              verifyHardware={verifyHardware}
               commitMessage={message}
               onSelectionChanged={(comparisonId, paths, safetyPaths = []) => {
                 setTiaSelection(comparisonId && (paths.length > 0 || safetyPaths.length > 0) ? { comparisonId, paths, safetyPaths } : null)

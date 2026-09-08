@@ -155,6 +155,29 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.querySelector('[data-testid="vc-changes-empty"]')).toBeNull()
   })
 
+  it('checks hardware verification by default and forwards an opt-out to the comparison', async () => {
+    mockVcState()
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue({
+      comparisonId: 'comparison-1',
+      masterSha: 'master-1',
+      fastGatePassed: true,
+      state: 'Consistent',
+      liveChecksums: {},
+      differences: [],
+      hardwareChecked: false,
+    })
+    vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    const checkbox = host.querySelector<HTMLInputElement>('[data-testid="vc-verify-hardware"]')!
+    expect(checkbox.checked).toBe(true)
+    await click(checkbox)
+    expect(checkbox.checked).toBe(false)
+    await click(host.querySelector('[data-testid="vc-compare-open"]')!)
+
+    expect(compare).toHaveBeenCalledWith('wb-1', undefined, false, false)
+  })
+
   it('does not describe the branch as clean when TIA comparison finds differences', async () => {
     mockVcState()
     vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue({
