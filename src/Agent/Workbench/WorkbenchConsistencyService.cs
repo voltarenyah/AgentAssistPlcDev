@@ -373,7 +373,11 @@ public sealed class WorkbenchConsistencyService
                 {
                     var masterObjects = new SourceTreeReader().Read(device.Context.SourceRoot);
                     var tiaObjects = scans[device.Metadata.DeviceId].Objects;
-                    return CompareDevice(device.Metadata, device.Context, masterObjects, tiaObjects)
+                    var masterMetadata = DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot)
+                        .ToDictionary(item => item.RelativePath, StringComparer.Ordinal);
+                    var tiaMetadata = DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.StagingRoot)
+                        .ToDictionary(item => item.RelativePath, StringComparer.Ordinal);
+                    return CompareDevice(device.Metadata, device.Context, masterObjects, tiaObjects, masterMetadata, tiaMetadata)
                         .Concat(scans[device.Metadata.DeviceId].UnsupportedObjects.Select(unsupported =>
                             new SourceDifference(
                                 device.Metadata.DeviceId,
@@ -747,7 +751,9 @@ public sealed class WorkbenchConsistencyService
         DeviceMetadata metadata,
         DeviceContext context,
         IReadOnlyList<SourceObjectSnapshot> master,
-        IReadOnlyList<SourceObjectSnapshot> tia)
+        IReadOnlyList<SourceObjectSnapshot> tia,
+        IReadOnlyDictionary<string, SourceObjectInfo>? masterMetadata = null,
+        IReadOnlyDictionary<string, SourceObjectInfo>? tiaMetadata = null)
     {
         var byPath = master.Concat(tia).Select(item => item.RelativePath).Distinct(StringComparer.Ordinal).OrderBy(path => path, StringComparer.Ordinal);
         return byPath
@@ -759,16 +765,24 @@ public sealed class WorkbenchConsistencyService
                     : right is null ? SourceDifferenceKind.Deleted
                     : left.Sha256 == right.Sha256 ? SourceDifferenceKind.Unchanged
                     : SourceDifferenceKind.Changed;
+                SourceObjectInfo? baselineMetadata = null;
+                SourceObjectInfo? liveMetadata = null;
+                masterMetadata?.TryGetValue(path, out baselineMetadata);
+                tiaMetadata?.TryGetValue(path, out liveMetadata);
+                var evidenceKind = EvidenceKindForCategory(right?.Category ?? left?.Category);
                 return new SourceDifference(
                     metadata.DeviceId,
                     metadata.PlcName,
                     $"{Path.GetRelativePath(context.WorktreeRoot, context.SourceRoot).Replace('\\', '/')}/{path}",
                     right?.Identity ?? left?.Identity ?? path,
                     kind,
-                    left?.Sha256,
-                    right?.Sha256,
+                    evidenceKind == ManagedSourceEvidenceKind.TagTable ? left?.ContentHash : left?.Sha256,
+                    evidenceKind == ManagedSourceEvidenceKind.TagTable ? right?.ContentHash : right?.Sha256,
                     true,
-                    EvidenceKind: EvidenceKindForCategory(right?.Category ?? left?.Category));
+                    FingerprintComparison.Compare(
+                        baselineMetadata?.FingerprintComponents,
+                        liveMetadata?.FingerprintComponents),
+                    evidenceKind);
             })
             .Where(item => item.Kind != SourceDifferenceKind.Unchanged)
             .ToArray();
@@ -799,17 +813,19 @@ public sealed class WorkbenchConsistencyService
             var candidateRoot = Path.Combine(
                 device.Context.StagingRoot,
                 ".fingerprint-candidates-" + Guid.NewGuid().ToString("N"));
-            var baseline = new SourceEvidenceSnapshot
+            try
             {
-                PlcName = device.Metadata.PlcName,
-                Checksum = new PlcChecksumInfo
+                var baseline = new SourceEvidenceSnapshot
                 {
                     PlcName = device.Metadata.PlcName,
-                    SoftwareChecksum = baselineDevice.ProjectChecksum,
-                },
-                Objects = baselineDevice.SourceEvidence!,
-            };
-            var capture = await MeasureAsync(
+                    Checksum = new PlcChecksumInfo
+                    {
+                        PlcName = device.Metadata.PlcName,
+                        SoftwareChecksum = baselineDevice.ProjectChecksum,
+                    },
+                    Objects = baselineDevice.SourceEvidence!,
+                };
+                var capture = await MeasureAsync(
                     timings,
                     "plc-evidence-capture",
                     "Read every lightweight fingerprint, tag timestamp, and F-block signature under one TIA lock; export XML only for nominated candidates.",
@@ -894,7 +910,12 @@ public sealed class WorkbenchConsistencyService
                 blockDifferences.Select(item => item.Path).ToArray(),
                 blockDifferences));
             safetyReadFailed |= checksum.IsSafetyDevice == true
-                && string.Equals(checksum.FSignatureReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal);
+                    && string.Equals(checksum.FSignatureReadState, FSignatureReadState.ReadFailed, StringComparison.Ordinal);
+            }
+            finally
+            {
+                TryDeleteDirectory(candidateRoot);
+            }
         }
 
         var safetyChanged = safety.Any(item => item.Changed);
@@ -951,6 +972,7 @@ public sealed class WorkbenchConsistencyService
         var master = reader.TryReadRelative(context.SourceRoot, relativePath);
         var live = reader.TryReadRelative(candidateRoot, relativePath)
             ?? throw new WorkbenchLifecycleException("CANDIDATE_XML_NOT_FOUND", $"Candidate XML '{relativePath}' disappeared before comparison.");
+        var evidenceKind = candidate.Live?.Kind ?? candidate.Baseline?.Kind;
         var kind = master is null
             ? SourceDifferenceKind.Added
             : string.Equals(master.Sha256, live.Sha256, StringComparison.Ordinal)
@@ -964,8 +986,8 @@ public sealed class WorkbenchConsistencyService
                 SourcePathForResult(context, relativePath),
                 live.Identity,
                 kind,
-                master?.Sha256,
-                live.Sha256,
+                string.Equals(evidenceKind, ManagedSourceEvidenceKind.TagTable, StringComparison.Ordinal) ? master?.ContentHash : master?.Sha256,
+                string.Equals(evidenceKind, ManagedSourceEvidenceKind.TagTable, StringComparison.Ordinal) ? live.ContentHash : live.Sha256,
                 true,
                 FingerprintComparison.Compare(candidate.Baseline?.Fingerprints, candidate.Live?.Fingerprints),
                 candidate.Live?.Kind ?? candidate.Baseline?.Kind);

@@ -33,6 +33,17 @@ public sealed class SourceTreeReaderTests : IDisposable
         Assert.Equal(first, second);
     }
 
+    [Fact]
+    public void ReadIgnoresTemporaryFingerprintCandidateDirectories()
+    {
+        Write("Blocks/Real.xml", "<Document><SW.Blocks.OB ID=\"1\" /></Document>");
+        Write(".fingerprint-candidates-old/Blocks/Duplicate.xml", "<Document><SW.Blocks.FB ID=\"2\" /></Document>");
+
+        var objects = new SourceTreeReader().Read(root);
+
+        Assert.Equal(new[] { "Blocks/Real.xml" }, objects.Select(item => item.RelativePath));
+    }
+
     private void Write(string relativePath, string content)
     {
         var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));

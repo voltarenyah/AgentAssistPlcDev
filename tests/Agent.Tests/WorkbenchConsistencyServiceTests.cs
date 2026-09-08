@@ -47,6 +47,53 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         Assert.Equal(2, engineering.Calls.Count(call => call == "compare_source_evidence"));
         Assert.DoesNotContain("sync_export", engineering.Calls);
         Assert.DoesNotContain("rebuild_export", engineering.Calls);
+        Assert.Empty(Directory.EnumerateDirectories(fixture.Root, ".fingerprint-candidates-*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task FullXmlCompareUsesManifestFingerprintComponents()
+    {
+        fixture.WriteSourceManifest("PLC_1", """
+            {
+              "components": [
+                {
+                  "name": "Main",
+                  "category": "OB",
+                  "exportedFile": "Blocks/Main.xml",
+                  "fingerprints": { "Code": "baseline-code", "Comments": "same-comments" }
+                }
+              ]
+            }
+            """);
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"))
+        {
+            SourceXmlByPlc = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["PLC_1"] = "<Document><SW.Blocks.OB ID=\"1\" Comment=\"changed\" /></Document>",
+                ["PLC_2"] = "<Document><SW.Blocks.OB ID=\"1\" /></Document>",
+            },
+            ExportMetadataJson = """
+                {
+                  "components": [
+                    {
+                      "name": "Main",
+                      "category": "OB",
+                      "exportedFile": "Blocks/Main.xml",
+                      "fingerprints": { "Code": "live-code", "Comments": "same-comments" }
+                    }
+                  ]
+                }
+                """
+        };
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        var difference = Assert.Single(result.Differences, item => item.PlcName == "PLC_1");
+        Assert.NotNull(difference.FingerprintComponents);
+        Assert.False(difference.FingerprintComponents!["Code"].Matches);
+        Assert.True(difference.FingerprintComponents["Comments"].Matches);
     }
 
     [Fact]
@@ -65,8 +112,12 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         var difference = Assert.Single(result.Differences, difference => difference.PlcName == "PLC_1");
         Assert.Equal(ManagedSourceEvidenceKind.TagTable, difference.EvidenceKind);
         Assert.Null(difference.FingerprintComponents);
-        Assert.NotNull(difference.MasterFingerprint);
-        Assert.NotNull(difference.TiaFingerprint);
+        Assert.Equal(
+            XmlContentHash.Compute("<Document><SW.Blocks.OB ID=\"1\" /></Document>"),
+            difference.MasterFingerprint);
+        Assert.Equal(
+            XmlContentHash.Compute(engineering.SourceXml),
+            difference.TiaFingerprint);
     }
 
     [Fact]
@@ -496,6 +547,8 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         public List<string> Calls { get; } = new();
         public string ProjectXml { get; init; } = "<CAEXFile><Device Name=\"PLC_1\" /></CAEXFile>";
         public string SourceXml { get; init; } = "<Document><SW.Blocks.OB ID=\"1\" /></Document>";
+        public IReadOnlyDictionary<string, string>? SourceXmlByPlc { get; init; }
+        public string ExportMetadataJson { get; init; } = "{}";
 
         /// <summary>Optional per-PLC safety surface: (isSafetyDevice, readState, fSignature, blockSignatures).</summary>
         public Dictionary<string, (bool IsSafety, string? ReadState, string? FSignature, IReadOnlyList<FBlockSignatureInfo>? Blocks)> Safety { get; } = new();
@@ -531,9 +584,9 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
             {
                 var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
                 Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
-                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), SourceXml);
-                File.WriteAllText(Path.Combine(outputDir, "metadata.json"), "{}");
                 var plcName = (string)args.GetType().GetProperty("plcName")!.GetValue(args)!;
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), SourceXmlByPlc?.GetValueOrDefault(plcName) ?? SourceXml);
+                File.WriteAllText(Path.Combine(outputDir, "metadata.json"), ExportMetadataJson);
                 return Task.FromResult((T)(object)new[]
                 {
                     new SyncResult { PlcName = plcName, ExportRoot = outputDir, Status = "updated" },
@@ -662,6 +715,13 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         public string Head => "head-1";
         public WorkbenchMetadata Workbench { get; }
         public WorktreeMetadata Master { get; }
+
+        public void WriteSourceManifest(string plcName, string json)
+        {
+            var deviceId = plcName == "PLC_1" ? "device-1" : "device-2";
+            var context = WorkbenchPaths.ResolveDevice("wb-1", Root, "master-1", "master", deviceId, plcName);
+            File.WriteAllText(Path.Combine(context.SourceRoot, "metadata.json"), json);
+        }
 
         public static ConsistencyFixture Create()
         {

@@ -8,7 +8,8 @@ public sealed record SourceObjectSnapshot(
     string Category,
     string Name,
     string Sha256,
-    long Length);
+    long Length,
+    string? ContentHash = null);
 
 public sealed record DeviceSourceSnapshot(
     string DeviceId,

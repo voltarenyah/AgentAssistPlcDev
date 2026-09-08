@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
+using Contracts.Engineering;
 
 namespace Agent.Workbench;
 
@@ -49,7 +50,8 @@ public sealed record SourceObjectInfo(
     string? ContentHash,
     bool? IsKnowHowProtected,
     DateTimeOffset? ModifiedDate,
-    string? Status);
+    string? Status,
+    FingerprintSet? FingerprintComponents = null);
 
 public sealed record DeviceSnapshot(
     string WorkbenchId,
@@ -206,6 +208,13 @@ public sealed class DeviceSnapshotReader
                 }
 
                 var relativePath = exportedFile.Replace('\\', '/');
+                var fingerprintComponents = ReadFingerprintSet(component, "fingerprints");
+                if (fingerprintComponents is null
+                    && component.TryGetProperty("fingerprints", out var legacyFingerprints)
+                    && legacyFingerprints.ValueKind == JsonValueKind.String)
+                {
+                    fingerprintComponents = FingerprintSet.Parse(legacyFingerprints.GetString());
+                }
                 objects.Add(new SourceObjectInfo(
                     ReadString(component, "id") ?? $"source:{relativePath}",
                     name,
@@ -217,7 +226,8 @@ public sealed class DeviceSnapshotReader
                     ReadString(component, "contentHash"),
                     ReadBool(component, "isKnowHowProtected"),
                     ReadDate(component, "modifiedDate"),
-                    ReadString(component, "status")));
+                    ReadString(component, "status"),
+                    fingerprintComponents));
             }
 
             return objects
@@ -238,6 +248,25 @@ public sealed class DeviceSnapshotReader
             && value.TryGetInt32(out var number)
             ? number
             : null;
+
+    private static FingerprintSet? ReadFingerprintSet(JsonElement owner, string property)
+    {
+        if (!owner.TryGetProperty(property, out var value) || value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var result = new FingerprintSet();
+        foreach (var item in value.EnumerateObject())
+        {
+            if (item.Value.ValueKind == JsonValueKind.String && item.Value.GetString() is { } fingerprint)
+            {
+                result[item.Name] = fingerprint;
+            }
+        }
+
+        return result.Count == 0 ? null : result;
+    }
 
     private static bool? ReadBool(JsonElement owner, string property)
     {

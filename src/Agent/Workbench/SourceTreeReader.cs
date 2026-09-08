@@ -27,6 +27,11 @@ public sealed class SourceTreeReader
                 RejectReparsePoint(entry);
                 if (Directory.Exists(entry))
                 {
+                    if (Path.GetFileName(entry).StartsWith(".fingerprint-candidates-", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     pending.Push(entry);
                     continue;
                 }
@@ -67,7 +72,8 @@ public sealed class SourceTreeReader
             category,
             name,
             ComputeHexHash(XmlCompare.Normalize(xml)),
-            new FileInfo(path).Length);
+            new FileInfo(path).Length,
+            XmlContentHash.Compute(xml));
     }
 
     private static string Describe(string xml, string relativePath, out string category, out string name)
