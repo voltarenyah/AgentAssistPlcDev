@@ -23,3 +23,10 @@ Implemented normalized hierarchical tag path creation, rename, derived path look
 ## Scope
 
 No API, UI, entity lifecycle, assignment, or search behavior was added.
+
+## Review follow-up
+
+Added direct creation-side coverage for a case/whitespace variant (` machine / PRESS `), proving the same stable final ID is returned and original display names remain `Machine` and `Press`.
+
+- Focused service tests after follow-up: 4 passed.
+- Full Agent.Tests rerun: 408 passed.

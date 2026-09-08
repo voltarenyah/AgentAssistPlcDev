@@ -26,7 +26,12 @@ public sealed class WorkbenchTagServiceTests : IDisposable
     public void EmptyInteriorSegmentAndSiblingCollisionAreRejected()
     {
         var service = new WorkbenchTagService(new WorkbenchTagStore(_path));
-        service.CreatePath("Machine/Press");
+        var first = service.CreatePath("Machine/Press");
+        var repeated = service.CreatePath(" machine / PRESS ");
+
+        Assert.Equal(first.TagId, repeated.TagId);
+        var stored = new WorkbenchTagStore(_path).Load();
+        Assert.Equal(["Machine", "Press"], stored.Nodes.Select(node => node.Name));
 
         var empty = Assert.Throws<WorkbenchTagDomainException>(() => service.CreatePath("Machine//Hydraulic"));
         Assert.Equal("invalid_path", empty.Code);
