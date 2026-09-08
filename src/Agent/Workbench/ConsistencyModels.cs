@@ -99,4 +99,5 @@ public sealed record WorkbenchConsistencyResult(
     IReadOnlyList<DeviceSafetyEvidence>? Safety = null,
     bool SafetyChanged = false,
     IReadOnlyList<ComparisonTiming>? Timings = null,
-    bool UntrackableChange = false);
+    bool UntrackableChange = false,
+    bool HardwareChecked = true);

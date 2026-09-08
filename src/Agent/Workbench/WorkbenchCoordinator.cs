@@ -2528,7 +2528,8 @@ public sealed class WorkbenchCoordinator
         CancellationToken token = default,
         IOperationProgress? progress = null,
         bool allowCompile = false,
-        bool forceFullExport = false)
+        bool forceFullExport = false,
+        bool includeHardware = true)
     {
         var workbench = LoadRegisteredWorkbench(workbenchId);
         var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
@@ -2537,7 +2538,7 @@ public sealed class WorkbenchCoordinator
         var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
         var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
         await EnsureMasterProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
-        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile, forceFullExport).ConfigureAwait(false);
+        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile, forceFullExport, includeHardware).ConfigureAwait(false);
     }
 
     public WorkbenchConsistencyResult GetComparison(string workbenchId, string comparisonId)

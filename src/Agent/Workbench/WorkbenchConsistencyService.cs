@@ -106,7 +106,8 @@ public sealed class WorkbenchConsistencyService
         CancellationToken cancellationToken = default,
         IOperationProgress? progress = null,
         bool allowCompile = false,
-        bool forceFullExport = false)
+        bool forceFullExport = false,
+        bool includeHardware = true)
     {
         ArgumentNullException.ThrowIfNull(workbench);
         ArgumentNullException.ThrowIfNull(master);
@@ -123,14 +124,29 @@ public sealed class WorkbenchConsistencyService
                 () => ReadHeadAsync(masterRoot, cancellationToken),
                 result => $"Comparing against {result.Sha[..Math.Min(7, result.Sha.Length)]}.")
             .ConfigureAwait(false);
-        var hardware = await MeasureAsync(
-                timings,
+        HardwareConfigurationCompareResult? hardware;
+        if (includeHardware)
+        {
+            hardware = await MeasureAsync(
+                    timings,
+                    "hardware-export",
+                    "Export and compare project AML plus the network configuration fingerprint.",
+                    null,
+                    () => CompareHardwareAsync(masterRoot, cancellationToken, progress),
+                    DescribeHardwareOutcome)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            timings.Add(new ComparisonTiming(
                 "hardware-export",
                 "Export and compare project AML plus the network configuration fingerprint.",
                 null,
-                () => CompareHardwareAsync(masterRoot, cancellationToken, progress),
-                DescribeHardwareOutcome)
-            .ConfigureAwait(false);
+                0,
+                "Hardware verification was not checked."));
+            hardware = null;
+        }
+        var hardwareMatches = !includeHardware || hardware?.State == "in-sync";
         var evidence = await MeasureAsync(
                 timings,
                 "validation-evidence-read",
@@ -203,6 +219,7 @@ public sealed class WorkbenchConsistencyService
                     master,
                     head,
                     hardware,
+                    includeHardware,
                     evidence!,
                     devices,
                     untrackableChange.UntrackableChange,
@@ -287,7 +304,7 @@ public sealed class WorkbenchConsistencyService
 
         if (evidenceCurrent && sourceClean && checksumsMatch)
         {
-            var fastState = safetyChanged || hardware.State != "in-sync"
+            var fastState = safetyChanged || !hardwareMatches
                 ? ConsistencyState.Different
                 : safetyReadFailed
                     ? ConsistencyState.Unavailable
@@ -302,7 +319,8 @@ public sealed class WorkbenchConsistencyService
                 hardware,
                 safety,
                 safetyChanged,
-                timings.ToArray()));
+                timings.ToArray(),
+                HardwareChecked: includeHardware));
         }
 
         var evidenceSourceCanNarrow = evidenceCurrent && sourceClean;
@@ -374,7 +392,7 @@ public sealed class WorkbenchConsistencyService
 
         var state = scans.Values.Any(scan => scan.UnsupportedObjects.Count > 0)
             ? ConsistencyState.ScanRequired
-            : differences.Count == 0 && hardware.State == "in-sync" && !safetyChanged
+            : differences.Count == 0 && hardwareMatches && !safetyChanged
                 ? safetyReadFailed
                     ? ConsistencyState.Unavailable
                     : ConsistencyState.Consistent
@@ -389,7 +407,8 @@ public sealed class WorkbenchConsistencyService
             hardware,
             safety,
             safetyChanged,
-            timings.ToArray()));
+            timings.ToArray(),
+            HardwareChecked: includeHardware));
     }
 
     /// <summary>Per-PLC baseline F-signatures from master's revision.json ("PLC:SIG;PLC2:SIG2").
@@ -759,7 +778,8 @@ public sealed class WorkbenchConsistencyService
         WorkbenchMetadata workbench,
         WorktreeMetadata master,
         ConsistencyCommit head,
-        HardwareConfigurationCompareResult hardware,
+        HardwareConfigurationCompareResult? hardware,
+        bool hardwareChecked,
         ConsistencyValidationEvidence evidence,
         IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
         bool untrackableChange,
@@ -878,7 +898,8 @@ public sealed class WorkbenchConsistencyService
         }
 
         var safetyChanged = safety.Any(item => item.Changed);
-        var state = differences.Count == 0 && hardware.State == "in-sync" && !safetyChanged
+        var hardwareMatches = !hardwareChecked || hardware?.State == "in-sync";
+        var state = differences.Count == 0 && hardwareMatches && !safetyChanged
             ? safetyReadFailed
                 ? ConsistencyState.Unavailable
                 : ConsistencyState.Consistent
@@ -894,7 +915,8 @@ public sealed class WorkbenchConsistencyService
             safety,
             safetyChanged,
             timings.ToArray(),
-            untrackable));
+            untrackable,
+            HardwareChecked: hardwareChecked));
     }
 
     private static bool HasFingerprintFirstEvidence(

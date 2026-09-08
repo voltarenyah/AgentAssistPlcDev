@@ -55,6 +55,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
   const [savepoints, setSavepoints] = useState<api.SavepointInfo[]>([])
   const [tab, setTab] = useState<VersionControlTab>('changes')
   const [compareSignal, setCompareSignal] = useState(0)
+  const [verifyHardware, setVerifyHardware] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -80,7 +81,10 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
   }, [workbenchId, worktreeId])
 
   useEffect(() => { void refresh() }, [refresh])
-  useEffect(() => { setCompareSignal(0) }, [workbenchId, worktreeId])
+  useEffect(() => {
+    setCompareSignal(0)
+    setVerifyHardware(true)
+  }, [workbenchId, worktreeId])
 
   const branch = status?.branch ?? ''
   const isMaster = branch.toLowerCase() === 'master'
@@ -181,6 +185,15 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
         >
           <GitCompare className="h-3.5 w-3.5" /> Compare with TIA
         </button>
+        <label className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[10px] text-muted-foreground">
+          <input
+            type="checkbox"
+            data-testid="vc-verify-hardware"
+            checked={verifyHardware}
+            onChange={event => setVerifyHardware(event.target.checked)}
+          />
+          Verify hardware configuration
+        </label>
         <div className="flex-1" />
         <button type="button" className="icon-button" title="Refresh version control" aria-label="Refresh version control" onClick={() => void refresh()} disabled={loading}>
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
@@ -209,6 +222,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
             branch={branch}
             entries={entries}
             compareSignal={compareSignal}
+            verifyHardware={verifyHardware}
             snapshot={{
               revision: lastSavepoint?.svnRevision ?? null,
               commitsSince: commitsSinceSavepoint,

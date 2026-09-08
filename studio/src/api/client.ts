@@ -491,6 +491,8 @@ export type WorkbenchConsistencyResult = {
   liveChecksums: Record<string, string | null>
   differences: SourceDifference[]
   hardware?: HardwareConfigurationCompareResult | null
+  /** False means the user deliberately skipped the project AML/network comparison. */
+  hardwareChecked?: boolean
   safety?: DeviceSafetyEvidence[] | null
   safetyChanged?: boolean
   timings?: ComparisonTiming[] | null
@@ -912,11 +914,16 @@ export const createRollbackFeature = (workbenchId: string, historicalSha: string
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/rollback-features`,
     withOperation(jsonRequest('POST', { historicalSha, paths, featureName }), operationId),
   )
-export const compareMasterWithTia = (workbenchId: string, operationId?: string, allowCompile = false) =>
-  workbenchRequest<WorkbenchConsistencyResult>(
-    `/workbenches/${encodeURIComponent(workbenchId)}/vc/compare-tia${allowCompile ? '?allowCompile=true' : ''}`,
+export const compareMasterWithTia = (workbenchId: string, operationId?: string, allowCompile = false, includeHardware = true) => {
+  const query = new URLSearchParams()
+  if (allowCompile) query.set('allowCompile', 'true')
+  if (!includeHardware) query.set('includeHardware', 'false')
+  const suffix = query.size > 0 ? `?${query}` : ''
+  return workbenchRequest<WorkbenchConsistencyResult>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/vc/compare-tia${suffix}`,
     withOperation(jsonRequest('POST'), operationId),
   )
+}
 export const getWorkbenchComparison = (workbenchId: string, comparisonId: string) =>
   workbenchRequest<WorkbenchConsistencyResult>(
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}`,
