@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, Boxes, GitBranch, Loader2, RefreshCw, Sparkles } from 'lucide-react'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
@@ -37,6 +37,7 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
   const [directTagIds, setDirectTagIds] = useState<string[]>([])
   const [tagsLoading, setTagsLoading] = useState(true)
   const [tagsError, setTagsError] = useState<string | null>(null)
+  const tagLoadGeneration = useRef(0)
 
   const reload = useCallback(async () => {
     try {
@@ -72,19 +73,23 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
   }, [workbenchId])
 
   const reloadTags = useCallback(async () => {
+    const generation = ++tagLoadGeneration.current
+    const isCurrent = () => generation === tagLoadGeneration.current
     setTagsLoading(true)
     try {
       const [taxonomy, assignments] = await Promise.all([
         api.getTagTaxonomy(),
         api.getWorkbenchTags(workbenchId),
       ])
-      setTagNodes(taxonomy.nodes)
-      setDirectTagIds(assignments.direct)
-      setTagsError(null)
+      if (isCurrent()) {
+        setTagNodes(taxonomy.nodes)
+        setDirectTagIds(assignments.direct)
+        setTagsError(null)
+      }
     } catch (loadError) {
-      setTagsError(displayError(loadError))
+      if (isCurrent()) setTagsError(displayError(loadError))
     } finally {
-      setTagsLoading(false)
+      if (isCurrent()) setTagsLoading(false)
     }
   }, [workbenchId])
 

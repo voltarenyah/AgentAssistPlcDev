@@ -97,6 +97,16 @@ const setInputValue = (input: HTMLInputElement | HTMLTextAreaElement, value: str
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 afterEach(() => {
   document.body.innerHTML = ''
 })
@@ -276,6 +286,35 @@ describe('ProjectLandingPage', () => {
 
     expect(host.textContent).toContain('Project overview unavailable')
     expect(host.textContent).toContain('boom')
+
+    await act(async () => root.unmount())
+  })
+
+  it('keeps only the latest workbench tags when requests resolve out of order', async () => {
+    const taxonomyA = deferred<api.TagTaxonomy>()
+    const assignmentsA = deferred<api.EntityTags>()
+    const taxonomyB = deferred<api.TagTaxonomy>()
+    const assignmentsB = deferred<api.EntityTags>()
+    const taxonomyRequests = [taxonomyA.promise, taxonomyB.promise]
+    vi.mocked(api.getTagTaxonomy).mockImplementation(() => taxonomyRequests.shift()!)
+    vi.mocked(api.getWorkbenchTags).mockImplementation(workbenchId =>
+      workbenchId === 'wb-a' ? assignmentsA.promise : assignmentsB.promise,
+    )
+
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb-a" onSelectWorktree={() => {}} />)
+    await act(async () => root.render(<ProjectLandingPage workbenchId="wb-b" onSelectWorktree={() => {}} />))
+    await act(async () => {})
+
+    taxonomyB.resolve({ nodes: [{ tagId: 'tag-b', parentTagId: null, name: 'B', normalizedName: 'b' }] })
+    assignmentsB.resolve({ direct: ['tag-b'], inherited: [], effective: ['tag-b'] })
+    await act(async () => {})
+    taxonomyA.resolve({ nodes: [{ tagId: 'tag-a', parentTagId: null, name: 'A', normalizedName: 'a' }] })
+    assignmentsA.resolve({ direct: ['tag-a'], inherited: [], effective: ['tag-a'] })
+    await act(async () => {})
+
+    expect(host.querySelector('[data-tag-id="tag-b"]')).not.toBeNull()
+    expect(host.querySelector('[data-tag-id="tag-a"]')).toBeNull()
+    expect(host.querySelector('[role="alert"]')).toBeNull()
 
     await act(async () => root.unmount())
   })
