@@ -85,6 +85,37 @@ public sealed class WorkbenchTagServiceTests : IDisposable
         Assert.DoesNotContain(store.Load().Nodes, node => node.TagId == parent.TagId);
     }
 
+    [Fact]
+    public void AssignmentsValidateCatalogAndEffectiveWorktreeTagsAreComputedAtReadTime()
+    {
+        var metadata = new WorkbenchMetadata(
+            WorkbenchSchema.CurrentVersion, "wb-1", "Fixture", "now", "/tmp/wb", "/tmp/repo", null, null,
+            [new WorkbenchWorktreeRegistration("wt-1", "Feature", "feature", "worktrees/feature")]);
+        var service = new WorkbenchTagService(
+            new WorkbenchTagStore(_path),
+            new WorkbenchCatalogTagEntityLookup([metadata]));
+        var workbenchTag = service.CreatePath("area/assembly");
+        var worktreeTag = service.CreatePath("priority/high");
+
+        service.AssignWorkbenchTag(workbenchTag.TagId, "wb-1");
+        service.AssignWorkbenchTag(workbenchTag.TagId, "wb-1");
+        service.AssignWorktreeTag(worktreeTag.TagId, "wb-1", "wt-1");
+        service.AssignWorktreeTag(worktreeTag.TagId, "wb-1", "wt-1");
+
+        var projection = service.GetWorktreeTags("wb-1", "wt-1");
+        Assert.Equal([worktreeTag.TagId], projection.DirectTagIds);
+        Assert.Equal(new[] { workbenchTag.TagId, worktreeTag.TagId }, projection.EffectiveTagIds);
+        Assert.Equal(2, new WorkbenchTagStore(_path).Load().Assignments.Count);
+
+        service.UnassignWorkbenchTag(workbenchTag.TagId, "wb-1");
+        Assert.Equal([worktreeTag.TagId], service.GetWorktreeTags("wb-1", "wt-1").EffectiveTagIds);
+        Assert.Single(new WorkbenchTagStore(_path).Load().Assignments);
+
+        var mismatch = Assert.Throws<WorkbenchTagDomainException>(() =>
+            service.AssignWorktreeTag(worktreeTag.TagId, "wb-other", "wt-1"));
+        Assert.Equal("worktree_not_found", mismatch.Code);
+    }
+
     public void Dispose()
     {
         var root = Path.GetDirectoryName(_path);
