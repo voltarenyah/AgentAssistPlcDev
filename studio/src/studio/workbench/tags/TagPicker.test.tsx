@@ -3,7 +3,10 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TagNode } from '@/api/client'
+import { showErrorToast } from '@/components/ui/toast'
 import TagPicker from './TagPicker'
+
+vi.mock('@/components/ui/toast', () => ({ showErrorToast: vi.fn() }))
 
 const nodes: TagNode[] = [
   { tagId: 'a', parentTagId: null, name: 'Machine', normalizedName: 'machine' },
@@ -51,10 +54,9 @@ describe('TagPicker', () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
-    const retry = vi.fn()
     function Harness() {
       const [currentTagIds] = React.useState(['a'])
-      return <TagPicker nodes={nodes} currentTagIds={currentTagIds} onAssign={onAssign} error="Tag API offline" onRetry={retry} />
+      return <TagPicker nodes={nodes} currentTagIds={currentTagIds} onAssign={onAssign} />
     }
     await act(async () => root.render(<Harness />))
     expect(getByRole('listitem', 'Machine')).toBeTruthy()
@@ -67,10 +69,8 @@ describe('TagPicker', () => {
     })
     expect(onAssign).toHaveBeenCalledWith('b')
     expect(getByRole('listitem', 'Machine')).toBeTruthy()
-    expect(document.body.textContent).not.toContain('Machine/Press\n')
-    expect(getByRole('alert')).toBeTruthy()
-    await act(async () => getByRole('button', 'Retry').click())
-    expect(retry).toHaveBeenCalledOnce()
+    expect(vi.mocked(showErrorToast)).toHaveBeenCalledWith('offline')
+    expect(getByLabel('Search tags')).toBeTruthy()
     await act(async () => root.unmount())
   })
 })

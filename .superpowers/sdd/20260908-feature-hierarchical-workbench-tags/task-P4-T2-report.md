@@ -14,6 +14,7 @@
 - `npm test -- --run` (studio) — 72 files / 401 tests passed; existing test environment emitted unhandled `ECONNREFUSED localhost:3000` errors from `MainStudio.apiKey.test.tsx` during teardown.
 - `git diff --check` — passed.
 - Review fix: picker tests now use semantic role/label helpers for Add tag, command search, create action, keyboard search/selection, and a controlled current-assignment harness with visible retry recovery.
+- Re-review fix: rejected assignment is now verified through the mocked `showErrorToast` boundary (`offline`), while the controlled assignment list and open search UI remain unchanged.
 
 ## Scope / concerns
 
@@ -22,4 +23,4 @@
 
 ## Commit
 
-- Commits: `f6347f2` initial implementation; follow-up review fix commit adds semantic picker proof and controlled error-recovery coverage.
+- Commits: `f6347f2` initial implementation; `1637448` semantic picker proof; final follow-up verifies toast-boundary recovery.
