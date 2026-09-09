@@ -53,7 +53,7 @@ export function TagFilter({
           <TagChip key={node.tagId} node={node} nodes={nodes} removable onRemove={remove} />
         ))}
       </div>
-      <Command shouldFilter={false} className="relative mt-1 min-w-0">
+      <Command shouldFilter={false} className="relative mt-1 min-w-0 overflow-visible">
         <CommandInput
           value={query}
           onValueChange={setQuery}
