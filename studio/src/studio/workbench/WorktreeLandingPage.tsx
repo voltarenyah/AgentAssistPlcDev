@@ -229,7 +229,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
+      <div className="flex h-12 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
         {worktreeTabs.map(worktreeTab => {
           const Icon = worktreeTab.icon
           return (

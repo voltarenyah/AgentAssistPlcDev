@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, ShieldAlert } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2, ShieldAlert } from 'lucide-react'
 import * as api from '@/api/client'
 import FeatureValidationDialog from './FeatureValidationDialog'
 import OperationTimingList, { formatElapsed } from '@/studio/workbench/OperationTimingList'
@@ -25,6 +25,8 @@ type Props = {
   onBeginOperation?: (kind: string, label: string) => string
   /** The polling status for this compare, including active and completed phase timings. */
   operationStatus?: api.OperationStatus | null
+  /** Notifies the parent while a comparison is running so commit controls can be hidden. */
+  onComparisonBusyChanged?: (busy: boolean) => void
 }
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
@@ -36,7 +38,7 @@ const safetyKindLabel = (kind: api.SafetyBlockDifference['kind']) => {
 
 const shortFingerprint = (value: string) => value.slice(0, 7)
 
-export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, verifyHardware = true, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation, operationStatus = null }: Props) {
+export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, verifyHardware = true, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation, operationStatus = null, onComparisonBusyChanged }: Props) {
   const [started, setStarted] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -45,10 +47,11 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   const [error, setError] = useState<string | null>(null)
   const [plan, setPlan] = useState<api.FeatureImportPlan | null>(null)
   const [needsCompileConfirmation, setNeedsCompileConfirmation] = useState(false)
+  const [timingsCollapsed, setTimingsCollapsed] = useState(false)
   const handledSignal = useRef(0)
 
   const compare = async (allowCompile = false) => {
-    setBusy(true); setError(null); setNeedsCompileConfirmation(false)
+    setBusy(true); onComparisonBusyChanged?.(true); setError(null); setNeedsCompileConfirmation(false)
     const operationId = onBeginOperation?.('compare-tia', 'Comparing master with TIA Portal...')
     try {
       const nextComparison = await (!verifyHardware
@@ -68,7 +71,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
         setError(displayError(reason))
       }
     }
-    finally { setBusy(false) }
+    finally { setBusy(false); onComparisonBusyChanged?.(false) }
   }
 
   useEffect(() => {
@@ -85,6 +88,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     setSelectedSafety(new Set())
     setComparison(null)
     setStarted(false)
+    onComparisonBusyChanged?.(false)
     setError(null)
     setNeedsCompileConfirmation(false)
     onSelectionChanged?.(null, [])
@@ -142,8 +146,8 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
 
   return (
     <div className="shrink-0" data-testid="vc-compare-result">
-      <div className="px-2.5 pb-2.5">
-        {busy && !comparison && (
+      <div className="px-3.5 pb-2.5">
+        {busy && (
           <div className="py-2 text-[10px] text-muted-foreground">
             <div className="flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Comparing the connected TIA project with master...
@@ -168,24 +172,36 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
           </div>
         )}
 
-        {comparison && (
+        {comparison && !busy && (
           <div className="space-y-2">
             {comparison.timings && comparison.timings.length > 0 && (
               <section className="rounded-lg border border-border/70 bg-muted/25 p-2.5 text-[9px]" data-comparison-timings aria-label="TIA comparison timings">
-                <div className="mb-1 text-[8px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Comparison timings</div>
-                <ol className="space-y-1">
-                  {comparison.timings.map((timing, index) => (
-                    <li key={`${timing.phase}:${timing.plcName ?? 'project'}:${index}`} className="flex items-start gap-2">
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-foreground">{timing.purpose}</span>
-                        <span className="block text-[8px] text-muted-foreground">
-                          {timing.plcName ? `${timing.plcName} · ` : ''}{timing.outcome}
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-1.5 text-left text-[8px] font-semibold uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
+                  aria-expanded={!timingsCollapsed}
+                  aria-label={`${timingsCollapsed ? 'Expand' : 'Collapse'} comparison timings`}
+                  onClick={() => setTimingsCollapsed(previous => !previous)}
+                >
+                  {timingsCollapsed ? <ChevronRight className="h-3 w-3" aria-hidden="true" /> : <ChevronDown className="h-3 w-3" aria-hidden="true" />}
+                  <span>Comparison timings</span>
+                  <span className="ml-auto font-normal normal-case tracking-normal">{comparison.timings.length}</span>
+                </button>
+                {!timingsCollapsed && (
+                  <ol className="mt-1 space-y-1" data-comparison-timings-list>
+                    {comparison.timings.map((timing, index) => (
+                      <li key={`${timing.phase}:${timing.plcName ?? 'project'}:${index}`} className="flex items-start gap-2">
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-foreground">{timing.purpose}</span>
+                          <span className="block text-[8px] text-muted-foreground">
+                            {timing.plcName ? `${timing.plcName} · ` : ''}{timing.outcome}
+                          </span>
                         </span>
-                      </span>
-                      <time className="shrink-0 font-mono text-foreground/80">{formatElapsed(timing.elapsedMilliseconds)}</time>
-                    </li>
-                  ))}
-                </ol>
+                        <time className="shrink-0 font-mono text-foreground/80">{formatElapsed(timing.elapsedMilliseconds)}</time>
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </section>
             )}
             {safetyChanges.length > 0 && (

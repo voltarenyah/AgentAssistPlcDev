@@ -74,6 +74,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
   const [commitMenuOpen, setCommitMenuOpen] = useState(false)
   const [snapshotMessage, setSnapshotMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [comparisonBusy, setComparisonBusy] = useState(false)
   const [allCommitted, setAllCommitted] = useState(false)
 
   useEffect(() => {
@@ -192,7 +193,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
           </div>
         ) : (
           <>
-            <div data-testid="vc-commit-controls" className="px-3.5 pt-2.5">
+            {!comparisonBusy && <div data-testid="vc-commit-controls" className="px-3.5 pt-2.5">
               <textarea
                 aria-label="Commit message"
                 placeholder="Message"
@@ -248,7 +249,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                   </div>
                 )}
               </div>
-            </div>
+            </div>}
 
             {(entries.length > 0 || tiaHasDifferences !== false) && (
               <div className="flex items-center gap-1.5 px-3.5 pb-1.5 pt-3.5 text-[11px] font-bold uppercase tracking-wide">
@@ -276,6 +277,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                 if (safetyPaths.length > 0) setUntrackable(false)
               }}
               onComparisonStateChanged={setTiaHasDifferences}
+              onComparisonBusyChanged={setComparisonBusy}
               selectionResetSignal={tiaSelectionResetSignal}
               onCommitted={onCommitted}
               onBeginOperation={onBeginOperation}

@@ -26,7 +26,7 @@ const comparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): ap
   ...overrides,
 })
 
-const render = async (props: { signal?: number; verifyHardware?: boolean; commitMessage?: string; branch?: string; selectionResetSignal?: number; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string; onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void } = {}) => {
+const render = async (props: { signal?: number; verifyHardware?: boolean; commitMessage?: string; branch?: string; selectionResetSignal?: number; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string; onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void; operationStatus?: api.OperationStatus | null; onComparisonBusyChanged?: (busy: boolean) => void } = {}) => {
   vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue({
     revision: {
       schemaVersion: 1,
@@ -56,6 +56,8 @@ const render = async (props: { signal?: number; verifyHardware?: boolean; commit
       onCommitted={props.onCommitted}
       onBeginOperation={props.onBeginOperation}
       onSelectionChanged={props.onSelectionChanged}
+      operationStatus={props.operationStatus}
+      onComparisonBusyChanged={props.onComparisonBusyChanged}
     />,
   ))
   return { host, root }
@@ -99,6 +101,73 @@ describe('VersionControlCompare (inline)', () => {
     expect(host.textContent).not.toContain('TIA differs from master')
     expect(host.querySelector('[data-comparison-timings]')?.textContent).toContain('Reading all readable block fingerprints')
     expect(host.querySelector('[data-comparison-timings]')?.textContent).toContain('1.4 s')
+    expect(host.querySelector('[aria-label="Collapse comparison timings"]')).toBeTruthy()
+  })
+
+  it('shows live operation timings for every comparison, including while a previous result remains visible', async () => {
+    const first = comparison({ differences: [], state: 'Consistent', fastGatePassed: true })
+    let resolveSecond!: (value: api.WorkbenchConsistencyResult) => void
+    const second = new Promise<api.WorkbenchConsistencyResult>(resolve => { resolveSecond = resolve })
+    const compare = vi.spyOn(api, 'compareMasterWithTia')
+      .mockResolvedValueOnce(first)
+      .mockReturnValueOnce(second)
+    const status: api.OperationStatus = {
+      operationId: 'op-2',
+      operationType: 'compare-tia',
+      state: 'running',
+      message: 'Exporting source objects',
+      updatedAt: '2026-09-09T00:00:00Z',
+      errorMessage: null,
+      completedPhases: [],
+      currentPhase: {
+        message: 'Exporting source objects',
+        startedAt: '2026-09-09T00:00:00Z',
+        completedAt: null,
+        elapsedMilliseconds: 1200,
+      },
+    }
+    const { host, root } = await render({ signal: 1 })
+    expect(compare).toHaveBeenCalledTimes(1)
+
+    await act(async () => root.render(
+      <VersionControlCompare
+        workbenchId="wb-1"
+        worktreeId="wt-1"
+        branch="master"
+        signal={2}
+        commitMessage=""
+        operationStatus={status}
+      />,
+    ))
+
+    expect(compare).toHaveBeenCalledTimes(2)
+    expect(host.querySelector('[data-operation-timings]')).toBeTruthy()
+    expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeNull()
+    resolveSecond(first)
+    await act(async () => {})
+  })
+
+  it('collapses and reopens comparison timings without hiding the comparison result', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({
+      timings: [{
+        phase: 'plc-evidence-capture',
+        purpose: 'Reading all readable block fingerprints',
+        plcName: 'PLC_1',
+        elapsedMilliseconds: 1430,
+        outcome: '132 blocks compared',
+      }],
+    }))
+    const { host } = await render({ signal: 1 })
+    const collapse = host.querySelector('[aria-label="Collapse comparison timings"]') as HTMLButtonElement
+    expect(host.querySelector('[data-comparison-timings-list]')).toBeTruthy()
+
+    await click(collapse)
+    expect(host.querySelector('[aria-label="Expand comparison timings"]')).toBeTruthy()
+    expect(host.querySelector('[data-comparison-timings-list]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeTruthy()
+
+    await click(host.querySelector('[aria-label="Expand comparison timings"]')!)
+    expect(host.querySelector('[data-comparison-timings-list]')).toBeTruthy()
   })
 
   it('labels changed fingerprint components and tag-table content hashes', async () => {

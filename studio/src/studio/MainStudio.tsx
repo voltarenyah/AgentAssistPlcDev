@@ -2094,7 +2094,7 @@ export default function MainStudio() {
           ) : !selection.deviceId && selection.worktreeId ? (
             mainView.kind === 'hardware' ? (
             <>
-              <div className="flex h-10 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
+              <div className="flex h-12 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
                 {hardwareTabs.map(tab => {
                   const Icon = tab.icon
                   return (
@@ -2258,7 +2258,7 @@ export default function MainStudio() {
               data-dock="right"
               data-dock-state={shellLayout.rightOpen ? 'open' : 'closed'}
               aria-hidden={!shellLayout.rightOpen}
-              className="dock-shell dock-shell-right min-h-0 shrink-0"
+              className="dock-shell dock-shell-right min-h-0 shrink-0 bg-sidebar"
               style={{ width: shellLayout.rightOpen ? shellLayout.rightWidth : 0 }}
             >
               {contextDock.content.kind === 'hardware' && (

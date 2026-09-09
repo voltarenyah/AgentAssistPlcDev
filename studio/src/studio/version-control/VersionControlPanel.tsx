@@ -154,8 +154,8 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
 
 
   return (
-    <section className="flex h-full min-h-0 w-full flex-col bg-card" aria-label="Version control workspace">
-      <nav className="flex shrink-0 items-center justify-center gap-1 border-b px-2 pt-1" style={{ borderColor: 'var(--border)' }} aria-label="Version control sections">
+    <section className="flex h-full min-h-0 w-full flex-col bg-sidebar" aria-label="Version control workspace">
+      <nav className="flex h-12 shrink-0 items-center justify-center gap-1 border-b px-2 pt-1" style={{ borderColor: 'var(--border)' }} aria-label="Version control sections">
         {panelTabs.map(panelTab => {
           const Icon = panelTab.icon
           const active = tab === panelTab.id
@@ -183,7 +183,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
           className="flex h-[30px] items-center gap-1.5 rounded-lg bg-primary px-3.5 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
           onClick={() => { setTab('changes'); setCompareSignal(signal => signal + 1) }}
         >
-          <GitCompare className="h-3.5 w-3.5" /> Compare with TIA
+          <GitCompare className="h-3.5 w-3.5" /> Compare
         </button>
         <label className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[10px] text-muted-foreground">
           <input

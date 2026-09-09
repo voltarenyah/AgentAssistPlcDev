@@ -56,7 +56,8 @@ describe('VersionControlPanel (worktree dock)', () => {
 
     expect(host.querySelector('[data-testid="vc-tab-changes"]')).toBeTruthy()
     expect(host.querySelector('[data-testid="vc-tab-history"]')).toBeTruthy()
-    expect(host.querySelector('[data-testid="vc-compare-open"]')?.textContent).toContain('Compare with TIA')
+    expect(host.querySelector('[data-testid="vc-compare-open"]')?.textContent).toContain('Compare')
+    expect(host.querySelector('[data-testid="vc-compare-open"]')?.textContent).not.toContain('Compare with TIA')
     expect(host.querySelector('[data-testid="vc-branch-name"]')?.textContent).toBe('feature-a')
     expect(host.textContent).toContain('master')
   })

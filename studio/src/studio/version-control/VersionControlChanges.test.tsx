@@ -58,6 +58,20 @@ afterEach(() => {
 })
 
 describe('VersionControlChanges', () => {
+  it('hides commit controls while a TIA comparison is active', async () => {
+    let resolveCompare!: (value: api.WorkbenchConsistencyResult) => void
+    vi.spyOn(api, 'compareMasterWithTia').mockReturnValue(new Promise(resolve => { resolveCompare = resolve }))
+    const { host } = await render([entry()], snapshot, 1)
+    await act(async () => {})
+
+    expect(host.querySelector('[data-testid="vc-commit-controls"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-untrackable-change"]')).toBeNull()
+
+    resolveCompare({ comparisonId: 'comparison-1', masterSha: 'master-1', fastGatePassed: true, state: 'Consistent', liveChecksums: {}, differences: [] })
+    await act(async () => {})
+    expect(host.querySelector('[data-testid="vc-commit-controls"]')).not.toBeNull()
+  })
+
   it('groups PLC objects into collapsible folders and selects rows on click', async () => {
     const { host } = await render([
       entry({ filePath: 'devices/PLC_1/source/Blocks/A.xml', objectName: 'A' }),

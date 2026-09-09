@@ -36,10 +36,10 @@ export default function SessionDock({
   return (
     <aside
       hidden={hidden}
-      className="flex h-full w-full shrink-0 flex-col border-l bg-card"
+      className="flex h-full w-full shrink-0 flex-col border-l bg-sidebar"
       style={{ borderColor: 'var(--border)' }}
     >
-      <div className="flex h-10 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>
+      <div className="flex h-12 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>
         <MessageSquare className="h-3.5 w-3.5 text-chart-3" />
         <h2 className="text-[10px] font-semibold">AI sessions</h2>
         <span className="ml-auto text-[9px] text-muted-foreground">{sessions.length}</span>
