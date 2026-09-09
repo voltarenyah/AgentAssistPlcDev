@@ -59,11 +59,27 @@ const overview: api.WorkbenchOverview = {
   ],
 }
 
+const tagNodes: api.TagNode[] = [
+  { tagId: 'tag-machine', parentTagId: null, name: 'Machine', normalizedName: 'machine' },
+  { tagId: 'tag-press', parentTagId: 'tag-machine', name: 'Press', normalizedName: 'press' },
+  { tagId: 'tag-state', parentTagId: null, name: 'State', normalizedName: 'state' },
+]
+
 vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
   return {
     ...actual,
     getWorkbenchOverview: vi.fn(async () => overview),
+    getTagTaxonomy: vi.fn(async () => ({ nodes: tagNodes })),
+    createTagPath: vi.fn(async (path: string) => ({
+      tagId: 'tag-created',
+      parentTagId: 'tag-machine',
+      name: path.split('/').at(-1)!,
+      normalizedName: path.split('/').at(-1)!.toLowerCase(),
+    })),
+    getWorkbenchTags: vi.fn(async () => ({ direct: ['tag-press'], inherited: [], effective: ['tag-press'] })),
+    assignWorkbenchTag: vi.fn(async () => undefined),
+    unassignWorkbenchTag: vi.fn(async () => undefined),
     updateWorkbench: vi.fn(async () => overview),
     updateWorktree: vi.fn(async () => ({} as api.WorktreeDetail)),
   }
@@ -87,6 +103,16 @@ const setInputValue = (input: HTMLInputElement | HTMLTextAreaElement, value: str
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 afterEach(() => {
   document.body.innerHTML = ''
 })
@@ -104,6 +130,95 @@ describe('ProjectLandingPage', () => {
     expect(host.textContent).toContain('D:/proj.ap17')
     expect((host.querySelector('input[aria-label="Project purpose"]') as HTMLInputElement).value).toBe('Line upgrade')
     expect((host.querySelector('input[aria-label="Project owner"]') as HTMLInputElement).value).toBe('Ansel')
+
+    await act(async () => root.unmount())
+  })
+
+  it('renders direct Workbench tags as removable full-path chips', async () => {
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
+
+    expect(host.querySelector('[data-tag-id="tag-press"]')?.textContent).toContain('Machine/Press')
+    expect(host.querySelector('button[aria-label="Remove tag Machine/Press"]')).not.toBeNull()
+    expect(host.querySelector('button[aria-label="Add tag"]')).not.toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('assigns a tag and refreshes only tags while preserving project metadata and Worktree rows', async () => {
+    vi.mocked(api.getWorkbenchTags)
+      .mockResolvedValueOnce({ direct: ['tag-press'], inherited: [], effective: ['tag-press'] })
+      .mockResolvedValueOnce({ direct: ['tag-press', 'tag-state'], inherited: [], effective: ['tag-press', 'tag-state'] })
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
+    const add = host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement
+    await act(async () => add.click())
+    const stateOption = document.body.querySelector('button[aria-label="Select State"]') as HTMLElement
+    await act(async () => stateOption?.click())
+    await act(async () => {})
+
+    expect(api.assignWorkbenchTag).toHaveBeenCalledWith('wb1', 'tag-state')
+    expect(host.querySelector('input[aria-label="Project purpose"]')).toHaveProperty('value', 'Line upgrade')
+    expect(host.querySelector('input[aria-label="Project owner"]')).toHaveProperty('value', 'Ansel')
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(3)
+    expect(host.querySelector('[data-tag-id="tag-state"]')).not.toBeNull()
+    expect(api.getWorkbenchOverview).toHaveBeenCalledTimes(1)
+
+    await act(async () => root.unmount())
+  })
+
+  it('creates an absent hierarchical path and assigns the returned tag', async () => {
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
+    const add = host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement
+    await act(async () => add.click())
+    const input = document.body.querySelector('input[aria-label="Search tags"]') as HTMLInputElement
+    await act(async () => setInputValue(input, 'Machine/New'))
+
+    const create = document.body.querySelector('[role="option"][aria-label="Create tag Machine/New"]') as HTMLElement
+    expect(create).not.toBeNull()
+    await act(async () => create.click())
+    await act(async () => {})
+
+    expect(api.createTagPath).toHaveBeenCalledWith('Machine/New')
+    expect(api.assignWorkbenchTag).toHaveBeenCalledWith('wb1', 'tag-created')
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(3)
+
+    await act(async () => root.unmount())
+  })
+
+  it('removes a direct tag and refreshes the chips', async () => {
+    vi.mocked(api.getWorkbenchTags)
+      .mockResolvedValueOnce({ direct: ['tag-press'], inherited: [], effective: ['tag-press'] })
+      .mockResolvedValueOnce({ direct: [], inherited: [], effective: [] })
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
+    const remove = host.querySelector('button[aria-label="Remove tag Machine/Press"]') as HTMLButtonElement
+    await act(async () => remove.click())
+    await act(async () => {})
+
+    expect(api.unassignWorkbenchTag).toHaveBeenCalledWith('wb1', 'tag-press')
+    expect(host.querySelector('[data-tag-id="tag-press"]')).toBeNull()
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(3)
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows tag loading and API error state without hiding the overview', async () => {
+    let resolveTags!: (value: api.EntityTags) => void
+    vi.mocked(api.getWorkbenchTags).mockReturnValueOnce(new Promise(resolve => { resolveTags = resolve }))
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
+    expect(host.querySelector('button[aria-label="Add tag (loading)"]')).not.toBeNull()
+    resolveTags({ direct: ['tag-press'], inherited: [], effective: ['tag-press'] })
+    await act(async () => {})
+
+    expect(host.textContent).toContain('Machine/Press')
+    await act(async () => root.unmount())
+  })
+
+  it('shows a tag API error while preserving the loaded overview', async () => {
+    vi.mocked(api.getTagTaxonomy).mockRejectedValueOnce(new Error('tag service down'))
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
+
+    expect(host.textContent).toContain('DemoWB')
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('tag service down')
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(3)
 
     await act(async () => root.unmount())
   })
@@ -196,6 +311,63 @@ describe('ProjectLandingPage', () => {
 
     expect(host.textContent).toContain('Project overview unavailable')
     expect(host.textContent).toContain('boom')
+
+    await act(async () => root.unmount())
+  })
+
+  it('keeps only the latest workbench tags when requests resolve out of order', async () => {
+    const taxonomyA = deferred<api.TagTaxonomy>()
+    const assignmentsA = deferred<api.EntityTags>()
+    const taxonomyB = deferred<api.TagTaxonomy>()
+    const assignmentsB = deferred<api.EntityTags>()
+    const taxonomyRequests = [taxonomyA.promise, taxonomyB.promise]
+    vi.mocked(api.getTagTaxonomy).mockImplementation(() => taxonomyRequests.shift()!)
+    vi.mocked(api.getWorkbenchTags).mockImplementation(workbenchId =>
+      workbenchId === 'wb-a' ? assignmentsA.promise : assignmentsB.promise,
+    )
+
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb-a" onSelectWorktree={() => {}} />)
+    await act(async () => root.render(<ProjectLandingPage workbenchId="wb-b" onSelectWorktree={() => {}} />))
+    await act(async () => {})
+
+    taxonomyB.resolve({ nodes: [{ tagId: 'tag-b', parentTagId: null, name: 'B', normalizedName: 'b' }] })
+    assignmentsB.resolve({ direct: ['tag-b'], inherited: [], effective: ['tag-b'] })
+    await act(async () => {})
+    taxonomyA.resolve({ nodes: [{ tagId: 'tag-a', parentTagId: null, name: 'A', normalizedName: 'a' }] })
+    assignmentsA.resolve({ direct: ['tag-a'], inherited: [], effective: ['tag-a'] })
+    await act(async () => {})
+
+    expect(host.querySelector('[data-tag-id="tag-b"]')).not.toBeNull()
+    expect(host.querySelector('[data-tag-id="tag-a"]')).toBeNull()
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('does not let a stale A mutation reload or overwrite B tags', async () => {
+    const assignA = deferred<void>()
+    vi.mocked(api.getTagTaxonomy).mockResolvedValue({ nodes: tagNodes })
+    vi.mocked(api.getWorkbenchTags).mockImplementation(async workbenchId => ({
+      direct: workbenchId === 'wb-a' ? ['tag-press'] : ['tag-state'],
+      inherited: [],
+      effective: workbenchId === 'wb-a' ? ['tag-press'] : ['tag-state'],
+    }))
+    vi.mocked(api.assignWorkbenchTag).mockImplementation(() => assignA.promise)
+
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb-a" onSelectWorktree={() => {}} />)
+    const add = host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement
+    await act(async () => add.click())
+    await act(async () => (document.body.querySelector('button[aria-label="Select State"]') as HTMLButtonElement).click())
+    await act(async () => root.render(<ProjectLandingPage workbenchId="wb-b" onSelectWorktree={() => {}} />))
+    await act(async () => {})
+
+    assignA.resolve()
+    await act(async () => {})
+
+    expect(api.getWorkbenchTags).toHaveBeenCalledTimes(2)
+    expect(host.querySelector('[data-tag-id="tag-state"]')).not.toBeNull()
+    expect(host.querySelector('[data-tag-id="tag-press"]')).toBeNull()
+    expect(host.querySelector('[role="alert"]')).toBeNull()
 
     await act(async () => root.unmount())
   })
