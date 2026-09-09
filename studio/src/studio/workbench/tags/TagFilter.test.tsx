@@ -32,6 +32,22 @@ const setInputValue = async (input: HTMLInputElement, value: string) => {
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('TagFilter', () => {
+  it('renders the compact search input and taxonomy control as separate peer elements', async () => {
+    const { root } = await render(
+      <TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={() => {}} />,
+    )
+
+    const input = document.body.querySelector('input[aria-label="Search filter tags"]') as HTMLInputElement
+    const searchCommand = input.closest('[cmdk-root]') as HTMLElement
+    const taxonomyButton = document.body.querySelector('button[aria-label="Open tag taxonomy"]') as HTMLButtonElement
+
+    expect(searchCommand).not.toBeNull()
+    expect(taxonomyButton).not.toBeNull()
+    expect(searchCommand.parentElement).toBe(taxonomyButton.parentElement)
+    expect(taxonomyButton.dataset.size).toBe('icon-sm')
+    await act(async () => root.unmount())
+  })
+
   it('offers full-path suggestions and selects a searched tag through keyboard interaction', async () => {
     const onSelectedTagIdsChange = vi.fn()
     const { root } = await render(

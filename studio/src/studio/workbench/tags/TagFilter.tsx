@@ -53,22 +53,33 @@ export function TagFilter({
           <TagChip key={node.tagId} node={node} nodes={nodes} removable onRemove={remove} />
         ))}
       </div>
-      <Command shouldFilter={false} className="relative mt-1 min-w-0 overflow-visible">
-        <CommandInput
-          value={query}
-          onValueChange={setQuery}
-          onInput={event => setQuery(event.currentTarget.value)}
-          placeholder={loading ? 'Loading tags…' : 'Filter tags'}
-          aria-label="Search filter tags"
-          disabled={loading}
-          className="pr-9"
-          wrapperClassName="rounded-md border border-input bg-transparent"
-        />
+      <div className="mt-1 flex items-stretch gap-1">
+        <Command shouldFilter={false} className="relative h-auto w-auto min-w-0 flex-1 overflow-visible bg-transparent">
+          <CommandInput
+            value={query}
+            onValueChange={setQuery}
+            onInput={event => setQuery(event.currentTarget.value)}
+            placeholder={loading ? 'Loading tags…' : 'Filter tags'}
+            aria-label="Search filter tags"
+            disabled={loading}
+            className="h-8 py-0"
+            wrapperClassName="h-8 rounded-md border border-input bg-transparent px-2 py-0"
+          />
+          {normalizedQuery.length > 0 && (
+            <CommandList className="absolute top-full z-10 mt-1 max-h-48 w-full rounded-md border border-border bg-popover p-1 shadow-md">
+              <CommandEmpty>No matching tags.</CommandEmpty>
+              {selectableNodes.map(node => {
+                const path = paths.get(node.tagId) ?? node.name
+                return <CommandItem key={node.tagId} value={path} onSelect={() => select(node.tagId)} aria-label={`Filter by ${path}`}>{path}</CommandItem>
+              })}
+            </CommandList>
+          )}
+        </Command>
         <Button
           type="button"
-          variant="ghost"
-          size="icon-xs"
-          className="absolute right-1 top-1/2 -translate-y-1/2"
+          variant="outline"
+          size="icon-sm"
+          className="shrink-0"
           disabled={loading}
           aria-label={loading ? 'Open tag taxonomy (loading)' : 'Open tag taxonomy'}
           onClick={() => {
@@ -79,16 +90,7 @@ export function TagFilter({
         >
           <ListFilter aria-hidden="true" />
         </Button>
-        {normalizedQuery.length > 0 && (
-          <CommandList className="absolute top-full z-10 mt-1 max-h-48 w-full rounded-md border border-border bg-popover p-1 shadow-md">
-            <CommandEmpty>No matching tags.</CommandEmpty>
-            {selectableNodes.map(node => {
-              const path = paths.get(node.tagId) ?? node.name
-              return <CommandItem key={node.tagId} value={path} onSelect={() => select(node.tagId)} aria-label={`Filter by ${path}`}>{path}</CommandItem>
-            })}
-          </CommandList>
-        )}
-      </Command>
+      </div>
       {error && (
         <div role="alert" className="mt-1 text-xs text-destructive">
           {error}{onRetry && <Button type="button" variant="link" size="xs" onClick={onRetry}>Retry</Button>}
