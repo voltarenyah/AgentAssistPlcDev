@@ -2845,6 +2845,22 @@ public sealed class WorkbenchCoordinator
             var staged = WorkbenchPaths.ResolveRelative(context.StagingRoot, sourceRelativePath);
             var destination = WorkbenchPaths.ResolveRelative(masterRoot, path);
             if (!File.Exists(staged))
+            {
+                // Project-level comparisons export nominated candidates into a temporary
+                // directory, so a missing canonical staging copy must be materialized now.
+                await RefreshStagedSourceForSynchronizationAsync(context, sourceRelativePath, token, progress)
+                    .ConfigureAwait(false);
+            }
+            else if (!File.Exists(destination) || string.Equals(HashFile(staged), HashFile(destination), StringComparison.Ordinal))
+            {
+                // If staging is byte-identical to master (or the source is newly added), it
+                // cannot be the nominated candidate produced by the current comparison. Refresh
+                // it from TIA before copying, otherwise Git receives no diff and reports
+                // "nothing to commit".
+                await RefreshStagedSourceForSynchronizationAsync(context, sourceRelativePath, token, progress)
+                    .ConfigureAwait(false);
+            }
+            if (!File.Exists(staged))
                 throw new WorkbenchLifecycleException("TIA_SOURCE_MISSING", $"The staged source '{sourceRelativePath}' is missing.");
 
             CopyFileAtomically(staged, destination);
@@ -2926,6 +2942,42 @@ public sealed class WorkbenchCoordinator
             comparisonId,
             remaining.Select(item => item.RelativePath).ToArray(),
             commit.Sha);
+    }
+
+    private async Task RefreshStagedSourceForSynchronizationAsync(
+        DeviceContext device,
+        string sourceRelativePath,
+        CancellationToken token,
+        IOperationProgress? progress)
+    {
+        var identity = ResolveSourceObjectIdentity(device, sourceRelativePath);
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await EnsureActiveProjectMatchesWorktreeAsync(device, token, progress).ConfigureAwait(false);
+            progress?.Report($"Exporting selected TIA source '{identity.Name}'...");
+            var export = await engineering.CallAsync<ExportResult>(
+                    "export_source_object",
+                    new
+                    {
+                        name = identity.Name,
+                        category = identity.Category,
+                        outputDir = device.StagingRoot,
+                        plcName = identity.PlcName,
+                    },
+                    token)
+                .ConfigureAwait(false);
+            if (!export.Success)
+            {
+                throw new WorkbenchLifecycleException(
+                    "TIA_SOURCE_EXPORT_FAILED",
+                    export.Error ?? $"TIA could not export {identity.Category} '{identity.Name}'.");
+            }
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
     }
 
     /// <summary>

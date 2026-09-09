@@ -34,6 +34,46 @@ public sealed class MasterSynchronizationTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyRefreshesCanonicalStagingWhenComparisonExportWasTemporary()
+    {
+        // Project-level compare exports nominated XML into a temporary capture directory. If
+        // the persistent staging file still matches master, refresh it from TIA before copying;
+        // otherwise the selected block produces an empty Git commit.
+        File.WriteAllText(fixture.StagingSource("Blocks/A.xml"), "old A");
+        File.WriteAllText(fixture.MasterSource("metadata.json"), """
+            { "components": [
+                { "id": "a", "name": "A", "category": "FC", "exportedFile": "Blocks/A.xml" }
+            ] }
+            """);
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("export_source_object", args =>
+            {
+                var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
+                var exported = System.IO.Path.Combine(outputDir, "Blocks", "A.xml");
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(exported)!);
+                File.WriteAllText(exported, "fresh A");
+                return new Contracts.Engineering.ExportResult { Success = true, Path = exported };
+            });
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        await coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Accept refreshed A",
+            CancellationToken.None);
+
+        Assert.Equal("fresh A", File.ReadAllText(fixture.MasterSource("Blocks/A.xml")));
+        Assert.Contains("export_source_object", engineering.Calls);
+    }
+
+    [Fact]
     public async Task ApplyOfEverySourceDifferenceCreatesAConsistentFingerprintBaseline()
     {
         var engineering = new FakeToolCaller()
@@ -43,6 +83,7 @@ public sealed class MasterSynchronizationTests : IDisposable
                 Path = SyncFixture.ProjectPath,
                 PlcDevices = ["PLC_1"],
             })
+            .Respond("export_source_object", new Contracts.Engineering.ExportResult { Success = true })
             .Respond("capture_source_evidence", new Contracts.Engineering.SourceEvidenceCaptureResult
             {
                 Snapshot = new Contracts.Engineering.SourceEvidenceSnapshot
@@ -478,6 +519,9 @@ public sealed class MasterSynchronizationTests : IDisposable
 
         public string Path(string relative) => $"devices/PLC_1/source/{relative}";
 
+        public string StagingSource(string relative) =>
+            System.IO.Path.Combine(Root, "worktrees", "master", "devices", "PLC_1", "staging", relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
+
         public string MasterSource(string relative) =>
             System.IO.Path.Combine(Root, "worktrees", "master", "devices", "PLC_1", "source", relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
 
@@ -506,7 +550,9 @@ public sealed class MasterSynchronizationTests : IDisposable
     private sealed class NoOpCaller : IMcpToolCaller
     {
         public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default) =>
-            throw new InvalidOperationException(tool);
+            tool == "export_source_object"
+                ? Task.FromResult((T)(object)new Contracts.Engineering.ExportResult { Success = true })
+                : throw new InvalidOperationException(tool);
     }
 
     private sealed class SyncVersionControlCaller : IMcpToolCaller
