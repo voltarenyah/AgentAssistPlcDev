@@ -20,7 +20,7 @@ const entry = (overrides: Partial<VersionControlSourceEntry> = {}): VersionContr
 
 const snapshot = { revision: 3, commitsSince: 2, hardwareDiffers: false }
 
-const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false) => {
+const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false, onBeginOperation?: (kind: string, label: string) => string) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -34,6 +34,7 @@ const render = async (entries: VersionControlSourceEntry[], snapshotOverride = s
         compareSignal={compareSignal}
         snapshot={snapshotOverride}
         untrackablePendingSavepoint={untrackablePendingSavepoint}
+        onBeginOperation={onBeginOperation}
       />,
     )
   })
@@ -129,6 +130,19 @@ describe('VersionControlChanges', () => {
       'devices/PLC_1/source/Blocks/A.xml',
       'devices/PLC_1/source/Blocks/B.xml',
     ], 'all', false)
+  })
+
+  it('starts a measured operation and forwards its id for a source commit', async () => {
+    const commit = vi.spyOn(api, 'commitVcPaths').mockResolvedValue({ sha: 'abc', message: 'change A', files: ['devices/PLC_1/source/Blocks/A.xml'] })
+    const begin = vi.fn().mockReturnValue('operation-1')
+    const { host } = await render([entry()], snapshot, 0, false, begin)
+
+    await click(host.querySelector('[data-testid="plc-source-row"]')!)
+    await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'change A')
+    await click(host.querySelector('[data-testid="vc-commit-selected"]')!)
+
+    expect(begin).toHaveBeenCalledWith('vc-commit', 'Committing selected changes...')
+    expect(commit).toHaveBeenCalledWith('wb-1', 'wt-1', ['devices/PLC_1/source/Blocks/Main.xml'], 'change A', false, false, 'operation-1')
   })
 
   it('shows the clean-state hero when there are no changes', async () => {

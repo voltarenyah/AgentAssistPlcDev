@@ -1981,10 +1981,10 @@ export const getWorktreeVcDiff = (workbenchId: string, worktreeId: string, fileP
   if (newSha) params.set('newSha', newSha)
   return workbenchRequest<VcDiffResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/diff?${params}`)
 }
-export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string, untrackableChange = false, safetyChange = false) =>
+export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string, untrackableChange = false, safetyChange = false, operationId?: string) =>
   workbenchRequest<{ sha: string; message: string; files: string[] }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/commit`,
-    jsonRequest('POST', { paths, message, untrackableChange, safetyChange }),
+    withOperation(jsonRequest('POST', { paths, message, untrackableChange, safetyChange }), operationId),
   )
 export const getVcValidation = (workbenchId: string, worktreeId: string, sha: string) =>
   workbenchRequest<VcValidationEvidence | null>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/validation/${encodeURIComponent(sha)}`)
@@ -2035,10 +2035,10 @@ export const restoreTiaProject = (workbenchId: string, worktreeId: string, gitCo
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/restore-tia`,
     jsonRequest('POST', { gitCommit: gitCommit || null }),
   )
-export const createSvnSavepoint = (workbenchId: string, worktreeId: string, message: string) =>
+export const createSvnSavepoint = (workbenchId: string, worktreeId: string, message: string, operationId?: string) =>
   workbenchRequest<{ sha: string; message: string; files: string[] }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/svn-savepoint`,
-    jsonRequest('POST', { message }),
+    withOperation(jsonRequest('POST', { message }), operationId),
   )
 
 export async function getVcLog(workbenchId: string, worktreeId: string, deviceId: string, maxCount?: number, filePath?: string): Promise<VcLogResult> {

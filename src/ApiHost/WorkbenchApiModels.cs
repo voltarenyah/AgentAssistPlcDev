@@ -795,7 +795,8 @@ public static class WorkbenchEndpoints
                 "vc_diff", new { repoPath = s.WorktreeRoot(workbenchId, worktreeId), filePath, oldSha, newSha }, ct));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/commit", async (
             string workbenchId, string worktreeId, CommitSourceApiRequest body,
-            WorkbenchApiState s, WorkbenchCoordinator coordinator, ApiMcpGateway gateway, CancellationToken ct) =>
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, ApiMcpGateway gateway,
+            OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
         {
             var root = s.WorktreeRoot(workbenchId, worktreeId);
             var hasExistingSource = body.Paths.Any(path =>
@@ -818,10 +819,21 @@ public static class WorkbenchEndpoints
                 // gateway fallback below only remains for empty/legacy worktrees without
                 // on-disk source files.
                 coordinator.RegisterWorkbench(s.Workbench(workbenchId));
-                return Results.Ok(await coordinator.CommitSourceAsync(
-                    workbenchId, worktreeId, body.Paths, body.Message, ct,
-                    untrackableChange: body.UntrackableChange,
-                    safetyChange: body.SafetyChange));
+                return Results.Ok(await RunOperationAsync(
+                    http,
+                    operations,
+                    "vc-commit",
+                    "Committing selected changes...",
+                    progress => coordinator.CommitSourceAsync(
+                        workbenchId,
+                        worktreeId,
+                        body.Paths,
+                        body.Message,
+                        ct,
+                        untrackableChange: body.UntrackableChange,
+                        safetyChange: body.SafetyChange,
+                        progress: progress),
+                    "Commit completed.").ConfigureAwait(false));
             }
 
             // Compatibility for an empty/legacy worktree: the version-control server still
@@ -873,11 +885,22 @@ public static class WorkbenchEndpoints
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/svn-savepoint", async (
             string workbenchId, string worktreeId, NativeSavepointApiRequest body,
-            WorkbenchApiState s, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+            WorkbenchApiState s, WorkbenchCoordinator coordinator, OperationStatusRegistry operations,
+            HttpContext http, CancellationToken ct) =>
         {
             coordinator.RegisterWorkbench(s.Workbench(workbenchId));
-            return Results.Ok(await coordinator.CreateNativeSavepointAsync(
-                workbenchId, worktreeId, body.Message, ct));
+            return Results.Ok(await RunOperationAsync(
+                http,
+                operations,
+                "svn-savepoint",
+                "Creating TIA snapshot...",
+                progress => coordinator.CreateNativeSavepointAsync(
+                    workbenchId,
+                    worktreeId,
+                    body.Message,
+                    ct,
+                    progress: progress),
+                "TIA snapshot completed.").ConfigureAwait(false));
         });
         app.MapPost("/api/workbenches/{workbenchId}/vc/compare-tia", async (
             string workbenchId,

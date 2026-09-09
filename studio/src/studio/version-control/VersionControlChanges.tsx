@@ -4,6 +4,7 @@ import * as api from '@/api/client'
 import { toast } from 'sonner'
 import { showErrorToast } from '@/components/ui/toast'
 import VersionControlCompare from './VersionControlCompare'
+import OperationTimingList from '@/studio/workbench/OperationTimingList'
 
 export type VersionControlSourceState = 'Modified' | 'Added' | 'Deleted' | 'Unauthorized'
 
@@ -131,9 +132,14 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
         setTiaSelection(null)
       }
       if (localPaths.length > 0 || untrackable || safetyPaths.length > 0) {
+        const operationId = onBeginOperation?.('vc-commit', 'Committing selected changes...')
         const result = safetyPaths.length > 0
-          ? await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable, true)
-          : await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable)
+          ? operationId
+            ? await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable, true, operationId)
+            : await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable, true)
+          : operationId
+            ? await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable, false, operationId)
+            : await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable)
         committedFiles = [...committedFiles, ...result.files]
         commitSha = result.sha
       }
@@ -157,7 +163,10 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
     if (!snapshotMessage.trim() || busy) return
     setBusy(true)
     try {
-      const result = await api.createSvnSavepoint(workbenchId, worktreeId, snapshotMessage.trim())
+      const operationId = onBeginOperation?.('svn-savepoint', 'Creating TIA snapshot...')
+      const result = operationId
+        ? await api.createSvnSavepoint(workbenchId, worktreeId, snapshotMessage.trim(), operationId)
+        : await api.createSvnSavepoint(workbenchId, worktreeId, snapshotMessage.trim())
       setSnapshotMessage('')
       toast.success(`TIA snapshot committed as ${result.sha.slice(0, 8)}`)
       await onCommitted?.()
@@ -249,6 +258,9 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                   </div>
                 )}
               </div>
+              {operationStatus && operationStatus.operationType !== 'compare-tia' && (
+                <OperationTimingList status={operationStatus} className="mt-2" />
+              )}
             </div>}
 
             {(entries.length > 0 || tiaHasDifferences !== false) && (

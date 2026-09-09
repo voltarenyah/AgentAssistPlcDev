@@ -843,7 +843,8 @@ public sealed class WorkbenchCoordinator
     /// </summary>
     private async Task<(string CompileStatus, string? ProjectChecksum, PlcChecksumInfo[] Checksums)> CompileManagedForCommitAsync(
         IReadOnlyList<string> plcNames,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IOperationProgress? progress = null)
     {
         if (plcNames.Count == 0)
         {
@@ -853,6 +854,7 @@ public sealed class WorkbenchCoordinator
         var failures = new List<string>();
         foreach (var plcName in plcNames)
         {
+            progress?.Report($"Compiling PLC '{plcName}'...");
             var compile = await engineering.CallAsync<CompileResult>(
                 "compile_plc",
                 new { plcName },
@@ -872,6 +874,7 @@ public sealed class WorkbenchCoordinator
                 + string.Join("; ", failures));
         }
 
+        progress?.Report("Reading compiled PLC checksums...");
         var checksums = await engineering.CallAsync<PlcChecksumInfo[]>(
             "get_plc_checksums",
             new { plcName = (string?)null },
@@ -2088,7 +2091,7 @@ public sealed class WorkbenchCoordinator
                 {
                     progress?.Report("Committing the confirmed TIA source changes...");
                     commitSha = await CommitApprovedMasterRefreshAsync(
-                            device, worktree, approval, sourcePaths, commitMessage.Trim(), cancellationToken)
+                            device, worktree, approval, sourcePaths, commitMessage.Trim(), cancellationToken, progress)
                         .ConfigureAwait(false);
                 }
                 else
@@ -2868,6 +2871,7 @@ public sealed class WorkbenchCoordinator
             WorkbenchWritePolicy.PendingSchemaVersion,
             master.WorktreeId,
             normalizedPending));
+        progress?.Report("Committing accepted TIA source to Git...");
         var commit = await CommitSourceAsync(
                 workbenchId,
                 master.WorktreeId,
@@ -2877,7 +2881,8 @@ public sealed class WorkbenchCoordinator
                 recordTiaState: false,
                 managedSourceConsistent: CoversAllManagedSourceDifferences(
                     comparison,
-                    selected.ToHashSet(StringComparer.Ordinal)))
+                    selected.ToHashSet(StringComparer.Ordinal)),
+                progress: progress)
             .ConfigureAwait(false);
 
         // Record TIA state (per-device checksums) for this commit so it can be traced later.
@@ -2950,7 +2955,8 @@ public sealed class WorkbenchCoordinator
         bool untrackableChange = false,
         bool safetyChange = false,
         bool recordTiaState = true,
-        bool managedSourceConsistent = false)
+        bool managedSourceConsistent = false,
+        IOperationProgress? progress = null)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A commit message is required.", nameof(message));
@@ -2959,6 +2965,7 @@ public sealed class WorkbenchCoordinator
             ?? throw new WorkbenchCatalogException("WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
         var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
         var worktree = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
+        progress?.Report("Validating commit selection and repository state...");
         // Ordinary commits are git-only: git history records what was done; native SVN
         // snapshots are created only by the explicit savepoint action (CreateNativeSavepointAsync).
         // An untrackable change leaves no git-tracked file diff, so an empty path list is
@@ -3008,6 +3015,7 @@ public sealed class WorkbenchCoordinator
         string[]? safetyManifestPaths = null;
         if (safetyChange)
         {
+            progress?.Report("Reading live safety evidence...");
             safetyDevices = LoadWorktreeDeviceContexts(workbench, worktree, registration.RelativePath);
             safetyChecksums = await ReadLiveSafetyEvidenceAsync(safetyDevices, token)
                 .ConfigureAwait(false);
@@ -3021,6 +3029,7 @@ public sealed class WorkbenchCoordinator
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToArray()
             : selected;
+        progress?.Report("Writing selected changes to Git...");
         var result = await CommitSelectedSourceAsync(
                 worktreeRoot, commitPaths, message, token, author,
                 allowEmpty: untrackableChange || safetyChange,
@@ -3030,6 +3039,7 @@ public sealed class WorkbenchCoordinator
 
         if (isMaster)
         {
+            progress?.Report("Updating master authorization state...");
             var remaining = writePolicy.ReadPending(worktreeRoot, worktree.WorktreeId).Sources
                 .Where(item => !selected.Contains(item.RelativePath, StringComparer.Ordinal))
                 .ToArray();
@@ -3043,16 +3053,17 @@ public sealed class WorkbenchCoordinator
         var evidenceWarnings = new List<string>();
         if (recordTiaState)
         {
+            progress?.Report("Recording live TIA checksum evidence...");
             // Every commit records the live TIA device checksums so the timeline can identify
             // the software state it captured — untrackable and mixed untrackable/tracked
             // commits leave no (or only a partial) git-tracked diff, so the checksum is the
             // only software-state evidence bound to the commit.
             var stateWarning = safetyChecksums is not null && safetyDevices is not null
                 ? await TryRecordCommitStateAsync(
-                        worktreeRoot, workbench.WorkbenchId, result.Sha, safetyDevices, safetyChecksums, token)
+                        worktreeRoot, workbench.WorkbenchId, result.Sha, safetyDevices, safetyChecksums, token, progress)
                     .ConfigureAwait(false)
                 : await TryRecordLiveCommitStateAsync(
-                        workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha, token)
+                        workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha, token, progress)
                     .ConfigureAwait(false);
             if (stateWarning is not null)
                 evidenceWarnings.Add(stateWarning);
@@ -3079,7 +3090,8 @@ public sealed class WorkbenchCoordinator
                 result.Sha,
                 managedSourceConsistent,
                 captured: null,
-                token)
+                token,
+                progress)
             .ConfigureAwait(false);
         if (managedSourceWarning is not null)
             evidenceWarnings.Add(managedSourceWarning);
@@ -3102,7 +3114,8 @@ public sealed class WorkbenchCoordinator
         string worktreeId,
         string message,
         CancellationToken token = default,
-        string? author = null)
+        string? author = null,
+        IOperationProgress? progress = null)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A savepoint message is required.", nameof(message));
@@ -3121,7 +3134,7 @@ public sealed class WorkbenchCoordinator
 
         return await CommitCombinedAsync(
                 workbench, worktree, worktreeRoot, registration.RelativePath,
-                Array.Empty<string>(), message.Trim(), token, author)
+                Array.Empty<string>(), message.Trim(), token, author, progress)
             .ConfigureAwait(false);
     }
 
@@ -3150,13 +3163,15 @@ public sealed class WorkbenchCoordinator
         IReadOnlyList<string> selected,
         string message,
         CancellationToken token,
-        string? author)
+        string? author,
+        IOperationProgress? progress = null)
     {
         var commitDevices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
 
         var pending = PendingCommitStore.Read(worktreeRoot);
         if (pending is not null)
         {
+            progress?.Report("Resuming the pending native SVN commit...");
             // Retry: the SVN revision is already committed; finish the git side with the SAME
             // revision — never a second SVN snapshot of the same savepoint.
             var existing = TryReadRevisionState(worktreeRoot);
@@ -3174,6 +3189,7 @@ public sealed class WorkbenchCoordinator
             }
 
             var retryPaths = BuildCombinedCommitPaths(worktreeRoot, selected, commitDevices);
+            progress?.Report("Writing the pending savepoint changes to Git...");
             var retried = await CommitSelectedSourceAsync(worktreeRoot, retryPaths, message, token, author)
                 .ConfigureAwait(false);
             await RecordCommitStateAsync(
@@ -3184,9 +3200,10 @@ public sealed class WorkbenchCoordinator
                 ParseAggregatedProjectChecksum(existing?.Tia?.ProjectChecksum),
                 token)
                 .ConfigureAwait(false);
+            progress?.Report("Capturing managed-source evidence...");
             var retryEvidenceWarning = await TryRecordManagedSourceEvidenceAsync(
                     workbench, worktree, worktreeRoot, worktreeRelativePath, retried.Sha,
-                    managedSourceConsistent: false, captured: null, token)
+                    managedSourceConsistent: false, captured: null, token, progress)
                 .ConfigureAwait(false);
             PendingCommitStore.Clear(worktreeRoot);
             return retryEvidenceWarning is null
@@ -3201,21 +3218,26 @@ public sealed class WorkbenchCoordinator
         PlcChecksumInfo[] savepointChecksums = Array.Empty<PlcChecksumInfo>();
         if (devices.Count > 0)
         {
+            progress?.Report("Opening the managed TIA project...");
             await engineeringSession.WaitAsync(token).ConfigureAwait(false);
             try
             {
                 await EnsureActiveProjectMatchesWorktreeAsync(devices[0].Context, token, null)
                     .ConfigureAwait(false);
+                progress?.Report("Saving the TIA project...");
                 await engineering.CallAsync<object>("save_project", new { }, token).ConfigureAwait(false);
                 (compileStatus, projectChecksum, savepointChecksums) = await CompileManagedForCommitAsync(
                     devices.Select(device => device.Metadata.PlcName).ToArray(),
-                    token).ConfigureAwait(false);
+                    token,
+                    progress).ConfigureAwait(false);
 
+                progress?.Report("Verifying live checksums against the latest Git commit...");
                 await EnsureSnapshotChecksumsMatchHeadAsync(
                         worktreeRoot,
                         devices,
                         savepointChecksums,
-                        token)
+                        token,
+                        progress)
                     .ConfigureAwait(false);
             }
             finally
@@ -3233,10 +3255,12 @@ public sealed class WorkbenchCoordinator
         // write the managed tree while SVN snapshots it.
         if (devices.Count > 0)
         {
+            progress?.Report("Disconnecting from TIA before the native commit...");
             await engineering.CallAsync<object>("disconnect", new { }, token).ConfigureAwait(false);
         }
 
         var tiaStore = WorkbenchPaths.ResolveTiaStore(worktreeRoot);
+        progress?.Report("Checking the native SVN working copy...");
         var svnStatus = await versionControl.CallAsync<CoordinatorSvnStatusResult>(
             "svn_status",
             new { path = tiaStore },
@@ -3260,11 +3284,13 @@ public sealed class WorkbenchCoordinator
         // The commit targets this worktree's own SVN branch (feature worktrees, Phase 4);
         // master falls back to the recorded baseline url, then to ^/native/main.
         var svnUrl = worktree.SvnUrl ?? baseline?.Svn?.Url ?? "^/native/main";
+        progress?.Report("Committing the native TIA store to SVN...");
         var svnCommit = await versionControl.CallAsync<CoordinatorSvnCommitResult>(
             "svn_commit",
             new { path = tiaStore, message = $"{message} [{FormatClassification(classification)}]" },
             token).ConfigureAwait(false);
 
+        progress?.Report("Writing native revision and safety state...");
         EngineeringStateWriter.Write(worktreeRoot, EngineeringStateWriter.Create(
             svnUrl,
             svnCommit.Revision,
@@ -3283,6 +3309,7 @@ public sealed class WorkbenchCoordinator
         WorkbenchCommitResult commit;
         try
         {
+            progress?.Report("Writing the savepoint changes to Git...");
             commit = await CommitSelectedSourceAsync(worktreeRoot, commitPaths, message, token, author)
                 .ConfigureAwait(false);
         }
@@ -3298,6 +3325,7 @@ public sealed class WorkbenchCoordinator
                 + $"Cause: {exception.Message}");
         }
 
+        progress?.Report("Recording the savepoint checksum evidence...");
         await RecordCommitStateAsync(
                 worktreeRoot,
                 workbench.WorkbenchId,
@@ -3306,9 +3334,10 @@ public sealed class WorkbenchCoordinator
                 savepointChecksums,
                 token)
             .ConfigureAwait(false);
+        progress?.Report("Capturing managed-source evidence...");
         var evidenceWarning = await TryRecordManagedSourceEvidenceAsync(
                 workbench, worktree, worktreeRoot, worktreeRelativePath, commit.Sha,
-                managedSourceConsistent: false, captured: null, token)
+                managedSourceConsistent: false, captured: null, token, progress)
             .ConfigureAwait(false);
         return evidenceWarning is null
             ? commit
@@ -3413,10 +3442,12 @@ public sealed class WorkbenchCoordinator
         string commitSha,
         IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
         IEnumerable<PlcChecksumInfo> checksums,
-        CancellationToken token)
+        CancellationToken token,
+        IOperationProgress? progress = null)
     {
         try
         {
+            progress?.Report("Writing checksum evidence for the commit...");
             await RecordCommitStateAsync(worktreeRoot, workbenchId, commitSha, devices, checksums, token)
                 .ConfigureAwait(false);
             return null;
@@ -3438,7 +3469,8 @@ public sealed class WorkbenchCoordinator
         string worktreeRoot,
         string worktreeRelativePath,
         string commitSha,
-        CancellationToken token)
+        CancellationToken token,
+        IOperationProgress? progress = null)
     {
         try
         {
@@ -3449,6 +3481,7 @@ public sealed class WorkbenchCoordinator
             }
 
             PlcChecksumInfo[] checksums;
+            progress?.Report("Opening TIA to read commit checksums...");
             await engineeringSession.WaitAsync(token).ConfigureAwait(false);
             try
             {
@@ -3465,6 +3498,7 @@ public sealed class WorkbenchCoordinator
                 engineeringSession.Release();
             }
 
+            progress?.Report("Writing checksum evidence for the commit...");
             await RecordCommitStateAsync(worktreeRoot, workbench.WorkbenchId, commitSha, devices, checksums, token)
                 .ConfigureAwait(false);
             return null;
@@ -3517,7 +3551,8 @@ public sealed class WorkbenchCoordinator
         string commitSha,
         bool managedSourceConsistent,
         IReadOnlyList<SourceEvidenceSnapshot>? captured,
-        CancellationToken token)
+        CancellationToken token,
+        IOperationProgress? progress = null)
     {
         try
         {
@@ -3528,6 +3563,7 @@ public sealed class WorkbenchCoordinator
             var snapshots = captured?.ToArray();
             if (snapshots is null)
             {
+                progress?.Report("Opening TIA to capture managed-source evidence...");
                 await engineeringSession.WaitAsync(token).ConfigureAwait(false);
                 try
                 {
@@ -3536,6 +3572,7 @@ public sealed class WorkbenchCoordinator
                     snapshots = new SourceEvidenceSnapshot[devices.Count];
                     for (var index = 0; index < devices.Count; index++)
                     {
+                        progress?.Report($"Capturing managed-source evidence for PLC '{devices[index].Metadata.PlcName}'...");
                         var capture = await engineering.CallAsync<SourceEvidenceCaptureResult>(
                                 "capture_source_evidence",
                                 new { plcName = devices[index].Metadata.PlcName },
@@ -3697,8 +3734,10 @@ public sealed class WorkbenchCoordinator
         string worktreeRoot,
         IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
         IReadOnlyList<PlcChecksumInfo> liveChecksums,
-        CancellationToken token)
+        CancellationToken token,
+        IOperationProgress? progress = null)
     {
+        progress?.Report("Reading the latest Git checksum evidence...");
         var head = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
         var evidence = await versionControl.CallAsync<ConsistencyValidationEvidence?>(
                 "vc_commit_state_get",
@@ -3717,6 +3756,7 @@ public sealed class WorkbenchCoordinator
 
         foreach (var device in devices)
         {
+            progress?.Report($"Comparing checksum evidence for PLC '{device.Metadata.PlcName}'...");
             var live = liveChecksums.FirstOrDefault(checksum =>
                 string.Equals(checksum.PlcName, device.Metadata.PlcName, StringComparison.Ordinal));
             var recorded = evidence.Devices.FirstOrDefault(item =>
@@ -3807,7 +3847,8 @@ public sealed class WorkbenchCoordinator
         ApprovedReconciliation approval,
         IReadOnlyList<string> sourcePaths,
         string message,
-        CancellationToken token)
+        CancellationToken token,
+        IOperationProgress? progress = null)
     {
         WorkbenchMetadata? workbench = null;
         try
@@ -3848,7 +3889,7 @@ public sealed class WorkbenchCoordinator
             pending.OrderBy(item => item.RelativePath, StringComparer.Ordinal).ToArray()));
 
         var commit = await CommitSourceAsync(
-                device.WorkbenchId, worktree.WorktreeId, sourcePaths, message, token)
+                device.WorkbenchId, worktree.WorktreeId, sourcePaths, message, token, progress: progress)
             .ConfigureAwait(false);
         return commit.Sha;
     }
