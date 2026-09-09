@@ -23,6 +23,7 @@ export function TagPicker({ nodes, currentTagIds = [], onAssign, onCreate, loadi
   const [expandedIds, setExpandedIds] = useState<string[]>([])
   const paths = useMemo(() => tagPaths(nodes), [nodes])
   const current = new Set(currentTagIds)
+  const normalizedQuery = query.trim().toLowerCase()
   const normalizedPath = validTagPath(query)
   const existing = normalizedPath ? nodes.find(node => paths.get(node.tagId)?.toLowerCase() === normalizedPath.toLowerCase()) : undefined
   const canCreate = Boolean(normalizedPath && !existing && onCreate)
@@ -51,7 +52,7 @@ export function TagPicker({ nodes, currentTagIds = [], onAssign, onCreate, loadi
 
   return (
     <>
-      <Button type="button" variant="outline" disabled={disabled || loading} onClick={() => setOpen(true)} aria-label={loading ? 'Add tag (loading)' : 'Add tag'}>
+      <Button type="button" variant="outline" size="xs" disabled={disabled || loading} onClick={() => setOpen(true)} aria-label={loading ? 'Add tag (loading)' : 'Add tag'}>
         {loading ? 'Loading tags…' : 'Add tag'}
       </Button>
       {error && <div role="alert" className="mt-1 text-xs text-destructive">{error}{onRetry && <Button type="button" variant="link" size="xs" onClick={onRetry}>Retry</Button>}</div>}
@@ -59,11 +60,24 @@ export function TagPicker({ nodes, currentTagIds = [], onAssign, onCreate, loadi
         <CommandInput value={query} onValueChange={setQuery} onInput={event => setQuery(event.currentTarget.value)} placeholder="Search tags or enter a/path" aria-label="Search tags" />
         <CommandList>
           {canCreate && <CommandItem value={normalizedPath!} onSelect={() => void create()} aria-label={`Create tag ${normalizedPath}`}>Create “{normalizedPath}”</CommandItem>}
-          <CommandEmpty>No matching tags.</CommandEmpty>
-          <div className="p-2"><TagTree nodes={nodes} expandedIds={expandedIds} onExpandedChange={setExpandedIds} onSelect={node => void assign(node.tagId)} selectedTagId={current.values().next().value ?? null} /></div>
-          {nodes.filter(node => !current.has(node.tagId) && paths.get(node.tagId)?.toLowerCase().includes(query.trim().toLowerCase())).map(node => (
-            <CommandItem key={node.tagId} value={paths.get(node.tagId)} onSelect={() => void assign(node.tagId)}>{paths.get(node.tagId)}</CommandItem>
-          ))}
+          {normalizedQuery.length === 0 ? (
+            <div className="p-2">
+              <TagTree
+                nodes={nodes}
+                expandedIds={expandedIds}
+                onExpandedChange={setExpandedIds}
+                onSelect={node => { if (!current.has(node.tagId)) void assign(node.tagId) }}
+                selectedTagIds={currentTagIds}
+              />
+            </div>
+          ) : (
+            <>
+              <CommandEmpty>No matching tags.</CommandEmpty>
+              {nodes.filter(node => !current.has(node.tagId) && paths.get(node.tagId)?.toLowerCase().includes(normalizedQuery)).map(node => (
+                <CommandItem key={node.tagId} value={paths.get(node.tagId)} onSelect={() => void assign(node.tagId)}>{paths.get(node.tagId)}</CommandItem>
+              ))}
+            </>
+          )}
         </CommandList>
       </CommandDialog>
     </>

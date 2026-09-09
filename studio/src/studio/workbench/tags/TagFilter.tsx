@@ -112,6 +112,7 @@ export function TagFilter({
                 expandedIds={expandedIds}
                 onExpandedChange={setExpandedIds}
                 onSelect={node => { if (!selected.has(node.tagId)) select(node.tagId) }}
+                selectedTagIds={selectedTagIds}
               />
             </div>
           ) : (
