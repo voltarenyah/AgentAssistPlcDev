@@ -27,10 +27,24 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task MatchingFingerprintEvidenceChecksumsSkipTheSourceEvidenceScan()
+    {
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.FingerprintEvidence());
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.Equal(ConsistencyState.Consistent, result.State);
+        Assert.True(result.FastGatePassed);
+        Assert.DoesNotContain("compare_source_evidence", engineering.Calls);
+    }
+
+    [Fact]
     public async Task V2EvidenceReadsAllLightweightEvidenceAndExportsOnlyTheChangedCandidate()
     {
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.FingerprintEvidence());
-        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"))
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "changed"), ("PLC_2", "two"))
         {
             SourceXml = "<Document><SW.Blocks.OB ID=\"1\" Comment=\"changed\" /></Document>",
         };
@@ -100,7 +114,7 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     public async Task V2EvidenceMarksChangedTagTablesForContentHashDisplay()
     {
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, fixture.FingerprintEvidence(ManagedSourceEvidenceKind.TagTable));
-        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"))
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "changed"), ("PLC_2", "two"))
         {
             SourceXml = "<Document><SW.Tags.PlcTagTable ID=\"1\" Name=\"Plant\" /></Document>",
         };
@@ -166,7 +180,8 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
         Assert.Contains(result.Timings!, timing =>
             timing.Phase == "hardware-export"
             && timing.Outcome == "Hardware verification was not checked.");
-        Assert.Equal(2, engineering.Calls.Count(call => call == "compare_source_evidence"));
+        Assert.True(result.FastGatePassed);
+        Assert.DoesNotContain("compare_source_evidence", engineering.Calls);
     }
 
     [Fact]

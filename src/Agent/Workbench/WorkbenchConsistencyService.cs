@@ -212,8 +212,70 @@ public sealed class WorkbenchConsistencyService
                     throw new WorkbenchLifecycleException("PLC_COMPILE_FAILED", $"Automatic PLC compile failed for '{device.Metadata.PlcName}'.");
             }
         }
-        if (!forceFullExport && sourceClean && HasFingerprintFirstEvidence(evidence, head, devices))
+        if (!forceFullExport
+            && sourceClean
+            && !untrackableChange.UntrackableChange
+            && HasFingerprintFirstEvidence(evidence, head, devices))
         {
+            // A compiled PLC software checksum covers all managed software changes, including
+            // comments and interface edits.  Probe it before the expensive fingerprint walk so
+            // an unchanged project can use the same fast gate as legacy validation evidence.
+            var fingerprintChecksums = await MeasureAsync(
+                    timings,
+                    "checksum-read",
+                    "Read every PLC software checksum before deciding whether source evidence must be scanned.",
+                    null,
+                    () => engineering.CallAsync<PlcChecksumInfo[]>("get_plc_checksums", new { }, cancellationToken),
+                    result => $"Read checksum evidence for {result.Length} PLC device(s).")
+                .ConfigureAwait(false);
+            var fingerprintLiveChecksums = devices.ToDictionary(
+                item => item.Metadata.DeviceId,
+                item => fingerprintChecksums.FirstOrDefault(checksum =>
+                    string.Equals(checksum.PlcName, item.Metadata.PlcName, StringComparison.OrdinalIgnoreCase)),
+                StringComparer.Ordinal);
+            var fingerprintChecksumsMatch = devices.All(item =>
+            {
+                var live = fingerprintLiveChecksums[item.Metadata.DeviceId];
+                var expected = evidence!.Devices.FirstOrDefault(device =>
+                    string.Equals(device.DeviceId, item.Metadata.DeviceId, StringComparison.Ordinal));
+                return live is not null
+                    && live.IsCompiled
+                    && !string.IsNullOrWhiteSpace(live.SoftwareChecksum)
+                    && expected is not null
+                    && string.Equals(expected.PlcName, item.Metadata.PlcName, StringComparison.Ordinal)
+                    && string.Equals(expected.ProjectChecksum, live.SoftwareChecksum, StringComparison.Ordinal);
+            });
+            var fingerprintHasSafetySurface = fingerprintChecksums.Any(checksum =>
+                    checksum.IsSafetyDevice == true
+                    || checksum.FSignatureReadState is not null
+                    || checksum.FSignature is not null
+                    || checksum.FBlockSignatures is not null)
+                || evidence!.Devices.Any(device =>
+                    device.SourceEvidence?.Any(source =>
+                        string.Equals(source.Kind, ManagedSourceEvidenceKind.FBlock, StringComparison.Ordinal)
+                        || source.FSignature is not null) == true);
+            if (fingerprintChecksumsMatch && !fingerprintHasSafetySurface)
+            {
+                var fingerprintState = hardwareMatches
+                    ? ConsistencyState.Consistent
+                    : ConsistencyState.Different;
+                return Persist(workbench, new WorkbenchConsistencyResult(
+                    Guid.NewGuid().ToString("N"),
+                    head.Sha,
+                    true,
+                    fingerprintState,
+                    fingerprintLiveChecksums.ToDictionary(
+                        item => item.Key,
+                        item => item.Value?.SoftwareChecksum,
+                        StringComparer.Ordinal),
+                    Array.Empty<SourceDifference>(),
+                    hardware,
+                    Array.Empty<DeviceSafetyEvidence>(),
+                    false,
+                    timings.ToArray(),
+                    HardwareChecked: includeHardware));
+            }
+
             return await CompareFingerprintFirstAsync(
                     workbench,
                     master,
