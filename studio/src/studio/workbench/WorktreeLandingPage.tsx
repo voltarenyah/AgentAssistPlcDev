@@ -336,6 +336,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                 })}
                 <TagPicker
                   nodes={tagNodes}
+                  currentTagIds={directTagIds}
                   onAssign={assignTag}
                   onCreate={api.createTagPath}
                   loading={tagsLoading}

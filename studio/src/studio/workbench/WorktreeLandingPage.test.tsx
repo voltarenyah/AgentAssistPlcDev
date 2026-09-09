@@ -157,6 +157,9 @@ describe('WorktreeLandingPage', () => {
     expect(host.querySelector('[data-tag-id="tag-state"] button')).toBeNull()
     expect(host.querySelector('button[aria-label="Add tag"]')).not.toBeNull()
 
+    await act(async () => (host.querySelector('button[aria-label="Add tag"]') as HTMLButtonElement).click())
+    expect(document.body.querySelector('[role="treeitem"][aria-selected="true"] button[aria-label="Select Machine/Press"]')).not.toBeNull()
+
     await act(async () => root.unmount())
   })
 
