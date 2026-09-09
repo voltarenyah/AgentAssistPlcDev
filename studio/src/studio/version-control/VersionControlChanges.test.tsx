@@ -229,7 +229,8 @@ describe('VersionControlChanges', () => {
       commitSha: 'commit-2',
     })
     const commit = vi.spyOn(api, 'commitVcPaths')
-    const { host } = await render([], snapshot, 1)
+    const begin = vi.fn().mockReturnValue('operation-1')
+    const { host } = await render([], snapshot, 1, false, begin)
 
     await click(host.querySelector('[data-testid="vc-compare-result"] input[type="checkbox"]')!)
     await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'Accept Main from TIA')
@@ -241,7 +242,9 @@ describe('VersionControlChanges', () => {
       'comparison-1',
       ['devices/PLC_1/source/Blocks/Main.xml'],
       'Accept Main from TIA',
+      'operation-1',
     )
+    expect(begin).toHaveBeenCalledWith('vc-commit', 'Committing selected changes...')
     expect(commit).not.toHaveBeenCalled()
     expect(api.compareMasterWithTia).toHaveBeenCalledTimes(1)
     expect(host.querySelector('input[type="checkbox"]')).toBeNull()

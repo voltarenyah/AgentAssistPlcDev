@@ -125,14 +125,16 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
     try {
       let committedFiles: string[] = []
       let commitSha: string | null = null
+      const operationId = onBeginOperation?.('vc-commit', 'Committing selected changes...')
       if (tiaSelection && tiaPaths.length > 0) {
-        const result = await api.acceptTiaSynchronization(workbenchId, tiaSelection.comparisonId, tiaPaths, message.trim())
+        const result = operationId
+          ? await api.acceptTiaSynchronization(workbenchId, tiaSelection.comparisonId, tiaPaths, message.trim(), operationId)
+          : await api.acceptTiaSynchronization(workbenchId, tiaSelection.comparisonId, tiaPaths, message.trim())
         committedFiles = [...committedFiles, ...tiaPaths]
         commitSha = result.commitSha ?? null
         setTiaSelection(null)
       }
       if (localPaths.length > 0 || untrackable || safetyPaths.length > 0) {
-        const operationId = onBeginOperation?.('vc-commit', 'Committing selected changes...')
         const result = safetyPaths.length > 0
           ? operationId
             ? await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable, true, operationId)
