@@ -94,6 +94,19 @@ describe('TagFilter', () => {
     await act(async () => root.unmount())
   })
 
+  it('marks active filters in the focused taxonomy', async () => {
+    const { root } = await render(
+      <TagFilter nodes={nodes} selectedTagIds={['machine']} onSelectedTagIdsChange={() => {}} />,
+    )
+
+    await act(async () => (document.body.querySelector('button[aria-label="Open tag taxonomy"]') as HTMLButtonElement).click())
+
+    const active = document.body.querySelector('[role="treeitem"][aria-selected="true"]') as HTMLElement
+    expect(active).not.toBeNull()
+    expect(active.textContent).toContain('Machine')
+    await act(async () => root.unmount())
+  })
+
   it('refreshes the taxonomy when the filter is opened', async () => {
     const onOpen = vi.fn()
     const { root } = await render(

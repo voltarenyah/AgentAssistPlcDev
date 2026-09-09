@@ -8,9 +8,12 @@ import TagPicker from './TagPicker'
 
 vi.mock('@/components/ui/toast', () => ({ showErrorToast: vi.fn() }))
 
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
 const nodes: TagNode[] = [
   { tagId: 'a', parentTagId: null, name: 'Machine', normalizedName: 'machine' },
   { tagId: 'b', parentTagId: 'a', name: 'Press', normalizedName: 'press' },
+  { tagId: 'c', parentTagId: null, name: 'State', normalizedName: 'state' },
 ]
 
 afterEach(() => { document.body.innerHTML = '' })
@@ -43,6 +46,22 @@ const type = async (input: HTMLInputElement, value: string) => {
 }
 
 describe('TagPicker', () => {
+  it('opens with the taxonomy only and marks every active tag', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => root.render(<TagPicker nodes={nodes} currentTagIds={['a', 'b']} onAssign={() => {}} />))
+
+    await act(async () => getByRole('button', 'Add tag').click())
+
+    expect(getAllByRole('option')).toHaveLength(0)
+    const active = Array.from(document.body.querySelectorAll('[role="treeitem"][aria-selected="true"]'))
+    expect(active).toHaveLength(2)
+    expect(active.some(item => item.querySelector('[aria-label="Select Machine"]'))).toBe(true)
+    expect(active.some(item => item.querySelector('[aria-label="Select Machine/Press"]'))).toBe(true)
+    await act(async () => root.unmount())
+  })
+
   it('shows one create action for a valid absent slash path', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
