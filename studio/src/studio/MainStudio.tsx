@@ -1996,6 +1996,7 @@ export default function MainStudio() {
                 nodes={navigatorTagNodes}
                 selectedTagIds={navigatorTagIds}
                 onSelectedTagIdsChange={setNavigatorTagIds}
+                onOpen={() => void reloadNavigatorTags()}
                 loading={navigatorTagsLoading}
                 error={navigatorTagsError ?? navigatorFilterError}
                 onRetry={() => void (navigatorTagsError

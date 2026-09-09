@@ -3,12 +3,14 @@ import type { TagNode } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import TagChip from './TagChip'
+import TagTree from './TagTree'
 import { tagPaths } from './tagPaths'
 
 export type TagFilterProps = {
   nodes: TagNode[]
   selectedTagIds: string[]
   onSelectedTagIdsChange: (tagIds: string[]) => void
+  onOpen?: () => void
   loading?: boolean
   error?: string | null
   onRetry?: () => void
@@ -18,12 +20,14 @@ export function TagFilter({
   nodes,
   selectedTagIds,
   onSelectedTagIdsChange,
+  onOpen,
   loading = false,
   error,
   onRetry,
 }: TagFilterProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [expandedIds, setExpandedIds] = useState<string[]>([])
   const paths = useMemo(() => tagPaths(nodes), [nodes])
   const selected = new Set(selectedTagIds)
   const normalizedQuery = query.trim().toLowerCase()
@@ -52,7 +56,10 @@ export function TagFilter({
           size="xs"
           disabled={loading}
           aria-label={loading ? 'Filter tags (loading)' : 'Filter tags'}
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            onOpen?.()
+            setOpen(true)
+          }}
         >
           {loading ? 'Loading tags…' : 'Filter tags'}
         </Button>
@@ -71,11 +78,24 @@ export function TagFilter({
           aria-label="Search filter tags"
         />
         <CommandList>
-          <CommandEmpty>No matching tags.</CommandEmpty>
-          {selectableNodes.map(node => {
-            const path = paths.get(node.tagId) ?? node.name
-            return <CommandItem key={node.tagId} value={path} onSelect={() => select(node.tagId)} aria-label={`Filter by ${path}`}>{path}</CommandItem>
-          })}
+          {normalizedQuery.length === 0 ? (
+            <div className="p-2">
+              <TagTree
+                nodes={nodes}
+                expandedIds={expandedIds}
+                onExpandedChange={setExpandedIds}
+                onSelect={node => { if (!selected.has(node.tagId)) select(node.tagId) }}
+              />
+            </div>
+          ) : (
+            <>
+              <CommandEmpty>No matching tags.</CommandEmpty>
+              {selectableNodes.map(node => {
+                const path = paths.get(node.tagId) ?? node.name
+                return <CommandItem key={node.tagId} value={path} onSelect={() => select(node.tagId)} aria-label={`Filter by ${path}`}>{path}</CommandItem>
+              })}
+            </>
+          )}
         </CommandList>
       </CommandDialog>
     </div>

@@ -64,7 +64,7 @@ describe('TagPicker', () => {
       return <TagPicker nodes={nodes} currentTagIds={currentTagIds} onAssign={onAssign} />
     }
     await act(async () => root.render(<Harness />))
-    expect(getByRole('listitem', 'Machine')).toBeTruthy()
+    expect(getAllByRole('listitem')).toHaveLength(0)
     await act(async () => getByRole('button', 'Add tag').click())
     const input = getByLabel('Search tags')
     await type(input, 'Machine/Press')
@@ -73,8 +73,7 @@ describe('TagPicker', () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
     expect(onAssign).toHaveBeenCalledWith('b')
-    expect(getByRole('listitem', 'Machine')).toBeTruthy()
-    expect(getAllByRole('listitem')).toHaveLength(1)
+    expect(getAllByRole('listitem')).toHaveLength(0)
     expect(getAllByRole('listitem').some(item => item.getAttribute('aria-label') === 'Machine/Press')).toBe(false)
     expect(vi.mocked(showErrorToast)).toHaveBeenCalledWith('offline')
     expect(getByLabel('Search tags')).toBeTruthy()

@@ -50,6 +50,35 @@ describe('TagFilter', () => {
     await act(async () => root.unmount())
   })
 
+  it('browses the filter taxonomy as a collapsed hierarchy', async () => {
+    const { root } = await render(
+      <TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={() => {}} />,
+    )
+
+    await act(async () => (document.body.querySelector('button[aria-label="Filter tags"]') as HTMLButtonElement).click())
+
+    const tree = document.body.querySelector('[role="tree"]') as HTMLElement
+    expect(tree).not.toBeNull()
+    expect(tree.textContent).toContain('Machine')
+    expect(tree.textContent).not.toContain('Machine/Press')
+    await act(async () => (document.body.querySelector('button[aria-label="Expand Machine"]') as HTMLButtonElement).click())
+    expect(document.body.querySelector('button[aria-label="Select Machine/Press"]')).not.toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('refreshes the taxonomy when the filter is opened', async () => {
+    const onOpen = vi.fn()
+    const { root } = await render(
+      <TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={() => {}} onOpen={onOpen} />,
+    )
+
+    await act(async () => (document.body.querySelector('button[aria-label="Filter tags"]') as HTMLButtonElement).click())
+
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    await act(async () => root.unmount())
+  })
+
   it('renders full-path chips and clears the final filter with its labelled remove control', async () => {
     const onSelectedTagIdsChange = vi.fn()
     const { host, root } = await render(
