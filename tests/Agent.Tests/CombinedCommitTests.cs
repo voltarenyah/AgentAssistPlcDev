@@ -15,7 +15,7 @@ public sealed class CombinedCommitTests : IDisposable
     [Fact]
     public async Task NativeSavepointAdvancesSvnAndGitWithClassification()
     {
-        var fixture = CombinedFixture.Create(root);
+        var fixture = CombinedFixture.Create(root, checksum: "PLC_1:new-checksum");
         var order = new List<string>();
         var engineering = fixture.ScriptEngineering(new OrderRecordingCaller(order, "engineering"));
         var versionControl = fixture.ScriptVersionControl(new OrderRecordingCaller(order, "version"));
@@ -62,7 +62,7 @@ public sealed class CombinedCommitTests : IDisposable
     [Fact]
     public async Task NativeSavepointRecordsFSignatureAndClassifiesSafetyChange()
     {
-        var fixture = CombinedFixture.Create(root);
+        var fixture = CombinedFixture.Create(root, checksum: "PLC_1:new-checksum");
         // The seeded baseline revision.json has no F-signature; the live read returns one,
         // so the savepoint must classify as a safety change.
         var engineering = fixture.ScriptEngineering(new FakeToolCaller(), fSignature: "0A1B2C3D");
@@ -146,7 +146,7 @@ public sealed class CombinedCommitTests : IDisposable
     [Fact]
     public async Task GitFailureRecordsPendingCommitAndRetryReusesTheSameSvnRevision()
     {
-        var fixture = CombinedFixture.Create(root);
+        var fixture = CombinedFixture.Create(root, checksum: "PLC_1:new-checksum");
         var engineering = fixture.ScriptEngineering(new FakeToolCaller());
         var versionControl = fixture.ScriptVersionControl(new FakeToolCaller(), failGitCommit: true);
         var coordinator = fixture.CreateCoordinator(engineering, versionControl);
@@ -224,6 +224,29 @@ public sealed class CombinedCommitTests : IDisposable
         Assert.Equal("COMMIT_NOTHING_TO_COMMIT", error.Code);
         Assert.DoesNotContain("svn_commit", versionControl.Calls);
         Assert.DoesNotContain("vc_commit_selected", versionControl.Calls);
+    }
+
+    [Fact]
+    public async Task NativeSavepointRejectsLiveChecksumDifferentFromHead()
+    {
+        var fixture = CombinedFixture.Create(root);
+        var engineering = fixture.ScriptEngineering(new FakeToolCaller(), softwareChecksum: "new-checksum");
+        var versionControl = fixture.ScriptVersionControl(new FakeToolCaller(), svnDirty: true);
+        var coordinator = fixture.CreateCoordinator(engineering, versionControl);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.CreateNativeSavepointAsync(
+                CombinedFixture.WorkbenchId,
+                CombinedFixture.WorktreeId,
+                "blocked source drift",
+                CancellationToken.None));
+
+        Assert.Equal("SNAPSHOT_REQUIRES_COMMITTED_SOURCE", error.Code);
+        Assert.Contains("uncommitted source changes", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("svn_status", versionControl.Calls);
+        Assert.DoesNotContain("svn_commit", versionControl.Calls);
+        Assert.DoesNotContain("vc_commit_selected", versionControl.Calls);
+        Assert.Equal(1, fixture.ReadRevisionState().Svn.Revision);
     }
 
     [Fact]
@@ -440,6 +463,20 @@ public sealed class CombinedCommitTests : IDisposable
                 {
                     Commits = new[] { new ConsistencyCommit { Sha = "head-1" } },
                 });
+            var baselineChecksum = ReadRevisionState().Tia.ProjectChecksum?.Split(':', 2).Last();
+            caller.Respond("vc_commit_state_get", new ConsistencyValidationEvidence
+            {
+                CommitSha = "head-1",
+                Devices = new[]
+                {
+                    new ConsistencyValidationDevice
+                    {
+                        DeviceId = "device-1",
+                        PlcName = "PLC_1",
+                        ProjectChecksum = baselineChecksum ?? string.Empty,
+                    },
+                },
+            });
             for (var i = 0; i < extraHeadReads; i++)
             {
                 // Callers like the refresh auto-commit read HEAD before CommitSourceAsync

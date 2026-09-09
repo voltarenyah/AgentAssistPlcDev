@@ -300,6 +300,9 @@ public sealed class WorkbenchConsistencyService
         // pending trackable TIA diff remains invisible until a later checksum change.
         var evidenceCurrent = !untrackableChange.UntrackableChange
             && evidence is not null
+            // Legacy evidence predates this field and remains usable; an explicit false is the
+            // savepoint's capture-only marker and must never certify the source tree.
+            && evidence.ManagedSourceConsistent is not false
             && string.Equals(evidence.CommitSha, head.Sha, StringComparison.OrdinalIgnoreCase)
             && evidence.Devices.Length == devices.Count;
         var checksumsMatch = evidenceCurrent && devices.All(item =>
@@ -854,7 +857,9 @@ public sealed class WorkbenchConsistencyService
                 string.Equals(item.DeviceId, device.Metadata.DeviceId, StringComparison.Ordinal));
             var candidateRoot = Path.Combine(
                 device.Context.StagingRoot,
-                ".fingerprint-candidates-" + Guid.NewGuid().ToString("N"));
+                // Keep the temporary capture path short enough for TIA Openness' legacy
+                // MAX_PATH handling when the worktree and source-group names are long.
+                ".fingerprint-candidates-" + Guid.NewGuid().ToString("N")[..8]);
             try
             {
                 var baseline = new SourceEvidenceSnapshot

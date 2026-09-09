@@ -224,6 +224,20 @@ describe('VersionControlCompare (inline)', () => {
     expect(host.textContent).not.toContain('TIA differs from master')
   })
 
+  it('asks before retrying when fingerprint capture reports an uncompiled PLC', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia')
+      .mockRejectedValueOnce(new api.WorkbenchApiError(400, 'PLC_NOT_COMPILED', "PLC 'PLC_1' has no readable software checksum. Compile it before capturing source evidence."))
+      .mockResolvedValueOnce(comparison())
+    const { host } = await render({ signal: 1 })
+
+    expect(host.textContent).toContain('Compile and save')
+    expect(host.querySelector('[aria-label="Compile and save in TIA, then compare"]')).toBeTruthy()
+
+    await click(host.querySelector('[aria-label="Compile and save in TIA, then compare"]')!)
+
+    expect(compare).toHaveBeenNthCalledWith(2, 'wb-1', undefined, true)
+  })
+
   it('does not offer a per-selection push-to-TIA action', async () => {
     vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
     const { host } = await render({ signal: 1, commitMessage: 'Accept Main' })

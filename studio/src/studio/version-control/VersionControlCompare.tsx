@@ -65,7 +65,8 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
       setSelectedSafety(new Set())
       onSelectionChanged?.(nextComparison.comparisonId, [])
     } catch (reason) {
-      if (reason instanceof api.WorkbenchApiError && reason.code === 'PLC_CHECKSUM_UNAVAILABLE') {
+      if (reason instanceof api.WorkbenchApiError
+        && (reason.code === 'PLC_CHECKSUM_UNAVAILABLE' || reason.code === 'PLC_NOT_COMPILED')) {
         setNeedsCompileConfirmation(true)
       } else {
         setError(displayError(reason))

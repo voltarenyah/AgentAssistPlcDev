@@ -745,7 +745,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             throw new AdapterException("CANDIDATE_OUTPUT_INVALID", "Candidate output directory must have a parent directory.");
         }
 
-        var temporaryRoot = Path.Combine(parent, "." + Path.GetFileName(finalRoot) + ".capture-" + Guid.NewGuid().ToString("N"));
+        // TIA Openness ultimately opens the exported XML using legacy Windows path handling;
+        // keep the atomic staging suffix short so nested source/group names remain below the
+        // MAX_PATH limit even in long AutomationWorkbench worktrees.
+        var temporaryRoot = Path.Combine(parent, "." + Path.GetFileName(finalRoot) + ".capture-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(temporaryRoot);
         try
         {

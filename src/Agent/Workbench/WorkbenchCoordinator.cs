@@ -3210,6 +3210,13 @@ public sealed class WorkbenchCoordinator
                 (compileStatus, projectChecksum, savepointChecksums) = await CompileManagedForCommitAsync(
                     devices.Select(device => device.Metadata.PlcName).ToArray(),
                     token).ConfigureAwait(false);
+
+                await EnsureSnapshotChecksumsMatchHeadAsync(
+                        worktreeRoot,
+                        devices,
+                        savepointChecksums,
+                        token)
+                    .ConfigureAwait(false);
             }
             finally
             {
@@ -3679,6 +3686,52 @@ public sealed class WorkbenchCoordinator
                 PlcName = parts[0],
                 SoftwareChecksum = parts[1],
             });
+    }
+
+    /// <summary>
+    /// A native snapshot must not advance the native baseline over uncommitted PLC software
+    /// changes. The per-commit TIA state tag is the checksum evidence bound to the current Git
+    /// HEAD; revision.json alone is not sufficient because it may describe an older commit.
+    /// </summary>
+    private async Task EnsureSnapshotChecksumsMatchHeadAsync(
+        string worktreeRoot,
+        IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
+        IReadOnlyList<PlcChecksumInfo> liveChecksums,
+        CancellationToken token)
+    {
+        var head = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
+        var evidence = await versionControl.CallAsync<ConsistencyValidationEvidence?>(
+                "vc_commit_state_get",
+                new { repoPath = worktreeRoot, commitSha = head },
+                token)
+            .ConfigureAwait(false);
+
+        if (evidence is null
+            || !string.Equals(evidence.CommitSha, head, StringComparison.OrdinalIgnoreCase)
+            || evidence.Devices.Length != devices.Count)
+        {
+            throw new WorkbenchLifecycleException(
+                "SNAPSHOT_REQUIRES_COMMITTED_SOURCE",
+                "The latest Git commit has no complete PLC checksum evidence. Commit all PLC source changes before taking a snapshot.");
+        }
+
+        foreach (var device in devices)
+        {
+            var live = liveChecksums.FirstOrDefault(checksum =>
+                string.Equals(checksum.PlcName, device.Metadata.PlcName, StringComparison.Ordinal));
+            var recorded = evidence.Devices.FirstOrDefault(item =>
+                string.Equals(item.DeviceId, device.Metadata.DeviceId, StringComparison.Ordinal)
+                && string.Equals(item.PlcName, device.Metadata.PlcName, StringComparison.Ordinal));
+            if (live?.IsCompiled != true
+                || string.IsNullOrWhiteSpace(live.SoftwareChecksum)
+                || recorded is null
+                || !string.Equals(live.SoftwareChecksum, recorded.ProjectChecksum, StringComparison.Ordinal))
+            {
+                throw new WorkbenchLifecycleException(
+                    "SNAPSHOT_REQUIRES_COMMITTED_SOURCE",
+                    $"PLC '{device.Metadata.PlcName}' has uncommitted source changes. Commit all PLC source changes before taking a snapshot.");
+            }
+        }
     }
 
     private static string FormatClassification(EngineeringChangeClassification classification)

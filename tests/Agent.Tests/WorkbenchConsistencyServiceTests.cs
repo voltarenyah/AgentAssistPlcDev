@@ -191,6 +191,21 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExplicitlyUntrustedEvidenceCannotPassChecksumFastGate()
+    {
+        var evidence = fixture.Evidence();
+        evidence.ManagedSourceConsistent = false;
+        var versionControl = new ConsistencyVersionControlCaller(fixture.Head, evidence);
+        var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
+        var service = new WorkbenchConsistencyService(engineering, versionControl);
+
+        var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
+
+        Assert.False(result.FastGatePassed);
+        Assert.Equal(2, engineering.Calls.Count(call => call == "sync_export"));
+    }
+
+    [Fact]
     public async Task UnlabeledMasterScansEveryDeviceWithSyncExport()
     {
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, null);
