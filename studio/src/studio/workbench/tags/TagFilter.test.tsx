@@ -32,20 +32,31 @@ const setInputValue = async (input: HTMLInputElement, value: string) => {
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('TagFilter', () => {
-  it('selects a searched tag through the command keyboard interaction', async () => {
+  it('offers full-path suggestions and selects a searched tag through keyboard interaction', async () => {
     const onSelectedTagIdsChange = vi.fn()
     const { root } = await render(
       <TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={onSelectedTagIdsChange} />,
     )
 
-    await act(async () => (document.body.querySelector('button[aria-label="Filter tags"]') as HTMLButtonElement).click())
     const input = document.body.querySelector('input[aria-label="Search filter tags"]') as HTMLInputElement
     await setInputValue(input, 'Machine/Press')
+    expect(document.body.textContent).toContain('Machine/Press')
     await act(async () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
+    expect(onSelectedTagIdsChange).toHaveBeenCalledWith(['press'])
+    expect(input.value).toBe('')
+    await act(async () => root.unmount())
+  })
+
+  it('selects an inline suggestion by pointer', async () => {
+    const onSelectedTagIdsChange = vi.fn()
+    const { root } = await render(<TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={onSelectedTagIdsChange} />)
+    const input = document.body.querySelector('input[aria-label="Search filter tags"]') as HTMLInputElement
+    await setInputValue(input, 'press')
+    await act(async () => (document.body.querySelector('[aria-label="Filter by Machine/Press"]') as HTMLElement).click())
     expect(onSelectedTagIdsChange).toHaveBeenCalledWith(['press'])
     await act(async () => root.unmount())
   })
@@ -55,7 +66,7 @@ describe('TagFilter', () => {
       <TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={() => {}} />,
     )
 
-    await act(async () => (document.body.querySelector('button[aria-label="Filter tags"]') as HTMLButtonElement).click())
+    await act(async () => (document.body.querySelector('button[aria-label="Open tag taxonomy"]') as HTMLButtonElement).click())
 
     const tree = document.body.querySelector('[role="tree"]') as HTMLElement
     expect(tree).not.toBeNull()
@@ -73,7 +84,7 @@ describe('TagFilter', () => {
       <TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={() => {}} onOpen={onOpen} />,
     )
 
-    await act(async () => (document.body.querySelector('button[aria-label="Filter tags"]') as HTMLButtonElement).click())
+    await act(async () => (document.body.querySelector('button[aria-label="Open tag taxonomy"]') as HTMLButtonElement).click())
 
     expect(onOpen).toHaveBeenCalledTimes(1)
     await act(async () => root.unmount())
