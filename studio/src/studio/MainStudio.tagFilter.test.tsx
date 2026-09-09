@@ -64,7 +64,6 @@ describe('MainStudio tag navigator filter', () => {
     await act(async () => root.render(<MainStudio />))
     await act(async () => {})
 
-    await act(async () => (host.querySelector('button[aria-label="Filter tags"]') as HTMLButtonElement).click())
     const input = document.body.querySelector('input[aria-label="Search filter tags"]') as HTMLInputElement
     await setInputValue(input, 'Machine/Press')
     await act(async () => {
@@ -93,7 +92,6 @@ describe('MainStudio tag navigator filter', () => {
     await act(async () => root.render(<MainStudio />))
     await act(async () => {})
 
-    await act(async () => (host.querySelector('button[aria-label="Filter tags"]') as HTMLButtonElement).click())
     let input = document.body.querySelector('input[aria-label="Search filter tags"]') as HTMLInputElement
     await setInputValue(input, 'Machine/Press')
     await act(async () => {
@@ -106,7 +104,6 @@ describe('MainStudio tag navigator filter', () => {
     }))
     expect(host.textContent).toContain('matching child')
 
-    await act(async () => (host.querySelector('button[aria-label="Filter tags"]') as HTMLButtonElement).click())
     input = document.body.querySelector('input[aria-label="Search filter tags"]') as HTMLInputElement
     await setInputValue(input, 'State')
     await act(async () => {

@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import type { TagNode } from '@/api/client'
+import { ListFilter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { Command, CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import TagChip from './TagChip'
 import TagTree from './TagTree'
 import { tagPaths } from './tagPaths'
@@ -27,6 +28,7 @@ export function TagFilter({
 }: TagFilterProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [dialogQuery, setDialogQuery] = useState('')
   const [expandedIds, setExpandedIds] = useState<string[]>([])
   const paths = useMemo(() => tagPaths(nodes), [nodes])
   const selected = new Set(selectedTagIds)
@@ -50,20 +52,43 @@ export function TagFilter({
         {nodes.filter(node => selected.has(node.tagId)).map(node => (
           <TagChip key={node.tagId} node={node} nodes={nodes} removable onRemove={remove} />
         ))}
+      </div>
+      <Command shouldFilter={false} className="relative mt-1 min-w-0">
+        <CommandInput
+          value={query}
+          onValueChange={setQuery}
+          onInput={event => setQuery(event.currentTarget.value)}
+          placeholder={loading ? 'Loading tags…' : 'Filter tags'}
+          aria-label="Search filter tags"
+          disabled={loading}
+          className="pr-9"
+          wrapperClassName="rounded-md border border-input bg-transparent"
+        />
         <Button
           type="button"
-          variant="outline"
-          size="xs"
+          variant="ghost"
+          size="icon-xs"
+          className="absolute right-1 top-1/2 -translate-y-1/2"
           disabled={loading}
-          aria-label={loading ? 'Filter tags (loading)' : 'Filter tags'}
+          aria-label={loading ? 'Open tag taxonomy (loading)' : 'Open tag taxonomy'}
           onClick={() => {
             onOpen?.()
+            setDialogQuery('')
             setOpen(true)
           }}
         >
-          {loading ? 'Loading tags…' : 'Filter tags'}
+          <ListFilter aria-hidden="true" />
         </Button>
-      </div>
+        {normalizedQuery.length > 0 && (
+          <CommandList className="absolute top-full z-10 mt-1 max-h-48 w-full rounded-md border border-border bg-popover p-1 shadow-md">
+            <CommandEmpty>No matching tags.</CommandEmpty>
+            {selectableNodes.map(node => {
+              const path = paths.get(node.tagId) ?? node.name
+              return <CommandItem key={node.tagId} value={path} onSelect={() => select(node.tagId)} aria-label={`Filter by ${path}`}>{path}</CommandItem>
+            })}
+          </CommandList>
+        )}
+      </Command>
       {error && (
         <div role="alert" className="mt-1 text-xs text-destructive">
           {error}{onRetry && <Button type="button" variant="link" size="xs" onClick={onRetry}>Retry</Button>}
@@ -71,14 +96,14 @@ export function TagFilter({
       )}
       <CommandDialog open={open} onOpenChange={setOpen} title="Filter projects" description="Search tags to filter projects and worktrees" shouldFilter={false}>
         <CommandInput
-          value={query}
-          onValueChange={setQuery}
-          onInput={event => setQuery(event.currentTarget.value)}
+          value={dialogQuery}
+          onValueChange={setDialogQuery}
+          onInput={event => setDialogQuery(event.currentTarget.value)}
           placeholder="Search tags"
-          aria-label="Search filter tags"
+          aria-label="Search taxonomy tags"
         />
         <CommandList>
-          {normalizedQuery.length === 0 ? (
+          {dialogQuery.trim().toLowerCase().length === 0 ? (
             <div className="p-2">
               <TagTree
                 nodes={nodes}
@@ -90,7 +115,8 @@ export function TagFilter({
           ) : (
             <>
               <CommandEmpty>No matching tags.</CommandEmpty>
-              {selectableNodes.map(node => {
+              {nodes.filter(node => !selected.has(node.tagId)
+                && (paths.get(node.tagId) ?? node.name).toLowerCase().includes(dialogQuery.trim().toLowerCase())).map(node => {
                 const path = paths.get(node.tagId) ?? node.name
                 return <CommandItem key={node.tagId} value={path} onSelect={() => select(node.tagId)} aria-label={`Filter by ${path}`}>{path}</CommandItem>
               })}
