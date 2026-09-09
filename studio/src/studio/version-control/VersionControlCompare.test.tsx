@@ -141,6 +141,8 @@ describe('VersionControlCompare (inline)', () => {
     ))
 
     expect(compare).toHaveBeenCalledTimes(2)
+    expect(host.querySelector('[data-testid="vc-compare-progress"]')).toBeTruthy()
+    expect(host.textContent).toContain('Comparing the connected TIA project with master')
     expect(host.querySelector('[data-operation-timings]')).toBeTruthy()
     expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeNull()
     resolveSecond(first)

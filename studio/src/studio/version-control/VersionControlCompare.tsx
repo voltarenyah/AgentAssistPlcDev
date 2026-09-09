@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Loader2, ShieldAlert } from 'lucide-react'
 import * as api from '@/api/client'
 import FeatureValidationDialog from './FeatureValidationDialog'
@@ -75,7 +75,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     finally { setBusy(false); onComparisonBusyChanged?.(false) }
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (signal === 0 || signal === handledSignal.current) return
     handledSignal.current = signal
     setStarted(true)
@@ -149,9 +149,13 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     <div className="shrink-0" data-testid="vc-compare-result">
       <div className="px-3.5 pb-2.5">
         {busy && (
-          <div className="py-2 text-[10px] text-muted-foreground">
+          <div className="rounded-lg border border-chart-2/30 bg-chart-2/5 p-2.5 text-[10px] text-muted-foreground" data-testid="vc-compare-progress" role="status" aria-live="polite">
             <div className="flex items-center gap-2">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Comparing the connected TIA project with master...
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-chart-2" />
+              <span className="font-medium text-foreground">Comparing the connected TIA project with master...</span>
+            </div>
+            <div className="mt-2 h-1 overflow-hidden rounded-full bg-chart-2/15" aria-hidden="true">
+              <div className="h-full w-2/5 animate-pulse rounded-full bg-chart-2" />
             </div>
             <OperationTimingList status={operationStatus} className="mt-2" />
           </div>

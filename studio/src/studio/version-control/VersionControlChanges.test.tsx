@@ -20,7 +20,7 @@ const entry = (overrides: Partial<VersionControlSourceEntry> = {}): VersionContr
 
 const snapshot = { revision: 3, commitsSince: 2, hardwareDiffers: false }
 
-const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false, onBeginOperation?: (kind: string, label: string) => string) => {
+const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false, onBeginOperation?: (kind: string, label: string) => string, operationStatus?: api.OperationStatus | null) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -35,6 +35,7 @@ const render = async (entries: VersionControlSourceEntry[], snapshotOverride = s
         snapshot={snapshotOverride}
         untrackablePendingSavepoint={untrackablePendingSavepoint}
         onBeginOperation={onBeginOperation}
+        operationStatus={operationStatus}
       />,
     )
   })
@@ -71,6 +72,22 @@ describe('VersionControlChanges', () => {
     resolveCompare({ comparisonId: 'comparison-1', masterSha: 'master-1', fastGatePassed: true, state: 'Consistent', liveChecksums: {}, differences: [] })
     await act(async () => {})
     expect(host.querySelector('[data-testid="vc-commit-controls"]')).not.toBeNull()
+  })
+
+  it('hides commit controls when compare telemetry is already running', async () => {
+    const status: api.OperationStatus = {
+      operationId: 'compare-1',
+      operationType: 'compare-tia',
+      state: 'running',
+      message: 'Comparing master with TIA Portal...',
+      updatedAt: '2026-09-09T00:00:00Z',
+      errorMessage: null,
+      completedPhases: [],
+      currentPhase: null,
+    }
+    const { host } = await render([entry()], snapshot, 0, false, undefined, status)
+
+    expect(host.querySelector('[data-testid="vc-commit-controls"]')).toBeNull()
   })
 
   it('groups PLC objects into collapsible folders and selects rows on click', async () => {

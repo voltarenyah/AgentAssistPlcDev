@@ -96,6 +96,8 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
   const selectedCommitPaths = new Set([...selectedPaths, ...(tiaSelection?.paths ?? [])])
   const selectedSafetyCount = tiaSelection?.safetyPaths.length ?? 0
   const canCommit = (selectedCommitPaths.size > 0 || selectedSafetyCount > 0 || untrackable) && message.trim().length > 0 && !busy
+  const comparisonInProgress = comparisonBusy
+    || (operationStatus?.operationType === 'compare-tia' && operationStatus.state === 'running')
 
   const togglePath = (filePath: string) => {
     setSelectedPaths(previous => {
@@ -204,7 +206,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
           </div>
         ) : (
           <>
-            {!comparisonBusy && <div data-testid="vc-commit-controls" className="px-3.5 pt-2.5">
+            {!comparisonInProgress && <div data-testid="vc-commit-controls" className="px-3.5 pt-2.5">
               <textarea
                 aria-label="Commit message"
                 placeholder="Message"
