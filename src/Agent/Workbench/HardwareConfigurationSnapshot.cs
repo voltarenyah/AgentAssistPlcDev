@@ -88,7 +88,9 @@ internal sealed record HardwareConfigurationSnapshot(
                 result => result.ContentHash,
                 StringComparer.Ordinal);
         if (exportRoot is not null
-            && exported.Any(result => result.Scope == "project")
+            && exported.Any(result =>
+                string.Equals(result.Scope, "project", StringComparison.OrdinalIgnoreCase)
+                && result.Success)
             && (!artifacts.TryGetValue("project", out var projectHash)
                 || string.IsNullOrWhiteSpace(projectHash)))
         {
@@ -170,6 +172,29 @@ internal static class HardwareConfigurationExport
         string outputRoot)
     {
         var failures = results.Where(result => !result.Success).ToArray();
+        var projectResults = results
+            .Where(result => string.Equals(result.Scope, "project", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (projectResults.Length == 0)
+        {
+            throw new WorkbenchLifecycleException(
+                "HARDWARE_EXPORT_INCOMPLETE",
+                "Hardware configuration export did not produce a project-level AML artifact.");
+        }
+
+        // A failed project export must never be treated as a warning when a usable AML file
+        // happens to remain in staging. That file may belong to an earlier comparison and would
+        // otherwise make stale hardware appear in-sync.
+        var failedProjectResults = projectResults.Where(result => !result.Success).ToArray();
+        if (failedProjectResults.Length > 0)
+        {
+            throw new WorkbenchLifecycleException(
+                "HARDWARE_EXPORT_INCOMPLETE",
+                "Hardware configuration export failed: "
+                + string.Join("; ", failedProjectResults.Select(result =>
+                    $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")));
+        }
+
         var projectAmlPath = ResolveArtifactPath(outputRoot, "project.aml");
         if (!IsUsableProjectAml(projectAmlPath))
         {
@@ -178,13 +203,6 @@ internal static class HardwareConfigurationExport
                 "Hardware configuration export failed: "
                 + string.Join("; ", failures.Select(result =>
                     $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")));
-        }
-
-        if (!results.Any(result => result.Scope == "project"))
-        {
-            throw new WorkbenchLifecycleException(
-                "HARDWARE_EXPORT_INCOMPLETE",
-                "Hardware configuration export did not produce a project-level AML artifact.");
         }
 
         return failures.Select(result =>

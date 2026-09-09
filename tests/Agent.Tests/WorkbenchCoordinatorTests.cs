@@ -565,7 +565,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task ReloadHardwareKeepsUsableProjectAmlWhenOptionalDeviceExportFails()
+    public async Task ReloadHardwareRejectsFailedProjectExportEvenWhenStagedAmlIsUsable()
     {
         var fixture = Fixture.Create(root);
         var hardwareRoot = Path.Combine(
@@ -591,14 +591,15 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     Error = "TypeIdentifier is invalid or missing",
                 },
             });
-        var versionControl = new FakeToolCaller()
-            .Respond("vc_commit_hardware", new CoordinatorGitCommitResult { Sha = "partial-commit" });
+        var versionControl = new FakeToolCaller();
         var coordinator = Create(fixture, engineering: engineering, versionControl: versionControl);
 
-        var result = await coordinator.ReloadHardwareAsync(fixture.Context, CancellationToken.None);
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.ReloadHardwareAsync(fixture.Context, CancellationToken.None));
 
-        Assert.Equal("partial-commit", result.CommitSha);
-        Assert.Contains(result.Warnings!, warning => warning.Contains("HMI_1"));
+        Assert.Equal("HARDWARE_EXPORT_INCOMPLETE", error.Code);
+        Assert.Contains("project export reported warnings", error.Message);
+        Assert.Empty(versionControl.Calls);
     }
 
     [Fact]

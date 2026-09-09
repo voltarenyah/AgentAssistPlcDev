@@ -65,6 +65,48 @@ public sealed class HardwareConfigurationSnapshotTests : IDisposable
     }
 
     [Fact]
+    public void FromResultsDoesNotReuseStagedProjectWhenExportFailed()
+    {
+        WriteProjectAml(root);
+
+        var snapshot = HardwareConfigurationSnapshot.FromResults(
+            new[]
+            {
+                new HardwareExportResult
+                {
+                    Scope = "project",
+                    Success = false,
+                    Error = "CAx export failed",
+                },
+            },
+            root);
+
+        Assert.DoesNotContain("project", snapshot.Artifacts.Keys);
+    }
+
+    [Fact]
+    public void EnsureSucceededRejectsFailedProjectEvenWhenStagedAmlIsUsable()
+    {
+        WriteProjectAml(root);
+
+        var error = Assert.Throws<WorkbenchLifecycleException>(() =>
+            HardwareConfigurationExport.EnsureSucceeded(
+                new[]
+                {
+                    new HardwareExportResult
+                    {
+                        Scope = "project",
+                        Success = false,
+                        Error = "CAx export failed",
+                    },
+                },
+                root));
+
+        Assert.Equal("HARDWARE_EXPORT_INCOMPLETE", error.Code);
+        Assert.Contains("CAx export failed", error.Message);
+    }
+
+    [Fact]
     public void CompareFlagsChangedNetworkFingerprintWhileProjectAmlStaysSame()
     {
         WriteManifest("""{ "projectAmlFile": "project.aml", "projectContentHash": "p1", "networkConfigurationHash": "old" }""");
@@ -127,6 +169,12 @@ public sealed class HardwareConfigurationSnapshotTests : IDisposable
     {
         Directory.CreateDirectory(root);
         File.WriteAllText(Path.Combine(root, "manifest.json"), json);
+    }
+
+    private static void WriteProjectAml(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, "project.aml"), "<Project />");
     }
 
     private static void WriteNetwork(string directory, string text)
