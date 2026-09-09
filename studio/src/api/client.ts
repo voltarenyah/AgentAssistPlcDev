@@ -231,6 +231,49 @@ export type Worktree = {
   lastReconciliationCommit: string | null
 }
 
+/** Server-owned hierarchical workbench tag taxonomy. */
+export type TagNode = {
+  tagId: string
+  parentTagId: string | null
+  name: string
+  normalizedName: string
+}
+
+export type TagTaxonomy = {
+  nodes: TagNode[]
+}
+
+export type TagEntityType = 'workbench' | 'worktree'
+
+/** Direct assignment identity returned or accepted by tag transport APIs. */
+export type TagAssignment = {
+  tagId: string
+  entityType: TagEntityType
+  entityId: string
+  workbenchId: string | null
+}
+
+/** Server-provided direct, inherited, and effective projections for an entity. */
+export type EntityTags = {
+  direct: string[]
+  inherited: string[]
+  effective: string[]
+}
+
+export type WorkbenchTagSearchResult = {
+  entityType: TagEntityType
+  entityId: string
+  workbenchId: string | null
+  direct: string[]
+  effective: string[]
+  available: boolean
+}
+
+export type WorkbenchTagSearchResults = {
+  workbenches: WorkbenchTagSearchResult[]
+  worktrees: WorkbenchTagSearchResult[]
+}
+
 export type WorktreeStatus = 'ongoing' | 'finished'
 
 export type WorktreeTaskStatus = 'todo' | 'inProgress' | 'done'
@@ -830,6 +873,43 @@ const withOperation = (init: RequestInit, operationId?: string): RequestInit => 
 }
 
 export const listWorkbenches = () => workbenchRequest<Workbench[]>('/workbenches')
+export const getTagTaxonomy = () =>
+  workbenchRequest<TagTaxonomy>('/tags')
+export const createTagPath = (path: string) =>
+  workbenchRequest<TagNode>('/tags/path', jsonRequest('POST', { path }))
+export const renameTag = (tagId: string, name: string) =>
+  workbenchRequest<TagNode>(`/tags/${encodeURIComponent(tagId)}`, jsonRequest('PATCH', { name }))
+export const deleteTag = (tagId: string) =>
+  workbenchRequest<void>(`/tags/${encodeURIComponent(tagId)}`, { method: 'DELETE' })
+export const getWorkbenchTags = (workbenchId: string) =>
+  workbenchRequest<EntityTags>(`/workbenches/${encodeURIComponent(workbenchId)}/tags`)
+export const assignWorkbenchTag = (workbenchId: string, tagId: string) =>
+  workbenchRequest<void>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/tags/${encodeURIComponent(tagId)}`,
+    jsonRequest('POST'),
+  )
+export const unassignWorkbenchTag = (workbenchId: string, tagId: string) =>
+  workbenchRequest<void>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/tags/${encodeURIComponent(tagId)}`,
+    { method: 'DELETE' },
+  )
+export const getWorktreeTags = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<EntityTags>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/tags`,
+  )
+export const assignWorktreeTag = (workbenchId: string, worktreeId: string, tagId: string) =>
+  workbenchRequest<void>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/tags/${encodeURIComponent(tagId)}`,
+    jsonRequest('POST'),
+  )
+export const unassignWorktreeTag = (workbenchId: string, worktreeId: string, tagId: string) =>
+  workbenchRequest<void>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/tags/${encodeURIComponent(tagId)}`,
+    { method: 'DELETE' },
+  )
+export const searchWorkbenches = (tagIds: string[]) =>
+  workbenchRequest<WorkbenchTagSearchResults>('/workbenches/search', jsonRequest('POST', { tagIds }))
+export const searchWorkbenchesByTags = searchWorkbenches
 export const openWorkbench = (rootPath: string) =>
   workbenchRequest<Workbench>('/workbenches/open', jsonRequest('POST', { rootPath }))
 export const deleteWorkbench = (workbenchId: string, operationId?: string) =>

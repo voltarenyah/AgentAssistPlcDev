@@ -34,6 +34,24 @@ public sealed record UnauthorizedMasterPathsRequest(string[] Paths, string? Feat
 public sealed record FeaturePathsApiRequest(string[] Paths);
 public sealed record ValidateFeatureMergeApiRequest(string ImportSessionId, bool MachineValidated, string ConfirmedBy);
 public sealed record RollbackFeatureApiRequest(string HistoricalSha, string[] Paths, string FeatureName);
+public sealed record CreateTagPathApiRequest(string? Path);
+public sealed record RenameTagApiRequest(string? Name);
+public sealed record WorkbenchTagSearchApiRequest(IReadOnlyList<string>? TagIds);
+public sealed record TagTaxonomyApiResponse(IReadOnlyList<TagNode> Nodes);
+public sealed record EntityTagsApiResponse(
+    IReadOnlyList<string> Direct,
+    IReadOnlyList<string> Inherited,
+    IReadOnlyList<string> Effective);
+public sealed record WorkbenchTagSearchResultApiResponse(
+    TagEntityType EntityType,
+    string EntityId,
+    string? WorkbenchId,
+    IReadOnlyList<string> Direct,
+    IReadOnlyList<string> Effective,
+    bool Available);
+public sealed record WorkbenchTagSearchApiResponse(
+    IReadOnlyList<WorkbenchTagSearchResultApiResponse> Workbenches,
+    IReadOnlyList<WorkbenchTagSearchResultApiResponse> Worktrees);
 
 /// <summary>Optional bootstrap body. CommitMessage customizes the first baseline commit title.</summary>
 public sealed record BootstrapApiRequest(string? CommitMessage);
@@ -391,6 +409,56 @@ public static class WorkbenchEndpoints
             operations.Dismiss(id);
             return Results.NoContent();
         });
+        app.MapGet("/api/tags", (WorkbenchTagService tags) =>
+            new TagTaxonomyApiResponse(tags.GetTaxonomy()));
+        app.MapPost("/api/tags/path", (CreateTagPathApiRequest request, WorkbenchTagService tags) =>
+        {
+            var node = tags.CreatePath(request.Path!);
+            return Results.Created($"/api/tags/{node.TagId}", node);
+        });
+        app.MapPatch("/api/tags/{tagId}", (string tagId, RenameTagApiRequest request, WorkbenchTagService tags) =>
+            Results.Ok(tags.Rename(tagId, request.Name!)));
+        app.MapDelete("/api/tags/{tagId}", (string tagId, WorkbenchTagService tags) =>
+        {
+            tags.Delete(tagId);
+            return Results.NoContent();
+        });
+        app.MapGet("/api/workbenches/{id}/tags", (string id, WorkbenchTagService tags) =>
+            Results.Ok(ToEntityTagsResponse(tags.GetWorkbenchTags(id))));
+        app.MapPost("/api/workbenches/{id}/tags/{tagId}", (string id, string tagId, WorkbenchTagService tags) =>
+        {
+            tags.AssignWorkbenchTag(tagId, id);
+            return Results.NoContent();
+        });
+        app.MapDelete("/api/workbenches/{id}/tags/{tagId}", (string id, string tagId, WorkbenchTagService tags) =>
+        {
+            tags.UnassignWorkbenchTag(tagId, id);
+            return Results.NoContent();
+        });
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/tags", (string id, string wt, WorkbenchTagService tags) =>
+            Results.Ok(ToEntityTagsResponse(tags.GetWorktreeTags(id, wt))));
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tags/{tagId}", (string id, string wt, string tagId, WorkbenchTagService tags) =>
+        {
+            tags.AssignWorktreeTag(tagId, id, wt);
+            return Results.NoContent();
+        });
+        app.MapDelete("/api/workbenches/{id}/worktrees/{wt}/tags/{tagId}", (string id, string wt, string tagId, WorkbenchTagService tags) =>
+        {
+            tags.UnassignWorktreeTag(tagId, id, wt);
+            return Results.NoContent();
+        });
+        app.MapPost("/api/workbenches/search", (WorkbenchTagSearchApiRequest request, WorkbenchTagService tags) =>
+        {
+            if (request.TagIds is null)
+            {
+                throw new ArgumentException("Field 'tagIds' is required.");
+            }
+
+            var results = tags.Search(request.TagIds);
+            return Results.Ok(new WorkbenchTagSearchApiResponse(
+                results.Workbenches.Select(ToSearchResultResponse).ToArray(),
+                results.Worktrees.Select(ToSearchResultResponse).ToArray()));
+        });
         app.MapGet("/api/workbenches", (WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
         {
             var workbenches = s.List();
@@ -428,6 +496,7 @@ public static class WorkbenchEndpoints
             string id,
             WorkbenchApiState s,
             WorkbenchCoordinator c,
+            WorkbenchTagService tags,
             OperationStatusRegistry operations,
             HttpContext http,
             CancellationToken ct) =>
@@ -440,6 +509,7 @@ public static class WorkbenchEndpoints
                 async progress =>
                 {
                     await c.DeleteWorkbenchAsync(s.Workbench(id), ct, progress).ConfigureAwait(false);
+                    tags.RemoveWorkbenchAssignments(id);
                     return new { deleted = true };
                 },
                 "Workbench deleted.").ConfigureAwait(false);
@@ -636,6 +706,7 @@ public static class WorkbenchEndpoints
             string wt,
             WorkbenchApiState s,
             WorkbenchCoordinator c,
+            WorkbenchTagService tags,
             OperationStatusRegistry operations,
             HttpContext http,
             CancellationToken ct) =>
@@ -648,6 +719,7 @@ public static class WorkbenchEndpoints
                 async progress =>
                 {
                     await c.DeleteWorktreeAsync(s.Workbench(id), wt, ct, progress).ConfigureAwait(false);
+                    tags.RemoveWorktreeAssignments(id, wt);
                     return new { deleted = true };
                 },
                 "Worktree removed.").ConfigureAwait(false);
@@ -1535,6 +1607,19 @@ public static class WorkbenchEndpoints
         worktree.Status,
         worktree.FinishedUtc);
 
+    private static EntityTagsApiResponse ToEntityTagsResponse(WorkbenchTagProjection tags) => new(
+        tags.DirectTagIds,
+        tags.InheritedTagIds,
+        tags.EffectiveTagIds);
+
+    private static WorkbenchTagSearchResultApiResponse ToSearchResultResponse(WorkbenchTagSearchResult result) => new(
+        result.EntityType,
+        result.EntityId,
+        result.WorkbenchId,
+        result.DirectTagIds,
+        result.EffectiveTagIds,
+        result.Available);
+
     /// <summary>PATCH semantics: false when the field is omitted (leave unchanged); true when
     /// present — a JSON null clears the value, any string (including empty) sets it.</summary>
     private static bool TryGetOptionalString(JsonElement body, string name, out string? value)
@@ -1674,6 +1759,16 @@ public sealed class WorkbenchApiExceptionMiddleware(RequestDelegate next)
         {
             context.Response.StatusCode = exception.Message.Contains("PREVIEW", StringComparison.Ordinal) ? 409 : 404;
             await context.Response.WriteAsJsonAsync(new { error = exception.Message });
+        }
+        catch (WorkbenchTagDomainException exception)
+        {
+            context.Response.StatusCode = exception.Code switch
+            {
+                "tag_not_found" or "workbench_not_found" or "worktree_not_found" => StatusCodes.Status404NotFound,
+                "sibling_name_conflict" or "tag_has_children" or "tag_assigned" => StatusCodes.Status409Conflict,
+                _ => StatusCodes.Status400BadRequest,
+            };
+            await context.Response.WriteAsJsonAsync(new { error = exception.Code, message = exception.Message });
         }
         catch (Exception exception) when (exception is ArgumentException or WorkbenchPathException)
         {

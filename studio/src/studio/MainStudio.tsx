@@ -37,6 +37,7 @@ import VersionControlPanel from '@/studio/version-control/VersionControlPanel'
 import WorkbenchNavigator, {
   type WorkbenchSelection,
 } from '@/studio/workbench/WorkbenchNavigator'
+import TagFilter from '@/studio/workbench/tags/TagFilter'
 import CreateWorkbenchDialog from '@/studio/workbench/CreateWorkbenchDialog'
 import OperationStatusLine from '@/studio/workbench/OperationStatusLine'
 import { shouldRetryOperationStatus } from '@/studio/operationStatus'
@@ -433,6 +434,12 @@ export default function MainStudio() {
   const [statusPopover, setStatusPopover] = useState<'runtime' | 'tia' | null>(null)
   const [sessionActionBusy, setSessionActionBusy] = useState<string | null>(null)
   const [devicesByWorktree, setDevicesByWorktree] = useState<Record<string, api.DeviceSummary[]>>({})
+  const [navigatorTagNodes, setNavigatorTagNodes] = useState<api.TagNode[]>([])
+  const [navigatorTagIds, setNavigatorTagIds] = useState<string[]>([])
+  const [navigatorTagsLoading, setNavigatorTagsLoading] = useState(true)
+  const [navigatorTagsError, setNavigatorTagsError] = useState<string | null>(null)
+  const [navigatorFilterResults, setNavigatorFilterResults] = useState<api.WorkbenchTagSearchResults | null>(null)
+  const [navigatorFilterError, setNavigatorFilterError] = useState<string | null>(null)
   const [selection, setSelection] = useState<WorkbenchSelection>({
     workbenchId: null,
     worktreeId: null,
@@ -446,6 +453,8 @@ export default function MainStudio() {
   const [hardwareBomView, setHardwareBomView] = useState<api.HardwareBomView | null>(null)
   const [hardwareNetworkView, setHardwareNetworkView] = useState<api.HardwareNetworkView | null>(null)
   const selectionRequestId = useRef(0)
+  const navigatorTagRequestId = useRef(0)
+  const navigatorFilterRequestId = useRef(0)
   const hardwareRequestId = useRef(0)
   const hardwareBomRequestId = useRef(0)
   const hardwareNetworkRequestId = useRef(0)
@@ -639,6 +648,47 @@ export default function MainStudio() {
     setWorkbenches(values)
     return values
   }, [])
+
+  const reloadNavigatorTags = useCallback(async () => {
+    const requestId = ++navigatorTagRequestId.current
+    setNavigatorTagsLoading(true)
+    try {
+      const taxonomy = await api.getTagTaxonomy()
+      if (navigatorTagRequestId.current !== requestId) return
+      setNavigatorTagNodes(taxonomy.nodes)
+      setNavigatorTagsError(null)
+    } catch (error) {
+      if (navigatorTagRequestId.current !== requestId) return
+      setNavigatorTagsError(displayError(error))
+    } finally {
+      if (navigatorTagRequestId.current === requestId) setNavigatorTagsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void reloadNavigatorTags() }, [reloadNavigatorTags])
+
+  const reloadNavigatorFilter = useCallback(async (tagIds: string[]) => {
+    const requestId = ++navigatorFilterRequestId.current
+    if (tagIds.length === 0) {
+      setNavigatorFilterResults(null)
+      setNavigatorFilterError(null)
+      return
+    }
+
+    setNavigatorFilterResults(null)
+    setNavigatorFilterError(null)
+    try {
+      const results = await api.searchWorkbenches(tagIds)
+      if (navigatorFilterRequestId.current !== requestId) return
+      setNavigatorFilterResults(results)
+    } catch (error) {
+      if (navigatorFilterRequestId.current !== requestId) return
+      setNavigatorFilterResults(null)
+      setNavigatorFilterError(displayError(error))
+    }
+  }, [])
+
+  useEffect(() => { void reloadNavigatorFilter(navigatorTagIds) }, [navigatorTagIds, reloadNavigatorFilter])
 
   const reloadKeyStatus = useCallback(async () => {
     try {
@@ -1939,6 +1989,21 @@ export default function MainStudio() {
             viewKind={mainView.kind}
             knowledgeState={navigatorKnowledgeState}
             loading={loading}
+            filterActive={navigatorTagIds.length > 0}
+            filteredResults={navigatorFilterResults}
+            filterControl={(
+              <TagFilter
+                nodes={navigatorTagNodes}
+                selectedTagIds={navigatorTagIds}
+                onSelectedTagIdsChange={setNavigatorTagIds}
+                onOpen={() => void reloadNavigatorTags()}
+                loading={navigatorTagsLoading}
+                error={navigatorTagsError ?? navigatorFilterError}
+                onRetry={() => void (navigatorTagsError
+                  ? reloadNavigatorTags()
+                  : reloadNavigatorFilter(navigatorTagIds))}
+              />
+            )}
             onCreateWorkbench={openCreateWorkbench}
             onCreateWorktree={setCreateWorktreeFor}
             onOpenWorkbench={(workbench, upgrade) => void openWorkbenchInTia(workbench, upgrade)}

@@ -16,7 +16,8 @@ import {
   ShieldCheck,
   Trash2,
 } from 'lucide-react'
-import type { DeviceSummary, Workbench, WorkbenchRegistration } from '@/api/client'
+import type { ReactNode } from 'react'
+import type { DeviceSummary, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults } from '@/api/client'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -40,6 +41,12 @@ type Props = {
   viewKind: 'project' | 'worktree' | 'hardware' | 'device'
   knowledgeState: Record<string, 'current' | 'stale' | 'missing' | 'failed'>
   loading: boolean
+  /** A tag search is active; rows come only from the server-owned result below. */
+  filterActive?: boolean
+  /** Server-owned tag search identities and availability, never client-derived tag semantics. */
+  filteredResults?: WorkbenchTagSearchResults | null
+  /** Filter controls are owned by the caller but placed directly below the navigator header. */
+  filterControl?: ReactNode
   onCreateWorkbench: () => void
   onCreateWorktree: (workbench: Workbench) => void
   onOpenWorkbench: (workbench: Workbench, upgrade: boolean) => void
@@ -75,6 +82,9 @@ export default function WorkbenchNavigator({
   viewKind,
   knowledgeState,
   loading,
+  filterActive = false,
+  filteredResults = null,
+  filterControl,
   onCreateWorkbench,
   onCreateWorktree,
   onOpenWorkbench,
@@ -100,6 +110,15 @@ export default function WorkbenchNavigator({
   onUpdateKnowledge,
   onRebuildKnowledge,
 }: Props) {
+  const matchingWorkbenchIds = new Set(filteredResults?.workbenches.map(result => result.entityId) ?? [])
+  const matchingWorktrees = new Map(
+    (filteredResults?.worktrees ?? []).map(result => [result.entityId, result]),
+  )
+  const visibleWorkbenches = filterActive
+    ? workbenches.filter(workbench => matchingWorkbenchIds.has(workbench.workbenchId)
+      || workbench.worktrees.some(worktree => matchingWorktrees.has(worktree.worktreeId)))
+    : workbenches
+
   return (
     <aside data-dock-content="left" className="flex h-full min-h-0 w-full shrink-0 flex-col border-r bg-sidebar" style={{ borderColor: 'var(--border)' }}>
       <div className="flex h-12 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>
@@ -112,9 +131,14 @@ export default function WorkbenchNavigator({
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
+      {filterControl}
 
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-2">
-        {workbenches.length === 0 ? (
+        {visibleWorkbenches.length === 0 ? filterActive ? (
+          <div className="px-2 py-3 text-[10px] text-muted-foreground" role="status">
+            {filteredResults ? 'No projects or worktrees match these tags.' : 'Filtering projects and worktrees…'}
+          </div>
+        ) : (
           <button
             onClick={onCreateWorkbench}
             className="group flex w-full flex-col items-start rounded-lg border border-dashed p-4 text-left hover:bg-accent/40"
@@ -125,8 +149,12 @@ export default function WorkbenchNavigator({
               A workbench owns the shared Git repository, linked worktrees, PLC devices, and their knowledge databases.
             </span>
           </button>
-        ) : workbenches.map(workbench => {
+        ) : visibleWorkbenches.map(workbench => {
           const workbenchSelected = selection.workbenchId === workbench.workbenchId
+          const workbenchExpanded = workbenchSelected || filterActive
+          const visibleWorktrees = filterActive
+            ? workbench.worktrees.filter(worktree => matchingWorktrees.has(worktree.worktreeId))
+            : workbench.worktrees
           return (
             <section key={workbench.workbenchId} className="mb-1">
               <ContextMenu>
@@ -183,10 +211,11 @@ export default function WorkbenchNavigator({
                 </ContextMenuContent>
               </ContextMenu>
 
-              {workbenchSelected && (
+              {workbenchExpanded && (
                 <div className="ml-4 border-l pl-2" style={{ borderColor: 'var(--border)' }}>
-                  {workbench.worktrees.map(worktree => {
+                  {visibleWorktrees.map(worktree => {
                     const worktreeSelected = selection.worktreeId === worktree.worktreeId
+                    const available = matchingWorktrees.get(worktree.worktreeId)?.available ?? true
                     const key = worktreeKey(workbench.workbenchId, worktree.worktreeId)
                     const devices = devicesByWorktree[key] ?? []
                     return (
@@ -209,6 +238,15 @@ export default function WorkbenchNavigator({
                               <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">
                                 {worktree.branch}
                               </span>
+                              {!available && (
+                                <span
+                                  className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[8px] text-amber-600 dark:text-amber-400"
+                                  title="Registered worktree directory is unavailable"
+                                  data-worktree-availability="unavailable"
+                                >
+                                  Unavailable
+                                </span>
+                              )}
                             </div>
                           </ContextMenuTrigger>
                           <ContextMenuContent>
