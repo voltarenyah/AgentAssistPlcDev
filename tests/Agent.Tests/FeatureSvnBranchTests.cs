@@ -35,6 +35,10 @@ public sealed class FeatureSvnBranchTests : IDisposable
 
         Assert.Equal("^/native/branches/feature-a", feature.SvnUrl);
         Assert.Equal(7, feature.BaseSvnRevision);
+        Assert.Equal(8, feature.SvnBranchRevision);
+        var persisted = new AtomicJsonStore().Read<WorktreeMetadata>(
+            Path.Combine(fixture.FeatureRoot("feature-a"), "worktree.json"));
+        Assert.Equal(8, persisted.SvnBranchRevision);
         Assert.Equal("head-base", feature.BaseCommit);
         Assert.Equal(
             Path.Combine(WorkbenchPaths.ResolveTiaStore(fixture.FeatureRoot("feature-a")), "Line.ap17"),
@@ -268,7 +272,7 @@ public sealed class FeatureSvnBranchTests : IDisposable
             }
             else
             {
-                caller.Respond("svn_copy_branch", new object());
+                caller.Respond("svn_copy_branch", new CoordinatorSvnBranchCopyResult { Revision = 8 });
             }
 
             if (failCheckout)

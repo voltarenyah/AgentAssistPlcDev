@@ -62,8 +62,11 @@ public sealed record WorktreeMetadata(
     /// <summary>This worktree's own SVN branch (1.2+ feature worktrees), e.g.
     /// "^/native/branches/feature-x"; null on master and on 1.1 worktrees.</summary>
     string? SvnUrl = null,
-    /// <summary>The ^/native/main revision this feature's SVN branch was copied from.</summary>
-    long? BaseSvnRevision = null);
+    /// <summary>The exact source revision this feature's SVN branch was copied from.</summary>
+    long? BaseSvnRevision = null,
+    /// <summary>The repository-wide SVN revision created by the server-side branch copy.
+    /// This is the first native-history event owned by the feature worktree.</summary>
+    long? SvnBranchRevision = null);
 
 [JsonConverter(typeof(WorktreeStatusJsonConverter))]
 public enum WorktreeStatus
@@ -154,6 +157,12 @@ public sealed class CoordinatorSvnInitResult
 public sealed class CoordinatorSvnCommitResult
 {
     public bool Committed { get; set; }
+    public long Revision { get; set; }
+}
+
+/// <summary>Result of creating a native SVN branch by server-side copy.</summary>
+public sealed class CoordinatorSvnBranchCopyResult
+{
     public long Revision { get; set; }
 }
 

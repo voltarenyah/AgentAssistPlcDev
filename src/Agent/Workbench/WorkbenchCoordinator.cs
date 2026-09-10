@@ -1143,6 +1143,16 @@ public sealed class WorkbenchCoordinator
             ?? throw new WorkbenchCatalogException(
                 "WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
         var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+        // Some legacy timeline records were created before a worktree.json existed at the
+        // catalog-relative path. They still have valid Git history; branch provenance is simply
+        // unavailable for those entries.
+        var worktreeMetadataPath = Path.Combine(worktreeRoot, "worktree.json");
+        var worktree = File.Exists(worktreeMetadataPath)
+            ? store.Read<WorktreeMetadata>(worktreeMetadataPath)
+            : null;
+        var branchSvnUrl = worktree?.SvnUrl;
+        var recoverLegacyBranchCopy = worktree is { SvnBranchRevision: null }
+            && !string.IsNullOrWhiteSpace(branchSvnUrl);
         var requestedCount = checked(offset + limit + 1);
         var log = await versionControl.CallAsync<ConsistencyLogResult>(
             "vc_log",
@@ -1228,6 +1238,10 @@ public sealed class WorkbenchCoordinator
             if (revisionStateChanged
                 && state?.Svn?.Revision is { } revision
                 && state.Svn.Url is { Length: > 0 } svnUrl
+                // A feature branch inherits its source commit's revision.json. That describes
+                // the source branch, not an event on the feature branch, so omit it here.
+                && (string.IsNullOrWhiteSpace(branchSvnUrl)
+                    || string.Equals(branchSvnUrl, svnUrl, StringComparison.Ordinal))
                 && seenRevisions.Add(revision))
             {
                 linkedRevision = revision;
@@ -1254,7 +1268,12 @@ public sealed class WorkbenchCoordinator
         }
 
         var svnMetadata = new Dictionary<long, TimelineSvnLogEntry>();
-        foreach (var group in candidates.GroupBy(item => item.Url, StringComparer.Ordinal))
+        var svnLogUrls = candidates.Select(item => item.Url)
+            .Append(branchSvnUrl)
+            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        foreach (var svnUrl in svnLogUrls)
         {
             try
             {
@@ -1262,8 +1281,12 @@ public sealed class WorkbenchCoordinator
                     "svn_log",
                     new
                     {
-                        path = ResolveSvnUrl(workbench.SvnRepositoryPath ?? string.Empty, group.Key),
+                        path = ResolveSvnUrl(workbench.SvnRepositoryPath ?? string.Empty, svnUrl!),
                         limit = requestedCount,
+                        // A legacy feature lacks the persisted copy result, so read its
+                        // branch history once to recover the original global revision.
+                        allHistory = recoverLegacyBranchCopy
+                            && string.Equals(branchSvnUrl, svnUrl, StringComparison.Ordinal),
                     },
                     token).ConfigureAwait(false);
                 foreach (var entry in logResult.Entries ?? Array.Empty<TimelineSvnLogEntry>())
@@ -1276,6 +1299,38 @@ public sealed class WorkbenchCoordinator
                 // Git metadata remains sufficient to render the linked event if SVN history
                 // is unavailable for an older or legacy worktree.
             }
+        }
+
+        // svn_copy_branch is a real, repository-wide commit. Attach that exact revision to
+        // the feature's Git starting point, rather than displaying the inherited source
+        // revision as though it were a feature event. Older metadata did not persist the
+        // result, so derive it from the standard branch-copy message when it is available.
+        var branchCopyRevision = worktree?.SvnBranchRevision;
+        if (branchCopyRevision is null && !string.IsNullOrWhiteSpace(branchSvnUrl))
+        {
+            var copyMessagePrefix = $"native: branch {branchSvnUrl} from ";
+            branchCopyRevision = svnMetadata.Values
+                .Where(entry => entry.Message.StartsWith(copyMessagePrefix, StringComparison.Ordinal))
+                .Select(entry => (long?)entry.Revision)
+                .OrderBy(revision => revision)
+                .FirstOrDefault();
+        }
+
+        if (branchCopyRevision is { } copyRevision
+            && !string.IsNullOrWhiteSpace(branchSvnUrl)
+            && worktree is { BaseCommit: { Length: > 0 } baseCommitSha } branchWorktree
+            && gitRows.FirstOrDefault(commit => string.Equals(commit.Sha, baseCommitSha, StringComparison.OrdinalIgnoreCase)) is { } baseCommit
+            && seenRevisions.Add(copyRevision))
+        {
+            var copyEntry = svnMetadata.GetValueOrDefault(copyRevision);
+            candidates.Add(new TimelineSvnCandidate(
+                copyRevision,
+                branchSvnUrl,
+                baseCommit.TiaChecksum,
+                baseCommit.Sha,
+                copyEntry?.Author ?? "Automation Workbench",
+                copyEntry?.Message ?? $"Native branch {branchSvnUrl} created from r{branchWorktree.BaseSvnRevision}",
+                copyEntry?.Time.ToUniversalTime().ToString("O") ?? branchWorktree.CreatedAt));
         }
 
         var page = gitRows.Skip(offset).Take(limit).ToArray();
@@ -1529,12 +1584,13 @@ public sealed class WorkbenchCoordinator
 
             string? featureManagedProjectPath = null;
             long? baseSvnRevision = null;
+            long? svnBranchRevision = null;
             if (masterSvnBase is not null && featureSvnUrl is not null)
             {
                 progress?.Report("Creating the feature's SVN native branch...");
                 baseSvnRevision = masterSvnBase.Value.Revision;
                 var svnSegment = featureSvnUrl["^/native/branches/".Length..];
-                await versionControl.CallAsync<object>(
+                var branchCopy = await versionControl.CallAsync<CoordinatorSvnBranchCopyResult>(
                     "svn_copy_branch",
                     new
                     {
@@ -1545,6 +1601,9 @@ public sealed class WorkbenchCoordinator
                         message = $"native: branch {featureSvnUrl} from {masterSvnBase.Value.Url}@{baseSvnRevision.Value}",
                     },
                     cancellationToken).ConfigureAwait(false);
+                if (branchCopy.Revision <= 0)
+                    throw new WorkbenchLifecycleException("SVN_COPY_BRANCH_FAILED", "The SVN branch copy did not return a valid revision.");
+                svnBranchRevision = branchCopy.Revision;
                 var featureTiaStore = WorkbenchPaths.ResolveTiaStore(worktreePath);
                 await versionControl.CallAsync<object>(
                     "svn_checkout",
@@ -1568,7 +1627,8 @@ public sealed class WorkbenchCoordinator
                 null,
                 ManagedTiaProjectPath: featureManagedProjectPath ?? masterWorktree.ManagedTiaProjectPath,
                 SvnUrl: featureSvnUrl,
-                BaseSvnRevision: baseSvnRevision);
+                BaseSvnRevision: baseSvnRevision,
+                SvnBranchRevision: svnBranchRevision);
             store.Write(Path.Combine(worktreePath, "worktree.json"), worktree);
             foreach (var inherited in inheritedDevices)
             {
