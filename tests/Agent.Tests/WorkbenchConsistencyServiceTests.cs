@@ -206,9 +206,9 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ExplicitlyUntrustedEvidenceCannotPassChecksumFastGate()
+    public async Task MatchingChecksumsPassFastGateEvenWhenSourceProofFlagIsFalse()
     {
-        var evidence = fixture.Evidence();
+        var evidence = fixture.FingerprintEvidence();
         evidence.ManagedSourceConsistent = false;
         var versionControl = new ConsistencyVersionControlCaller(fixture.Head, evidence);
         var engineering = new ConsistencyEngineeringCaller(fixture.Root, ("PLC_1", "one"), ("PLC_2", "two"));
@@ -216,8 +216,8 @@ public sealed class WorkbenchConsistencyServiceTests : IDisposable
 
         var result = await service.CompareAsync(fixture.Workbench, fixture.Master, CancellationToken.None);
 
-        Assert.False(result.FastGatePassed);
-        Assert.Equal(2, engineering.Calls.Count(call => call == "sync_export"));
+        Assert.True(result.FastGatePassed);
+        Assert.DoesNotContain("sync_export", engineering.Calls);
     }
 
     [Fact]

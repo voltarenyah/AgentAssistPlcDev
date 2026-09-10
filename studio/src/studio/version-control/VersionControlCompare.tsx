@@ -14,11 +14,11 @@ type Props = {
   verifyHardware?: boolean
   /** The changes page commit message — reused as the title for accept actions. */
   commitMessage: string
-  /** Reports the TIA paths selected for the global commit action. */
+  /** Reports the TIA paths selected for the active worktree commit action. */
   onSelectionChanged?: (comparisonId: string | null, paths: string[], safetyPaths?: string[]) => void
   /** Reports whether the completed comparison has anything to display. */
   onComparisonStateChanged?: (hasDifferences: boolean) => void
-  /** Incremented by the global commit flow after selected TIA sources are committed. */
+  /** Incremented by the commit flow after selected TIA sources are committed. */
   selectionResetSignal?: number
   onCommitted?: () => void | Promise<void>
   /** Starts a title-bar operation and returns its id so the full compare reports live export progress. */
@@ -52,13 +52,20 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
 
   const compare = async (allowCompile = false) => {
     setBusy(true); onComparisonBusyChanged?.(true); setError(null); setNeedsCompileConfirmation(false)
-    const operationId = onBeginOperation?.('compare-tia', 'Comparing master with TIA Portal...')
+    const operationLabel = branch.toLowerCase() === 'master'
+      ? 'Comparing master with TIA Portal...'
+      : 'Comparing master with the selected TIA project...'
+    const operationId = onBeginOperation?.('compare-tia', operationLabel)
     try {
-      const nextComparison = await (!verifyHardware
-        ? api.compareMasterWithTia(workbenchId, operationId, allowCompile, false)
-        : allowCompile
-          ? api.compareMasterWithTia(workbenchId, operationId, true)
-          : api.compareMasterWithTia(workbenchId, operationId))
+      const compareSelectedProject = (compile: boolean, hardware: boolean) => {
+        if (branch.toLowerCase() === 'master') {
+          if (!hardware) return api.compareMasterWithTia(workbenchId, operationId, compile, false)
+          if (compile) return api.compareMasterWithTia(workbenchId, operationId, true)
+          return api.compareMasterWithTia(workbenchId, operationId)
+        }
+        return api.compareMasterWithTia(workbenchId, operationId, compile, hardware, worktreeId)
+      }
+      const nextComparison = await compareSelectedProject(allowCompile, verifyHardware)
       setComparison(nextComparison)
       onComparisonStateChanged?.(nextComparison.state === 'Unavailable' || nextComparison.differences.length > 0 || nextComparison.hardware?.state === 'changed' || nextComparison.safetyChanged === true)
       setSelected(new Set())
@@ -152,7 +159,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
           <div className="rounded-lg border border-chart-2/30 bg-chart-2/5 p-2.5 text-[10px] text-muted-foreground" data-testid="vc-compare-progress" role="status" aria-live="polite">
             <div className="flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-chart-2" />
-              <span className="font-medium text-foreground">Comparing the connected TIA project with master...</span>
+              <span className="font-medium text-foreground">Comparing {branch.toLowerCase() === 'master' ? 'the connected TIA project with master' : 'master with the selected TIA project'}...</span>
             </div>
             <div className="mt-2 h-1 overflow-hidden rounded-full bg-chart-2/15" aria-hidden="true">
               <div className="h-full w-2/5 animate-pulse rounded-full bg-chart-2" />
@@ -333,7 +340,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                   )
                 })}
                 {selected.size > 0 && titleMissing && (
-                  <div className="text-[9px] text-muted-foreground">Type a commit message above to include the selected TIA sources in the global commit.</div>
+                  <div className="text-[9px] text-muted-foreground">Type a commit message above to commit the selected TIA sources to the active worktree.</div>
                 )}
               </>
             )}

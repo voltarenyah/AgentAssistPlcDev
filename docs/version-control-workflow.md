@@ -265,7 +265,9 @@ from an icon tab bar:
 The Compare with TIA action runs the comparison immediately and renders the
 result inline at the top of the Changes page — no separate view. Accepting TIA
 changes and accepting hardware differences reuse the page's commit message as
-the commit title.
+the commit title. On a feature worktree, the action keeps that worktree's
+registered TIA project active while comparing it with the master source baseline;
+it never silently switches the session back to master.
 
 Compare with TIA first checks the saved checksum evidence for each PLC, then
 also exports and compares the project-level hardware AML. A checksum match is
@@ -277,12 +279,14 @@ source scan and present individual block, DB, UDT, and tag-table differences.
 Hardware differences are shown separately with the staged AML;
 accepting them requires an explanatory commit message and creates a hardware
 commit. Both source directions are offered:
-accepting selected TIA changes into the local repo (with a commit title), or
+accepting selected TIA changes into the currently selected worktree (with a commit title), or
 pushing selected local objects back into TIA (per-object import outcomes;
 compile and snapshot afterwards). When no source differences exist but the TIA
 checksum differs from the last savepoint, the result points to the TIA
 snapshot area to record the remaining untrackable change; when source and hardware
-match, it reports that no commit is needed.
+match, it reports that no commit is needed. Local source rows in the Changes list
+commit to the currently selected worktree; accepting TIA comparison rows follows
+the same worktree boundary.
 
 For a feature worktree, Prepare feature import creates a three-way import plan.
 Objects changed in both TIA and the feature are disabled individually; unrelated

@@ -20,7 +20,7 @@ const entry = (overrides: Partial<VersionControlSourceEntry> = {}): VersionContr
 
 const snapshot = { revision: 3, commitsSince: 2, hardwareDiffers: false }
 
-const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false, onBeginOperation?: (kind: string, label: string) => string, operationStatus?: api.OperationStatus | null) => {
+const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false, onBeginOperation?: (kind: string, label: string) => string, operationStatus?: api.OperationStatus | null, branch = 'master') => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -29,7 +29,7 @@ const render = async (entries: VersionControlSourceEntry[], snapshotOverride = s
       <VersionControlChanges
         workbenchId="wb-1"
         worktreeId="wt-1"
-        branch="master"
+        branch={branch}
         entries={entries}
         compareSignal={compareSignal}
         snapshot={snapshotOverride}
@@ -220,7 +220,7 @@ describe('VersionControlChanges', () => {
     expect(commitControls.compareDocumentPosition(compareResult) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('uses the global commit action to overwrite selected local sources from TIA and commit them', async () => {
+  it('commits selected TIA sources to the active worktree', async () => {
     vi.spyOn(api, 'compareMasterWithTia')
       .mockResolvedValueOnce({
         comparisonId: 'comparison-1',
@@ -256,6 +256,7 @@ describe('VersionControlChanges', () => {
 
     expect(accept).toHaveBeenCalledWith(
       'wb-1',
+      'wt-1',
       'comparison-1',
       ['devices/PLC_1/source/Blocks/Main.xml'],
       'Accept Main from TIA',
@@ -267,6 +268,33 @@ describe('VersionControlChanges', () => {
     expect(host.querySelector('input[type="checkbox"]')).toBeNull()
     expect(host.querySelector('[data-testid="vc-compare-result"]')).toBeNull()
     expect(host.querySelector('[data-testid="vc-committed-empty"]')?.textContent).toContain('All files committed')
+  })
+
+  it('explains that selected TIA sources are committed to the active feature worktree', async () => {
+    vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue({
+      comparisonId: 'comparison-1',
+      masterSha: 'master-1',
+      fastGatePassed: false,
+      state: 'Different',
+      liveChecksums: {},
+      differences: [{
+        deviceId: 'dev-1',
+        plcName: 'PLC_1',
+        relativePath: 'devices/PLC_1/source/Blocks/Main.xml',
+        identity: 'Main',
+        kind: 'Changed',
+        masterFingerprint: 'old',
+        tiaFingerprint: 'new',
+        supported: true,
+      }],
+    })
+    vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
+    const { host } = await render([], snapshot, 1, false, undefined, undefined, 'debug/cpu')
+
+    await click(host.querySelector('[data-testid="vc-compare-result"] input[type="checkbox"]')!)
+
+    expect(host.querySelector('[data-testid="vc-tia-target-notice"]')?.textContent).toContain('committed to debug/cpu')
+    expect(host.querySelector('[data-testid="vc-tia-target-notice"]')?.textContent).toContain('debug/cpu')
   })
 
   it('keeps the commit button disabled with a message but zero selected paths until the untrackable checkbox is ticked', async () => {

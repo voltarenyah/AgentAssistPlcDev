@@ -41,9 +41,23 @@ describe('version-control workflow API sequence', () => {
     expect(requestPath).toContain('/vc/compare-tia?includeHardware=false')
   })
 
+  it('scopes a feature compare request to the selected TIA worktree', async () => {
+    let requestPath = ''
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      requestPath = String(input)
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+
+    await api.compareMasterWithTia('wb-1', undefined, false, true, 'wt-feature')
+
+    expect(requestPath).toContain('/workbenches/wb-1/worktrees/wt-feature/vc/compare-tia')
+  })
+
   it('sends the required commit title when accepting TIA synchronization', async () => {
+    let requestPath = ''
     let requestBody: { paths?: string[]; message?: string } | undefined
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestPath = String(input)
       if (String(input).includes('/accept')) {
         requestBody = JSON.parse(String(init?.body)) as { paths?: string[]; message?: string }
       }
@@ -56,6 +70,7 @@ describe('version-control workflow API sequence', () => {
 
     await api.acceptTiaSynchronization(
       'wb-1',
+      'wt-1',
       'comparison-1',
       ['devices/PLC_1/source/Blocks/Main.xml'],
       'Accept Main from TIA',
@@ -65,5 +80,6 @@ describe('version-control workflow API sequence', () => {
       paths: ['devices/PLC_1/source/Blocks/Main.xml'],
       message: 'Accept Main from TIA',
     })
+    expect(requestPath).toContain('/workbenches/wb-1/worktrees/wt-1/vc/comparisons/comparison-1/accept')
   })
 })

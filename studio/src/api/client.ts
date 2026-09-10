@@ -540,6 +540,7 @@ export type WorkbenchConsistencyResult = {
   safetyChanged?: boolean
   timings?: ComparisonTiming[] | null
   untrackableChange?: boolean
+  comparedWorktreeId?: string | null
 }
 
 export type ComparisonTiming = {
@@ -994,13 +995,18 @@ export const createRollbackFeature = (workbenchId: string, historicalSha: string
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/rollback-features`,
     withOperation(jsonRequest('POST', { historicalSha, paths, featureName }), operationId),
   )
-export const compareMasterWithTia = (workbenchId: string, operationId?: string, allowCompile = false, includeHardware = true) => {
+/** Compares the master source baseline with TIA. When supplied, tiaWorktreeId selects
+ * the registered TIA project that must remain active while the comparison runs. */
+export const compareMasterWithTia = (workbenchId: string, operationId?: string, allowCompile = false, includeHardware = true, tiaWorktreeId?: string) => {
   const query = new URLSearchParams()
   if (allowCompile) query.set('allowCompile', 'true')
   if (!includeHardware) query.set('includeHardware', 'false')
   const suffix = query.size > 0 ? `?${query}` : ''
+  const path = tiaWorktreeId
+    ? `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(tiaWorktreeId)}/vc/compare-tia${suffix}`
+    : `/workbenches/${encodeURIComponent(workbenchId)}/vc/compare-tia${suffix}`
   return workbenchRequest<WorkbenchConsistencyResult>(
-    `/workbenches/${encodeURIComponent(workbenchId)}/vc/compare-tia${suffix}`,
+    path,
     withOperation(jsonRequest('POST'), operationId),
   )
 }
@@ -1008,9 +1014,9 @@ export const getWorkbenchComparison = (workbenchId: string, comparisonId: string
   workbenchRequest<WorkbenchConsistencyResult>(
     `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}`,
   )
-export const acceptTiaSynchronization = (workbenchId: string, comparisonId: string, paths: string[], message: string, operationId?: string) =>
+export const acceptTiaSynchronization = (workbenchId: string, worktreeId: string, comparisonId: string, paths: string[], message: string, operationId?: string) =>
   workbenchRequest<PendingSynchronizationResult>(
-    `/workbenches/${encodeURIComponent(workbenchId)}/vc/comparisons/${encodeURIComponent(comparisonId)}/accept`,
+    `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/comparisons/${encodeURIComponent(comparisonId)}/accept`,
     withOperation(jsonRequest('POST', { paths, message }), operationId),
   )
 export type PushToTiaOutcome = { path: string; success: boolean; message: string | null }

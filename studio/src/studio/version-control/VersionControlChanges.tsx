@@ -95,6 +95,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
 
   const selectedCommitPaths = new Set([...selectedPaths, ...(tiaSelection?.paths ?? [])])
   const selectedSafetyCount = tiaSelection?.safetyPaths.length ?? 0
+  const isMasterBranch = branch.toLowerCase() === 'master'
   const canCommit = (selectedCommitPaths.size > 0 || selectedSafetyCount > 0 || untrackable) && message.trim().length > 0 && !busy
   const comparisonInProgress = comparisonBusy
     || (operationStatus?.operationType === 'compare-tia' && operationStatus.state === 'running')
@@ -126,14 +127,17 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
     setCommitMenuOpen(false)
     try {
       let committedFiles: string[] = []
-      let commitSha: string | null = null
+      let tiaCommitSha: string | null = null
+      let localCommitSha: string | null = null
+      const committedTiaPaths = tiaPaths.length > 0
+      const committedLocalChanges = localPaths.length > 0 || untrackable || safetyPaths.length > 0
       const operationId = onBeginOperation?.('vc-commit', 'Committing selected changes...')
       if (tiaSelection && tiaPaths.length > 0) {
         const result = operationId
-          ? await api.acceptTiaSynchronization(workbenchId, tiaSelection.comparisonId, tiaPaths, message.trim(), operationId)
-          : await api.acceptTiaSynchronization(workbenchId, tiaSelection.comparisonId, tiaPaths, message.trim())
+          ? await api.acceptTiaSynchronization(workbenchId, worktreeId, tiaSelection.comparisonId, tiaPaths, message.trim(), operationId)
+          : await api.acceptTiaSynchronization(workbenchId, worktreeId, tiaSelection.comparisonId, tiaPaths, message.trim())
         committedFiles = [...committedFiles, ...tiaPaths]
-        commitSha = result.commitSha ?? null
+        tiaCommitSha = result.commitSha ?? null
         setTiaSelection(null)
       }
       if (localPaths.length > 0 || untrackable || safetyPaths.length > 0) {
@@ -145,7 +149,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
             ? await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable, false, operationId)
             : await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable)
         committedFiles = [...committedFiles, ...result.files]
-        commitSha = result.sha
+        localCommitSha = result.sha
       }
       const committed = new Set(committedFiles)
       setAllCommitted((committedFiles.length > 0 || untrackable || safetyPaths.length > 0) && entries.every(entry => committed.has(entry.filePath)))
@@ -154,7 +158,13 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
       setUntrackable(false)
       setTiaSelectionResetSignal(previous => previous + 1)
       if (safetyPaths.length > 0) toast.success('Safety change committed to Git. Create an SVN savepoint separately to capture the TIA project.')
-      else if (commitSha) toast.success(`Committed ${commitSha.slice(0, 8)}`)
+      else if (committedTiaPaths && committedLocalChanges) {
+        toast.success(`Committed TIA sources and changes to ${branch || 'this worktree'}`)
+      } else if (committedTiaPaths && tiaCommitSha) {
+        toast.success(`Committed TIA sources to ${branch || 'this worktree'} (${tiaCommitSha.slice(0, 8)})`)
+      } else if (localCommitSha) {
+        toast.success(`Committed to ${branch || 'this worktree'} (${localCommitSha.slice(0, 8)})`)
+      }
       await onCommitted?.()
     } catch (cause) {
       showErrorToast(`Commit failed: ${displayError(cause)}`)
@@ -215,6 +225,11 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                 className="h-[52px] w-full resize-none rounded-[9px] border bg-white/[0.03] px-2.5 py-2 text-[11px] outline-none placeholder:text-neutral-500 focus:border-white/20"
                 style={{ borderColor: 'var(--border)' }}
               />
+              {tiaSelection && tiaSelection.paths.length > 0 && !isMasterBranch && (
+                <div className="mt-1.5 rounded-lg border border-sky-500/30 bg-sky-500/5 p-2 text-[9px] text-sky-600" data-testid="vc-tia-target-notice">
+                  Selected TIA sources are committed to <span className="font-semibold">{branch}</span>, the active worktree.
+                </div>
+              )}
               {selectedSafetyCount === 0 && <label className="mt-1.5 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2">
                 <input
                   type="checkbox"

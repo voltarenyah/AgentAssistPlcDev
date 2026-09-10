@@ -101,4 +101,6 @@ public sealed record WorkbenchConsistencyResult(
     bool SafetyChanged = false,
     IReadOnlyList<ComparisonTiming>? Timings = null,
     bool UntrackableChange = false,
-    bool HardwareChecked = true);
+    bool HardwareChecked = true,
+    /// <summary>The worktree whose registered TIA project supplied the live comparison.</summary>
+    string? ComparedWorktreeId = null);

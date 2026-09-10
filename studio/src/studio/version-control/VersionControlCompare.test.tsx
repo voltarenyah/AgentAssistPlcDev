@@ -274,6 +274,13 @@ describe('VersionControlCompare (inline)', () => {
     expect(compare).toHaveBeenCalledWith('wb-1', 'op-42')
   })
 
+  it('keeps a feature worktree project active for the master comparison', async () => {
+    const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
+    await render({ branch: 'feature-a' })
+
+    expect(compare).toHaveBeenCalledWith('wb-1', undefined, false, true, 'wt-1')
+  })
+
   it('clears a committed comparison without running another TIA export', async () => {
     const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison())
     const { host, root } = await render({ signal: 1 })

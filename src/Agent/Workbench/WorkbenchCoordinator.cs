@@ -291,11 +291,18 @@ public sealed class WorkbenchCoordinator
         WorktreeMetadata master,
         CancellationToken token,
         IOperationProgress? progress)
+        => EnsureWorktreeProjectConnectedAsync(workbench, master, token, progress);
+
+    private Task EnsureWorktreeProjectConnectedAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree,
+        CancellationToken token,
+        IOperationProgress? progress)
     {
-        var context = LoadMasterContexts(workbench, master).FirstOrDefault().Context
+        var context = LoadWorktreeContexts(workbench, worktree).FirstOrDefault().Context
             ?? throw new WorkbenchCatalogException(
                 "DEVICE_NOT_FOUND",
-                $"Master worktree '{master.WorktreeId}' has no registered PLC devices.");
+                $"Worktree '{worktree.WorktreeId}' has no registered PLC devices.");
         return EnsureActiveProjectMatchesWorktreeAsync(context, token, progress);
     }
 
@@ -1981,7 +1988,19 @@ public sealed class WorkbenchCoordinator
         {
             return null;
         }
+        catch (ToolCallException exception) when (IsDisposedProjectFailure(exception))
+        {
+            // TIA can leave the adapter holding a Project proxy after the portal has
+            // invalidated it. Treat that proxy like a disconnected session so the caller's
+            // existing disconnect/reconnect path can acquire a fresh project handle.
+            return null;
+        }
     }
+
+    private static bool IsDisposedProjectFailure(ToolCallException exception) =>
+        string.Equals(exception.Code, "OPENNESS_ERROR", StringComparison.Ordinal)
+        && exception.Message.Contains("disposed object", StringComparison.OrdinalIgnoreCase)
+        && exception.Message.Contains("Siemens.Engineering.Project", StringComparison.OrdinalIgnoreCase);
 
     private static bool ProjectPathsEqual(string left, string right)
     {
@@ -2544,10 +2563,34 @@ public sealed class WorkbenchCoordinator
         var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
                 string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
             ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
-        var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
-        var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
-        await EnsureMasterProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
-        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile, forceFullExport, includeHardware).ConfigureAwait(false);
+        var master = LoadRegisteredWorktree(workbench, masterRegistration.WorktreeId);
+        await EnsureWorktreeProjectConnectedAsync(workbench, master, token, progress).ConfigureAwait(false);
+        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile, forceFullExport, includeHardware, master.WorktreeId).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Compares the registered master source baseline with TIA while keeping the selected
+    /// worktree's project session active. Feature worktrees use this to inspect TIA divergence
+    /// before importing it into that same worktree.
+    /// </summary>
+    public async Task<WorkbenchConsistencyResult> CompareWorktreeWithTiaAsync(
+        string workbenchId,
+        string tiaWorktreeId,
+        CancellationToken token = default,
+        IOperationProgress? progress = null,
+        bool allowCompile = false,
+        bool forceFullExport = false,
+        bool includeHardware = true)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var tiaWorktree = LoadRegisteredWorktree(workbench, tiaWorktreeId);
+        await EnsureWorktreeProjectConnectedAsync(workbench, tiaWorktree, token, progress).ConfigureAwait(false);
+
+        var master = LoadRegisteredWorktree(
+            workbench,
+            workbench.Worktrees.Single(item =>
+                string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
+        return await consistency.CompareAsync(workbench, master, token, progress, allowCompile, forceFullExport, includeHardware, tiaWorktree.WorktreeId).ConfigureAwait(false);
     }
 
     public WorkbenchConsistencyResult GetComparison(string workbenchId, string comparisonId)
@@ -2803,6 +2846,7 @@ public sealed class WorkbenchCoordinator
 
     public async Task<TiaSynchronizationResult> ApplyTiaSynchronizationAsync(
         string workbenchId,
+        string worktreeId,
         string comparisonId,
         IReadOnlyList<string> paths,
         string message,
@@ -2813,16 +2857,30 @@ public sealed class WorkbenchCoordinator
             throw new ArgumentException("A commit title is required.", nameof(message));
 
         var workbench = LoadRegisteredWorkbench(workbenchId);
-        var masterRegistration = workbench.Worktrees.SingleOrDefault(item =>
-                string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase))
-            ?? throw new WorkbenchCatalogException("MASTER_WORKTREE_NOT_FOUND", "The workbench has no master worktree.");
-        var masterRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, masterRegistration.RelativePath);
-        var master = store.Read<WorktreeMetadata>(Path.Combine(masterRoot, "worktree.json"));
+        var targetRegistration = workbench.Worktrees.SingleOrDefault(item => item.WorktreeId == worktreeId)
+            ?? throw new WorkbenchCatalogException("WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
+        var targetRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, targetRegistration.RelativePath);
+        var target = store.Read<WorktreeMetadata>(Path.Combine(targetRoot, "worktree.json"));
         var comparison = consistency.GetComparison(workbench, comparisonId);
+        if (!string.IsNullOrWhiteSpace(comparison.ComparedWorktreeId)
+            && !string.Equals(comparison.ComparedWorktreeId, target.WorktreeId, StringComparison.Ordinal))
+        {
+            throw new WorkbenchLifecycleException(
+                "COMPARISON_WORKTREE_MISMATCH",
+                $"Comparison '{comparisonId}' was produced for worktree '{comparison.ComparedWorktreeId}', not '{target.WorktreeId}'. Run Compare with TIA again for this worktree.");
+        }
+        if (string.IsNullOrWhiteSpace(comparison.ComparedWorktreeId)
+            && !string.Equals(target.Branch, "master", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorkbenchLifecycleException(
+                "COMPARISON_WORKTREE_REQUIRED",
+                "This comparison predates worktree-bound TIA evidence. Run Compare with TIA again before accepting source changes on a feature worktree.");
+        }
         var selected = NormalizeSourcePaths(paths);
-        var contexts = LoadMasterContexts(workbench, master)
+        var contexts = LoadWorktreeContexts(workbench, target)
             .ToDictionary(item => item.Metadata.DeviceId, item => item.Context, StringComparer.Ordinal);
-        var pending = writePolicy.ReadPending(masterRoot, master.WorktreeId).Sources.ToList();
+        var pending = writePolicy.ReadPending(targetRoot, target.WorktreeId).Sources.ToList();
+        var isMasterTarget = string.Equals(target.Branch, "master", StringComparison.OrdinalIgnoreCase);
 
         foreach (var path in selected)
         {
@@ -2839,12 +2897,19 @@ public sealed class WorkbenchCoordinator
             if (difference.Kind is not (SourceDifferenceKind.Changed or SourceDifferenceKind.Added))
                 throw new WorkbenchLifecycleException("SOURCE_NOT_IMPORTABLE", $"Source '{path}' is not importable.");
             if (!contexts.TryGetValue(difference.DeviceId, out var context))
-                throw new WorkbenchCatalogException("DEVICE_NOT_FOUND", $"Device '{difference.DeviceId}' was not found in master.");
+                throw new WorkbenchCatalogException("DEVICE_NOT_FOUND", $"Device '{difference.DeviceId}' was not found in worktree '{target.WorktreeId}'.");
 
             var sourceRelativePath = ExtractSourceRelativePath(path);
             var staged = WorkbenchPaths.ResolveRelative(context.StagingRoot, sourceRelativePath);
-            var destination = WorkbenchPaths.ResolveRelative(masterRoot, path);
-            if (!File.Exists(staged))
+            var destination = WorkbenchPaths.ResolveRelative(targetRoot, path);
+            if (!isMasterTarget)
+            {
+                // A feature comparison uses the master source tree as its baseline, so refresh
+                // the selected object into the feature worktree before committing it there.
+                await RefreshStagedSourceForSynchronizationAsync(context, sourceRelativePath, token, progress)
+                    .ConfigureAwait(false);
+            }
+            else if (!File.Exists(staged))
             {
                 // Project-level comparisons export nominated candidates into a temporary
                 // directory, so a missing canonical staging copy must be materialized now.
@@ -2877,20 +2942,20 @@ public sealed class WorkbenchCoordinator
             {
                 Knowledge = metadata.Knowledge with { Stale = true, BaselineStale = true },
             });
-            progress?.Report($"Accepted TIA source {path} into master.");
+            progress?.Report($"Accepted TIA source {path} into {target.Branch}.");
         }
 
         var normalizedPending = pending
             .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
             .ToArray();
-        writePolicy.WritePending(masterRoot, new PendingMasterSynchronization(
+        writePolicy.WritePending(targetRoot, new PendingMasterSynchronization(
             WorkbenchWritePolicy.PendingSchemaVersion,
-            master.WorktreeId,
+            target.WorktreeId,
             normalizedPending));
         progress?.Report("Committing accepted TIA source to Git...");
         var commit = await CommitSourceAsync(
                 workbenchId,
-                master.WorktreeId,
+                target.WorktreeId,
                 selected,
                 message.Trim(),
                 token,
@@ -2929,7 +2994,7 @@ public sealed class WorkbenchCoordinator
                 "vc_commit_state_create",
                 new
                 {
-                    repoPath = masterRoot,
+                    repoPath = targetRoot,
                     commitSha = commit.Sha,
                     workbenchId,
                     devices = stateDevices,
@@ -2937,7 +3002,7 @@ public sealed class WorkbenchCoordinator
                 token).ConfigureAwait(false);
         }
 
-        var remaining = writePolicy.ReadPending(masterRoot, master.WorktreeId).Sources;
+        var remaining = writePolicy.ReadPending(targetRoot, target.WorktreeId).Sources;
         return new TiaSynchronizationResult(
             comparisonId,
             remaining.Select(item => item.RelativePath).ToArray(),
@@ -4073,12 +4138,17 @@ public sealed class WorkbenchCoordinator
     private IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> LoadMasterContexts(
         WorkbenchMetadata workbench,
         WorktreeMetadata master)
+        => LoadWorktreeContexts(workbench, master);
+
+    private IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> LoadWorktreeContexts(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree)
     {
         var masterRoot = WorkbenchPaths.ResolveWorktree(
             workbench.RootPath,
-            workbench.Worktrees.Single(item => item.WorktreeId == master.WorktreeId).RelativePath);
-        return LoadInheritedDevices(masterRoot, master)
-            .Select(device => (device, catalog.ResolveDevice(workbench, master, device)))
+            workbench.Worktrees.Single(item => item.WorktreeId == worktree.WorktreeId).RelativePath);
+        return LoadInheritedDevices(masterRoot, worktree)
+            .Select(device => (device, catalog.ResolveDevice(workbench, worktree, device)))
             .ToArray();
     }
 

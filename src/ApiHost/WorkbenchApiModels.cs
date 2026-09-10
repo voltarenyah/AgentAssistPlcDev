@@ -919,14 +919,36 @@ public static class WorkbenchEndpoints
                 "Comparing master with TIA Portal...",
                 progress => coordinator.CompareMasterWithTiaAsync(workbenchId, ct, progress, allowCompile, forceFullExport, includeHardware),
                 "TIA comparison completed.").ConfigureAwait(false));
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/compare-tia", async (
+            string workbenchId,
+            string worktreeId,
+            WorkbenchApiState state,
+            WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations,
+            HttpContext http,
+            CancellationToken ct,
+            bool allowCompile = false,
+            bool forceFullExport = false,
+            bool includeHardware = true) =>
+        {
+            coordinator.RegisterWorkbench(state.Workbench(workbenchId));
+            return await RunOperationAsync(
+                http,
+                operations,
+                "compare-tia",
+                "Comparing master with the selected TIA project...",
+                progress => coordinator.CompareWorktreeWithTiaAsync(workbenchId, worktreeId, ct, progress, allowCompile, forceFullExport, includeHardware),
+                "TIA comparison completed.").ConfigureAwait(false);
+        });
         app.MapGet("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}", (
             string workbenchId,
             string comparisonId,
             WorkbenchApiState state,
             WorkbenchCoordinator coordinator) =>
             coordinator.GetComparison(workbenchId, comparisonId));
-        app.MapPost("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}/accept", async (
+        app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/comparisons/{comparisonId}/accept", async (
             string workbenchId,
+            string worktreeId,
             string comparisonId,
             TiaSynchronizationAcceptApiRequest body,
             WorkbenchCoordinator coordinator,
@@ -937,9 +959,9 @@ public static class WorkbenchEndpoints
                 http,
                 operations,
                 "accept-tia-synchronization",
-                "Applying selected TIA source to master...",
-                progress => coordinator.ApplyTiaSynchronizationAsync(workbenchId, comparisonId, body.Paths, body.Message, ct, progress),
-                "Selected TIA source accepted.").ConfigureAwait(false));
+                "Applying selected TIA source to the active worktree...",
+                progress => coordinator.ApplyTiaSynchronizationAsync(workbenchId, worktreeId, comparisonId, body.Paths, body.Message, ct, progress),
+                "Selected TIA source committed to the active worktree.").ConfigureAwait(false));
         app.MapPost("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}/push-to-tia", async (
             string workbenchId,
             string comparisonId,

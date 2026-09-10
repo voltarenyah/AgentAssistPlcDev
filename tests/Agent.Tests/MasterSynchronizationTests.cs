@@ -12,12 +12,33 @@ public sealed class MasterSynchronizationTests : IDisposable
     private readonly SyncFixture fixture = SyncFixture.Create();
 
     [Fact]
+    public async Task ApplyRejectsAComparisonBoundToAnotherWorktree()
+    {
+        var comparisonPath = System.IO.Path.Combine(fixture.Root, ".automation", "comparisons", "comparison-1.json");
+        var comparison = fixture.Store.Read<WorkbenchConsistencyResult>(comparisonPath) with { ComparedWorktreeId = "feature-1" };
+        fixture.Store.Write(comparisonPath, comparison);
+        var coordinator = fixture.CreateCoordinator();
+
+        var exception = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() => coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Reject cross-worktree apply",
+            CancellationToken.None));
+
+        Assert.Equal("COMPARISON_WORKTREE_MISMATCH", exception.Code);
+        Assert.DoesNotContain("vc_commit_selected", fixture.VersionControl.Calls);
+    }
+
+    [Fact]
     public async Task ApplyCopiesSelectedChangedObjectsAndAutoCommitsWithTheProvidedTitle()
     {
         var coordinator = fixture.CreateCoordinator();
 
         var result = await coordinator.ApplyTiaSynchronizationAsync(
             fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
             fixture.ComparisonId,
             [fixture.Path("Blocks/A.xml")],
             "Accept Main block from TIA",
@@ -31,6 +52,68 @@ public sealed class MasterSynchronizationTests : IDisposable
         Assert.Equal(
             "Accept Main block from TIA",
             fixture.VersionControl.CommitMessage);
+    }
+
+    [Fact]
+    public async Task ApplyCommitsSelectedTiaSourceIntoTheComparedFeatureWorktree()
+    {
+        var feature = new WorktreeMetadata(
+            "1.0", "feature-1", "wb-1", "debug/cpu", "debug", "now", "feature-head-1", "project-1", SyncFixture.ProjectPath,
+            new[] { "device-1" }, null);
+        var featureWorkbench = fixture.Workbench with
+        {
+            Worktrees = new[]
+            {
+                fixture.Workbench.Worktrees.Single(),
+                new WorkbenchWorktreeRegistration("feature-1", "debug/cpu", "debug", "debug/cpu"),
+            },
+        };
+        fixture.Store.Write(System.IO.Path.Combine(fixture.Root, "workbench.json"), featureWorkbench);
+        var featureRoot = System.IO.Path.Combine(fixture.Root, "worktrees", "debug", "cpu");
+        fixture.Store.Write(System.IO.Path.Combine(featureRoot, "worktree.json"), feature);
+        var context = WorkbenchPaths.ResolveDevice("wb-1", fixture.Root, "feature-1", "debug/cpu", "device-1", "PLC_1");
+        Directory.CreateDirectory(System.IO.Path.Combine(context.SourceRoot, "Blocks"));
+        Directory.CreateDirectory(System.IO.Path.Combine(context.StagingRoot, "Blocks"));
+        File.WriteAllText(System.IO.Path.Combine(context.SourceRoot, "Blocks", "A.xml"), "feature old A");
+        File.WriteAllText(System.IO.Path.Combine(context.SourceRoot, "metadata.json"), """
+            { "components": [ { "id": "a", "name": "A", "category": "FC", "exportedFile": "Blocks/A.xml" } ] }
+            """);
+        fixture.Store.Write(System.IO.Path.Combine(context.DeviceRoot, "device.json"), new DeviceMetadata(
+            "1.0", "device-1", "feature-1", "PLC_1", "project-1", null, null, null,
+            new KnowledgeState(false, new Dictionary<string, string>(), null), Array.Empty<DeviceImportRecord>()));
+        var comparisonPath = System.IO.Path.Combine(fixture.Root, ".automation", "comparisons", "comparison-1.json");
+        fixture.Store.Write(comparisonPath, fixture.Store.Read<WorkbenchConsistencyResult>(comparisonPath) with { ComparedWorktreeId = "feature-1" });
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("export_source_object", args =>
+            {
+                var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
+                var exported = System.IO.Path.Combine(outputDir, "Blocks", "A.xml");
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(exported)!);
+                File.WriteAllText(exported, "feature fresh A");
+                return new Contracts.Engineering.ExportResult { Success = true, Path = exported };
+            });
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        var result = await coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            "feature-1",
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Accept feature TIA change",
+            CancellationToken.None);
+
+        Assert.Equal("head-2", result.CommitSha);
+        Assert.Equal("feature fresh A", File.ReadAllText(System.IO.Path.Combine(context.SourceRoot, "Blocks", "A.xml")));
+        Assert.Equal("old A", File.ReadAllText(fixture.MasterSource("Blocks/A.xml")));
+        Assert.Contains("export_source_object", engineering.Calls);
+        Assert.Equal(featureRoot, Property<string>(fixture.VersionControl.CommitArgs!, "repoPath"));
+        Assert.Equal("Accept feature TIA change", fixture.VersionControl.CommitMessage);
     }
 
     [Fact]
@@ -64,6 +147,7 @@ public sealed class MasterSynchronizationTests : IDisposable
 
         await coordinator.ApplyTiaSynchronizationAsync(
             fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
             fixture.ComparisonId,
             [fixture.Path("Blocks/A.xml")],
             "Accept refreshed A",
@@ -114,6 +198,7 @@ public sealed class MasterSynchronizationTests : IDisposable
 
         await coordinator.ApplyTiaSynchronizationAsync(
             fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
             fixture.ComparisonId,
             [fixture.Path("Blocks/A.xml"), fixture.Path("Blocks/B.xml")],
             "Accept every TIA source change",
@@ -132,6 +217,7 @@ public sealed class MasterSynchronizationTests : IDisposable
         var coordinator = fixture.CreateCoordinator();
         await coordinator.ApplyTiaSynchronizationAsync(
             fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
             fixture.ComparisonId,
             [fixture.Path("Blocks/A.xml")],
             "Accept A",
@@ -512,7 +598,8 @@ public sealed class MasterSynchronizationTests : IDisposable
                 {
                     new SourceDifference("device-1", "PLC_1", "devices/PLC_1/source/Blocks/A.xml", "Blocks:A", SourceDifferenceKind.Changed, "old", "new", true),
                     new SourceDifference("device-1", "PLC_1", "devices/PLC_1/source/Blocks/B.xml", "Blocks:B", SourceDifferenceKind.Changed, "old", "new", true),
-                });
+                },
+                ComparedWorktreeId: "master-1");
             store.Write(System.IO.Path.Combine(root, ".automation", "comparisons", "comparison-1.json"), comparison);
             return new SyncFixture(root, workbench, master, store, new SyncVersionControlCaller());
         }

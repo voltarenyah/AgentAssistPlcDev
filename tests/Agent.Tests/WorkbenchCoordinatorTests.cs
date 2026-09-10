@@ -398,11 +398,14 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task StageRefreshConnectsToRegisteredProjectWhenNothingIsConnected()
+    public async Task StageRefreshReconnectsAfterDisposedProjectProxy()
     {
         var fixture = Fixture.Create(root);
         var engineering = new FakeToolCaller()
-            .Fail("get_project_info", "NOT_CONNECTED", "No project connected. Call connect first.")
+            .Fail(
+                "get_project_info",
+                "OPENNESS_ERROR",
+                "Access to a disposed object of type 'Siemens.Engineering.Project' is not possible.")
             .Respond("disconnect", new object())
             .Respond("list_sessions", Array.Empty<SessionInfo>())
             .Respond("connect", new { connected = true })
@@ -457,6 +460,69 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
         Assert.DoesNotContain(
             Directory.EnumerateFileSystemEntries(fixture.Context.WorktreeRoot),
             path => Path.GetFileName(path).StartsWith(".hardware-compare-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CompareWorktreeWithTiaKeepsSelectedFeatureProjectActive()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Master.ap17");
+        var store = new AtomicJsonStore();
+        var workbench = RegisterTimelineWorkbench(fixture) with
+        {
+            Worktrees = [new WorkbenchWorktreeRegistration(
+                "wt-1", "master", "master", "master")],
+        };
+        store.Write(Path.Combine(workbench.RootPath, "workbench.json"), workbench);
+        var featureRoot = Path.Combine(workbench.RootPath, "worktrees", "feature-a");
+        var featureContext = WorkbenchPaths.ResolveDevice(
+            workbench.WorkbenchId,
+            workbench.RootPath,
+            "wt-feature",
+            "feature-a",
+            "dev-1",
+            "PLC_1");
+        Directory.CreateDirectory(featureContext.SourceRoot);
+        Directory.CreateDirectory(featureContext.StagingRoot);
+        store.Write(
+            Path.Combine(featureContext.DeviceRoot, "device.json"),
+            store.Read<DeviceMetadata>(Path.Combine(fixture.Context.DeviceRoot, "device.json")) with { WorktreeId = "wt-feature" });
+        store.Write(
+            Path.Combine(featureRoot, "worktree.json"),
+            new WorktreeMetadata(
+                WorkbenchSchema.CurrentVersion,
+                "wt-feature",
+                workbench.WorkbenchId,
+                "feature-a",
+                "feature-a",
+                "2026-08-10T00:00:00Z",
+                "master",
+                null,
+                @"C:\Projects\Feature.ap17",
+                ["dev-1"],
+                null));
+        workbench = workbench with
+        {
+            Worktrees = workbench.Worktrees.Append(new WorkbenchWorktreeRegistration(
+                "wt-feature", "feature-a", "feature-a", "feature-a")).ToArray(),
+        };
+        store.Write(Path.Combine(workbench.RootPath, "workbench.json"), workbench);
+
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo { Path = @"C:\Projects\Master.ap17" })
+            .Respond("disconnect", new object())
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new object())
+            .Respond("get_project_info", new ProjectInfo { Path = @"C:\Projects\Feature.ap17" });
+        var versionControl = new FakeToolCaller()
+            .Fail("vc_log", "TEST_STOP", "stop after selected project attach");
+        var coordinator = Create(fixture, engineering, versionControl: versionControl);
+        coordinator.RegisterWorkbench(workbench);
+
+        await Assert.ThrowsAsync<ToolCallException>(() =>
+            coordinator.CompareWorktreeWithTiaAsync(workbench.WorkbenchId, "wt-feature"));
+
+        Assert.Equal(@"C:\Projects\Feature.ap17", Property<string>(
+            engineering.CallArgs["connect"].Single(), "projectPath"));
     }
 
     [Fact]

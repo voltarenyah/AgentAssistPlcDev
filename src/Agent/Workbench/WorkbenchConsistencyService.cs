@@ -107,7 +107,8 @@ public sealed class WorkbenchConsistencyService
         IOperationProgress? progress = null,
         bool allowCompile = false,
         bool forceFullExport = false,
-        bool includeHardware = true)
+        bool includeHardware = true,
+        string? comparedWorktreeId = null)
     {
         ArgumentNullException.ThrowIfNull(workbench);
         ArgumentNullException.ThrowIfNull(master);
@@ -215,7 +216,7 @@ public sealed class WorkbenchConsistencyService
         if (!forceFullExport
             && sourceClean
             && !untrackableChange.UntrackableChange
-            && HasFingerprintFirstEvidence(evidence, head, devices))
+            && HasChecksumEvidence(evidence, head, devices))
         {
             // A compiled PLC software checksum covers all managed software changes, including
             // comments and interface edits.  Probe it before the expensive fingerprint walk so
@@ -273,7 +274,8 @@ public sealed class WorkbenchConsistencyService
                     Array.Empty<DeviceSafetyEvidence>(),
                     false,
                     timings.ToArray(),
-                    HardwareChecked: includeHardware));
+                    HardwareChecked: includeHardware,
+                    ComparedWorktreeId: comparedWorktreeId));
             }
 
             return await CompareFingerprintFirstAsync(
@@ -286,6 +288,7 @@ public sealed class WorkbenchConsistencyService
                     devices,
                     untrackableChange.UntrackableChange,
                     timings,
+                    comparedWorktreeId,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -394,7 +397,8 @@ public sealed class WorkbenchConsistencyService
                 safety,
                 safetyChanged,
                 timings.ToArray(),
-                HardwareChecked: includeHardware));
+                HardwareChecked: includeHardware,
+                ComparedWorktreeId: comparedWorktreeId));
         }
 
         var evidenceSourceCanNarrow = evidenceCurrent && sourceClean;
@@ -486,7 +490,8 @@ public sealed class WorkbenchConsistencyService
             safety,
             safetyChanged,
             timings.ToArray(),
-            HardwareChecked: includeHardware));
+            HardwareChecked: includeHardware,
+            ComparedWorktreeId: comparedWorktreeId));
     }
 
     /// <summary>Legacy fallback safety baseline per PLC name from master's revision.json, used
@@ -905,6 +910,7 @@ public sealed class WorkbenchConsistencyService
         IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices,
         bool untrackableChange,
         ICollection<ComparisonTiming> timings,
+        string? comparedWorktreeId,
         CancellationToken cancellationToken)
     {
         var differences = new List<SourceDifference>();
@@ -1046,17 +1052,17 @@ public sealed class WorkbenchConsistencyService
             safetyChanged,
             timings.ToArray(),
             untrackable,
-            HardwareChecked: hardwareChecked));
+            HardwareChecked: hardwareChecked,
+            ComparedWorktreeId: comparedWorktreeId));
     }
 
-    private static bool HasFingerprintFirstEvidence(
+    private static bool HasChecksumEvidence(
         ConsistencyValidationEvidence? evidence,
         ConsistencyCommit head,
         IReadOnlyList<(DeviceMetadata Metadata, DeviceContext Context)> devices) =>
         evidence is not null
         && string.Equals(evidence.SchemaVersion, "2.0", StringComparison.Ordinal)
         && string.Equals(evidence.EvidenceKind, "tia-managed-source", StringComparison.Ordinal)
-        && evidence.ManagedSourceConsistent == true
         && string.Equals(evidence.CommitSha, head.Sha, StringComparison.OrdinalIgnoreCase)
         && evidence.Devices.Length == devices.Count
         && devices.All(device => evidence.Devices.Any(candidate =>

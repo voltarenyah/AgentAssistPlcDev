@@ -40,6 +40,14 @@ Rejected. It changes every source commit's tree, risks merge conflicts, and conf
 - A transient tag-write failure leaves the commit intact, is visible to the user, and is refreshed by the next capture.
 - Hardware remains outside the evidence invariant until separately designed.
 
+## Amendment: checksum-authoritative fast gate
+
+The compiled PLC software checksum is the authoritative invariant for the managed software
+domain. The `managedSourceConsistent` field remains as historical capture metadata, but a v2
+evidence record with an exact commit binding and complete device coverage may use the checksum
+fast gate regardless of that flag. Source scans remain available for checksum mismatches,
+untrackable changes, safety surfaces, or incomplete evidence.
+
 ## Verification
 
 - Repository fixture tests prove a successful evidence recording binds a complete v2 validation tag to the exact commit SHA.

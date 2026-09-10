@@ -176,7 +176,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(checkbox.checked).toBe(false)
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
 
-    expect(compare).toHaveBeenCalledWith('wb-1', undefined, false, false)
+    expect(compare).toHaveBeenCalledWith('wb-1', undefined, false, false, 'wt-1')
   })
 
   it('does not describe the branch as clean when TIA comparison finds differences', async () => {
