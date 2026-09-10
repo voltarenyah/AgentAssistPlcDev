@@ -38,7 +38,15 @@ public sealed record CreateWorktreeRequest(
     WorkbenchMetadata Workbench,
     string Name,
     string Branch,
-    string? StartPoint = null);
+    string? StartPoint = null,
+    SourceSavepointSelection? SourceSavepoint = null);
+
+public sealed record SourceSavepointSelection(string WorktreeId, string GitSha);
+
+public sealed record BranchStartPoint(
+    string WorktreeId, string WorktreeName, string Branch, string GitSha, string Message,
+    string? SvnUrl, long? SvnRevision, string? ProjectChecksum, string? CompileStatus,
+    string? State, bool Selectable, string? DisabledReason);
 
 public sealed record ApprovedReconciliation(
     ReconciliationPreview Preview,
@@ -1076,6 +1084,44 @@ public sealed class WorkbenchCoordinator
         return savepoints;
     }
 
+    /// <summary>Lists selectable SVN savepoints across every registered worktree.</summary>
+    public async Task<IReadOnlyList<BranchStartPoint>> ListBranchStartPointsAsync(
+        string workbenchId, CancellationToken token = default)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var result = new List<BranchStartPoint>();
+        foreach (var registration in workbench.Worktrees)
+        {
+            var root = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+            string head;
+            ConsistencyLogResult log;
+            try
+            {
+                head = await ReadMasterHeadAsync(root, token).ConfigureAwait(false);
+                log = await versionControl.CallAsync<ConsistencyLogResult>(
+                    "vc_log", new { repoPath = root, filePath = EngineeringStateWriter.RelativePath, allHistory = true }, token).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                result.Add(new BranchStartPoint(registration.WorktreeId, registration.Name, registration.Branch, string.Empty,
+                    "Worktree unavailable", null, null, null, null, "unavailable", false, exception.Message));
+                continue;
+            }
+            foreach (var commit in log.Commits)
+            {
+                var file = await versionControl.CallAsync<ShowFileResult>(
+                    "vc_show_file", new { repoPath = root, filePath = EngineeringStateWriter.RelativePath, commitSha = commit.Sha }, token).ConfigureAwait(false);
+                var state = EngineeringStateWriter.TryParse(file.Content);
+                var selectable = state?.Svn?.Revision is not null && !string.IsNullOrWhiteSpace(state.Svn.Url);
+                result.Add(new BranchStartPoint(registration.WorktreeId, registration.Name, registration.Branch, commit.Sha, commit.Message,
+                    state?.Svn?.Url, state?.Svn?.Revision, state?.Tia?.ProjectChecksum, state?.Validation?.CompileStatus,
+                    string.Equals(commit.Sha, head, StringComparison.OrdinalIgnoreCase) ? "latest-baseline" : "git-ahead",
+                    selectable, selectable ? null : "No usable SVN URL/revision at this savepoint."));
+            }
+        }
+        return result;
+    }
+
     /// <summary>Returns a paged, worktree-scoped Git/SVN/TIA timeline. Git-only commits keep
     /// their own row and never inherit checksum or SVN metadata from an earlier savepoint.</summary>
     public async Task<VersionControlTimelineResult> ListVersionControlTimelineAsync(
@@ -1403,13 +1449,47 @@ public sealed class WorkbenchCoordinator
 
         // Phase 4: a 1.2 workbench (SVN native store + master revision baseline) gives the
         // feature its own SVN branch + tia/ working copy; 1.1 workbenches stay git-only.
+        var svnManaged = !string.IsNullOrWhiteSpace(persistedWorkbench.SvnRepositoryPath);
+        if (svnManaged && !Directory.Exists(persistedWorkbench.SvnRepositoryPath))
+            throw new WorkbenchLifecycleException("SVN_HISTORY_UNAVAILABLE", "The SVN native store is unavailable.");
         var masterSvnBase = TryResolveMasterSvnBase(persistedWorkbench, masterPath);
         string? baseGitCommit = request.StartPoint;
         string? featureSvnUrl = null;
-        if (masterSvnBase is not null)
+        if (svnManaged)
         {
-            baseGitCommit ??= await ReadMasterHeadAsync(masterPath, cancellationToken)
-                .ConfigureAwait(false);
+            if (request.SourceSavepoint is not null && !string.IsNullOrWhiteSpace(request.StartPoint))
+                throw new WorkbenchLifecycleException("MIXED_START_POINT", "Select either an SVN savepoint or a manual Git start point, not both.");
+            if (request.SourceSavepoint is not null)
+            {
+                var selectedRegistration = persistedWorkbench.Worktrees.SingleOrDefault(w => w.WorktreeId == request.SourceSavepoint.WorktreeId)
+                    ?? throw new WorkbenchLifecycleException("SAVEPOINT_NOT_FOUND", "The selected savepoint worktree is not registered.");
+                var selectedRoot = WorkbenchPaths.ResolveWorktree(persistedWorkbench.RootPath, selectedRegistration.RelativePath);
+                var selectedLog = await versionControl.CallAsync<ConsistencyLogResult>(
+                    "vc_log", new { repoPath = selectedRoot, filePath = EngineeringStateWriter.RelativePath, allHistory = true }, cancellationToken).ConfigureAwait(false);
+                if (!selectedLog.Commits.Any(commit => string.Equals(commit.Sha, request.SourceSavepoint.GitSha, StringComparison.OrdinalIgnoreCase)))
+                    throw new WorkbenchLifecycleException("SAVEPOINT_NOT_FOUND", "The selected Git commit is not a registered revision savepoint.");
+                var selectedFile = await versionControl.CallAsync<ShowFileResult>(
+                    "vc_show_file", new { repoPath = selectedRoot, filePath = EngineeringStateWriter.RelativePath, commitSha = request.SourceSavepoint.GitSha }, cancellationToken).ConfigureAwait(false);
+                var selectedState = EngineeringStateWriter.TryParse(selectedFile.Content)
+                    ?? throw new WorkbenchLifecycleException("SAVEPOINT_NOT_FOUND", "The selected savepoint has no committed revision state.");
+                if (selectedState.Svn?.Revision is not { } revision || string.IsNullOrWhiteSpace(selectedState.Svn.Url))
+                    throw new WorkbenchLifecycleException("SAVEPOINT_NOT_BRANCHABLE", "The selected savepoint has no usable SVN URL/revision.");
+                baseGitCommit = request.SourceSavepoint.GitSha;
+                masterSvnBase = (selectedState.Svn.Url, revision);
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(request.StartPoint))
+                    throw new WorkbenchLifecycleException("SOURCE_SAVEPOINT_REQUIRED", "SVN-managed worktrees must start from a selected savepoint.");
+                baseGitCommit = await ReadMasterHeadAsync(masterPath, cancellationToken).ConfigureAwait(false);
+                var masterFile = await versionControl.CallAsync<ShowFileResult>(
+                    "vc_show_file", new { repoPath = masterPath, filePath = EngineeringStateWriter.RelativePath, commitSha = baseGitCommit }, cancellationToken).ConfigureAwait(false);
+                var masterState = EngineeringStateWriter.TryParse(masterFile.Content);
+                if (masterState?.Svn?.Revision is { } masterRevision && !string.IsNullOrWhiteSpace(masterState.Svn.Url))
+                    masterSvnBase = (masterState.Svn.Url, masterRevision);
+                else
+                    throw new WorkbenchLifecycleException("SOURCE_SAVEPOINT_REQUIRED", "The SVN workbench has no current committed master savepoint.");
+            }
             var svnSegment = SafeDirectoryName(request.Branch);
             featureSvnUrl = $"^/native/branches/{svnSegment}";
             // Cheap collision pre-check before anything is created: the SVN branch copy
@@ -1443,7 +1523,7 @@ public sealed class WorkbenchCoordinator
                     repositoryPath = persistedWorkbench.RepositoryPath,
                     worktreePath,
                     branchName = request.Branch,
-                    startPoint = request.StartPoint,
+                    startPoint = baseGitCommit,
                 },
                 cancellationToken).ConfigureAwait(false);
 
@@ -2683,7 +2763,7 @@ public sealed class WorkbenchCoordinator
         var workbench = LoadRegisteredWorkbench(workbenchId);
         var master = LoadRegisteredWorktree(workbench, workbench.Worktrees.Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
         var branch = $"rollback/{SafeDirectoryName(featureName)}-{Guid.NewGuid():N}";
-        var feature = await CreateWorktreeAsync(new CreateWorktreeRequest(workbench, featureName, branch, master.BaseCommit), token).ConfigureAwait(false);
+        var feature = await CreateWorktreeAsync(new CreateWorktreeRequest(workbench, featureName, branch), token).ConfigureAwait(false);
         var featureRoot = ResolveWorktreeRoot(workbench, feature.WorktreeId);
         try
         {

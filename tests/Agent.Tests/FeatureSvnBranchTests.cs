@@ -1,5 +1,6 @@
 using Agent.Mcp;
 using Agent.Workbench;
+using System.Text.Json;
 using Xunit;
 
 namespace Agent.Tests;
@@ -39,7 +40,7 @@ public sealed class FeatureSvnBranchTests : IDisposable
             Path.Combine(WorkbenchPaths.ResolveTiaStore(fixture.FeatureRoot("feature-a")), "Line.ap17"),
             feature.ManagedTiaProjectPath);
         Assert.Equal(
-            new[] { "vc_log", "svn_log", "vc_add_worktree", "svn_copy_branch", "svn_checkout" },
+            new[] { "vc_log", "vc_show_file", "svn_log", "vc_add_worktree", "svn_copy_branch", "svn_checkout" },
             versionControl.Calls);
     }
 
@@ -74,9 +75,41 @@ public sealed class FeatureSvnBranchTests : IDisposable
                 CancellationToken.None));
 
         Assert.Equal("SVN_BRANCH_EXISTS", error.Code);
-        Assert.Equal(new[] { "vc_log", "svn_log" }, versionControl.Calls);
+        Assert.Equal(new[] { "vc_log", "vc_show_file", "svn_log" }, versionControl.Calls);
         Assert.DoesNotContain("vc_add_worktree", versionControl.Calls);
         Assert.False(Directory.Exists(fixture.FeatureRoot("feature-a")));
+    }
+
+    [Fact]
+    public async Task FeatureCreationRejectsMixedManualAndSavepointStart()
+    {
+        var fixture = SvnManagedFixture.Create(root);
+        var versionControl = fixture.ScriptVersionControl(new FakeToolCaller());
+        var coordinator = fixture.CreateCoordinator(versionControl);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.CreateWorktreeAsync(new CreateWorktreeRequest(
+                fixture.Workbench, "feature-a", "feature-a", "manual-sha",
+                new SourceSavepointSelection("master-1", "head-base")), CancellationToken.None));
+
+        Assert.Equal("MIXED_START_POINT", error.Code);
+        Assert.DoesNotContain("vc_add_worktree", versionControl.Calls);
+    }
+
+    [Fact]
+    public async Task FeatureCreationRejectsUnregisteredSavepointSource()
+    {
+        var fixture = SvnManagedFixture.Create(root);
+        var versionControl = fixture.ScriptVersionControl(new FakeToolCaller());
+        var coordinator = fixture.CreateCoordinator(versionControl);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.CreateWorktreeAsync(new CreateWorktreeRequest(
+                fixture.Workbench, "feature-a", "feature-a", null,
+                new SourceSavepointSelection("unknown", "head-base")), CancellationToken.None));
+
+        Assert.Equal("SAVEPOINT_NOT_FOUND", error.Code);
+        Assert.DoesNotContain("vc_add_worktree", versionControl.Calls);
     }
 
     [Fact]
@@ -92,7 +125,7 @@ public sealed class FeatureSvnBranchTests : IDisposable
                 CancellationToken.None));
 
         Assert.Equal(
-            new[] { "vc_log", "svn_log", "vc_add_worktree", "svn_copy_branch", "vc_remove_worktree" },
+            new[] { "vc_log", "vc_show_file", "svn_log", "vc_add_worktree", "svn_copy_branch", "vc_remove_worktree" },
             versionControl.Calls);
         var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
         Assert.Equal("feature-a", Property<string>(rollback, "branchName"));
@@ -218,9 +251,13 @@ public sealed class FeatureSvnBranchTests : IDisposable
             bool failCheckout = false)
         {
             caller
-                .Respond("vc_log", new ConsistencyLogResult
+            .Respond("vc_log", new ConsistencyLogResult
                 {
                     Commits = new[] { new ConsistencyCommit { Sha = "head-base" } },
+                })
+                .Respond("vc_show_file", new ShowFileResult
+                {
+                    Content = JsonSerializer.Serialize(EngineeringStateWriter.Create("^/native/main", 7, "PLC_1:checksum", null, EngineeringCompileStatus.Success), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
                 })
                 // svn_log (collision pre-check) intentionally unscripted: the thrown
                 // InvalidOperationException stands in for "branch does not exist".

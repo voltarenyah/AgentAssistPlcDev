@@ -18,7 +18,9 @@ public sealed record OpenTiaProjectApiRequest(
     bool Upgrade = false,
     string? AuthenticationMode = null);
 public sealed record OpenWorkbenchApiRequest(string RootPath);
-public sealed record CreateWorktreeApiRequest(string Name, string Branch, string? StartPoint);
+public sealed record CreateWorktreeApiRequest(
+    string Name, string Branch, string? StartPoint,
+    SourceSavepointSelection? SourceSavepoint = null);
 public sealed record RefreshApplyApiRequest(
     string PreviewId,
     string[]? ApprovedPaths,
@@ -696,10 +698,16 @@ public static class WorkbenchEndpoints
                 operations,
                 "create-worktree",
                 "Creating linked worktree...",
-                progress => c.CreateWorktreeAsync(new(s.Workbench(id), r.Name, r.Branch, r.StartPoint), ct, progress),
+                progress => c.CreateWorktreeAsync(new(s.Workbench(id), r.Name, r.Branch, r.StartPoint, r.SourceSavepoint), ct, progress),
                 "Worktree created.").ConfigureAwait(false);
             s.Refresh(id);
             return result;
+        });
+        app.MapGet("/api/workbenches/{id}/branch-start-points", async (
+            string id, WorkbenchApiState s, WorkbenchCoordinator c, CancellationToken ct) =>
+        {
+            c.RegisterWorkbench(s.Workbench(id));
+            return Results.Ok(await c.ListBranchStartPointsAsync(id, ct));
         });
         app.MapDelete("/api/workbenches/{id}/worktrees/{wt}", async (
             string id,
