@@ -171,11 +171,21 @@ function NewWorktreeDialog({
   operationStatus: api.OperationStatus | null
   onDismissOperation: () => void
   onClose: () => void
-  onCreate: (name: string, branch: string, startPoint?: string) => Promise<void>
+  onCreate: (name: string, branch: string, startPoint?: string, sourceSavepoint?: api.SourceSavepointSelection) => Promise<void>
 }) {
   const [name, setName] = useState('')
   const [branch, setBranch] = useState('')
   const [startPoint, setStartPoint] = useState('master')
+  const [branchStartPoints, setBranchStartPoints] = useState<api.BranchStartPoint[]>([])
+  const [selectedSavepoint, setSelectedSavepoint] = useState('')
+  const svnManaged = Boolean(workbench.svnRepositoryPath)
+  useEffect(() => {
+    void api.getBranchStartPoints(workbench.workbenchId).then(points => {
+      setBranchStartPoints(points)
+      const latest = points.find(point => point.selectable && point.branch.toLowerCase() === 'master' && point.state === 'latest-baseline')
+      setSelectedSavepoint(latest ? `${latest.worktreeId}:${latest.gitSha}` : '')
+    }).catch(() => setBranchStartPoints([]))
+  }, [workbench.workbenchId])
   const valid = Boolean(name.trim() && branch.trim())
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-5 backdrop-blur-[2px]">
@@ -206,16 +216,42 @@ function NewWorktreeDialog({
             <span>Branch</span>
             <input className="field-input font-mono" value={branch} onChange={event => setBranch(event.target.value)} placeholder="feature/commissioning" />
           </label>
-          <label className="field-label">
-            <span>Start point</span>
-            <input className="field-input font-mono" value={startPoint} onChange={event => setStartPoint(event.target.value)} placeholder="master" />
-          </label>
+          {svnManaged ? (
+            branchStartPoints.length > 0 ? (
+            <label className="field-label">
+              <span>SVN savepoint</span>
+              <select className="field-input font-mono" value={selectedSavepoint} onChange={event => setSelectedSavepoint(event.target.value)}>
+                <option value="">Select a savepoint</option>
+                {Array.from(new Set(branchStartPoints.map(point => point.worktreeId))).map(worktreeId => {
+                  const points = branchStartPoints.filter(point => point.worktreeId === worktreeId)
+                  return <optgroup key={worktreeId} label={`${points[0].worktreeName} (${points[0].branch})`}>
+                    {points.map(point => <option key={`${point.worktreeId}:${point.gitSha}`} value={`${point.worktreeId}:${point.gitSha}`} disabled={!point.selectable}>
+                      {point.gitSha.slice(0, 7)} · r{point.svnRevision ?? '—'} · {point.message}{point.state ? ` · ${point.state}` : ''}{point.selectable ? '' : ` · ${point.disabledReason}`}
+                    </option>)}
+                  </optgroup>
+                })}
+              </select>
+            </label>
+            ) : (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[10px] text-amber-700" data-testid="branch-start-points-unavailable">
+                No registered SVN savepoints are available. Refresh the workbench after creating a native savepoint.
+              </div>
+            )
+          ) : (
+            <label className="field-label">
+              <span>Start point</span>
+              <input className="field-input font-mono" value={startPoint} onChange={event => setStartPoint(event.target.value)} placeholder="master" />
+            </label>
+          )}
         </div>
         <div className="flex items-center justify-between gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <OperationStatusLine status={operationStatus} fallback={busy ? 'Creating linked worktree…' : undefined} onDismiss={onDismissOperation} />
           <div className="flex gap-2">
             <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
-            <button className="primary-button" disabled={!valid || busy} onClick={() => onCreate(name.trim(), branch.trim(), startPoint.trim() || undefined)}>
+            <button className="primary-button" disabled={!valid || busy || (svnManaged && !selectedSavepoint)} onClick={() => {
+              const [worktreeId, gitSha] = selectedSavepoint.split(':')
+              void onCreate(name.trim(), branch.trim(), svnManaged ? undefined : (startPoint.trim() || undefined), worktreeId && gitSha ? { worktreeId, gitSha } : undefined)
+            }}>
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Create worktree
             </button>
@@ -1393,12 +1429,12 @@ export default function MainStudio() {
     await sendChatMessage(sessionId, 'continue')
   }
 
-  const createWorktree = async (name: string, branch: string, startPoint?: string) => {
+  const createWorktree = async (name: string, branch: string, startPoint?: string, sourceSavepoint?: api.SourceSavepointSelection) => {
     if (!createWorktreeFor) return
     setOperation('create-worktree')
     const op = beginOperation('create-worktree', 'Creating linked worktree...')
     try {
-      await api.createWorktree(createWorktreeFor.workbenchId, name, branch, startPoint, op.id)
+      await api.createWorktree(createWorktreeFor.workbenchId, name, branch, startPoint, op.id, sourceSavepoint)
       const refreshed = await reloadWorkbenches()
       const workbench = refreshed.find(value => value.workbenchId === createWorktreeFor.workbenchId)
       setCreateWorktreeFor(null)

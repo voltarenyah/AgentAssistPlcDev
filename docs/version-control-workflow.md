@@ -10,6 +10,13 @@ savepoint is one Git commit naming the SVN revision that holds the same TIA stat
 Git commit → revision.json → SVN revision → TIA project
 ```
 
+When creating a linked worktree in an SVN-managed workbench, choose a savepoint
+from the project-wide selector. The server resolves the selected worktree and
+Git SHA back to its committed `revision.json`, then starts Git and the native
+SVN branch from that exact Git/SVN tuple. Savepoints without a usable SVN URL
+or revision remain visible for history but cannot be selected. Git-only
+workbenches continue to accept a manual Git start point.
+
 ## Workbench layout
 
 ```text
