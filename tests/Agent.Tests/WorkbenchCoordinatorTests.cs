@@ -168,6 +168,80 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task FeatureTimelineShowsItsGlobalBranchCopyRevisionInsteadOfInheritedSourceRevision()
+    {
+        var fixture = Fixture.Create(root);
+        var workbench = RegisterTimelineWorkbench(fixture) with
+        {
+            Worktrees =
+            [
+                new WorkbenchWorktreeRegistration("wt-1", "Feature A", "feature/a", "master"),
+            ],
+        };
+        var store = new AtomicJsonStore();
+        store.Write(Path.Combine(workbench.RootPath, "workbench.json"), workbench);
+        store.Write(Path.Combine(fixture.Context.WorktreeRoot, "worktree.json"), new WorktreeMetadata(
+            WorkbenchSchema.CurrentVersion, "wt-1", "wb-1", "Feature A", "feature/a",
+            "2026-09-10T13:17:00Z", "source-savepoint", null, null, ["dev-1"], null,
+            SvnUrl: "^/native/branches/feature-a", BaseSvnRevision: 1));
+
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_log", new ConsistencyLogResult
+            {
+                Commits =
+                [
+                    new ConsistencyCommit
+                    {
+                        Sha = "feature-savepoint",
+                        Message = "Feature savepoint",
+                        Files = [EngineeringStateWriter.RelativePath],
+                    },
+                    new ConsistencyCommit
+                    {
+                        Sha = "source-savepoint",
+                        Message = "Master baseline",
+                        Files = [EngineeringStateWriter.RelativePath],
+                    },
+                ],
+            })
+            .Respond("vc_show_file", new ShowFileResult
+            {
+                Content = """
+                    { "schemaVersion": 1, "svn": { "url": "^/native/branches/feature-a", "revision": 3 },
+                      "tia": {}, "safety": {}, "validation": { "compileStatus": "SUCCESS" } }
+                    """,
+            })
+            .Respond("vc_show_file", new ShowFileResult
+            {
+                Content = """
+                    { "schemaVersion": 1, "svn": { "url": "^/native/main", "revision": 1 },
+                      "tia": {}, "safety": {}, "validation": { "compileStatus": "SUCCESS" } }
+                    """,
+            })
+            .Respond("svn_log", new TimelineSvnLogResult
+            {
+                Entries =
+                [
+                    new TimelineSvnLogEntry { Revision = 3, Message = "Feature savepoint [native]" },
+                    new TimelineSvnLogEntry { Revision = 2, Message = "native: branch ^/native/branches/feature-a from ^/native/main@1" },
+                ],
+            });
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(), new FakeToolCaller(), versionControl,
+            new WorkbenchCatalog(store, Path.Combine(root, "feature-timeline-catalog")), store,
+            new DeviceReconciler(), new DeviceSourceResolver(_ => { }));
+        coordinator.RegisterWorkbench(workbench);
+
+        var result = await coordinator.ListVersionControlTimelineAsync("wb-1", "wt-1");
+
+        Assert.Equal(3, result.GitCommits[0].SvnRevision);
+        Assert.Null(result.GitCommits[1].SvnRevision);
+        Assert.Equal(new long[] { 3, 2 }, result.SvnRevisions.Select(item => item.Revision));
+        Assert.Equal("source-savepoint", result.SvnRevisions.Single(item => item.Revision == 2).GitCommitSha);
+        Assert.DoesNotContain(result.SvnRevisions, item => item.Revision == 1);
+    }
+
+    [Fact]
     public async Task SavepointsDeriveSafetyChangeAndReadStateFromRevisionState()
     {
         var fixture = Fixture.Create(root);
@@ -2720,6 +2794,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             },
             "svn_commit_native_baseline" => new CoordinatorSvnCommitResult { Committed = true, Revision = 1 },
             "svn_commit" => new CoordinatorSvnCommitResult { Committed = true, Revision = 1 },
+            "svn_copy_branch" => new CoordinatorSvnBranchCopyResult { Revision = 2 },
             "vc_commit_selected" => new WorkbenchCommitResult(
                 "baseline-sha",
                 "Initial PLC source baseline",
