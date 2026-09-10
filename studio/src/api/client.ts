@@ -212,6 +212,7 @@ export type Workbench = {
   createdAt: string
   rootPath: string
   repositoryPath: string
+  svnRepositoryPath?: string | null
   engineeringProjectId: string | null
   sourceProjectPath: string | null
   worktrees: WorkbenchRegistration[]
@@ -947,11 +948,29 @@ export const selectWorkbench = (workbenchId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/select`, jsonRequest('POST'))
 export const listWorktrees = (workbenchId: string) =>
   workbenchRequest<WorkbenchRegistration[]>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees`)
-export const createWorktree = (workbenchId: string, name: string, branch: string, startPoint?: string, operationId?: string) =>
+export type SourceSavepointSelection = { worktreeId: string; gitSha: string }
+export type BranchStartPoint = {
+  worktreeId: string
+  worktreeName: string
+  branch: string
+  gitSha: string
+  message: string
+  svnUrl: string | null
+  svnRevision: number | null
+  projectChecksum: string | null
+  compileStatus: string | null
+  state: string | null
+  selectable: boolean
+  disabledReason: string | null
+}
+export const getBranchStartPoints = (workbenchId: string) =>
+  workbenchRequest<BranchStartPoint[]>(`/workbenches/${encodeURIComponent(workbenchId)}/branch-start-points`)
+export const createWorktree = (workbenchId: string, name: string, branch: string, startPoint?: string, operationId?: string, sourceSavepoint?: SourceSavepointSelection) =>
   workbenchRequest<Worktree>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees`, withOperation(jsonRequest('POST', {
     name,
     branch,
     startPoint: startPoint?.trim() || null,
+    sourceSavepoint: sourceSavepoint ?? null,
   }), operationId))
 export const planFeatureImport = (workbenchId: string, featureWorktreeId: string, operationId?: string) =>
   workbenchRequest<FeatureImportPlan>(
