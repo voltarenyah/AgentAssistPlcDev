@@ -242,6 +242,65 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task BranchStartPointsAndSavepointProjectionUseTheFeatureBranchCopyInsteadOfInheritedSourceState()
+    {
+        var fixture = Fixture.Create(root);
+        var workbench = RegisterTimelineWorkbench(fixture) with
+        {
+            Worktrees =
+            [
+                new WorkbenchWorktreeRegistration("wt-1", "Feature A", "feature/a", "master"),
+            ],
+        };
+        var store = new AtomicJsonStore();
+        store.Write(Path.Combine(workbench.RootPath, "workbench.json"), workbench);
+        store.Write(Path.Combine(fixture.Context.WorktreeRoot, "worktree.json"), new WorktreeMetadata(
+            WorkbenchSchema.CurrentVersion, "wt-1", "wb-1", "Feature A", "feature/a",
+            "2026-09-10T13:17:00Z", "source-savepoint", null, null, ["dev-1"], null,
+            SvnUrl: "^/native/branches/feature-a", BaseSvnRevision: 1, SvnBranchRevision: 2));
+
+        ConsistencyLogResult History() => new()
+        {
+            Commits =
+            [
+                new ConsistencyCommit { Sha = "feature-savepoint", Message = "Feature savepoint", Files = [EngineeringStateWriter.RelativePath] },
+                new ConsistencyCommit { Sha = "source-savepoint", Message = "Master baseline", Files = [EngineeringStateWriter.RelativePath] },
+            ],
+        };
+        ShowFileResult FeatureState() => new()
+        {
+            Content = """{ "schemaVersion": 1, "svn": { "url": "^/native/branches/feature-a", "revision": 3 }, "tia": {}, "safety": {}, "validation": {} }""",
+        };
+        ShowFileResult SourceState() => new()
+        {
+            Content = """{ "schemaVersion": 1, "svn": { "url": "^/native/main", "revision": 1 }, "tia": {}, "safety": {}, "validation": {} }""",
+        };
+        var versionControl = new FakeToolCaller()
+            // ListSavepointsAsync
+            .Respond("vc_log", History())
+            .Respond("vc_show_file", FeatureState())
+            .Respond("vc_show_file", SourceState())
+            // ListBranchStartPointsAsync reads HEAD, then all revision-state history.
+            .Respond("vc_log", new ConsistencyLogResult { Commits = [History().Commits[0]] })
+            .Respond("vc_log", History())
+            .Respond("vc_show_file", FeatureState())
+            .Respond("vc_show_file", SourceState());
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(), new FakeToolCaller(), versionControl,
+            new WorkbenchCatalog(store, Path.Combine(root, "branch-start-projection-catalog")), store,
+            new DeviceReconciler(), new DeviceSourceResolver(_ => { }));
+        coordinator.RegisterWorkbench(workbench);
+
+        var savepoints = await coordinator.ListSavepointsAsync("wb-1", "wt-1");
+        var startPoints = await coordinator.ListBranchStartPointsAsync("wb-1");
+
+        Assert.Equal(new long[] { 3, 2 }, savepoints.Select(item => item.SvnRevision!.Value).ToArray());
+        Assert.Equal(new long[] { 3, 2 }, startPoints.Select(item => item.SvnRevision!.Value).ToArray());
+        Assert.DoesNotContain(savepoints, item => item.SvnRevision == 1);
+        Assert.DoesNotContain(startPoints, item => item.SvnRevision == 1);
+    }
+
+    [Fact]
     public async Task SavepointsDeriveSafetyChangeAndReadStateFromRevisionState()
     {
         var fixture = Fixture.Create(root);

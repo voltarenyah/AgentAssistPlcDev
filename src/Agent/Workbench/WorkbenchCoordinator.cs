@@ -987,11 +987,21 @@ public sealed class WorkbenchCoordinator
             ?? throw new WorkbenchCatalogException(
                 "WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
         var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
-
+        var worktreeMetadataPath = Path.Combine(worktreeRoot, "worktree.json");
+        var worktree = File.Exists(worktreeMetadataPath)
+            ? store.Read<WorktreeMetadata>(worktreeMetadataPath)
+            : null;
         var head = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
         var sha = string.IsNullOrWhiteSpace(gitCommit) ? head : gitCommit.Trim();
         var state = await ReadRevisionStateAtCommitAsync(worktreeRoot, sha, head, token)
             .ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(worktree?.SvnUrl)
+            && !string.Equals(worktree.SvnUrl, state.Svn?.Url, StringComparison.Ordinal)
+            && string.Equals(worktree.BaseCommit, sha, StringComparison.OrdinalIgnoreCase)
+            && await ResolveBranchCopyRevisionAsync(workbench, worktree, token).ConfigureAwait(false) is { } copyRevision)
+        {
+            state = state with { Svn = new EngineeringSvnLink(worktree.SvnUrl, copyRevision) };
+        }
         if (string.IsNullOrWhiteSpace(state.Svn?.Url) || state.Svn.Revision is null)
         {
             throw new WorkbenchLifecycleException(
@@ -1042,6 +1052,12 @@ public sealed class WorkbenchCoordinator
             ?? throw new WorkbenchCatalogException(
                 "WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
         var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+        var worktreeMetadataPath = Path.Combine(worktreeRoot, "worktree.json");
+        var worktree = File.Exists(worktreeMetadataPath)
+            ? store.Read<WorktreeMetadata>(worktreeMetadataPath)
+            : null;
+        var branchSvnUrl = worktree?.SvnUrl;
+        var branchCopyRevision = await ResolveBranchCopyRevisionAsync(workbench, worktree, token).ConfigureAwait(false);
 
         var log = await versionControl.CallAsync<ConsistencyLogResult>(
             "vc_log",
@@ -1056,15 +1072,35 @@ public sealed class WorkbenchCoordinator
                 new { repoPath = worktreeRoot, filePath = EngineeringStateWriter.RelativePath, commitSha = commit.Sha },
                 token).ConfigureAwait(false);
             var state = EngineeringStateWriter.TryParse(file.Content);
-            savepoints.Add(new SavepointInfo(
-                commit.Sha,
-                commit.Message,
-                state?.Svn?.Url,
-                state?.Svn?.Revision,
-                state?.Tia?.ProjectChecksum,
-                state?.Validation?.CompileStatus,
-                state?.Safety?.FSignature,
-                SafetyReadState: state?.Safety?.ReadState));
+            var isOwnSavepoint = string.IsNullOrWhiteSpace(branchSvnUrl)
+                || string.Equals(branchSvnUrl, state?.Svn?.Url, StringComparison.Ordinal);
+            if (isOwnSavepoint)
+            {
+                savepoints.Add(new SavepointInfo(
+                    commit.Sha,
+                    commit.Message,
+                    state?.Svn?.Url,
+                    state?.Svn?.Revision,
+                    state?.Tia?.ProjectChecksum,
+                    state?.Validation?.CompileStatus,
+                    state?.Safety?.FSignature,
+                    SafetyReadState: state?.Safety?.ReadState));
+            }
+            else if (branchCopyRevision is { } copyRevision
+                && string.Equals(worktree?.BaseCommit, commit.Sha, StringComparison.OrdinalIgnoreCase))
+            {
+                // The feature branch begins at this Git commit, but its inherited revision.json
+                // belongs to the source branch. Its own first TIA state is the SVN branch copy.
+                savepoints.Add(new SavepointInfo(
+                    commit.Sha,
+                    $"Native branch {branchSvnUrl} created from r{worktree?.BaseSvnRevision}",
+                    branchSvnUrl,
+                    copyRevision,
+                    state?.Tia?.ProjectChecksum,
+                    state?.Validation?.CompileStatus,
+                    state?.Safety?.FSignature,
+                    SafetyReadState: state?.Safety?.ReadState));
+            }
         }
 
         // The log is newest-first: a savepoint is a safety change when its F-signature differs
@@ -1107,11 +1143,35 @@ public sealed class WorkbenchCoordinator
                     "Worktree unavailable", null, null, null, null, "unavailable", false, exception.Message));
                 continue;
             }
+            var worktreeMetadataPath = Path.Combine(root, "worktree.json");
+            var worktree = File.Exists(worktreeMetadataPath)
+                ? store.Read<WorktreeMetadata>(worktreeMetadataPath)
+                : null;
+            var branchSvnUrl = worktree?.SvnUrl;
+            var branchCopyRevision = await ResolveBranchCopyRevisionAsync(workbench, worktree, token).ConfigureAwait(false);
+            var addedBranchCopy = false;
             foreach (var commit in log.Commits)
             {
                 var file = await versionControl.CallAsync<ShowFileResult>(
                     "vc_show_file", new { repoPath = root, filePath = EngineeringStateWriter.RelativePath, commitSha = commit.Sha }, token).ConfigureAwait(false);
                 var state = EngineeringStateWriter.TryParse(file.Content);
+                var isOwnSavepoint = string.IsNullOrWhiteSpace(branchSvnUrl)
+                    || string.Equals(branchSvnUrl, state?.Svn?.Url, StringComparison.Ordinal);
+                if (!isOwnSavepoint)
+                {
+                    if (!addedBranchCopy
+                        && branchCopyRevision is { } copyRevision
+                        && string.Equals(worktree?.BaseCommit, commit.Sha, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.Add(new BranchStartPoint(registration.WorktreeId, registration.Name, registration.Branch, commit.Sha,
+                            $"Native branch {branchSvnUrl} created from r{worktree?.BaseSvnRevision}",
+                            branchSvnUrl, copyRevision, state?.Tia?.ProjectChecksum, state?.Validation?.CompileStatus,
+                            string.Equals(commit.Sha, head, StringComparison.OrdinalIgnoreCase) ? "latest-baseline" : "git-ahead",
+                            true, null));
+                        addedBranchCopy = true;
+                    }
+                    continue;
+                }
                 var selectable = state?.Svn?.Revision is not null && !string.IsNullOrWhiteSpace(state.Svn.Url);
                 result.Add(new BranchStartPoint(registration.WorktreeId, registration.Name, registration.Branch, commit.Sha, commit.Message,
                     state?.Svn?.Url, state?.Svn?.Revision, state?.Tia?.ProjectChecksum, state?.Validation?.CompileStatus,
@@ -1120,6 +1180,46 @@ public sealed class WorkbenchCoordinator
             }
         }
         return result;
+    }
+
+    private async Task<long?> ResolveBranchCopyRevisionAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata? worktree,
+        CancellationToken token)
+    {
+        if (worktree?.SvnBranchRevision is { } recordedRevision)
+        {
+            return recordedRevision;
+        }
+
+        if (string.IsNullOrWhiteSpace(worktree?.SvnUrl)
+            || string.IsNullOrWhiteSpace(workbench.SvnRepositoryPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var log = await versionControl.CallAsync<TimelineSvnLogResult>(
+                "svn_log",
+                new
+                {
+                    path = ResolveSvnUrl(workbench.SvnRepositoryPath, worktree.SvnUrl),
+                    limit = 100,
+                    allHistory = true,
+                },
+                token).ConfigureAwait(false);
+            var prefix = $"native: branch {worktree.SvnUrl} from ";
+            return log.Entries?
+                .Where(entry => entry.Message.StartsWith(prefix, StringComparison.Ordinal))
+                .Select(entry => (long?)entry.Revision)
+                .OrderBy(revision => revision)
+                .FirstOrDefault();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Returns a paged, worktree-scoped Git/SVN/TIA timeline. Git-only commits keep
@@ -1527,10 +1627,27 @@ public sealed class WorkbenchCoordinator
                     "vc_show_file", new { repoPath = selectedRoot, filePath = EngineeringStateWriter.RelativePath, commitSha = request.SourceSavepoint.GitSha }, cancellationToken).ConfigureAwait(false);
                 var selectedState = EngineeringStateWriter.TryParse(selectedFile.Content)
                     ?? throw new WorkbenchLifecycleException("SAVEPOINT_NOT_FOUND", "The selected savepoint has no committed revision state.");
-                if (selectedState.Svn?.Revision is not { } revision || string.IsNullOrWhiteSpace(selectedState.Svn.Url))
+                var selectedWorktreeMetadataPath = Path.Combine(selectedRoot, "worktree.json");
+                var selectedWorktree = File.Exists(selectedWorktreeMetadataPath)
+                    ? store.Read<WorktreeMetadata>(selectedWorktreeMetadataPath)
+                    : null;
+                var selectedSvn = selectedState.Svn?.Revision is { } revision
+                    && !string.IsNullOrWhiteSpace(selectedState.Svn.Url)
+                    && (string.IsNullOrWhiteSpace(selectedWorktree?.SvnUrl)
+                        || string.Equals(selectedWorktree.SvnUrl, selectedState.Svn.Url, StringComparison.Ordinal))
+                    ? (Url: selectedState.Svn.Url!, Revision: revision)
+                    : ((string Url, long Revision)?)null;
+                if (selectedSvn is null
+                    && string.Equals(selectedWorktree?.BaseCommit, request.SourceSavepoint.GitSha, StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(selectedWorktree?.SvnUrl)
+                    && await ResolveBranchCopyRevisionAsync(persistedWorkbench, selectedWorktree, cancellationToken).ConfigureAwait(false) is { } copyRevision)
+                {
+                    selectedSvn = (selectedWorktree.SvnUrl!, copyRevision);
+                }
+                if (selectedSvn is null)
                     throw new WorkbenchLifecycleException("SAVEPOINT_NOT_BRANCHABLE", "The selected savepoint has no usable SVN URL/revision.");
                 baseGitCommit = request.SourceSavepoint.GitSha;
-                masterSvnBase = (selectedState.Svn.Url, revision);
+                masterSvnBase = selectedSvn;
             }
             else
             {
