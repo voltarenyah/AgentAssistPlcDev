@@ -100,3 +100,41 @@ acceptance for the source editor are in progress. See `buildnote/plan/` for the 
 build plan and current milestone status.
 
 For the local Codex issue worker, see [the operator guide](docs/local-codex-worker.md).
+
+
+## Product Introduce
+
+### Keep TIA project easy to access
+
+Real automation work naturally creates many project states. Automation Workbench gives those projects, copies, and parallel engineering activities a clear structure, so engineers can get to the right working state quickly.
+
+#### Store them at one place
+
+Imagine a typical start to your TIA engineering work:
+
+- Open TIA Portal and wait for the crowded recent-project list to appear.
+- Scan through similar project names and pick the one that looks most likely to be correct.
+- Wait for it to load, check the code and project state, then realize it is the wrong copy.
+- Close it, open another one, and repeat the same loop.
+
+Before any real engineering begins, several minutes can already disappear into finding the correct project.
+
+#### Organize it in your way
+
+Use tags to give every project and worktree the context that matters, then filter the workbench down to exactly what you need.
+
+- Tag by machine, site, customer, status, phase, or any category you define.
+- Apply tags to both projects and worktrees.
+- Filter freely from the landing page.
+- Find the right engineering context without relying on folder names.
+
+#### Keep diversity under control
+
+One machine can have several valid program states at the same time. Worktrees let you keep those parallel versions under one project, without turning them into disconnected copies.
+
+- Create a worktree from any point of the existing project.
+- Use separate worktrees for development, debugging, commissioning, testing, or stable release.
+- Modify and maintain each worktree independently.
+- Decide later which version should be downloaded to the machine.
+
+
