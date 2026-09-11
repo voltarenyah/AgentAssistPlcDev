@@ -104,7 +104,7 @@ For the local Codex issue worker, see [the operator guide](docs/local-codex-work
 
 ## Product Introduce
 
-### Keep TIA project easy to access
+### New relationship with TIA projects
 
 Real automation work naturally creates many project states. Automation Workbench gives those projects, copies, and parallel engineering activities a clear structure, so engineers can get to the right working state quickly.
 
@@ -136,5 +136,30 @@ One machine can have several valid program states at the same time. Worktrees le
 - Use separate worktrees for development, debugging, commissioning, testing, or stable release.
 - Modify and maintain each worktree independently.
 - Decide later which version should be downloaded to the machine.
+
+
+### Keep every version and history in between
+
+Permanent nightmare of an automation engineer who worked on a long-term multi-players TIA project: 
+** WHY/WHO MADE THIS CHANGE??? **
+You always need pretty much imagination to make-up a storyline to explain one code changing
+When that guy modify it, they think: everyone would understand it for sure OR it's only temporary change
+
+#### Read aritifacts from your TIA project
+
+When you first handle a TIA project to it, all source files are exported and tracked by Git version control mechanism.
+
+
+#### Compare to find your modifications / Locate your change, explain reason
+
+You can always check your TIA project match the history version
+
+
+#### Archive project with SVN version control mechanism
+
+
+### Task oriented engineering workflow with program context
+
+
 
 
