@@ -24,13 +24,31 @@ const CompletedPhase = ({ phase }: { phase: OperationPhaseTiming }) => (
   </li>
 )
 
-const ActivePhase = ({ phase }: { phase: OperationPhaseTiming }) => (
-  <li className="flex items-start gap-1.5 text-foreground" aria-live="polite">
-    <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-chart-2" aria-hidden="true" />
-    <span className="min-w-0 flex-1 break-words">{phase.message}</span>
-    <time className="shrink-0 font-mono text-chart-2">{formatElapsed(phase.elapsedMilliseconds)}</time>
-  </li>
-)
+const ActivePhase = ({ phase }: { phase: OperationPhaseTiming }) => {
+  const [sample, setSample] = useState({ phase, elapsedMilliseconds: phase.elapsedMilliseconds })
+
+  useEffect(() => {
+    // Continue the server's measured duration locally while status requests are delayed.
+    // Use a monotonic clock so wall-clock adjustments cannot distort the live timer.
+    const receivedAt = performance.now()
+    const timer = window.setInterval(() => {
+      setSample({
+        phase,
+        elapsedMilliseconds: phase.elapsedMilliseconds + Math.floor(performance.now() - receivedAt),
+      })
+    }, 250)
+    return () => window.clearInterval(timer)
+  }, [phase])
+
+  const elapsedMilliseconds = sample.phase === phase ? sample.elapsedMilliseconds : phase.elapsedMilliseconds
+  return (
+    <li className="flex items-start gap-1.5 text-foreground" aria-live="polite">
+      <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-chart-2" aria-hidden="true" />
+      <span className="min-w-0 flex-1 break-words">{phase.message}</span>
+      <time className="shrink-0 font-mono text-chart-2">{formatElapsed(elapsedMilliseconds)}</time>
+    </li>
+  )
+}
 
 const SourceExportPageSize = 100
 
