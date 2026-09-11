@@ -40,6 +40,27 @@ afterEach(() => {
 })
 
 describe('OperationTimingList', () => {
+  it('keeps advancing when repeated status responses recreate the active phase', () => {
+    vi.useFakeTimers()
+    const { host, root } = render(status)
+    for (let index = 0; index < 20; index++) {
+      act(() => vi.advanceTimersByTime(100))
+      act(() => root.render(<OperationTimingList status={{ ...status, currentPhase: { ...status.currentPhase! } }} />))
+    }
+    expect(host.querySelector('time')?.textContent).toBe('3.0 s')
+  })
+
+  it('does not rewind the running timer when a delayed measurement arrives', () => {
+    vi.useFakeTimers()
+    const { host, root } = render(status)
+    act(() => vi.advanceTimersByTime(5000))
+    expect(host.querySelector('time')?.textContent).toBe('6.0 s')
+    act(() => root.render(<OperationTimingList status={{ ...status, currentPhase: { ...status.currentPhase!, elapsedMilliseconds: 2000 } }} />))
+    expect(host.querySelector('time')?.textContent).toBe('6.0 s')
+    act(() => vi.advanceTimersByTime(1000))
+    expect(host.querySelector('time')?.textContent).toBe('7.0 s')
+  })
+
   it.each(['inline', 'dashboard'] as const)('advances an active phase between status polls in %s layout', (layout) => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-11T00:00:00Z'))
