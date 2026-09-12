@@ -1,5 +1,6 @@
 using Agent.Workbench;
 using Agent.Workbench.EngineeringGraph;
+using Agent.Chat;
 using System.Text.Json;
 using Xunit;
 
@@ -171,6 +172,70 @@ public sealed class WorktreeTaskStoreTests : IDisposable
         Assert.Equal("legacy-1", store.LastImportDiagnostics[0].TaskId);
         Assert.Equal("wt-2", store.LastImportDiagnostics[0].WorktreeId);
         Assert.Equal("Imported", Assert.Single(store.Load(firstRoot).Tasks).Title);
+    }
+
+    [Fact]
+    public void LegacyTaskAndSessionConversationSurviveGraphUpgrade()
+    {
+        var workbenchRoot = CreateGraphFixture("wb-upgrade", ("wt-1", "legacy"));
+        var worktreeRoot = Path.Combine(workbenchRoot, "worktrees", "legacy");
+        var created = DateTimeOffset.UtcNow.AddDays(-4);
+        var task = new WorktreeTask(
+            "legacy-upgrade-task", "Retain this task", "Imported details",
+            WorktreeTaskStatus.InProgress, ["PLC_1/FB_Main"], created, null);
+        var jsonStore = new AtomicJsonStore();
+        jsonStore.Write(WorktreeTaskStore.TasksPath(worktreeRoot), new WorktreeTaskList(1, [task]));
+
+        var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+        var device = new DeviceContext(
+            "wb-upgrade", "wt-1", "PLC_1", workbenchRoot, worktreeRoot, deviceRoot,
+            Path.Combine(deviceRoot, "source"), Path.Combine(deviceRoot, "staging"),
+            Path.Combine(deviceRoot, "plc-knowledge.db"));
+        const string sessionId = "legacy-session-upgrade";
+        var sessionsDirectory = SessionManager.SessionsDirectory(worktreeRoot);
+        Directory.CreateDirectory(sessionsDirectory);
+        File.WriteAllText(Path.Combine(sessionsDirectory, $"{sessionId}.json"), """
+            {
+              "header": {
+                "sessionId": "legacy-session-upgrade",
+                "projectName": "Legacy Line",
+                "createdAt": "2026-01-01T00:00:00.0000000+00:00",
+                "updatedAt": "2026-01-02T00:00:00.0000000+00:00",
+                "settings": { "model": "legacy-session" },
+                "runtimeContext": "legacy runtime",
+                "title": "Legacy conversation"
+              },
+              "messages": [
+                { "role": "user", "content": "Preserve this history" },
+                { "role": "assistant", "content": "History retained" }
+              ],
+              "roundUsages": []
+            }
+            """);
+
+        var tasks = new WorktreeTaskStore(jsonStore);
+        var loaded = Assert.Single(tasks.Load(worktreeRoot).Tasks);
+
+        Assert.Equal(task.TaskId, loaded.TaskId);
+        Assert.Equal(task.Title, loaded.Title);
+        Assert.Equal(task.Details, loaded.Details);
+        Assert.Equal(task.Status, loaded.Status);
+        Assert.Equal(task.ElementRefs, loaded.ElementRefs);
+        Assert.Equal(task.CreatedUtc, loaded.CreatedUtc);
+        Assert.Equal(task.DoneUtc, loaded.DoneUtc);
+
+        var restored = SessionManager.LoadLegacySession(worktreeRoot, sessionId);
+        Assert.NotNull(restored);
+        Assert.Equal("Legacy Line", restored!.Header.ProjectName);
+        Assert.Equal("legacy-session", restored.Header.Settings.Model);
+        Assert.Equal("legacy runtime", restored.Header.RuntimeContext);
+        Assert.Equal("Preserve this history", restored!.Messages[0].Content);
+        Assert.Equal("History retained", restored.Messages[1].Content);
+        var listed = Assert.Single(SessionManager.ListSessions(worktreeRoot));
+        Assert.Equal(sessionId, listed.SessionId);
+        Assert.Equal("Legacy conversation", listed.Title);
+        Assert.Equal(2, listed.MessageCount);
+        Assert.Equal(1, listed.TurnCount);
     }
 
     private string CreateGraphFixture(string workbenchId, params (string Id, string Name)[] worktrees)

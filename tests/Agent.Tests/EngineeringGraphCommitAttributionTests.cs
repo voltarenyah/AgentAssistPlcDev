@@ -53,12 +53,35 @@ public sealed class EngineeringGraphCommitAttributionTests : IDisposable
         using var store = new EngineeringGraphStore(root);
         var graph = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
         graph.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Task", GraphTaskType.Feature, intent: "intent", expectedResult: "result");
-        store.Dispose();
+        var attribution = new EngineeringGraphCommitAttribution(graph);
+        Assert.Null(attribution.Associate("wb-1", "wt-1", "prior-commit", "task-1"));
 
-        var warning = new EngineeringGraphCommitAttribution(graph).Associate("wb-1", "wt-1", "stable-commit", "task-1");
+        using (var command = store.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                CREATE TRIGGER fail_graph_edge
+                BEFORE INSERT ON graph_edges
+                WHEN NEW.to_id = 'stable-commit'
+                BEGIN
+                    SELECT RAISE(ABORT, 'Injected graph edge failure.');
+                END;
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var warning = attribution.Associate("wb-1", "wt-1", "stable-commit", "task-1");
 
         Assert.Contains("stable-commit", warning);
         Assert.Contains("Repair", warning);
+
+        store.Dispose();
+        using var reopenedStore = new EngineeringGraphStore(root);
+        var reopenedGraph = new EngineeringGraphService(reopenedStore, "wb-1", id => id == "wt-1");
+        Assert.Equal("Task", reopenedGraph.FindTask("task-1")!.Title);
+        Assert.NotNull(reopenedGraph.GetEntity(GraphEntityKind.GitCommit, "stable-commit"));
+        var edges = reopenedGraph.GetEdges(GraphEntityKind.Task, "task-1", GraphEntityKind.GitCommit);
+        var prior = Assert.Single(edges);
+        Assert.Equal("prior-commit", prior.ToId);
     }
 
     public void Dispose()
