@@ -94,7 +94,7 @@ function NetworkCardView({ source, network, access, referenceTargets, onOpenRefe
 type Ladder = NonNullable<api.SourceInspectionNetwork['ladder']>
 type LadderPort = { elementId: string; pin: string }
 type LadderConnection = { from: LadderPort; to: LadderPort }
-type LadderPlacement = { element: api.LadderElementInspection; x: number; y: number; width: number; height: number }
+type LadderPlacement = { element: api.LadderElementInspection; x: number; y: number; width: number; height: number; pinYs: Record<string, number> }
 
 function Ladder({ network, referenceTargets, onOpenReference }: { network: Ladder; referenceTargets: Record<string, string>; onOpenReference: (relativePath: string) => void }) {
   const diagram = buildLadderDiagram(network)
@@ -138,14 +138,35 @@ function buildLadderDiagram(network: Ladder) {
       if (!row.has(connection.to.elementId) || sourceRow < row.get(connection.to.elementId)!) row.set(connection.to.elementId, sourceRow)
     }
   }
+  const pinRows = new Map<string, number>()
+  for (const connection of connections) {
+    const sourceRow = row.get(connection.from.elementId)
+    if (sourceRow != null) pinRows.set(`${connection.to.elementId}:${connection.to.pin.toLowerCase()}`, sourceRow)
+  }
+  const baseline = (index: number) => 112 + index * 220
   let disconnected = 0
   const placements = network.elements.map(element => {
     const block = !/^(contact|coil)$/i.test(element.kind)
     const width = block ? 142 : 104
-    const height = block ? 154 : 52
     const x = 108 + (distance.get(element.id) ?? disconnected++) * 175
-    const y = 50 + (row.get(element.id) ?? 0) * 158
-    return { element, x, y, width, height }
+    const elementRow = row.get(element.id) ?? 0
+    const pinYs: Record<string, number> = {}
+    for (const pin of displayPins(element)) {
+      const inputRow = pinRows.get(`${element.id}:${pin.name.toLowerCase()}`)
+      if (inputRow != null) pinYs[pin.name.toLowerCase()] = baseline(inputRow)
+    }
+    if (!block) return { element, x, y: baseline(elementRow) - 26, width, height: 52, pinYs }
+    if (/^sr$/i.test(element.kind)) {
+      const inputRows = ['s', 'r1'].map(pin => pinRows.get(`${element.id}:${pin}`)).filter((value): value is number => value != null)
+      const topRow = inputRows.length ? Math.min(...inputRows) : elementRow
+      const bottomRow = inputRows.length ? Math.max(...inputRows) : elementRow
+      const y = baseline(topRow) - 44
+      return { element, x, y, width, height: baseline(bottomRow) - y + 18, pinYs }
+    }
+    const y = baseline(elementRow) - 46
+    pinYs.in = pinYs.in ?? baseline(elementRow)
+    pinYs.q = pinYs.q ?? baseline(elementRow)
+    return { element, x, y, width, height: 154, pinYs }
   })
   const byId = new Map(placements.map(placement => [placement.element.id, placement]))
   const point = ({ elementId, pin }: LadderPort) => portPoint(byId.get(elementId)!, pin)
@@ -165,8 +186,8 @@ function portPoint(placement: LadderPlacement, pin: string) {
   const name = pin.toLowerCase()
   const block = !/^(contact|coil)$/i.test(placement.element.kind)
   if (!block) return { x: isOutputPin(name) ? placement.x + placement.width : placement.x, y: placement.y + placement.height / 2 }
-  const input = name === 'pt' || name === 'r1' ? placement.y + placement.height - 28 : placement.y + 46
-  const output = name === 'et' ? placement.y + placement.height - 28 : placement.y + 52
+  const input = placement.pinYs[name] ?? (name === 'pt' || name === 'r1' ? placement.y + placement.height - 18 : placement.y + 46)
+  const output = placement.pinYs[name] ?? (name === 'et' ? placement.y + 96 : placement.y + 46)
   return { x: isOutputPin(name) ? placement.x + placement.width : placement.x, y: isOutputPin(name) ? output : input }
 }
 function displayPins(element: api.LadderElementInspection) {
@@ -180,14 +201,14 @@ function LadderElement({ placement, referenceTargets, onOpenReference }: { place
   const reference = element.referencedObject && referenceTargets[element.referencedObject]
   const label = element.label ?? element.id
   const pins = displayPins(element).filter(pin => !/^operand$/i.test(pin.name))
-  return <ContextMenu><ContextMenuTrigger asChild><g data-lad-element-id={element.id} data-lad-x={x} data-lad-y={y} role="button" tabIndex={0} aria-label={`${element.kind} ${label}`} className="cursor-context-menu outline-none">
+  return <ContextMenu><ContextMenuTrigger asChild><g data-lad-element-id={element.id} data-lad-x={x} data-lad-y={y} data-lad-height={height} role="button" tabIndex={0} aria-label={`${element.kind} ${label}`} className="cursor-context-menu outline-none">
     <rect x={x - 5} y={y - 34} width={width + 10} height={height + 42} fill="transparent" />
     <text x={x + width / 2} y={y - 19} fill="currentColor" fontSize="11" textAnchor="middle">{label}</text>
-    {isContact ? <ContactSymbol x={x} y={y} width={width} height={height} negated={element.negatedPins.some(pin => /^operand$/i.test(pin))} /> : <FunctionBlock x={x} y={y} width={width} height={height} kind={element.kind} pins={pins} />}
+    {isContact ? <ContactSymbol x={x} y={y} width={width} height={height} negated={element.negatedPins.some(pin => /^operand$/i.test(pin))} /> : <FunctionBlock placement={placement} pins={pins} />}
   </g></ContextMenuTrigger><ContextMenuContent><ContextMenuItem disabled={!reference} onSelect={() => { if (reference) onOpenReference(reference) }}><ExternalLink className="h-3.5 w-3.5" />Open referenced object</ContextMenuItem></ContextMenuContent></ContextMenu>
 }
 
 function ContactSymbol({ x, y, width, height, negated }: { x: number; y: number; width: number; height: number; negated: boolean }) { const middle = y + height / 2; return <g><line x1={x} x2={x + 30} y1={middle} y2={middle} stroke="currentColor" strokeWidth="2" /><line x1={x + width - 30} x2={x + width} y1={middle} y2={middle} stroke="currentColor" strokeWidth="2" /><line x1={x + 30} x2={x + 30} y1={middle - 14} y2={middle + 14} stroke="currentColor" strokeWidth="2" /><line x1={x + width - 30} x2={x + width - 30} y1={middle - 14} y2={middle + 14} stroke="currentColor" strokeWidth="2" />{negated && <line x1={x + 25} x2={x + width - 25} y1={middle + 18} y2={middle - 18} stroke="currentColor" strokeWidth="2" />}</g> }
-function FunctionBlock({ x, y, width, height, kind, pins }: { x: number; y: number; width: number; height: number; kind: string; pins: api.LadderPinInspection[] }) { return <g><rect x={x} y={y} width={width} height={height} fill="#d9dbe3" stroke="currentColor" strokeWidth="1.5" /><text x={x + width / 2} y={y + 23} fill="currentColor" fontSize="13" fontWeight="700" textAnchor="middle">{kind}</text>{pins.map(pin => { const point = portPoint({ element: { id: '', kind, label: null, negatedPins: [], referencedObject: null, pins: [] }, x, y, width, height }, pin.name); const output = isOutputPin(pin.name); return <g key={pin.name}><text x={output ? point.x - 8 : point.x + 8} y={point.y + 4} fill="currentColor" fontSize="10" textAnchor={output ? 'end' : 'start'}>{pin.name}</text>{pin.label && <text x={output ? point.x - 8 : point.x + 8} y={point.y + 18} fill="#0f766e" fontSize="9" textAnchor={output ? 'end' : 'start'}>{pin.label}</text>}</g> })}</g> }
+function FunctionBlock({ placement, pins }: { placement: LadderPlacement; pins: api.LadderPinInspection[] }) { const { x, y, width, height, element } = placement; return <g><rect x={x} y={y} width={width} height={height} fill="#d9dbe3" stroke="currentColor" strokeWidth="1.5" /><text x={x + width / 2} y={y + 23} fill="currentColor" fontSize="13" fontWeight="700" textAnchor="middle">{element.kind}</text>{pins.map(pin => { const point = portPoint(placement, pin.name); const output = isOutputPin(pin.name); return <g key={pin.name}><text x={output ? point.x - 8 : point.x + 8} y={point.y + 4} fill="currentColor" fontSize="10" textAnchor={output ? 'end' : 'start'}>{pin.name}</text>{pin.label && <text x={output ? point.x - 8 : point.x + 8} y={point.y + 18} fill="#0f766e" fontSize="9" textAnchor={output ? 'end' : 'start'}>{pin.label}</text>}</g> })}</g> }
 function Table({ columns, rows, onShowUsage }: { columns: string[]; rows: Record<string, string | null>[]; onShowUsage?: (variable: string) => void }) { return <div className="overflow-auto rounded border"><table className="w-full text-left text-xs"><thead className="bg-muted/50"><tr>{columns.map(column => <th key={column} className="whitespace-nowrap px-3 py-2 font-medium">{column}</th>)}</tr></thead><tbody>{rows.map((row, index) => <ContextMenu key={index}><ContextMenuTrigger asChild><tr className="border-t">{columns.map(column => <td key={column} className="whitespace-nowrap px-3 py-2">{row[column] || '—'}</td>)}</tr></ContextMenuTrigger>{onShowUsage && <ContextMenuContent><ContextMenuItem onSelect={() => { if (row.Name) onShowUsage(row.Name) }}><Network className="h-3.5 w-3.5" />Show read/write networks</ContextMenuItem></ContextMenuContent>}</ContextMenu>)}</tbody></table></div> }
 function message(reason: unknown) { return reason instanceof Error ? reason.message : String(reason) }

@@ -98,8 +98,12 @@ public sealed class SourceObjectInspectorReader
         var parts = flgNet.Descendants().FirstOrDefault(element => element.Name.LocalName == "Parts");
         var wires = flgNet.Descendants().Where(element => element.Name.LocalName == "Wire").Select(wire => new LadderWireInspection(wire.Elements().Select(endpoint =>
             new LadderEndpointInspection(endpoint.Name.LocalName, (string?)endpoint.Attribute("UId"), (string?)endpoint.Attribute("Name"))).ToArray())).ToArray();
-        var accessLabels = parts?.Elements().Where(element => element.Name.LocalName == "Access")
-            .ToDictionary(element => (string?)element.Attribute("UId") ?? "", element => element.Descendants().FirstOrDefault(node => node.Name.LocalName == "Component")?.Attribute("Name")?.Value) ?? [];
+        Dictionary<string, (string? Label, string? ReferencedObject)> accesses = parts?.Elements().Where(element => element.Name.LocalName == "Access")
+            .ToDictionary(element => (string?)element.Attribute("UId") ?? "", element =>
+            {
+                var reference = element.Descendants().FirstOrDefault(node => node.Name.LocalName == "Component")?.Attribute("Name")?.Value;
+                return (reference ?? element.Descendants().FirstOrDefault(node => node.Name.LocalName == "ConstantValue")?.Value, reference);
+            }) ?? [];
         var elements = parts?.Elements().Where(element => element.Name.LocalName is "Part" or "Call").Select(element =>
         {
             var id = (string?)element.Attribute("UId") ?? Guid.NewGuid().ToString("N");
@@ -110,8 +114,8 @@ public sealed class SourceObjectInspectorReader
                 .Select(endpoint =>
                 {
                     var accessId = wire.Endpoints.FirstOrDefault(candidate => candidate.Kind == "IdentCon")?.ElementId;
-                    var accessLabel = accessId is not null && accessLabels.TryGetValue(accessId, out var value) ? value : null;
-                    return new LadderPinInspection(endpoint.Pin!, accessLabel, accessLabel,
+                    var access = accessId is not null && accesses.TryGetValue(accessId, out var value) ? value : (null, null);
+                    return new LadderPinInspection(endpoint.Pin!, access.Item1, access.Item2,
                         negated.Contains(endpoint.Pin!, StringComparer.OrdinalIgnoreCase));
                 }))
                 .GroupBy(pin => pin.Name, StringComparer.OrdinalIgnoreCase).Select(group => group.First()).ToArray();
