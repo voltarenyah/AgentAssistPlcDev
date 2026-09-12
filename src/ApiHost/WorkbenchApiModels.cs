@@ -635,6 +635,20 @@ public static class WorkbenchEndpoints
                 throw new KeyNotFoundException("TASK_NOT_FOUND");
             return scope.Service.DeleteTask(taskId) ? Results.NoContent() : throw new KeyNotFoundException("TASK_NOT_FOUND");
         });
+        app.MapGet("/api/workbenches/{id}/active-task", (
+            string id, WorkbenchApiState state, EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            return Results.Ok(new { activeTask = activeTasks.Get(scope.Service, null) is { } task ? ToEngineeringTaskResponse(task) : null });
+        });
+        app.MapMethods("/api/workbenches/{id}/active-task", new[] { "PUT", "POST" }, (
+            string id, ActiveTaskApiRequest request, WorkbenchApiState state, EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var task = activeTasks.Select(scope.Service, null, request.TaskId);
+            return Results.Ok(new { activeTask = task is null ? null : ToEngineeringTaskResponse(task) });
+        });
         app.MapPatch("/api/workbenches/{id}", (
             string id,
             JsonElement body,
@@ -702,6 +716,28 @@ public static class WorkbenchEndpoints
             if (task is null || task.ScopeKind != GraphTaskScopeKind.Worktree || task.WorktreeId != wt)
                 throw new KeyNotFoundException("TASK_NOT_FOUND");
             return ToEngineeringTaskDetailResult(scope.Service, taskId);
+        });
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/active-task", (
+            string id, string wt, WorkbenchApiState state, WorktreeTaskStore tasks, EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks) =>
+        {
+            var workbench = state.Workbench(id);
+            state.Worktree(id, wt);
+            tasks.Load(state.WorktreeRoot(id, wt));
+            using var scope = graphs.Open(workbench);
+            var task = activeTasks.Get(scope.Service, wt);
+            return Results.Ok(new { activeTask = task is null ? null : ToEngineeringTaskResponse(task) });
+        });
+        app.MapMethods("/api/workbenches/{id}/worktrees/{wt}/active-task", new[] { "PUT", "POST" }, (
+            string id, string wt, ActiveTaskApiRequest request, WorkbenchApiState state, WorktreeTaskStore tasks,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            var workbench = state.Workbench(id);
+            state.Worktree(id, wt);
+            tasks.Load(state.WorktreeRoot(id, wt));
+            using var scope = graphs.Open(workbench);
+            var task = activeTasks.Select(scope.Service, wt, request.TaskId);
+            return Results.Ok(new { activeTask = task is null ? null : ToEngineeringTaskResponse(task) });
         });
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tasks", (
             string id,

@@ -101,6 +101,62 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task ActiveTaskApiSelectsSwitchesAndClearsCompatibleTasks()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var project = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "Project task", type = "feature", intent = "Intent", expectedResult = "Result" });
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        var local = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Local task" });
+        var localId = (await local.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        var route = $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/active-task";
+
+        var projectRoute = $"/api/workbenches/{wb}/active-task";
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PostAsJsonAsync(projectRoute, new { taskId = projectId })).StatusCode);
+        Assert.Equal(projectId, (await (await fixture.Client.GetAsync(projectRoute)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("activeTask").GetProperty("taskId").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId = projectId })).StatusCode);
+        Assert.Equal(projectId, (await (await fixture.Client.GetAsync(route)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("activeTask").GetProperty("taskId").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId = localId })).StatusCode);
+        Assert.Equal(localId, (await (await fixture.Client.GetAsync(route)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("activeTask").GetProperty("taskId").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId = (string?)null })).StatusCode);
+        Assert.True((await (await fixture.Client.GetAsync(route)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("activeTask").ValueKind == JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task ActiveTaskApiRejectsTaskOwnedByAnotherWorktree()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
+        var wb = fixture.Context.WorkbenchId;
+        var local = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Local task" });
+        var localId = (await local.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        var response = await fixture.Client.PutAsJsonAsync($"/api/workbenches/{wb}/worktrees/wt-2/active-task", new { taskId = localId });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ChangingActiveTaskDoesNotMutateExistingEdges()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var taskResponse = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "Project task", intent = "Intent", expectedResult = "Result" });
+        var taskId = (await taskResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        using var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id == fixture.Context.WorktreeId);
+        graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-1", wb, fixture.Context.WorktreeId));
+        graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.Task, taskId, Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-1");
+        var before = graph.GetEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Task, taskId)
+            .Select(edge => (edge.EdgeId, edge.FromKind, edge.FromId, edge.ToKind, edge.ToId, edge.RelationKind, edge.Provenance, edge.IsPrimary))
+            .ToArray();
+        var route = $"/api/workbenches/{wb}/active-task";
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId = (string?)null })).StatusCode);
+        var after = graph.GetEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Task, taskId)
+            .Select(edge => (edge.EdgeId, edge.FromKind, edge.FromId, edge.ToKind, edge.ToId, edge.RelationKind, edge.Provenance, edge.IsPrimary))
+            .ToArray();
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
     public async Task WorktreeTaskDetailImportsLegacyTaskBeforeGraphLookup()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
@@ -2470,7 +2526,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             string? sourceProjectPath = null,
             Action<string, string>? stageExport = null,
             string? versionControlJson = null,
-            Exception? versionControlFailure = null)
+            Exception? versionControlFailure = null,
+            bool includeSecondWorktree = false)
         {
             var store = new AtomicJsonStore();
             var catalog = new WorkbenchCatalog(store, fixtureRoot);
@@ -2480,6 +2537,17 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             workbench = catalog.RegisterWorktree(
                 workbench,
                 new WorkbenchWorktreeRegistration(worktreeId, "master", "master", "master"));
+            if (includeSecondWorktree)
+            {
+                workbench = catalog.RegisterWorktree(
+                    workbench,
+                    new WorkbenchWorktreeRegistration("wt-2", "feature-2", "feature-2", "feature-2"));
+                var secondRoot = Path.Combine(workbench.RootPath, "worktrees", "feature-2");
+                Directory.CreateDirectory(secondRoot);
+                store.Write(Path.Combine(secondRoot, "worktree.json"), new WorktreeMetadata(
+                    "1.0", "wt-2", workbench.WorkbenchId, "feature-2", "feature-2",
+                    DateTimeOffset.UtcNow.ToString("O"), null, null, null, [], null));
+            }
             var worktreeRoot = Path.Combine(workbench.RootPath, "worktrees", "master");
             var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
             var context = new DeviceContext(

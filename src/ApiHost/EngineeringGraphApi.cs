@@ -66,3 +66,5 @@ public sealed record EngineeringTaskDetailApiResponse(
     IReadOnlyList<EngineeringTaskRelationshipApiResponse> Commits,
     IReadOnlyList<EngineeringTaskRelationshipApiResponse> SourceObjects,
     IReadOnlyList<EngineeringTaskRelationshipApiResponse> SvnRevisions);
+
+public sealed record ActiveTaskApiRequest(string? TaskId);

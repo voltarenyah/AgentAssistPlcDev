@@ -1,6 +1,7 @@
 using Agent.Mcp;
 using Agent.Chat;
 using Agent.Workbench;
+using Agent.Workbench.EngineeringGraph;
 using ApiHost.AppAssistant;
 using Contracts.Sandbox;
 using System.ComponentModel;
@@ -63,6 +64,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorktreeTaskStore>();
 builder.Services.AddSingleton<EngineeringGraphApiFactory>();
+builder.Services.AddSingleton<ActiveTaskContextService>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
 builder.Services.AddSingleton<WorkbenchTagStore>();
 builder.Services.AddSingleton(_ => new TrustedWorkbenchRootRegistry(
