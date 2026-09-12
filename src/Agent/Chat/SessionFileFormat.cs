@@ -15,7 +15,8 @@ public sealed record ChatSessionHeader(
     ChatRequestSettings Settings,
     string? RuntimeContext,
     string? Title = null,
-    string? TaskId = null)
+    string? TaskId = null,
+    string? TaskProvenance = null)
 {
     /// <summary>Legacy JSON field retained only so project-name session files can be read.</summary>
     [JsonInclude]
@@ -40,4 +41,5 @@ public sealed record ChatSessionInfo(
     int MessageCount,
     int TurnCount,
     string? FirstUserMessage,
-    string? TaskId = null);
+    string? TaskId = null,
+    string? TaskProvenance = null);

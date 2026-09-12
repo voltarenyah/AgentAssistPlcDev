@@ -11,6 +11,7 @@ namespace Agent.Chat;
 /// </summary>
 public static class SessionManager
 {
+    public static Action<DeviceContext, ChatSessionData>? SaveSessionOverride { get; set; }
     private static readonly JsonSerializerOptions Json = new()
     {
         WriteIndented = true,
@@ -101,7 +102,8 @@ public static class SessionManager
         DeviceContext device,
         ChatRequestSettings settings,
         string? runtimeContext,
-        string? taskId = null) =>
+        string? taskId = null,
+        string? taskProvenance = null) =>
         CreateNewSession(
             device?.WorkbenchId ?? throw new ArgumentNullException(nameof(device)),
             device.WorktreeId,
@@ -110,7 +112,7 @@ public static class SessionManager
             device.KnowledgeDbPath,
             settings,
             runtimeContext,
-            taskId);
+            taskId, taskProvenance);
 
     /// <summary>Create a new empty session using explicit stable identities and paths.</summary>
     public static ChatSessionData CreateNewSession(
@@ -121,7 +123,8 @@ public static class SessionManager
         string knowledgeDbPath,
         ChatRequestSettings settings,
         string? runtimeContext,
-        string? taskId = null)
+        string? taskId = null,
+        string? taskProvenance = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workbenchId);
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreeId);
@@ -144,7 +147,7 @@ public static class SessionManager
             settings,
             runtimeContext,
             "New chat",
-            taskId);
+            taskId, taskProvenance);
         var data = new ChatSessionData(
             header,
             new List<ChatMessage>(),
@@ -160,6 +163,7 @@ public static class SessionManager
     /// </summary>
     public static void SaveSession(DeviceContext device, ChatSessionData data)
     {
+        SaveSessionOverride?.Invoke(device, data);
         ArgumentNullException.ThrowIfNull(device);
         ArgumentNullException.ThrowIfNull(data);
         if (!HeaderMatches(device, data.Header))
@@ -336,7 +340,8 @@ public static class SessionManager
                 messageCount,
                 turnCount,
                 firstUserMessage,
-                GetString(header, "taskId"));
+                GetString(header, "taskId"),
+                GetString(header, "taskProvenance"));
         }
         catch (Exception exception) when (exception is JsonException or IOException)
         {

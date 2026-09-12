@@ -1324,6 +1324,20 @@ export default function MainStudio() {
     }
   }
 
+  const setChatSessionTask = async (sessionId: string, taskId: string | null) => {
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      const session = await api.setChatSessionTask(sessionId, taskId)
+      setChatTabs(previous => openTab(previous, session))
+      await refreshChatSessions()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
   const sendChatMessage = async (sessionId: string, message: string) => {
     setChatBusy(true)
     setChatTabs(previous => appendLocalUserMessage(previous, sessionId, message))
@@ -2340,6 +2354,7 @@ export default function MainStudio() {
                   onRename={(sessionId, title) => void renameChatSession(sessionId, title)}
                   onRemove={sessionId => void removeChatSession(sessionId)}
                   onExport={sessionId => void exportChatSession(sessionId)}
+                  onSetTask={(sessionId, taskId) => void setChatSessionTask(sessionId, taskId)}
                 />
               )}
             </div>

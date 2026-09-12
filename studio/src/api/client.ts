@@ -128,6 +128,8 @@ export type ChatSessionInfo = {
   messageCount: number
   turnCount: number
   firstUserMessage: string | null
+  taskId?: string | null
+  taskProvenance?: 'default' | 'manual' | null
 }
 
 export type ChatSessionHeader = {
@@ -139,6 +141,8 @@ export type ChatSessionHeader = {
   deviceId?: string | null
   createdAt: string
   updatedAt: string
+  taskId?: string | null
+  taskProvenance?: 'default' | 'manual' | null
 }
 
 export type ChatUsage = {
@@ -1848,6 +1852,15 @@ export async function newChatSession(_projectName?: string): Promise<ChatSession
     const body = await res.text()
     throw new Error(body || `New session failed: ${res.status}`)
   }
+  return res.json()
+}
+
+export async function setChatSessionTask(sessionId: string, taskId: string | null): Promise<ChatSessionData> {
+  const res = await fetch(`${BASE}/chat/session/task`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, taskId }),
+  })
+  if (!res.ok) throw new Error((await res.text()) || `Session task update failed: ${res.status}`)
   return res.json()
 }
 

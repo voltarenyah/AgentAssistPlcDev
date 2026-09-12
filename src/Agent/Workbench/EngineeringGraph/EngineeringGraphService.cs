@@ -172,6 +172,45 @@ public sealed class EngineeringGraphService
         return edge;
     }
 
+    public void RemoveEdge(string edgeId)
+    {
+        if (string.IsNullOrWhiteSpace(edgeId)) return;
+        ExecuteNonQuery("DELETE FROM graph_edges WHERE edge_id=$id", ("$id", edgeId));
+    }
+    public void RemoveEntity(GraphEntityKind kind, string entityId)
+    {
+        ExecuteNonQuery("DELETE FROM graph_edges WHERE from_kind=$kind AND from_id=$id OR to_kind=$kind AND to_id=$id", ("$kind", Kind(kind)), ("$id", entityId));
+        ExecuteNonQuery("DELETE FROM graph_entities WHERE entity_kind=$kind AND entity_id=$id", ("$kind", Kind(kind)), ("$id", entityId));
+    }
+
+    public GraphEdge? ReplaceSessionTask(string sessionId, string? taskId, GraphProvenance provenance)
+    {
+        var session = FindEntity(GraphEntityKind.Session, sessionId)
+            ?? throw new EngineeringGraphConstraintException("Session was not registered in the current Workbench.");
+        GraphTask? task = null;
+        if (!string.IsNullOrWhiteSpace(taskId))
+        {
+            task = FindTask(taskId) ?? throw new EngineeringGraphConstraintException("The selected task was not found in the current Workbench.");
+            if (task.ScopeKind == GraphTaskScopeKind.Worktree && task.WorktreeId != session.WorktreeId)
+                throw new EngineeringGraphConstraintException("The selected task is not compatible with the current project or Workbench context.");
+        }
+        using var tx = _store.Connection.BeginTransaction();
+        Execute(tx, "DELETE FROM graph_edges WHERE to_kind='session' AND to_id=$session", ("$session", sessionId));
+        if (task is null)
+        {
+            tx.Commit();
+            return null;
+        }
+        var now = DateTimeOffset.UtcNow;
+        var edge = new GraphEdge(Guid.NewGuid().ToString("N"), GraphEntityKind.Task, task.TaskId,
+            GraphEntityKind.Session, sessionId, GraphRelationKind.TaskSession, provenance, false, now, now);
+        Execute(tx, "INSERT INTO graph_edges (edge_id,from_kind,from_id,to_kind,to_id,relation_kind,provenance,is_primary,created_utc,updated_utc) VALUES ($edge,'task',$task,'session',$session,'task_session',$prov,0,$created,$updated)",
+            ("$edge", edge.EdgeId), ("$task", task.TaskId), ("$session", sessionId),
+            ("$prov", provenance.ToString().ToLowerInvariant()), ("$created", now.ToString("O")), ("$updated", now.ToString("O")));
+        tx.Commit();
+        return edge;
+    }
+
     public int CountEdges() => Convert.ToInt32(Scalar("SELECT COUNT(*) FROM graph_edges;"));
     public GraphTask? GetTask(string taskId)
     {
@@ -191,6 +230,20 @@ public sealed class EngineeringGraphService
     }
     public IReadOnlyList<GraphEdge> GetEdges(GraphEntityKind fromKind, string fromId, GraphEntityKind? toKind = null) =>
         ReadEdges(fromKind, fromId, toKind);
+
+    public IReadOnlyList<GraphEdge> GetIncomingEdges(GraphEntityKind toKind, string toId)
+    {
+        using var c = _store.Connection.CreateCommand();
+        c.CommandText = "SELECT edge_id,from_kind,from_id,relation_kind,provenance,is_primary,created_utc,updated_utc FROM graph_edges WHERE to_kind=$tk AND to_id=$id ORDER BY created_utc;";
+        c.Parameters.AddWithValue("$tk", Kind(toKind)); c.Parameters.AddWithValue("$id", toId);
+        using var reader = c.ExecuteReader();
+        var result = new List<GraphEdge>();
+        while (reader.Read())
+            result.Add(new GraphEdge(reader.GetString(0), ParseKind(reader.GetString(1)), reader.GetString(2), toKind, toId,
+                ParseRelation(reader.GetString(3)), ParseProvenance(reader.GetString(4)), reader.GetInt32(5) != 0,
+                DateTimeOffset.Parse(reader.GetString(6)), DateTimeOffset.Parse(reader.GetString(7))));
+        return result;
+    }
 
     private IReadOnlyList<GraphEdge> ReadEdges(GraphEntityKind fromKind, string fromId, GraphEntityKind? toKind)
     {
