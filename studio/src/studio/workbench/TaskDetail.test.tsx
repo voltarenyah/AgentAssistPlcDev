@@ -19,6 +19,16 @@ describe('TaskDetail', () => {
     expect(host.textContent).toContain('Default'); expect(host.textContent).toContain('Evidence-derived'); expect(host.textContent).toContain('Manual'); expect(host.textContent).toContain('No linked source objects yet.')
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open Sessions session-1"]')?.click())
     expect(navigate).toHaveBeenCalledWith('session', 'session-1')
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open Commits commit-1"]')?.click())
+    expect(navigate).toHaveBeenCalledWith('commit', 'commit-1')
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open SVN revisions r42"]')?.click())
+    expect(navigate).toHaveBeenCalledWith('svnRevision', 'r42')
+  })
+  it('carries the exact source-object identifier through navigation', async () => {
+    const navigate = vi.fn()
+    const host = await render({ detail: { ...detail, sourceObjects: [{ id: 'device-7/Blocks/Main', edgeId: 'edge-source', provenance: 'manual', isPrimary: false }] }, onNavigate: navigate })
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open Source objects device-7/Blocks/Main"]')?.click())
+    expect(navigate).toHaveBeenCalledWith('sourceObject', 'device-7/Blocks/Main')
   })
   it('makes loading and failed-query states explicit and retries', async () => {
     const retry = vi.fn(); const loading = await render({ detail: null, loading: true }); expect(loading.textContent).toContain('Loading task traceability')

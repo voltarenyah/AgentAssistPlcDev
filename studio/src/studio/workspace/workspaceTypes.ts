@@ -65,6 +65,9 @@ export type WorkspaceSourceProps = {
   deviceView: DeviceViewState | null
   onChatWithAgent: (item: SourceObjectInfo) => void
   onSnapshotReload: () => void
+  onNavigateTask?: (taskId: string) => void
+  onNavigateEntity?: (kind: string, id: string) => void
+  selectedTraceabilityTarget?: { kind: string; id: string } | null
 }
 
 export type WorkspaceKnowledgeProps = {

@@ -623,7 +623,17 @@ public static class WorkbenchEndpoints
             WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
             using var scope = graphs.Open(state.Workbench(id));
-            var edge = scope.Service.ReplaceTaskRelationship(taskId, ParseGraphEntityKind(targetKind), targetId,
+            var targetGraphKind = ParseGraphEntityKind(targetKind);
+            var replacementTaskId = request?.NewTaskId;
+            if (!string.IsNullOrWhiteSpace(replacementTaskId) && !string.IsNullOrWhiteSpace(request?.CurrentEdgeId))
+            {
+                var oldEdge = scope.Service.GetEdges(GraphEntityKind.Task, taskId, targetGraphKind)
+                    .SingleOrDefault(edge => edge.EdgeId == request.CurrentEdgeId && edge.ToId == targetId)
+                    ?? throw new KeyNotFoundException("RELATIONSHIP_NOT_FOUND");
+                var replacement = scope.Service.ReassignTaskRelationship(taskId, replacementTaskId, targetGraphKind, targetId, oldEdge.EdgeId, GraphProvenance.Manual, request.IsPrimary);
+                return Results.Ok(ToRelationshipMutation(replacement));
+            }
+            var edge = scope.Service.ReplaceTaskRelationship(taskId, targetGraphKind, targetId,
                 GraphProvenance.Manual, request?.IsPrimary ?? false);
             return Results.Ok(ToRelationshipMutation(edge!));
         });

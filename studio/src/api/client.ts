@@ -1341,10 +1341,14 @@ export const listGraphWorktreeTasks = (workbenchId: string, worktreeId: string) 
   workbenchRequest<EngineeringTaskList>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`)
 export const getWorktreeTaskDetail = (workbenchId: string, worktreeId: string, taskId: string) =>
   workbenchRequest<EngineeringTaskDetail>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`)
+export const getEngineeringTaskDetail = async (workbenchId: string, taskId: string, worktreeId?: string | null) => {
+  try { return await getProjectTaskDetail(workbenchId, taskId) }
+  catch (error) { if (!worktreeId) throw error; return getWorktreeTaskDetail(workbenchId, worktreeId, taskId) }
+}
 export const attachTaskRelationship = (workbenchId: string, taskId: string, targetKind: string, targetId: string, isPrimary = false) =>
   workbenchRequest<EngineeringTaskRelationshipMutation>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}/relationships`, jsonRequest('POST', { targetKind, targetId, isPrimary }))
-export const reassignTaskRelationship = (workbenchId: string, taskId: string, targetKind: string, targetId: string, isPrimary = false) =>
-  workbenchRequest<EngineeringTaskRelationshipMutation>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}/relationships/${encodeURIComponent(targetKind)}/${encodeURIComponent(targetId)}`, jsonRequest('PUT', { isPrimary }))
+export const reassignTaskRelationship = (workbenchId: string, currentTaskId: string, newTaskId: string, targetKind: string, targetId: string, currentEdgeId: string, isPrimary = false) =>
+  workbenchRequest<EngineeringTaskRelationshipMutation>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(currentTaskId)}/relationships/${encodeURIComponent(targetKind)}/${encodeURIComponent(targetId)}`, jsonRequest('PUT', { isPrimary, newTaskId, currentEdgeId }))
 export const removeTaskRelationship = (workbenchId: string, taskId: string, edgeId: string) =>
   workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}/relationships/${encodeURIComponent(edgeId)}`, { method: 'DELETE' })
 export const getGraphEntityDetail = (workbenchId: string, entityKind: string, entityId: string) =>

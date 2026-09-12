@@ -8,6 +8,9 @@ const PAGE_SIZE = 10
 type Props = {
   workbenchId: string
   worktreeId: string
+  onNavigateTask?: (taskId: string) => void
+  onNavigateEntity?: (kind: string, id: string) => void
+  selectedTraceabilityTarget?: { kind: string; id: string } | null
 }
 
 type ActiveEvent =
@@ -164,7 +167,7 @@ function TimelineColumnView({
   )
 }
 
-function EventDetails({ active, position, entity, onAttach, onRemove }: { active: ActiveEvent; position: DetailPosition; entity?: api.EngineeringGraphEntityDetail; onAttach?: () => void; onRemove?: (taskId: string, edgeId: string) => void }) {
+function EventDetails({ active, position, entity, onAttach, onRemove, onReassign, onNavigateTask, onNavigateEntity }: { active: ActiveEvent; position: DetailPosition; entity?: api.EngineeringGraphEntityDetail; onAttach?: () => void; onRemove?: (taskId: string, edgeId: string) => void; onReassign?: (taskId: string) => void; onNavigateTask?: (taskId: string) => void; onNavigateEntity?: (kind: string, id: string) => void }) {
   const isGit = active.kind === 'git'
   const event = active.event
   const identifier = 'sha' in event ? event.sha : `r${event.revision}`
@@ -177,7 +180,7 @@ function EventDetails({ active, position, entity, onAttach, onRemove }: { active
       <div className="flex items-center gap-2">
         <span className={`h-2.5 w-2.5 ${isGit ? 'rounded-full bg-chart-3' : 'rounded-[2px] bg-chart-2'}`} />
         <span className="font-semibold">{isGit ? 'Git commit' : 'SVN revision'}</span>
-        <span className="font-mono text-muted-foreground">{identifier}</span>
+        {onNavigateEntity ? <button type="button" className="pointer-events-auto font-mono text-muted-foreground underline" aria-label={`Open ${isGit ? 'Git commit' : 'SVN revision'} ${identifier}`} onClick={() => onNavigateEntity(isGit ? 'gitCommit' : 'svnRevision', 'sha' in event ? event.sha : String(event.revision))}>{identifier}</button> : <span className="font-mono text-muted-foreground">{identifier}</span>}
       </div>
       <p className="mt-2 font-medium">{event.message || 'No commit message'}</p>
       <div className="mt-1 grid grid-cols-1 gap-x-4 gap-y-1 text-muted-foreground sm:grid-cols-2">
@@ -187,12 +190,12 @@ function EventDetails({ active, position, entity, onAttach, onRemove }: { active
         {!isGit && 'gitCommitSha' in event && <span title={event.gitCommitSha}>Git commit: {shortGitHash(event.gitCommitSha)}</span>}
         {isGit && 'files' in event && event.files.length > 0 && <span>Changed files: {event.files.length}</span>}
       </div>
-      {entity && <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border)' }}><div className="mb-1 font-semibold">Task links</div>{entity.tasks.length === 0 ? <span className="text-muted-foreground">Unassigned legacy record</span> : entity.tasks.map(link => <div key={link.edgeId || link.id} className="flex items-center gap-1"><button type="button" className="pointer-events-auto underline" aria-label={`Open task ${link.id}`} onClick={() => window.dispatchEvent(new CustomEvent('studio:navigate-task', { detail: link.id }))}>{link.id}</button><span className="text-muted-foreground">{link.provenance}</span>{link.edgeId && onRemove && <button type="button" className="pointer-events-auto underline" aria-label={`Remove task ${link.id} from ${identifier}`} onClick={() => onRemove(link.id, link.edgeId)}>Remove</button>}</div>)}{onAttach && <button type="button" className="pointer-events-auto secondary-button mt-1 h-6 px-2" aria-label={`Attach task to ${identifier}`} onClick={onAttach}>Attach</button>}</div>}
+      {entity && <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border)' }}><div className="mb-1 font-semibold">Task links</div>{entity.tasks.length === 0 ? <span className="text-muted-foreground">Unassigned legacy record</span> : entity.tasks.map(link => <div key={link.edgeId || link.id} className="flex items-center gap-1"><button type="button" className="pointer-events-auto underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="text-muted-foreground">{link.provenance}</span>{onReassign && <button type="button" className="pointer-events-auto underline" aria-label={`Reassign task ${link.id} from ${identifier}`} onClick={() => onReassign(link.id)}>Reassign</button>}{link.edgeId && onRemove && <button type="button" className="pointer-events-auto underline" aria-label={`Remove task ${link.id} from ${identifier}`} onClick={() => onRemove(link.id, link.edgeId)}>Remove</button>}</div>)}{onAttach && <button type="button" className="pointer-events-auto secondary-button mt-1 h-6 px-2" aria-label={`Attach task to ${identifier}`} onClick={onAttach}>Attach</button>}</div>}
     </div>
   )
 }
 
-export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId }: Props) {
+export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId, onNavigateTask, onNavigateEntity, selectedTraceabilityTarget }: Props) {
   const [gitCommits, setGitCommits] = useState<api.VersionControlTimelineGitCommit[]>([])
   const [svnRevisions, setSvnRevisions] = useState<api.VersionControlTimelineSvnRevision[]>([])
   const [hasMore, setHasMore] = useState(false)
@@ -225,6 +228,13 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
   const removeActive = async (taskId: string, edgeId: string) => {
     if (!activeId) return
     try { await api.removeTaskRelationship(workbenchId, taskId, edgeId); const result = await api.getGraphEntityDetail(workbenchId, activeKind, activeId); setEntityDetails(previous => ({ ...previous, [activeId]: result })) } catch { /* preserve visible links on failure */ }
+  }
+  const reassignActive = async (currentTaskId: string) => {
+    if (!activeId) return
+    const taskId = window.prompt('New task ID', currentTaskId)?.trim()
+    if (!taskId || taskId === currentTaskId) return
+    const edgeId = entityDetails[activeId]?.tasks.find(link => link.id === currentTaskId)?.edgeId ?? ''
+    try { await api.reassignTaskRelationship(workbenchId, currentTaskId, taskId, activeKind, activeId, edgeId); const result = await api.getGraphEntityDetail(workbenchId, activeKind, activeId); setEntityDetails(previous => ({ ...previous, [activeId]: result })) } catch { /* preserve visible links on failure */ }
   }
 
   const loadPage = useCallback(async (offset: number, append: boolean) => {
@@ -260,6 +270,19 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
     setSvnRevisions([])
     void loadPage(0, false)
   }, [loadPage])
+  useEffect(() => {
+    if (!selectedTraceabilityTarget || (selectedTraceabilityTarget.kind !== 'gitCommit' && selectedTraceabilityTarget.kind !== 'svnRevision')) return
+    const id = selectedTraceabilityTarget.id
+    const current = selectedTraceabilityTarget.kind === 'gitCommit'
+      ? gitCommits.find(item => item.sha === id)
+      : svnRevisions.find(item => String(item.revision) === id)
+    if (current) {
+      setActiveEvent(selectedTraceabilityTarget.kind === 'gitCommit' ? { kind: 'git', event: current as api.VersionControlTimelineGitCommit } : { kind: 'svn', event: current as api.VersionControlTimelineSvnRevision })
+      setDetailPosition({ left: 24, top: 72 })
+      return
+    }
+    if (hasMore && !loadingMore) void loadPage(gitCommits.length, true)
+  }, [selectedTraceabilityTarget, gitCommits, svnRevisions, hasMore, loadingMore, loadPage])
 
   const columns = useMemo(
     () => buildTimelineColumns({ gitCommits, svnRevisions, hasMore }),
@@ -267,12 +290,12 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
   )
 
   return (
-    <section className="relative overflow-visible rounded-xl border bg-card" aria-label="Worktree version control" style={{ borderColor: 'var(--border)' }}>
+    <section className="relative overflow-visible rounded-xl border bg-card" aria-label="Worktree version control" data-selected-target={selectedTraceabilityTarget?.kind === 'gitCommit' || selectedTraceabilityTarget?.kind === 'svnRevision' ? selectedTraceabilityTarget.id : undefined} style={{ borderColor: 'var(--border)' }}>
       <header className="flex items-center gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
         <GitBranch className="h-4 w-4 text-chart-4" />
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold">Worktree version control</h2>
-          <p className="mt-0.5 text-[9px] text-muted-foreground">Git commits and linked SVN savepoints · newest first</p>
+        <p className="mt-0.5 text-[9px] text-muted-foreground">Git commits and linked SVN savepoints · newest first{selectedTraceabilityTarget && (selectedTraceabilityTarget.kind === 'gitCommit' || selectedTraceabilityTarget.kind === 'svnRevision') ? ` · Selected ${selectedTraceabilityTarget.id}` : ''}</p>
         </div>
         {!loading && gitCommits.length > 0 && <span className="text-[9px] text-muted-foreground">{gitCommits.length} loaded</span>}
       </header>
@@ -319,7 +342,7 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
             <span className="inline-flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-chart-3" /> Git commit</span>
             <span className="inline-flex items-center gap-1"><i className="h-2 w-2 rounded-[2px] bg-chart-2" /> SVN revision</span>
           </div>
-          {activeEvent && detailPosition && <EventDetails active={activeEvent} position={detailPosition} entity={activeEntity} onAttach={() => void attachActive()} onRemove={(taskId, edgeId) => void removeActive(taskId, edgeId)} />}
+          {activeEvent && detailPosition && <EventDetails active={activeEvent} position={detailPosition} entity={activeEntity} onAttach={() => void attachActive()} onReassign={taskId => void reassignActive(taskId)} onRemove={(taskId, edgeId) => void removeActive(taskId, edgeId)} onNavigateTask={onNavigateTask} onNavigateEntity={onNavigateEntity} />}
           <div className="flex items-center justify-between border-t px-4 py-2.5" style={{ borderColor: 'var(--border)' }}>
             <span className="text-[9px] text-muted-foreground">Hover or focus a shape for commit details.</span>
             {hasMore && (

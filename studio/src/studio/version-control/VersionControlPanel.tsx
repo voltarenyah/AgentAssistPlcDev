@@ -3,6 +3,7 @@ import { ArrowUpRight, FileCheck2, GitBranch, GitCompare, History, Loader2, Refr
 import * as api from '@/api/client'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 import VersionControlHistory, { type VcTimelineItem } from './VersionControlHistory'
+import WorktreeVersionControlTimeline from '@/studio/workbench/WorktreeVersionControlTimeline'
 
 export type VersionControlPanelProps = {
   workbenchId: string
@@ -10,6 +11,9 @@ export type VersionControlPanelProps = {
   /** Starts a title-bar operation and returns its id, so the full TIA compare shows live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
   operationStatus?: api.OperationStatus | null
+  onNavigateTask?: (taskId: string) => void
+  onNavigateEntity?: (kind: string, id: string) => void
+  selectedTraceabilityTarget?: { kind: string; id: string } | null
 }
 
 type VersionControlTab = 'changes' | 'history'
@@ -48,7 +52,7 @@ function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSo
   }
 }
 
-export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOperation, operationStatus = null }: VersionControlPanelProps) {
+export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOperation, operationStatus = null, onNavigateTask, onNavigateEntity, selectedTraceabilityTarget }: VersionControlPanelProps) {
   const [status, setStatus] = useState<api.VcStatusResult | null>(null)
   const [log, setLog] = useState<api.VcCommitEntry[]>([])
   const [timeline, setTimeline] = useState<api.VersionControlTimelineResult | null>(null)
@@ -242,6 +246,7 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
             items={timelineItems}
             loading={loading && timeline === null}
           />
+          <div className="mt-3"><WorktreeVersionControlTimeline workbenchId={workbenchId} worktreeId={worktreeId} onNavigateTask={onNavigateTask} onNavigateEntity={onNavigateEntity} selectedTraceabilityTarget={selectedTraceabilityTarget} /></div>
         </div>
       </div>
     </section>

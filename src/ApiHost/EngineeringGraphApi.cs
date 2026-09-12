@@ -65,7 +65,9 @@ public sealed record EngineeringTaskRelationshipApiResponse(
 public sealed record EngineeringTaskRelationshipApiRequest(
     string TargetKind,
     string TargetId,
-    bool IsPrimary = false);
+    bool IsPrimary = false,
+    string? NewTaskId = null,
+    string? CurrentEdgeId = null);
 
 public sealed record EngineeringTaskRelationshipMutationApiResponse(
     string EdgeId, string TaskId, string TargetKind, string TargetId, string Relation,

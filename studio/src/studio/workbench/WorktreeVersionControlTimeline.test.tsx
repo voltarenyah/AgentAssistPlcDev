@@ -53,6 +53,10 @@ afterEach(() => {
 })
 
 describe('WorktreeVersionControlTimeline', () => {
+  const graphDetail = (tasks: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>): api.EngineeringGraphEntityDetail => ({
+    kind: 'gitCommit', id: 'commit-0', workbenchId: 'wb-1', worktreeId: 'wt-1', tasks, commits: [],
+  })
+
   it('shows a seven-character Git hash and device-free checksum in the metadata lane', async () => {
     const fullSha = 'abcdef1234567890abcdef1234567890abcdef12'
     const fullChecksum = 'PLC_1:0123456789abcdef0123456789abcdef'
@@ -192,4 +196,67 @@ describe('WorktreeVersionControlTimeline', () => {
     expect(gitCommitDetail?.textContent).toBe('Git commit: abcdef1')
     expect(gitCommitDetail?.getAttribute('title')).toBe(fullSha)
   })
+
+  it('uses the linked edge identity for remove and opens the exact task id', async () => {
+    vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue({ ...firstPage, gitCommits: [gitCommit(0, { sha: 'commit-0' })], svnRevisions: [], hasMore: false })
+    vi.spyOn(api, 'getGraphEntityDetail').mockResolvedValue(graphDetail([{ id: 'task-old', edgeId: 'edge-91', provenance: 'manual', isPrimary: false }]))
+    const remove = vi.spyOn(api, 'removeTaskRelationship').mockResolvedValue(undefined)
+    const navigate = vi.fn()
+    const { host } = await renderWithProps({ onNavigateTask: navigate })
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-timeline-git="commit-0"]')?.focus())
+    await act(async () => {})
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open task task-old"]')?.click())
+    expect(navigate).toHaveBeenCalledWith('task-old')
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove task task-old from commit-0"]')?.click())
+    expect(remove).toHaveBeenCalledWith('wb-1', 'task-old', 'edge-91')
+  })
+
+  it('attaches with the selected event identity and reloads detail after a successful reassign', async () => {
+    const detail = graphDetail([{ id: 'task-old', edgeId: 'edge-91', provenance: 'manual', isPrimary: false }])
+    const afterAttach = graphDetail([
+      { id: 'task-old', edgeId: 'edge-91', provenance: 'manual', isPrimary: false },
+      { id: 'task-added', edgeId: 'edge-new', provenance: 'manual', isPrimary: false },
+    ])
+    const refreshed = graphDetail([{ id: 'task-new', edgeId: 'edge-92', provenance: 'manual', isPrimary: true }])
+    vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue({ ...firstPage, gitCommits: [gitCommit(0, { sha: 'commit-0' })], svnRevisions: [], hasMore: false })
+    const getDetail = vi.spyOn(api, 'getGraphEntityDetail').mockResolvedValueOnce(detail).mockResolvedValueOnce(afterAttach).mockResolvedValueOnce(refreshed)
+    const attach = vi.spyOn(api, 'attachTaskRelationship').mockResolvedValue({ edgeId: 'edge-new', taskId: 'task-added', targetKind: 'gitCommit', targetId: 'commit-0', relation: 'traces', provenance: 'manual', isPrimary: false })
+    const reassign = vi.spyOn(api, 'reassignTaskRelationship').mockResolvedValue({ edgeId: 'edge-92', taskId: 'task-new', targetKind: 'gitCommit', targetId: 'commit-0', relation: 'traces', provenance: 'manual', isPrimary: true })
+    const prompts = vi.fn().mockReturnValueOnce('task-added').mockReturnValueOnce('task-new')
+    vi.stubGlobal('prompt', prompts)
+    const { host } = await renderWithProps()
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-timeline-git="commit-0"]')?.focus())
+    await act(async () => {})
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Attach task to commit-0"]')?.click())
+    expect(attach).toHaveBeenCalledWith('wb-1', 'task-added', 'gitCommit', 'commit-0')
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Reassign task task-old from commit-0"]')?.click())
+    expect(reassign).toHaveBeenCalledWith('wb-1', 'task-old', 'task-new', 'gitCommit', 'commit-0', 'edge-91')
+    expect(getDetail).toHaveBeenCalledTimes(3)
+    expect(host.textContent).toContain('task-new')
+    expect(host.textContent).not.toContain('task-old')
+    expect(prompts).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves the visible old link when reassign is rejected', async () => {
+    vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue({ ...firstPage, gitCommits: [gitCommit(0, { sha: 'commit-0' })], svnRevisions: [], hasMore: false })
+    vi.spyOn(api, 'getGraphEntityDetail').mockResolvedValue(graphDetail([{ id: 'task-old', edgeId: 'edge-91', provenance: 'manual', isPrimary: false }]))
+    const reassign = vi.spyOn(api, 'reassignTaskRelationship').mockRejectedValue(new Error('rejected'))
+    vi.stubGlobal('prompt', vi.fn().mockReturnValue('task-new'))
+    const { host } = await renderWithProps()
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-timeline-git="commit-0"]')?.focus())
+    await act(async () => {})
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Reassign task task-old from commit-0"]')?.click())
+    expect(reassign).toHaveBeenCalledWith('wb-1', 'task-old', 'task-new', 'gitCommit', 'commit-0', 'edge-91')
+    expect(host.textContent).toContain('task-old')
+    expect(host.textContent).not.toContain('task-new')
+  })
 })
+
+const renderWithProps = async (props: React.ComponentProps<typeof WorktreeVersionControlTimeline> = {}) => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => root.render(<WorktreeVersionControlTimeline workbenchId="wb-1" worktreeId="wt-1" {...props} />))
+  await act(async () => {})
+  return { host, root }
+}

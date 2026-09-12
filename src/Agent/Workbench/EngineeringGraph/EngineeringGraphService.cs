@@ -215,6 +215,26 @@ public sealed class EngineeringGraphService
             throw new EngineeringGraphConstraintException("The target already has a primary task relationship.", "GRAPH_PRIMARY_RELATIONSHIP_EXISTS");
         }
     }
+
+    public GraphEdge ReassignTaskRelationship(string currentTaskId, string replacementTaskId, GraphEntityKind targetKind, string targetId, string currentEdgeId,
+        GraphProvenance provenance = GraphProvenance.Manual, bool isPrimary = false)
+    {
+        var current = FindTask(currentTaskId) ?? throw new EngineeringGraphConstraintException("Task was not found in the current Workbench.", "TASK_NOT_FOUND");
+        var replacement = FindTask(replacementTaskId) ?? throw new EngineeringGraphConstraintException("Replacement task was not found in the current Workbench.", "TASK_NOT_FOUND");
+        var target = FindEntity(targetKind, targetId) ?? throw new EngineeringGraphConstraintException("Target entity was not registered in the current Workbench.", "GRAPH_TARGET_NOT_FOUND");
+        if (!Relations.ContainsKey((GraphEntityKind.Task, targetKind))) throw new EngineeringGraphConstraintException("The target kind is not a supported task relationship.");
+        if (replacement.ScopeKind == GraphTaskScopeKind.Worktree && replacement.WorktreeId != target.WorktreeId) throw new EngineeringGraphConstraintException("A worktree-scoped task can only link within its Worktree.");
+        var old = GetEdges(GraphEntityKind.Task, currentTaskId, targetKind).SingleOrDefault(edge => edge.EdgeId == currentEdgeId && edge.ToId == targetId)
+            ?? throw new EngineeringGraphConstraintException("The relationship was not found in the current Workbench.", "RELATIONSHIP_NOT_FOUND");
+        using var tx = _store.Connection.BeginTransaction();
+        Execute(tx, "DELETE FROM graph_edges WHERE edge_id=$edge", ("$edge", old.EdgeId));
+        var now = DateTimeOffset.UtcNow;
+        var edge = new GraphEdge(Guid.NewGuid().ToString("N"), GraphEntityKind.Task, replacementTaskId, targetKind, targetId, Relations[(GraphEntityKind.Task, targetKind)], provenance, isPrimary, now, now);
+        Execute(tx, "INSERT INTO graph_edges (edge_id,from_kind,from_id,to_kind,to_id,relation_kind,provenance,is_primary,created_utc,updated_utc) VALUES ($edge,'task',$task,$kind,$target,$relation,$prov,$primary,$created,$updated)",
+            ("$edge", edge.EdgeId), ("$task", replacementTaskId), ("$kind", Kind(targetKind)), ("$target", targetId), ("$relation", Relation(edge.RelationKind)), ("$prov", provenance.ToString().ToLowerInvariant()), ("$primary", isPrimary ? 1 : 0), ("$created", now.ToString("O")), ("$updated", now.ToString("O")));
+        tx.Commit();
+        return edge;
+    }
     public void RemoveEntity(GraphEntityKind kind, string entityId)
     {
         ExecuteNonQuery("DELETE FROM graph_edges WHERE from_kind=$kind AND from_id=$id OR to_kind=$kind AND to_id=$id", ("$kind", Kind(kind)), ("$id", entityId));
