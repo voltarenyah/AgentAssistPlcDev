@@ -14,6 +14,9 @@ public sealed record GraphTask(
     DateTimeOffset? CreatedUtc = null, DateTimeOffset? UpdatedUtc = null,
     int Priority = 0, string Intent = "", string ExpectedResult = "");
 
+public sealed record LegacyImportDiagnostic(string TaskId, string WorktreeId, string Message);
+public sealed record LegacyImportResult(int ImportedCount, IReadOnlyList<LegacyImportDiagnostic> Diagnostics);
+
 public sealed record GraphEntity(
     GraphEntityKind Kind, string EntityId, string WorkbenchId, string? WorktreeId,
     string? DeviceId = null, string? ExternalRef = null);

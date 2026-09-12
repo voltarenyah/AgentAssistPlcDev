@@ -27,6 +27,7 @@ public sealed class EngineeringGraphService
         _workbenchId = Require(workbenchId, nameof(workbenchId));
         _worktreeExists = worktreeExists ?? (_ => false);
     }
+    public string WorkbenchId() => _workbenchId;
 
     public GraphTask CreateTask(string taskId, GraphTaskScopeKind scope, string? worktreeId, string title, GraphTaskType type,
         GraphTaskStatus status = GraphTaskStatus.Todo, string? description = null, int priority = 0,
@@ -55,6 +56,73 @@ public sealed class EngineeringGraphService
             ("$created", now.ToString("O")), ("$updated", now.ToString("O")));
         tx.Commit();
         return task;
+    }
+
+    public void ImportTask(GraphTask task, IReadOnlyList<string> elementRefs, DateTimeOffset? doneUtc, string sourceId)
+    {
+        if (HasLegacyImport(sourceId)) return;
+        if (FindTask(task.TaskId) is not null)
+            throw new EngineeringGraphConstraintException($"Legacy task ID '{task.TaskId}' already exists; import was not applied.");
+        if (task.WorkbenchId != _workbenchId || task.ScopeKind != GraphTaskScopeKind.Worktree || task.WorktreeId is null || !_worktreeExists(task.WorktreeId))
+            throw new EngineeringGraphConstraintException("Legacy task has invalid Workbench or Worktree scope.");
+        var metadata = JsonSerializer.Serialize(new { priority = task.Priority, intent = task.Intent, expectedResult = task.ExpectedResult, elementRefs, doneUtc });
+        using var tx = _store.Connection.BeginTransaction();
+        Execute(tx, "INSERT INTO tasks (task_id,workbench_id,scope_kind,worktree_id,type,status,title,description,metadata_json,created_utc,updated_utc) VALUES ($id,$wb,'worktree',$wt,$type,$status,$title,$description,$metadata,$created,$updated); INSERT INTO graph_entities (entity_kind,entity_id,workbench_id,worktree_id) VALUES ('task',$id,$wb,$wt); INSERT INTO legacy_imports (source_kind,source_id,imported_utc) VALUES ('tasks.json',$source,$imported);",
+            ("$id", task.TaskId), ("$wb", task.WorkbenchId), ("$wt", task.WorktreeId), ("$type", task.Type.ToString().ToLowerInvariant()),
+            ("$status", task.Status.ToString().ToLowerInvariant()), ("$title", task.Title), ("$description", task.Description), ("$metadata", metadata),
+            ("$created", task.CreatedUtc!.Value.ToString("O")), ("$updated", (task.UpdatedUtc ?? task.CreatedUtc)!.Value.ToString("O")),
+            ("$source", sourceId), ("$imported", DateTimeOffset.UtcNow.ToString("O")));
+        tx.Commit();
+    }
+
+    public IReadOnlyList<GraphTask> ListTasks(string? worktreeId = null)
+    {
+        using var command = _store.Connection.CreateCommand();
+        command.CommandText = "SELECT task_id FROM tasks WHERE workbench_id=$wb" +
+            (worktreeId is null ? "" : " AND worktree_id=$wt") + " ORDER BY created_utc;";
+        command.Parameters.AddWithValue("$wb", _workbenchId);
+        if (worktreeId is not null) command.Parameters.AddWithValue("$wt", worktreeId);
+        var ids = new List<string>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) ids.Add(reader.GetString(0));
+        return ids.Select(id => GetTask(id)!).ToArray();
+    }
+
+    public GraphTask? UpdateTask(string taskId, Func<GraphTask, GraphTask> change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        var current = GetTask(taskId);
+        if (current is null) return null;
+        var updated = change(current) with { UpdatedUtc = DateTimeOffset.UtcNow };
+        if (updated.WorkbenchId != _workbenchId || updated.TaskId != current.TaskId ||
+            updated.ScopeKind != current.ScopeKind || updated.WorktreeId != current.WorktreeId)
+            throw new EngineeringGraphConstraintException("Task identity and scope cannot be changed.");
+        var metadata = updated.MetadataJson ?? JsonSerializer.Serialize(new { priority = updated.Priority, intent = updated.Intent, expectedResult = updated.ExpectedResult });
+        ExecuteNonQuery("UPDATE tasks SET title=$title,description=$description,status=$status,metadata_json=$metadata,updated_utc=$updated WHERE task_id=$id AND workbench_id=$wb",
+            ("$title", updated.Title), ("$description", updated.Description), ("$status", updated.Status.ToString().ToLowerInvariant()),
+            ("$metadata", metadata), ("$updated", updated.UpdatedUtc!.Value.ToString("O")), ("$id", taskId), ("$wb", _workbenchId));
+        return updated with { MetadataJson = metadata };
+    }
+
+    public bool HasLegacyImport(string sourceId) => Convert.ToInt32(Scalar(
+        "SELECT COUNT(*) FROM legacy_imports WHERE source_kind='tasks.json' AND source_id=$id;", ("$id", sourceId))) != 0;
+
+    public void MarkLegacyImport(string sourceId) => ExecuteNonQuery(
+        "INSERT OR IGNORE INTO legacy_imports (source_kind,source_id,imported_utc) VALUES ('tasks.json',$id,$utc);",
+        ("$id", sourceId), ("$utc", DateTimeOffset.UtcNow.ToString("O")));
+
+    public GraphTask? FindTask(string taskId) => GetTask(taskId);
+
+    public bool DeleteTask(string taskId)
+    {
+        using var tx = _store.Connection.BeginTransaction();
+        using var command = _store.Connection.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = "DELETE FROM tasks WHERE task_id=$id AND workbench_id=$wb; DELETE FROM graph_entities WHERE entity_kind='task' AND entity_id=$id;";
+        command.Parameters.AddWithValue("$id", taskId); command.Parameters.AddWithValue("$wb", _workbenchId);
+        var removed = command.ExecuteNonQuery() > 0;
+        tx.Commit();
+        return removed;
     }
 
     public void RegisterEntity(GraphEntity entity)

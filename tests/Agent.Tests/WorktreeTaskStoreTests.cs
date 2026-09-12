@@ -1,4 +1,6 @@
 using Agent.Workbench;
+using Agent.Workbench.EngineeringGraph;
+using System.Text.Json;
 using Xunit;
 
 namespace Agent.Tests;
@@ -128,8 +130,82 @@ public sealed class WorktreeTaskStoreTests : IDisposable
         Assert.Equal(second.TaskId, remaining.TaskId);
     }
 
+    [Fact]
+    public void ImportsLegacyTasksIdempotentlyAndPreservesFieldsAcrossWorktrees()
+    {
+        var workbenchRoot = CreateGraphFixture("wb-1", ("wt-1", "one"), ("wt-2", "two"), ("wt-3", "three"));
+        var firstRoot = Path.Combine(workbenchRoot, "worktrees", "one");
+        var secondRoot = Path.Combine(workbenchRoot, "worktrees", "two");
+        var created = DateTimeOffset.UtcNow.AddDays(-2);
+        var task = new WorktreeTask("legacy-1", "Imported", "details", WorktreeTaskStatus.Done,
+            ["Device/FB"], created, created.AddDays(1));
+        Directory.CreateDirectory(firstRoot); Directory.CreateDirectory(secondRoot);
+        var jsonStore = new AtomicJsonStore();
+        jsonStore.Write(WorktreeTaskStore.TasksPath(firstRoot), new WorktreeTaskList(1, [task]));
+        jsonStore.Write(WorktreeTaskStore.TasksPath(secondRoot), new WorktreeTaskList(1, [task with { TaskId = "legacy-2" }]));
+
+        var store = new WorktreeTaskStore(new AtomicJsonStore());
+        var imported = Assert.Single(store.Load(firstRoot).Tasks);
+        Assert.Equal(task.TaskId, imported.TaskId);
+        Assert.Equal(task.Title, imported.Title);
+        Assert.Equal(task.Details, imported.Details);
+        Assert.Equal(task.Status, imported.Status);
+        Assert.Equal(task.ElementRefs, imported.ElementRefs);
+        Assert.Equal(task.CreatedUtc, imported.CreatedUtc);
+        Assert.Equal(task.DoneUtc, imported.DoneUtc);
+        using (var graphStore = new EngineeringGraphStore(workbenchRoot))
+        {
+            Assert.Equal(2, Convert.ToInt32(Scalar(graphStore.Connection, "SELECT COUNT(*) FROM tasks;")));
+        }
+        var added = store.Add(firstRoot, "Mirrored");
+        Assert.Contains(new AtomicJsonStore().Read<WorktreeTaskList>(WorktreeTaskStore.TasksPath(firstRoot)).Tasks, item => item.TaskId == added.TaskId);
+        var changed = store.Update(firstRoot, added.TaskId, item => item with { Title = "Changed" });
+        Assert.Equal("Changed", Assert.Single(new AtomicJsonStore().Read<WorktreeTaskList>(WorktreeTaskStore.TasksPath(firstRoot)).Tasks, item => item.TaskId == added.TaskId).Title);
+        Assert.True(store.Delete(firstRoot, added.TaskId));
+        Assert.DoesNotContain(new AtomicJsonStore().Read<WorktreeTaskList>(WorktreeTaskStore.TasksPath(firstRoot)).Tasks, item => item.TaskId == added.TaskId);
+        Assert.Single(store.Load(firstRoot).Tasks);
+        Assert.Single(store.Load(secondRoot).Tasks);
+        jsonStore.Write(WorktreeTaskStore.TasksPath(secondRoot), new WorktreeTaskList(1, [task]));
+        _ = store.Load(secondRoot);
+        Assert.Single(store.LastImportDiagnostics);
+        Assert.Equal("legacy-1", store.LastImportDiagnostics[0].TaskId);
+        Assert.Equal("wt-2", store.LastImportDiagnostics[0].WorktreeId);
+        Assert.Equal("Imported", Assert.Single(store.Load(firstRoot).Tasks).Title);
+    }
+
+    private string CreateGraphFixture(string workbenchId, params (string Id, string Name)[] worktrees)
+    {
+        var root = Path.Combine(_testRoot, "graph-workbench");
+        Directory.CreateDirectory(Path.Combine(root, "worktrees"));
+        var registrations = worktrees.Select(w => new { worktreeId = w.Id, name = w.Name, branch = w.Name, relativePath = w.Name });
+        File.WriteAllText(Path.Combine(root, "workbench.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = "1.2", workbenchId, name = "Test", createdAt = DateTimeOffset.UtcNow.ToString("O"), rootPath = root,
+            repositoryPath = Path.Combine(root, "repo"), engineeringProjectId = (string?)null, sourceProjectPath = (string?)null,
+            worktrees = registrations
+        }));
+        foreach (var worktree in worktrees)
+        {
+            var path = Path.Combine(root, "worktrees", worktree.Name);
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "worktree.json"), JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.2", worktreeId = worktree.Id, workbenchId, name = worktree.Name, branch = worktree.Name,
+                createdAt = DateTimeOffset.UtcNow.ToString("O"), baseCommit = (string?)null, engineeringProjectId = (string?)null,
+                sourceProjectPath = (string?)null, deviceIds = Array.Empty<string>(), lastReconciliationCommit = (string?)null
+            }));
+        }
+        return root;
+    }
+
+    private static long Scalar(Microsoft.Data.Sqlite.SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar());
+    }
+
     public void Dispose()
     {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         if (Directory.Exists(_testRoot))
         {
             Directory.Delete(_testRoot, recursive: true);

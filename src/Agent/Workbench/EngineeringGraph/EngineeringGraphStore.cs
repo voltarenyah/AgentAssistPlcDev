@@ -21,6 +21,7 @@ public sealed class EngineeringGraphStore : IDisposable
             DataSource = DatabasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             ForeignKeys = true,
+            Pooling = false,
         }.ToString());
         try
         {
