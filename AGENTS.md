@@ -1,5 +1,21 @@
 # Agent instructions for AgentAssistPlcDev
 
+## Read first
+
+This file is operating policy and a map, not a knowledge base. Read the relevant document
+before changing that area.
+
+- Product overview and application layout: `README.md`
+- Version-control semantics (Git semantic state vs native TIA state): `docs/version-control-workflow.md`
+- PLC source workflow and live TIA acceptance: `docs/plc-workflow.md`
+- Device knowledge workflow: `docs/knowledge-workflow.md`
+- Decided design and architecture decisions: `docs/design/`, `docs/adr/`
+- UI specifications: `docs/ui-spec/`
+- Implementation plans: `docs/plans/`
+- Codex worker operations: `docs/local-codex-worker.md`
+
+`docs/superpowers/` holds historical plans and specifications (July–August 2026): background, not current authority.
+
 ## Start the local test flow
 
 When testing the application in development mode, use the repository launcher as the single service entry point. It starts the ASP.NET API, the Vite frontend, and the LangGraph Python sidecar.
@@ -116,6 +132,10 @@ When asked to work on issue `#N`, treat the issue as the task specification.
 Codex may investigate issues, implement changes, run validation, create commits,
 push branches, and prepare pull requests. Human review is required before
 integration into the default branch.
+
+Every task prompt or issue states four things: **Goal** (what must change), **Context** (the
+files, docs, or errors that matter), **Constraints** (architecture, safety, conventions), and
+**Done when** (what must be true before the task is complete).
 
 ### Core Development Rules
 
