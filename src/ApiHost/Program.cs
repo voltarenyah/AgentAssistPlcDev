@@ -62,6 +62,7 @@ builder.Services.AddCors(options =>
 });
 builder.Services.AddSingleton<AtomicJsonStore>();
 builder.Services.AddSingleton<WorktreeTaskStore>();
+builder.Services.AddSingleton<EngineeringGraphApiFactory>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
 builder.Services.AddSingleton<WorkbenchTagStore>();
 builder.Services.AddSingleton(_ => new TrustedWorkbenchRootRegistry(

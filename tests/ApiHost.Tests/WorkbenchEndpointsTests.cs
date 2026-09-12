@@ -34,6 +34,104 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task EngineeringTaskApiSupportsProjectCrudAndCategorizedEmptyDetail()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var route = $"/api/workbenches/{fixture.Context.WorkbenchId}/tasks";
+
+        var created = await fixture.Client.PostAsJsonAsync(route, new
+        {
+            title = "Improve diagnostics",
+            type = "improvement",
+            status = "todo",
+            priority = 2,
+            intent = "Make failures actionable",
+            expectedResult = "Clear diagnostics",
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var task = await created.Content.ReadFromJsonAsync<JsonElement>();
+        var taskId = task.GetProperty("taskId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(taskId));
+
+        var detail = await fixture.Client.GetAsync($"{route}/{taskId}");
+        Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+        var payload = await detail.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("project", payload.GetProperty("task").GetProperty("scope").GetString());
+        var taskPayload = payload.GetProperty("task");
+        Assert.Equal("Improve diagnostics", taskPayload.GetProperty("title").GetString());
+        Assert.Equal("improvement", taskPayload.GetProperty("type").GetString());
+        Assert.Equal("todo", taskPayload.GetProperty("status").GetString());
+        Assert.Equal(2, taskPayload.GetProperty("priority").GetInt32());
+        Assert.Equal("Make failures actionable", taskPayload.GetProperty("intent").GetString());
+        Assert.Equal("Clear diagnostics", taskPayload.GetProperty("expectedResult").GetString());
+        Assert.True(taskPayload.GetProperty("createdUtc").GetDateTimeOffset() <= DateTimeOffset.UtcNow);
+        Assert.True(taskPayload.GetProperty("updatedUtc").GetDateTimeOffset() >= taskPayload.GetProperty("createdUtc").GetDateTimeOffset());
+        foreach (var category in new[] { "sessions", "commits", "sourceObjects", "svnRevisions" })
+            Assert.Equal(0, payload.GetProperty(category).GetArrayLength());
+
+        var worktreeTask = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/tasks",
+            new { title = "Worktree-only task" });
+        Assert.Equal(HttpStatusCode.Created, worktreeTask.StatusCode);
+        var worktreeTaskId = (await worktreeTask.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.GetAsync($"{route}/{worktreeTaskId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.PatchAsJsonAsync($"{route}/{worktreeTaskId}", new { title = "must not change" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.DeleteAsync($"{route}/{worktreeTaskId}")).StatusCode);
+
+        var updated = await fixture.Client.PatchAsJsonAsync($"{route}/{taskId}", new
+        {
+            status = "inProgress",
+            type = "feature",
+            title = "Improve diagnostics now",
+            priority = 7,
+            intent = "Updated intent",
+            expectedResult = "Updated result",
+        });
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        var updatedPayload = await (await fixture.Client.GetAsync($"{route}/{taskId}")).Content.ReadFromJsonAsync<JsonElement>();
+        var updatedTask = updatedPayload.GetProperty("task");
+        Assert.Equal("feature", updatedTask.GetProperty("type").GetString());
+        Assert.Equal("inProgress", updatedTask.GetProperty("status").GetString());
+        Assert.Equal(7, updatedTask.GetProperty("priority").GetInt32());
+        Assert.Equal("Updated intent", updatedTask.GetProperty("intent").GetString());
+        Assert.Equal("Updated result", updatedTask.GetProperty("expectedResult").GetString());
+        Assert.Equal("Improve diagnostics now", updatedTask.GetProperty("title").GetString());
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"{route}/{taskId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.GetAsync($"{route}/{taskId}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task WorktreeTaskDetailImportsLegacyTaskBeforeGraphLookup()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var taskId = "legacy-direct-detail";
+        var createdUtc = DateTimeOffset.UtcNow.AddMinutes(-2);
+        new AtomicJsonStore().Write(
+            Path.Combine(fixture.Context.WorktreeRoot, "tasks.json"),
+            new WorktreeTaskList(1, [new WorktreeTask(
+                taskId, "Imported task", "Legacy details", WorktreeTaskStatus.InProgress,
+                ["Blocks/Main"], createdUtc, null)]));
+
+        var response = await fixture.Client.GetAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/tasks/{taskId}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var task = payload.GetProperty("task");
+        Assert.Equal(taskId, task.GetProperty("taskId").GetString());
+        Assert.Equal("worktree", task.GetProperty("scope").GetString());
+        Assert.Equal(fixture.Context.WorktreeId, task.GetProperty("worktreeId").GetString());
+        Assert.Equal("Imported task", task.GetProperty("title").GetString());
+        Assert.Equal("feature", task.GetProperty("type").GetString());
+        Assert.Equal("inProgress", task.GetProperty("status").GetString());
+        Assert.Equal("Legacy task", task.GetProperty("intent").GetString());
+        Assert.Equal("Unspecified", task.GetProperty("expectedResult").GetString());
+        Assert.NotEqual(default, task.GetProperty("createdUtc").GetDateTimeOffset());
+        foreach (var category in new[] { "sessions", "commits", "sourceObjects", "svnRevisions" })
+            Assert.Equal(0, payload.GetProperty(category).GetArrayLength());
+    }
+
+    [Fact]
     public async Task TestingHostServesSpaStaticAssetsAndKeepsApiRoutesOutOfFallback()
     {
         await using var factory = new WebApplicationFactory<Program>()

@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Agent.Workbench.EngineeringGraph;
 
@@ -97,9 +98,10 @@ public sealed class EngineeringGraphService
         if (updated.WorkbenchId != _workbenchId || updated.TaskId != current.TaskId ||
             updated.ScopeKind != current.ScopeKind || updated.WorktreeId != current.WorktreeId)
             throw new EngineeringGraphConstraintException("Task identity and scope cannot be changed.");
-        var metadata = updated.MetadataJson ?? JsonSerializer.Serialize(new { priority = updated.Priority, intent = updated.Intent, expectedResult = updated.ExpectedResult });
-        ExecuteNonQuery("UPDATE tasks SET title=$title,description=$description,status=$status,metadata_json=$metadata,updated_utc=$updated WHERE task_id=$id AND workbench_id=$wb",
+        var metadata = UpdatedMetadataJson(updated);
+        ExecuteNonQuery("UPDATE tasks SET title=$title,description=$description,type=$type,status=$status,metadata_json=$metadata,updated_utc=$updated WHERE task_id=$id AND workbench_id=$wb",
             ("$title", updated.Title), ("$description", updated.Description), ("$status", updated.Status.ToString().ToLowerInvariant()),
+            ("$type", updated.Type.ToString().ToLowerInvariant()),
             ("$metadata", metadata), ("$updated", updated.UpdatedUtc!.Value.ToString("O")), ("$id", taskId), ("$wb", _workbenchId));
         return updated with { MetadataJson = metadata };
     }
@@ -174,8 +176,9 @@ public sealed class EngineeringGraphService
     public GraphTask? GetTask(string taskId)
     {
         using var c = _store.Connection.CreateCommand();
-        c.CommandText = "SELECT workbench_id,scope_kind,worktree_id,title,type,status,description,metadata_json,created_utc,updated_utc FROM tasks WHERE task_id=$id;";
+        c.CommandText = "SELECT workbench_id,scope_kind,worktree_id,title,type,status,description,metadata_json,created_utc,updated_utc FROM tasks WHERE task_id=$id AND workbench_id=$wb;";
         c.Parameters.AddWithValue("$id", taskId);
+        c.Parameters.AddWithValue("$wb", _workbenchId);
         using var r = c.ExecuteReader();
         if (!r.Read()) return null;
         var metadata = r.IsDBNull(7) ? null : JsonSerializer.Deserialize<TaskMetadata>(r.GetString(7),
@@ -222,4 +225,15 @@ public sealed class EngineeringGraphService
     private static GraphProvenance ParseProvenance(string value)=>value switch { "default"=>GraphProvenance.Default,"evidence"=>GraphProvenance.Evidence,_=>GraphProvenance.Manual };
     private sealed record TaskMetadata(int Priority, string Intent, string ExpectedResult);
     private static string Require(string? value,string name)=>string.IsNullOrWhiteSpace(value)?throw new ArgumentException("A value is required.",name):value;
+
+    private static string UpdatedMetadataJson(GraphTask task)
+    {
+        var metadata = string.IsNullOrWhiteSpace(task.MetadataJson)
+            ? new JsonObject()
+            : JsonNode.Parse(task.MetadataJson) as JsonObject ?? new JsonObject();
+        metadata["priority"] = task.Priority;
+        metadata["intent"] = task.Intent;
+        metadata["expectedResult"] = task.ExpectedResult;
+        return metadata.ToJsonString();
+    }
 }
