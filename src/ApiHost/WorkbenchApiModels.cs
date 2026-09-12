@@ -653,10 +653,10 @@ public static class WorkbenchEndpoints
                 .Select(edge => (edge.FromId, edge.Provenance, edge.IsPrimary)));
             var tasks = directTasks.Select(edge => (edge.FromId, edge.Provenance, edge.IsPrimary))
                 .Concat(traversedTasks).GroupBy(item => item.FromId, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal)
-                .Select(group => new EngineeringTaskRelationshipApiResponse(group.Key,
+                .Select(group => new EngineeringTaskRelationshipApiResponse(group.Key, "",
                     JsonNamingPolicy.CamelCase.ConvertName(group.First().Provenance.ToString()), group.Any(item => item.IsPrimary))).ToArray();
             var commits = evidenceCommits.OrderBy(edge => edge.FromId, StringComparer.Ordinal)
-                .Select(edge => new EngineeringTaskRelationshipApiResponse(edge.FromId,
+                .Select(edge => new EngineeringTaskRelationshipApiResponse(edge.FromId, edge.EdgeId,
                     JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary)).ToArray();
             return Results.Ok(new EngineeringGraphEntityDetailApiResponse(
                 JsonNamingPolicy.CamelCase.ConvertName(kind.ToString()), entity.EntityId,
@@ -1916,7 +1916,7 @@ public static class WorkbenchEndpoints
             EngineeringGraphService graph, string taskId, GraphEntityKind kind) =>
             graph.GetEdges(GraphEntityKind.Task, taskId, kind)
                 .Select(edge => new EngineeringTaskRelationshipApiResponse(
-                    edge.ToId, JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary))
+                    edge.ToId, edge.EdgeId, JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary))
                 .ToArray();
         return Results.Ok(new EngineeringTaskDetailApiResponse(
             ToEngineeringTaskResponse(task),

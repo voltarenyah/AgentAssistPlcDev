@@ -58,6 +58,7 @@ public sealed record EngineeringTaskApiResponse(
 
 public sealed record EngineeringTaskRelationshipApiResponse(
     string Id,
+    string EdgeId,
     string Provenance,
     bool IsPrimary);
 

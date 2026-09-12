@@ -369,10 +369,29 @@ export type EngineeringTask = {
 
 export type EngineeringTaskDetail = {
   task: EngineeringTask
-  sessions: Array<{ id: string; provenance: string; isPrimary: boolean }>
-  commits: Array<{ id: string; provenance: string; isPrimary: boolean }>
-  sourceObjects: Array<{ id: string; provenance: string; isPrimary: boolean }>
-  svnRevisions: Array<{ id: string; provenance: string; isPrimary: boolean }>
+  sessions: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  commits: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  sourceObjects: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  svnRevisions: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+}
+
+export type EngineeringGraphEntityDetail = {
+  kind: string
+  id: string
+  workbenchId: string
+  worktreeId: string | null
+  tasks: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  commits: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+}
+
+export type EngineeringTaskRelationshipMutation = {
+  edgeId: string
+  taskId: string
+  targetKind: string
+  targetId: string
+  relation: string
+  provenance: string
+  isPrimary: boolean
 }
 
 export type EngineeringTaskList = EngineeringTask[]
@@ -1322,6 +1341,14 @@ export const listGraphWorktreeTasks = (workbenchId: string, worktreeId: string) 
   workbenchRequest<EngineeringTaskList>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`)
 export const getWorktreeTaskDetail = (workbenchId: string, worktreeId: string, taskId: string) =>
   workbenchRequest<EngineeringTaskDetail>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`)
+export const attachTaskRelationship = (workbenchId: string, taskId: string, targetKind: string, targetId: string, isPrimary = false) =>
+  workbenchRequest<EngineeringTaskRelationshipMutation>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}/relationships`, jsonRequest('POST', { targetKind, targetId, isPrimary }))
+export const reassignTaskRelationship = (workbenchId: string, taskId: string, targetKind: string, targetId: string, isPrimary = false) =>
+  workbenchRequest<EngineeringTaskRelationshipMutation>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}/relationships/${encodeURIComponent(targetKind)}/${encodeURIComponent(targetId)}`, jsonRequest('PUT', { isPrimary }))
+export const removeTaskRelationship = (workbenchId: string, taskId: string, edgeId: string) =>
+  workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}/relationships/${encodeURIComponent(edgeId)}`, { method: 'DELETE' })
+export const getGraphEntityDetail = (workbenchId: string, entityKind: string, entityId: string) =>
+  workbenchRequest<EngineeringGraphEntityDetail>(`/workbenches/${encodeURIComponent(workbenchId)}/engineering-graph/${encodeURIComponent(entityKind)}/${encodeURIComponent(entityId)}`)
 export const getActiveProjectTask = (workbenchId: string) =>
   workbenchRequest<ActiveTaskResponse>(`/workbenches/${encodeURIComponent(workbenchId)}/active-task`)
 export const getActiveWorktreeTask = (workbenchId: string, worktreeId: string) =>

@@ -164,7 +164,7 @@ function TimelineColumnView({
   )
 }
 
-function EventDetails({ active, position }: { active: ActiveEvent; position: DetailPosition }) {
+function EventDetails({ active, position, entity, onAttach, onRemove }: { active: ActiveEvent; position: DetailPosition; entity?: api.EngineeringGraphEntityDetail; onAttach?: () => void; onRemove?: (taskId: string, edgeId: string) => void }) {
   const isGit = active.kind === 'git'
   const event = active.event
   const identifier = 'sha' in event ? event.sha : `r${event.revision}`
@@ -187,6 +187,7 @@ function EventDetails({ active, position }: { active: ActiveEvent; position: Det
         {!isGit && 'gitCommitSha' in event && <span title={event.gitCommitSha}>Git commit: {shortGitHash(event.gitCommitSha)}</span>}
         {isGit && 'files' in event && event.files.length > 0 && <span>Changed files: {event.files.length}</span>}
       </div>
+      {entity && <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border)' }}><div className="mb-1 font-semibold">Task links</div>{entity.tasks.length === 0 ? <span className="text-muted-foreground">Unassigned legacy record</span> : entity.tasks.map(link => <div key={link.edgeId || link.id} className="flex items-center gap-1"><button type="button" className="pointer-events-auto underline" aria-label={`Open task ${link.id}`} onClick={() => window.dispatchEvent(new CustomEvent('studio:navigate-task', { detail: link.id }))}>{link.id}</button><span className="text-muted-foreground">{link.provenance}</span>{link.edgeId && onRemove && <button type="button" className="pointer-events-auto underline" aria-label={`Remove task ${link.id} from ${identifier}`} onClick={() => onRemove(link.id, link.edgeId)}>Remove</button>}</div>)}{onAttach && <button type="button" className="pointer-events-auto secondary-button mt-1 h-6 px-2" aria-label={`Attach task to ${identifier}`} onClick={onAttach}>Attach</button>}</div>}
     </div>
   )
 }
@@ -200,10 +201,30 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
   const [error, setError] = useState<string | null>(null)
   const [activeEvent, setActiveEvent] = useState<ActiveEvent | null>(null)
   const [detailPosition, setDetailPosition] = useState<DetailPosition | null>(null)
+  const [entityDetails, setEntityDetails] = useState<Record<string, api.EngineeringGraphEntityDetail>>({})
 
   const activateEvent = (active: ActiveEvent | null, position?: DetailPosition) => {
     setActiveEvent(active)
     setDetailPosition(position ?? null)
+    if (active) {
+      const kind = active.kind === 'git' ? 'gitCommit' : 'svnRevision'
+      const id = active.kind === 'git' ? active.event.sha : String(active.event.revision)
+      if (!entityDetails[id]) void api.getGraphEntityDetail(workbenchId, kind, id).then(result => setEntityDetails(previous => ({ ...previous, [id]: result }))).catch(() => undefined)
+    }
+  }
+
+  const activeId = activeEvent ? activeEvent.kind === 'git' ? activeEvent.event.sha : String(activeEvent.event.revision) : null
+  const activeEntity = activeId ? entityDetails[activeId] : undefined
+  const activeKind = activeEvent?.kind === 'git' ? 'gitCommit' : 'svnRevision'
+  const attachActive = async () => {
+    if (!activeId) return
+    const taskId = window.prompt('Task ID to attach')?.trim()
+    if (!taskId) return
+    try { await api.attachTaskRelationship(workbenchId, taskId, activeKind, activeId); const result = await api.getGraphEntityDetail(workbenchId, activeKind, activeId); setEntityDetails(previous => ({ ...previous, [activeId]: result })) } catch { /* preserve visible links on failure */ }
+  }
+  const removeActive = async (taskId: string, edgeId: string) => {
+    if (!activeId) return
+    try { await api.removeTaskRelationship(workbenchId, taskId, edgeId); const result = await api.getGraphEntityDetail(workbenchId, activeKind, activeId); setEntityDetails(previous => ({ ...previous, [activeId]: result })) } catch { /* preserve visible links on failure */ }
   }
 
   const loadPage = useCallback(async (offset: number, append: boolean) => {
@@ -298,7 +319,7 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
             <span className="inline-flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-chart-3" /> Git commit</span>
             <span className="inline-flex items-center gap-1"><i className="h-2 w-2 rounded-[2px] bg-chart-2" /> SVN revision</span>
           </div>
-          {activeEvent && detailPosition && <EventDetails active={activeEvent} position={detailPosition} />}
+          {activeEvent && detailPosition && <EventDetails active={activeEvent} position={detailPosition} entity={activeEntity} onAttach={() => void attachActive()} onRemove={(taskId, edgeId) => void removeActive(taskId, edgeId)} />}
           <div className="flex items-center justify-between border-t px-4 py-2.5" style={{ borderColor: 'var(--border)' }}>
             <span className="text-[9px] text-muted-foreground">Hover or focus a shape for commit details.</span>
             {hasMore && (

@@ -67,6 +67,7 @@ import HardwareNetworkView from '@/studio/HardwareNetworkView'
 import HardwarePropertiesDock from '@/studio/HardwarePropertiesDock'
 import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
 import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
+import TaskDetail, { type TraceabilityItem } from '@/studio/workbench/TaskDetail'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
@@ -486,6 +487,10 @@ export default function MainStudio() {
   const [hardwareSelectedNodeId, setHardwareSelectedNodeId] = useState<string | null>(null)
   const [hardwareInspectedNodeId, setHardwareInspectedNodeId] = useState<string | null>(null)
   const [mainView, setMainView] = useState<MainView>({ kind: 'project' })
+  const [taskDetail, setTaskDetail] = useState<api.EngineeringTaskDetail | null>(null)
+  const [taskDetailTask, setTaskDetailTask] = useState<api.EngineeringTask | null>(null)
+  const [taskDetailLoading, setTaskDetailLoading] = useState(false)
+  const [taskDetailError, setTaskDetailError] = useState<string | null>(null)
   const [hardwareBomView, setHardwareBomView] = useState<api.HardwareBomView | null>(null)
   const [hardwareNetworkView, setHardwareNetworkView] = useState<api.HardwareNetworkView | null>(null)
   const selectionRequestId = useRef(0)
@@ -1931,6 +1936,20 @@ export default function MainStudio() {
   // In the desktop shell the header doubles as the window caption: dragging
   // empty header space moves the borderless window, double-click toggles
   // maximize. No-ops in a plain browser (see studio/desktopWindowBridge.ts).
+  const openTaskDetail = async (task: api.EngineeringTask) => {
+    if (!selection.workbenchId || !selection.worktreeId) return
+    setTaskDetailTask(task); setTaskDetail(null); setTaskDetailError(null); setTaskDetailLoading(true)
+    try { setTaskDetail(await api.getWorktreeTaskDetail(selection.workbenchId, selection.worktreeId, task.taskId)) }
+    catch (error) { setTaskDetailError(displayError(error)) }
+    finally { setTaskDetailLoading(false) }
+  }
+  const reloadTaskDetail = async () => { if (taskDetailTask) await openTaskDetail(taskDetailTask) }
+  const removeTaskDetailRelation = async (_kind: string, item: TraceabilityItem) => {
+    if (!taskDetail || !selection.workbenchId) return
+    try { await api.removeTaskRelationship(selection.workbenchId, taskDetail.task.taskId, item.edgeId); await reloadTaskDetail() }
+    catch (error) { showErrorToast(displayError(error)) }
+  }
+
   const handleHeaderMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0 || !isWindowDragTarget(event.target)) return
     sendWindowCommand('begin-drag')
@@ -2183,7 +2202,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              <WorktreeLandingPage
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind) => { if (kind === 'session') workspaceService.focusView('chat'); else if (kind === 'commit' || kind === 'svnRevision') workspaceService.focusView('source') }} /></div> : <WorktreeLandingPage
                 workbenchId={selection.workbenchId!}
                 worktreeId={selection.worktreeId}
                 tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}
@@ -2191,6 +2210,7 @@ export default function MainStudio() {
                 onSelectDevice={deviceId => {
                   if (activeWorkbench && activeWorktree) void selectDevice(activeWorkbench, activeWorktree, deviceId)
                 }}
+                onOpenTaskDetail={task => void openTaskDetail(task)}
               />
             )
           ) : !selection.deviceId && selection.workbenchId ? (

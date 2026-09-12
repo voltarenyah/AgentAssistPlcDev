@@ -29,6 +29,7 @@ type Props = {
   projectTasks?: api.EngineeringTask[]
   activeTask?: api.EngineeringTask | null
   onActiveTaskChanged?: (task: api.EngineeringTask | null) => void
+  onOpenTaskDetail?: (task: api.EngineeringTask) => void
 }
 
 const displayError = (error: unknown) => {
@@ -151,7 +152,7 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, projectTasks = [], activeTask = null, onActiveTaskChanged }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, projectTasks = [], activeTask = null, onActiveTaskChanged, onOpenTaskDetail }: Props) {
   const [newTitle, setNewTitle] = useState('')
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<EditDraft | null>(null)
@@ -302,6 +303,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                           </div>
                         )}
                       </div>
+                      {onOpenTaskDetail && !isLegacyTask(task) && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</button>}
                       {isLegacyTask(task) && <><button className="icon-button" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
                         <Pencil className="h-3 w-3" />
                       </button>
