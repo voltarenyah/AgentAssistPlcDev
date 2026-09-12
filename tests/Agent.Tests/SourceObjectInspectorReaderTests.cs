@@ -80,23 +80,27 @@ public sealed class SourceObjectInspectorReaderTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         File.WriteAllText(file, """
             <Document><SW.Blocks.FC><AttributeList><Name>Cylinder</Name></AttributeList><SW.Blocks.CompileUnit ID="network-3"><AttributeList><ProgrammingLanguage>LAD</ProgrammingLanguage></AttributeList><FlgNet><Parts>
-              <Access UId="21"><Symbol><Component Name="CylinderGoForwardPos" /></Symbol></Access><Access UId="22"><Symbol><Component Name="CylinderGoBackwardPos" /></Symbol></Access><Access UId="23"><Symbol><Component Name="CylinderMovementSimulate" /></Symbol></Access><Access UId="24"><Symbol><Component Name="CylinderGoBackwardPos" /></Symbol></Access><Access UId="25"><Symbol><Component Name="io_Cylinder@ForwardPos" /></Symbol></Access>
-              <Part Name="Contact" UId="26" /><Part Name="Contact" UId="27"><Negated Name="operand" /></Part><Part Name="TON" UId="28"><Instance UId="29"><Component Name="IEC_CylForwardMovement" /></Instance></Part><Part Name="Contact" UId="30" /><Part Name="Sr" UId="31" />
+              <Access UId="21"><Symbol><Component Name="CylinderGoForwardPos" /></Symbol></Access><Access UId="22"><Symbol><Component Name="CylinderGoBackwardPos" /></Symbol></Access><Access UId="23"><Symbol><Component Name="CylinderMovementSimulate" /></Symbol></Access><Access Scope="LiteralConstant" UId="24"><Constant><ConstantType>Bool</ConstantType><ConstantValue>false</ConstantValue></Constant></Access><Access UId="25"><Symbol><Component Name="CylinderGoBackwardPos" /></Symbol></Access><Access UId="26"><Symbol><Component Name="io_Cylinder@ForwardPos" /></Symbol></Access>
+              <Part Name="Contact" UId="27" /><Part Name="Contact" UId="28"><Negated Name="operand" /></Part><Part Name="TON" UId="29"><Instance UId="30"><Component Name="IEC_CylForwardMovement" /></Instance></Part><Part Name="Contact" UId="31" /><Part Name="Contact" UId="32" /><Part Name="Sr" UId="33" />
             </Parts><Wires>
-              <Wire><Powerrail /><NameCon UId="26" Name="in" /><NameCon UId="30" Name="in" /></Wire><Wire><IdentCon UId="21" /><NameCon UId="26" Name="operand" /></Wire><Wire><NameCon UId="26" Name="out" /><NameCon UId="27" Name="in" /></Wire><Wire><IdentCon UId="22" /><NameCon UId="27" Name="operand" /></Wire><Wire><NameCon UId="27" Name="out" /><NameCon UId="28" Name="IN" /></Wire><Wire><IdentCon UId="23" /><NameCon UId="28" Name="PT" /></Wire><Wire><NameCon UId="28" Name="Q" /><NameCon UId="31" Name="s" /></Wire><Wire><NameCon UId="28" Name="ET" /><OpenCon UId="32" /></Wire><Wire><IdentCon UId="24" /><NameCon UId="30" Name="operand" /></Wire><Wire><NameCon UId="30" Name="out" /><NameCon UId="31" Name="r1" /></Wire><Wire><IdentCon UId="25" /><NameCon UId="31" Name="operand" /></Wire>
+              <Wire><Powerrail /><NameCon UId="27" Name="in" /><NameCon UId="32" Name="in" /></Wire><Wire><IdentCon UId="21" /><NameCon UId="27" Name="operand" /></Wire><Wire><NameCon UId="27" Name="out" /><NameCon UId="28" Name="in" /></Wire><Wire><IdentCon UId="22" /><NameCon UId="28" Name="operand" /></Wire><Wire><NameCon UId="28" Name="out" /><NameCon UId="29" Name="IN" /></Wire><Wire><IdentCon UId="23" /><NameCon UId="29" Name="PT" /></Wire><Wire><NameCon UId="29" Name="Q" /><NameCon UId="31" Name="in" /></Wire><Wire><NameCon UId="29" Name="ET" /><OpenCon UId="34" /></Wire><Wire><IdentCon UId="24" /><NameCon UId="31" Name="operand" /></Wire><Wire><NameCon UId="31" Name="out" /><NameCon UId="33" Name="s" /></Wire><Wire><IdentCon UId="25" /><NameCon UId="32" Name="operand" /></Wire><Wire><NameCon UId="32" Name="out" /><NameCon UId="33" Name="r1" /></Wire><Wire><IdentCon UId="26" /><NameCon UId="33" Name="operand" /></Wire>
             </Wires></FlgNet></SW.Blocks.CompileUnit></SW.Blocks.FC></Document>
             """);
 
         var ladder = Assert.Single(new SourceObjectInspectorReader().Read(context, "Blocks/Cylinder.xml", new DeviceSourceResolver(_ => { })).Networks).Ladder!;
 
-        var timer = Assert.Single(ladder.Elements, element => element.Id == "28");
+        var timer = Assert.Single(ladder.Elements, element => element.Id == "29");
         Assert.Equal("IEC_CylForwardMovement", timer.Label);
         Assert.Contains(timer.Pins, pin => pin.Name == "PT" && pin.Label == "CylinderMovementSimulate");
-        var setReset = Assert.Single(ladder.Elements, element => element.Id == "31");
+        var falseContact = Assert.Single(ladder.Elements, element => element.Id == "31");
+        Assert.Equal("false", falseContact.Label);
+        Assert.Null(falseContact.ReferencedObject);
+        Assert.Contains(falseContact.Pins, pin => pin.Name == "operand" && pin.Label == "false" && pin.ReferencedObject is null);
+        var setReset = Assert.Single(ladder.Elements, element => element.Id == "33");
         Assert.Equal("io_Cylinder@ForwardPos", setReset.Label);
         Assert.Contains(setReset.Pins, pin => pin.Name == "s");
         Assert.Contains(setReset.Pins, pin => pin.Name == "r1");
-        Assert.Equal(11, ladder.Wires.Count);
+        Assert.Equal(13, ladder.Wires.Count);
     }
 
     public void Dispose()
