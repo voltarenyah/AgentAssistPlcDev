@@ -95,6 +95,52 @@ public sealed class SessionManagerTests : IDisposable
     }
 
     [Fact]
+    public void TaskId_roundtrips_in_session_header_and_listing()
+    {
+        var device = CreateDeviceContext();
+        var created = SessionManager.CreateNewSession(
+            device, new ChatRequestSettings { Model = "task" }, null, "task-123");
+
+        var loaded = SessionManager.LoadSession(device, created.Header.SessionId);
+        var listed = Assert.Single(SessionManager.ListSessions(device));
+
+        Assert.Equal("task-123", loaded!.Header.TaskId);
+        Assert.Equal("task-123", listed.TaskId);
+    }
+
+    [Fact]
+    public void Legacy_session_without_task_id_loads_unassigned()
+    {
+        var device = CreateDeviceContext();
+        var sessionId = SessionManager.NewSessionId();
+        var directory = SessionManager.SessionsDirectory(device);
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, $"{sessionId}.json"), $$"""
+            {
+              "header": {
+                "sessionId": "{{sessionId}}",
+                "workbenchId": "{{device.WorkbenchId}}",
+                "worktreeId": "{{device.WorktreeId}}",
+                "deviceId": "{{device.DeviceId}}",
+                "worktreeRoot": "{{device.WorktreeRoot.Replace("\\", "\\\\")}}",
+                "knowledgeDbPath": "{{device.KnowledgeDbPath.Replace("\\", "\\\\")}}",
+                "createdAt": "2026-01-01T00:00:00.0000000+00:00",
+                "updatedAt": "2026-01-01T00:00:00.0000000+00:00",
+                "settings": { "model": "legacy" }
+              },
+              "messages": [],
+              "roundUsages": []
+            }
+            """);
+
+        var loaded = SessionManager.LoadSession(device, sessionId);
+
+        Assert.NotNull(loaded);
+        Assert.Null(loaded!.Header.TaskId);
+        Assert.Null(Assert.Single(SessionManager.ListSessions(device)).TaskId);
+    }
+
+    [Fact]
     public void ListSessions_returns_device_identity_and_counts_all_user_turns()
     {
         var device = CreateDeviceContext();

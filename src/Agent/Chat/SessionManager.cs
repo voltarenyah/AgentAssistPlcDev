@@ -100,7 +100,8 @@ public static class SessionManager
     public static ChatSessionData CreateNewSession(
         DeviceContext device,
         ChatRequestSettings settings,
-        string? runtimeContext) =>
+        string? runtimeContext,
+        string? taskId = null) =>
         CreateNewSession(
             device?.WorkbenchId ?? throw new ArgumentNullException(nameof(device)),
             device.WorktreeId,
@@ -108,7 +109,8 @@ public static class SessionManager
             device.WorktreeRoot,
             device.KnowledgeDbPath,
             settings,
-            runtimeContext);
+            runtimeContext,
+            taskId);
 
     /// <summary>Create a new empty session using explicit stable identities and paths.</summary>
     public static ChatSessionData CreateNewSession(
@@ -118,7 +120,8 @@ public static class SessionManager
         string worktreeRoot,
         string knowledgeDbPath,
         ChatRequestSettings settings,
-        string? runtimeContext)
+        string? runtimeContext,
+        string? taskId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workbenchId);
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreeId);
@@ -140,7 +143,8 @@ public static class SessionManager
             now,
             settings,
             runtimeContext,
-            "New chat");
+            "New chat",
+            taskId);
         var data = new ChatSessionData(
             header,
             new List<ChatMessage>(),
@@ -331,7 +335,8 @@ public static class SessionManager
                 updatedAt,
                 messageCount,
                 turnCount,
-                firstUserMessage);
+                firstUserMessage,
+                GetString(header, "taskId"));
         }
         catch (Exception exception) when (exception is JsonException or IOException)
         {

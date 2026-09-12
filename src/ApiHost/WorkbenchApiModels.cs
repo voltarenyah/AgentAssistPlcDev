@@ -112,7 +112,7 @@ public sealed record CreateWorktreeTaskApiRequest(
 /// <summary>Device list entry: opaque object id plus the human-readable PLC name from device.json.</summary>
 public sealed record DeviceSummary(string DeviceId, string PlcName);
 public sealed record MergeWorktreeApiRequest(string TargetWorktreeId);
-public sealed record SessionCreateApiRequest(Agent.Chat.ChatRequestSettings Settings, string? RuntimeContext);
+public sealed record SessionCreateApiRequest(Agent.Chat.ChatRequestSettings Settings, string? RuntimeContext, string? TaskId = null);
 public sealed record SessionSaveApiRequest(ChatSessionData Session);
 
 public sealed class WorkbenchApiState
@@ -1568,18 +1568,25 @@ public static class WorkbenchEndpoints
             string workbenchId, string worktreeId, string device, WorkbenchApiState s) =>
             SessionManager.ListSessions(s.Device(workbenchId, worktreeId, device).Context));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions", (
-            string workbenchId, string worktreeId, string device, SessionCreateApiRequest r, WorkbenchApiState s) =>
-            SessionManager.CreateNewSession(
-                s.Device(workbenchId, worktreeId, device).Context, r.Settings, r.RuntimeContext));
+            string workbenchId, string worktreeId, string device, SessionCreateApiRequest r, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            var taskId = ResolveSessionTaskId(s, graphs, activeTasks, workbenchId, worktreeId, r.TaskId);
+            return SessionManager.CreateNewSession(
+                s.Device(workbenchId, worktreeId, device).Context, r.Settings, r.RuntimeContext, taskId);
+        });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
             string workbenchId, string worktreeId, string device, string session, WorkbenchApiState s) =>
             SessionManager.LoadSession(s.Device(workbenchId, worktreeId, device).Context, session) is { } value
                 ? Results.Ok(value) : Results.NotFound());
         app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
             string workbenchId, string worktreeId, string device, string session,
-            SessionSaveApiRequest r, WorkbenchApiState s) =>
+            SessionSaveApiRequest r, WorkbenchApiState s, EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks) =>
         {
             if (r.Session.Header.SessionId != session) return Results.BadRequest();
+            if (!string.IsNullOrWhiteSpace(r.Session.Header.TaskId))
+                _ = ResolveSessionTaskId(s, graphs, activeTasks, workbenchId, worktreeId, r.Session.Header.TaskId);
             SessionManager.SaveSession(s.Device(workbenchId, worktreeId, device).Context, r.Session);
             return Results.NoContent();
         });
@@ -1756,9 +1763,24 @@ public static class WorkbenchEndpoints
                 "Worktree merged.").ConfigureAwait(false);
         });
         app.MapGet("/api/devices/{device}/sessions", (string device, WorkbenchApiState s) => SessionManager.ListSessions(s.Device(device).Context));
-        app.MapPost("/api/devices/{device}/sessions", (string device, SessionCreateApiRequest r, WorkbenchApiState s) => SessionManager.CreateNewSession(s.Device(device).Context, r.Settings, r.RuntimeContext));
+        app.MapPost("/api/devices/{device}/sessions", (string device, SessionCreateApiRequest r, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            var selection = s.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
+            var taskId = ResolveSessionTaskId(s, graphs, activeTasks, selection.WorkbenchId, selection.WorktreeId, r.TaskId);
+            return SessionManager.CreateNewSession(s.Device(device).Context, r.Settings, r.RuntimeContext, taskId);
+        });
         app.MapGet("/api/devices/{device}/sessions/{session}", (string device, string session, WorkbenchApiState s) => SessionManager.LoadSession(s.Device(device).Context, session) is { } value ? Results.Ok(value) : Results.NotFound());
-        app.MapPut("/api/devices/{device}/sessions/{session}", (string device, string session, SessionSaveApiRequest r, WorkbenchApiState s) => { if (r.Session.Header.SessionId != session) return Results.BadRequest(); SessionManager.SaveSession(s.Device(device).Context, r.Session); return Results.NoContent(); });
+        app.MapPut("/api/devices/{device}/sessions/{session}", (string device, string session, SessionSaveApiRequest r, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            if (r.Session.Header.SessionId != session) return Results.BadRequest();
+            var selection = s.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
+            if (!string.IsNullOrWhiteSpace(r.Session.Header.TaskId))
+                _ = ResolveSessionTaskId(s, graphs, activeTasks, selection.WorkbenchId, selection.WorktreeId, r.Session.Header.TaskId);
+            SessionManager.SaveSession(s.Device(device).Context, r.Session);
+            return Results.NoContent();
+        });
         return app;
     }
 
@@ -1767,6 +1789,26 @@ public static class WorkbenchEndpoints
         task.Title, JsonNamingPolicy.CamelCase.ConvertName(task.Type.ToString()), JsonNamingPolicy.CamelCase.ConvertName(task.Status.ToString()),
         task.Priority, task.Intent, task.ExpectedResult, task.Description,
         task.CreatedUtc!.Value, task.UpdatedUtc!.Value);
+
+    private static string? ResolveSessionTaskId(
+        WorkbenchApiState state,
+        EngineeringGraphApiFactory graphs,
+        ActiveTaskContextService activeTasks,
+        string workbenchId,
+        string? worktreeId,
+        string? requestedTaskId)
+    {
+        using var scope = graphs.Open(state.Workbench(workbenchId));
+        if (string.IsNullOrWhiteSpace(requestedTaskId))
+            return activeTasks.Get(scope.Service, worktreeId)?.TaskId;
+
+        var task = scope.Service.FindTask(requestedTaskId)
+            ?? throw new EngineeringGraphConstraintException("The selected task was not found in the current Workbench.");
+        if (task.ScopeKind == GraphTaskScopeKind.Worktree && (worktreeId is null || task.WorktreeId != worktreeId))
+            throw new EngineeringGraphConstraintException(
+                "The selected task is not compatible with the current project or Workbench context.");
+        return task.TaskId;
+    }
 
     private static IResult ToEngineeringTaskDetailResult(EngineeringGraphService graph, string taskId)
     {
