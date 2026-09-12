@@ -16,7 +16,8 @@ public sealed record SourceInspectionMember(string Name, string? DataType, strin
 public sealed record SourceInspectionTable(string Title, IReadOnlyList<string> Columns, IReadOnlyList<IReadOnlyDictionary<string, string?>> Rows);
 public sealed record SourceInspectionNetwork(int Index, string CompileUnitId, string? Title, string? Comment, string? Language, string? StructuredText, LadderNetworkInspection? Ladder);
 public sealed record LadderNetworkInspection(IReadOnlyList<LadderElementInspection> Elements, IReadOnlyList<LadderWireInspection> Wires);
-public sealed record LadderElementInspection(string Id, string Kind, string? Label, IReadOnlyList<string> NegatedPins, string? ReferencedObject);
+public sealed record LadderElementInspection(string Id, string Kind, string? Label, IReadOnlyList<string> NegatedPins, string? ReferencedObject, IReadOnlyList<LadderPinInspection> Pins);
+public sealed record LadderPinInspection(string Name, string? Label, string? ReferencedObject, bool Negated);
 public sealed record LadderWireInspection(IReadOnlyList<LadderEndpointInspection> Endpoints);
 public sealed record LadderEndpointInspection(string Kind, string? ElementId, string? Pin);
 
@@ -71,7 +72,7 @@ public sealed class SourceObjectInspectorReader
     {
         if (category == "Tags")
         {
-            var rows = root.Descendants().Where(element => element.Name.LocalName is "PlcTag" or "Tag")
+            var rows = root.Descendants().Where(element => element.Name.LocalName is "PlcTag" or "Tag" || element.Name.LocalName.EndsWith(".PlcTag", StringComparison.Ordinal))
                 .Select(element => Row(("Name", AttrOrValue(element, "Name")), ("Data type", AttrOrValue(element, "Datatype") ?? AttrOrValue(element, "DataTypeName")), ("Address", AttrOrValue(element, "LogicalAddress")), ("Comment", Text(element, "Comment")))).ToArray();
             return [new SourceInspectionTable("Tags", ["Name", "Data type", "Address", "Comment"], rows)];
         }
@@ -103,14 +104,23 @@ public sealed class SourceObjectInspectorReader
         {
             var id = (string?)element.Attribute("UId") ?? Guid.NewGuid().ToString("N");
             var kind = (string?)element.Attribute("Name") ?? element.Name.LocalName;
-            var accessId = wires.FirstOrDefault(wire => wire.Endpoints.Any(endpoint => endpoint.Kind == "NameCon" && endpoint.ElementId == id && endpoint.Pin == "operand"))?.Endpoints
-                .FirstOrDefault(endpoint => endpoint.Kind == "IdentCon")?.ElementId;
-            var label = accessId is not null && accessLabels.TryGetValue(accessId, out var accessLabel) ? accessLabel :
-                element.Descendants().FirstOrDefault(node => node.Name.LocalName == "Component")?.Attribute("Name")?.Value ?? kind;
             var negated = element.Elements().Where(node => node.Name.LocalName == "Negated").Select(node => (string?)node.Attribute("Name") ?? "operand").ToArray();
-            var reference = accessId is not null && accessLabels.TryGetValue(accessId, out var target) ? target :
+            var pins = wires.SelectMany(wire => wire.Endpoints
+                .Where(endpoint => endpoint.Kind == "NameCon" && endpoint.ElementId == id && endpoint.Pin is not null)
+                .Select(endpoint =>
+                {
+                    var accessId = wire.Endpoints.FirstOrDefault(candidate => candidate.Kind == "IdentCon")?.ElementId;
+                    var accessLabel = accessId is not null && accessLabels.TryGetValue(accessId, out var value) ? value : null;
+                    return new LadderPinInspection(endpoint.Pin!, accessLabel, accessLabel,
+                        negated.Contains(endpoint.Pin!, StringComparer.OrdinalIgnoreCase));
+                }))
+                .GroupBy(pin => pin.Name, StringComparer.OrdinalIgnoreCase).Select(group => group.First()).ToArray();
+            var operand = pins.FirstOrDefault(pin => string.Equals(pin.Name, "operand", StringComparison.OrdinalIgnoreCase));
+            var label = operand?.Label ??
+                element.Descendants().FirstOrDefault(node => node.Name.LocalName == "Component")?.Attribute("Name")?.Value ?? kind;
+            var reference = operand?.ReferencedObject ??
                 element.Descendants().FirstOrDefault(node => node.Name.LocalName == "Component")?.Attribute("Name")?.Value;
-            return new LadderElementInspection(id, kind, label, negated, reference);
+            return new LadderElementInspection(id, kind, label, negated, reference, pins);
         }).ToArray() ?? [];
         return new LadderNetworkInspection(elements, wires);
     }

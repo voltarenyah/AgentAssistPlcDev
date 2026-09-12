@@ -44,7 +44,7 @@ Program-block inspection projects block metadata, interface sections/members, an
 
 For tag usage, a new device-scoped API route forwards to an extended `get_variable_usage` result. Each returned row includes its block, block kind, source file, network index, title, direction, and network id. The browser uses that trusted relative source-file identity to request the existing source-inspection route, selects the specified exact XML network, and adds those cards to the same session-local inspector workspace.
 
-The Studio dialog owns the card list. Reordering is local React state through move controls; no browser storage, database, worktree file, or new persisted schema is introduced. The LAD renderer uses rails and connected HTML part elements, with source-wire evidence retained and selectable/focusable parts. SCL remains a readable source view. Element context menus expose `Open referenced object` only when a unique source-object name is available in the current source list.
+The Studio workspace owns the selected inspector target and the inspector view owns its card list. Selecting `Inspect object` focuses the new dockable `Source inspector` FlexLayout view; users can move/split that view using the existing workspace controls. Reordering is local React state through move controls; no inspector content, browser storage, database, worktree file, or new persisted schema is introduced. The LAD renderer builds an SVG electrical graph from the XML `Powerrail`/`NameCon`/`OpenCon` endpoints: named pins remain attached to their owning part, branches originate at the rail, and orthogonal paths terminate at the exact input/output pin. Contacts and function blocks remain selectable/focusable. SCL remains a readable source view. Element context menus expose `Open referenced object` only when a unique source-object name is available in the current source list.
 
 ### Change Surface
 
@@ -54,14 +54,14 @@ The Studio dialog owns the card list. Reordering is local React state through mo
 | `src/Mcp.Knowledge` | Include source file in variable-usage location rows. | AC-005 | Existing read/write/mention semantics and response limits. |
 | `src/ApiHost/WorkbenchApiModels.cs` | Add device-scoped inspector and usage routes. | AC-001–006 | Existing compatibility routes and mutation policy. |
 | `studio/src/api/client.ts` | Add typed inspector/usage client calls. | AC-001–006 | Existing source action contracts. |
-| `studio/src/studio` | Add inspector dialog, object tables, network workspace, LAD/SCL renderers; extend source-row menu. | UI Spec | Existing source list filtering and TIA/compare/chat actions. |
+| `studio/src/studio` | Add dockable inspector workspace view, object tables, network workspace, LAD/SCL renderers; extend source-row menu. | UI Spec | Existing source list filtering and TIA/compare/chat actions. |
 | Focused tests | Add parser/projection, route, and UI interaction coverage. | AC-001–006 | Existing fixture behavior. |
 
 ### Components and Flow
 
 ```text
 source row or selected graph element
-  -> Studio inspector dialog
+  -> Studio dockable source-inspector workspace view
   -> read-only device-scoped inspector API
   -> DeviceSourceResolver -> exact source XML -> SourceInspection DTO
   -> object table / interface table / SCL renderer / LAD topology renderer
@@ -79,7 +79,7 @@ tag usage request
 | Studio → inspector API | `GET .../source/inspect?relativePath=<normalized XML path>` | Discriminated `SourceInspection` with object and network projections. | 400 for invalid path; 404 missing file; 422 malformed/unsupported XML with path-safe message. | Additive route. |
 | Studio → usage API | `GET .../source/usage?variable=<exact tag>` | Usage rows with `read`/`write`/`mention`, source file, block identity, and network index. The browser then requests the exact source networks. | 404/clear state for missing knowledge DB; direct inspection remains available. | Additive route and fields. |
 | ApiHost → knowledge tool | Device DB path plus exact variable | Extend variable-usage row with nullable `sourceFile`. | Preserve existing fields/semantics. | Additive JSON field. |
-| Studio dialog state | In-memory selected object and network-card array | Destroyed on close/unmount. | No restoration attempt. | No persistence change. |
+| Studio inspector state | In-memory selected object and network-card array | Selection resets when device/worktree context changes; cards reset on a new target. | No inspector-content restoration attempt. | Existing workspace geometry remains user-dockable/persisted. |
 
 ### Security Boundary
 
@@ -88,7 +88,7 @@ The inspector never receives an absolute path from the browser. Every source req
 ## Implementation Approach
 
 - Slicing: Hybrid.
-- Dependency order: First build and prove the source/usage DTOs and path-safe routes; then implement the dialog/table views; then add graphical LAD rendering and cross-block card workflow.
+- Dependency order: First build and prove the source/usage DTOs and path-safe routes; then implement the workspace-view/table surfaces; then add graphical LAD rendering and cross-block card workflow.
 - First observable checkpoint: Inspect a block from the source row and see its XML-derived interface table plus an SCL network.
 - Rationale: Exact source parsing and usage location contracts are shared prerequisites; visible source-type views can then be delivered vertically before the more complex LAD renderer.
 
@@ -96,10 +96,10 @@ The inspector never receives an absolute path from the browser. Every source req
 
 | Claim / AC | Level | Repository command or operation | Observable pass condition |
 |---|---|---|---|
-| XML projections and topology | L1 | Focused `PlcXml.Model`/Agent tests | Fixture interfaces, simple-object rows, and ladder wire endpoints are exact. |
+| XML projections and topology | L1 | Focused `PlcXml.Model`/Agent tests | Fixture interfaces, simple-object rows, ladder wire endpoints, named timer pins, and branch endpoints are exact. |
 | Usage location contract | L2 | Focused `Mcp.Knowledge.Tests` and `ApiHost.Tests` | A tag result retains read/write/mention and source file/network index. |
 | Secure inspector API | L2 | Focused `ApiHost.Tests` | Valid path returns projection; traversal/missing/malformed paths fail safely. |
-| Context-menu/dialog behavior | L1 | `Push-Location studio; npm test -- --run ...; Pop-Location` | Every object category opens an inspector and existing actions remain. |
+| Context-menu/workspace behavior | L1 | `Push-Location studio; npm test -- --run ...; Pop-Location` | Every object category focuses the dockable inspector and existing actions remain. |
 | Cross-block workspace and LAD selection | L1/L3 | Focused Studio test; launcher/browser smoke if practical | Mixed origin cards render and an LAD element supports selection/context menu. |
 | Build compatibility | L2 | `dotnet build AgentAssistPlcDev.sln -v q`; Studio build | All changed layers compile. |
 
@@ -124,3 +124,4 @@ The inspector never receives an absolute path from the browser. Every source req
 | Date | Version | Changes |
 |---|---|---|
 | 2026-09-11 | 1.0 | Initial design from confirmed requirements. |
+| 2026-09-12 | 1.1 | Preserve pin-level LAD graph data and render power-rail branches with SVG routing. |

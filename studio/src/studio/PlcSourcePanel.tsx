@@ -37,7 +37,6 @@ import {
   type SourceTypeFilter,
 } from './plcSourceState'
 import PlcSourceCompareDialog from './PlcSourceCompareDialog'
-import SourceObjectInspectorDialog from './SourceObjectInspectorDialog'
 
 type Props = {
   workbenchId: string
@@ -46,6 +45,8 @@ type Props = {
   deviceView: DeviceViewState | null
   onChatWithAgent: (item: SourceObjectInfo) => void
   onSnapshotReload: () => void
+  onInspectObject: (relativePath: string) => void
+  onInspectUsage: (usage: api.SourceVariableUsage[]) => void
 }
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -72,14 +73,14 @@ export default function PlcSourcePanel({
   deviceView,
   onChatWithAgent,
   onSnapshotReload,
+  onInspectObject,
+  onInspectUsage,
 }: Props) {
   const [typeFilter, setTypeFilter] = useState<SourceTypeFilter>('all')
   const [query, setQuery] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [comparison, setComparison] = useState<SourceObjectComparison | null>(null)
-  const [inspectionPath, setInspectionPath] = useState<string | null>(null)
-  const [usage, setUsage] = useState<api.SourceVariableUsage[] | null>(null)
 
   const items = useMemo(
     () => resolveSourceObjects(deviceView?.sourceObjects, deviceView?.blocks),
@@ -89,10 +90,6 @@ export default function PlcSourcePanel({
   const matching = useMemo(() => filterSourceObjects(items, typeFilter, query), [items, typeFilter, query])
   const limited = useMemo(() => limitSourceObjects(matching), [matching])
   const visible = limited.items
-  const referenceTargets = useMemo(() => items.reduce<Record<string, string>>((result, item) => {
-    if (!result[item.name]) result[item.name] = item.relativePath
-    return result
-  }, {}), [items])
 
   const openInTia = async (item: SourceObjectInfo) => {
     setPendingAction(`open:${item.id}`)
@@ -130,8 +127,7 @@ export default function PlcSourcePanel({
         toast.info(`No read/write or mention networks were found for "${variable}".`)
         return
       }
-      setInspectionPath(null)
-      setUsage(result.usages)
+      onInspectUsage(result.usages)
     } catch (error) {
       showErrorToast(errorMessage(error))
     }
@@ -228,7 +224,7 @@ export default function PlcSourcePanel({
                     </ContextMenuTrigger>
                     <ContextMenuContent>
                       <ContextMenuLabel>{item.category} · {item.name}</ContextMenuLabel>
-                      <ContextMenuItem onSelect={() => { setUsage(null); setInspectionPath(item.relativePath) }}>
+                      <ContextMenuItem onSelect={() => onInspectObject(item.relativePath)}>
                         <Code2 className="h-3.5 w-3.5" />
                         Inspect object
                       </ContextMenuItem>
@@ -310,8 +306,6 @@ export default function PlcSourcePanel({
           }}
         />
       )}
-      {inspectionPath && <SourceObjectInspectorDialog workbenchId={workbenchId} worktreeId={worktreeId} deviceId={deviceId} relativePath={inspectionPath} referenceTargets={referenceTargets} onOpenReference={path => { setUsage(null); setInspectionPath(path) }} onShowUsage={showVariableUsage} onClose={() => setInspectionPath(null)} />}
-      {usage && <SourceObjectInspectorDialog workbenchId={workbenchId} worktreeId={worktreeId} deviceId={deviceId} usage={usage} referenceTargets={referenceTargets} onOpenReference={path => { setUsage(null); setInspectionPath(path) }} onShowUsage={showVariableUsage} onClose={() => setUsage(null)} />}
     </div>
   )
 }

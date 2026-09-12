@@ -3,7 +3,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceService } from './WorkspaceService'
-import { DEFAULT_WORKSPACE_TABSET_ID } from './defaultLayout'
+import { buildDefaultWorkspaceLayout, DEFAULT_WORKSPACE_TABSET_ID } from './defaultLayout'
 import { workspaceViewInstanceId } from './workspaceTypes'
 import { Actions, DockLocation } from 'flexlayout-react'
 
@@ -43,6 +43,18 @@ describe('WorkspaceService', () => {
     service.openView('knowledge')
 
     expect(service.getFocusedViewKind()).toBe('knowledge')
+  })
+
+  it('adds the source inspector to an existing saved layout when it is first opened', () => {
+    const saved = buildDefaultWorkspaceLayout()
+    const tabs = saved.layout.children[0].children ?? []
+    saved.layout.children[0].children = tabs.filter(tab => tab.id !== workspaceViewInstanceId('inspector'))
+    const service = new WorkspaceService(saved)
+
+    service.openView('inspector')
+
+    expect(service.getModel().getNodeById(workspaceViewInstanceId('inspector'))).toBeTruthy()
+    expect(service.getFocusedViewKind()).toBe('inspector')
   })
 
   it('showSource is a semantic alias for the source view', () => {
