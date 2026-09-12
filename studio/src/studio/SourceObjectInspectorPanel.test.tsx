@@ -57,4 +57,9 @@ it('renders exact network cards in the dockable source inspector panel', async (
   expect(Number(setReset.getAttribute('data-lad-height'))).toBeGreaterThan(200)
   expect(host.textContent).toContain('CylinderMovementSimulate')
   expect(host.textContent).toContain('false')
+  const collapse = host.querySelector<HTMLButtonElement>('[aria-label="Collapse network"]')!
+  await act(async () => { collapse.click() })
+  expect(collapse.getAttribute('aria-expanded')).toBe('false')
+  expect(host.querySelectorAll('[aria-label="Ladder logic diagram"]').length).toBe(1)
+  expect(host.textContent).toContain('CylinderGoForwardPos')
 })
