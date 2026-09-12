@@ -43,6 +43,13 @@ const taskList: api.WorktreeTaskList = {
     task({ taskId: 't3', title: 'Done task', status: 'done' }),
   ],
 }
+const projectGraphTask: api.EngineeringTask = {
+  taskId: 'project-1', workbenchId: 'wb1', scope: 'project', worktreeId: null,
+  title: 'Project improvement', type: 'improvement', status: 'todo', priority: 1,
+  intent: 'Improve', expectedResult: 'Better', description: 'Project details',
+  createdUtc: '2026-08-01T00:00:00Z', updatedUtc: '2026-08-01T00:00:00Z',
+}
+let activeGraphTask: api.EngineeringTask | null = null
 
 const tagNodes: api.TagNode[] = [
   { tagId: 'tag-machine', parentTagId: null, name: 'Machine', normalizedName: 'machine' },
@@ -98,6 +105,21 @@ vi.mock('@/api/client', async importOriginal => {
       finishedUtc: patch.status === 'finished' ? '2026-08-03T00:00:00Z' : detail.finishedUtc,
     })),
     listWorktreeTasks: vi.fn(async () => taskList),
+    listProjectTasks: vi.fn(async () => [projectGraphTask]),
+    listGraphWorktreeTasks: vi.fn(async () => [...taskList.tasks.map(item => ({
+      ...item, workbenchId: 'wb1', scope: 'worktree' as const, worktreeId: 'wt1', type: 'feature' as const,
+      priority: 0, intent: 'intent', expectedResult: 'result', updatedUtc: item.createdUtc,
+    })), {
+      ...taskList.tasks[0], taskId: 'other-worktree', title: 'Other worktree task', workbenchId: 'wb1',
+      scope: 'worktree' as const, worktreeId: 'wt2', type: 'issue' as const,
+      priority: 0, intent: 'intent', expectedResult: 'result', updatedUtc: taskList.tasks[0].createdUtc,
+    }]),
+    getActiveWorktreeTask: vi.fn(async () => ({ activeTask: activeGraphTask })),
+    setActiveWorktreeTask: vi.fn(async (_wb: string, _wt: string, taskId: string | null) => ({
+      activeTask: taskId === projectGraphTask.taskId ? projectGraphTask : taskId ? {
+        ...projectGraphTask, taskId, title: 'Running task', scope: 'worktree' as const, worktreeId: 'wt1', type: 'feature' as const,
+      } : null,
+    })),
     getWorktreeVersionControlTimeline: vi.fn(async () => ({
       gitCommits: [],
       svnRevisions: [],
@@ -143,6 +165,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  activeGraphTask = null
 })
 
 describe('WorktreeLandingPage', () => {
@@ -285,6 +308,43 @@ describe('WorktreeLandingPage', () => {
     expect(host.textContent).toContain('Running task')
     expect(host.textContent).toContain('Done task')
 
+    await act(async () => root.unmount())
+  })
+
+  it('wires graph scopes/types and active task keyboard selection and clear through the landing page', async () => {
+    const { host, root } = await renderPage({ tab: 'tasks' })
+    expect(host.textContent).toContain('Project improvement')
+    expect(host.textContent).toContain('Project · Improvement')
+    expect(host.textContent).toContain('Improvement')
+    expect(host.textContent).toContain('Worktree scope')
+    const selector = host.querySelector('select[aria-label="Active task"]') as HTMLSelectElement
+    expect(Array.from(selector.options).some(option => option.value === 'other-worktree')).toBe(false)
+    await act(async () => {
+      selector.focus()
+      selector.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      selector.value = 'project-1'
+      selector.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(vi.mocked(api.setActiveWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', 'project-1')
+    expect(host.textContent).toContain('Project improvement')
+    await act(async () => {
+      const clear = [...host.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Clear') as HTMLButtonElement
+      clear.focus()
+      clear.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(vi.mocked(api.setActiveWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', null)
+    await act(async () => root.unmount())
+  })
+
+  it('keeps the active selection and shows recovery when the wired mutation fails', async () => {
+    activeGraphTask = projectGraphTask
+    vi.mocked(api.setActiveWorktreeTask).mockRejectedValueOnce(new Error('graph unavailable'))
+    const { host, root } = await renderPage({ tab: 'tasks' })
+    const selector = host.querySelector('select[aria-label="Active task"]') as HTMLSelectElement
+    expect(selector.value).toBe('project-1')
+    await act(async () => { selector.value = ''; selector.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(selector.value).toBe('project-1')
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('graph unavailable')
     await act(async () => root.unmount())
   })
 

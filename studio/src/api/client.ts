@@ -331,12 +331,49 @@ export type WorktreeTask = {
   elementRefs: string[]
   createdUtc: string
   doneUtc: string | null
+  /** Graph-backed task metadata; optional for legacy tasks.json responses. */
+  workbenchId?: string
+  scope?: 'project' | 'worktree'
+  worktreeId?: string | null
+  type?: 'issue' | 'improvement' | 'feature'
+  priority?: number
+  intent?: string
+  expectedResult?: string
+  updatedUtc?: string
 }
 
 export type WorktreeTaskList = {
   version: number
   tasks: WorktreeTask[]
 }
+
+export type EngineeringTask = {
+  taskId: string
+  workbenchId: string
+  scope: 'project' | 'worktree'
+  worktreeId: string | null
+  title: string
+  type: 'issue' | 'improvement' | 'feature'
+  status: string
+  priority: number
+  intent: string
+  expectedResult: string
+  description: string | null
+  createdUtc: string
+  updatedUtc: string
+}
+
+export type EngineeringTaskDetail = {
+  task: EngineeringTask
+  sessions: Array<{ id: string; provenance: string; isPrimary: boolean }>
+  commits: Array<{ id: string; provenance: string; isPrimary: boolean }>
+  sourceObjects: Array<{ id: string; provenance: string; isPrimary: boolean }>
+  svnRevisions: Array<{ id: string; provenance: string; isPrimary: boolean }>
+}
+
+export type EngineeringTaskList = EngineeringTask[]
+
+export type ActiveTaskResponse = { activeTask: EngineeringTask | null }
 
 export type AppAssistantRuntimeSnapshot = {
   schemaVersion: number
@@ -1271,6 +1308,24 @@ export const updateWorktree = (
   workbenchRequest<WorktreeDetail>(worktreePath(workbenchId, worktreeId), jsonRequest('PATCH', patch))
 export const listWorktreeTasks = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<WorktreeTaskList>(`${worktreePath(workbenchId, worktreeId)}/tasks`)
+export const listProjectTasks = (workbenchId: string) =>
+  workbenchRequest<EngineeringTaskList>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks`)
+export const createProjectTask = (workbenchId: string, task: { title: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
+  workbenchRequest<EngineeringTask>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks`, jsonRequest('POST', task))
+export const getProjectTaskDetail = (workbenchId: string, taskId: string) =>
+  workbenchRequest<EngineeringTaskDetail>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}`)
+export const listGraphWorktreeTasks = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<EngineeringTaskList>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`)
+export const getWorktreeTaskDetail = (workbenchId: string, worktreeId: string, taskId: string) =>
+  workbenchRequest<EngineeringTaskDetail>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`)
+export const getActiveProjectTask = (workbenchId: string) =>
+  workbenchRequest<ActiveTaskResponse>(`/workbenches/${encodeURIComponent(workbenchId)}/active-task`)
+export const getActiveWorktreeTask = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<ActiveTaskResponse>(`${worktreePath(workbenchId, worktreeId)}/active-task`)
+export const setActiveProjectTask = (workbenchId: string, taskId: string | null) =>
+  workbenchRequest<ActiveTaskResponse>(`/workbenches/${encodeURIComponent(workbenchId)}/active-task`, jsonRequest('PUT', { taskId }))
+export const setActiveWorktreeTask = (workbenchId: string, worktreeId: string, taskId: string | null) =>
+  workbenchRequest<ActiveTaskResponse>(`${worktreePath(workbenchId, worktreeId)}/active-task`, jsonRequest('PUT', { taskId }))
 export const createWorktreeTask = (
   workbenchId: string,
   worktreeId: string,

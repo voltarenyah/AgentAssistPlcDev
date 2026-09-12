@@ -196,4 +196,18 @@ describe('WorktreeTasksPanel', () => {
 
     await act(async () => root.unmount())
   })
+
+  it('renders an exact graph task response description without legacy fields', async () => {
+    const graphTask: api.EngineeringTask = {
+      taskId: 'graph-1', workbenchId: 'wb1', scope: 'project', worktreeId: null,
+      title: 'Graph-backed task', type: 'improvement', status: 'inProgress',
+      priority: 1, intent: 'Improve traceability', expectedResult: 'Visible links',
+      description: '**Graph** details', createdUtc: '2026-08-01T00:00:00Z', updatedUtc: '2026-08-01T00:00:00Z',
+    }
+    const { host, root } = await renderPanel({ tasks: [graphTask] })
+    expect(host.textContent).toContain('Project scope')
+    expect(host.textContent).toContain('Improvement')
+    expect(host.querySelector('strong')?.textContent).toBe('Graph')
+    await act(async () => root.unmount())
+  })
 })

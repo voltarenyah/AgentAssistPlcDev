@@ -42,7 +42,9 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
   const [detail, setDetail] = useState<api.WorktreeDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(true)
   const [detailError, setDetailError] = useState<string | null>(null)
-  const [tasks, setTasks] = useState<api.WorktreeTask[]>([])
+  const [tasks, setTasks] = useState<api.EngineeringTask[]>([])
+  const [projectTasks, setProjectTasks] = useState<api.EngineeringTask[]>([])
+  const [activeTask, setActiveTask] = useState<api.EngineeringTask | null>(null)
   const [tasksLoading, setTasksLoading] = useState(true)
   const [tasksError, setTasksError] = useState<string | null>(null)
   const [modifiedDevices, setModifiedDevices] = useState<ModifiedDevice[] | null>(null)
@@ -104,8 +106,14 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
 
   const reloadTasks = useCallback(async () => {
     try {
-      const result = await api.listWorktreeTasks(workbenchId, worktreeId)
-      setTasks(result.tasks)
+      const [project, worktree, active] = await Promise.all([
+        api.listProjectTasks(workbenchId),
+        api.listGraphWorktreeTasks(workbenchId, worktreeId),
+        api.getActiveWorktreeTask(workbenchId, worktreeId),
+      ])
+      setProjectTasks(project)
+      setTasks(worktree)
+      setActiveTask(active.activeTask)
       setTasksError(null)
     } catch (loadError) {
       setTasksError(displayError(loadError))
@@ -118,10 +126,16 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
     let cancelled = false
     setTasksLoading(true)
     setTasksError(null)
-    void api.listWorktreeTasks(workbenchId, worktreeId)
-      .then(result => {
+    void Promise.all([
+      api.listProjectTasks(workbenchId),
+      api.listGraphWorktreeTasks(workbenchId, worktreeId),
+      api.getActiveWorktreeTask(workbenchId, worktreeId),
+    ])
+      .then(([project, worktree, active]) => {
         if (cancelled) return
-        setTasks(result.tasks)
+        setProjectTasks(project)
+        setTasks(worktree)
+        setActiveTask(active.activeTask)
         setTasksLoading(false)
       })
       .catch(loadError => {
@@ -425,6 +439,9 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
               workbenchId={workbenchId}
               worktreeId={worktreeId}
               tasks={tasks}
+              projectTasks={projectTasks}
+              activeTask={activeTask}
+              onActiveTaskChanged={setActiveTask}
               loading={tasksLoading}
               error={tasksError}
               onChanged={() => void reloadTasks()}

@@ -22,10 +22,13 @@ import {
 type Props = {
   workbenchId: string
   worktreeId: string
-  tasks: api.WorktreeTask[]
+  tasks: TaskSurface[]
   loading: boolean
   error: string | null
   onChanged: () => void
+  projectTasks?: api.EngineeringTask[]
+  activeTask?: api.EngineeringTask | null
+  onActiveTaskChanged?: (task: api.EngineeringTask | null) => void
 }
 
 const displayError = (error: unknown) => {
@@ -37,6 +40,74 @@ const taskStatusLabel = (status: api.WorktreeTaskStatus) =>
   status === 'inProgress' ? 'In Progress' : status === 'done' ? 'Done' : 'Todo'
 
 const taskStatusOrder: api.WorktreeTaskStatus[] = ['todo', 'inProgress', 'done']
+
+type TaskSurface = api.WorktreeTask | api.EngineeringTask
+const isLegacyTask = (task: TaskSurface): task is api.WorktreeTask => 'elementRefs' in task
+
+const taskTypeLabel = (type?: TaskSurface['type']) =>
+  type === 'issue' ? 'Issue' : type === 'improvement' ? 'Improvement' : 'Feature'
+
+export function ActiveTaskSelector({
+  tasks,
+  activeTask,
+  onChange,
+  worktreeId,
+}: {
+  tasks: TaskSurface[]
+  activeTask: api.EngineeringTask | null
+  onChange: (taskId: string | null) => Promise<void>
+  worktreeId?: string
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const compatible = tasks.filter(task => task.scope !== 'worktree' || !task.worktreeId || task.worktreeId === worktreeId)
+  const selectedId = activeTask?.taskId ?? ''
+  const select = async (taskId: string) => {
+    setSaving(true)
+    try {
+      await onChange(taskId || null)
+      setError(null)
+    } catch (cause) {
+      setError(displayError(cause))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
+      <label className="field-label" htmlFor="active-task-selector"><span>Active task</span></label>
+      <div className="mt-1 flex items-center gap-2">
+        <select
+          id="active-task-selector"
+          aria-label="Active task"
+          className="field-input h-8 min-w-0 flex-1 text-[10px]"
+          value={selectedId}
+          disabled={saving}
+          onChange={event => { void select(event.target.value) }}
+        >
+          <option value="">No active task</option>
+          {compatible.map(task => (
+            <option key={task.taskId} value={task.taskId}>
+              {task.title} ({task.scope === 'project' ? 'Project' : 'Worktree'} · {taskTypeLabel(task.type)})
+            </option>
+          ))}
+        </select>
+        <button type="button" className="secondary-button h-8 text-[9px]" disabled={!activeTask || saving} onClick={() => { void select('') }} onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            void select('')
+          }
+        }}>
+          Clear
+        </button>
+      </div>
+      <div className="mt-1 text-[9px] text-muted-foreground">
+        {activeTask ? <><span className="font-medium text-foreground">{activeTask.title}</span> · {activeTask.scope === 'project' ? 'Project' : 'Worktree'} scope · {taskTypeLabel(activeTask.type)}</> : 'New sessions and actions remain unassigned until you choose a task.'}
+      </div>
+      {error && <div role="alert" className="mt-2 flex items-center justify-between gap-2 text-[9px] text-destructive"><span>Active task could not be changed: {error}</span><button type="button" className="underline" onClick={() => setError(null)}>Dismiss</button></div>}
+    </div>
+  )
+}
 
 const taskStatusClasses = (status: api.WorktreeTaskStatus) =>
   status === 'done'
@@ -80,7 +151,7 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, projectTasks = [], activeTask = null, onActiveTaskChanged }: Props) {
   const [newTitle, setNewTitle] = useState('')
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<EditDraft | null>(null)
@@ -152,6 +223,17 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
 
   return (
     <div className="space-y-4">
+      {onActiveTaskChanged && (
+        <ActiveTaskSelector
+          tasks={[...projectTasks, ...tasks]}
+          activeTask={activeTask}
+          worktreeId={worktreeId}
+          onChange={async taskId => {
+            const result = await api.setActiveWorktreeTask(workbenchId, worktreeId, taskId)
+            onActiveTaskChanged(result.activeTask)
+          }}
+        />
+      )}
       <div className="flex gap-2">
         <input
           aria-label="New task title"
@@ -193,20 +275,24 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                 <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
                   {group.map(task => (
                     <div key={task.taskId} className="flex items-start gap-3 px-4 py-2.5">
-                      <TaskStatusControl
+                      {isLegacyTask(task) ? <TaskStatusControl
                         task={task}
                         onChange={next => mutate(() => api.updateWorktreeTask(workbenchId, worktreeId, task.taskId, { status: next }))}
-                      />
+                      /> : <span className="inline-flex shrink-0 rounded-full border px-2 py-0.5 text-[8px] uppercase tracking-[0.1em]">{taskStatusLabel(task.status as api.WorktreeTaskStatus)}</span>}
                       <div className="min-w-0 flex-1">
                         <div className={`text-[10px] font-medium ${task.status === 'done' ? 'text-muted-foreground line-through' : ''}`}>
                           {task.title}
                         </div>
-                        {task.details && (
+                        <div className="mt-1 flex gap-1 text-[8px] text-muted-foreground">
+                          <span className="rounded bg-muted px-1.5 py-0.5">{task.scope === 'project' ? 'Project' : 'Worktree'} scope</span>
+                          <span className="rounded bg-muted px-1.5 py-0.5">{taskTypeLabel(task.type)}</span>
+                        </div>
+                        {(isLegacyTask(task) ? task.details : task.description) && (
                           <div className="mt-1 text-[9px] leading-relaxed text-muted-foreground [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-4">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{task.details}</ReactMarkdown>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{isLegacyTask(task) ? task.details : task.description}</ReactMarkdown>
                           </div>
                         )}
-                        {task.elementRefs.length > 0 && (
+                        {isLegacyTask(task) && task.elementRefs.length > 0 && (
                           <div className="mt-1.5 flex flex-wrap gap-1">
                             {task.elementRefs.map(elementRef => (
                               <span key={elementRef} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">
@@ -216,7 +302,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                           </div>
                         )}
                       </div>
-                      <button className="icon-button" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
+                      {isLegacyTask(task) && <><button className="icon-button" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
                         <Pencil className="h-3 w-3" />
                       </button>
                       <button
@@ -229,7 +315,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                         }}
                       >
                         <Trash2 className="h-3 w-3" />
-                      </button>
+                      </button></>}
                     </div>
                   ))}
                 </div>

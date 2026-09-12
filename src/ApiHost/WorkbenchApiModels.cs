@@ -702,6 +702,18 @@ public static class WorkbenchEndpoints
             WorkbenchApiState s,
             WorktreeTaskStore tasks) =>
             tasks.Load(s.WorktreeRoot(id, wt)));
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/engineering-tasks", (
+            string id, string wt, WorkbenchApiState state, WorktreeTaskStore tasks, EngineeringGraphApiFactory graphs) =>
+        {
+            var workbench = state.Workbench(id);
+            state.Worktree(id, wt);
+            // Preserve the legacy import boundary, then expose graph task contracts.
+            tasks.Load(state.WorktreeRoot(id, wt));
+            using var scope = graphs.Open(workbench);
+            return Results.Ok(scope.Service.ListTasks(wt)
+                .Where(task => task.ScopeKind == Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree)
+                .Select(ToEngineeringTaskResponse));
+        });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}", (
             string id, string wt, string taskId, WorkbenchApiState state,
             WorktreeTaskStore tasks, EngineeringGraphApiFactory graphs) =>
