@@ -9,13 +9,14 @@ import type {
   KnowledgeGraphContext,
   PendingConfirmation,
   SourceObjectInfo,
+  SourceVariableUsage,
 } from '@/api/client'
 import type { ChatTabsState } from '@/studio/chat/chatTabState'
 import type { SourceChatContext } from '@/studio/plcSourceState'
 import type { DeviceViewState } from '@/studio/deviceSnapshot'
 import type { DeviceOverviewViewProps } from '@/studio/DeviceOverviewView'
 
-export type WorkspaceViewKind = 'overview' | 'chat' | 'source' | 'knowledge'
+export type WorkspaceViewKind = 'overview' | 'chat' | 'source' | 'inspector' | 'knowledge'
 
 /** One mounted view in the workspace. V1 uses exactly one instance per kind. */
 export type WorkbenchViewInstance = {
@@ -30,6 +31,7 @@ export const DEFAULT_WORKSPACE_VIEW_KINDS: readonly WorkspaceViewKind[] = [
   'overview',
   'chat',
   'source',
+  'inspector',
   'knowledge',
 ]
 
@@ -65,6 +67,22 @@ export type WorkspaceSourceProps = {
   deviceView: DeviceViewState | null
   onChatWithAgent: (item: SourceObjectInfo) => void
   onSnapshotReload: () => void
+  onInspectObject: (relativePath: string) => void
+  onInspectUsage: (usage: SourceVariableUsage[]) => void
+}
+
+export type SourceInspectorTarget =
+  | { kind: 'object'; relativePath: string }
+  | { kind: 'usage'; usage: SourceVariableUsage[] }
+
+export type WorkspaceInspectorProps = {
+  workbenchId: string | null
+  worktreeId: string | null
+  deviceId: string | null
+  target: SourceInspectorTarget | null
+  referenceTargets: Record<string, string>
+  onInspectObject: (relativePath: string) => void
+  onInspectUsage: (usage: SourceVariableUsage[]) => void
 }
 
 export type WorkspaceKnowledgeProps = {
@@ -79,5 +97,6 @@ export type WorkspaceViewProps = {
   overview: DeviceOverviewViewProps
   chat: WorkspaceChatProps
   source: WorkspaceSourceProps
+  inspector: WorkspaceInspectorProps
   knowledge: WorkspaceKnowledgeProps
 }
