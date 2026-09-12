@@ -66,6 +66,7 @@ builder.Services.AddSingleton<WorktreeTaskStore>();
 builder.Services.AddSingleton<EngineeringGraphApiFactory>();
 builder.Services.AddSingleton<ActiveTaskContextService>();
 builder.Services.AddSingleton<EngineeringGraphCommitAttributionProvider>();
+builder.Services.AddSingleton<EngineeringGraphEvidenceIndexerProvider>();
 builder.Services.AddSingleton<WorkbenchCatalog>();
 builder.Services.AddSingleton<WorkbenchTagStore>();
 builder.Services.AddSingleton(_ => new TrustedWorkbenchRootRegistry(
@@ -119,7 +120,8 @@ if (startExternalMcp)
         s.GetRequiredService<DeviceSourceResolver>(),
         s.GetRequiredService<DeviceOperationLock>(),
         s.GetRequiredService<SandboxConfig>().PathJail,
-        graphAttributionProvider: s.GetRequiredService<EngineeringGraphCommitAttributionProvider>()));
+        graphAttributionProvider: s.GetRequiredService<EngineeringGraphCommitAttributionProvider>(),
+        graphEvidenceIndexer: s.GetRequiredService<EngineeringGraphEvidenceIndexerProvider>()));
 }
 else
 {
@@ -139,7 +141,8 @@ else
         s.GetRequiredService<DeviceSourceResolver>(),
         s.GetRequiredService<DeviceOperationLock>(),
         s.GetRequiredService<SandboxConfig>().PathJail,
-        graphAttributionProvider: s.GetRequiredService<EngineeringGraphCommitAttributionProvider>()));
+        graphAttributionProvider: s.GetRequiredService<EngineeringGraphCommitAttributionProvider>(),
+        graphEvidenceIndexer: s.GetRequiredService<EngineeringGraphEvidenceIndexerProvider>()));
 }
 
 builder.Services.AddSingleton<WorkbenchRuntimeStateCoordinator>();

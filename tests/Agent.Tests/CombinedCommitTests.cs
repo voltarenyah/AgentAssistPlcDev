@@ -61,6 +61,43 @@ public sealed class CombinedCommitTests : IDisposable
     }
 
     [Fact]
+    public async Task NativeSavepointIndexesTheTimelineRevisionAsGitToSvnEvidence()
+    {
+        var fixture = CombinedFixture.Create(root, checksum: "PLC_1:new-checksum");
+        var engineering = fixture.ScriptEngineering(new FakeToolCaller());
+        var versionControl = fixture.ScriptVersionControl(
+            new FakeToolCaller(), timelineAfterSavepoint: true);
+        var coordinator = fixture.CreateCoordinator(
+            engineering, versionControl, graphEvidenceIndexer: new EngineeringGraphEvidenceIndexerProvider());
+
+        var savepoint = await coordinator.CreateNativeSavepointAsync(
+            CombinedFixture.WorkbenchId,
+            CombinedFixture.WorktreeId,
+            "accept Main change",
+            CancellationToken.None);
+
+        var revision = fixture.ReadRevisionState();
+        Assert.Equal(2, revision.Svn.Revision);
+
+        var timeline = await coordinator.ListVersionControlTimelineAsync(
+            CombinedFixture.WorkbenchId, CombinedFixture.WorktreeId);
+        var gitRow = Assert.Single(timeline.GitCommits);
+        Assert.Equal(savepoint.Sha, gitRow.Sha);
+        Assert.Equal(revision.Svn.Revision, gitRow.SvnRevision);
+        var svnRow = Assert.Single(timeline.SvnRevisions);
+        Assert.Equal(revision.Svn.Revision, svnRow.Revision);
+        Assert.Equal(gitRow.Sha, svnRow.GitCommitSha);
+
+        using var graphStore = new EngineeringGraphStore(fixture.Root);
+        var graph = new EngineeringGraphService(graphStore, CombinedFixture.WorkbenchId,
+            id => id == CombinedFixture.WorktreeId);
+        var edge = Assert.Single(graph.GetEdges(
+            GraphEntityKind.GitCommit, gitRow.Sha, GraphEntityKind.SvnRevision));
+        Assert.Equal($"{CombinedFixture.WorktreeId}:{svnRow.Revision}", edge.ToId);
+        Assert.Equal(GraphProvenance.Evidence, edge.Provenance);
+    }
+
+    [Fact]
     public async Task NativeSavepointRecordsFSignatureAndClassifiesSafetyChange()
     {
         var fixture = CombinedFixture.Create(root, checksum: "PLC_1:new-checksum");
@@ -482,7 +519,8 @@ public sealed class CombinedCommitTests : IDisposable
             FakeToolCaller caller,
             bool svnDirty = true,
             bool failGitCommit = false,
-            int extraHeadReads = 0)
+            int extraHeadReads = 0,
+            bool timelineAfterSavepoint = false)
         {
             caller
                 .Respond("vc_log", new ConsistencyLogResult
@@ -527,18 +565,71 @@ public sealed class CombinedCommitTests : IDisposable
                     new[] { SourcePath, EngineeringStateWriter.RelativePath }));
             }
 
-            return caller
+            var postSavepointLog = timelineAfterSavepoint
+                ? new ConsistencyLogResult
+                {
+                    Commits = new[]
+                    {
+                        new ConsistencyCommit
+                        {
+                            Sha = "head-2",
+                            Author = "Automation Workbench",
+                            Message = "accept Main change",
+                            Timestamp = "2026-09-12T00:00:00Z",
+                            Files = new[] { EngineeringStateWriter.RelativePath },
+                        },
+                    },
+                }
+                : new ConsistencyLogResult
+                {
+                    Commits = new[] { new ConsistencyCommit { Sha = "head-2" } },
+                };
+            caller
                 .Respond("vc_commit_state_create", new object())
-                .Respond("vc_log", new ConsistencyLogResult
+                .Respond("vc_log", postSavepointLog);
+            if (timelineAfterSavepoint)
             {
-                Commits = new[] { new ConsistencyCommit { Sha = "head-2" } },
-            });
+                caller
+                    .Respond("vc_commit_state_get", new ConsistencyValidationEvidence
+                    {
+                        CommitSha = "head-2",
+                        Devices = new[]
+                        {
+                            new ConsistencyValidationDevice
+                            {
+                                DeviceId = "device-1",
+                                PlcName = "PLC_1",
+                                ProjectChecksum = "new-checksum",
+                            },
+                        },
+                    })
+                    .Respond("vc_show_file", _ => new ShowFileResult
+                    {
+                        Content = File.ReadAllText(WorkbenchPaths.ResolveRevisionState(MasterRoot)),
+                    })
+                    .Respond("svn_log", new TimelineSvnLogResult
+                    {
+                        Entries = new[]
+                        {
+                            new TimelineSvnLogEntry
+                            {
+                                Revision = 2,
+                                Author = "Automation Workbench",
+                                Message = "accept Main change [native]",
+                                Time = new DateTime(2026, 9, 12, 0, 0, 0, DateTimeKind.Utc),
+                            },
+                        },
+                    });
+            }
+
+            return caller;
         }
 
         public WorkbenchCoordinator CreateCoordinator(
             FakeToolCaller engineering,
             FakeToolCaller versionControl,
-            EngineeringGraphCommitAttribution? attribution = null)
+            EngineeringGraphCommitAttribution? attribution = null,
+            EngineeringGraphEvidenceIndexerProvider? graphEvidenceIndexer = null)
         {
             var catalog = new WorkbenchCatalog(store, Path.Combine(Root, "catalog"));
             var coordinator = new WorkbenchCoordinator(
@@ -549,7 +640,8 @@ public sealed class CombinedCommitTests : IDisposable
                 store,
                 new DeviceReconciler(),
                 new DeviceSourceResolver(_ => { }),
-                graphAttribution: attribution);
+                graphAttribution: attribution,
+                graphEvidenceIndexer: graphEvidenceIndexer);
             coordinator.RegisterWorkbench(catalog.Load(Root));
             return coordinator;
         }

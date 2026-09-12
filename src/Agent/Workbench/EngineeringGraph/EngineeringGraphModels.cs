@@ -25,6 +25,7 @@ public sealed record GraphEdge(
     string EdgeId, GraphEntityKind FromKind, string FromId, GraphEntityKind ToKind, string ToId,
     GraphRelationKind RelationKind, GraphProvenance Provenance, bool IsPrimary,
     DateTimeOffset CreatedUtc, DateTimeOffset UpdatedUtc);
+public sealed record GraphFileEvidence(string CommitSha, string RelativePath, DateTimeOffset RecordedUtc);
 
 public sealed class EngineeringGraphConstraintException : InvalidOperationException
 {

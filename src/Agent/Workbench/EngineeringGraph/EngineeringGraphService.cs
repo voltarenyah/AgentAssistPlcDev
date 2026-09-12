@@ -212,6 +212,21 @@ public sealed class EngineeringGraphService
     }
 
     public int CountEdges() => Convert.ToInt32(Scalar("SELECT COUNT(*) FROM graph_edges;"));
+    public void RecordFileEvidence(string commitSha, string relativePath)
+    {
+        ExecuteNonQuery("INSERT OR IGNORE INTO graph_file_evidence (commit_sha,relative_path,recorded_utc) VALUES ($sha,$path,$utc);",
+            ("$sha", commitSha), ("$path", relativePath), ("$utc", DateTimeOffset.UtcNow.ToString("O")));
+    }
+    public IReadOnlyList<GraphFileEvidence> GetFileEvidence(string commitSha)
+    {
+        using var c = _store.Connection.CreateCommand();
+        c.CommandText = "SELECT commit_sha,relative_path,recorded_utc FROM graph_file_evidence WHERE commit_sha=$sha ORDER BY relative_path;";
+        c.Parameters.AddWithValue("$sha", commitSha);
+        using var r = c.ExecuteReader();
+        var result = new List<GraphFileEvidence>();
+        while (r.Read()) result.Add(new GraphFileEvidence(r.GetString(0), r.GetString(1), DateTimeOffset.Parse(r.GetString(2))));
+        return result;
+    }
     public GraphTask? GetTask(string taskId)
     {
         using var c = _store.Connection.CreateCommand();

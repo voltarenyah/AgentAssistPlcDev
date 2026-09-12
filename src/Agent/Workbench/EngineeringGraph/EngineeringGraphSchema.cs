@@ -4,7 +4,7 @@ namespace Agent.Workbench.EngineeringGraph;
 
 public static class EngineeringGraphSchema
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     internal static int GetVersion(SqliteConnection connection)
     {
@@ -76,6 +76,12 @@ public static class EngineeringGraphSchema
                     imported_utc TEXT NOT NULL,
                     PRIMARY KEY (source_kind, source_id)
                 );
+                CREATE TABLE IF NOT EXISTS graph_file_evidence (
+                    commit_sha TEXT NOT NULL,
+                    relative_path TEXT NOT NULL,
+                    recorded_utc TEXT NOT NULL,
+                    PRIMARY KEY (commit_sha, relative_path)
+                );
                 CREATE INDEX IF NOT EXISTS ix_graph_entities_workbench
                     ON graph_entities (workbench_id, entity_kind);
                 CREATE INDEX IF NOT EXISTS ix_graph_edges_from
@@ -90,6 +96,12 @@ public static class EngineeringGraphSchema
             failureInjector?.Invoke(2);
             Execute(connection, transaction, "DELETE FROM graph_schema;");
             Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (1, $utc);",
+                ("$utc", DateTimeOffset.UtcNow.ToString("O")));
+        }
+        if (version < 2)
+        {
+            Execute(connection, transaction, "CREATE TABLE IF NOT EXISTS graph_file_evidence (commit_sha TEXT NOT NULL, relative_path TEXT NOT NULL, recorded_utc TEXT NOT NULL, PRIMARY KEY (commit_sha, relative_path));");
+            Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (2, $utc);",
                 ("$utc", DateTimeOffset.UtcNow.ToString("O")));
         }
     }

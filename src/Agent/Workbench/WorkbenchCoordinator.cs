@@ -123,6 +123,7 @@ public sealed class WorkbenchCoordinator
     private readonly PathJail? pathJail;
     private readonly EngineeringGraphCommitAttribution? graphAttribution;
     private readonly EngineeringGraphCommitAttributionProvider? graphAttributionProvider;
+    private readonly EngineeringGraphEvidenceIndexerProvider? graphEvidenceIndexer;
     private readonly SemaphoreSlim engineeringSession = new(1, 1);
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> knownWorkbenches =
         new(StringComparer.Ordinal);
@@ -142,7 +143,8 @@ public sealed class WorkbenchCoordinator
         DeviceOperationLock? operationLock = null,
         PathJail? pathJail = null,
         EngineeringGraphCommitAttribution? graphAttribution = null,
-        EngineeringGraphCommitAttributionProvider? graphAttributionProvider = null)
+        EngineeringGraphCommitAttributionProvider? graphAttributionProvider = null,
+        EngineeringGraphEvidenceIndexerProvider? graphEvidenceIndexer = null)
     {
         this.engineering = engineering ?? throw new ArgumentNullException(nameof(engineering));
         this.knowledge = knowledge ?? throw new ArgumentNullException(nameof(knowledge));
@@ -155,6 +157,7 @@ public sealed class WorkbenchCoordinator
         this.pathJail = pathJail;
         this.graphAttribution = graphAttribution;
         this.graphAttributionProvider = graphAttributionProvider;
+        this.graphEvidenceIndexer = graphEvidenceIndexer;
         stager = new SafeDeviceExportStager(engineering, this.operationLock);
         consistency = new WorkbenchConsistencyService(engineering, versionControl, catalog, store);
         featureImport = new FeatureImportService(engineering, versionControl, consistency, store);
@@ -3480,6 +3483,9 @@ public sealed class WorkbenchCoordinator
         var attributionWarning = AssociateCommit(workbench, worktree.WorktreeId, result.Sha, additionalTaskIds);
         if (attributionWarning is not null)
             evidenceWarnings.Add(attributionWarning);
+        var indexingWarning = IndexGraphEvidence(workbench, worktree.WorktreeId, result.Sha, commitPaths, null);
+        if (indexingWarning is not null)
+            evidenceWarnings.Add(indexingWarning);
         if (evidenceWarnings.Count > 0)
             return result with { EvidenceWarnings = evidenceWarnings };
 
@@ -3599,6 +3605,9 @@ public sealed class WorkbenchCoordinator
             var retryAttributionWarning = AssociateCommit(workbench, worktree.WorktreeId, retried.Sha, additionalTaskIds);
             if (retryAttributionWarning is not null)
                 retryWarnings.Add(retryAttributionWarning);
+            var retryIndexingWarning = IndexGraphEvidence(workbench, worktree.WorktreeId, retried.Sha, retryPaths, pending.SvnRevision);
+            if (retryIndexingWarning is not null)
+                retryWarnings.Add(retryIndexingWarning);
             return retryWarnings.Count == 0
                 ? retried
                 : retried with { EvidenceWarnings = retryWarnings };
@@ -3738,6 +3747,9 @@ public sealed class WorkbenchCoordinator
         var attributionWarning = AssociateCommit(workbench, worktree.WorktreeId, commit.Sha, additionalTaskIds);
         if (attributionWarning is not null)
             warnings.Add(attributionWarning);
+        var indexingWarning = IndexGraphEvidence(workbench, worktree.WorktreeId, commit.Sha, commitPaths, svnCommit.Revision);
+        if (indexingWarning is not null)
+            warnings.Add(indexingWarning);
         return warnings.Count == 0
             ? commit
             : commit with { EvidenceWarnings = warnings };
@@ -3796,6 +3808,24 @@ public sealed class WorkbenchCoordinator
         graphAttributionProvider?.Associate(workbench, worktreeId, evidenceId, additionalTaskIds)
         ?? graphAttribution?.Associate(workbench.WorkbenchId, worktreeId, evidenceId,
             additionalTaskIds: additionalTaskIds);
+
+    private string? IndexGraphEvidence(
+        WorkbenchMetadata workbench, string worktreeId, string sha,
+        IReadOnlyList<string> paths, long? svnRevision)
+    {
+        if (graphEvidenceIndexer is null) return null;
+        try
+        {
+            graphEvidenceIndexer.Index(workbench, worktreeId,
+                new VersionControlTimelineGitCommit(sha, "Automation Workbench", "app-mediated commit",
+                    DateTimeOffset.UtcNow.ToString("O"), paths, null, svnRevision, false));
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"Commit '{sha}' succeeded, but evidence indexing was not recorded: {exception.Message}";
+        }
+    }
 
     /// <summary>
     /// Required live safety-evidence read for a safety-change commit: the commit's whole purpose
