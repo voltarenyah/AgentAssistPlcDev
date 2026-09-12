@@ -410,3 +410,11 @@ trust, monitoring, recovery, and deployment procedures.
 - By default, resolve each child model before spawning and immediately rename the returned task using the `subagents-orchestration-guide` Model-Bearing Sidebar Names procedure (for example, `luna-reviewer` or `Terra-programmer`); the user does not need to request model-bearing names.
 - Luna Medium handles routine analysis, execution, testing, and mechanical verification. Terra Medium/High handles selective design, review, security, and difficult judgment. `expert-solver` is the only Sol role and is advisory-only, read-only, and escalation-only.
 - Escalate Luna -> Terra -> Sol only for unresolved root cause, contradictory evidence, non-obvious cross-layer state/lifecycle behavior, high-risk design ambiguity, or repeated failed attempts with an unknown cause. Distill the problem, evidence, ruled-out hypotheses, constraints, and exact decision before invoking Sol. Never escalate merely because work is large, has many files, or failed once.
+
+## Maintaining this file
+
+This file is a map and operating policy, not a knowledge base. Keep it short, and keep every rule grounded in real friction.
+
+- When the **same** wrong assumption or mistake happens a second time, run a short retrospective and record the conclusion in the closest instruction file: this file for cross-cutting rules, a subsystem `AGENTS.md` for domain rules, or the document the rule belongs to.
+- State the situation that triggers the rule, not just the corrected fact.
+- Prefer tightening or replacing an existing rule over appending a new one, and do not add rules for problems that have not occurred.
