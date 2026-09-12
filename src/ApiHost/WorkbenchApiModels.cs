@@ -608,6 +608,60 @@ public static class WorkbenchEndpoints
                 throw new KeyNotFoundException("TASK_NOT_FOUND");
             return ToEngineeringTaskDetailResult(scope.Service, taskId);
         });
+        app.MapPost("/api/workbenches/{id}/tasks/{taskId}/relationships", (
+            string id, string taskId, EngineeringTaskRelationshipApiRequest request,
+            WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var kind = ParseGraphEntityKind(request.TargetKind);
+            var edge = scope.Service.AddEdge(GraphEntityKind.Task, taskId, kind, request.TargetId,
+                GraphProvenance.Manual, request.IsPrimary);
+            return Results.Created($"/api/workbenches/{id}/tasks/{taskId}/relationships/{edge.EdgeId}", ToRelationshipMutation(edge));
+        });
+        app.MapPut("/api/workbenches/{id}/tasks/{taskId}/relationships/{targetKind}/{targetId}", (
+            string id, string taskId, string targetKind, string targetId, EngineeringTaskRelationshipApiRequest? request,
+            WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var edge = scope.Service.ReplaceTaskRelationship(taskId, ParseGraphEntityKind(targetKind), targetId,
+                GraphProvenance.Manual, request?.IsPrimary ?? false);
+            return Results.Ok(ToRelationshipMutation(edge!));
+        });
+        app.MapDelete("/api/workbenches/{id}/tasks/{taskId}/relationships/{edgeId}", (
+            string id, string taskId, string edgeId, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var edge = scope.Service.GetEdges(GraphEntityKind.Task, taskId).SingleOrDefault(item => item.EdgeId == edgeId)
+                ?? throw new KeyNotFoundException("RELATIONSHIP_NOT_FOUND");
+            scope.Service.RemoveEdge(edge.EdgeId);
+            return Results.NoContent();
+        });
+        app.MapGet("/api/workbenches/{id}/engineering-graph/{entityKind}/{entityId}", (
+            string id, string entityKind, string entityId, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var kind = ParseGraphEntityKind(entityKind);
+            var entity = scope.Service.GetEntity(kind, entityId)
+                ?? throw new KeyNotFoundException("GRAPH_ENTITY_NOT_FOUND");
+            var directTasks = scope.Service.GetIncomingEdges(kind, entityId)
+                .Where(edge => edge.FromKind == GraphEntityKind.Task);
+            var evidenceCommits = scope.Service.GetIncomingEdges(kind, entityId)
+                .Where(edge => edge.FromKind == GraphEntityKind.GitCommit)
+                .ToArray();
+            var traversedTasks = evidenceCommits.SelectMany(commit => scope.Service.GetIncomingEdges(GraphEntityKind.GitCommit, commit.FromId)
+                .Where(edge => edge.FromKind == GraphEntityKind.Task)
+                .Select(edge => (edge.FromId, edge.Provenance, edge.IsPrimary)));
+            var tasks = directTasks.Select(edge => (edge.FromId, edge.Provenance, edge.IsPrimary))
+                .Concat(traversedTasks).GroupBy(item => item.FromId, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => new EngineeringTaskRelationshipApiResponse(group.Key,
+                    JsonNamingPolicy.CamelCase.ConvertName(group.First().Provenance.ToString()), group.Any(item => item.IsPrimary))).ToArray();
+            var commits = evidenceCommits.OrderBy(edge => edge.FromId, StringComparer.Ordinal)
+                .Select(edge => new EngineeringTaskRelationshipApiResponse(edge.FromId,
+                    JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary)).ToArray();
+            return Results.Ok(new EngineeringGraphEntityDetailApiResponse(
+                JsonNamingPolicy.CamelCase.ConvertName(kind.ToString()), entity.EntityId,
+                entity.WorkbenchId, entity.WorktreeId, tasks, commits));
+        });
         app.MapPatch("/api/workbenches/{id}/tasks/{taskId}", (
             string id, string taskId, JsonElement body, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
@@ -1821,6 +1875,20 @@ public static class WorkbenchEndpoints
         task.Priority, task.Intent, task.ExpectedResult, task.Description,
         task.CreatedUtc!.Value, task.UpdatedUtc!.Value);
 
+    private static EngineeringTaskRelationshipMutationApiResponse ToRelationshipMutation(GraphEdge edge) => new(
+        edge.EdgeId, edge.FromId, JsonNamingPolicy.CamelCase.ConvertName(edge.ToKind.ToString()), edge.ToId,
+        JsonNamingPolicy.CamelCase.ConvertName(edge.RelationKind.ToString()),
+        JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary);
+
+    private static GraphEntityKind ParseGraphEntityKind(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "session" => GraphEntityKind.Session,
+        "commit" or "gitcommit" or "git_commit" => GraphEntityKind.GitCommit,
+        "source" or "sourceobject" or "source_object" => GraphEntityKind.SourceObject,
+        "svn" or "svnrevision" or "svn_revision" => GraphEntityKind.SvnRevision,
+        _ => throw new EngineeringGraphConstraintException($"Unsupported graph entity kind '{value}'."),
+    };
+
     private static string? ResolveSessionTaskId(
         WorkbenchApiState state,
         EngineeringGraphApiFactory graphs,
@@ -2086,6 +2154,12 @@ public sealed class WorkbenchApiExceptionMiddleware(RequestDelegate next)
         {
             context.Response.StatusCode = 409;
             await context.Response.WriteAsJsonAsync(new { error = "METADATA_SCHEMA_UNSUPPORTED", message = exception.Message });
+        }
+        catch (EngineeringGraphConstraintException exception)
+        {
+            context.Response.StatusCode = exception.Code.Contains("EXISTS", StringComparison.Ordinal)
+                ? StatusCodes.Status409Conflict : StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(new { error = exception.Code, message = exception.Message });
         }
         catch (InvalidOperationException exception)
         {

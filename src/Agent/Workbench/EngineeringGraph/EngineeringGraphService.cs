@@ -148,8 +148,8 @@ public sealed class EngineeringGraphService
     {
         if (!Relations.TryGetValue((fromKind, toKind), out var relation))
             throw new EngineeringGraphConstraintException($"Unsupported relationship: {fromKind} -> {toKind}.");
-        var from = FindEntity(fromKind, fromId) ?? throw new EngineeringGraphConstraintException("Source entity was not registered.");
-        var to = FindEntity(toKind, toId) ?? throw new EngineeringGraphConstraintException("Target entity was not registered.");
+        var from = FindEntity(fromKind, fromId) ?? throw new EngineeringGraphConstraintException("Source entity was not registered.", "GRAPH_SOURCE_NOT_FOUND");
+        var to = FindEntity(toKind, toId) ?? throw new EngineeringGraphConstraintException("Target entity was not registered.", "GRAPH_TARGET_NOT_FOUND");
         if (from.WorkbenchId != _workbenchId || to.WorkbenchId != _workbenchId)
             throw new EngineeringGraphConstraintException("Entities must belong to the current Workbench.");
         if (fromKind == GraphEntityKind.Task && IsWorktreeTask(fromId) && from.WorktreeId != to.WorktreeId)
@@ -167,7 +167,9 @@ public sealed class EngineeringGraphService
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is 19)
         {
-            throw new EngineeringGraphConstraintException("The relationship violates a graph uniqueness constraint.");
+            throw new EngineeringGraphConstraintException(
+                isPrimary ? "The target already has a primary task relationship." : "The relationship already exists.",
+                isPrimary ? "GRAPH_PRIMARY_RELATIONSHIP_EXISTS" : "GRAPH_RELATIONSHIP_EXISTS");
         }
         return edge;
     }
@@ -176,6 +178,42 @@ public sealed class EngineeringGraphService
     {
         if (string.IsNullOrWhiteSpace(edgeId)) return;
         ExecuteNonQuery("DELETE FROM graph_edges WHERE edge_id=$id", ("$id", edgeId));
+    }
+
+    public GraphEntity? GetEntity(GraphEntityKind kind, string entityId) => FindEntity(kind, entityId);
+
+    public GraphEdge? ReplaceTaskRelationship(string taskId, GraphEntityKind targetKind, string targetId,
+        GraphProvenance provenance = GraphProvenance.Manual, bool isPrimary = false)
+    {
+        var task = FindTask(taskId) ?? throw new EngineeringGraphConstraintException("Task was not found in the current Workbench.", "TASK_NOT_FOUND");
+        var target = FindEntity(targetKind, targetId) ?? throw new EngineeringGraphConstraintException("Target entity was not registered in the current Workbench.", "GRAPH_TARGET_NOT_FOUND");
+        if (targetKind == GraphEntityKind.Task || !Relations.ContainsKey((GraphEntityKind.Task, targetKind)))
+            throw new EngineeringGraphConstraintException("The target kind is not a supported task relationship.");
+        if (isPrimary && targetKind != GraphEntityKind.GitCommit)
+            throw new EngineeringGraphConstraintException("Only task-to-commit relationships may be primary.");
+        if (task.ScopeKind == GraphTaskScopeKind.Worktree && task.WorktreeId != target.WorktreeId)
+            throw new EngineeringGraphConstraintException("A worktree-scoped task can only link within its Worktree.");
+        using var tx = _store.Connection.BeginTransaction();
+        var deleteSql = targetKind == GraphEntityKind.Session
+            ? "DELETE FROM graph_edges WHERE from_kind='task' AND to_kind='session' AND to_id=$target;"
+            : "DELETE FROM graph_edges WHERE from_kind='task' AND from_id=$task AND to_kind=$kind AND to_id=$target;";
+        Execute(tx, deleteSql, ("$task", taskId), ("$kind", Kind(targetKind)), ("$target", targetId));
+        var now = DateTimeOffset.UtcNow;
+        var edge = new GraphEdge(Guid.NewGuid().ToString("N"), GraphEntityKind.Task, taskId, targetKind, targetId,
+            Relations[(GraphEntityKind.Task, targetKind)], provenance, isPrimary, now, now);
+        try
+        {
+            Execute(tx, "INSERT INTO graph_edges (edge_id,from_kind,from_id,to_kind,to_id,relation_kind,provenance,is_primary,created_utc,updated_utc) VALUES ($edge,'task',$task,$kind,$target,$relation,$prov,$primary,$created,$updated)",
+                ("$edge", edge.EdgeId), ("$task", taskId), ("$kind", Kind(targetKind)), ("$target", targetId),
+                ("$relation", Relation(edge.RelationKind)), ("$prov", provenance.ToString().ToLowerInvariant()), ("$primary", isPrimary ? 1 : 0),
+                ("$created", now.ToString("O")), ("$updated", now.ToString("O")));
+            tx.Commit();
+            return edge;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode is 19)
+        {
+            throw new EngineeringGraphConstraintException("The target already has a primary task relationship.", "GRAPH_PRIMARY_RELATIONSHIP_EXISTS");
+        }
     }
     public void RemoveEntity(GraphEntityKind kind, string entityId)
     {
@@ -249,7 +287,7 @@ public sealed class EngineeringGraphService
     public IReadOnlyList<GraphEdge> GetIncomingEdges(GraphEntityKind toKind, string toId)
     {
         using var c = _store.Connection.CreateCommand();
-        c.CommandText = "SELECT edge_id,from_kind,from_id,relation_kind,provenance,is_primary,created_utc,updated_utc FROM graph_edges WHERE to_kind=$tk AND to_id=$id ORDER BY created_utc;";
+        c.CommandText = "SELECT edge_id,from_kind,from_id,relation_kind,provenance,is_primary,created_utc,updated_utc FROM graph_edges WHERE to_kind=$tk AND to_id=$id ORDER BY relation_kind,from_id,created_utc;";
         c.Parameters.AddWithValue("$tk", Kind(toKind)); c.Parameters.AddWithValue("$id", toId);
         using var reader = c.ExecuteReader();
         var result = new List<GraphEdge>();
@@ -264,7 +302,7 @@ public sealed class EngineeringGraphService
     {
         using var c = _store.Connection.CreateCommand();
         c.CommandText = "SELECT edge_id,to_kind,to_id,relation_kind,provenance,is_primary,created_utc,updated_utc FROM graph_edges WHERE from_kind=$fk AND from_id=$id" +
-            (toKind is null ? "" : " AND to_kind=$tk") + " ORDER BY created_utc;";
+            (toKind is null ? "" : " AND to_kind=$tk") + " ORDER BY relation_kind,to_id,created_utc;";
         c.Parameters.AddWithValue("$fk", Kind(fromKind)); c.Parameters.AddWithValue("$id", fromId);
         if (toKind is not null) c.Parameters.AddWithValue("$tk", Kind(toKind.Value));
         using var reader = c.ExecuteReader();

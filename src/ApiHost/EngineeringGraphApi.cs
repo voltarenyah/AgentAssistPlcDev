@@ -61,6 +61,20 @@ public sealed record EngineeringTaskRelationshipApiResponse(
     string Provenance,
     bool IsPrimary);
 
+public sealed record EngineeringTaskRelationshipApiRequest(
+    string TargetKind,
+    string TargetId,
+    bool IsPrimary = false);
+
+public sealed record EngineeringTaskRelationshipMutationApiResponse(
+    string EdgeId, string TaskId, string TargetKind, string TargetId, string Relation,
+    string Provenance, bool IsPrimary);
+
+public sealed record EngineeringGraphEntityDetailApiResponse(
+    string Kind, string Id, string WorkbenchId, string? WorktreeId,
+    IReadOnlyList<EngineeringTaskRelationshipApiResponse> Tasks,
+    IReadOnlyList<EngineeringTaskRelationshipApiResponse> Commits);
+
 public sealed record EngineeringTaskDetailApiResponse(
     EngineeringTaskApiResponse Task,
     IReadOnlyList<EngineeringTaskRelationshipApiResponse> Sessions,

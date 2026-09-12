@@ -29,5 +29,6 @@ public sealed record GraphFileEvidence(string CommitSha, string RelativePath, Da
 
 public sealed class EngineeringGraphConstraintException : InvalidOperationException
 {
-    public EngineeringGraphConstraintException(string message) : base(message) { }
+    public string Code { get; }
+    public EngineeringGraphConstraintException(string message, string code = "GRAPH_RELATIONSHIP_INVALID") : base(message) => Code = code;
 }
