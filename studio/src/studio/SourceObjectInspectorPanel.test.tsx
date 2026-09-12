@@ -41,6 +41,9 @@ it('renders exact network cards in the dockable source inspector panel', async (
   expect(host.textContent).toContain('B · Network 2')
   expect(host.querySelectorAll('[data-lad-element-id]').length).toBe(8)
   expect(host.querySelectorAll('[data-lad-wire]').length).toBeGreaterThanOrEqual(6)
-  expect(host.querySelector('[data-lad-element-id="30"]')?.getAttribute('transform')).toBeNull()
+  const forwardContact = host.querySelector('[data-lad-element-id="26"]')!
+  const resetContact = host.querySelector('[data-lad-element-id="30"]')!
+  expect(resetContact.getAttribute('data-lad-x')).toBe(forwardContact.getAttribute('data-lad-x'))
+  expect(Number(resetContact.getAttribute('data-lad-y'))).toBeGreaterThan(Number(forwardContact.getAttribute('data-lad-y')))
   expect(host.textContent).toContain('CylinderMovementSimulate')
 })

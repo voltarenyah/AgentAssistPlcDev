@@ -117,9 +117,10 @@ function buildLadderDiagram(network: Ladder) {
   const openOutputs: LadderPort[] = []
   for (const wire of network.wires) {
     const ports = wire.endpoints.filter((endpoint): endpoint is { kind: string; elementId: string; pin: string } => endpoint.kind === 'NameCon' && !!endpoint.elementId && !!endpoint.pin && elements.has(endpoint.elementId)).map(endpoint => ({ elementId: endpoint.elementId, pin: endpoint.pin }))
-    if (wire.endpoints.some(endpoint => endpoint.kind === 'Powerrail')) powerInputs.push(...ports)
+    const hasPowerrail = wire.endpoints.some(endpoint => endpoint.kind === 'Powerrail')
+    if (hasPowerrail) powerInputs.push(...ports)
     if (wire.endpoints.some(endpoint => endpoint.kind === 'OpenCon')) openOutputs.push(...ports)
-    if (ports.length === 2) {
+    if (!hasPowerrail && ports.length === 2) {
       const [first, second] = ports
       connections.push(isOutputPin(first.pin) || !isOutputPin(second.pin) ? { from: first, to: second } : { from: second, to: first })
     }
@@ -158,7 +159,7 @@ function buildLadderDiagram(network: Ladder) {
   return { placements, connections, powerInputs, outputStubs, point, width, height }
 }
 
-function isOutputPin(pin: string) { return /^(out|q|eno)$/i.test(pin) }
+function isOutputPin(pin: string) { return /^(out|q|eno|et)$/i.test(pin) }
 function route(from: { x: number; y: number }, to: { x: number; y: number }) { const mid = Math.round((from.x + to.x) / 2); return `M ${from.x} ${from.y} H ${mid} V ${to.y} H ${to.x}` }
 function portPoint(placement: LadderPlacement, pin: string) {
   const name = pin.toLowerCase()
@@ -179,7 +180,7 @@ function LadderElement({ placement, referenceTargets, onOpenReference }: { place
   const reference = element.referencedObject && referenceTargets[element.referencedObject]
   const label = element.label ?? element.id
   const pins = displayPins(element).filter(pin => !/^operand$/i.test(pin.name))
-  return <ContextMenu><ContextMenuTrigger asChild><g data-lad-element-id={element.id} role="button" tabIndex={0} aria-label={`${element.kind} ${label}`} className="cursor-context-menu outline-none">
+  return <ContextMenu><ContextMenuTrigger asChild><g data-lad-element-id={element.id} data-lad-x={x} data-lad-y={y} role="button" tabIndex={0} aria-label={`${element.kind} ${label}`} className="cursor-context-menu outline-none">
     <rect x={x - 5} y={y - 34} width={width + 10} height={height + 42} fill="transparent" />
     <text x={x + width / 2} y={y - 19} fill="currentColor" fontSize="11" textAnchor="middle">{label}</text>
     {isContact ? <ContactSymbol x={x} y={y} width={width} height={height} negated={element.negatedPins.some(pin => /^operand$/i.test(pin))} /> : <FunctionBlock x={x} y={y} width={width} height={height} kind={element.kind} pins={pins} />}
