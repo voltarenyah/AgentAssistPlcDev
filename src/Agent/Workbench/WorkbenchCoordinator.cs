@@ -3,6 +3,7 @@ using Contracts.Engineering;
 using Contracts.Knowledge;
 using Contracts.Sandbox;
 using System.Collections.Concurrent;
+using Agent.Workbench.EngineeringGraph;
 using System.Security.Cryptography;
 
 namespace Agent.Workbench;
@@ -120,6 +121,8 @@ public sealed class WorkbenchCoordinator
     private readonly RollbackFeatureService rollbackFeature;
     private readonly WorkbenchWritePolicy writePolicy;
     private readonly PathJail? pathJail;
+    private readonly EngineeringGraphCommitAttribution? graphAttribution;
+    private readonly EngineeringGraphCommitAttributionProvider? graphAttributionProvider;
     private readonly SemaphoreSlim engineeringSession = new(1, 1);
     private readonly ConcurrentDictionary<string, WorkbenchMetadata> knownWorkbenches =
         new(StringComparer.Ordinal);
@@ -137,7 +140,9 @@ public sealed class WorkbenchCoordinator
         DeviceReconciler reconciler,
         DeviceSourceResolver sourceResolver,
         DeviceOperationLock? operationLock = null,
-        PathJail? pathJail = null)
+        PathJail? pathJail = null,
+        EngineeringGraphCommitAttribution? graphAttribution = null,
+        EngineeringGraphCommitAttributionProvider? graphAttributionProvider = null)
     {
         this.engineering = engineering ?? throw new ArgumentNullException(nameof(engineering));
         this.knowledge = knowledge ?? throw new ArgumentNullException(nameof(knowledge));
@@ -148,6 +153,8 @@ public sealed class WorkbenchCoordinator
         this.sourceResolver = sourceResolver ?? throw new ArgumentNullException(nameof(sourceResolver));
         this.operationLock = operationLock ?? new DeviceOperationLock();
         this.pathJail = pathJail;
+        this.graphAttribution = graphAttribution;
+        this.graphAttributionProvider = graphAttributionProvider;
         stager = new SafeDeviceExportStager(engineering, this.operationLock);
         consistency = new WorkbenchConsistencyService(engineering, versionControl, catalog, store);
         featureImport = new FeatureImportService(engineering, versionControl, consistency, store);
@@ -3330,7 +3337,8 @@ public sealed class WorkbenchCoordinator
         bool safetyChange = false,
         bool recordTiaState = true,
         bool managedSourceConsistent = false,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        IReadOnlyList<string>? additionalTaskIds = null)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A commit message is required.", nameof(message));
@@ -3469,6 +3477,9 @@ public sealed class WorkbenchCoordinator
             .ConfigureAwait(false);
         if (managedSourceWarning is not null)
             evidenceWarnings.Add(managedSourceWarning);
+        var attributionWarning = AssociateCommit(workbench, worktree.WorktreeId, result.Sha, additionalTaskIds);
+        if (attributionWarning is not null)
+            evidenceWarnings.Add(attributionWarning);
         if (evidenceWarnings.Count > 0)
             return result with { EvidenceWarnings = evidenceWarnings };
 
@@ -3489,7 +3500,8 @@ public sealed class WorkbenchCoordinator
         string message,
         CancellationToken token = default,
         string? author = null,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        IReadOnlyList<string>? additionalTaskIds = null)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A savepoint message is required.", nameof(message));
@@ -3508,7 +3520,7 @@ public sealed class WorkbenchCoordinator
 
         return await CommitCombinedAsync(
                 workbench, worktree, worktreeRoot, registration.RelativePath,
-                Array.Empty<string>(), message.Trim(), token, author, progress)
+                Array.Empty<string>(), message.Trim(), token, author, progress, additionalTaskIds)
             .ConfigureAwait(false);
     }
 
@@ -3538,7 +3550,8 @@ public sealed class WorkbenchCoordinator
         string message,
         CancellationToken token,
         string? author,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        IReadOnlyList<string>? additionalTaskIds = null)
     {
         var commitDevices = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath);
 
@@ -3580,9 +3593,15 @@ public sealed class WorkbenchCoordinator
                     managedSourceConsistent: false, captured: null, token, progress)
                 .ConfigureAwait(false);
             PendingCommitStore.Clear(worktreeRoot);
-            return retryEvidenceWarning is null
+            var retryWarnings = retryEvidenceWarning is null
+                ? new List<string>()
+                : new List<string> { retryEvidenceWarning };
+            var retryAttributionWarning = AssociateCommit(workbench, worktree.WorktreeId, retried.Sha, additionalTaskIds);
+            if (retryAttributionWarning is not null)
+                retryWarnings.Add(retryAttributionWarning);
+            return retryWarnings.Count == 0
                 ? retried
-                : retried with { EvidenceWarnings = new[] { retryEvidenceWarning } };
+                : retried with { EvidenceWarnings = retryWarnings };
         }
 
         var baseline = TryReadRevisionState(worktreeRoot);
@@ -3712,10 +3731,16 @@ public sealed class WorkbenchCoordinator
         var evidenceWarning = await TryRecordManagedSourceEvidenceAsync(
                 workbench, worktree, worktreeRoot, worktreeRelativePath, commit.Sha,
                 managedSourceConsistent: false, captured: null, token, progress)
-            .ConfigureAwait(false);
-        return evidenceWarning is null
+                .ConfigureAwait(false);
+        var warnings = evidenceWarning is null
+            ? new List<string>()
+            : new List<string> { evidenceWarning };
+        var attributionWarning = AssociateCommit(workbench, worktree.WorktreeId, commit.Sha, additionalTaskIds);
+        if (attributionWarning is not null)
+            warnings.Add(attributionWarning);
+        return warnings.Count == 0
             ? commit
-            : commit with { EvidenceWarnings = new[] { evidenceWarning } };
+            : commit with { EvidenceWarnings = warnings };
     }
 
     /// <summary>Writes the live safety evidence into every device's git-tracked source manifest
@@ -3762,6 +3787,15 @@ public sealed class WorkbenchCoordinator
             .Distinct(StringComparer.Ordinal)
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
+
+    private string? AssociateCommit(
+        WorkbenchMetadata workbench,
+        string worktreeId,
+        string evidenceId,
+        IReadOnlyList<string>? additionalTaskIds) =>
+        graphAttributionProvider?.Associate(workbench, worktreeId, evidenceId, additionalTaskIds)
+        ?? graphAttribution?.Associate(workbench.WorkbenchId, worktreeId, evidenceId,
+            additionalTaskIds: additionalTaskIds);
 
     /// <summary>
     /// Required live safety-evidence read for a safety-change commit: the commit's whole purpose

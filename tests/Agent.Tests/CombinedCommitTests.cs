@@ -1,4 +1,5 @@
 using Agent.Workbench;
+using Agent.Workbench.EngineeringGraph;
 using Contracts.Engineering;
 using System.Security.Cryptography;
 using Xunit;
@@ -224,6 +225,31 @@ public sealed class CombinedCommitTests : IDisposable
         Assert.Equal("COMMIT_NOTHING_TO_COMMIT", error.Code);
         Assert.DoesNotContain("svn_commit", versionControl.Calls);
         Assert.DoesNotContain("vc_commit_selected", versionControl.Calls);
+    }
+
+    [Fact]
+    public async Task NativeSavepointRemainsSuccessfulWhenTaskAttributionFails()
+    {
+        var fixture = CombinedFixture.Create(root, checksum: "PLC_1:new-checksum");
+        using var graphStore = new EngineeringGraphStore(fixture.Root);
+        var graph = new EngineeringGraphService(graphStore, CombinedFixture.WorkbenchId,
+            id => id == CombinedFixture.WorktreeId);
+        graph.CreateTask("task-1", GraphTaskScopeKind.Worktree, CombinedFixture.WorktreeId,
+            "Savepoint", GraphTaskType.Feature, intent: "intent", expectedResult: "result");
+        var attribution = new EngineeringGraphCommitAttribution(graph);
+        graphStore.Dispose();
+        var coordinator = fixture.CreateCoordinator(
+            fixture.ScriptEngineering(new FakeToolCaller()),
+            fixture.ScriptVersionControl(new FakeToolCaller()),
+            attribution);
+
+        var result = await coordinator.CreateNativeSavepointAsync(
+            CombinedFixture.WorkbenchId, CombinedFixture.WorktreeId, "savepoint", CancellationToken.None);
+
+        Assert.Equal("head-2", result.Sha);
+        var warning = Assert.Single(result.EvidenceWarnings!, item => item.Contains("attribution", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("head-2", warning);
+        Assert.Contains("attribution", warning, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -511,7 +537,8 @@ public sealed class CombinedCommitTests : IDisposable
 
         public WorkbenchCoordinator CreateCoordinator(
             FakeToolCaller engineering,
-            FakeToolCaller versionControl)
+            FakeToolCaller versionControl,
+            EngineeringGraphCommitAttribution? attribution = null)
         {
             var catalog = new WorkbenchCatalog(store, Path.Combine(Root, "catalog"));
             var coordinator = new WorkbenchCoordinator(
@@ -521,7 +548,8 @@ public sealed class CombinedCommitTests : IDisposable
                 catalog,
                 store,
                 new DeviceReconciler(),
-                new DeviceSourceResolver(_ => { }));
+                new DeviceSourceResolver(_ => { }),
+                graphAttribution: attribution);
             coordinator.RegisterWorkbench(catalog.Load(Root));
             return coordinator;
         }
