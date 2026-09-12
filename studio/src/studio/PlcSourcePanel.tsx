@@ -10,6 +10,7 @@ import {
   GitCompareArrows,
   Loader2,
   MessageSquare,
+  Network,
   Search,
   SquareArrowOutUpRight,
   Table2,
@@ -36,6 +37,7 @@ import {
   type SourceTypeFilter,
 } from './plcSourceState'
 import PlcSourceCompareDialog from './PlcSourceCompareDialog'
+import SourceObjectInspectorDialog from './SourceObjectInspectorDialog'
 
 type Props = {
   workbenchId: string
@@ -76,6 +78,8 @@ export default function PlcSourcePanel({
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [comparison, setComparison] = useState<SourceObjectComparison | null>(null)
+  const [inspectionPath, setInspectionPath] = useState<string | null>(null)
+  const [usage, setUsage] = useState<api.SourceVariableUsage[] | null>(null)
 
   const items = useMemo(
     () => resolveSourceObjects(deviceView?.sourceObjects, deviceView?.blocks),
@@ -85,6 +89,10 @@ export default function PlcSourcePanel({
   const matching = useMemo(() => filterSourceObjects(items, typeFilter, query), [items, typeFilter, query])
   const limited = useMemo(() => limitSourceObjects(matching), [matching])
   const visible = limited.items
+  const referenceTargets = useMemo(() => items.reduce<Record<string, string>>((result, item) => {
+    if (!result[item.name]) result[item.name] = item.relativePath
+    return result
+  }, {}), [items])
 
   const openInTia = async (item: SourceObjectInfo) => {
     setPendingAction(`open:${item.id}`)
@@ -106,6 +114,26 @@ export default function PlcSourcePanel({
       showErrorToast(errorMessage(error))
     } finally {
       setPendingAction(null)
+    }
+  }
+
+  const showUsageNetworks = async (item: SourceObjectInfo) => {
+    setPendingAction(`usage:${item.id}`)
+    await showVariableUsage(item.name)
+    setPendingAction(null)
+  }
+
+  const showVariableUsage = async (variable: string) => {
+    try {
+      const result = await api.getSourceVariableUsage(workbenchId, worktreeId, deviceId, variable)
+      if (!result.usages.length) {
+        toast.info(`No read/write or mention networks were found for "${variable}".`)
+        return
+      }
+      setInspectionPath(null)
+      setUsage(result.usages)
+    } catch (error) {
+      showErrorToast(errorMessage(error))
     }
   }
 
@@ -200,6 +228,15 @@ export default function PlcSourcePanel({
                     </ContextMenuTrigger>
                     <ContextMenuContent>
                       <ContextMenuLabel>{item.category} · {item.name}</ContextMenuLabel>
+                      <ContextMenuItem onSelect={() => { setUsage(null); setInspectionPath(item.relativePath) }}>
+                        <Code2 className="h-3.5 w-3.5" />
+                        Inspect object
+                      </ContextMenuItem>
+                      {item.category === 'Tags' && <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void showUsageNetworks(item)}>
+                        <Network className="h-3.5 w-3.5" />
+                        Show read/write networks
+                      </ContextMenuItem>}
+                      <ContextMenuSeparator />
                       <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void openInTia(item)}>
                         <SquareArrowOutUpRight className="h-3.5 w-3.5" />
                         Open in TIA
@@ -273,6 +310,8 @@ export default function PlcSourcePanel({
           }}
         />
       )}
+      {inspectionPath && <SourceObjectInspectorDialog workbenchId={workbenchId} worktreeId={worktreeId} deviceId={deviceId} relativePath={inspectionPath} referenceTargets={referenceTargets} onOpenReference={path => { setUsage(null); setInspectionPath(path) }} onShowUsage={showVariableUsage} onClose={() => setInspectionPath(null)} />}
+      {usage && <SourceObjectInspectorDialog workbenchId={workbenchId} worktreeId={worktreeId} deviceId={deviceId} usage={usage} referenceTargets={referenceTargets} onOpenReference={path => { setUsage(null); setInspectionPath(path) }} onShowUsage={showVariableUsage} onClose={() => setUsage(null)} />}
     </div>
   )
 }
