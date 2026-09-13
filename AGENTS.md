@@ -5,6 +5,9 @@
 This file is operating policy and a map, not a knowledge base. Read the relevant document
 before changing that area.
 
+A nested `AGENTS.md` adds rules for its own directory; where it and a `docs/` document
+disagree, the `docs/` file wins and the nested file is the one to fix.
+
 - Product overview and application layout: `README.md`
 - Version-control semantics (Git semantic state vs native TIA state): `docs/version-control-workflow.md`
 - PLC source workflow and live TIA acceptance: `docs/plc-workflow.md`
@@ -15,6 +18,16 @@ before changing that area.
 - Codex worker operations: `docs/local-codex-worker.md`
 
 `docs/superpowers/` holds historical plans and specifications (July–August 2026): background, not current authority.
+
+## Two-store version-control invariant
+
+- Git is readable semantic history; the local SVN repository is the native, byte-exact TIA store, and
+  `engineering-state/revision.json` is the only link. A Git SHA never identifies native TIA state.
+- Ordinary commits write Git only — never SVN, never `revision.json`. The combined SVN+Git transaction
+  belongs to the explicit **Create SVN savepoint** action and the workbench baseline.
+- Every source commit path goes through the guarded combined transaction (`CommitSourceAsync`). Never
+  call the raw commit tool or gateway route directly, not even for a device-refresh apply-and-commit —
+  that bypass once let Git advance while SVN, `revision.json` and the checksums did not.
 
 ## Start the local test flow
 
@@ -79,13 +92,7 @@ The response should contain `decision.kind = mutation_proposal`, a `pendingAppro
 
 ## Automated test commands
 
-Frontend tests:
-
-```powershell
-Push-Location studio
-npm test -- --run
-Pop-Location
-```
+Frontend tests: see `studio/AGENTS.md` (vitest).
 
 Python sidecar tests:
 
