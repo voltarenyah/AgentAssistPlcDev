@@ -112,6 +112,25 @@ The inspector never receives an absolute path from the browser. Every source req
 | Knowledge DB may be stale/missing | Device knowledge lifecycle is separate from source XML. | Keep direct XML inspection independent and present a distinct usage-discovery state. |
 | Large network payloads | Existing knowledge logic is chunked for tool limits. | API projects selected networks only; do not load whole project XML collections. |
 
+## Implementation Status and Follow-up Boundary
+
+This section records the agreed delivery boundary after the initial implementation. It is a status record, not a new requirement set.
+
+| Outcome group | Status | Delivered boundary / evidence | Follow-up boundary |
+|---|---|---|---|
+| Source-object entry and docked workspace | Implemented | Every supported source-object row exposes `Inspect object`, which focuses the dockable Source inspector view. | None for the initial release. |
+| Source XML semantic projection | Implemented | The inspector reads exact device XML through the device-scoped resolver and creates a read-only inspection projection. This is distinct from the derived `plc-knowledge.db`. | A raw-XML view remains a separate future capability; semantic projection must not be presented as byte-for-byte XML fidelity. |
+| Block interfaces and simple-object tables | Implemented | OB/FB/FC interfaces and DB/tag-table/UDT table projections are available. | Richer TIA-style hierarchy/attribute presentation is not part of this delivery. |
+| SCL source presentation | Implemented | SCL networks are displayed as readable, read-only structured text. | Formatting fidelity beyond the exported source text is out of scope. |
+| Session-local network workspace | Implemented | Network cards can be mixed in one inspector and moved temporarily; cards can fold/unfold. No card order is persisted. | Persistent order was explicitly excluded. |
+| LAD graphical presentation | Partially implemented | The pin-level topology renderer is validated for the demonstrated Network 3: rails, power-rail fan-out, contacts, TON, SR, literal `false`, named pins, and lower reset branch routing. | It is not a complete TIA-equivalent renderer for every exported instruction, multi-pin shape, branch/merge layout, or wire-routing pattern. Unknown shapes remain a bounded visual fallback. |
+| Cross-file read/write network workspace | Partially implemented | Usage locations can identify source-file/network pairs and the UI can load the corresponding exact XML networks into mixed-origin cards. | Prove this workflow end-to-end against a freshly generated real `plc-knowledge.db`, including the user journey starting from an individual tag-table row. |
+| `Open referenced object` | Deferred | The element menu exists, but most LAD symbols cannot resolve because the current lookup only maps source-object names/files, not semantic symbol ownership. The action must not be represented as useful until it resolves correctly. | Build a typed symbol-resolution index: tag row -> tag table; block/DB/UDT reference -> source object; local/interface variable -> owning block; literal -> no navigation. |
+
+### Next Increment Starting Point
+
+Start with typed symbol ownership and navigation, rather than adding more menu actions. The resolver must return a discriminated target with an explicit resolution state (`resolved`, `ambiguous`, or `notNavigable`) so the client can enable `Open referenced object` only when a correct destination exists. Then validate tag-row read/write discovery against a current knowledge DB and load mixed-origin cards from the returned source-file/network locations. Extend LAD shape and layout support only from real exported XML plus a matching TIA reference image, adding a regression fixture for each newly supported topology.
+
 ## References
 
 - `docs/ui-spec/source-object-inspector-ui-spec.md`
@@ -125,3 +144,4 @@ The inspector never receives an absolute path from the browser. Every source req
 |---|---|---|
 | 2026-09-11 | 1.0 | Initial design from confirmed requirements. |
 | 2026-09-12 | 1.1 | Preserve pin-level LAD graph data and render power-rail branches with SVG routing. |
+| 2026-09-13 | 1.2 | Record implemented, partial, and deferred inspector outcomes plus the next-increment boundary. |

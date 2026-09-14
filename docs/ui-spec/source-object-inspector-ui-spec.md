@@ -78,9 +78,27 @@
 | AC-007 | Element menu | A resolvable call/type reference opens its source object inspector. |
 | AC-008 | Error state | Malformed XML and missing/stale knowledge evidence have distinct, actionable displays. |
 
+## Delivery Status and Deferred Interaction
+
+The initial release is a dockable semantic XML source inspector, not a full TIA editor or a general cross-reference browser.
+
+| User-visible outcome | Status | Current behavior | Deferred work |
+|---|---|---|---|
+| Inspect source object | Implemented | All supported source-object rows offer `Inspect object` and focus the dockable inspector. | None for initial entry behavior. |
+| Interfaces, DBs, tags, UDTs, and SCL | Implemented | Blocks show interfaces and source networks; simple objects use spreadsheet-like source tables; SCL is readable source text. | Richer TIA-equivalent fields, trees, and editor behavior are excluded. |
+| Network workspace controls | Implemented | Cards can be folded/unfolded and reordered for the current inspector session only. | Saving a card arrangement is explicitly excluded. |
+| LAD interaction and topology | Partial | Supported topology is rendered as selectable SVG elements with a context menu. The validated engineering reference includes rails, branches, contacts, TON, SR, literal operands, and exact connected pin rows. | Additional exported LAD instructions, multi-pin layouts, and complex branch/merge routing need source-and-screenshot-driven extensions. |
+| Read/write networks from several blocks | Partial | The workspace can assemble cards from source-file/network locations returned by usage discovery. | Validate an individual tag-row journey against a current `plc-knowledge.db`; make stale/missing knowledge state clear during that real workflow. |
+| Open referenced object | Deferred | The context-menu item is disabled unless the renderer can map a label to a unique source object. Current LAD tag, local/interface, and literal operands usually do not meet that condition. | Introduce typed symbol ownership resolution before enabling navigation: tag-table row, block/DB/UDT source object, owning local/interface variable, or intentionally non-navigable literal. |
+
+### Follow-up UX Rule
+
+Do not enable an element-level navigation action based on a matching display label alone. The backend must supply a typed, unique destination or an explicit non-navigable/ambiguous state. For future LAD corrections, use the actual exported XML and the matching TIA screenshot as the acceptance pair; do not infer topology from a simplified fixture alone.
+
 ## Update History
 
 | Date | Version | Changes |
 |---|---|---|
 | 2026-09-11 | 1.0 | Initial specification from confirmed inspector requirements. |
 | 2026-09-12 | 1.1 | Specify pin-level SVG routing for branched LAD networks. |
+| 2026-09-13 | 1.2 | Record the delivered source-inspection boundary and deferred cross-reference/LAD follow-up work. |
