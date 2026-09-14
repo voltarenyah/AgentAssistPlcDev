@@ -15,6 +15,7 @@ describe('workspaceViewRegistry', () => {
       'Device overview',
       'AI chat',
       'PLC source',
+      'Source inspector',
       'Knowledge',
     ])
   })
