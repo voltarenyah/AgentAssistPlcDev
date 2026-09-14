@@ -1,6 +1,16 @@
 import { AlertTriangle, CheckCircle2, FileDiff, Loader2, X } from 'lucide-react'
 import { useState } from 'react'
 import type { ReconciliationEntry, ReconciliationPreview } from '@/api/client'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import {
   actionableEntries,
   comparedEntries,
@@ -42,18 +52,23 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
   }, {})
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-5 backdrop-blur-[2px]">
-      <div className="flex max-h-[86vh] w-full max-w-[760px] flex-col overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
-        <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+    <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}>
+      <DialogContent
+        showCloseButton={false}
+        className="flex max-h-[86vh] max-w-[760px] flex-col gap-0 overflow-hidden p-0"
+        onEscapeKeyDown={event => { if (busy) event.preventDefault() }}
+        onPointerDownOutside={event => { if (busy) event.preventDefault() }}
+      >
+        <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 text-left" style={{ borderColor: 'var(--border)' }}>
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-amber-500/10">
             <FileDiff className="h-4 w-4 text-amber-500" />
           </div>
           <div className="flex-1">
-            <h2 className="text-sm font-semibold">TIA comparison</h2>
-            <p className="text-[10px] text-muted-foreground">Live source was exported to temporary staging. This comparison is non-destructive; tracked source changes only after explicit approval{autoCommit ? ', then committed with your title.' : '.'}</p>
+            <DialogTitle className="text-sm">TIA comparison</DialogTitle>
+            <DialogDescription className="text-[10px]">Live source was exported to temporary staging. This comparison is non-destructive; tracked source changes only after explicit approval{autoCommit ? ', then committed with your title.' : '.'}</DialogDescription>
           </div>
-          <button className="icon-button" onClick={onClose}><X className="h-4 w-4" /></button>
-        </div>
+          <Button variant="ghost" size="icon-xs" onClick={onClose} disabled={busy} aria-label="Close TIA comparison"><X /></Button>
+        </DialogHeader>
 
         <div className="grid grid-cols-4 gap-px border-b bg-border" style={{ borderColor: 'var(--border)' }}>
           {(['Added', 'Changed', 'Removed', 'Unchanged'] as const).map(label => (
@@ -137,7 +152,7 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
           )}
         </div>
 
-        <div className="flex items-center gap-3 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <DialogFooter className="flex-row items-center gap-3 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           {actionable.length > 0 ? (
             <div className="flex min-w-0 flex-1 items-center gap-2 text-[9px] text-amber-500">
               <AlertTriangle className="h-3.5 w-3.5" />
@@ -146,44 +161,46 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
           ) : <div className="flex-1" />}
           {actionable.length > 0 && (
             <>
-              <button
-                className="secondary-button"
+              <Button
+                variant="outline"
+                size="xs"
                 disabled={busy || approvedPaths.size === actionable.length}
                 onClick={() => setApprovedPaths(new Set(actionable.map(entry => entry.relativePath)))}
               >
                 Check all
-              </button>
-              <button
-                className="secondary-button"
+              </Button>
+              <Button
+                variant="outline"
+                size="xs"
                 disabled={busy || approvedPaths.size === 0}
                 onClick={() => setApprovedPaths(new Set())}
               >
                 Uncheck all
-              </button>
+              </Button>
             </>
           )}
           {autoCommit && actionable.length > 0 && approvedPaths.size > 0 && (
-            <input
+            <Input
               aria-label="TIA commit title"
               value={commitTitle}
               onChange={event => setCommitTitle(event.currentTarget.value)}
               onInput={event => setCommitTitle(event.currentTarget.value)}
               placeholder="Commit title..."
               disabled={busy}
-              className="w-44 rounded border bg-card px-2 py-1.5 text-[9px] outline-none"
+              className="h-7 w-44 text-[9px]"
             />
           )}
-          <button className="secondary-button" onClick={onClose} disabled={busy}>Reject</button>
-          <button
-            className="primary-button"
+          <Button variant="outline" size="xs" onClick={onClose} disabled={busy}>Reject</Button>
+          <Button
+            size="xs"
             disabled={busy || (actionable.length > 0 && (approvedPaths.size === 0 || (autoCommit && !commitTitle.trim())))}
             onClick={() => onApply([...approvedPaths], autoCommit ? commitTitle.trim() : undefined)}
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             {actionable.length === 0 ? 'Confirm no changes' : autoCommit ? `Apply and commit ${approvedPaths.size}` : `Apply ${approvedPaths.size} selected`}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
