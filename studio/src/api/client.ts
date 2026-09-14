@@ -1873,11 +1873,11 @@ export async function getChatSessions(_projectName?: string): Promise<ChatSessio
   return res.json()
 }
 
-export async function newChatSession(_projectName?: string): Promise<ChatSessionData> {
+export async function newChatSession(_projectName?: string, taskId?: string | null): Promise<ChatSessionData> {
   const res = await fetch(`${BASE}/chat/session/new`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify(taskId === undefined ? {} : { taskId }),
   })
   if (!res.ok) {
     const body = await res.text()

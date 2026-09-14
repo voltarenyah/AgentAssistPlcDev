@@ -97,17 +97,21 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('creates a task from the inline add input', async () => {
+  it('creates a task from the focused add dialog', async () => {
     const { host, root, onChanged } = await renderPanel()
-    const input = host.querySelector('input[aria-label="New task title"]') as HTMLInputElement
+    await act(async () => {
+      ;([...host.querySelectorAll('button')] as HTMLButtonElement[]).find(button => button.textContent?.includes('Add task'))!.click()
+    })
+    const dialog = document.body.querySelector('[data-slot="dialog-content"]') as HTMLElement
+    const input = dialog.querySelector('input[aria-label="New task title"]') as HTMLInputElement
 
     await act(async () => setInputValue(input, 'Add alarm handling'))
     await act(async () => {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      dialog.querySelector('button[type="submit"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     await act(async () => {})
 
-    expect(vi.mocked(api.createWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', { title: 'Add alarm handling' })
+    expect(vi.mocked(api.createWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', { title: 'Add alarm handling', details: 'Type: Feature' })
     expect(onChanged).toHaveBeenCalled()
     expect(input.value).toBe('')
 
@@ -194,6 +198,14 @@ describe('WorktreeTasksPanel', () => {
 
     expect(host.textContent).toContain('No tasks yet')
 
+    await act(async () => root.unmount())
+  })
+
+  it('passes the selected task to its Start chat callback', async () => {
+    const onStartChat = vi.fn()
+    const { host, root } = await renderPanel({ onStartChat })
+    await act(async () => host.querySelector('button[aria-label="Start chat for Todo task"]')!.click())
+    expect(onStartChat).toHaveBeenCalledWith(tasks[0])
     await act(async () => root.unmount())
   })
 

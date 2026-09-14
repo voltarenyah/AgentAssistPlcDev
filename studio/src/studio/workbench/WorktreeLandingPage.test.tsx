@@ -311,40 +311,17 @@ describe('WorktreeLandingPage', () => {
     await act(async () => root.unmount())
   })
 
-  it('wires graph scopes/types and active task keyboard selection and clear through the landing page', async () => {
+  it('shows task content only and removes the global active task selector', async () => {
     const { host, root } = await renderPage({ tab: 'tasks' })
-    expect(host.textContent).toContain('Project improvement')
-    expect(host.textContent).toContain('Project · Improvement')
-    expect(host.textContent).toContain('Improvement')
+    expect(host.querySelector('[data-testid="worktree-context"]')).toBeNull()
+    expect(host.querySelector('select[aria-label="Active task"]')).toBeNull()
     expect(host.textContent).toContain('Worktree scope')
-    const selector = host.querySelector('select[aria-label="Active task"]') as HTMLSelectElement
-    expect(Array.from(selector.options).some(option => option.value === 'other-worktree')).toBe(false)
-    await act(async () => {
-      selector.focus()
-      selector.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
-      selector.value = 'project-1'
-      selector.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(vi.mocked(api.setActiveWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', 'project-1')
-    expect(host.textContent).toContain('Project improvement')
-    await act(async () => {
-      const clear = [...host.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Clear') as HTMLButtonElement
-      clear.focus()
-      clear.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-    expect(vi.mocked(api.setActiveWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', null)
     await act(async () => root.unmount())
   })
 
-  it('keeps the active selection and shows recovery when the wired mutation fails', async () => {
-    activeGraphTask = projectGraphTask
-    vi.mocked(api.setActiveWorktreeTask).mockRejectedValueOnce(new Error('graph unavailable'))
-    const { host, root } = await renderPage({ tab: 'tasks' })
-    const selector = host.querySelector('select[aria-label="Active task"]') as HTMLSelectElement
-    expect(selector.value).toBe('project-1')
-    await act(async () => { selector.value = ''; selector.dispatchEvent(new Event('change', { bubbles: true })) })
-    expect(selector.value).toBe('project-1')
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('graph unavailable')
+  it('renders a Start chat action for each task', async () => {
+    const { host, root } = await renderPage({ tab: 'tasks', onStartTaskChat: vi.fn() })
+    expect(host.querySelector('button[aria-label="Start chat for Open task"]')).not.toBeNull()
     await act(async () => root.unmount())
   })
 

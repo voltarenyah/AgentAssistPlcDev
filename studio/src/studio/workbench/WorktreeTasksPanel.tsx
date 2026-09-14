@@ -27,9 +27,8 @@ type Props = {
   error: string | null
   onChanged: () => void
   projectTasks?: api.EngineeringTask[]
-  activeTask?: api.EngineeringTask | null
-  onActiveTaskChanged?: (task: api.EngineeringTask | null) => void
   onOpenTaskDetail?: (task: api.EngineeringTask) => void
+  onStartChat?: (task: TaskSurface) => void
 }
 
 const displayError = (error: unknown) => {
@@ -152,12 +151,17 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, projectTasks = [], activeTask = null, onActiveTaskChanged, onOpenTaskDetail }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, projectTasks = [], onOpenTaskDetail, onStartChat }: Props) {
+  const [createOpen, setCreateOpen] = useState(false)
   const [newTitle, setNewTitle] = useState('')
+  const [newType, setNewType] = useState<api.EngineeringTask['type']>('feature')
+  const [newDevice, setNewDevice] = useState('')
+  const [newSourceBlocks, setNewSourceBlocks] = useState('')
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<EditDraft | null>(null)
   const [newRef, setNewRef] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
+  const visibleTasks = [...projectTasks, ...tasks]
 
   const mutate = (action: () => Promise<unknown>) => {
     void action()
@@ -169,9 +173,18 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
     const title = newTitle.trim()
     if (!title || adding) return
     setAdding(true)
-    void api.createWorktreeTask(workbenchId, worktreeId, { title })
+    const elementRefs = newSourceBlocks.split(/\r?\n/).map(value => value.trim()).filter(Boolean)
+    const details = [
+      `Type: ${taskTypeLabel(newType)}`,
+      newDevice.trim() ? `Device: ${newDevice.trim()}` : null,
+    ].filter(Boolean).join('\n')
+    void api.createWorktreeTask(workbenchId, worktreeId, { title, details, ...(elementRefs.length > 0 ? { elementRefs } : {}) })
       .then(() => {
         setNewTitle('')
+        setNewType('feature')
+        setNewDevice('')
+        setNewSourceBlocks('')
+        setCreateOpen(false)
         onChanged()
       })
       .catch(addError => showErrorToast(`Task could not be created: ${displayError(addError)}`))
@@ -224,37 +237,13 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
 
   return (
     <div className="space-y-4">
-      {onActiveTaskChanged && (
-        <ActiveTaskSelector
-          tasks={[...projectTasks, ...tasks]}
-          activeTask={activeTask}
-          worktreeId={worktreeId}
-          onChange={async taskId => {
-            const result = await api.setActiveWorktreeTask(workbenchId, worktreeId, taskId)
-            onActiveTaskChanged(result.activeTask)
-          }}
-        />
-      )}
-      <div className="flex gap-2">
-        <input
-          aria-label="New task title"
-          className="field-input h-8 flex-1 text-[10px]"
-          placeholder="Add a task — which PLC element needs modification?"
-          value={newTitle}
-          onChange={event => setNewTitle(event.target.value)}
-          onKeyDown={event => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              addTask()
-            }
-          }}
-        />
-        <button className="primary-button h-8" disabled={!newTitle.trim() || adding} onClick={addTask}>
-          {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Add task
+      <div className="flex justify-end">
+        <button type="button" className="primary-button h-8" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-3.5 w-3.5" /> Add task
         </button>
       </div>
 
-      {tasks.length === 0 ? (
+      {visibleTasks.length === 0 ? (
         <div className="grid place-items-center rounded-xl border border-dashed p-10 text-center" style={{ borderColor: 'var(--border)' }}>
           <ListTodo className="mb-3 h-6 w-6 text-chart-2" />
           <p className="text-[10px] text-muted-foreground">
@@ -263,7 +252,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
         </div>
       ) : (
         taskStatusOrder.map(status => {
-          const group = tasks.filter(task => task.status === status)
+          const group = visibleTasks.filter(task => task.status === status)
           return (
             <section key={status} className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
               <div className="flex items-center border-b px-4 py-2" style={{ borderColor: 'var(--border)' }}>
@@ -303,6 +292,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                           </div>
                         )}
                       </div>
+                      {onStartChat && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>Start chat</button>}
                       {onOpenTaskDetail && !isLegacyTask(task) && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</button>}
                       {isLegacyTask(task) && <><button className="icon-button" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
                         <Pencil className="h-3 w-3" />
@@ -392,6 +382,21 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
               {savingEdit && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save task
             </button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add task</DialogTitle>
+            <DialogDescription>Create a focused task for this worktree.</DialogDescription>
+          </DialogHeader>
+          <form className="space-y-3" onSubmit={event => { event.preventDefault(); addTask() }}>
+            <label className="field-label"><span>Title</span><input autoFocus aria-label="New task title" className="field-input" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
+            <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
+            <label className="field-label"><span>Device</span><input aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)} placeholder="Optional device identifier" /><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan for this worktree.</span></label>
+            <label className="field-label"><span>Related source blocks</span><textarea aria-label="New task source blocks" className="field-input min-h-[72px] py-1.5 font-mono text-[10px]" value={newSourceBlocks} onChange={event => setNewSourceBlocks(event.target.value)} placeholder="One block per line" /><span className="text-[9px] text-muted-foreground">Source references can be edited after creation through the existing element-reference contract.</span></label>
+            <DialogFooter><button type="button" className="secondary-button" onClick={() => setCreateOpen(false)} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

@@ -391,13 +391,16 @@ public static class CompatibilityEndpoints
             });
         });
         app.MapGet("/api/chat/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
-        app.MapPost("/api/chat/session/new", (WorkbenchApiState state, ApiChatService chat,
-            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        app.MapPost("/api/chat/session/new", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs) =>
         {
             var device = Device(state);
             var selection = state.Selection!;
             using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
-            var taskId = activeTasks.Get(scope.Service, selection.WorktreeId)?.TaskId;
+            var requestedTaskId = body.TryGetProperty("taskId", out var requestedTask) && requestedTask.ValueKind != JsonValueKind.Null
+                ? requestedTask.GetString()
+                : null;
+            var taskId = requestedTaskId;
             var session = chat.CreateSession(device, taskId, string.IsNullOrWhiteSpace(taskId) ? null : "default");
             try { SessionGraphOperations.Register(scope.Service, session, GraphProvenance.Default); }
             catch { chat.DeleteSession(device, session.Header.SessionId); throw; }

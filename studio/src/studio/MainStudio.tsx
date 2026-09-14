@@ -1330,6 +1330,21 @@ export default function MainStudio() {
     }
   }
 
+  const createChatSessionForTask = async (task: api.EngineeringTask | api.WorktreeTask) => {
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      const session = await api.newChatSession(undefined, task.taskId)
+      setChatTabs(previous => openTab(previous, session))
+      workspaceService.focusView('chat')
+      await refreshChatSessions()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
   const setChatSessionTask = async (sessionId: string, taskId: string | null) => {
     setChatBusy(true)
     try {
@@ -2212,6 +2227,7 @@ export default function MainStudio() {
                   if (activeWorkbench && activeWorktree) void selectDevice(activeWorkbench, activeWorktree, deviceId)
                 }}
                 onOpenTaskDetail={task => void openTaskDetail(task)}
+                onStartTaskChat={task => void createChatSessionForTask(task)}
               />
             )
           ) : !selection.deviceId && selection.workbenchId ? (

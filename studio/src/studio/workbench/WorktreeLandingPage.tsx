@@ -18,6 +18,7 @@ type Props = {
   onTabChange: (tab: WorktreeLandingTab) => void
   onSelectDevice: (deviceId: string) => void
   onOpenTaskDetail?: (task: api.EngineeringTask) => void
+  onStartTaskChat?: (task: api.EngineeringTask | api.WorktreeTask) => void
 }
 
 type ModifiedDevice = {
@@ -39,13 +40,12 @@ const worktreeTabs: Array<{ id: WorktreeLandingTab; label: string; icon: typeof 
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
 ]
 
-export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail }: Props) {
+export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail, onStartTaskChat }: Props) {
   const [detail, setDetail] = useState<api.WorktreeDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(true)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [tasks, setTasks] = useState<api.EngineeringTask[]>([])
   const [projectTasks, setProjectTasks] = useState<api.EngineeringTask[]>([])
-  const [activeTask, setActiveTask] = useState<api.EngineeringTask | null>(null)
   const [tasksLoading, setTasksLoading] = useState(true)
   const [tasksError, setTasksError] = useState<string | null>(null)
   const [modifiedDevices, setModifiedDevices] = useState<ModifiedDevice[] | null>(null)
@@ -107,14 +107,12 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
 
   const reloadTasks = useCallback(async () => {
     try {
-      const [project, worktree, active] = await Promise.all([
+      const [project, worktree] = await Promise.all([
         api.listProjectTasks(workbenchId),
         api.listGraphWorktreeTasks(workbenchId, worktreeId),
-        api.getActiveWorktreeTask(workbenchId, worktreeId),
       ])
       setProjectTasks(project)
       setTasks(worktree)
-      setActiveTask(active.activeTask)
       setTasksError(null)
     } catch (loadError) {
       setTasksError(displayError(loadError))
@@ -130,13 +128,11 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
     void Promise.all([
       api.listProjectTasks(workbenchId),
       api.listGraphWorktreeTasks(workbenchId, worktreeId),
-      api.getActiveWorktreeTask(workbenchId, worktreeId),
     ])
-      .then(([project, worktree, active]) => {
+      .then(([project, worktree]) => {
         if (cancelled) return
         setProjectTasks(project)
         setTasks(worktree)
-        setActiveTask(active.activeTask)
         setTasksLoading(false)
       })
       .catch(loadError => {
@@ -262,7 +258,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
 
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-5 p-5">
-          <section
+          {tab === 'overview' && <section
             data-testid="worktree-context"
             className={`rounded-xl border bg-card p-5 ${tab === 'overview' ? 'grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]' : ''}`}
             style={{ borderColor: 'var(--border)' }}
@@ -360,7 +356,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                 />
               </div>
             </div>
-          </section>
+          </section>}
 
           {tab === 'overview' && (
             <>
@@ -441,12 +437,11 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
               worktreeId={worktreeId}
               tasks={tasks}
               projectTasks={projectTasks}
-              activeTask={activeTask}
-              onActiveTaskChanged={setActiveTask}
               loading={tasksLoading}
               error={tasksError}
               onChanged={() => void reloadTasks()}
               onOpenTaskDetail={onOpenTaskDetail}
+              onStartChat={onStartTaskChat}
             />
           )}
         </div>
