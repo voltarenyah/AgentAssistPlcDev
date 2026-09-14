@@ -10,6 +10,7 @@ import {
   GitCompareArrows,
   Loader2,
   MessageSquare,
+  Network,
   Search,
   SquareArrowOutUpRight,
   Table2,
@@ -44,6 +45,8 @@ type Props = {
   deviceView: DeviceViewState | null
   onChatWithAgent: (item: SourceObjectInfo) => void
   onSnapshotReload: () => void
+  onInspectObject: (relativePath: string) => void
+  onInspectUsage: (usage: api.SourceVariableUsage[]) => void
 }
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -70,6 +73,8 @@ export default function PlcSourcePanel({
   deviceView,
   onChatWithAgent,
   onSnapshotReload,
+  onInspectObject,
+  onInspectUsage,
 }: Props) {
   const [typeFilter, setTypeFilter] = useState<SourceTypeFilter>('all')
   const [query, setQuery] = useState('')
@@ -106,6 +111,25 @@ export default function PlcSourcePanel({
       showErrorToast(errorMessage(error))
     } finally {
       setPendingAction(null)
+    }
+  }
+
+  const showUsageNetworks = async (item: SourceObjectInfo) => {
+    setPendingAction(`usage:${item.id}`)
+    await showVariableUsage(item.name)
+    setPendingAction(null)
+  }
+
+  const showVariableUsage = async (variable: string) => {
+    try {
+      const result = await api.getSourceVariableUsage(workbenchId, worktreeId, deviceId, variable)
+      if (!result.usages.length) {
+        toast.info(`No read/write or mention networks were found for "${variable}".`)
+        return
+      }
+      onInspectUsage(result.usages)
+    } catch (error) {
+      showErrorToast(errorMessage(error))
     }
   }
 
@@ -200,6 +224,15 @@ export default function PlcSourcePanel({
                     </ContextMenuTrigger>
                     <ContextMenuContent>
                       <ContextMenuLabel>{item.category} · {item.name}</ContextMenuLabel>
+                      <ContextMenuItem onSelect={() => onInspectObject(item.relativePath)}>
+                        <Code2 className="h-3.5 w-3.5" />
+                        Inspect object
+                      </ContextMenuItem>
+                      {item.category === 'Tags' && <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void showUsageNetworks(item)}>
+                        <Network className="h-3.5 w-3.5" />
+                        Show read/write networks
+                      </ContextMenuItem>}
+                      <ContextMenuSeparator />
                       <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void openInTia(item)}>
                         <SquareArrowOutUpRight className="h-3.5 w-3.5" />
                         Open in TIA

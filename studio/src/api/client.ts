@@ -638,6 +638,17 @@ export type SourceObjectInfo = {
   status: string | null
 }
 
+export type SourceInspectionMember = { name: string; dataType: string | null; defaultValue: string | null; accessibility: string | null; comment: string | null }
+export type SourceInspectionSection = { name: string; members: SourceInspectionMember[] }
+export type SourceInspectionTable = { title: string; columns: string[]; rows: Record<string, string | null>[] }
+export type LadderPinInspection = { name: string; label: string | null; referencedObject: string | null; negated: boolean }
+export type LadderElementInspection = { id: string; kind: string; label: string | null; negatedPins: string[]; referencedObject: string | null; pins: LadderPinInspection[] }
+export type LadderWireInspection = { endpoints: { kind: string; elementId: string | null; pin: string | null }[] }
+export type SourceInspectionNetwork = { index: number; compileUnitId: string; title: string | null; comment: string | null; language: string | null; structuredText: string | null; ladder: { elements: LadderElementInspection[]; wires: LadderWireInspection[] } | null }
+export type SourceInspection = { category: string; name: string; relativePath: string; interfaces: SourceInspectionSection[]; tables: SourceInspectionTable[]; networks: SourceInspectionNetwork[] }
+export type SourceVariableUsage = { block: string | null; blockKind: string | null; networkIndex: number | null; networkTitle: string | null; sourceFile: string | null; access: 'read' | 'write' | 'mention'; networkId: string }
+export type SourceVariableUsageResult = { variable: string; matchedNodes: string[]; usages: SourceVariableUsage[]; truncated: boolean }
+
 export type DeviceSnapshot = DeviceInfo & {
   device: DeviceExportMetadata | null
   knowledge: {
@@ -1241,6 +1252,10 @@ export const acceptTiaSourceObject = (workbenchId: string, worktreeId: string, d
   workbenchRequest<SourceObjectSyncResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/comparisons/${encodeURIComponent(comparisonId)}/accept`, withOperation(jsonRequest('POST'), operationId))
 export const pushSourceObjectToTia = (workbenchId: string, worktreeId: string, deviceId: string, comparisonId: string, operationId?: string) =>
   workbenchRequest<SourceObjectSyncResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/comparisons/${encodeURIComponent(comparisonId)}/push-to-tia`, withOperation(jsonRequest('POST'), operationId))
+export const inspectSourceObject = (workbenchId: string, worktreeId: string, deviceId: string, relativePath: string) =>
+  workbenchRequest<SourceInspection>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/inspect?relativePath=${encodeURIComponent(relativePath)}`)
+export const getSourceVariableUsage = (workbenchId: string, worktreeId: string, deviceId: string, variable: string) =>
+  workbenchRequest<SourceVariableUsageResult>(`${devicePath(workbenchId, worktreeId, deviceId)}/source/usage?variable=${encodeURIComponent(variable)}`)
 export const mergeWorktree = (workbenchId: string, sourceWorktreeId: string, targetWorktreeId: string, operationId?: string) =>
   workbenchRequest<unknown>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(sourceWorktreeId)}/merge`, withOperation(jsonRequest('POST', { targetWorktreeId }), operationId))
 export const listDeviceSessions = (workbenchId: string, worktreeId: string, deviceId: string) =>

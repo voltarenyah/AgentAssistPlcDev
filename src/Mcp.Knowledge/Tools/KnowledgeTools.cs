@@ -1233,6 +1233,7 @@ public sealed class KnowledgeTools
                     detail?.BlockKind,
                     detail?.Index,
                     detail?.Title,
+                    detail?.SourceFile,
                     direction,
                     entry.Key));
             }
@@ -1343,12 +1344,13 @@ public sealed class KnowledgeTools
 
         using var command = connection.CreateCommand();
         command.CommandText = $"""
-            SELECT n.id, idx.value, title.value, b.name, b.kind
+            SELECT n.id, idx.value, title.value, b.name, b.kind, source.value
             FROM graph_nodes n
             LEFT JOIN graph_node_properties idx ON idx.node_id = n.id AND idx.name = 'networkIndex'
             LEFT JOIN graph_node_properties title ON title.node_id = n.id AND title.name = 'title'
             LEFT JOIN graph_edges c ON c.to_node_id = n.id AND c.type = 'CONTAINS'
             LEFT JOIN graph_nodes b ON b.id = c.from_node_id AND b.kind IN ('OB', 'FB', 'FC')
+            LEFT JOIN graph_node_properties source ON source.node_id = b.id AND source.name = 'sourceFile'
             WHERE {InClause(command, "n.id", "n", ids)};
             """;
         using var reader = command.ExecuteReader();
@@ -1362,7 +1364,8 @@ public sealed class KnowledgeTools
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 index,
-                reader.IsDBNull(2) ? null : reader.GetString(2));
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(5) ? null : reader.GetString(5));
         }
 
         return details;
@@ -1389,9 +1392,9 @@ public sealed class KnowledgeTools
     private static string FtsLiteral(string text) =>
         "\"" + text.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
-    private sealed record VariableUsageNetwork(string? BlockName, string? BlockKind, int? Index, string? Title);
+    private sealed record VariableUsageNetwork(string? BlockName, string? BlockKind, int? Index, string? Title, string? SourceFile);
 
-    private sealed record VariableUsageRow(string? Block, string? BlockKind, int? NetworkIndex, string? NetworkTitle, string Access, string NetworkId);
+    private sealed record VariableUsageRow(string? Block, string? BlockKind, int? NetworkIndex, string? NetworkTitle, string? SourceFile, string Access, string NetworkId);
 
     private static SqliteConnection OpenReadOnly(string dbPath)
     {

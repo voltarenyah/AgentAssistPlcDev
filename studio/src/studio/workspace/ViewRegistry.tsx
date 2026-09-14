@@ -3,11 +3,12 @@
 // and its tabs only carry instanceId/kind.
 
 import type { ReactNode } from 'react'
-import { Code2, Cpu, Database, MessageSquare, type LucideIcon } from 'lucide-react'
+import { Code2, Cpu, Database, FileSearch, MessageSquare, type LucideIcon } from 'lucide-react'
 import ChatWorkspace from '@/studio/chat/ChatWorkspace'
 import PlcSourcePanel from '@/studio/PlcSourcePanel'
 import NodeEdgesView from '@/studio/NodeEdgesView'
 import DeviceOverviewView from '@/studio/DeviceOverviewView'
+import SourceObjectInspectorPanel from '@/studio/SourceObjectInspectorPanel'
 import type { WorkspaceViewKind, WorkspaceViewProps } from './workspaceTypes'
 
 export type WorkspaceViewDefinition = {
@@ -61,6 +62,27 @@ export const workspaceViewRegistry: Record<WorkspaceViewKind, WorkspaceViewDefin
             deviceView={source.deviceView}
             onChatWithAgent={source.onChatWithAgent}
             onSnapshotReload={source.onSnapshotReload}
+            onInspectObject={source.onInspectObject}
+            onInspectUsage={source.onInspectUsage}
+          />
+        )}
+      </div>
+    ),
+  },
+  inspector: {
+    title: 'Source inspector',
+    icon: FileSearch,
+    render: ({ inspector }) => (
+      <div className="h-full min-h-0">
+        {inspector.workbenchId && inspector.worktreeId && inspector.deviceId && (
+          <SourceObjectInspectorPanel
+            workbenchId={inspector.workbenchId}
+            worktreeId={inspector.worktreeId}
+            deviceId={inspector.deviceId}
+            target={inspector.target}
+            referenceTargets={inspector.referenceTargets}
+            onInspectObject={inspector.onInspectObject}
+            onInspectUsage={inspector.onInspectUsage}
           />
         )}
       </div>

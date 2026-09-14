@@ -56,7 +56,7 @@ import {
   type DeviceSelectionState,
 } from '@/studio/deviceSnapshot'
 import * as api from '@/api/client'
-import type { SourceChatContext } from '@/studio/plcSourceState'
+import { resolveSourceObjects, type SourceChatContext } from '@/studio/plcSourceState'
 import AppAssistantPanel from '@/studio/appAssistant/AppAssistantPanel'
 import SessionDock from '@/studio/chat/SessionDock'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
@@ -94,6 +94,7 @@ import {
   setTurnMeta,
   type ChatTabsState,
 } from '@/studio/chat/chatTabState'
+import type { SourceInspectorTarget } from '@/studio/workspace/workspaceTypes'
 
 // What <main> renders for the current selection. Replaces the old hardwarePage
 // ternary: project and worktree selections now have their own landing pages.
@@ -555,12 +556,17 @@ export default function MainStudio() {
   const [apiBalance, setApiBalance] = useState<api.DeepSeekBalance | null>(null)
   const [balanceRefreshState, setBalanceRefreshState] = useState<DeepSeekBalanceRefreshState>('idle')
   const [chatSourceContext, setChatSourceContext] = useState<SourceChatContext | null>(null)
+  const [sourceInspectorTarget, setSourceInspectorTarget] = useState<SourceInspectorTarget | null>(null)
   const [appAssistantOpen, setAppAssistantOpen] = useState(false)
   const [appAssistantRuntime, setAppAssistantRuntime] = useState<api.AppAssistantRuntimeSnapshot | null>(null)
   const [projectAccess, setProjectAccess] = useState<{
     project: api.ProjectInfo
     capabilities: api.ProjectCapabilities
   } | null>(null)
+
+  useEffect(() => {
+    setSourceInspectorTarget(null)
+  }, [selection.worktreeId, selection.deviceId])
 
   useEffect(() => {
     setAppAssistantRuntime(null)
@@ -635,6 +641,11 @@ export default function MainStudio() {
     [selection.workbenchId, selection.worktreeId, selection.deviceId],
   )
   const deviceView = deviceSelection?.view ?? null
+  const sourceReferenceTargets = useMemo(() => resolveSourceObjects(deviceView?.sourceObjects, deviceView?.blocks)
+    .reduce<Record<string, string>>((targets, item) => {
+      if (!targets[item.name]) targets[item.name] = item.relativePath
+      return targets
+    }, {}), [deviceView])
   const deviceSessions = deviceSelection?.sessions ?? []
   const deviceInfo = deviceView?.snapshot ?? null
   const deviceName = deviceInfo?.plcName ?? deviceSelection?.cachedMetadata?.plcName ?? selection.deviceId
@@ -2270,6 +2281,29 @@ export default function MainStudio() {
                   worktreeId: selection.worktreeId!,
                   deviceId: selection.deviceId!,
                 }),
+                onInspectObject: relativePath => {
+                  setSourceInspectorTarget({ kind: 'object', relativePath })
+                  workspaceService.openView('inspector')
+                },
+                onInspectUsage: usage => {
+                  setSourceInspectorTarget({ kind: 'usage', usage })
+                  workspaceService.openView('inspector')
+                },
+              }}
+              inspector={{
+                workbenchId: selection.workbenchId,
+                worktreeId: selection.worktreeId,
+                deviceId: selection.deviceId,
+                target: sourceInspectorTarget,
+                referenceTargets: sourceReferenceTargets,
+                onInspectObject: relativePath => {
+                  setSourceInspectorTarget({ kind: 'object', relativePath })
+                  workspaceService.openView('inspector')
+                },
+                onInspectUsage: usage => {
+                  setSourceInspectorTarget({ kind: 'usage', usage })
+                  workspaceService.openView('inspector')
+                },
               }}
               knowledge={{
                 context: knowledgeContext,

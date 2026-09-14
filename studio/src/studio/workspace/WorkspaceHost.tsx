@@ -30,7 +30,7 @@ export type WorkspaceHostProps = WorkspaceViewProps & {
   workspace: WorkspaceService
 }
 
-export default function WorkspaceHost({ workspace, overview, chat, source, knowledge }: WorkspaceHostProps) {
+export default function WorkspaceHost({ workspace, overview, chat, source, inspector, knowledge }: WorkspaceHostProps) {
   // Re-reads (and remounts the Layout via key) when the service replaces the
   // model instance (resetLayout); stable identity otherwise.
   const { model, version } = useSyncExternalStore(
@@ -45,10 +45,10 @@ export default function WorkspaceHost({ workspace, overview, chat, source, knowl
     return (
       <WorkbenchViewHost
         instance={instance}
-        viewProps={{ overview, chat, source, knowledge }}
+        viewProps={{ overview, chat, source, inspector, knowledge }}
       />
     )
-  }, [overview, chat, source, knowledge])
+  }, [overview, chat, source, inspector, knowledge])
 
   const renderTab = useCallback((node: TabNode, renderValues: ITabRenderValues) => {
     const kind = node.getComponent() as WorkspaceViewKind
