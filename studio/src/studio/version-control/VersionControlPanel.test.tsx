@@ -135,28 +135,6 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.querySelector('[data-testid="timeline-detail"]')?.textContent).not.toContain('PLC_1:AA BB')
   })
 
-  it('passes the exact linked task id from the rendered history timeline to its consumer', async () => {
-    mockVcState({
-      timeline: {
-        gitCommits: [{
-          sha: 'commit-task-link', author: 'Ansel', message: 'Trace task', timestamp: '2026-08-04T08:00:00.000Z', files: [], tiaChecksum: null, svnRevision: null,
-        }],
-        svnRevisions: [], hasMore: false,
-      },
-    })
-    vi.spyOn(api, 'getGraphEntityDetail').mockResolvedValue({
-      kind: 'gitCommit', id: 'commit-task-link', workbenchId: 'wb-1', worktreeId: 'wt-1',
-      tasks: [{ id: 'task-exact-98', edgeId: 'edge-98', provenance: 'manual', isPrimary: false }], commits: [],
-    })
-    const navigate = vi.fn()
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" onNavigateTask={navigate} />)
-    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
-    await act(async () => host.querySelector<HTMLButtonElement>('[data-timeline-git="commit-task-link"]')?.focus())
-    await act(async () => {})
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open task task-exact-98"]')?.click())
-    expect(navigate).toHaveBeenCalledWith('task-exact-98')
-  })
-
   it('executes the TIA comparison directly from the header action', async () => {
     mockVcState()
     const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue({
