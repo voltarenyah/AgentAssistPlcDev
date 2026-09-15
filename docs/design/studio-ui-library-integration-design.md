@@ -60,12 +60,23 @@ dialog maps the current open state to `Dialog open`; dismissal maps to the
 existing close callback. Controls invoke the same local event handlers, so no
 state or API boundary changes.
 
+Global color-token and theme architecture changes are explicitly deferred to
+a separate project. This work may consume existing color tokens for hierarchy
+and state, but must not rename, remap, or redesign the application's global
+palette.
+
 ## Implementation Approach
 
 - Slicing: vertical, by dialog.
 - Dependency order: add/adjust focused behavioral tests, migrate a dialog, run its test, then repeat; remove dead legacy styles only after migration.
 - First observable checkpoint: Refresh dialog still blocks Apply until both selection and title are present while rendering standard buttons/field.
 - Rationale: The existing primitive library covers the required semantics and allows low-risk replacement without changing domain ownership.
+
+After each coherent visual group, start the changed worktree's Studio frontend
+on its own port and inspect the live DOM/browser surface before migrating the
+next group. This is a blocking visual checkpoint: correct callbacks and a
+passing build do not authorize broad follow-on replacement when spacing,
+overflow, action hierarchy, or contrast is visibly wrong.
 
 ## Verification Strategy
 
@@ -74,7 +85,7 @@ state or API boundary changes.
 | Refresh gating | L1 | `npm test -- --run src/studio/workbench/RefreshDialog.test.tsx` | Selected paths and title reach the unchanged callback only when valid. |
 | Dialog flows | L1 | Focused colocated dialog tests | Inputs, callbacks, busy state, and safety actions retain behavior. |
 | Studio compatibility | L2 | `npm test -- --run`, `npm run lint`, `npm run build` | All Studio tests, lint, and production build pass. |
-| Visual modal behavior | L3 | `launch.ps1 -NoBuild` plus browser smoke | Modal surface, focus, and actions are visible in the real Studio. |
+| Visual modal behavior | L3 | Changed-worktree Vite preview plus browser smoke | Modal surface, focus, action hierarchy, and dense proportions are visible before the next migration group. |
 
 ## Material Risks
 

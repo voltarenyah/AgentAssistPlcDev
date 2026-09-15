@@ -3,9 +3,9 @@
 ## Overview
 
 - Outcome: Studio presents consistent, accessible forms and confirmation dialogs using its existing Orca-derived Shadcn/Radix primitives.
-- Scope: The first migration slice covers the workbench creation, archive, TIA comparison, sandbox-denial, and TIA-close dialogs.
+- Scope: The first migration slice covers the workbench creation, archive, TIA comparison, sandbox-denial, and TIA-close dialogs, plus the left Projects Dock navigation surface and the main landing-page typography pass.
 - PRD or requirement carrier: User request, 2026-09-15; `docs/STYLEGUIDE.md`.
-- Explicit exclusions: PLC/version-control behavior, API contracts, workspace geometry, Orca application-shell components, and new runtime dependencies.
+- Explicit exclusions: PLC/version-control behavior, API contracts, workspace geometry, Orca application-shell components, new runtime dependencies, and a global color-token/theme redesign. The existing light/dark color tokens remain the source of truth for this slice; global color improvements are deferred to a separate project.
 
 ## Design Evidence
 
@@ -33,6 +33,11 @@
 | Titles and descriptions | Reuse `DialogHeader`, `DialogTitle`, `DialogDescription` | Existing copy | Dialog receives an accessible name and description. | AC-001–004 |
 | Action controls | Reuse `Button` variants | Existing disabled/busy states and callbacks | Default is affirmative; outline/secondary is neutral; destructive is reserved for discard/unsafe action. | AC-001–004 |
 | Inputs and selects | Reuse `Input` / `Select` where native behavior is compatible | Existing value, validation, and `onChange` | Preserve labels, placeholders, read-only state, and keyboard interaction. | AC-001–003 |
+| Create-workbench mode switch | Reuse `ToggleGroup` with a local animated active-surface indicator | Existing `session` / `file` mode state | The two options remain a single accessible selection while the active surface slides between equal-width options. | AC-001 |
+| Create-workbench progress detail | Reuse `ToggleGroup` to switch the existing workflow/source lists | Existing operation-status rows | Only one detail list is mounted at a time; switching views preserves the same status data and scroll affordance without changing the modal size. | AC-001 |
+| Projects Dock header actions | Reuse `Button` icon variants | Existing refresh/create callbacks and loading state | Header actions retain their callbacks, have accessible names, and use the same 32px control height. | Dock-001 |
+| Projects Dock tree rows | Reuse existing icons and context menus | Workbench, worktree, hardware, and device projections | Rows use a shared compact rhythm (`min-h-8` for workbenches, `min-h-7` for children), `text-xs` labels, and preserve context-menu actions and selection callbacks. | Dock-002 |
+| Main landing-page typography | Reuse existing Tailwind typography tokens | MainStudio error/empty states, ProjectLandingPage, WorktreeLandingPage | Replace one-off 8–11px labels with the shared title/body/annotation hierarchy without changing content or behavior. | Main-001 |
 
 ## Visual Constraints
 
@@ -41,6 +46,19 @@
 | Dialog layer | Use the existing translucent `DialogContent` surface and overlay. | `components/ui/dialog.tsx` | Every migrated dialog uses the same modal surface in light and dark modes. |
 | Actions | Use existing button sizes/variants rather than `primary-button`, `secondary-button`, or `icon-button`. | `docs/STYLEGUIDE.md` | Primary, neutral, and destructive actions are visually and semantically distinct. |
 | Fields | Use existing input/select focus treatment rather than `field-input`. | `docs/STYLEGUIDE.md` | Keyboard focus is visible and disabled controls retain their existing availability. |
+| Dialog typography | Use the compact-dialog hierarchy: `text-sm` semibold title, then `text-xs` for fields, actions, descriptions, and annotations. | `docs/STYLEGUIDE.md` | A dialog uses no more than three font scales; explanatory text is differentiated by color or weight, not a string of tiny sizes. |
+| Create-workbench project path | Use ordinary `text-xs` application text in the editable project-path field and resolved-location preview. | User feedback, 2026-09-15 | The path remains readable without a bold or monospaced visual emphasis. |
+| Projects Dock rhythm | Keep Dock width unchanged; align row heights, indentation, icon sizing, and label scale across the tree. | User feedback, 2026-09-15 | Expanding or selecting a project does not introduce inconsistent row density or tiny unreadable labels. |
+| Projects Dock selection | Use existing `accent` and `border` tokens for workbench, worktree, hardware, and device selection. | Existing Studio tokens | The active row is recognizable in both themes without introducing a new color system. |
+| Main landing-page hierarchy | Keep page titles at `text-lg`/`text-xl`, body and controls at `text-xs`/`text-sm`, and annotations at `text-xs`. | `docs/STYLEGUIDE.md`, user feedback, 2026-09-15 | Project, Worktree, Hardware and empty/error states use no more than three readable scales. |
+
+### Visual Checkpoint Rule
+
+Before moving from one dialog or panel group to the next, render the changed
+worktree in the browser and compare it with the pre-migration surface. Verify
+the modal width, title/action hierarchy, dense-control height, overflow, and
+light/dark contrast at ordinary desktop width. A passing component test or
+production build is not sufficient proof of visual proportion.
 
 ## Accessibility Requirements
 
@@ -58,9 +76,14 @@
 | AC-002 | Archive dialog | Browse, busy, error, Cancel, and Archive behaviors are unchanged. |
 | AC-003 | Refresh dialog | Selecting a change and entering a title still gates Apply and forwards the same values. |
 | AC-004 | Safety dialogs | Sandbox acknowledgement and TIA close choices preserve their callbacks and safety labels. |
+| Dock-001 | Projects Dock header | Refresh and create actions remain keyboard reachable and preserve their callbacks. |
+| Dock-002 | Projects Dock tree | Row selection, expansion, availability labels, and context-menu actions remain functional with the normalized layout. |
+| Main-001 | Main landing pages | Loading, error, empty, metadata, tab, table, and modified-block views retain their behavior with normalized readable typography. |
 
 ## Update History
 
 | Date | Version | Changes |
 |---|---|---|
 | 2026-09-15 | 1.0 | Specify the first Studio UI library migration slice. |
+| 2026-09-15 | 1.1 | Add the first left Projects Dock layout and typography pass; Dock width remains unchanged. |
+| 2026-09-15 | 1.2 | Add the main landing-page typography pass. |

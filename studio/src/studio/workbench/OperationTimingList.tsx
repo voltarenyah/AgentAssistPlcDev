@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Clock3, Loader2 } from 'lucide-react'
 import type { OperationPhaseTiming, OperationStatus } from '@/api/client'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 type Props = {
   status: OperationStatus | null
@@ -68,7 +69,7 @@ const PhaseList = ({ phases, current, scrollable = false, currentFirst = false, 
   onReachEnd?: () => void
 }) => (
   <ol
-    className={`${scrollable ? 'scrollbar-sleek min-h-0 flex-1 overflow-y-auto pr-1' : ''} space-y-1 text-[9px] leading-4`.trim()}
+    className={`${scrollable ? 'scrollbar-sleek min-h-0 flex-1 overflow-y-auto pr-1' : ''} space-y-1 text-xs leading-4`.trim()}
     onScroll={onReachEnd ? event => {
       const list = event.currentTarget
       if (list.scrollTop + list.clientHeight >= list.scrollHeight - 8) onReachEnd()
@@ -110,7 +111,7 @@ const SourceExportActivity = ({
         currentFirst
         onReachEnd={hasMore ? () => setVisibleRows(rows => Math.min(rows + SourceExportPageSize, totalRows)) : undefined}
       />
-      <p className="mt-2 shrink-0 text-[9px] text-muted-foreground">
+      <p className="mt-2 shrink-0 text-xs leading-4 text-muted-foreground">
         {hasMore
           ? `Showing latest ${visibleCount} of ${totalRows}. Scroll down to load ${Math.min(SourceExportPageSize, totalRows - visibleCount)} more.`
           : `Showing all ${totalRows} source export items.`}
@@ -125,40 +126,65 @@ const SourceExportActivity = ({
 export default function OperationTimingList({ status, className = '', layout = 'inline' }: Props) {
   const completed = status?.completedPhases ?? []
   const current = status?.currentPhase ?? null
-  if (completed.length === 0 && current === null && layout === 'inline') return null
-
   const completedSourceExportRows = completed.filter(phase => isSourceObjectActivity(phase.message)).reverse()
   const activeSourceExportRow = current && isSourceObjectActivity(current.message) ? current : null
   const regularRows = completed.filter(phase => !isSourceObjectActivity(phase.message)).reverse()
   const activeRegularRow = activeSourceExportRow ? null : current
+  const hasSourceExportActivity = completedSourceExportRows.length > 0 || activeSourceExportRow !== null
+  const [activeDashboardView, setActiveDashboardView] = useState<'workflow' | 'source'>(
+    'workflow',
+  )
+
+  useEffect(() => {
+    if (!hasSourceExportActivity) setActiveDashboardView('workflow')
+  }, [hasSourceExportActivity])
+
+  if (completed.length === 0 && current === null && layout === 'inline') return null
 
   if (layout === 'dashboard') {
-    const hasSourceExportActivity = completedSourceExportRows.length > 0 || activeSourceExportRow !== null
     return (
       <section className={`flex min-h-0 flex-col rounded-lg border border-border/70 bg-background/55 ${className}`.trim()} data-operation-timings aria-label="Operation task timings">
-        <div className="flex items-center gap-2 border-b border-border/70 px-4 py-3">
-          <Clock3 className="h-4 w-4 text-chart-2" aria-hidden="true" />
-          <div>
-            <div className="text-xs font-semibold">Workflow timing</div>
-            <p className="text-[10px] text-muted-foreground">Completed stages stay visible while the current task updates live.</p>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <Clock3 className="h-4 w-4 shrink-0 text-chart-2" aria-hidden="true" />
+            <div className="min-w-0">
+              <div className="text-xs font-semibold">Workflow timing</div>
+              <p className="text-xs leading-4 text-muted-foreground">Completed stages stay visible while the current task updates live.</p>
+            </div>
           </div>
-        </div>
-        <div className={`grid min-h-0 flex-1 gap-3 p-3 ${hasSourceExportActivity ? 'lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]' : ''}`}>
-          <section className="flex min-h-0 flex-col rounded-md border border-border/60 bg-muted/20 p-3" aria-label="Workflow stages">
-            <div className="mb-2 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Workflow stages</div>
-            {regularRows.length > 0 || activeRegularRow ? (
-              <PhaseList phases={regularRows} current={activeRegularRow} scrollable currentFirst />
-            ) : (
-              <div className="flex items-center gap-2 text-[10px] text-muted-foreground" aria-live="polite">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-chart-2" aria-hidden="true" /> Connecting workflow telemetry…
-              </div>
-            )}
-          </section>
           {hasSourceExportActivity && (
-            <section className="flex min-h-0 flex-col rounded-md border border-chart-2/25 bg-chart-2/5 p-3" data-source-export-activity aria-label="Source export activity">
+            <ToggleGroup
+              type="single"
+              value={activeDashboardView}
+              variant="outline"
+              size="sm"
+              aria-label="Operation detail view"
+              onValueChange={value => {
+                if (value === 'workflow' || value === 'source') setActiveDashboardView(value)
+              }}
+            >
+              <ToggleGroupItem value="workflow" className="text-xs">Workflow</ToggleGroupItem>
+              <ToggleGroupItem value="source" className="text-xs">Source export</ToggleGroupItem>
+            </ToggleGroup>
+          )}
+        </div>
+        <div className="min-h-0 flex-1 p-3">
+          {activeDashboardView === 'workflow' || !hasSourceExportActivity ? (
+            <section className="flex h-full min-h-0 flex-col rounded-md border border-border/60 bg-muted/20 p-3" aria-label="Workflow stages">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Workflow stages</div>
+              {regularRows.length > 0 || activeRegularRow ? (
+                <PhaseList phases={regularRows} current={activeRegularRow} scrollable currentFirst />
+              ) : (
+                <div className="flex items-center gap-2 text-xs leading-4 text-muted-foreground" aria-live="polite">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-chart-2" aria-hidden="true" /> Connecting workflow telemetry…
+                </div>
+              )}
+            </section>
+          ) : (
+            <section className="flex h-full min-h-0 flex-col rounded-md border border-chart-2/25 bg-chart-2/5 p-3" data-source-export-activity aria-label="Source export activity">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Source export activity</div>
-                <span className="text-[9px] text-muted-foreground">Latest first</span>
+                <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Source export activity</div>
+                <span className="text-xs text-muted-foreground">Latest first</span>
               </div>
               <SourceExportActivity
                 phases={completedSourceExportRows}
@@ -174,7 +200,7 @@ export default function OperationTimingList({ status, className = '', layout = '
 
   return (
     <section className={`rounded-md border border-border/70 bg-background/45 px-2.5 py-2 ${className}`.trim()} data-operation-timings aria-label="Operation task timings">
-      <div className="mb-1 flex items-center gap-1.5 text-[8px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
         <Clock3 className="h-3 w-3" aria-hidden="true" /> Task timings
       </div>
       <PhaseList phases={completed} current={current} />

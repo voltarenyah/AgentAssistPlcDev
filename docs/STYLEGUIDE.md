@@ -62,6 +62,11 @@ Use the primitive before creating a local replacement. Preserve its
 - Use `var(--font-mono)` for literal identifiers, paths, hashes, PLC source,
   and technical metrics. Keep normal application text in the configured Geist
   family.
+- Within a dialog or compact panel, use at most three text scales. The default
+  hierarchy is `text-sm` semibold for the title and `text-xs` for fields,
+  actions, descriptions, and annotations; distinguish secondary copy with
+  muted color, weight, and line-height rather than a new font size. Add a
+  third scale only when a documented, reusable reading requirement needs it.
 - Use the primitive's established size and radius. For dense Studio chrome,
   prefer existing `xs`, `sm`, `icon-xs`, and `icon-sm` button variants rather
   than adding a new compact control.

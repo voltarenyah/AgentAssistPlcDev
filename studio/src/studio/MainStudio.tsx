@@ -2132,7 +2132,7 @@ export default function MainStudio() {
               <div className="max-w-lg rounded-xl border bg-card p-6 text-center" style={{ borderColor: 'var(--border)' }}>
                 <AlertCircle className="mx-auto mb-3 h-8 w-8 text-red-500" />
                 <h1 className="text-sm font-semibold">Workbench API unavailable</h1>
-                <p className="mt-2 break-words text-[10px] leading-relaxed text-muted-foreground">{fatalError}</p>
+                <p className="mt-2 break-words text-xs leading-4 text-muted-foreground">{fatalError}</p>
                 <button className="primary-button mt-4" onClick={() => void loadStartup()}>
                   <RefreshCw className="h-3.5 w-3.5" /> Retry
                 </button>
@@ -2148,7 +2148,7 @@ export default function MainStudio() {
                     <button
                       key={tab.id}
                       onClick={() => setMainView({ kind: 'hardware', page: tab.id })}
-                      className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[9px] transition-colors ${hardwarePage === tab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+                      className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors ${hardwarePage === tab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
                     >
                       <Icon className="h-3 w-3" /> {tab.label}
                     </button>
@@ -2193,7 +2193,6 @@ export default function MainStudio() {
           ) : !selection.deviceId && selection.workbenchId ? (
             <ProjectLandingPage
               workbenchId={selection.workbenchId}
-              onOpenAssistant={() => setAppAssistantOpen(true)}
               onSelectWorktree={worktreeId => {
                 const worktree = activeWorkbench?.worktrees.find(candidate => candidate.worktreeId === worktreeId)
                 if (activeWorkbench && worktree) void selectWorktree(activeWorkbench, worktree)
@@ -2210,7 +2209,7 @@ export default function MainStudio() {
                   <Cpu className="h-7 w-7 text-chart-2" />
                 </div>
                 <h1 className="text-xl font-semibold tracking-tight">Select a device context</h1>
-                <p className="mx-auto mt-2 max-w-md text-[11px] leading-relaxed text-muted-foreground">
+                <p className="mx-auto mt-2 max-w-md text-xs leading-4 text-muted-foreground">
                   Choose a workbench, linked worktree, and PLC device. Every source, knowledge, and chat operation is then bound to that exact context.
                 </p>
                 {workbenches.length === 0 && (
