@@ -204,7 +204,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
   if (detailLoading && !detail) {
     return (
       <div className="grid h-full min-h-[520px] place-items-center p-8">
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading worktree...
         </div>
       </div>
@@ -219,7 +219,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
             <AlertCircle className="h-7 w-7 text-red-500" />
           </div>
           <h2 className="text-base font-semibold">Worktree unavailable</h2>
-          <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">{detailError}</p>
+          <p className="mt-2 text-xs leading-4 text-muted-foreground">{detailError}</p>
         </div>
       </div>
     )
@@ -236,7 +236,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
             <button
               key={worktreeTab.id}
               onClick={() => onTabChange(worktreeTab.id)}
-              className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[9px] transition-colors ${tab === worktreeTab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+              className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors ${tab === worktreeTab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
             >
               <Icon className="h-3 w-3" /> {worktreeTab.label}
             </button>
@@ -249,7 +249,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
         <div className="mx-auto max-w-6xl space-y-5 p-5">
           <section
             data-testid="worktree-context"
-            className={`rounded-xl border bg-card p-5 ${tab === 'overview' ? 'grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]' : ''}`}
+            className="space-y-4 rounded-xl border bg-card p-5"
             style={{ borderColor: 'var(--border)' }}
           >
             <div className="min-w-0">
@@ -260,17 +260,20 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-lg font-semibold">{detail.name}</h1>
-                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{detail.branch}</span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{detail.branch}</span>
                     <StatusBadge status={detail.status} onChange={changeStatus} />
                   </div>
-                  <p className="mt-1 text-[9px] text-muted-foreground">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     Created {formatDate(detail.createdAt)}
                     {detail.status === 'finished' && detail.finishedUtc ? ` · Finished ${formatDate(detail.finishedUtc)}` : ''}
                   </p>
                 </div>
               </div>
-              <div className="mt-4 grid grid-cols-[64px_1fr] items-start gap-x-3 gap-y-2">
-                <span className="pt-1.5 text-[9px] uppercase tracking-wide text-muted-foreground">Purpose</span>
+            </div>
+
+            <div className="grid gap-x-5 gap-y-3 border-t pt-4 sm:grid-cols-2" style={{ borderColor: 'var(--border)' }}>
+              <label className="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] items-center gap-3">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">Purpose</span>
                 <InlineEdit
                   ariaLabel="Worktree purpose"
                   placeholder="What is this worktree for?"
@@ -278,49 +281,51 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                   value={detail.purpose ?? ''}
                   onSave={purpose => saveDetailField({ purpose })}
                 />
-                <span className="self-center text-[9px] uppercase tracking-wide text-muted-foreground">Owner</span>
+              </label>
+              <label className="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] items-center gap-3">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">Owner</span>
                 <InlineEdit
                   ariaLabel="Worktree owner"
                   placeholder="Responsible person"
                   value={detail.owner ?? ''}
                   onSave={owner => saveDetailField({ owner })}
                 />
-              </div>
+              </label>
             </div>
 
             {tab === 'overview' && (
-              <div data-testid="worktree-metadata" className="border-t pt-4 sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
+              <div data-testid="worktree-metadata" className="border-t pt-4">
                 <h2 className="text-sm font-semibold">Worktree metadata</h2>
-                <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-[10px] sm:grid-cols-2">
-                  <div className="flex justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
-                    <dt className="text-muted-foreground">Branch</dt>
-                    <dd className="font-mono">{detail.branch}</dd>
+                <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-xs lg:grid-cols-2">
+                  <div className="flex min-w-0 justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
+                    <dt className="shrink-0 text-muted-foreground">Branch</dt>
+                    <dd className="min-w-0 truncate font-mono" title={detail.branch}>{detail.branch}</dd>
                   </div>
-                  <div className="flex justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
-                    <dt className="text-muted-foreground">Created</dt>
-                    <dd>{formatDate(detail.createdAt)}</dd>
+                  <div className="flex min-w-0 justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
+                    <dt className="shrink-0 text-muted-foreground">Created</dt>
+                    <dd className="min-w-0 truncate text-right" title={formatDate(detail.createdAt)}>{formatDate(detail.createdAt)}</dd>
                   </div>
-                  <div className="flex justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
-                    <dt className="text-muted-foreground">Base commit</dt>
-                    <dd className="font-mono">{detail.baseCommit ?? '—'}</dd>
+                  <div className="flex min-w-0 justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
+                    <dt className="shrink-0 text-muted-foreground">Base commit</dt>
+                    <dd className="min-w-0 truncate text-right font-mono" title={detail.baseCommit ?? undefined}>{detail.baseCommit ?? '—'}</dd>
                   </div>
-                  <div className="flex justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
-                    <dt className="text-muted-foreground">Last reconciliation</dt>
-                    <dd className="font-mono">{detail.lastReconciliationCommit ?? '—'}</dd>
+                  <div className="flex min-w-0 justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
+                    <dt className="shrink-0 text-muted-foreground">Last reconciliation</dt>
+                    <dd className="min-w-0 truncate text-right font-mono" title={detail.lastReconciliationCommit ?? undefined}>{detail.lastReconciliationCommit ?? '—'}</dd>
                   </div>
-                  <div className="flex justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
-                    <dt className="text-muted-foreground">Source project</dt>
-                    <dd className="truncate font-mono" title={detail.sourceProjectPath ?? undefined}>{detail.sourceProjectPath ?? '—'}</dd>
+                  <div className="flex min-w-0 justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
+                    <dt className="shrink-0 text-muted-foreground">Source project</dt>
+                    <dd className="min-w-0 truncate text-right font-mono" title={detail.sourceProjectPath ?? undefined}>{detail.sourceProjectPath ?? '—'}</dd>
                   </div>
-                  <div className="flex justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
-                    <dt className="text-muted-foreground">PLC devices</dt>
-                    <dd>{detail.deviceIds.length}</dd>
+                  <div className="flex min-w-0 justify-between gap-3 border-b py-1" style={{ borderColor: 'var(--border)' }}>
+                    <dt className="shrink-0 text-muted-foreground">PLC devices</dt>
+                    <dd className="min-w-0 truncate text-right">{detail.deviceIds.length}</dd>
                   </div>
                 </dl>
               </div>
             )}
-            <div className={`mt-4 border-t pt-3 ${tab === 'overview' ? 'col-span-full' : ''}`} style={{ borderColor: 'var(--border)' }}>
-              <div className="mb-2 text-[9px] uppercase tracking-wide text-muted-foreground">Tags</div>
+            <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+              <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Tags</div>
               <div className="flex flex-wrap items-center gap-1.5">
                 {directTagIds.map(tagId => {
                   const node = tagNodes.find(candidate => candidate.tagId === tagId)
@@ -353,7 +358,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                 <div className="flex items-center gap-3">
                   <ListTodo className="h-4 w-4 text-chart-2" />
                   <h2 className="text-sm font-semibold">Tasks</h2>
-                  <button className="secondary-button ml-auto h-7 text-[9px]" onClick={() => onTabChange('tasks')}>
+                  <button className="secondary-button ml-auto h-7 text-xs" onClick={() => onTabChange('tasks')}>
                     Open task list
                   </button>
                 </div>
@@ -370,7 +375,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                       style={{ borderColor: 'var(--border)' }}
                     >
                       <span className="text-sm font-semibold">{count}</span>
-                      <span className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</span>
+                      <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
                     </button>
                   ))}
                 </div>
@@ -378,17 +383,17 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
 
               <section className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
-                  <span className="text-[10px] font-semibold">Modified blocks</span>
-                  <span className="ml-auto text-[9px] text-muted-foreground">
+                  <span className="text-sm font-semibold">Modified blocks</span>
+                  <span className="ml-auto text-xs text-muted-foreground">
                     {modifiedDevices === null ? 'Loading…' : `${modifiedDevices.length} device${modifiedDevices.length === 1 ? '' : 's'} with overlay changes`}
                   </span>
                 </div>
                 {modifiedDevices === null ? (
-                  <div className="flex items-center justify-center gap-2 p-6 text-[10px] text-muted-foreground">
+                  <div className="flex items-center justify-center gap-2 p-6 text-xs text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> Inspecting device overlays...
                   </div>
                 ) : modifiedDevices.length === 0 ? (
-                  <div className="p-6 text-center text-[10px] text-muted-foreground">
+                  <div className="p-6 text-center text-xs text-muted-foreground">
                     No overlay-modified blocks in this worktree.
                   </div>
                 ) : (
@@ -401,12 +406,12 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                       >
                         <Cpu className="mt-0.5 h-3.5 w-3.5 shrink-0 text-chart-2" />
                         <span className="min-w-0 flex-1">
-                          <span className="text-[10px] font-medium">
+                          <span className="text-xs font-medium">
                             {device.plcName} — {device.blocks.length} modified block{device.blocks.length === 1 ? '' : 's'}
                           </span>
                           <span className="mt-1 flex flex-wrap gap-1">
                             {device.blocks.map(block => (
-                              <span key={block} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">
+                              <span key={block} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
                                 <FileCode2 className="h-2.5 w-2.5" /> {block}
                               </span>
                             ))}

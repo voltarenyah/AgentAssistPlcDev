@@ -223,18 +223,10 @@ describe('ProjectLandingPage', () => {
     await act(async () => root.unmount())
   })
 
-  it('opens the workbench assistant from the project landing page', async () => {
-    const onOpenAssistant = vi.fn()
-    const { host, root } = await render(
-      <ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} onOpenAssistant={onOpenAssistant} />,
-    )
+  it('does not duplicate the workbench assistant action inside the project card', async () => {
+    const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
 
-    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Open Workbench Assistant"]')
-    expect(button).not.toBeNull()
-    await act(async () => button!.click())
-
-    expect(onOpenAssistant).toHaveBeenCalledTimes(1)
-
+    expect(host.querySelector('button[aria-label="Open Workbench Assistant"]')).toBeNull()
     await act(async () => root.unmount())
   })
 

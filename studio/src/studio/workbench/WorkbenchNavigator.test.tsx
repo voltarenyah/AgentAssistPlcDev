@@ -98,4 +98,28 @@ describe('WorkbenchNavigator tag projection', () => {
     expect(host.textContent).toContain('unmatched worktree')
     await act(async () => root.unmount())
   })
+
+  it('keeps previously expanded projects open when another project is selected', async () => {
+    const { host, root } = await renderNavigator(null, false)
+    const directName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'Direct project')
+    const directRow = directName?.parentElement
+    expect(directName).toBeTruthy()
+    expect(directRow).toBeTruthy()
+
+    await act(async () => (directRow as HTMLElement).click())
+    expect(host.textContent).toContain('descendant match')
+
+    const parentName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'Parent-only project')
+    const parentRow = parentName?.parentElement
+    expect(parentRow).toBeTruthy()
+    await act(async () => (parentRow as HTMLElement).click())
+
+    expect(host.textContent).toContain('descendant match')
+    expect(host.textContent).toContain('unavailable match')
+
+    await act(async () => (parentRow as HTMLElement).click())
+    expect(host.textContent).toContain('descendant match')
+    expect(host.textContent).not.toContain('unavailable match')
+    await act(async () => root.unmount())
+  })
 })

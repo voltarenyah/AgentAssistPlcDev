@@ -317,7 +317,7 @@
   }
 
   .studio-status-bar {
-    @apply flex h-7 shrink-0 items-center gap-3 border-t bg-card px-3 text-[9px] text-muted-foreground;
+    @apply flex h-8 shrink-0 items-center gap-3 border-t bg-card px-3 text-xs text-muted-foreground;
     border-color: var(--border);
   }
 
@@ -607,7 +607,7 @@ select option {
   --flexlayout-color-3: var(--accent);
   --flexlayout-color-4: var(--border);
   --flexlayout-font-family: inherit;
-  --flexlayout-font-size: 10px;
+  --flexlayout-font-size: 12px;
   --flexlayout-color-icon: var(--muted-foreground);
   --flexlayout-color-focus: var(--ring);
   --flexlayout-color-tabset-background: var(--card);

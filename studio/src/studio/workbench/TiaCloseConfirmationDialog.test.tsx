@@ -18,7 +18,7 @@ afterEach(() => { document.body.innerHTML = '' })
 
 describe('TiaCloseConfirmationDialog', () => {
   it('explains why the current TIA instance must close and offers the three choices', () => {
-    const { host } = render(
+    render(
       <TiaCloseConfirmationDialog
         operationLabel="Create workbench project"
         busy={false}
@@ -28,17 +28,17 @@ describe('TiaCloseConfirmationDialog', () => {
       />,
     )
 
-    expect(host.textContent).toContain('Create workbench project requires close current attached TIA instance')
-    expect(host.querySelector('button[aria-label="Save and close TIA instance"]')).not.toBeNull()
-    expect(host.querySelector('button[aria-label="Close TIA instance without saving"]')).not.toBeNull()
-    expect(host.querySelector('button[aria-label="Cancel and close manually"]')).not.toBeNull()
+    expect(document.body.textContent).toContain('Create workbench project requires close current attached TIA instance')
+    expect(document.body.querySelector('button[aria-label="Save and close TIA instance"]')).not.toBeNull()
+    expect(document.body.querySelector('button[aria-label="Close TIA instance without saving"]')).not.toBeNull()
+    expect(document.body.querySelector('button[aria-label="Cancel and close manually"]')).not.toBeNull()
   })
 
   it('routes each choice to its action', () => {
     const onSaveAndClose = vi.fn()
     const onCloseWithoutSaving = vi.fn()
     const onCancel = vi.fn()
-    const { host } = render(
+    render(
       <TiaCloseConfirmationDialog
         operationLabel="Create workbench project"
         busy={false}
@@ -48,9 +48,9 @@ describe('TiaCloseConfirmationDialog', () => {
       />,
     )
 
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Save and close TIA instance"]')!.click())
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Close TIA instance without saving"]')!.click())
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Cancel and close manually"]')!.click())
+    act(() => document.body.querySelector<HTMLButtonElement>('[aria-label="Save and close TIA instance"]')!.click())
+    act(() => document.body.querySelector<HTMLButtonElement>('[aria-label="Close TIA instance without saving"]')!.click())
+    act(() => document.body.querySelector<HTMLButtonElement>('[aria-label="Cancel and close manually"]')!.click())
 
     expect(onSaveAndClose).toHaveBeenCalledTimes(1)
     expect(onCloseWithoutSaving).toHaveBeenCalledTimes(1)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Boxes, GitBranch, Loader2, RefreshCw, Sparkles } from 'lucide-react'
+import { AlertCircle, Boxes, GitBranch, Loader2, RefreshCw } from 'lucide-react'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import InlineEdit from './InlineEdit'
@@ -10,7 +10,6 @@ import TagPicker from './tags/TagPicker'
 type Props = {
   workbenchId: string
   onSelectWorktree: (worktreeId: string) => void
-  onOpenAssistant?: () => void
 }
 
 const displayError = (error: unknown) => {
@@ -29,7 +28,7 @@ const orderWorktrees = (worktrees: api.WorktreeOverview[]) => {
   return [...ongoing, ...finished]
 }
 
-export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOpenAssistant }: Props) {
+export default function ProjectLandingPage({ workbenchId, onSelectWorktree }: Props) {
   const [overview, setOverview] = useState<api.WorkbenchOverview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -137,7 +136,7 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
   if (loading && !overview) {
     return (
       <div className="grid h-full min-h-[520px] place-items-center p-8">
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading project overview...
         </div>
       </div>
@@ -152,7 +151,7 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
             <AlertCircle className="h-7 w-7 text-red-500" />
           </div>
           <h2 className="text-base font-semibold">Project overview unavailable</h2>
-          <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">{error}</p>
+          <p className="mt-2 text-xs leading-4 text-muted-foreground">{error}</p>
           <button className="secondary-button mt-4" onClick={() => { setLoading(true); void reload() }}>
             <RefreshCw className="h-3.5 w-3.5" /> Retry
           </button>
@@ -166,46 +165,44 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
   return (
     <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-5 p-5">
-        <section className="flex flex-wrap items-start gap-4 rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-          <div className="grid h-12 w-12 place-items-center rounded-xl bg-chart-2/10">
-            <Boxes className="h-5 w-5 text-chart-2" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-semibold">{overview.name}</h1>
-            <p className="mt-0.5 text-[9px] text-muted-foreground">Created {formatDate(overview.createdAt)}</p>
-            <div className="mt-2 space-y-1 font-mono text-[9px] text-muted-foreground">
-              <p className="truncate" title={overview.rootPath}>Root: {overview.rootPath}</p>
-              <p className="truncate" title={overview.sourceProjectPath ?? undefined}>Source project: {overview.sourceProjectPath ?? '—'}</p>
+        <section className="space-y-4 rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex min-w-0 flex-wrap items-start gap-4">
+            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-chart-2/10">
+              <Boxes className="h-5 w-5 text-chart-2" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg font-semibold">{overview.name}</h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">Created {formatDate(overview.createdAt)}</p>
+              <div className="mt-2 space-y-1 font-mono text-xs text-muted-foreground">
+                <p className="truncate" title={overview.rootPath}>Root: {overview.rootPath}</p>
+                <p className="truncate" title={overview.sourceProjectPath ?? undefined}>Source project: {overview.sourceProjectPath ?? '—'}</p>
+              </div>
             </div>
           </div>
-          {onOpenAssistant && (
-            <button
-              className="secondary-button shrink-0"
-              aria-label="Open Workbench Assistant"
-              onClick={onOpenAssistant}
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              Open Workbench Assistant
-            </button>
-          )}
-          <div className="grid w-full max-w-sm grid-cols-[64px_1fr] items-center gap-x-3 gap-y-2">
-            <span className="self-center text-[9px] uppercase tracking-wide text-muted-foreground">Purpose</span>
-            <InlineEdit
-              ariaLabel="Project purpose"
-              placeholder="What is this project for?"
-              value={overview.purpose ?? ''}
-              onSave={purpose => saveWorkbenchField({ purpose })}
-            />
-            <span className="self-center text-[9px] uppercase tracking-wide text-muted-foreground">Owner</span>
-            <InlineEdit
-              ariaLabel="Project owner"
-              placeholder="Responsible person"
-              value={overview.owner ?? ''}
-              onSave={owner => saveWorkbenchField({ owner })}
-            />
+
+          <div className="grid gap-x-5 gap-y-3 border-t pt-4 sm:grid-cols-2" style={{ borderColor: 'var(--border)' }}>
+            <label className="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] items-center gap-3">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">Purpose</span>
+              <InlineEdit
+                ariaLabel="Project purpose"
+                placeholder="What is this project for?"
+                value={overview.purpose ?? ''}
+                onSave={purpose => saveWorkbenchField({ purpose })}
+              />
+            </label>
+            <label className="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] items-center gap-3">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">Owner</span>
+              <InlineEdit
+                ariaLabel="Project owner"
+                placeholder="Responsible person"
+                value={overview.owner ?? ''}
+                onSave={owner => saveWorkbenchField({ owner })}
+              />
+            </label>
           </div>
-          <div className="w-full border-t pt-3" style={{ borderColor: 'var(--border)' }}>
-            <div className="mb-2 text-[9px] uppercase tracking-wide text-muted-foreground">Tags</div>
+
+          <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+            <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Tags</div>
             <div className="flex flex-wrap items-center gap-1.5">
               {directTagIds.map(tagId => {
                 const node = tagNodes.find(candidate => candidate.tagId === tagId)
@@ -228,19 +225,19 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
 
         <section className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
           <div className="flex items-center border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
-            <span className="text-[10px] font-semibold">Worktrees</span>
-            <span className="ml-auto text-[9px] text-muted-foreground">
+            <span className="text-sm font-semibold">Worktrees</span>
+            <span className="ml-auto text-xs text-muted-foreground">
               {overview.worktrees.length} worktree{overview.worktrees.length === 1 ? '' : 's'}
             </span>
           </div>
           {orderedWorktrees.length === 0 ? (
-            <div className="p-8 text-center text-[10px] text-muted-foreground">
+            <div className="p-8 text-center text-xs text-muted-foreground">
               No worktrees yet. Create a linked worktree from the project tree to start working.
             </div>
           ) : (
-            <table className="w-full text-[10px]">
+            <table className="w-full text-xs">
               <thead className="sticky top-0 bg-card">
-                <tr className="border-b text-left text-[9px] uppercase tracking-wide text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
+                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
                   <th className="px-4 py-2 font-medium">Title</th>
                   <th className="px-4 py-2 font-medium">Branch</th>
                   <th className="px-4 py-2 font-medium">Status</th>
@@ -259,7 +256,7 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
                   >
                     <td className="px-4 py-1.5 font-medium">{worktree.name}</td>
                     <td className="px-4 py-1.5">
-                      <span className="inline-flex items-center gap-1 font-mono text-[9px] text-muted-foreground">
+                      <span className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground">
                         <GitBranch className="h-3 w-3" /> {worktree.branch}
                       </span>
                     </td>
@@ -273,7 +270,7 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree, onOp
                     <td className="max-w-[220px] truncate px-4 py-1.5 text-muted-foreground" title={worktree.purpose ?? undefined}>
                       {worktree.purpose || '—'}
                     </td>
-                    <td className="px-4 py-1.5 font-mono text-[9px] text-muted-foreground">
+                    <td className="px-4 py-1.5 font-mono text-xs text-muted-foreground">
                       {worktree.openTasks} / {worktree.totalTasks}
                     </td>
                   </tr>

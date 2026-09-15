@@ -54,6 +54,7 @@ describe('workspace model geometry', () => {
     expect(tabIdsOf(model, DEFAULT_WORKSPACE_TABSET_ID)).toEqual([
       workspaceViewInstanceId('overview'),
       workspaceViewInstanceId('chat'),
+      workspaceViewInstanceId('inspector'),
       workspaceViewInstanceId('knowledge'),
     ])
   })
