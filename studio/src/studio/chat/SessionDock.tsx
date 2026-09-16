@@ -12,6 +12,7 @@ type Props = {
   onRename: (sessionId: string, title: string) => void
   onRemove: (sessionId: string) => void
   onExport: (sessionId: string) => void
+  onSetTask: (sessionId: string, taskId: string | null) => void
 }
 
 const displayDate = (value: string) => {
@@ -29,6 +30,7 @@ export default function SessionDock({
   onRename,
   onRemove,
   onExport,
+  onSetTask,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [removeId, setRemoveId] = useState<string | null>(null)
@@ -114,6 +116,16 @@ export default function SessionDock({
                         <button className="icon-button h-6 w-6" aria-label={`Delete ${session.title}`} disabled={busy} onClick={() => setRemoveId(session.sessionId)}>
                           <Trash2 className="h-3 w-3" />
                         </button>
+                      </div>
+                      <div className="mt-2 flex items-center gap-1 text-[9px]">
+                        <span aria-label={`Task for ${session.title}`} className="min-w-0 flex-1 truncate text-muted-foreground">
+                          {session.taskId ? `Task: ${session.taskId} (${session.taskProvenance === 'manual' ? 'Manual' : 'Default'})` : 'Unassigned legacy session'}
+                        </span>
+                        <button className="secondary-button h-6 px-2" disabled={busy} aria-label={`${session.taskId ? 'Reassign' : 'Attach'} task for ${session.title}`} onClick={() => {
+                          const taskId = window.prompt('Task ID (leave blank to clear)', session.taskId ?? '')?.trim() ?? ''
+                          onSetTask(session.sessionId, taskId || null)
+                        }}>{session.taskId ? 'Reassign' : 'Attach'}</button>
+                        {session.taskId && <button className="secondary-button h-6 px-2" disabled={busy} aria-label={`Remove task from ${session.title}`} onClick={() => onSetTask(session.sessionId, null)}>Remove</button>}
                       </div>
                       {removeId === session.sessionId && (
                         <div className="mt-2 flex items-center gap-1 border-t pt-2" style={{ borderColor: 'var(--border)' }}>

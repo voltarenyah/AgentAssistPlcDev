@@ -10,6 +10,9 @@ export type VersionControlPanelProps = {
   /** Starts a title-bar operation and returns its id, so the full TIA compare shows live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
   operationStatus?: api.OperationStatus | null
+  onNavigateTask?: (taskId: string) => void
+  onNavigateEntity?: (kind: string, id: string) => void
+  selectedTraceabilityTarget?: { kind: string; id: string } | null
 }
 
 type VersionControlTab = 'changes' | 'history'

@@ -22,10 +22,13 @@ import {
 type Props = {
   workbenchId: string
   worktreeId: string
-  tasks: api.WorktreeTask[]
+  tasks: TaskSurface[]
   loading: boolean
   error: string | null
   onChanged: () => void
+  projectTasks?: api.EngineeringTask[]
+  onOpenTaskDetail?: (task: api.EngineeringTask) => void
+  onStartChat?: (task: TaskSurface) => void
 }
 
 const displayError = (error: unknown) => {
@@ -37,6 +40,74 @@ const taskStatusLabel = (status: api.WorktreeTaskStatus) =>
   status === 'inProgress' ? 'In Progress' : status === 'done' ? 'Done' : 'Todo'
 
 const taskStatusOrder: api.WorktreeTaskStatus[] = ['todo', 'inProgress', 'done']
+
+type TaskSurface = api.WorktreeTask | api.EngineeringTask
+const isLegacyTask = (task: TaskSurface): task is api.WorktreeTask => 'elementRefs' in task
+
+const taskTypeLabel = (type?: TaskSurface['type']) =>
+  type === 'issue' ? 'Issue' : type === 'improvement' ? 'Improvement' : 'Feature'
+
+export function ActiveTaskSelector({
+  tasks,
+  activeTask,
+  onChange,
+  worktreeId,
+}: {
+  tasks: TaskSurface[]
+  activeTask: api.EngineeringTask | null
+  onChange: (taskId: string | null) => Promise<void>
+  worktreeId?: string
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const compatible = tasks.filter(task => task.scope !== 'worktree' || !task.worktreeId || task.worktreeId === worktreeId)
+  const selectedId = activeTask?.taskId ?? ''
+  const select = async (taskId: string) => {
+    setSaving(true)
+    try {
+      await onChange(taskId || null)
+      setError(null)
+    } catch (cause) {
+      setError(displayError(cause))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
+      <label className="field-label" htmlFor="active-task-selector"><span>Active task</span></label>
+      <div className="mt-1 flex items-center gap-2">
+        <select
+          id="active-task-selector"
+          aria-label="Active task"
+          className="field-input h-8 min-w-0 flex-1 text-[10px]"
+          value={selectedId}
+          disabled={saving}
+          onChange={event => { void select(event.target.value) }}
+        >
+          <option value="">No active task</option>
+          {compatible.map(task => (
+            <option key={task.taskId} value={task.taskId}>
+              {task.title} ({task.scope === 'project' ? 'Project' : 'Worktree'} · {taskTypeLabel(task.type)})
+            </option>
+          ))}
+        </select>
+        <button type="button" className="secondary-button h-8 text-[9px]" disabled={!activeTask || saving} onClick={() => { void select('') }} onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            void select('')
+          }
+        }}>
+          Clear
+        </button>
+      </div>
+      <div className="mt-1 text-[9px] text-muted-foreground">
+        {activeTask ? <><span className="font-medium text-foreground">{activeTask.title}</span> · {activeTask.scope === 'project' ? 'Project' : 'Worktree'} scope · {taskTypeLabel(activeTask.type)}</> : 'New sessions and actions remain unassigned until you choose a task.'}
+      </div>
+      {error && <div role="alert" className="mt-2 flex items-center justify-between gap-2 text-[9px] text-destructive"><span>Active task could not be changed: {error}</span><button type="button" className="underline" onClick={() => setError(null)}>Dismiss</button></div>}
+    </div>
+  )
+}
 
 const taskStatusClasses = (status: api.WorktreeTaskStatus) =>
   status === 'done'
@@ -80,12 +151,17 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, projectTasks = [], onOpenTaskDetail, onStartChat }: Props) {
+  const [createOpen, setCreateOpen] = useState(false)
   const [newTitle, setNewTitle] = useState('')
+  const [newType, setNewType] = useState<api.EngineeringTask['type']>('feature')
+  const [newDevice, setNewDevice] = useState('')
+  const [newSourceBlocks, setNewSourceBlocks] = useState('')
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<EditDraft | null>(null)
   const [newRef, setNewRef] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
+  const visibleTasks = [...projectTasks, ...tasks]
 
   const mutate = (action: () => Promise<unknown>) => {
     void action()
@@ -97,9 +173,18 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
     const title = newTitle.trim()
     if (!title || adding) return
     setAdding(true)
-    void api.createWorktreeTask(workbenchId, worktreeId, { title })
+    const elementRefs = newSourceBlocks.split(/\r?\n/).map(value => value.trim()).filter(Boolean)
+    const details = [
+      `Type: ${taskTypeLabel(newType)}`,
+      newDevice.trim() ? `Device: ${newDevice.trim()}` : null,
+    ].filter(Boolean).join('\n')
+    void api.createWorktreeTask(workbenchId, worktreeId, { title, details, ...(elementRefs.length > 0 ? { elementRefs } : {}) })
       .then(() => {
         setNewTitle('')
+        setNewType('feature')
+        setNewDevice('')
+        setNewSourceBlocks('')
+        setCreateOpen(false)
         onChanged()
       })
       .catch(addError => showErrorToast(`Task could not be created: ${displayError(addError)}`))
@@ -152,26 +237,13 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">
-        <input
-          aria-label="New task title"
-          className="field-input h-8 flex-1 text-[10px]"
-          placeholder="Add a task — which PLC element needs modification?"
-          value={newTitle}
-          onChange={event => setNewTitle(event.target.value)}
-          onKeyDown={event => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              addTask()
-            }
-          }}
-        />
-        <button className="primary-button h-8" disabled={!newTitle.trim() || adding} onClick={addTask}>
-          {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Add task
+      <div className="flex justify-end">
+        <button type="button" className="primary-button h-8" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-3.5 w-3.5" /> Add task
         </button>
       </div>
 
-      {tasks.length === 0 ? (
+      {visibleTasks.length === 0 ? (
         <div className="grid place-items-center rounded-xl border border-dashed p-10 text-center" style={{ borderColor: 'var(--border)' }}>
           <ListTodo className="mb-3 h-6 w-6 text-chart-2" />
           <p className="text-[10px] text-muted-foreground">
@@ -180,7 +252,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
         </div>
       ) : (
         taskStatusOrder.map(status => {
-          const group = tasks.filter(task => task.status === status)
+          const group = visibleTasks.filter(task => task.status === status)
           return (
             <section key={status} className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
               <div className="flex items-center border-b px-4 py-2" style={{ borderColor: 'var(--border)' }}>
@@ -193,20 +265,24 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                 <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
                   {group.map(task => (
                     <div key={task.taskId} className="flex items-start gap-3 px-4 py-2.5">
-                      <TaskStatusControl
+                      {isLegacyTask(task) ? <TaskStatusControl
                         task={task}
                         onChange={next => mutate(() => api.updateWorktreeTask(workbenchId, worktreeId, task.taskId, { status: next }))}
-                      />
+                      /> : <span className="inline-flex shrink-0 rounded-full border px-2 py-0.5 text-[8px] uppercase tracking-[0.1em]">{taskStatusLabel(task.status as api.WorktreeTaskStatus)}</span>}
                       <div className="min-w-0 flex-1">
                         <div className={`text-[10px] font-medium ${task.status === 'done' ? 'text-muted-foreground line-through' : ''}`}>
                           {task.title}
                         </div>
-                        {task.details && (
+                        <div className="mt-1 flex gap-1 text-[8px] text-muted-foreground">
+                          <span className="rounded bg-muted px-1.5 py-0.5">{task.scope === 'project' ? 'Project' : 'Worktree'} scope</span>
+                          <span className="rounded bg-muted px-1.5 py-0.5">{taskTypeLabel(task.type)}</span>
+                        </div>
+                        {(isLegacyTask(task) ? task.details : task.description) && (
                           <div className="mt-1 text-[9px] leading-relaxed text-muted-foreground [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-4">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{task.details}</ReactMarkdown>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{isLegacyTask(task) ? task.details : task.description}</ReactMarkdown>
                           </div>
                         )}
-                        {task.elementRefs.length > 0 && (
+                        {isLegacyTask(task) && task.elementRefs.length > 0 && (
                           <div className="mt-1.5 flex flex-wrap gap-1">
                             {task.elementRefs.map(elementRef => (
                               <span key={elementRef} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">
@@ -216,7 +292,9 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                           </div>
                         )}
                       </div>
-                      <button className="icon-button" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
+                      {onStartChat && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>Start chat</button>}
+                      {onOpenTaskDetail && !isLegacyTask(task) && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</button>}
+                      {isLegacyTask(task) && <><button className="icon-button" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
                         <Pencil className="h-3 w-3" />
                       </button>
                       <button
@@ -229,7 +307,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                         }}
                       >
                         <Trash2 className="h-3 w-3" />
-                      </button>
+                      </button></>}
                     </div>
                   ))}
                 </div>
@@ -304,6 +382,21 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
               {savingEdit && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save task
             </button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add task</DialogTitle>
+            <DialogDescription>Create a focused task for this worktree.</DialogDescription>
+          </DialogHeader>
+          <form className="space-y-3" onSubmit={event => { event.preventDefault(); addTask() }}>
+            <label className="field-label"><span>Title</span><input autoFocus aria-label="New task title" className="field-input" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
+            <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
+            <label className="field-label"><span>Device</span><input aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)} placeholder="Optional device identifier" /><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan for this worktree.</span></label>
+            <label className="field-label"><span>Related source blocks</span><textarea aria-label="New task source blocks" className="field-input min-h-[72px] py-1.5 font-mono text-[10px]" value={newSourceBlocks} onChange={event => setNewSourceBlocks(event.target.value)} placeholder="One block per line" /><span className="text-[9px] text-muted-foreground">Source references can be edited after creation through the existing element-reference contract.</span></label>
+            <DialogFooter><button type="button" className="secondary-button" onClick={() => setCreateOpen(false)} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

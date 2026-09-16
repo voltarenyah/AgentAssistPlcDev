@@ -17,8 +17,11 @@ const sessions: ChatSessionInfo[] = [
     messageCount: 2,
     turnCount: 1,
     firstUserMessage: 'Check valves',
+    taskId: null,
   },
 ]
+const assignedSession = { ...sessions[0], sessionId: 's2', title: 'Assigned checks', taskId: 'task-1' }
+const manualSession = { ...sessions[0], sessionId: 's3', title: 'Manual checks', taskId: 'task-2', taskProvenance: 'manual' as const }
 
 const render = (element: React.ReactNode) => {
   const host = document.createElement('div')
@@ -46,6 +49,7 @@ describe('SessionDock', () => {
         onRename={vi.fn()}
         onRemove={vi.fn()}
         onExport={vi.fn()}
+        onSetTask={vi.fn()}
       />,
     )
 
@@ -67,6 +71,7 @@ describe('SessionDock', () => {
         onRename={vi.fn()}
         onRemove={vi.fn()}
         onExport={onExport}
+        onSetTask={vi.fn()}
       />,
     )
 
@@ -88,6 +93,7 @@ describe('SessionDock', () => {
         onRename={onRename}
         onRemove={vi.fn()}
         onExport={vi.fn()}
+        onSetTask={vi.fn()}
       />,
     )
 
@@ -104,5 +110,36 @@ describe('SessionDock', () => {
     })
 
     expect(onRename).toHaveBeenCalledWith('s1', 'Valve diagnosis')
+  })
+
+  it('exposes accessible attach and remove task controls', async () => {
+    const onSetTask = vi.fn()
+    const originalPrompt = window.prompt
+    window.prompt = () => 'task-42'
+    const { host } = render(
+      <SessionDock sessions={sessions} activeSessionId={null} busy={false} hidden={false}
+        onCreate={vi.fn()} onActivate={vi.fn()} onRename={vi.fn()} onRemove={vi.fn()}
+        onExport={vi.fn()} onSetTask={onSetTask} />,
+    )
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Attach task for Startup checks"]')?.click())
+    expect(onSetTask).toHaveBeenCalledWith('s1', 'task-42')
+    window.prompt = originalPrompt
+  })
+
+  it('labels legacy sessions and invokes reassignment and removal controls', () => {
+    const onSetTask = vi.fn()
+    const originalPrompt = window.prompt
+    window.prompt = () => 'replacement-task'
+    const { host } = render(<SessionDock sessions={[sessions[0], assignedSession, manualSession]} activeSessionId={null} busy={false} hidden={false}
+      onCreate={vi.fn()} onActivate={vi.fn()} onRename={vi.fn()} onRemove={vi.fn()} onExport={vi.fn()} onSetTask={onSetTask} />)
+    expect(host.textContent).toContain('Unassigned legacy session')
+    expect(host.textContent).toContain('Task: task-1 (Default)')
+    expect(host.textContent).toContain('Task: task-2 (Manual)')
+    expect(host.querySelector('[aria-label="Reassign task for Assigned checks"]')).not.toBeNull()
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Reassign task for Assigned checks"]')?.click())
+    expect(onSetTask).toHaveBeenCalledWith('s2', 'replacement-task')
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Remove task from Assigned checks"]')?.click())
+    expect(onSetTask).toHaveBeenCalledWith('s2', null)
+    window.prompt = originalPrompt
   })
 })

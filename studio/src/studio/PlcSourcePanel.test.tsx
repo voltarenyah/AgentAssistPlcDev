@@ -2,6 +2,7 @@
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as api from '@/api/client'
 import type { SourceObjectInfo } from '@/api/client'
 import PlcSourcePanel from './PlcSourcePanel'
 import type { DeviceViewState } from './deviceSnapshot'
@@ -14,6 +15,7 @@ vi.mock('sonner', () => ({ toast: toastMock }))
 vi.mock('@/api/client', () => ({
   openSourceInTia: vi.fn(),
   compareSourceWithTia: vi.fn(),
+  getGraphEntityDetail: vi.fn(),
 }))
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -49,6 +51,7 @@ const deviceView = {
 describe('PlcSourcePanel', () => {
   beforeEach(() => {
     toastMock.success.mockReset()
+    vi.mocked(api.getGraphEntityDetail).mockReset()
   })
 
   afterEach(() => {
@@ -81,5 +84,49 @@ describe('PlcSourcePanel', () => {
 
     expect(host.querySelectorAll('[data-testid="plc-source-row"]')).toHaveLength(1)
     expect(host.textContent).toContain('Block 200')
+  })
+
+  it('keeps a selected source object outside the cap visible and loads its task links', async () => {
+    vi.mocked(api.getGraphEntityDetail).mockResolvedValue({
+      kind: 'sourceObject',
+      id: 'source-200',
+      workbenchId: 'wb1',
+      worktreeId: 'wt1',
+      tasks: [{ id: 'task-200', edgeId: 'edge-200', provenance: 'manual', isPrimary: true }],
+      commits: [{ id: 'commit-200', edgeId: 'commit-edge-200', provenance: 'source-evidence', isPrimary: true }],
+    })
+
+    const onNavigateTask = vi.fn()
+    const onNavigateEntity = vi.fn()
+
+    const { host } = await render(
+      <PlcSourcePanel
+        workbenchId="wb1"
+        worktreeId="wt1"
+        deviceId="dev1"
+        deviceView={deviceView}
+        onChatWithAgent={vi.fn()}
+        onSnapshotReload={vi.fn()}
+        onNavigateTask={onNavigateTask}
+        onNavigateEntity={onNavigateEntity}
+        selectedTraceabilityTarget={{ kind: 'sourceObject', id: 'source-200' }}
+      />,
+    )
+
+    await act(async () => {})
+
+    const selectedRow = Array.from(host.querySelectorAll<HTMLElement>('[data-testid="plc-source-row"]'))
+      .find(row => row.textContent?.includes('Block 200'))
+    expect(selectedRow).toBeTruthy()
+    expect(selectedRow?.textContent).toContain('Blocks/Block200 [FB200].xml')
+    expect(selectedRow?.textContent).toContain('task-200')
+    expect(selectedRow?.textContent).toContain('manual')
+    expect(selectedRow?.textContent).toContain('commit-200')
+    expect(selectedRow?.textContent).toContain('source-evidence')
+    const openCommit = host.querySelector<HTMLButtonElement>('button[aria-label="Open commit commit-200"]')
+    expect(openCommit).toBeTruthy()
+    await act(async () => openCommit?.click())
+    expect(onNavigateEntity).toHaveBeenCalledWith('gitCommit', 'commit-200')
+    expect(api.getGraphEntityDetail).toHaveBeenCalledWith('wb1', 'sourceObject', 'source-200')
   })
 })

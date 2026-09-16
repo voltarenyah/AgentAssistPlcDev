@@ -62,6 +62,9 @@ export const workspaceViewRegistry: Record<WorkspaceViewKind, WorkspaceViewDefin
             deviceView={source.deviceView}
             onChatWithAgent={source.onChatWithAgent}
             onSnapshotReload={source.onSnapshotReload}
+            onNavigateTask={source.onNavigateTask}
+            onNavigateEntity={source.onNavigateEntity}
+            selectedTraceabilityTarget={source.selectedTraceabilityTarget}
             onInspectObject={source.onInspectObject}
             onInspectUsage={source.onInspectUsage}
           />

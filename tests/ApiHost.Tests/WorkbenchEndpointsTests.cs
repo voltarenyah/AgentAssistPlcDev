@@ -34,6 +34,513 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task EngineeringTaskApiSupportsProjectCrudAndCategorizedEmptyDetail()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
+        var route = $"/api/workbenches/{fixture.Context.WorkbenchId}/tasks";
+
+        var created = await fixture.Client.PostAsJsonAsync(route, new
+        {
+            title = "Improve diagnostics",
+            type = "improvement",
+            status = "todo",
+            priority = 2,
+            intent = "Make failures actionable",
+            expectedResult = "Clear diagnostics",
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var task = await created.Content.ReadFromJsonAsync<JsonElement>();
+        var taskId = task.GetProperty("taskId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(taskId));
+
+        var detail = await fixture.Client.GetAsync($"{route}/{taskId}");
+        Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+        var payload = await detail.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("project", payload.GetProperty("task").GetProperty("scope").GetString());
+        var taskPayload = payload.GetProperty("task");
+        Assert.Equal("Improve diagnostics", taskPayload.GetProperty("title").GetString());
+        Assert.Equal("improvement", taskPayload.GetProperty("type").GetString());
+        Assert.Equal("todo", taskPayload.GetProperty("status").GetString());
+        Assert.Equal(2, taskPayload.GetProperty("priority").GetInt32());
+        Assert.Equal("Make failures actionable", taskPayload.GetProperty("intent").GetString());
+        Assert.Equal("Clear diagnostics", taskPayload.GetProperty("expectedResult").GetString());
+        Assert.True(taskPayload.GetProperty("createdUtc").GetDateTimeOffset() <= DateTimeOffset.UtcNow);
+        Assert.True(taskPayload.GetProperty("updatedUtc").GetDateTimeOffset() >= taskPayload.GetProperty("createdUtc").GetDateTimeOffset());
+        foreach (var category in new[] { "sessions", "commits", "sourceObjects", "svnRevisions" })
+            Assert.Equal(0, payload.GetProperty(category).GetArrayLength());
+
+        var worktreeTask = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/tasks",
+            new { title = "Worktree-only task" });
+        Assert.Equal(HttpStatusCode.Created, worktreeTask.StatusCode);
+        var worktreeTaskId = (await worktreeTask.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.GetAsync($"{route}/{worktreeTaskId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.PatchAsJsonAsync($"{route}/{worktreeTaskId}", new { title = "must not change" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.DeleteAsync($"{route}/{worktreeTaskId}")).StatusCode);
+
+        var updated = await fixture.Client.PatchAsJsonAsync($"{route}/{taskId}", new
+        {
+            status = "inProgress",
+            type = "feature",
+            title = "Improve diagnostics now",
+            priority = 7,
+            intent = "Updated intent",
+            expectedResult = "Updated result",
+        });
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        var updatedPayload = await (await fixture.Client.GetAsync($"{route}/{taskId}")).Content.ReadFromJsonAsync<JsonElement>();
+        var updatedTask = updatedPayload.GetProperty("task");
+        Assert.Equal("feature", updatedTask.GetProperty("type").GetString());
+        Assert.Equal("inProgress", updatedTask.GetProperty("status").GetString());
+        Assert.Equal(7, updatedTask.GetProperty("priority").GetInt32());
+        Assert.Equal("Updated intent", updatedTask.GetProperty("intent").GetString());
+        Assert.Equal("Updated result", updatedTask.GetProperty("expectedResult").GetString());
+        Assert.Equal("Improve diagnostics now", updatedTask.GetProperty("title").GetString());
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"{route}/{taskId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.GetAsync($"{route}/{taskId}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task EngineeringTaskRelationshipApiAttachesReassignsAndReportsStableTraceability()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
+        var wb = fixture.Context.WorkbenchId;
+        var created = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "Trace task", type = "feature", intent = "trace", expectedResult = "linked" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        using (var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id is "wt-1" or "wt-2");
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-a", wb, "wt-1"));
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-b", wb, "wt-1"));
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "source-a", wb, "wt-1"));
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, "session-a", wb, "wt-1"));
+            graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-a", Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "source-a", Agent.Workbench.EngineeringGraph.GraphProvenance.Evidence);
+            graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.Task, taskId, Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, "session-a", Agent.Workbench.EngineeringGraph.GraphProvenance.Default);
+        }
+        var attach = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks/{taskId}/relationships",
+            new { targetKind = "git_commit", targetId = "commit-a", isPrimary = true });
+        Assert.Equal(HttpStatusCode.Created, attach.StatusCode);
+        var edge = await attach.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("commit-a", edge.GetProperty("targetId").GetString());
+        Assert.Equal("manual", edge.GetProperty("provenance").GetString());
+        var secondAttach = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks/{taskId}/relationships",
+            new { targetKind = "git_commit", targetId = "commit-b", isPrimary = false });
+        Assert.Equal(HttpStatusCode.Created, secondAttach.StatusCode);
+        var detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/tasks/{taskId}");
+        Assert.Equal("commit-a", detail.GetProperty("commits")[0].GetProperty("id").GetString());
+        Assert.Equal("commit-b", detail.GetProperty("commits")[1].GetProperty("id").GetString());
+        Assert.Equal("default", detail.GetProperty("sessions")[0].GetProperty("provenance").GetString());
+        var reassigned = await fixture.Client.PutAsJsonAsync($"/api/workbenches/{wb}/tasks/{taskId}/relationships/source_object/source-a",
+            new { isPrimary = false });
+        Assert.Equal(HttpStatusCode.OK, reassigned.StatusCode);
+        detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/tasks/{taskId}");
+        Assert.Equal("source-a", detail.GetProperty("sourceObjects")[0].GetProperty("id").GetString());
+        var entity = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/engineering-graph/source_object/source-a");
+        Assert.Equal(taskId, entity.GetProperty("tasks")[0].GetProperty("id").GetString());
+        Assert.Equal("commit-a", entity.GetProperty("commits")[0].GetProperty("id").GetString());
+        Assert.Equal("evidence", entity.GetProperty("commits")[0].GetProperty("provenance").GetString());
+        var otherTaskResponse = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "Other", type = "feature", intent = "other", expectedResult = "other" });
+        var otherTaskId = (await otherTaskResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var primaryConflict = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks/{otherTaskId}/relationships", new { targetKind = "git_commit", targetId = "commit-a", isPrimary = true });
+        Assert.Equal(HttpStatusCode.Conflict, primaryConflict.StatusCode);
+        Assert.Equal("GRAPH_PRIMARY_RELATIONSHIP_EXISTS", (await primaryConflict.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
+        var reassignedSession = await fixture.Client.PutAsJsonAsync($"/api/workbenches/{wb}/tasks/{otherTaskId}/relationships/session/session-a", new { isPrimary = false });
+        Assert.Equal(HttpStatusCode.OK, reassignedSession.StatusCode);
+        detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/tasks/{taskId}");
+        Assert.Equal(0, detail.GetProperty("sessions").GetArrayLength());
+        detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/tasks/{otherTaskId}");
+        Assert.Equal("session-a", detail.GetProperty("sessions")[0].GetProperty("id").GetString());
+        var crossTaskResponse = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/wt-2/tasks", new { title = "Cross", details = "cross" });
+        var crossTaskId = (await crossTaskResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var cross = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks/{crossTaskId}/relationships", new { targetKind = "session", targetId = "session-a" });
+        Assert.Equal(HttpStatusCode.BadRequest, cross.StatusCode);
+        var incompatible = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks/{taskId}/relationships",
+            new { targetKind = "session", targetId = "missing" });
+        Assert.Equal(HttpStatusCode.BadRequest, incompatible.StatusCode);
+        var error = await incompatible.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("GRAPH_TARGET_NOT_FOUND", error.GetProperty("error").GetString());
+        var failedReplace = await fixture.Client.PutAsJsonAsync($"/api/workbenches/{wb}/tasks/{taskId}/relationships/git_commit/missing",
+            new { isPrimary = true });
+        Assert.Equal(HttpStatusCode.BadRequest, failedReplace.StatusCode);
+        detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/tasks/{taskId}");
+        Assert.Equal("commit-a", detail.GetProperty("commits")[0].GetProperty("id").GetString());
+        var invalidPrimary = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks/{taskId}/relationships",
+            new { targetKind = "source_object", targetId = "source-a", isPrimary = true });
+        Assert.Equal(HttpStatusCode.BadRequest, invalidPrimary.StatusCode);
+        var edgeId = edge.GetProperty("edgeId").GetString()!;
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"/api/workbenches/{wb}/tasks/{taskId}/relationships/{edgeId}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task ActiveTaskApiSelectsSwitchesAndClearsCompatibleTasks()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
+        var wb = fixture.Context.WorkbenchId;
+        var project = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "Project task", type = "feature", intent = "Intent", expectedResult = "Result" });
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        var local = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Local task" });
+        var localId = (await local.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        var route = $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/active-task";
+
+        var projectRoute = $"/api/workbenches/{wb}/active-task";
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PostAsJsonAsync(projectRoute, new { taskId = projectId })).StatusCode);
+        Assert.Equal(projectId, (await (await fixture.Client.GetAsync(projectRoute)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("activeTask").GetProperty("taskId").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId = projectId })).StatusCode);
+        Assert.Equal(projectId, (await (await fixture.Client.GetAsync(route)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("activeTask").GetProperty("taskId").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId = localId })).StatusCode);
+        Assert.Equal(localId, (await (await fixture.Client.GetAsync(route)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("activeTask").GetProperty("taskId").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId = (string?)null })).StatusCode);
+        Assert.True((await (await fixture.Client.GetAsync(route)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("activeTask").ValueKind == JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task ActiveTaskApiRejectsTaskOwnedByAnotherWorktree()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
+        var wb = fixture.Context.WorkbenchId;
+        var local = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Local task" });
+        var localId = (await local.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        var response = await fixture.Client.PutAsJsonAsync($"/api/workbenches/{wb}/worktrees/wt-2/active-task", new { taskId = localId });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SessionTaskApiReassignsAndClearsWithManualProvenance()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var task = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{wt}/tasks", new { title = "Session task A" });
+        var taskId = (await task.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var taskB = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{wt}/tasks", new { title = "Session task B" });
+        var taskBId = (await taskB.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var route = $"/api/workbenches/{wb}/worktrees/{wt}/devices/dev-1/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null });
+        Assert.Equal(HttpStatusCode.OK, created.StatusCode);
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("header").GetProperty("sessionId").GetString()!;
+        var updated = await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}/task", new { taskId });
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        var detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskId}");
+        Assert.Equal(sessionId, detail.GetProperty("sessions")[0].GetProperty("id").GetString());
+        Assert.Equal("manual", detail.GetProperty("sessions")[0].GetProperty("provenance").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}/task", new { taskId = taskBId })).StatusCode);
+        detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskId}");
+        Assert.Equal(0, detail.GetProperty("sessions").GetArrayLength());
+        detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskBId}");
+        Assert.Equal(sessionId, detail.GetProperty("sessions")[0].GetProperty("id").GetString());
+        Assert.Equal("manual", detail.GetProperty("sessions")[0].GetProperty("provenance").GetString());
+        var reloadedB = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
+        Assert.Equal(taskBId, reloadedB.GetProperty("header").GetProperty("taskId").GetString());
+        Assert.Equal("manual", reloadedB.GetProperty("header").GetProperty("taskProvenance").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}/task", new { taskId = (string?)null })).StatusCode);
+        var reloadedCleared = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
+        Assert.Equal(JsonValueKind.Null, reloadedCleared.GetProperty("header").GetProperty("taskId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reloadedCleared.GetProperty("header").GetProperty("taskProvenance").ValueKind);
+        detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskBId}");
+        Assert.Equal(0, detail.GetProperty("sessions").GetArrayLength());
+
+        await fixture.Client.PostAsync($"/api/workbenches/{wb}/worktrees/wt-2/devices/dev-1/select", null);
+        var otherRoute = $"/api/workbenches/{wb}/worktrees/wt-2/devices/dev-1/sessions";
+        var otherSession = await fixture.Client.PostAsJsonAsync(otherRoute, new { settings = new { }, runtimeContext = (string?)null });
+        var otherId = (await otherSession.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("header").GetProperty("sessionId").GetString()!;
+        var invalid = await fixture.Client.PutAsJsonAsync($"{otherRoute}/{otherId}/task", new { taskId });
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        var reloadedOther = await fixture.Client.GetFromJsonAsync<JsonElement>($"{otherRoute}/{otherId}");
+        Assert.Equal(JsonValueKind.Null, reloadedOther.GetProperty("header").GetProperty("taskId").ValueKind);
+        using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id is "wt-1" or "wt-2");
+        Assert.Empty(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, otherId));
+    }
+
+    [Fact]
+    public async Task ChangingActiveTaskDoesNotMutateExistingEdges()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var taskResponse = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "Project task", intent = "Intent", expectedResult = "Result" });
+        var taskId = (await taskResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        using var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id == fixture.Context.WorktreeId);
+        graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-1", wb, fixture.Context.WorktreeId));
+        graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.Task, taskId, Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-1");
+        var before = graph.GetEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Task, taskId)
+            .Select(edge => (edge.EdgeId, edge.FromKind, edge.FromId, edge.ToKind, edge.ToId, edge.RelationKind, edge.Provenance, edge.IsPrimary))
+            .ToArray();
+        var route = $"/api/workbenches/{wb}/active-task";
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(route, new { taskId = (string?)null })).StatusCode);
+        var after = graph.GetEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Task, taskId)
+            .Select(edge => (edge.EdgeId, edge.FromKind, edge.FromId, edge.ToKind, edge.ToId, edge.RelationKind, edge.Provenance, edge.IsPrimary))
+            .ToArray();
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task NewChatSessionPersistsTheSelectedActiveTask()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var taskResponse = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/tasks", new { title = "Session task", intent = "Intent", expectedResult = "Result" });
+        taskResponse.EnsureSuccessStatusCode();
+        var taskId = (await taskResponse.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("taskId").GetString()!;
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync(
+            $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/devices/dev-1/select", null)).StatusCode);
+        var activeResponse = await fixture.Client.PutAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/active-task", new { taskId });
+        Assert.Equal(HttpStatusCode.OK, activeResponse.StatusCode);
+        Assert.Equal(taskId, (await activeResponse.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("activeTask").GetProperty("taskId").GetString());
+        var response = await fixture.Client.PostAsync("/api/chat/session/new", null);
+        response.EnsureSuccessStatusCode();
+        var session = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(taskId, session.GetProperty("header").GetProperty("taskId").GetString());
+        var loaded = await fixture.Client.PostAsJsonAsync(
+            "/api/chat/session/load", new { sessionId = session.GetProperty("header").GetProperty("sessionId").GetString() });
+        Assert.Equal(taskId, (await loaded.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("taskId").GetString());
+        using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == fixture.Context.WorktreeId);
+        var sessionId = session.GetProperty("header").GetProperty("sessionId").GetString()!;
+        var edge = Assert.Single(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId));
+        Assert.Equal(taskId, edge.FromId);
+        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Default, edge.Provenance);
+    }
+
+    [Fact]
+    public async Task GenericDeviceSessionRoutesPersistManualTaskProvenanceAndGraphEdge()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var taskResponse = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "Generic session task", intent = "Intent", expectedResult = "Result" });
+        var taskId = (await taskResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        await fixture.Client.PutAsJsonAsync($"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/active-task", new { taskId });
+        var route = "/api/devices/dev-1/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null });
+        created.EnsureSuccessStatusCode();
+        var session = await created.Content.ReadFromJsonAsync<JsonElement>();
+        var sessionId = session.GetProperty("header").GetProperty("sessionId").GetString()!;
+        Assert.Equal(taskId, session.GetProperty("header").GetProperty("taskId").GetString());
+        Assert.Equal("default", session.GetProperty("header").GetProperty("taskProvenance").GetString());
+        using var defaultStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var defaultGraph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(defaultStore, wb, id => id == fixture.Context.WorktreeId);
+        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Default, Assert.Single(defaultGraph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId)).Provenance);
+        var node = System.Text.Json.Nodes.JsonNode.Parse(session.GetRawText())!;
+        node["header"]!["taskId"] = taskId;
+        var saved = await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}", new { session = node });
+        Assert.Equal(HttpStatusCode.NoContent, saved.StatusCode);
+        var loaded = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
+        Assert.Equal(taskId, loaded.GetProperty("header").GetProperty("taskId").GetString());
+        Assert.Equal("manual", loaded.GetProperty("header").GetProperty("taskProvenance").GetString());
+        using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == fixture.Context.WorktreeId);
+        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Manual,
+            Assert.Single(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId)).Provenance);
+    }
+
+    [Fact]
+    public async Task GenericDeviceSessionCreateRemovesPersistedAndGraphStateWhenRegistrationFails()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+
+        await AssertSessionCreationRegistrationFailureIsCompensatedAsync(
+            fixture,
+            () => fixture.Client.PostAsJsonAsync(
+                "/api/devices/dev-1/sessions", new { settings = new { }, runtimeContext = (string?)null }));
+    }
+
+    [Fact]
+    public async Task ScopedDeviceSessionCreateRemovesPersistedAndGraphStateWhenRegistrationFails()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var route = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/devices/dev-1/sessions";
+
+        await AssertSessionCreationRegistrationFailureIsCompensatedAsync(
+            fixture,
+            () => fixture.Client.PostAsJsonAsync(
+                route, new { settings = new { }, runtimeContext = (string?)null }));
+    }
+
+    [Fact]
+    public async Task CompatibilitySessionCreateRemovesPersistedGraphAndInMemoryStateWhenRegistrationFails()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+
+        await AssertSessionCreationRegistrationFailureIsCompensatedAsync(
+            fixture,
+            () => fixture.Client.PostAsync("/api/chat/session/new", null),
+            assertNoActiveSession: true);
+    }
+
+    [Fact]
+    public async Task GenericSessionPutRetainsTrustedIdentityAndTaskGraphWhenUpdatingMutableHeader()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var workbenchId = fixture.Context.WorkbenchId;
+        var taskResponse = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{workbenchId}/tasks",
+            new { title = "Retained generic session task", intent = "Intent", expectedResult = "Result" });
+        var taskId = (await taskResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync(
+            $"/api/workbenches/{workbenchId}/worktrees/{fixture.Context.WorktreeId}/active-task", new { taskId })).StatusCode);
+
+        var route = "/api/devices/dev-1/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = "Initial context" });
+        created.EnsureSuccessStatusCode();
+        var original = await created.Content.ReadFromJsonAsync<JsonElement>();
+        var sessionId = original.GetProperty("header").GetProperty("sessionId").GetString()!;
+        var header = original.GetProperty("header");
+        var candidate = System.Text.Json.Nodes.JsonNode.Parse(original.GetRawText())!;
+        candidate["header"]!["title"] = "Updated retained title";
+        candidate["header"]!["runtimeContext"] = "Updated retained context";
+
+        var saved = await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}", new { session = candidate });
+
+        Assert.Equal(HttpStatusCode.NoContent, saved.StatusCode);
+        var reloaded = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
+        var reloadedHeader = reloaded.GetProperty("header");
+        Assert.Equal("Updated retained title", reloadedHeader.GetProperty("title").GetString());
+        Assert.Equal("Updated retained context", reloadedHeader.GetProperty("runtimeContext").GetString());
+        foreach (var identity in new[] { "sessionId", "workbenchId", "worktreeId", "deviceId", "worktreeRoot", "knowledgeDbPath" })
+            Assert.Equal(header.GetProperty(identity).GetString(), reloadedHeader.GetProperty(identity).GetString());
+        Assert.Equal(taskId, reloadedHeader.GetProperty("taskId").GetString());
+
+        using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(
+            graphStore, workbenchId, id => id == fixture.Context.WorktreeId);
+        var edge = Assert.Single(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId));
+        Assert.Equal(taskId, edge.FromId);
+        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Manual, edge.Provenance);
+    }
+
+    private static async Task AssertSessionCreationRegistrationFailureIsCompensatedAsync(
+        SelectedApiFixture fixture,
+        Func<Task<HttpResponseMessage>> create,
+        bool assertNoActiveSession = false)
+    {
+        string? sessionId = null;
+        var previous = SessionGraphOperations.RegisterOverride;
+        SessionGraphOperations.RegisterOverride = (_, session) =>
+        {
+            sessionId = session.Header.SessionId;
+            throw new InvalidOperationException("Injected graph registration failure.");
+        };
+        HttpResponseMessage response;
+        try { response = await create(); }
+        finally { SessionGraphOperations.RegisterOverride = previous; }
+
+        using (response)
+            Assert.False(response.IsSuccessStatusCode);
+        Assert.False(string.IsNullOrWhiteSpace(sessionId));
+        Assert.Null(SessionManager.LoadSession(fixture.Context, sessionId!));
+        Assert.Empty(SessionManager.ListSessions(fixture.Context));
+        using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        using var entity = graphStore.Connection.CreateCommand();
+        entity.CommandText = "SELECT COUNT(*) FROM graph_entities WHERE entity_kind='session' AND entity_id=$sessionId;";
+        entity.Parameters.AddWithValue("$sessionId", sessionId);
+        Assert.Equal(0L, (long)entity.ExecuteScalar()!);
+        using var edge = graphStore.Connection.CreateCommand();
+        edge.CommandText = "SELECT COUNT(*) FROM graph_edges WHERE from_id=$sessionId OR to_id=$sessionId;";
+        edge.Parameters.AddWithValue("$sessionId", sessionId);
+        Assert.Equal(0L, (long)edge.ExecuteScalar()!);
+        if (!assertNoActiveSession) return;
+
+        var info = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/chat/session/info");
+        Assert.Equal(JsonValueKind.Null, info.GetProperty("activeSessionId").ValueKind);
+        Assert.Equal(0, info.GetProperty("sessions").GetInt32());
+    }
+
+    [Fact]
+    public async Task SessionGraphReplacementRestoresOldEdgeWhenPersistenceFails()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var taskA = (await (await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "A", intent = "i", expectedResult = "r" })).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var taskB = (await (await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "B", intent = "i", expectedResult = "r" })).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var route = $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/devices/dev-1/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null, taskId = taskA });
+        var payload = await created.Content.ReadFromJsonAsync<JsonElement>();
+        var id = payload.GetProperty("header").GetProperty("sessionId").GetString()!;
+        using var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id == fixture.Context.WorktreeId);
+        var current = SessionManager.LoadSession(fixture.Context, id)!;
+        SessionManager.SaveSessionOverride = (_, _) => throw new IOException("injected persistence failure");
+        try
+        {
+            await Assert.ThrowsAsync<IOException>(() => fixture.Client.PutAsJsonAsync(
+                $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/devices/dev-1/sessions/{id}/task",
+                new { taskId = taskB }));
+        }
+        finally { SessionManager.SaveSessionOverride = null; }
+        Assert.Throws<IOException>(() => SessionGraphOperations.ApplyWithPersistence(graph, current, taskB,
+            value => value with { Header = value.Header with { TaskId = taskB } },
+            _ => throw new IOException("injected persistence failure")));
+        Assert.Equal(taskA, Assert.Single(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, id)).FromId);
+        Assert.Equal(taskA, SessionManager.LoadSession(fixture.Context, id)!.Header.TaskId);
+    }
+
+    [Fact]
+    public async Task SessionSaveRejectsTaskIdOutsideCurrentGraphContext()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
+        var wb = fixture.Context.WorkbenchId;
+        var taskResponse = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Worktree A task" });
+        taskResponse.EnsureSuccessStatusCode();
+        var taskId = (await taskResponse.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("taskId").GetString()!;
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsync(
+            $"/api/workbenches/{wb}/worktrees/wt-2/devices/dev-1/select", null)).StatusCode);
+        var route = $"/api/workbenches/{wb}/worktrees/wt-2/devices/dev-1/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null });
+        created.EnsureSuccessStatusCode();
+        var session = System.Text.Json.Nodes.JsonNode.Parse(await created.Content.ReadAsStringAsync())!;
+        var sessionId = session["header"]!["sessionId"]!.GetValue<string>();
+        session["header"]!["taskId"] = taskId;
+
+        var response = await fixture.Client.PutAsJsonAsync(
+            $"{route}/{sessionId}", new { session });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var persisted = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
+        Assert.Equal(JsonValueKind.Null, persisted.GetProperty("header").GetProperty("taskId").ValueKind);
+    }
+
+    [Fact]
+    public async Task WorktreeTaskDetailImportsLegacyTaskBeforeGraphLookup()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var taskId = "legacy-direct-detail";
+        var createdUtc = DateTimeOffset.UtcNow.AddMinutes(-2);
+        new AtomicJsonStore().Write(
+            Path.Combine(fixture.Context.WorktreeRoot, "tasks.json"),
+            new WorktreeTaskList(1, [new WorktreeTask(
+                taskId, "Imported task", "Legacy details", WorktreeTaskStatus.InProgress,
+                ["Blocks/Main"], createdUtc, null)]));
+
+        var response = await fixture.Client.GetAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/tasks/{taskId}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var task = payload.GetProperty("task");
+        Assert.Equal(taskId, task.GetProperty("taskId").GetString());
+        Assert.Equal("worktree", task.GetProperty("scope").GetString());
+        Assert.Equal(fixture.Context.WorktreeId, task.GetProperty("worktreeId").GetString());
+        Assert.Equal("Imported task", task.GetProperty("title").GetString());
+        Assert.Equal("feature", task.GetProperty("type").GetString());
+        Assert.Equal("inProgress", task.GetProperty("status").GetString());
+        Assert.Equal("Legacy task", task.GetProperty("intent").GetString());
+        Assert.Equal("Unspecified", task.GetProperty("expectedResult").GetString());
+        Assert.NotEqual(default, task.GetProperty("createdUtc").GetDateTimeOffset());
+        foreach (var category in new[] { "sessions", "commits", "sourceObjects", "svnRevisions" })
+            Assert.Equal(0, payload.GetProperty(category).GetArrayLength());
+    }
+
+    [Fact]
     public async Task TestingHostServesSpaStaticAssetsAndKeepsApiRoutesOutOfFallback()
     {
         await using var factory = new WebApplicationFactory<Program>()
@@ -2372,7 +2879,8 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             string? sourceProjectPath = null,
             Action<string, string>? stageExport = null,
             string? versionControlJson = null,
-            Exception? versionControlFailure = null)
+            Exception? versionControlFailure = null,
+            bool includeSecondWorktree = false)
         {
             var store = new AtomicJsonStore();
             var catalog = new WorkbenchCatalog(store, fixtureRoot);
@@ -2382,6 +2890,22 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             workbench = catalog.RegisterWorktree(
                 workbench,
                 new WorkbenchWorktreeRegistration(worktreeId, "master", "master", "master"));
+            if (includeSecondWorktree)
+            {
+                workbench = catalog.RegisterWorktree(
+                    workbench,
+                    new WorkbenchWorktreeRegistration("wt-2", "feature-2", "feature-2", "feature-2"));
+                var secondRoot = Path.Combine(workbench.RootPath, "worktrees", "feature-2");
+                Directory.CreateDirectory(secondRoot);
+                var secondDeviceRoot = Path.Combine(secondRoot, "devices", "PLC_1");
+                Directory.CreateDirectory(secondDeviceRoot);
+                store.Write(Path.Combine(secondRoot, "worktree.json"), new WorktreeMetadata(
+                    "1.0", "wt-2", workbench.WorkbenchId, "feature-2", "feature-2",
+                    DateTimeOffset.UtcNow.ToString("O"), null, null, null, [deviceId], null));
+                store.Write(Path.Combine(secondDeviceRoot, "device.json"), new DeviceMetadata(
+                    "1.0", deviceId, "wt-2", "PLC_1", "PLC:1", null, null, null,
+                    new KnowledgeState(true, new Dictionary<string, string>(), null), []));
+            }
             var worktreeRoot = Path.Combine(workbench.RootPath, "worktrees", "master");
             var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
             var context = new DeviceContext(

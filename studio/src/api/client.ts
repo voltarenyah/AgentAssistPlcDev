@@ -128,6 +128,8 @@ export type ChatSessionInfo = {
   messageCount: number
   turnCount: number
   firstUserMessage: string | null
+  taskId?: string | null
+  taskProvenance?: 'default' | 'manual' | null
 }
 
 export type ChatSessionHeader = {
@@ -139,6 +141,8 @@ export type ChatSessionHeader = {
   deviceId?: string | null
   createdAt: string
   updatedAt: string
+  taskId?: string | null
+  taskProvenance?: 'default' | 'manual' | null
 }
 
 export type ChatUsage = {
@@ -331,12 +335,68 @@ export type WorktreeTask = {
   elementRefs: string[]
   createdUtc: string
   doneUtc: string | null
+  /** Graph-backed task metadata; optional for legacy tasks.json responses. */
+  workbenchId?: string
+  scope?: 'project' | 'worktree'
+  worktreeId?: string | null
+  type?: 'issue' | 'improvement' | 'feature'
+  priority?: number
+  intent?: string
+  expectedResult?: string
+  updatedUtc?: string
 }
 
 export type WorktreeTaskList = {
   version: number
   tasks: WorktreeTask[]
 }
+
+export type EngineeringTask = {
+  taskId: string
+  workbenchId: string
+  scope: 'project' | 'worktree'
+  worktreeId: string | null
+  title: string
+  type: 'issue' | 'improvement' | 'feature'
+  status: string
+  priority: number
+  intent: string
+  expectedResult: string
+  description: string | null
+  createdUtc: string
+  updatedUtc: string
+}
+
+export type EngineeringTaskDetail = {
+  task: EngineeringTask
+  sessions: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  commits: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  sourceObjects: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  svnRevisions: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+}
+
+export type EngineeringGraphEntityDetail = {
+  kind: string
+  id: string
+  workbenchId: string
+  worktreeId: string | null
+  tasks: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  commits: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+}
+
+export type EngineeringTaskRelationshipMutation = {
+  edgeId: string
+  taskId: string
+  targetKind: string
+  targetId: string
+  relation: string
+  provenance: string
+  isPrimary: boolean
+}
+
+export type EngineeringTaskList = EngineeringTask[]
+
+export type ActiveTaskResponse = { activeTask: EngineeringTask | null }
 
 export type AppAssistantRuntimeSnapshot = {
   schemaVersion: number
@@ -1286,6 +1346,36 @@ export const updateWorktree = (
   workbenchRequest<WorktreeDetail>(worktreePath(workbenchId, worktreeId), jsonRequest('PATCH', patch))
 export const listWorktreeTasks = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<WorktreeTaskList>(`${worktreePath(workbenchId, worktreeId)}/tasks`)
+export const listProjectTasks = (workbenchId: string) =>
+  workbenchRequest<EngineeringTaskList>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks`)
+export const createProjectTask = (workbenchId: string, task: { title: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
+  workbenchRequest<EngineeringTask>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks`, jsonRequest('POST', task))
+export const getProjectTaskDetail = (workbenchId: string, taskId: string) =>
+  workbenchRequest<EngineeringTaskDetail>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}`)
+export const listGraphWorktreeTasks = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<EngineeringTaskList>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`)
+export const getWorktreeTaskDetail = (workbenchId: string, worktreeId: string, taskId: string) =>
+  workbenchRequest<EngineeringTaskDetail>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`)
+export const getEngineeringTaskDetail = async (workbenchId: string, taskId: string, worktreeId?: string | null) => {
+  try { return await getProjectTaskDetail(workbenchId, taskId) }
+  catch (error) { if (!worktreeId) throw error; return getWorktreeTaskDetail(workbenchId, worktreeId, taskId) }
+}
+export const attachTaskRelationship = (workbenchId: string, taskId: string, targetKind: string, targetId: string, isPrimary = false) =>
+  workbenchRequest<EngineeringTaskRelationshipMutation>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}/relationships`, jsonRequest('POST', { targetKind, targetId, isPrimary }))
+export const reassignTaskRelationship = (workbenchId: string, currentTaskId: string, newTaskId: string, targetKind: string, targetId: string, currentEdgeId: string, isPrimary = false) =>
+  workbenchRequest<EngineeringTaskRelationshipMutation>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(currentTaskId)}/relationships/${encodeURIComponent(targetKind)}/${encodeURIComponent(targetId)}`, jsonRequest('PUT', { isPrimary, newTaskId, currentEdgeId }))
+export const removeTaskRelationship = (workbenchId: string, taskId: string, edgeId: string) =>
+  workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}/relationships/${encodeURIComponent(edgeId)}`, { method: 'DELETE' })
+export const getGraphEntityDetail = (workbenchId: string, entityKind: string, entityId: string) =>
+  workbenchRequest<EngineeringGraphEntityDetail>(`/workbenches/${encodeURIComponent(workbenchId)}/engineering-graph/${encodeURIComponent(entityKind)}/${encodeURIComponent(entityId)}`)
+export const getActiveProjectTask = (workbenchId: string) =>
+  workbenchRequest<ActiveTaskResponse>(`/workbenches/${encodeURIComponent(workbenchId)}/active-task`)
+export const getActiveWorktreeTask = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<ActiveTaskResponse>(`${worktreePath(workbenchId, worktreeId)}/active-task`)
+export const setActiveProjectTask = (workbenchId: string, taskId: string | null) =>
+  workbenchRequest<ActiveTaskResponse>(`/workbenches/${encodeURIComponent(workbenchId)}/active-task`, jsonRequest('PUT', { taskId }))
+export const setActiveWorktreeTask = (workbenchId: string, worktreeId: string, taskId: string | null) =>
+  workbenchRequest<ActiveTaskResponse>(`${worktreePath(workbenchId, worktreeId)}/active-task`, jsonRequest('PUT', { taskId }))
 export const createWorktreeTask = (
   workbenchId: string,
   worktreeId: string,
@@ -1798,16 +1888,25 @@ export async function getChatSessions(_projectName?: string): Promise<ChatSessio
   return res.json()
 }
 
-export async function newChatSession(_projectName?: string): Promise<ChatSessionData> {
+export async function newChatSession(_projectName?: string, taskId?: string | null): Promise<ChatSessionData> {
   const res = await fetch(`${BASE}/chat/session/new`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify(taskId === undefined ? {} : { taskId }),
   })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(body || `New session failed: ${res.status}`)
   }
+  return res.json()
+}
+
+export async function setChatSessionTask(sessionId: string, taskId: string | null): Promise<ChatSessionData> {
+  const res = await fetch(`${BASE}/chat/session/task`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, taskId }),
+  })
+  if (!res.ok) throw new Error((await res.text()) || `Session task update failed: ${res.status}`)
   return res.json()
 }
 

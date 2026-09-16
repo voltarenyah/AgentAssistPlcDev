@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   Boxes,
@@ -45,6 +45,9 @@ type Props = {
   deviceView: DeviceViewState | null
   onChatWithAgent: (item: SourceObjectInfo) => void
   onSnapshotReload: () => void
+  onNavigateTask?: (taskId: string) => void
+  onNavigateEntity?: (kind: string, id: string) => void
+  selectedTraceabilityTarget?: { kind: string; id: string } | null
   onInspectObject: (relativePath: string) => void
   onInspectUsage: (usage: api.SourceVariableUsage[]) => void
 }
@@ -73,6 +76,9 @@ export default function PlcSourcePanel({
   deviceView,
   onChatWithAgent,
   onSnapshotReload,
+  onNavigateTask,
+  onNavigateEntity,
+  selectedTraceabilityTarget,
   onInspectObject,
   onInspectUsage,
 }: Props) {
@@ -81,6 +87,7 @@ export default function PlcSourcePanel({
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [comparison, setComparison] = useState<SourceObjectComparison | null>(null)
+  const [traceability, setTraceability] = useState<Record<string, api.EngineeringGraphEntityDetail>>({})
 
   const items = useMemo(
     () => resolveSourceObjects(deviceView?.sourceObjects, deviceView?.blocks),
@@ -89,7 +96,30 @@ export default function PlcSourcePanel({
   const counts = useMemo(() => countSourceObjectsByType(items), [items])
   const matching = useMemo(() => filterSourceObjects(items, typeFilter, query), [items, typeFilter, query])
   const limited = useMemo(() => limitSourceObjects(matching), [matching])
-  const visible = limited.items
+  const selectedSource = selectedTraceabilityTarget?.kind === 'sourceObject'
+    ? matching.find(item => item.id === selectedTraceabilityTarget.id)
+    : undefined
+  const visible = selectedSource && !limited.items.some(item => item.id === selectedSource.id)
+    ? [...limited.items, selectedSource]
+    : limited.items
+  const loadTraceability = useCallback(async (item: SourceObjectInfo) => {
+    try {
+      const detail = await api.getGraphEntityDetail(workbenchId, 'sourceObject', item.id)
+      setTraceability(previous => ({ ...previous, [item.id]: detail }))
+    } catch (error) {
+      showErrorToast(errorMessage(error))
+    }
+  }, [workbenchId])
+  useEffect(() => {
+    if (selectedTraceabilityTarget?.kind !== 'sourceObject') return
+    setExpandedId(selectedTraceabilityTarget.id)
+    const item = items.find(candidate => candidate.id === selectedTraceabilityTarget.id)
+    if (item) void loadTraceability(item)
+  }, [items, selectedTraceabilityTarget, loadTraceability])
+  useEffect(() => {
+    if (selectedTraceabilityTarget?.kind !== 'sourceObject') return
+    if (items.some(item => item.id === selectedTraceabilityTarget.id)) { setTypeFilter('all'); setQuery('') }
+  }, [items, selectedTraceabilityTarget])
 
   const openInTia = async (item: SourceObjectInfo) => {
     setPendingAction(`open:${item.id}`)
@@ -114,6 +144,18 @@ export default function PlcSourcePanel({
     }
   }
 
+  const attachSourceTask = async (item: SourceObjectInfo) => {
+    const taskId = window.prompt('Task ID to attach')?.trim()
+    if (!taskId) return
+    try { await api.attachTaskRelationship(workbenchId, taskId, 'sourceObject', item.id); await loadTraceability(item) }
+    catch (error) { showErrorToast(errorMessage(error)) }
+  }
+  const reassignSourceTask = async (item: SourceObjectInfo, currentTaskId: string) => {
+    const taskId = window.prompt('New task ID', currentTaskId)?.trim()
+    if (!taskId || taskId === currentTaskId) return
+    try { await api.reassignTaskRelationship(workbenchId, currentTaskId, taskId, 'sourceObject', item.id, traceability[item.id]?.tasks.find(link => link.id === currentTaskId)?.edgeId ?? ''); await loadTraceability(item) }
+    catch (error) { showErrorToast(errorMessage(error)) }
+  }
   const showUsageNetworks = async (item: SourceObjectInfo) => {
     setPendingAction(`usage:${item.id}`)
     await showVariableUsage(item.name)
@@ -203,7 +245,7 @@ export default function PlcSourcePanel({
                     <ContextMenuTrigger asChild>
                       <div
                         className="flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
-                        onClick={() => setExpandedId(expanded ? null : item.id)}
+                        onClick={() => { setExpandedId(expanded ? null : item.id); if (!expanded) void loadTraceability(item) }}
                       >
                         {expanded
                           ? <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
@@ -285,6 +327,15 @@ export default function PlcSourcePanel({
                           <span className="break-all font-mono">{item.contentHash.slice(0, 16)}…</span>
                         </>
                       )}
+                      <span className="text-muted-foreground">Task links</span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {(traceability[item.id]?.tasks ?? []).length === 0 ? <span className="text-muted-foreground">Unassigned legacy source object</span> : traceability[item.id]!.tasks.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span><button type="button" className="underline font-sans" aria-label={`Reassign task ${link.id} from source object ${item.name}`} onClick={() => void reassignSourceTask(item, link.id)}>Reassign</button>{link.edgeId && <button type="button" className="underline font-sans" aria-label={`Remove task ${link.id} from source object ${item.name}`} onClick={async () => { try { await api.removeTaskRelationship(workbenchId, link.id, link.edgeId); await loadTraceability(item) } catch (error) { showErrorToast(errorMessage(error)) } }}>Remove</button>}</span>)}
+                        <button type="button" className="secondary-button h-6 px-2" aria-label={`Attach task to source object ${item.name}`} onClick={() => void attachSourceTask(item)}>Attach</button>
+                      </div>
+                      <span className="text-muted-foreground">Commit links</span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {(traceability[item.id]?.commits ?? []).length === 0 ? <span className="text-muted-foreground">No linked commits yet.</span> : traceability[item.id]!.commits.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open commit ${link.id}`} onClick={() => onNavigateEntity?.('gitCommit', link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span></span>)}
+                      </div>
                     </div>
                   )}
                 </div>

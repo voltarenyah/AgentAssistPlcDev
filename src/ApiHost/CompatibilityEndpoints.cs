@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using Agent.Mcp;
 using Agent.Chat;
 using Agent.Workbench;
+using Agent.Workbench.EngineeringGraph;
 using Contracts.Sandbox;
 using Microsoft.AspNetCore.Http.Features;
 
@@ -390,8 +391,36 @@ public static class CompatibilityEndpoints
             });
         });
         app.MapGet("/api/chat/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
-        app.MapPost("/api/chat/session/new", (WorkbenchApiState state, ApiChatService chat) =>
-            chat.CreateSession(Device(state)));
+        app.MapPost("/api/chat/session/new", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs) =>
+        {
+            var device = Device(state);
+            var selection = state.Selection!;
+            using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
+            var requestedTaskId = body.TryGetProperty("taskId", out var requestedTask) && requestedTask.ValueKind != JsonValueKind.Null
+                ? requestedTask.GetString()
+                : null;
+            var taskId = requestedTaskId;
+            var session = chat.CreateSession(device, taskId, string.IsNullOrWhiteSpace(taskId) ? null : "default");
+            try { SessionGraphOperations.Register(scope.Service, session, GraphProvenance.Default); }
+            catch { chat.DeleteSession(device, session.Header.SessionId); throw; }
+            return session;
+        });
+        app.MapPut("/api/chat/session/task", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs) =>
+        {
+            var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
+            var taskId = body.TryGetProperty("taskId", out var task) && task.ValueKind != JsonValueKind.Null ? task.GetString() : null;
+            var device = Device(state);
+            var current = chat.LoadSession(device, id) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
+            var selection = state.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
+            using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
+            var updated = SessionGraphOperations.ApplyWithPersistence(scope.Service, current, taskId,
+                value => value with { Header = value.Header with { TaskId = taskId, TaskProvenance = string.IsNullOrWhiteSpace(taskId) ? null : "manual", UpdatedAt = DateTimeOffset.UtcNow.ToString("O") } },
+                value => SessionManager.SaveSession(device, value));
+            chat.LoadSession(device, id);
+            return Results.Ok(updated);
+        });
         app.MapPost("/api/chat/session/load", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
@@ -672,12 +701,12 @@ internal sealed class ApiChatService(
         SessionManager.DeleteSession(device, sessionId);
     }
 
-    public ChatSessionData CreateSession(DeviceContext device)
+    public ChatSessionData CreateSession(DeviceContext device, string? taskId = null, string? taskProvenance = null)
     {
         var key = DeviceContextIdentity.Key(device);
         sessionRequired.TryRemove(key, out _);
         chats.TryRemove(key, out _);
-        var session = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null);
+        var session = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null, taskId, taskProvenance);
         pendingSessions[key] = session;
         return session;
     }

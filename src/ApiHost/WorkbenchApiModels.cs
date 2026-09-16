@@ -3,6 +3,7 @@ using System.Text.Json;
 using Agent.Chat;
 using Agent.Mcp;
 using Agent.Workbench;
+using Agent.Workbench.EngineeringGraph;
 using Contracts.Sandbox;
 using ApiHost.AppAssistant;
 
@@ -111,8 +112,9 @@ public sealed record CreateWorktreeTaskApiRequest(
 /// <summary>Device list entry: opaque object id plus the human-readable PLC name from device.json.</summary>
 public sealed record DeviceSummary(string DeviceId, string PlcName);
 public sealed record MergeWorktreeApiRequest(string TargetWorktreeId);
-public sealed record SessionCreateApiRequest(Agent.Chat.ChatRequestSettings Settings, string? RuntimeContext);
+public sealed record SessionCreateApiRequest(Agent.Chat.ChatRequestSettings Settings, string? RuntimeContext, string? TaskId = null);
 public sealed record SessionSaveApiRequest(ChatSessionData Session);
+public sealed record SessionTaskApiRequest(string? TaskId);
 
 public sealed class WorkbenchApiState
 {
@@ -580,6 +582,138 @@ public static class WorkbenchEndpoints
                 workbench.Owner,
                 entries);
         });
+        app.MapGet("/api/workbenches/{id}/tasks", (string id, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            return Results.Ok(scope.Service.ListTasks()
+                .Where(task => task.ScopeKind == GraphTaskScopeKind.Project)
+                .Select(ToEngineeringTaskResponse));
+        });
+        app.MapPost("/api/workbenches/{id}/tasks", (
+            string id, EngineeringTaskApiRequest request, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var task = scope.Service.CreateTask(
+                Guid.NewGuid().ToString("N"), GraphTaskScopeKind.Project, null, request.Title,
+                request.Type, request.Status, request.Description, request.Priority,
+                request.Intent, request.ExpectedResult);
+            return Results.Created($"/api/workbenches/{id}/tasks/{task.TaskId}", ToEngineeringTaskResponse(task));
+        });
+        app.MapGet("/api/workbenches/{id}/tasks/{taskId}", (
+            string id, string taskId, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var task = scope.Service.FindTask(taskId);
+            if (task is null || task.ScopeKind != GraphTaskScopeKind.Project)
+                throw new KeyNotFoundException("TASK_NOT_FOUND");
+            return ToEngineeringTaskDetailResult(scope.Service, taskId);
+        });
+        app.MapPost("/api/workbenches/{id}/tasks/{taskId}/relationships", (
+            string id, string taskId, EngineeringTaskRelationshipApiRequest request,
+            WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var kind = ParseGraphEntityKind(request.TargetKind);
+            var edge = scope.Service.AddEdge(GraphEntityKind.Task, taskId, kind, request.TargetId,
+                GraphProvenance.Manual, request.IsPrimary);
+            return Results.Created($"/api/workbenches/{id}/tasks/{taskId}/relationships/{edge.EdgeId}", ToRelationshipMutation(edge));
+        });
+        app.MapPut("/api/workbenches/{id}/tasks/{taskId}/relationships/{targetKind}/{targetId}", (
+            string id, string taskId, string targetKind, string targetId, EngineeringTaskRelationshipApiRequest? request,
+            WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var targetGraphKind = ParseGraphEntityKind(targetKind);
+            var replacementTaskId = request?.NewTaskId;
+            if (!string.IsNullOrWhiteSpace(replacementTaskId) && !string.IsNullOrWhiteSpace(request?.CurrentEdgeId))
+            {
+                var oldEdge = scope.Service.GetEdges(GraphEntityKind.Task, taskId, targetGraphKind)
+                    .SingleOrDefault(edge => edge.EdgeId == request.CurrentEdgeId && edge.ToId == targetId)
+                    ?? throw new KeyNotFoundException("RELATIONSHIP_NOT_FOUND");
+                var replacement = scope.Service.ReassignTaskRelationship(taskId, replacementTaskId, targetGraphKind, targetId, oldEdge.EdgeId, GraphProvenance.Manual, request.IsPrimary);
+                return Results.Ok(ToRelationshipMutation(replacement));
+            }
+            var edge = scope.Service.ReplaceTaskRelationship(taskId, targetGraphKind, targetId,
+                GraphProvenance.Manual, request?.IsPrimary ?? false);
+            return Results.Ok(ToRelationshipMutation(edge!));
+        });
+        app.MapDelete("/api/workbenches/{id}/tasks/{taskId}/relationships/{edgeId}", (
+            string id, string taskId, string edgeId, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var edge = scope.Service.GetEdges(GraphEntityKind.Task, taskId).SingleOrDefault(item => item.EdgeId == edgeId)
+                ?? throw new KeyNotFoundException("RELATIONSHIP_NOT_FOUND");
+            scope.Service.RemoveEdge(edge.EdgeId);
+            return Results.NoContent();
+        });
+        app.MapGet("/api/workbenches/{id}/engineering-graph/{entityKind}/{entityId}", (
+            string id, string entityKind, string entityId, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var kind = ParseGraphEntityKind(entityKind);
+            var entity = scope.Service.GetEntity(kind, entityId)
+                ?? throw new KeyNotFoundException("GRAPH_ENTITY_NOT_FOUND");
+            var directTasks = scope.Service.GetIncomingEdges(kind, entityId)
+                .Where(edge => edge.FromKind == GraphEntityKind.Task);
+            var evidenceCommits = scope.Service.GetIncomingEdges(kind, entityId)
+                .Where(edge => edge.FromKind == GraphEntityKind.GitCommit)
+                .ToArray();
+            var traversedTasks = evidenceCommits.SelectMany(commit => scope.Service.GetIncomingEdges(GraphEntityKind.GitCommit, commit.FromId)
+                .Where(edge => edge.FromKind == GraphEntityKind.Task)
+                .Select(edge => (edge.FromId, edge.Provenance, edge.IsPrimary)));
+            var tasks = directTasks.Select(edge => (edge.FromId, edge.Provenance, edge.IsPrimary))
+                .Concat(traversedTasks).GroupBy(item => item.FromId, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => new EngineeringTaskRelationshipApiResponse(group.Key, "",
+                    JsonNamingPolicy.CamelCase.ConvertName(group.First().Provenance.ToString()), group.Any(item => item.IsPrimary))).ToArray();
+            var commits = evidenceCommits.OrderBy(edge => edge.FromId, StringComparer.Ordinal)
+                .Select(edge => new EngineeringTaskRelationshipApiResponse(edge.FromId, edge.EdgeId,
+                    JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary)).ToArray();
+            return Results.Ok(new EngineeringGraphEntityDetailApiResponse(
+                JsonNamingPolicy.CamelCase.ConvertName(kind.ToString()), entity.EntityId,
+                entity.WorkbenchId, entity.WorktreeId, tasks, commits));
+        });
+        app.MapPatch("/api/workbenches/{id}/tasks/{taskId}", (
+            string id, string taskId, JsonElement body, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var current = scope.Service.FindTask(taskId);
+            if (current is null || current.ScopeKind != GraphTaskScopeKind.Project)
+                throw new KeyNotFoundException("TASK_NOT_FOUND");
+            var updated = scope.Service.UpdateTask(taskId, current => current with
+            {
+                Title = TryGetOptionalString(body, "title", out var title) ? title! : current.Title,
+                Description = TryGetOptionalString(body, "description", out var description) ? description : current.Description,
+                Type = TryGetOptionalEnum<GraphTaskType>(body, "type", out var type) ? type : current.Type,
+                Status = TryGetOptionalEnum<GraphTaskStatus>(body, "status", out var status) ? status : current.Status,
+                Priority = TryGetOptionalInt(body, "priority", out var priority) ? priority : current.Priority,
+                Intent = TryGetOptionalString(body, "intent", out var intent) ? intent! : current.Intent,
+                ExpectedResult = TryGetOptionalString(body, "expectedResult", out var expected) ? expected! : current.ExpectedResult,
+            });
+            return updated is null ? throw new KeyNotFoundException("TASK_NOT_FOUND") : Results.Ok(ToEngineeringTaskResponse(updated));
+        });
+        app.MapDelete("/api/workbenches/{id}/tasks/{taskId}", (
+            string id, string taskId, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var current = scope.Service.FindTask(taskId);
+            if (current is null || current.ScopeKind != GraphTaskScopeKind.Project)
+                throw new KeyNotFoundException("TASK_NOT_FOUND");
+            return scope.Service.DeleteTask(taskId) ? Results.NoContent() : throw new KeyNotFoundException("TASK_NOT_FOUND");
+        });
+        app.MapGet("/api/workbenches/{id}/active-task", (
+            string id, WorkbenchApiState state, EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            return Results.Ok(new { activeTask = activeTasks.Get(scope.Service, null) is { } task ? ToEngineeringTaskResponse(task) : null });
+        });
+        app.MapMethods("/api/workbenches/{id}/active-task", new[] { "PUT", "POST" }, (
+            string id, ActiveTaskApiRequest request, WorkbenchApiState state, EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var task = activeTasks.Select(scope.Service, null, request.TaskId);
+            return Results.Ok(new { activeTask = task is null ? null : ToEngineeringTaskResponse(task) });
+        });
         app.MapPatch("/api/workbenches/{id}", (
             string id,
             JsonElement body,
@@ -633,6 +767,55 @@ public static class WorkbenchEndpoints
             WorkbenchApiState s,
             WorktreeTaskStore tasks) =>
             tasks.Load(s.WorktreeRoot(id, wt)));
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/engineering-tasks", (
+            string id, string wt, WorkbenchApiState state, WorktreeTaskStore tasks, EngineeringGraphApiFactory graphs) =>
+        {
+            var workbench = state.Workbench(id);
+            state.Worktree(id, wt);
+            // Preserve the legacy import boundary, then expose graph task contracts.
+            tasks.Load(state.WorktreeRoot(id, wt));
+            using var scope = graphs.Open(workbench);
+            return Results.Ok(scope.Service.ListTasks(wt)
+                .Where(task => task.ScopeKind == Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree)
+                .Select(ToEngineeringTaskResponse));
+        });
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}", (
+            string id, string wt, string taskId, WorkbenchApiState state,
+            WorktreeTaskStore tasks, EngineeringGraphApiFactory graphs) =>
+        {
+            var workbench = state.Workbench(id);
+            state.Worktree(id, wt);
+            // Loading through the compatibility boundary performs idempotent legacy
+            // tasks.json import before the graph lookup below.
+            tasks.Load(state.WorktreeRoot(id, wt));
+            using var scope = graphs.Open(workbench);
+            var task = scope.Service.FindTask(taskId);
+            if (task is null || task.ScopeKind != GraphTaskScopeKind.Worktree || task.WorktreeId != wt)
+                throw new KeyNotFoundException("TASK_NOT_FOUND");
+            return ToEngineeringTaskDetailResult(scope.Service, taskId);
+        });
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/active-task", (
+            string id, string wt, WorkbenchApiState state, WorktreeTaskStore tasks, EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks) =>
+        {
+            var workbench = state.Workbench(id);
+            state.Worktree(id, wt);
+            tasks.Load(state.WorktreeRoot(id, wt));
+            using var scope = graphs.Open(workbench);
+            var task = activeTasks.Get(scope.Service, wt);
+            return Results.Ok(new { activeTask = task is null ? null : ToEngineeringTaskResponse(task) });
+        });
+        app.MapMethods("/api/workbenches/{id}/worktrees/{wt}/active-task", new[] { "PUT", "POST" }, (
+            string id, string wt, ActiveTaskApiRequest request, WorkbenchApiState state, WorktreeTaskStore tasks,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            var workbench = state.Workbench(id);
+            state.Worktree(id, wt);
+            tasks.Load(state.WorktreeRoot(id, wt));
+            using var scope = graphs.Open(workbench);
+            var task = activeTasks.Select(scope.Service, wt, request.TaskId);
+            return Results.Ok(new { activeTask = task is null ? null : ToEngineeringTaskResponse(task) });
+        });
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tasks", (
             string id,
             string wt,
@@ -1463,20 +1646,48 @@ public static class WorkbenchEndpoints
             string workbenchId, string worktreeId, string device, WorkbenchApiState s) =>
             SessionManager.ListSessions(s.Device(workbenchId, worktreeId, device).Context));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions", (
-            string workbenchId, string worktreeId, string device, SessionCreateApiRequest r, WorkbenchApiState s) =>
-            SessionManager.CreateNewSession(
-                s.Device(workbenchId, worktreeId, device).Context, r.Settings, r.RuntimeContext));
+            string workbenchId, string worktreeId, string device, SessionCreateApiRequest r, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            var taskId = ResolveSessionTaskId(s, graphs, activeTasks, workbenchId, worktreeId, r.TaskId);
+            var session = SessionManager.CreateNewSession(
+                s.Device(workbenchId, worktreeId, device).Context, r.Settings, r.RuntimeContext, taskId,
+                string.IsNullOrWhiteSpace(taskId) ? null : "default");
+            using var graph = graphs.Open(s.Workbench(workbenchId));
+            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default); }
+            catch { SessionManager.DeleteSession(s.Device(workbenchId, worktreeId, device).Context, session.Header.SessionId); throw; }
+            return session;
+        });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
             string workbenchId, string worktreeId, string device, string session, WorkbenchApiState s) =>
             SessionManager.LoadSession(s.Device(workbenchId, worktreeId, device).Context, session) is { } value
                 ? Results.Ok(value) : Results.NotFound());
         app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
             string workbenchId, string worktreeId, string device, string session,
-            SessionSaveApiRequest r, WorkbenchApiState s) =>
+            SessionSaveApiRequest r, WorkbenchApiState s, EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks) =>
         {
             if (r.Session.Header.SessionId != session) return Results.BadRequest();
-            SessionManager.SaveSession(s.Device(workbenchId, worktreeId, device).Context, r.Session);
+            var context = s.Device(workbenchId, worktreeId, device).Context;
+            var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
+            var candidate = SessionGraphOperations.ValidateCandidate(context, current, r.Session);
+            using var graph = graphs.Open(s.Workbench(workbenchId));
+            var updatedSession = SessionGraphOperations.ApplyWithPersistence(graph.Service, candidate, candidate.Header.TaskId,
+                value => value with { Header = value.Header with { TaskProvenance = string.IsNullOrWhiteSpace(value.Header.TaskId) ? null : "manual" } },
+                value => SessionManager.SaveSession(context, value));
             return Results.NoContent();
+        });
+        app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}/task", (
+            string workbenchId, string worktreeId, string device, string session, SessionTaskApiRequest request,
+            WorkbenchApiState s, EngineeringGraphApiFactory graphs) =>
+        {
+            var context = s.Device(workbenchId, worktreeId, device).Context;
+            var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
+            using var graph = graphs.Open(s.Workbench(workbenchId));
+            var updated = SessionGraphOperations.ApplyWithPersistence(graph.Service, current, request.TaskId,
+                value => value with { Header = value.Header with { TaskId = request.TaskId, TaskProvenance = string.IsNullOrWhiteSpace(request.TaskId) ? null : "manual", UpdatedAt = DateTimeOffset.UtcNow.ToString("O") } },
+                value => SessionManager.SaveSession(context, value));
+            return Results.Ok(updated);
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/status", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
@@ -1651,10 +1862,99 @@ public static class WorkbenchEndpoints
                 "Worktree merged.").ConfigureAwait(false);
         });
         app.MapGet("/api/devices/{device}/sessions", (string device, WorkbenchApiState s) => SessionManager.ListSessions(s.Device(device).Context));
-        app.MapPost("/api/devices/{device}/sessions", (string device, SessionCreateApiRequest r, WorkbenchApiState s) => SessionManager.CreateNewSession(s.Device(device).Context, r.Settings, r.RuntimeContext));
+        app.MapPost("/api/devices/{device}/sessions", (string device, SessionCreateApiRequest r, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            var selection = s.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
+            var taskId = ResolveSessionTaskId(s, graphs, activeTasks, selection.WorkbenchId, selection.WorktreeId, r.TaskId);
+            var session = SessionManager.CreateNewSession(s.Device(device).Context, r.Settings, r.RuntimeContext, taskId,
+                string.IsNullOrWhiteSpace(taskId) ? null : "default");
+            using var graph = graphs.Open(s.Workbench(selection.WorkbenchId));
+            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default); }
+            catch { SessionManager.DeleteSession(s.Device(device).Context, session.Header.SessionId); throw; }
+            return session;
+        });
         app.MapGet("/api/devices/{device}/sessions/{session}", (string device, string session, WorkbenchApiState s) => SessionManager.LoadSession(s.Device(device).Context, session) is { } value ? Results.Ok(value) : Results.NotFound());
-        app.MapPut("/api/devices/{device}/sessions/{session}", (string device, string session, SessionSaveApiRequest r, WorkbenchApiState s) => { if (r.Session.Header.SessionId != session) return Results.BadRequest(); SessionManager.SaveSession(s.Device(device).Context, r.Session); return Results.NoContent(); });
+        app.MapPut("/api/devices/{device}/sessions/{session}", (string device, string session, SessionSaveApiRequest r, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            if (r.Session.Header.SessionId != session) return Results.BadRequest();
+            var selection = s.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
+            var context = s.Device(device).Context;
+            var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
+            var candidate = SessionGraphOperations.ValidateCandidate(context, current, r.Session);
+            using var graph = graphs.Open(s.Workbench(selection.WorkbenchId));
+            var updatedSession = SessionGraphOperations.ApplyWithPersistence(graph.Service, candidate, candidate.Header.TaskId,
+                value => value with { Header = value.Header with { TaskProvenance = string.IsNullOrWhiteSpace(value.Header.TaskId) ? null : "manual" } },
+                value => SessionManager.SaveSession(context, value));
+            return Results.NoContent();
+        });
         return app;
+    }
+
+    private static EngineeringTaskApiResponse ToEngineeringTaskResponse(GraphTask task) => new(
+        task.TaskId, task.WorkbenchId, JsonNamingPolicy.CamelCase.ConvertName(task.ScopeKind.ToString()), task.WorktreeId,
+        task.Title, JsonNamingPolicy.CamelCase.ConvertName(task.Type.ToString()), JsonNamingPolicy.CamelCase.ConvertName(task.Status.ToString()),
+        task.Priority, task.Intent, task.ExpectedResult, task.Description,
+        task.CreatedUtc!.Value, task.UpdatedUtc!.Value);
+
+    private static EngineeringTaskRelationshipMutationApiResponse ToRelationshipMutation(GraphEdge edge) => new(
+        edge.EdgeId, edge.FromId, JsonNamingPolicy.CamelCase.ConvertName(edge.ToKind.ToString()), edge.ToId,
+        JsonNamingPolicy.CamelCase.ConvertName(edge.RelationKind.ToString()),
+        JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary);
+
+    private static GraphEntityKind ParseGraphEntityKind(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "session" => GraphEntityKind.Session,
+        "commit" or "gitcommit" or "git_commit" => GraphEntityKind.GitCommit,
+        "source" or "sourceobject" or "source_object" => GraphEntityKind.SourceObject,
+        "svn" or "svnrevision" or "svn_revision" => GraphEntityKind.SvnRevision,
+        _ => throw new EngineeringGraphConstraintException($"Unsupported graph entity kind '{value}'."),
+    };
+
+    private static string? ResolveSessionTaskId(
+        WorkbenchApiState state,
+        EngineeringGraphApiFactory graphs,
+        ActiveTaskContextService activeTasks,
+        string workbenchId,
+        string? worktreeId,
+        string? requestedTaskId)
+    {
+        using var scope = graphs.Open(state.Workbench(workbenchId));
+        if (string.IsNullOrWhiteSpace(requestedTaskId))
+            return activeTasks.Get(scope.Service, worktreeId)?.TaskId;
+
+        var task = scope.Service.FindTask(requestedTaskId)
+            ?? throw new EngineeringGraphConstraintException("The selected task was not found in the current Workbench.");
+        if (task.ScopeKind == GraphTaskScopeKind.Worktree && (worktreeId is null || task.WorktreeId != worktreeId))
+            throw new EngineeringGraphConstraintException(
+                "The selected task is not compatible with the current project or Workbench context.");
+        return task.TaskId;
+    }
+
+    private static IResult ToEngineeringTaskDetailResult(EngineeringGraphService graph, string taskId)
+    {
+        var task = graph.FindTask(taskId) ?? throw new KeyNotFoundException("TASK_NOT_FOUND");
+        static EngineeringTaskRelationshipApiResponse[] Relationships(
+            EngineeringGraphService graph, string taskId, GraphEntityKind kind) =>
+            graph.GetEdges(GraphEntityKind.Task, taskId, kind)
+                .Select(edge => new EngineeringTaskRelationshipApiResponse(
+                    edge.ToId, edge.EdgeId, JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary))
+                .ToArray();
+        return Results.Ok(new EngineeringTaskDetailApiResponse(
+            ToEngineeringTaskResponse(task),
+            Relationships(graph, taskId, GraphEntityKind.Session),
+            Relationships(graph, taskId, GraphEntityKind.GitCommit),
+            Relationships(graph, taskId, GraphEntityKind.SourceObject),
+            Relationships(graph, taskId, GraphEntityKind.SvnRevision)));
+    }
+
+    private static bool TryGetOptionalInt(JsonElement body, string name, out int value)
+    {
+        if (body.ValueKind == JsonValueKind.Object && body.TryGetProperty(name, out var property)
+            && property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out value)) return true;
+        value = default;
+        return false;
     }
 
     private static WorktreeDetailResponse ToDetail(WorktreeMetadata worktree) => new(
@@ -1877,6 +2177,12 @@ public sealed class WorkbenchApiExceptionMiddleware(RequestDelegate next)
         {
             context.Response.StatusCode = 409;
             await context.Response.WriteAsJsonAsync(new { error = "METADATA_SCHEMA_UNSUPPORTED", message = exception.Message });
+        }
+        catch (EngineeringGraphConstraintException exception)
+        {
+            context.Response.StatusCode = exception.Code.Contains("EXISTS", StringComparison.Ordinal)
+                ? StatusCodes.Status409Conflict : StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(new { error = exception.Code, message = exception.Message });
         }
         catch (InvalidOperationException exception)
         {

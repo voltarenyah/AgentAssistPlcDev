@@ -43,6 +43,13 @@ const taskList: api.WorktreeTaskList = {
     task({ taskId: 't3', title: 'Done task', status: 'done' }),
   ],
 }
+const projectGraphTask: api.EngineeringTask = {
+  taskId: 'project-1', workbenchId: 'wb1', scope: 'project', worktreeId: null,
+  title: 'Project improvement', type: 'improvement', status: 'todo', priority: 1,
+  intent: 'Improve', expectedResult: 'Better', description: 'Project details',
+  createdUtc: '2026-08-01T00:00:00Z', updatedUtc: '2026-08-01T00:00:00Z',
+}
+let activeGraphTask: api.EngineeringTask | null = null
 
 const tagNodes: api.TagNode[] = [
   { tagId: 'tag-machine', parentTagId: null, name: 'Machine', normalizedName: 'machine' },
@@ -98,6 +105,21 @@ vi.mock('@/api/client', async importOriginal => {
       finishedUtc: patch.status === 'finished' ? '2026-08-03T00:00:00Z' : detail.finishedUtc,
     })),
     listWorktreeTasks: vi.fn(async () => taskList),
+    listProjectTasks: vi.fn(async () => [projectGraphTask]),
+    listGraphWorktreeTasks: vi.fn(async () => [...taskList.tasks.map(item => ({
+      ...item, workbenchId: 'wb1', scope: 'worktree' as const, worktreeId: 'wt1', type: 'feature' as const,
+      priority: 0, intent: 'intent', expectedResult: 'result', updatedUtc: item.createdUtc,
+    })), {
+      ...taskList.tasks[0], taskId: 'other-worktree', title: 'Other worktree task', workbenchId: 'wb1',
+      scope: 'worktree' as const, worktreeId: 'wt2', type: 'issue' as const,
+      priority: 0, intent: 'intent', expectedResult: 'result', updatedUtc: taskList.tasks[0].createdUtc,
+    }]),
+    getActiveWorktreeTask: vi.fn(async () => ({ activeTask: activeGraphTask })),
+    setActiveWorktreeTask: vi.fn(async (_wb: string, _wt: string, taskId: string | null) => ({
+      activeTask: taskId === projectGraphTask.taskId ? projectGraphTask : taskId ? {
+        ...projectGraphTask, taskId, title: 'Running task', scope: 'worktree' as const, worktreeId: 'wt1', type: 'feature' as const,
+      } : null,
+    })),
     getWorktreeVersionControlTimeline: vi.fn(async () => ({
       gitCommits: [],
       svnRevisions: [],
@@ -143,6 +165,7 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  activeGraphTask = null
 })
 
 describe('WorktreeLandingPage', () => {
@@ -285,6 +308,20 @@ describe('WorktreeLandingPage', () => {
     expect(host.textContent).toContain('Running task')
     expect(host.textContent).toContain('Done task')
 
+    await act(async () => root.unmount())
+  })
+
+  it('shows task content only and removes the global active task selector', async () => {
+    const { host, root } = await renderPage({ tab: 'tasks' })
+    expect(host.querySelector('[data-testid="worktree-context"]')).toBeNull()
+    expect(host.querySelector('select[aria-label="Active task"]')).toBeNull()
+    expect(host.textContent).toContain('Worktree scope')
+    await act(async () => root.unmount())
+  })
+
+  it('renders a Start chat action for each task', async () => {
+    const { host, root } = await renderPage({ tab: 'tasks', onStartTaskChat: vi.fn() })
+    expect(host.querySelector('button[aria-label="Start chat for Open task"]')).not.toBeNull()
     await act(async () => root.unmount())
   })
 

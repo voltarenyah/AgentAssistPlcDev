@@ -1,4 +1,7 @@
 using Agent.Workbench;
+using Agent.Workbench.EngineeringGraph;
+using Agent.Chat;
+using System.Text.Json;
 using Xunit;
 
 namespace Agent.Tests;
@@ -128,8 +131,146 @@ public sealed class WorktreeTaskStoreTests : IDisposable
         Assert.Equal(second.TaskId, remaining.TaskId);
     }
 
+    [Fact]
+    public void ImportsLegacyTasksIdempotentlyAndPreservesFieldsAcrossWorktrees()
+    {
+        var workbenchRoot = CreateGraphFixture("wb-1", ("wt-1", "one"), ("wt-2", "two"), ("wt-3", "three"));
+        var firstRoot = Path.Combine(workbenchRoot, "worktrees", "one");
+        var secondRoot = Path.Combine(workbenchRoot, "worktrees", "two");
+        var created = DateTimeOffset.UtcNow.AddDays(-2);
+        var task = new WorktreeTask("legacy-1", "Imported", "details", WorktreeTaskStatus.Done,
+            ["Device/FB"], created, created.AddDays(1));
+        Directory.CreateDirectory(firstRoot); Directory.CreateDirectory(secondRoot);
+        var jsonStore = new AtomicJsonStore();
+        jsonStore.Write(WorktreeTaskStore.TasksPath(firstRoot), new WorktreeTaskList(1, [task]));
+        jsonStore.Write(WorktreeTaskStore.TasksPath(secondRoot), new WorktreeTaskList(1, [task with { TaskId = "legacy-2" }]));
+
+        var store = new WorktreeTaskStore(new AtomicJsonStore());
+        var imported = Assert.Single(store.Load(firstRoot).Tasks);
+        Assert.Equal(task.TaskId, imported.TaskId);
+        Assert.Equal(task.Title, imported.Title);
+        Assert.Equal(task.Details, imported.Details);
+        Assert.Equal(task.Status, imported.Status);
+        Assert.Equal(task.ElementRefs, imported.ElementRefs);
+        Assert.Equal(task.CreatedUtc, imported.CreatedUtc);
+        Assert.Equal(task.DoneUtc, imported.DoneUtc);
+        using (var graphStore = new EngineeringGraphStore(workbenchRoot))
+        {
+            Assert.Equal(2, Convert.ToInt32(Scalar(graphStore.Connection, "SELECT COUNT(*) FROM tasks;")));
+        }
+        var added = store.Add(firstRoot, "Mirrored");
+        Assert.Contains(new AtomicJsonStore().Read<WorktreeTaskList>(WorktreeTaskStore.TasksPath(firstRoot)).Tasks, item => item.TaskId == added.TaskId);
+        var changed = store.Update(firstRoot, added.TaskId, item => item with { Title = "Changed" });
+        Assert.Equal("Changed", Assert.Single(new AtomicJsonStore().Read<WorktreeTaskList>(WorktreeTaskStore.TasksPath(firstRoot)).Tasks, item => item.TaskId == added.TaskId).Title);
+        Assert.True(store.Delete(firstRoot, added.TaskId));
+        Assert.DoesNotContain(new AtomicJsonStore().Read<WorktreeTaskList>(WorktreeTaskStore.TasksPath(firstRoot)).Tasks, item => item.TaskId == added.TaskId);
+        Assert.Single(store.Load(firstRoot).Tasks);
+        Assert.Single(store.Load(secondRoot).Tasks);
+        jsonStore.Write(WorktreeTaskStore.TasksPath(secondRoot), new WorktreeTaskList(1, [task]));
+        _ = store.Load(secondRoot);
+        Assert.Single(store.LastImportDiagnostics);
+        Assert.Equal("legacy-1", store.LastImportDiagnostics[0].TaskId);
+        Assert.Equal("wt-2", store.LastImportDiagnostics[0].WorktreeId);
+        Assert.Equal("Imported", Assert.Single(store.Load(firstRoot).Tasks).Title);
+    }
+
+    [Fact]
+    public void LegacyTaskAndSessionConversationSurviveGraphUpgrade()
+    {
+        var workbenchRoot = CreateGraphFixture("wb-upgrade", ("wt-1", "legacy"));
+        var worktreeRoot = Path.Combine(workbenchRoot, "worktrees", "legacy");
+        var created = DateTimeOffset.UtcNow.AddDays(-4);
+        var task = new WorktreeTask(
+            "legacy-upgrade-task", "Retain this task", "Imported details",
+            WorktreeTaskStatus.InProgress, ["PLC_1/FB_Main"], created, null);
+        var jsonStore = new AtomicJsonStore();
+        jsonStore.Write(WorktreeTaskStore.TasksPath(worktreeRoot), new WorktreeTaskList(1, [task]));
+
+        var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+        var device = new DeviceContext(
+            "wb-upgrade", "wt-1", "PLC_1", workbenchRoot, worktreeRoot, deviceRoot,
+            Path.Combine(deviceRoot, "source"), Path.Combine(deviceRoot, "staging"),
+            Path.Combine(deviceRoot, "plc-knowledge.db"));
+        const string sessionId = "legacy-session-upgrade";
+        var sessionsDirectory = SessionManager.SessionsDirectory(worktreeRoot);
+        Directory.CreateDirectory(sessionsDirectory);
+        File.WriteAllText(Path.Combine(sessionsDirectory, $"{sessionId}.json"), """
+            {
+              "header": {
+                "sessionId": "legacy-session-upgrade",
+                "projectName": "Legacy Line",
+                "createdAt": "2026-01-01T00:00:00.0000000+00:00",
+                "updatedAt": "2026-01-02T00:00:00.0000000+00:00",
+                "settings": { "model": "legacy-session" },
+                "runtimeContext": "legacy runtime",
+                "title": "Legacy conversation"
+              },
+              "messages": [
+                { "role": "user", "content": "Preserve this history" },
+                { "role": "assistant", "content": "History retained" }
+              ],
+              "roundUsages": []
+            }
+            """);
+
+        var tasks = new WorktreeTaskStore(jsonStore);
+        var loaded = Assert.Single(tasks.Load(worktreeRoot).Tasks);
+
+        Assert.Equal(task.TaskId, loaded.TaskId);
+        Assert.Equal(task.Title, loaded.Title);
+        Assert.Equal(task.Details, loaded.Details);
+        Assert.Equal(task.Status, loaded.Status);
+        Assert.Equal(task.ElementRefs, loaded.ElementRefs);
+        Assert.Equal(task.CreatedUtc, loaded.CreatedUtc);
+        Assert.Equal(task.DoneUtc, loaded.DoneUtc);
+
+        var restored = SessionManager.LoadLegacySession(worktreeRoot, sessionId);
+        Assert.NotNull(restored);
+        Assert.Equal("Legacy Line", restored!.Header.ProjectName);
+        Assert.Equal("legacy-session", restored.Header.Settings.Model);
+        Assert.Equal("legacy runtime", restored.Header.RuntimeContext);
+        Assert.Equal("Preserve this history", restored!.Messages[0].Content);
+        Assert.Equal("History retained", restored.Messages[1].Content);
+        var listed = Assert.Single(SessionManager.ListSessions(worktreeRoot));
+        Assert.Equal(sessionId, listed.SessionId);
+        Assert.Equal("Legacy conversation", listed.Title);
+        Assert.Equal(2, listed.MessageCount);
+        Assert.Equal(1, listed.TurnCount);
+    }
+
+    private string CreateGraphFixture(string workbenchId, params (string Id, string Name)[] worktrees)
+    {
+        var root = Path.Combine(_testRoot, "graph-workbench");
+        Directory.CreateDirectory(Path.Combine(root, "worktrees"));
+        var registrations = worktrees.Select(w => new { worktreeId = w.Id, name = w.Name, branch = w.Name, relativePath = w.Name });
+        File.WriteAllText(Path.Combine(root, "workbench.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = "1.2", workbenchId, name = "Test", createdAt = DateTimeOffset.UtcNow.ToString("O"), rootPath = root,
+            repositoryPath = Path.Combine(root, "repo"), engineeringProjectId = (string?)null, sourceProjectPath = (string?)null,
+            worktrees = registrations
+        }));
+        foreach (var worktree in worktrees)
+        {
+            var path = Path.Combine(root, "worktrees", worktree.Name);
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "worktree.json"), JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.2", worktreeId = worktree.Id, workbenchId, name = worktree.Name, branch = worktree.Name,
+                createdAt = DateTimeOffset.UtcNow.ToString("O"), baseCommit = (string?)null, engineeringProjectId = (string?)null,
+                sourceProjectPath = (string?)null, deviceIds = Array.Empty<string>(), lastReconciliationCommit = (string?)null
+            }));
+        }
+        return root;
+    }
+
+    private static long Scalar(Microsoft.Data.Sqlite.SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand(); command.CommandText = sql; return Convert.ToInt64(command.ExecuteScalar());
+    }
+
     public void Dispose()
     {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         if (Directory.Exists(_testRoot))
         {
             Directory.Delete(_testRoot, recursive: true);

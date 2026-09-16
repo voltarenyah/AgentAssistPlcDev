@@ -67,6 +67,7 @@ import HardwareNetworkView from '@/studio/HardwareNetworkView'
 import HardwarePropertiesDock from '@/studio/HardwarePropertiesDock'
 import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
 import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
+import TaskDetail, { type TraceabilityItem } from '@/studio/workbench/TaskDetail'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
@@ -487,6 +488,11 @@ export default function MainStudio() {
   const [hardwareSelectedNodeId, setHardwareSelectedNodeId] = useState<string | null>(null)
   const [hardwareInspectedNodeId, setHardwareInspectedNodeId] = useState<string | null>(null)
   const [mainView, setMainView] = useState<MainView>({ kind: 'project' })
+  const [taskDetail, setTaskDetail] = useState<api.EngineeringTaskDetail | null>(null)
+  const [taskDetailTask, setTaskDetailTask] = useState<api.EngineeringTask | null>(null)
+  const [taskDetailLoading, setTaskDetailLoading] = useState(false)
+  const [taskDetailError, setTaskDetailError] = useState<string | null>(null)
+  const [traceabilityTarget, setTraceabilityTarget] = useState<{ kind: string; id: string } | null>(null)
   const [hardwareBomView, setHardwareBomView] = useState<api.HardwareBomView | null>(null)
   const [hardwareNetworkView, setHardwareNetworkView] = useState<api.HardwareNetworkView | null>(null)
   const selectionRequestId = useRef(0)
@@ -1335,6 +1341,35 @@ export default function MainStudio() {
     }
   }
 
+  const createChatSessionForTask = async (task: api.EngineeringTask | api.WorktreeTask) => {
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      const session = await api.newChatSession(undefined, task.taskId)
+      setChatTabs(previous => openTab(previous, session))
+      workspaceService.focusView('chat')
+      await refreshChatSessions()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  const setChatSessionTask = async (sessionId: string, taskId: string | null) => {
+    setChatBusy(true)
+    try {
+      await ensureChatContext()
+      const session = await api.setChatSessionTask(sessionId, taskId)
+      setChatTabs(previous => openTab(previous, session))
+      await refreshChatSessions()
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
   const sendChatMessage = async (sessionId: string, message: string) => {
     setChatBusy(true)
     setChatTabs(previous => appendLocalUserMessage(previous, sessionId, message))
@@ -1928,6 +1963,20 @@ export default function MainStudio() {
   // In the desktop shell the header doubles as the window caption: dragging
   // empty header space moves the borderless window, double-click toggles
   // maximize. No-ops in a plain browser (see studio/desktopWindowBridge.ts).
+  const openTaskDetail = async (task: api.EngineeringTask) => {
+    if (!selection.workbenchId) return
+    setTaskDetailTask(task); setTaskDetail(null); setTaskDetailError(null); setTaskDetailLoading(true)
+    try { setTaskDetail(await api.getEngineeringTaskDetail(selection.workbenchId, task.taskId, selection.worktreeId)) }
+    catch (error) { setTaskDetailError(displayError(error)) }
+    finally { setTaskDetailLoading(false) }
+  }
+  const reloadTaskDetail = async () => { if (taskDetailTask) await openTaskDetail(taskDetailTask) }
+  const removeTaskDetailRelation = async (_kind: string, item: TraceabilityItem) => {
+    if (!taskDetail || !selection.workbenchId) return
+    try { await api.removeTaskRelationship(selection.workbenchId, taskDetail.task.taskId, item.edgeId); await reloadTaskDetail() }
+    catch (error) { showErrorToast(displayError(error)) }
+  }
+
   const handleHeaderMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
     if (event.button !== 0 || !isWindowDragTarget(event.target)) return
     sendWindowCommand('begin-drag')
@@ -2180,7 +2229,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              <WorktreeLandingPage
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div> : <WorktreeLandingPage
                 workbenchId={selection.workbenchId!}
                 worktreeId={selection.worktreeId}
                 tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}
@@ -2188,6 +2237,8 @@ export default function MainStudio() {
                 onSelectDevice={deviceId => {
                   if (activeWorkbench && activeWorktree) void selectDevice(activeWorkbench, activeWorktree, deviceId)
                 }}
+                onOpenTaskDetail={task => void openTaskDetail(task)}
+                onStartTaskChat={task => void createChatSessionForTask(task)}
               />
             )
           ) : !selection.deviceId && selection.workbenchId ? (
@@ -2280,6 +2331,14 @@ export default function MainStudio() {
                   worktreeId: selection.worktreeId!,
                   deviceId: selection.deviceId!,
                 }),
+                onNavigateTask: taskId => {
+                  const workbenchId = selection.workbenchId
+                  const worktreeId = selection.worktreeId
+                  if (!workbenchId || !worktreeId) return
+                  void openTaskDetail({ taskId, workbenchId, scope: 'worktree', worktreeId, title: taskId, type: 'feature', status: 'todo', priority: 0, intent: '', expectedResult: '', description: null, createdUtc: '', updatedUtc: '' })
+                },
+                onNavigateEntity: (kind, id) => setTraceabilityTarget({ kind, id }),
+                selectedTraceabilityTarget: traceabilityTarget,
                 onInspectObject: relativePath => {
                   setSourceInspectorTarget({ kind: 'object', relativePath })
                   workspaceService.openView('inspector')
@@ -2360,6 +2419,9 @@ export default function MainStudio() {
                   operationStatus={activeOperation && ['compare-tia', 'accept-tia-synchronization', 'vc-commit', 'svn-savepoint'].includes(activeOperation.kind)
                     ? activeOperation.status
                     : null}
+                  onNavigateEntity={(kind, id) => setTraceabilityTarget({ kind, id })}
+                  selectedTraceabilityTarget={traceabilityTarget}
+                  onNavigateTask={taskId => { if (selection.workbenchId) void openTaskDetail({ taskId, workbenchId: selection.workbenchId, scope: 'project', worktreeId: null, title: taskId, type: 'feature', status: 'todo', priority: 0, intent: '', expectedResult: '', description: null, createdUtc: '', updatedUtc: '' }) }}
                 />
               )}
               {contextDock.content.kind === 'sessions' && (
@@ -2373,6 +2435,7 @@ export default function MainStudio() {
                   onRename={(sessionId, title) => void renameChatSession(sessionId, title)}
                   onRemove={sessionId => void removeChatSession(sessionId)}
                   onExport={sessionId => void exportChatSession(sessionId)}
+                  onSetTask={(sessionId, taskId) => void setChatSessionTask(sessionId, taskId)}
                 />
               )}
             </div>
