@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { MutableRefObject } from 'react'
 import { CheckCircle2, Clock3, Loader2 } from 'lucide-react'
 import type { OperationPhaseTiming, OperationStatus } from '@/api/client'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -7,6 +8,12 @@ type Props = {
   status: OperationStatus | null
   className?: string
   layout?: 'inline' | 'dashboard'
+}
+
+type ActivePhaseClock = {
+  phaseKey: string
+  elapsedMilliseconds: number
+  observedAt: number
 }
 
 export const formatElapsed = (elapsedMilliseconds: number) => {
@@ -25,28 +32,38 @@ const CompletedPhase = ({ phase }: { phase: OperationPhaseTiming }) => (
   </li>
 )
 
-const ActivePhase = ({ phase }: { phase: OperationPhaseTiming }) => {
-  const [elapsedMilliseconds, setElapsedMilliseconds] = useState(phase.elapsedMilliseconds)
-  const clock = useRef({ elapsedMilliseconds: phase.elapsedMilliseconds, observedAt: performance.now() })
+const phaseKey = (phase: OperationPhaseTiming) => `${phase.startedAt}:${phase.message}`
+
+const ActivePhase = ({ phase, sharedClock }: { phase: OperationPhaseTiming, sharedClock: MutableRefObject<ActivePhaseClock | null> }) => {
+  const key = phaseKey(phase)
+  const now = performance.now()
+  if (sharedClock.current?.phaseKey !== key) {
+    sharedClock.current = { phaseKey: key, elapsedMilliseconds: phase.elapsedMilliseconds, observedAt: now }
+  }
+  const [elapsedMilliseconds, setElapsedMilliseconds] = useState(() => Math.floor(
+    Math.max(phase.elapsedMilliseconds, sharedClock.current!.elapsedMilliseconds + now - sharedClock.current!.observedAt),
+  ))
 
   useEffect(() => {
     const now = performance.now()
     // Delayed snapshots may be older than the duration already displayed.
-    clock.current = {
-      elapsedMilliseconds: Math.max(phase.elapsedMilliseconds, clock.current.elapsedMilliseconds + now - clock.current.observedAt),
+    sharedClock.current = {
+      phaseKey: key,
+      elapsedMilliseconds: Math.max(phase.elapsedMilliseconds, sharedClock.current!.elapsedMilliseconds + now - sharedClock.current!.observedAt),
       observedAt: now,
     }
-    setElapsedMilliseconds(Math.floor(clock.current.elapsedMilliseconds))
-  }, [phase.elapsedMilliseconds])
+    setElapsedMilliseconds(Math.floor(sharedClock.current.elapsedMilliseconds))
+  }, [key, phase.elapsedMilliseconds, sharedClock])
 
   useEffect(() => {
     // Continue the server's measured duration locally while status requests are delayed.
     // Use a monotonic clock so wall-clock adjustments cannot distort the live timer.
     const timer = window.setInterval(() => {
-      setElapsedMilliseconds(Math.floor(clock.current.elapsedMilliseconds + performance.now() - clock.current.observedAt))
+      const clock = sharedClock.current!
+      setElapsedMilliseconds(Math.floor(clock.elapsedMilliseconds + performance.now() - clock.observedAt))
     }, 250)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [sharedClock])
 
   return (
     <li className="flex items-start gap-1.5 text-foreground" aria-live="polite">
@@ -61,9 +78,10 @@ const SourceExportPageSize = 100
 
 const isSourceObjectActivity = (message: string) => /^(?:Exporting|Skipping)(?: fail-safe)? (?:source )?(?:block|UDT|tag table)\b/i.test(message)
 
-const PhaseList = ({ phases, current, scrollable = false, currentFirst = false, onReachEnd }: {
+const PhaseList = ({ phases, current, sharedClock, scrollable = false, currentFirst = false, onReachEnd }: {
   phases: OperationPhaseTiming[]
   current?: OperationPhaseTiming | null
+  sharedClock: MutableRefObject<ActivePhaseClock | null>
   scrollable?: boolean
   currentFirst?: boolean
   onReachEnd?: () => void
@@ -75,9 +93,9 @@ const PhaseList = ({ phases, current, scrollable = false, currentFirst = false, 
       if (list.scrollTop + list.clientHeight >= list.scrollHeight - 8) onReachEnd()
     } : undefined}
   >
-    {currentFirst && current && <ActivePhase key={`${current.startedAt}:${current.message}`} phase={current} />}
+    {currentFirst && current && <ActivePhase key={phaseKey(current)} phase={current} sharedClock={sharedClock} />}
     {phases.map(phase => <CompletedPhase key={`${phase.startedAt}:${phase.message}`} phase={phase} />)}
-    {!currentFirst && current && <ActivePhase key={`${current.startedAt}:${current.message}`} phase={current} />}
+    {!currentFirst && current && <ActivePhase key={phaseKey(current)} phase={current} sharedClock={sharedClock} />}
   </ol>
 )
 
@@ -85,10 +103,12 @@ const SourceExportActivity = ({
   phases,
   current,
   operationId,
+  sharedClock,
 }: {
   phases: OperationPhaseTiming[]
   current: OperationPhaseTiming | null
   operationId?: string
+  sharedClock: MutableRefObject<ActivePhaseClock | null>
 }) => {
   const [visibleRows, setVisibleRows] = useState(SourceExportPageSize)
 
@@ -107,6 +127,7 @@ const SourceExportActivity = ({
       <PhaseList
         phases={visiblePhases}
         current={current}
+        sharedClock={sharedClock}
         scrollable
         currentFirst
         onReachEnd={hasMore ? () => setVisibleRows(rows => Math.min(rows + SourceExportPageSize, totalRows)) : undefined}
@@ -124,6 +145,7 @@ const SourceExportActivity = ({
  * Export counters update the active row in place; completed phases remain available
  * until the operation is dismissed by the user or expires server-side. */
 export default function OperationTimingList({ status, className = '', layout = 'inline' }: Props) {
+  const sharedClock = useRef<ActivePhaseClock | null>(null)
   const completed = status?.completedPhases ?? []
   const current = status?.currentPhase ?? null
   const completedSourceExportRows = completed.filter(phase => isSourceObjectActivity(phase.message)).reverse()
@@ -173,7 +195,7 @@ export default function OperationTimingList({ status, className = '', layout = '
             <section className="flex h-full min-h-0 flex-col rounded-md border border-border/60 bg-muted/20 p-3" aria-label="Workflow stages">
               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Workflow stages</div>
               {regularRows.length > 0 || activeRegularRow ? (
-                <PhaseList phases={regularRows} current={activeRegularRow} scrollable currentFirst />
+                <PhaseList phases={regularRows} current={activeRegularRow} sharedClock={sharedClock} scrollable currentFirst />
               ) : (
                 <div className="flex items-center gap-2 text-xs leading-4 text-muted-foreground" aria-live="polite">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-chart-2" aria-hidden="true" /> Connecting workflow telemetry…
@@ -190,6 +212,7 @@ export default function OperationTimingList({ status, className = '', layout = '
                 phases={completedSourceExportRows}
                 current={activeSourceExportRow}
                 operationId={status?.operationId}
+                sharedClock={sharedClock}
               />
             </section>
           )}
@@ -203,7 +226,7 @@ export default function OperationTimingList({ status, className = '', layout = '
       <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
         <Clock3 className="h-3 w-3" aria-hidden="true" /> Task timings
       </div>
-      <PhaseList phases={completed} current={current} />
+      <PhaseList phases={completed} current={current} sharedClock={sharedClock} />
     </section>
   )
 }

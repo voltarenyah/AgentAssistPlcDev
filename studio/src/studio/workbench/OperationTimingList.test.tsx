@@ -89,6 +89,24 @@ describe('OperationTimingList', () => {
     expect(host.querySelector('time')?.textContent).toBe('1.5 s')
   })
 
+  it('does not reset a stuck source-export timer when switching dashboard views', () => {
+    vi.useFakeTimers()
+    const { host } = render({ ...status, currentPhase: { ...status.currentPhase!, message: 'Exporting block Main...' } }, 'dashboard')
+    const select = (label: string) => act(() => {
+      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
+        .find(button => button.textContent?.includes(label))?.click()
+    })
+
+    select('Source export')
+    act(() => vi.advanceTimersByTime(3000))
+    expect(host.querySelector('[data-source-export-activity] time')?.textContent).toBe('4.0 s')
+
+    select('Workflow')
+    act(() => vi.advanceTimersByTime(2000))
+    select('Source export')
+    expect(host.querySelector('[data-source-export-activity] time')?.textContent).toBe('6.0 s')
+  })
+
   it('resynchronizes with a fresh server measurement and stops on completion', () => {
     vi.useFakeTimers()
     const { host, root } = render(status)

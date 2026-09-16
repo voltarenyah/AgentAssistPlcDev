@@ -171,7 +171,7 @@ internal static class HardwareConfigurationExport
         HardwareExportResult[] results,
         string outputRoot)
     {
-        var failures = results.Where(result => !result.Success).ToArray();
+        var failures = DescribeFailures(results);
         var projectResults = results
             .Where(result => string.Equals(result.Scope, "project", StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -191,8 +191,7 @@ internal static class HardwareConfigurationExport
             throw new WorkbenchLifecycleException(
                 "HARDWARE_EXPORT_INCOMPLETE",
                 "Hardware configuration export failed: "
-                + string.Join("; ", failedProjectResults.Select(result =>
-                    $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")));
+                + string.Join("; ", DescribeFailures(failedProjectResults)));
         }
 
         var projectAmlPath = ResolveArtifactPath(outputRoot, "project.aml");
@@ -201,14 +200,18 @@ internal static class HardwareConfigurationExport
             throw new WorkbenchLifecycleException(
                 "HARDWARE_EXPORT_INCOMPLETE",
                 "Hardware configuration export failed: "
-                + string.Join("; ", failures.Select(result =>
-                    $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")));
+                + string.Join("; ", failures));
         }
 
-        return failures.Select(result =>
+        return failures;
+    }
+
+    public static IReadOnlyList<string> DescribeFailures(IEnumerable<HardwareExportResult> results) =>
+        results
+            .Where(result => !result.Success)
+            .Select(result =>
             $"{result.Scope}{(result.DeviceName is null ? string.Empty : $" '{result.DeviceName}'")}: {result.Error}")
             .ToArray();
-    }
 
     public static bool IsUsableProjectAml(string path)
     {

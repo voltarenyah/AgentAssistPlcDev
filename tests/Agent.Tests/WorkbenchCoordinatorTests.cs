@@ -1510,7 +1510,7 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task FailedSessionCreateClosesAttachedTiaAfterSavingManagedCopy()
+    public async Task HardwareExportFailureDoesNotRollBackManagedWorkbench()
     {
         var workbenchRoot = Path.Combine(root, "failed-session-create");
         var managedPath = (string?)null;
@@ -1536,16 +1536,18 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 Path = managedPath,
                 PlcDevices = Array.Empty<string>(),
             })
-            .Fail("export_hardware_configuration", "TIA_EXPORT_FAILED", "simulated export failure")
+            .Respond("export_hardware_configuration", new[]
+            {
+                new HardwareExportResult
+                {
+                    Scope = "project",
+                    Success = false,
+                    Error = "simulated CAx export failure",
+                },
+            })
             .Respond("close_session", new object())
             .Respond("disconnect", new object());
-        var versionControl = new FakeToolCaller()
-            .Respond("vc_init_shared", new object())
-            .Respond("svn_init_shared", new CoordinatorSvnInitResult
-            {
-                RepositoryPath = "repository.svn",
-                RepositoryUri = "file:///repository.svn/",
-            });
+        var versionControl = ScriptCreateVersionControl(new FakeToolCaller());
         var coordinator = new WorkbenchCoordinator(
             engineering,
             new FakeToolCaller(),
@@ -1555,15 +1557,19 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new DeviceReconciler(),
             new DeviceSourceResolver(_ => { }));
 
-        var error = await Assert.ThrowsAsync<ToolCallException>(() =>
-            coordinator.CreateWorkbenchAsync(
-                new CreateWorkbenchRequest("Line", workbenchRoot, 4242, null)));
+        var progress = new RecordingProgress();
+        var result = await coordinator.CreateWorkbenchAsync(
+            new CreateWorkbenchRequest("Line", workbenchRoot, 4242, null),
+            progress: progress);
 
-        Assert.Equal("TIA_EXPORT_FAILED", error.Code);
         Assert.Equal(4242, Property<int>(engineering.CallArgs["close_session"].Single(), "sessionId"));
         Assert.Equal(new[] { "close_session", "disconnect" }, engineering.Calls.TakeLast(2));
-        Assert.False(File.Exists(Path.Combine(workbenchRoot, "workbench.json")));
-        Assert.False(Directory.Exists(Path.Combine(workbenchRoot, "worktrees")));
+        Assert.True(File.Exists(Path.Combine(workbenchRoot, "workbench.json")));
+        Assert.True(Directory.Exists(Path.Combine(workbenchRoot, "worktrees")));
+        Assert.Equal(workbenchRoot, result.Workbench.RootPath);
+        Assert.Contains(progress.Messages, message =>
+            message.Contains("Hardware configuration was not fully captured (non-fatal)")
+            && message.Contains("simulated CAx export failure"));
     }
 
     [Fact]

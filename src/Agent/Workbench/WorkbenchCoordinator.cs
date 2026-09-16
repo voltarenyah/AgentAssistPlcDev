@@ -607,17 +607,40 @@ public sealed class WorkbenchCoordinator
             try
             {
                 progress?.Report("Exporting hardware configuration...");
-                var hardwareResults = await engineering.CallAsync<HardwareExportResult[]>(
-                    "export_hardware_configuration",
-                    new { outputDir = hardwareRoot, includeDeviceExports = false },
-                    cancellationToken).ConfigureAwait(false);
-                _ = HardwareConfigurationExport.EnsureSucceeded(hardwareResults, hardwareRoot);
-                RemoveLegacyHardwareLayout(hardwareRoot);
-                initialHardwarePaths.AddRange(
-                    Directory.EnumerateFiles(hardwareRoot, "*", SearchOption.AllDirectories)
-                        .Where(path => !IsUnderHardwareStaging(hardwareRoot, path))
-                        .Select(path => Path.GetRelativePath(masterPath, path).Replace('\\', '/'))
-                        .OrderBy(path => path, StringComparer.Ordinal));
+                try
+                {
+                    var hardwareResults = await engineering.CallAsync<HardwareExportResult[]>(
+                        "export_hardware_configuration",
+                        new { outputDir = hardwareRoot, includeDeviceExports = false },
+                        cancellationToken).ConfigureAwait(false);
+                    var hardwareWarnings = HardwareConfigurationExport.DescribeFailures(hardwareResults);
+                    if (!HardwareConfigurationExport.IsUsableProjectAml(
+                            HardwareConfigurationExport.ResolveArtifactPath(hardwareRoot, "project.aml")))
+                    {
+                        hardwareWarnings = hardwareWarnings
+                            .Append("project: no usable CAx/AML artifact was produced")
+                            .ToArray();
+                    }
+
+                    if (hardwareWarnings.Count > 0)
+                    {
+                        progress?.Report(
+                            "Hardware configuration was not fully captured (non-fatal): "
+                            + string.Join("; ", hardwareWarnings));
+                    }
+
+                    RemoveLegacyHardwareLayout(hardwareRoot);
+                    initialHardwarePaths.AddRange(
+                        Directory.EnumerateFiles(hardwareRoot, "*", SearchOption.AllDirectories)
+                            .Where(path => !IsUnderHardwareStaging(hardwareRoot, path))
+                            .Select(path => Path.GetRelativePath(masterPath, path).Replace('\\', '/'))
+                            .OrderBy(path => path, StringComparer.Ordinal));
+                }
+                catch (ToolCallException exception)
+                {
+                    progress?.Report(
+                        $"Hardware configuration was not captured (non-fatal): {exception.Code}: {exception.Message}");
+                }
             }
             finally
             {
