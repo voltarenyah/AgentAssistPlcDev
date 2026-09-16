@@ -16,7 +16,7 @@ const render = (element: React.ReactNode) => {
   document.body.appendChild(host)
   const root = createRoot(host)
   act(() => root.render(element))
-  return { host, root }
+  return { host: document.body, root }
 }
 
 const renderDialog = (overrides: Partial<Parameters<typeof CreateWorkbenchDialog>[0]> = {}) => {
@@ -50,9 +50,12 @@ describe('CreateWorkbenchDialog', () => {
   it('refreshes the TIA session list from the refresh button', async () => {
     const onRefreshSessions = vi.fn(() => Promise.resolve())
     const { host } = renderDialog({ onRefreshSessions })
+    expect(host.querySelector('[data-slot="select-trigger"]')?.getAttribute('data-size')).toBe('sm')
+    expect(host.querySelector('button[aria-label="Update TIA sessions"]')?.textContent).toContain('Update')
+    expect(host.querySelector('button[aria-label="Update TIA sessions"]')?.className).toContain('w-[88px]')
 
     await act(async () => {
-      host.querySelector<HTMLButtonElement>('button[aria-label="Refresh TIA sessions"]')?.click()
+      host.querySelector<HTMLButtonElement>('button[aria-label="Update TIA sessions"]')?.click()
     })
 
     expect(onRefreshSessions).toHaveBeenCalledTimes(1)
@@ -107,6 +110,10 @@ describe('CreateWorkbenchDialog', () => {
     expect(host.querySelector('[data-operation-timings]')?.textContent).toContain('2.0 s')
     const workflowStages = host.querySelector('[aria-label="Workflow stages"]')
     expect(workflowStages?.textContent?.indexOf('Reading software checksum...')).toBeLessThan(workflowStages?.textContent?.indexOf('Initializing Git repository...') ?? 0)
+    act(() => {
+      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
+        .find(button => button.textContent?.includes('Source export'))?.click()
+    })
     const sourceExport = host.querySelector('[data-source-export-activity]')
     expect(sourceExport?.textContent).toContain('Exporting block Active_FC1...')
     expect(sourceExport?.textContent).toContain('Exporting block Latest_FB1...')
@@ -187,13 +194,17 @@ describe('CreateWorkbenchDialog', () => {
       currentPhase: null,
     }
     const { host } = renderDialog({ busy: true, operationStatus })
+    act(() => {
+      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
+        .find(button => button.textContent?.includes('Source export'))?.click()
+    })
     const sourceExport = host.querySelector<HTMLElement>('[data-source-export-activity]')!
     const sourceList = sourceExport.querySelector<HTMLOListElement>('ol')!
 
     expect(sourceList.querySelectorAll('li')).toHaveLength(100)
     expect(sourceExport.textContent).toContain('Showing latest 100 of 101')
     expect(sourceExport.textContent).toContain('Exporting UDT Type_100...')
-    expect(host.querySelector('[aria-label="Workflow stages"]')?.textContent).not.toContain('Type_100')
+    expect(host.querySelector('[aria-label="Workflow stages"]')).toBeNull()
 
     Object.defineProperties(sourceList, {
       scrollTop: { configurable: true, value: 500, writable: true },
@@ -228,9 +239,12 @@ describe('CreateWorkbenchDialog', () => {
     const { host } = renderDialog({ onCreate })
     const nameInput = host.querySelector<HTMLInputElement>('input[placeholder="Line-7 commissioning"]')!
     act(() => setInputValue(nameInput, 'Line 7'))
+    expect(host.querySelector('[data-slot="toggle-group"]')).not.toBeNull()
+    expect(host.querySelector('[aria-hidden="true"].transition-transform')).not.toBeNull()
     const fileModeButton = [...host.querySelectorAll<HTMLButtonElement>('button')]
       .find(button => button.textContent?.includes('Open project file'))!
     act(() => fileModeButton.click())
+    expect(fileModeButton.getAttribute('data-state')).toBe('on')
 
     const createButton = () => [...host.querySelectorAll<HTMLButtonElement>('button')]
       .find(button => button.textContent?.includes('Create workbench'))!

@@ -11,8 +11,8 @@
 // optional onLayoutChange callback (invoked with model.toJson() after every
 // model action; at this scale serializing per change is cheap).
 
-import { Actions, Model, type Action, type IJsonModel, type TabSetNode } from 'flexlayout-react'
-import { buildDefaultWorkspaceLayout } from './defaultLayout'
+import { Actions, DockLocation, Model, type Action, type IJsonModel, type TabSetNode } from 'flexlayout-react'
+import { buildDefaultWorkspaceLayout, DEFAULT_WORKSPACE_TABSET_ID } from './defaultLayout'
 import {
   workspaceViewInstanceId,
   workspaceViewKindForInstanceId,
@@ -72,12 +72,17 @@ export class WorkspaceService {
     }
   }
 
-  /**
-   * V1: every view's tab always exists, so open == focus. Kept as a separate
-   * method so multi-instance semantics (open creates a new tab) can differ
-   * later without changing call sites.
-   */
   openView(kind: WorkspaceViewKind): void {
+    const id = workspaceViewInstanceId(kind)
+    if (!this.model.getNodeById(id)) {
+      const tabsetId = this.model.getActiveTabset()?.getId() ?? DEFAULT_WORKSPACE_TABSET_ID
+      this.model.doAction(Actions.addNode({
+        type: 'tab',
+        id,
+        name: kind === 'inspector' ? 'Source inspector' : kind,
+        component: kind,
+      }, tabsetId, DockLocation.CENTER, -1, true))
+    }
     this.focusView(kind)
   }
 
@@ -91,7 +96,7 @@ export class WorkspaceService {
   }
 
   /**
-   * Replaces the model with the default layout (single tabset, four views).
+   * Replaces the model with the default layout (single tabset, all fixed views).
    * Notifies model subscribers so hosts remount the Layout, restores focus to
    * the overview, and reports the default geometry via onLayoutChange (which
    * overwrites any persisted custom layout).

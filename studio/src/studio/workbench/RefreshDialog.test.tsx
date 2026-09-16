@@ -65,13 +65,13 @@ afterEach(() => {
 describe('RefreshDialog', () => {
   it('requires a TIA commit title before applying master changes', async () => {
     const onApply = vi.fn(async () => undefined)
-    const { host } = await render(onApply)
+    await render(onApply)
 
-    await click(host.querySelector('input[aria-label="Apply devices/PLC_1/source/Blocks/Main.xml"]')!)
-    const apply = host.querySelector('button.primary-button') as HTMLButtonElement
+    await click(document.body.querySelector('input[aria-label="Apply devices/PLC_1/source/Blocks/Main.xml"]')!)
+    const apply = document.body.querySelector('button[data-variant="default"]') as HTMLButtonElement
     expect(apply.disabled).toBe(true)
 
-    await input(host.querySelector('input[aria-label="TIA commit title"]')!, 'Accept Main from TIA')
+    await input(document.body.querySelector('input[aria-label="TIA commit title"]')!, 'Accept Main from TIA')
     expect(apply.disabled).toBe(false)
     await click(apply)
 
@@ -82,13 +82,13 @@ describe('RefreshDialog', () => {
   })
 
   it('shows changed fingerprint components with full hashes on hover', async () => {
-    const { host } = await render(vi.fn(async () => undefined))
+    await render(vi.fn(async () => undefined))
 
-    expect(host.textContent).toContain('Code')
-    expect(host.textContent).toContain('Changed')
-    expect(host.textContent).not.toContain('old-code')
-    expect(host.textContent).not.toContain('new-code')
-    const changedBadge = Array.from(host.querySelectorAll('[title]'))
+    expect(document.body.textContent).toContain('Code')
+    expect(document.body.textContent).toContain('Changed')
+    expect(document.body.textContent).not.toContain('old-code')
+    expect(document.body.textContent).not.toContain('new-code')
+    const changedBadge = Array.from(document.body.querySelectorAll('[title]'))
       .find(element => element.getAttribute('title') === 'Stored: old-code\nLive: new-code')
     expect(changedBadge).not.toBeUndefined()
   })

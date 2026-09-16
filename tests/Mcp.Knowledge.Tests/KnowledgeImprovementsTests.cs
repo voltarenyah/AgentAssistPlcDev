@@ -87,6 +87,7 @@ public sealed class KnowledgeImprovementsTests : IDisposable
         Assert.Equal("FC", writeRow.GetProperty("blockKind").GetString());
         Assert.Equal(1, writeRow.GetProperty("networkIndex").GetInt32());
         Assert.Equal("Write counters", writeRow.GetProperty("networkTitle").GetString());
+        Assert.Equal("SclAssign [FC10].xml", writeRow.GetProperty("sourceFile").GetString());
         Assert.Equal("write", writeRow.GetProperty("access").GetString());
         Assert.Equal("network:SclAssign:1", writeRow.GetProperty("networkId").GetString());
 

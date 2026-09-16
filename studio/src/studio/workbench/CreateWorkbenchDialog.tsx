@@ -1,6 +1,19 @@
 import { useMemo, useState } from 'react'
-import { Boxes, FileCode2, FolderOpen, Loader2, RefreshCw, Server, X } from 'lucide-react'
+import { FileCode2, FolderOpen, FolderPlus, Loader2, RefreshCw, Server, X } from 'lucide-react'
 import type { OperationStatus, SessionInfo } from '@/api/client'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import OperationStatusLine from '@/studio/workbench/OperationStatusLine'
 import OperationTimingList from '@/studio/workbench/OperationTimingList'
 
@@ -90,106 +103,133 @@ export default function CreateWorkbenchDialog({
 
   if (busy) {
     return (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-5 backdrop-blur-[2px]" data-creation-progress aria-live="polite">
-        <section className="flex h-[calc(100vh-2.5rem)] max-h-[44rem] w-full max-w-5xl flex-col overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }} role="dialog" aria-modal="true" aria-labelledby="creation-progress-title">
-          <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+      <Dialog open onOpenChange={() => undefined}>
+        <DialogContent
+          showCloseButton={false}
+          className="flex h-[calc(100vh-2.5rem)] max-h-[44rem] max-w-5xl flex-col gap-0 overflow-hidden p-0"
+          data-creation-progress
+          aria-live="polite"
+          onEscapeKeyDown={event => event.preventDefault()}
+          onPointerDownOutside={event => event.preventDefault()}
+        >
+          <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 text-left">
             <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
               <Loader2 className="h-4 w-4 animate-spin text-chart-2" aria-hidden="true" />
             </div>
             <div>
-              <h2 id="creation-progress-title" className="text-sm font-semibold">Creating workbench project…</h2>
-              <p className="text-[10px] text-muted-foreground">Repository, worktree, and TIA source evidence are being prepared.</p>
+              <DialogTitle className="text-sm">Creating workbench project…</DialogTitle>
+              <DialogDescription className="text-xs leading-4">Repository, worktree, and TIA source evidence are being prepared.</DialogDescription>
             </div>
-          </div>
+          </DialogHeader>
           <div className="min-h-0 flex-1 overflow-hidden p-5">
             <OperationTimingList status={operationStatus} layout="dashboard" className="h-full" />
           </div>
-          <div className="border-t bg-muted/25 px-5 py-3 text-[10px] text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
+          <div className="border-t bg-muted/25 px-5 py-3 text-xs leading-4 text-muted-foreground">
             The active phase and elapsed time refresh automatically while setup continues.
           </div>
-        </section>
-      </div>
+        </DialogContent>
+      </Dialog>
     )
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-5 backdrop-blur-[2px]">
-      <div className="w-full max-w-[620px] overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
-        <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
+      <DialogContent showCloseButton={false} className="max-w-[620px] gap-0 overflow-hidden p-0">
+        <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 text-left">
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
-            <Boxes className="h-4 w-4 text-chart-2" />
+            <FolderPlus className="h-4 w-4 text-chart-2" />
           </div>
           <div className="flex-1">
-            <h2 className="text-sm font-semibold">Create workbench project</h2>
-            <p className="text-[10px] text-muted-foreground">One shared repository, complete linked worktrees, device-owned knowledge.</p>
+            <DialogTitle className="text-sm">Create workbench project</DialogTitle>
+            <DialogDescription className="text-xs leading-4">One shared repository, complete linked worktrees, device-owned knowledge.</DialogDescription>
           </div>
-          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
-        </div>
+          <Button variant="ghost" size="icon-xs" onClick={onClose} disabled={busy} aria-label="Close create workbench dialog"><X /></Button>
+        </DialogHeader>
 
         <div className="space-y-4 p-5">
-          <label className="field-label">
-            <span>Workbench name</span>
-            <input className="field-input" value={name} onChange={event => setName(event.target.value)} placeholder="Line-7 commissioning" autoFocus />
-          </label>
+          <div className="space-y-1.5">
+            <Label htmlFor="workbench-name" className="text-xs">Workbench name</Label>
+            <Input id="workbench-name" className="h-8 text-xs" value={name} onChange={event => setName(event.target.value)} placeholder="Line-7 commissioning" autoFocus />
+          </div>
 
-          <div className="field-label">
-            <span>TIA project</span>
-            <div className="flex gap-1.5">
-              <button
-                className={`secondary-button flex-1 ${mode === 'session' ? 'border-chart-2 text-foreground' : 'text-muted-foreground'}`}
-                onClick={() => setMode('session')}
+          <div className="space-y-1.5">
+            <Label className="text-xs">TIA project</Label>
+            <div className="relative w-full rounded-md border border-border bg-muted/40 p-0.5">
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-y-0.5 left-0.5 w-1/2 rounded-sm bg-background shadow-sm transition-transform duration-200 ease-out ${mode === 'file' ? 'translate-x-full' : 'translate-x-0'}`}
+              />
+              <ToggleGroup
+                type="single"
+                value={mode}
+                variant="default"
+                size="sm"
+                spacing={0}
+                className="relative z-10 w-full gap-0"
+                onValueChange={value => {
+                  if (value === 'session' || value === 'file') setMode(value)
+                }}
               >
-                <Server className="h-3.5 w-3.5" /> Attach to running TIA
-              </button>
-              <button
-                className={`secondary-button flex-1 ${mode === 'file' ? 'border-chart-2 text-foreground' : 'text-muted-foreground'}`}
-                onClick={() => setMode('file')}
-              >
-                <FileCode2 className="h-3.5 w-3.5" /> Open project file (.ap17)
-              </button>
+                <ToggleGroupItem value="session" className="min-w-0 flex-1 rounded-sm bg-transparent text-center text-xs whitespace-normal leading-4 data-[state=on]:bg-transparent">
+                  <Server /> Attach to running TIA
+                </ToggleGroupItem>
+                <ToggleGroupItem value="file" className="min-w-0 flex-1 rounded-sm bg-transparent text-center text-xs whitespace-normal leading-4 data-[state=on]:bg-transparent">
+                  <FileCode2 /> Open project file (.ap17)
+                </ToggleGroupItem>
+              </ToggleGroup>
             </div>
           </div>
 
           {mode === 'session' ? (
-            <label className="field-label">
-              <span>Running TIA session</span>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Running TIA session</Label>
               <div className="flex gap-1.5">
-                <select className="field-input flex-1" value={sessionId} onChange={event => setSessionId(event.target.value)}>
-                  <option value="">Select an open TIA project…</option>
-                  {sessions.map(session => (
-                    <option key={session.id} value={session.id}>
-                      PID {session.id} · {session.projectPath ?? 'No project loaded'}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  className="icon-button self-center"
-                  aria-label="Refresh TIA sessions"
-                  title="Refresh TIA sessions"
+                <Select value={sessionId || undefined} onValueChange={setSessionId}>
+                  <SelectTrigger size="sm" className="min-w-0 flex-1 text-xs">
+                    <SelectValue placeholder="Select an open TIA project…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sessions.map(session => (
+                      <SelectItem key={session.id} value={session.id.toString()}>
+                        PID {session.id} · {session.projectPath ?? 'No project loaded'}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 w-[88px] self-center justify-center text-xs"
+                    aria-label="Update TIA sessions"
+                    title="Update TIA sessions"
                   disabled={refreshing || busy}
                   onClick={() => void refreshSessions()}
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-                </button>
+                  Update
+                </Button>
               </div>
               {sessions.length === 0 && (
-                <span className="text-[9px] text-amber-500">Open the engineering project in TIA Portal, then refresh sessions.</span>
+                <span className="text-xs leading-4 text-amber-500">Open the engineering project in TIA Portal, then refresh sessions.</span>
               )}
-            </label>
+            </div>
           ) : (
-            <label className="field-label">
-              <span>TIA project file</span>
+            <div className="space-y-1.5">
+              <Label htmlFor="tia-project-file" className="text-xs">TIA project file</Label>
               <div className="relative">
                 <FileCode2 className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                 <div className="flex gap-1.5">
-                  <input
-                    className="field-input min-w-0 flex-1 pl-9 font-mono"
+                  <Input
+                    id="tia-project-file"
+                    className="h-8 min-w-0 flex-1 pl-9 text-xs md:text-xs"
                     value={projectFile}
                     onChange={event => setProjectFile(event.target.value)}
                     placeholder="C:\\Users\\…\\Documents\\Automation\\Line\\Line.ap17"
                   />
-                  <button
-                    className="secondary-button shrink-0"
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-[88px] shrink-0 justify-center text-xs"
                     type="button"
                     aria-label="Browse for TIA project file"
                     onClick={() => void browseProjectFile()}
@@ -197,49 +237,50 @@ export default function CreateWorkbenchDialog({
                   >
                     {browsing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
                     Browse
-                  </button>
+                  </Button>
                 </div>
               </div>
-              <span className="text-[9px] text-muted-foreground">A new TIA Portal instance is launched with this project open.</span>
-              {browseError && <span className="text-[9px] text-amber-500">{browseError}</span>}
+              <span className="text-xs leading-4 text-muted-foreground">A new TIA Portal instance is launched with this project open.</span>
+              {browseError && <span className="text-xs leading-4 text-amber-500">{browseError}</span>}
               {trimmedProjectFile && !projectFileValid && (
-                <span className="text-[9px] text-amber-500">Enter the full path to a TIA Portal project file (.ap17).</span>
+                <span className="text-xs leading-4 text-amber-500">Enter the full path to a TIA Portal project file (.ap17).</span>
               )}
               {projectFileOutsideSandbox && (
-                <span className="text-[9px] text-amber-500">This path is outside the sandbox whitelist. Move the project under an allowed root, or creation will be denied.</span>
+                <span className="text-xs leading-4 text-amber-500">This path is outside the sandbox whitelist. Move the project under an allowed root, or creation will be denied.</span>
               )}
-            </label>
+            </div>
           )}
 
-          <label className="field-label">
-            <span>Custom root <em className="font-normal text-muted-foreground">optional</em></span>
+          <div className="space-y-1.5">
+            <Label htmlFor="workbench-root" className="text-xs">Custom root <em className="font-normal text-muted-foreground">optional</em></Label>
             <div className="relative">
               <FolderOpen className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-              <input
-                className="field-input pl-9"
+              <Input
+                id="workbench-root"
+                className="h-8 pl-9 text-xs md:text-xs"
                 value={rootPath}
                 onChange={event => setRootPath(event.target.value)}
                 placeholder="D:\\Automation\\MyWorkbench"
               />
             </div>
-          </label>
+          </div>
 
           <div className="rounded-lg border bg-muted/40 p-3" style={{ borderColor: 'var(--border)' }}>
-            <div className="text-[9px] uppercase tracking-[0.16em] text-muted-foreground">Resolved location</div>
-            <div className="mt-1 break-all font-mono text-[10px]">{rootPath.trim() || defaultPreview}</div>
+            <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Resolved location</div>
+            <div className="mt-1 break-all text-xs">{rootPath.trim() || defaultPreview}</div>
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <DialogFooter className="items-center justify-between border-t bg-muted/25 px-5 py-3 sm:flex-row">
           <OperationStatusLine
             status={operationStatus}
             fallback={busy ? 'Preparing workbench storage...' : undefined}
             onDismiss={onDismissOperation}
           />
           <div className="flex gap-2">
-            <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
-            <button
-              className="primary-button"
+            <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
+            <Button
+              size="sm"
               disabled={!valid || busy}
               onClick={() => onCreate(mode === 'session'
                 ? {
@@ -255,10 +296,10 @@ export default function CreateWorkbenchDialog({
             >
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Create workbench
-            </button>
+            </Button>
           </div>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

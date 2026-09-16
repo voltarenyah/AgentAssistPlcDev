@@ -68,6 +68,17 @@ const makeViewProps = () => ({
     deviceView: null,
     onChatWithAgent: vi.fn(),
     onSnapshotReload: vi.fn(),
+    onInspectObject: vi.fn(),
+    onInspectUsage: vi.fn(),
+  },
+  inspector: {
+    workbenchId: null,
+    worktreeId: null,
+    deviceId: null,
+    target: null,
+    referenceTargets: {},
+    onInspectObject: vi.fn(),
+    onInspectUsage: vi.fn(),
   },
   knowledge: {
     context: null,
@@ -93,11 +104,11 @@ afterEach(() => {
 })
 
 describe('WorkspaceHost', () => {
-  it('renders the four workspace tabs and the focused overview view', async () => {
+  it('renders the workspace tabs including the dockable source inspector', async () => {
     const workspace = new WorkspaceService()
     const { host } = await render(<WorkspaceHost workspace={workspace} {...makeViewProps()} />)
 
-    for (const label of ['Device overview', 'AI chat', 'PLC source', 'Knowledge']) {
+    for (const label of ['Device overview', 'AI chat', 'PLC source', 'Source inspector', 'Knowledge']) {
       expect(tabButton(host, label), `tab "${label}"`).toBeTruthy()
     }
     expect(host.querySelector('h1')?.textContent).toBe('PLC_1')

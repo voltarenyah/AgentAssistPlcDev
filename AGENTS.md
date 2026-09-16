@@ -1,5 +1,34 @@
 # Agent instructions for AgentAssistPlcDev
 
+## Read first
+
+This file is operating policy and a map, not a knowledge base. Read the relevant document
+before changing that area.
+
+A nested `AGENTS.md` adds rules for its own directory; where it and a `docs/` document
+disagree, the `docs/` file wins and the nested file is the one to fix.
+
+- Product overview and application layout: `README.md`
+- Version-control semantics (Git semantic state vs native TIA state): `docs/version-control-workflow.md`
+- PLC source workflow and live TIA acceptance: `docs/plc-workflow.md`
+- Device knowledge workflow: `docs/knowledge-workflow.md`
+- Decided design and architecture decisions: `docs/design/`, `docs/adr/`
+- UI specifications: `docs/ui-spec/`
+- Implementation plans: `docs/plans/`
+- Codex worker operations: `docs/local-codex-worker.md`
+
+`docs/superpowers/` holds historical plans and specifications (July–August 2026): background, not current authority.
+
+## Two-store version-control invariant
+
+- Git is readable semantic history; the local SVN repository is the native, byte-exact TIA store, and
+  `engineering-state/revision.json` is the only link. A Git SHA never identifies native TIA state.
+- Ordinary commits write Git only — never SVN, never `revision.json`. The combined SVN+Git transaction
+  belongs to the explicit **Create SVN savepoint** action and the workbench baseline.
+- Every source commit path goes through the guarded combined transaction (`CommitSourceAsync`). Never
+  call the raw commit tool or gateway route directly, not even for a device-refresh apply-and-commit —
+  that bypass once let Git advance while SVN, `revision.json` and the checksums did not.
+
 ## Start the local test flow
 
 When testing the application in development mode, use the repository launcher as the single service entry point. It starts the ASP.NET API, the Vite frontend, and the LangGraph Python sidecar.
@@ -63,13 +92,7 @@ The response should contain `decision.kind = mutation_proposal`, a `pendingAppro
 
 ## Automated test commands
 
-Frontend tests:
-
-```powershell
-Push-Location studio
-npm test -- --run
-Pop-Location
-```
+Frontend tests: see `studio/AGENTS.md` (vitest).
 
 Python sidecar tests:
 
@@ -109,6 +132,17 @@ dotnet test AgentAssistPlcDev.sln --no-build -v q
 - Check browser console errors after UI tests. Ignore unrelated external telemetry timeout messages, but never ignore errors originating from the local application.
 - Report service health, automated test totals, browser scenarios exercised, and any warnings when handing off a test run.
 
+## Studio UI component library
+
+All Studio UI work—layout, color, typography, spacing, component selection,
+and interaction behavior—must follow [docs/STYLEGUIDE.md](docs/STYLEGUIDE.md).
+Use the tokens in `studio/src/assets/main.css` and the Shadcn/Radix primitives
+in `studio/src/components/ui/`; do not invent one-off visual components, token
+values, or headless interaction behavior when the documented library already
+covers the need. A new shared primitive requires a demonstrated cross-surface
+need, accessible behavior, and focused tests. Domain-specific components belong
+under `studio/src/studio/` and compose the existing primitives.
+
 ## GitHub Issues and PR Workflow
 
 This repository uses GitHub Issues as the source of truth for development work.
@@ -116,6 +150,10 @@ When asked to work on issue `#N`, treat the issue as the task specification.
 Codex may investigate issues, implement changes, run validation, create commits,
 push branches, and prepare pull requests. Human review is required before
 integration into the default branch.
+
+Every task prompt or issue states four things: **Goal** (what must change), **Context** (the
+files, docs, or errors that matter), **Constraints** (architecture, safety, conventions), and
+**Done when** (what must be true before the task is complete).
 
 ### Core Development Rules
 
@@ -410,3 +448,11 @@ trust, monitoring, recovery, and deployment procedures.
 - By default, resolve each child model before spawning and immediately rename the returned task using the `subagents-orchestration-guide` Model-Bearing Sidebar Names procedure (for example, `luna-reviewer` or `Terra-programmer`); the user does not need to request model-bearing names.
 - Luna Medium handles routine analysis, execution, testing, and mechanical verification. Terra Medium/High handles selective design, review, security, and difficult judgment. `expert-solver` is the only Sol role and is advisory-only, read-only, and escalation-only.
 - Escalate Luna -> Terra -> Sol only for unresolved root cause, contradictory evidence, non-obvious cross-layer state/lifecycle behavior, high-risk design ambiguity, or repeated failed attempts with an unknown cause. Distill the problem, evidence, ruled-out hypotheses, constraints, and exact decision before invoking Sol. Never escalate merely because work is large, has many files, or failed once.
+
+## Maintaining this file
+
+This file is a map and operating policy, not a knowledge base. Keep it short, and keep every rule grounded in real friction.
+
+- When the **same** wrong assumption or mistake happens a second time, run a short retrospective and record the conclusion in the closest instruction file: this file for cross-cutting rules, a subsystem `AGENTS.md` for domain rules, or the document the rule belongs to.
+- State the situation that triggers the rule, not just the corrected fact.
+- Prefer tightening or replacing an existing rule over appending a new one, and do not add rules for problems that have not occurred.

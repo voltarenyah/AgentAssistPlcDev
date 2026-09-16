@@ -56,7 +56,7 @@ import {
   type DeviceSelectionState,
 } from '@/studio/deviceSnapshot'
 import * as api from '@/api/client'
-import type { SourceChatContext } from '@/studio/plcSourceState'
+import { resolveSourceObjects, type SourceChatContext } from '@/studio/plcSourceState'
 import AppAssistantPanel from '@/studio/appAssistant/AppAssistantPanel'
 import SessionDock from '@/studio/chat/SessionDock'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
@@ -95,6 +95,7 @@ import {
   setTurnMeta,
   type ChatTabsState,
 } from '@/studio/chat/chatTabState'
+import type { SourceInspectorTarget } from '@/studio/workspace/workspaceTypes'
 
 // What <main> renders for the current selection. Replaces the old hardwarePage
 // ternary: project and worktree selections now have their own landing pages.
@@ -561,12 +562,17 @@ export default function MainStudio() {
   const [apiBalance, setApiBalance] = useState<api.DeepSeekBalance | null>(null)
   const [balanceRefreshState, setBalanceRefreshState] = useState<DeepSeekBalanceRefreshState>('idle')
   const [chatSourceContext, setChatSourceContext] = useState<SourceChatContext | null>(null)
+  const [sourceInspectorTarget, setSourceInspectorTarget] = useState<SourceInspectorTarget | null>(null)
   const [appAssistantOpen, setAppAssistantOpen] = useState(false)
   const [appAssistantRuntime, setAppAssistantRuntime] = useState<api.AppAssistantRuntimeSnapshot | null>(null)
   const [projectAccess, setProjectAccess] = useState<{
     project: api.ProjectInfo
     capabilities: api.ProjectCapabilities
   } | null>(null)
+
+  useEffect(() => {
+    setSourceInspectorTarget(null)
+  }, [selection.worktreeId, selection.deviceId])
 
   useEffect(() => {
     setAppAssistantRuntime(null)
@@ -641,6 +647,11 @@ export default function MainStudio() {
     [selection.workbenchId, selection.worktreeId, selection.deviceId],
   )
   const deviceView = deviceSelection?.view ?? null
+  const sourceReferenceTargets = useMemo(() => resolveSourceObjects(deviceView?.sourceObjects, deviceView?.blocks)
+    .reduce<Record<string, string>>((targets, item) => {
+      if (!targets[item.name]) targets[item.name] = item.relativePath
+      return targets
+    }, {}), [deviceView])
   const deviceSessions = deviceSelection?.sessions ?? []
   const deviceInfo = deviceView?.snapshot ?? null
   const deviceName = deviceInfo?.plcName ?? deviceSelection?.cachedMetadata?.plcName ?? selection.deviceId
@@ -2170,7 +2181,7 @@ export default function MainStudio() {
               <div className="max-w-lg rounded-xl border bg-card p-6 text-center" style={{ borderColor: 'var(--border)' }}>
                 <AlertCircle className="mx-auto mb-3 h-8 w-8 text-red-500" />
                 <h1 className="text-sm font-semibold">Workbench API unavailable</h1>
-                <p className="mt-2 break-words text-[10px] leading-relaxed text-muted-foreground">{fatalError}</p>
+                <p className="mt-2 break-words text-xs leading-4 text-muted-foreground">{fatalError}</p>
                 <button className="primary-button mt-4" onClick={() => void loadStartup()}>
                   <RefreshCw className="h-3.5 w-3.5" /> Retry
                 </button>
@@ -2186,7 +2197,7 @@ export default function MainStudio() {
                     <button
                       key={tab.id}
                       onClick={() => setMainView({ kind: 'hardware', page: tab.id })}
-                      className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[9px] transition-colors ${hardwarePage === tab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+                      className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors ${hardwarePage === tab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
                     >
                       <Icon className="h-3 w-3" /> {tab.label}
                     </button>
@@ -2233,7 +2244,6 @@ export default function MainStudio() {
           ) : !selection.deviceId && selection.workbenchId ? (
             <ProjectLandingPage
               workbenchId={selection.workbenchId}
-              onOpenAssistant={() => setAppAssistantOpen(true)}
               onSelectWorktree={worktreeId => {
                 const worktree = activeWorkbench?.worktrees.find(candidate => candidate.worktreeId === worktreeId)
                 if (activeWorkbench && worktree) void selectWorktree(activeWorkbench, worktree)
@@ -2250,7 +2260,7 @@ export default function MainStudio() {
                   <Cpu className="h-7 w-7 text-chart-2" />
                 </div>
                 <h1 className="text-xl font-semibold tracking-tight">Select a device context</h1>
-                <p className="mx-auto mt-2 max-w-md text-[11px] leading-relaxed text-muted-foreground">
+                <p className="mx-auto mt-2 max-w-md text-xs leading-4 text-muted-foreground">
                   Choose a workbench, linked worktree, and PLC device. Every source, knowledge, and chat operation is then bound to that exact context.
                 </p>
                 {workbenches.length === 0 && (
@@ -2329,6 +2339,29 @@ export default function MainStudio() {
                 },
                 onNavigateEntity: (kind, id) => setTraceabilityTarget({ kind, id }),
                 selectedTraceabilityTarget: traceabilityTarget,
+                onInspectObject: relativePath => {
+                  setSourceInspectorTarget({ kind: 'object', relativePath })
+                  workspaceService.openView('inspector')
+                },
+                onInspectUsage: usage => {
+                  setSourceInspectorTarget({ kind: 'usage', usage })
+                  workspaceService.openView('inspector')
+                },
+              }}
+              inspector={{
+                workbenchId: selection.workbenchId,
+                worktreeId: selection.worktreeId,
+                deviceId: selection.deviceId,
+                target: sourceInspectorTarget,
+                referenceTargets: sourceReferenceTargets,
+                onInspectObject: relativePath => {
+                  setSourceInspectorTarget({ kind: 'object', relativePath })
+                  workspaceService.openView('inspector')
+                },
+                onInspectUsage: usage => {
+                  setSourceInspectorTarget({ kind: 'usage', usage })
+                  workspaceService.openView('inspector')
+                },
               }}
               knowledge={{
                 context: knowledgeContext,

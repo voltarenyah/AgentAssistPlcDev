@@ -32,6 +32,7 @@ export function TagFilter({
   const [expandedIds, setExpandedIds] = useState<string[]>([])
   const paths = useMemo(() => tagPaths(nodes), [nodes])
   const selected = new Set(selectedTagIds)
+  const selectedNodes = nodes.filter(node => selected.has(node.tagId))
   const normalizedQuery = query.trim().toLowerCase()
   const selectableNodes = nodes.filter(node => !selected.has(node.tagId)
     && (normalizedQuery.length === 0 || (paths.get(node.tagId) ?? node.name).toLowerCase().includes(normalizedQuery)))
@@ -48,12 +49,7 @@ export function TagFilter({
 
   return (
     <div className="border-b px-2 py-2" style={{ borderColor: 'var(--border)' }}>
-      <div role="list" aria-label="Active tag filters" className="flex flex-wrap items-center gap-1">
-        {nodes.filter(node => selected.has(node.tagId)).map(node => (
-          <TagChip key={node.tagId} node={node} nodes={nodes} removable onRemove={remove} />
-        ))}
-      </div>
-      <div className="mt-1 flex items-stretch gap-1">
+      <div className="flex items-stretch gap-1">
         <Command shouldFilter={false} className="relative h-auto w-auto min-w-0 flex-1 overflow-visible bg-transparent">
           <CommandInput
             value={query}
@@ -91,6 +87,13 @@ export function TagFilter({
           <ListFilter aria-hidden="true" />
         </Button>
       </div>
+      {selectedNodes.length > 0 && (
+        <div role="list" aria-label="Active tag filters" className="mt-2 flex flex-wrap items-center gap-1">
+          {selectedNodes.map(node => (
+            <TagChip key={node.tagId} node={node} nodes={nodes} removable onRemove={remove} />
+          ))}
+        </div>
+      )}
       {error && (
         <div role="alert" className="mt-1 text-xs text-destructive">
           {error}{onRetry && <Button type="button" variant="link" size="xs" onClick={onRetry}>Retry</Button>}

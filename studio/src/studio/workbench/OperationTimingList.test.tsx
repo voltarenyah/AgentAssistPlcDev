@@ -76,6 +76,10 @@ describe('OperationTimingList', () => {
   it('advances source-export activity and resets when the phase changes', () => {
     vi.useFakeTimers()
     const { host, root } = render({ ...status, currentPhase: { ...status.currentPhase!, message: 'Exporting block Main...' } }, 'dashboard')
+    act(() => {
+      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
+        .find(button => button.textContent?.includes('Source export'))?.click()
+    })
     act(() => vi.advanceTimersByTime(2000))
     expect(host.querySelector('[data-source-export-activity] time')?.textContent).toBe('3.0 s')
 

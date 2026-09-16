@@ -1322,6 +1322,9 @@ public static class WorkbenchEndpoints
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/knowledge/edge-properties",
             async (string id, string wt, string device, string edgeId, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
                 await KnowledgeQuery(s, gateway, id, wt, device, "query_edge_properties", new Dictionary<string, object?> { ["edgeId"] = edgeId }, ct));
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/source/usage",
+            async (string id, string wt, string device, string variable, int? maxRows, WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
+                await KnowledgeQuery(s, gateway, id, wt, device, "get_variable_usage", new Dictionary<string, object?> { ["variable"] = variable, ["maxRows"] = maxRows }, ct));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/tia/open", async (
             string workbenchId,
             string worktreeId,
@@ -1588,6 +1591,16 @@ public static class WorkbenchEndpoints
             var context = s.Device(workbenchId, worktreeId, device).Context;
             writePolicy.RequireFeatureEdit(context);
             return resolver.PrepareEditable(context, r.RelativePath);
+        });
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/inspect", (
+            string workbenchId, string worktreeId, string device, string relativePath,
+            WorkbenchApiState s, DeviceSourceResolver resolver, SourceObjectInspectorReader inspector) =>
+        {
+            try { return Results.Ok(inspector.Read(s.Device(workbenchId, worktreeId, device).Context, relativePath, resolver)); }
+            catch (SourceInspectionException exception) { return Results.UnprocessableEntity(new { error = exception.Code, message = exception.Message }); }
+            catch (FileNotFoundException exception) { return Results.NotFound(new { error = "SOURCE_FILE_NOT_FOUND", message = exception.Message }); }
+            catch (ArgumentException exception) { return Results.BadRequest(new { error = "SOURCE_PATH_INVALID", message = exception.Message }); }
+            catch (WorkbenchPathException exception) { return Results.BadRequest(new { error = "SOURCE_PATH_INVALID", message = exception.Message }); }
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/import", async (
             string workbenchId, string worktreeId, string device, SourcePathApiRequest r,

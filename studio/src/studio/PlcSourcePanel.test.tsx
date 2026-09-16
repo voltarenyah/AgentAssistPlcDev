@@ -67,6 +67,8 @@ describe('PlcSourcePanel', () => {
         deviceView={deviceView}
         onChatWithAgent={vi.fn()}
         onSnapshotReload={vi.fn()}
+        onInspectObject={vi.fn()}
+        onInspectUsage={vi.fn()}
       />,
     )
 

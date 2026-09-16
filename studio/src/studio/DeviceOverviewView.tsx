@@ -63,7 +63,7 @@ function Metric({
   return (
     <div className="rounded-lg border bg-card p-3" style={{ borderColor: 'var(--border)' }}>
       <div className={`text-xl font-semibold tabular-nums ${color}`}>{value}</div>
-      <div className="mt-1 text-[9px] uppercase tracking-[0.15em] text-muted-foreground">{label}</div>
+      <div className="mt-1 text-xs uppercase tracking-[0.12em] text-muted-foreground">{label}</div>
     </div>
   )
 }
@@ -94,22 +94,28 @@ export default function DeviceOverviewView({
 }: DeviceOverviewViewProps) {
   return (
     <div className="mx-auto max-w-6xl space-y-5 p-5">
-      <section className="flex flex-wrap items-start gap-4 rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-        <div className="grid h-12 w-12 place-items-center rounded-xl bg-chart-2/10">
-          <Cpu className="h-5 w-5 text-chart-2" />
+      <section className="space-y-4 rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex min-w-0 items-start gap-4">
+          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-chart-2/10">
+            <Cpu className="h-5 w-5 text-chart-2" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-lg font-semibold">{deviceName}</h1>
+            <p className="mt-0.5 font-mono text-xs text-muted-foreground">{deviceInfo?.engineeringIdentity ?? deviceId}</p>
+            {(deviceMeta?.typeIdentifier || deviceMeta?.deviceName) && (
+              <p className="mt-1.5 flex min-w-0 items-start gap-1.5 font-mono text-xs leading-4 text-muted-foreground">
+                <Cpu className="mt-0.5 h-3 w-3 shrink-0" />
+                <span className="min-w-0 break-words">
+                  {deviceMeta.typeIdentifier?.replace(/^OrderNumber:/, '') ?? ''}
+                  {deviceMeta.typeIdentifier && deviceMeta.deviceName ? ' · ' : ''}
+                  {deviceMeta.deviceName ?? ''}
+                </span>
+              </p>
+            )}
+          </div>
         </div>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold">{deviceName}</h1>
-          <p className="mt-0.5 font-mono text-[9px] text-muted-foreground">{deviceInfo?.engineeringIdentity ?? deviceId}</p>
-          {(deviceMeta?.typeIdentifier || deviceMeta?.deviceName) && (
-            <p className="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
-              <Cpu className="h-3 w-3" />
-              {deviceMeta.typeIdentifier?.replace(/^OrderNumber:/, '') ?? ''}
-              {deviceMeta.typeIdentifier && deviceMeta.deviceName ? ' · ' : ''}
-              {deviceMeta.deviceName ?? ''}
-            </p>
-          )}
-          <div className="mt-3 flex flex-wrap gap-2">
+
+        <div className="flex flex-wrap gap-2 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
             <button className="secondary-button" disabled={Boolean(operation)} onClick={() => onOpenProjectInTia()}>
               <Server className="h-3.5 w-3.5" /> Open project in TIA
             </button>
@@ -146,14 +152,14 @@ export default function DeviceOverviewView({
                 <GitMerge className="h-3.5 w-3.5" /> Merge to master
               </button>
             )}
-          </div>
         </div>
-        <div className="rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border)' }}>
-          <div className="flex items-center gap-2 text-[8px] uppercase tracking-[0.16em] text-muted-foreground">
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex items-center gap-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">
             <span>Knowledge</span>
             <span className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-400">Offline ready</span>
           </div>
-          <div className={`mt-1 flex items-center gap-1.5 text-[10px] font-medium ${
+          <div className={`flex items-center gap-1.5 text-xs font-medium ${
             activeKnowledge === 'current' ? 'text-emerald-500'
               : activeKnowledge === 'stale' ? 'text-amber-500'
                 : activeKnowledge === 'failed' ? 'text-red-500'
@@ -161,7 +167,7 @@ export default function DeviceOverviewView({
           }`}>
             <Database className="h-3.5 w-3.5" /> {activeKnowledge}
           </div>
-          <div className="mt-1 text-[8px] text-muted-foreground">
+          <div className="text-xs text-muted-foreground">
             Updated {deviceView?.knowledgeUpdatedAt
               ? new Date(deviceView.knowledgeUpdatedAt).toLocaleString()
               : 'never'}
@@ -176,7 +182,7 @@ export default function DeviceOverviewView({
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold">Start by generating the PLC context</h2>
-            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+            <p className="mt-1 text-xs leading-4 text-muted-foreground">
               Exports the full PLC from TIA, commits it as the initial baseline, and builds the offline knowledge database — no confirmations needed.
             </p>
           </div>
@@ -199,23 +205,25 @@ export default function DeviceOverviewView({
             <Database className="h-5 w-5 text-chart-2" />
             <div>
               <h2 className="text-sm font-semibold">Device-owned knowledge</h2>
-              <p className="text-[9px] text-muted-foreground">No cross-device lifecycle coupling</p>
+              <p className="text-xs text-muted-foreground">No cross-device lifecycle coupling</p>
             </div>
           </div>
-          <div className="mt-5 rounded-lg border bg-muted/30 p-4" style={{ borderColor: 'var(--border)' }}>
-            <div className="text-[8px] uppercase tracking-[0.16em] text-muted-foreground">State</div>
-            <div className="mt-2 flex items-center gap-2 text-lg font-semibold capitalize">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-4" style={{ borderColor: 'var(--border)' }}>
+            <div>
+              <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">State</div>
+              <div className="mt-1 flex items-center gap-2 text-lg font-semibold capitalize">
               <CircleDot className={`h-4 w-4 ${activeKnowledge === 'current' ? 'text-emerald-500' : activeKnowledge === 'failed' ? 'text-red-500' : 'text-amber-500'}`} />
               {activeKnowledge}
+              </div>
             </div>
-            <div className="mt-2 text-[9px] text-muted-foreground">
+            <div className="text-xs text-muted-foreground">
               Last updated: {deviceView?.knowledgeUpdatedAt
                 ? new Date(deviceView.knowledgeUpdatedAt).toLocaleString()
                 : 'Never'}
             </div>
           </div>
           {activeKnowledge !== 'current' && (
-            <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-500/8 p-3 text-[9px] leading-relaxed text-amber-600 dark:text-amber-400">
+            <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-500/8 p-3 text-xs leading-4 text-amber-600 dark:text-amber-400">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               Update once after your edit batch and before relying on graph or block context.
             </div>
@@ -223,7 +231,7 @@ export default function DeviceOverviewView({
         </section>
         <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
           <h2 className="text-sm font-semibold">Maintenance actions</h2>
-          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+          <p className="mt-1 text-xs leading-4 text-muted-foreground">
             Normal update batches stale source objects. Rebuild ingests the full PLC source tree.
           </p>
           <div className="mt-5 space-y-2">
@@ -234,7 +242,7 @@ export default function DeviceOverviewView({
               <RefreshCw className="h-3.5 w-3.5" /> Full device rebuild
             </button>
           </div>
-          <div className="mt-5 flex items-center gap-2 text-[9px] text-muted-foreground">
+          <div className="mt-5 flex items-center gap-2 text-xs text-muted-foreground">
             <ShieldCheck className="h-4 w-4 text-emerald-500" />
             Applied hashes are checked before stale state clears.
           </div>

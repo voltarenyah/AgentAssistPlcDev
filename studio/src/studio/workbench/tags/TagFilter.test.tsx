@@ -133,4 +133,26 @@ describe('TagFilter', () => {
     expect(onSelectedTagIdsChange).toHaveBeenCalledWith([])
     await act(async () => root.unmount())
   })
+
+  it('does not reserve chip spacing when no tags are selected', async () => {
+    const { host, root } = await render(
+      <TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={() => {}} />,
+    )
+
+    expect(host.querySelector('[aria-label="Active tag filters"]')).toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('places active tag chips below the search controls', async () => {
+    const { host, root } = await render(
+      <TagFilter nodes={nodes} selectedTagIds={['press']} onSelectedTagIdsChange={() => {}} />,
+    )
+
+    const searchRow = host.querySelector('input[aria-label="Search filter tags"]')!.closest('.flex.items-stretch') as HTMLElement
+    const activeFilters = host.querySelector('[aria-label="Active tag filters"]') as HTMLElement
+    expect(searchRow).not.toBeNull()
+    expect(activeFilters).not.toBeNull()
+    expect(searchRow.compareDocumentPosition(activeFilters) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await act(async () => root.unmount())
+  })
 })
