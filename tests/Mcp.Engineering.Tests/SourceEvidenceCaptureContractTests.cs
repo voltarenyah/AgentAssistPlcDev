@@ -17,11 +17,11 @@ public sealed class SourceEvidenceCaptureContractTests
 
         Assert.NotNull(capture);
         Assert.Equal(typeof(SourceEvidenceCaptureResult), capture!.ReturnType);
-        Assert.Equal(new[] { "plcName" }, capture.GetParameters().Select(parameter => parameter.Name));
+        Assert.Equal(new[] { "plcName", "sourceObjectIds" }, capture.GetParameters().Select(parameter => parameter.Name));
 
         Assert.NotNull(compare);
         Assert.Equal(typeof(SourceEvidenceCaptureResult), compare!.ReturnType);
-        Assert.Equal(new[] { "baseline", "outputDir", "plcName" }, compare.GetParameters().Select(parameter => parameter.Name));
+        Assert.Equal(new[] { "baseline", "outputDir", "plcName", "sourceObjectIds" }, compare.GetParameters().Select(parameter => parameter.Name));
     }
 
     [Fact]

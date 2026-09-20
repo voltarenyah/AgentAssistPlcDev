@@ -574,16 +574,20 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
-    public SourceEvidenceCaptureResult CaptureSourceEvidence(string? plcName = null)
+    public SourceEvidenceCaptureResult CaptureSourceEvidence(string? plcName = null,
+        IReadOnlyCollection<string>? sourceObjectIds = null)
     {
         lock (_gate)
         {
             var project = RequireProject();
             var plc = PlcSoftwareResolver.Resolve(project, plcName);
             using var exclusiveAccess = _portal!.ExclusiveAccess("Capture managed-source evidence");
+            var selectedIds = sourceObjectIds is { Count: > 0 }
+                ? new HashSet<string>(sourceObjectIds, StringComparer.Ordinal)
+                : null;
             return new SourceEvidenceCaptureResult
             {
-                Snapshot = CaptureManagedSourceEvidence(project, plc).Snapshot,
+                Snapshot = CaptureManagedSourceEvidence(project, plc, selectedIds).Snapshot,
             };
         }
     }
@@ -591,7 +595,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     public SourceEvidenceCaptureResult CompareSourceEvidence(
         SourceEvidenceSnapshot baseline,
         string outputDir,
-        string? plcName = null)
+        string? plcName = null,
+        IReadOnlyCollection<string>? sourceObjectIds = null)
     {
         if (baseline is null)
             throw new ArgumentNullException(nameof(baseline));
@@ -611,13 +616,19 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             }
 
             using var exclusiveAccess = _portal!.ExclusiveAccess("Compare managed-source evidence");
-            var liveCapture = CaptureManagedSourceEvidence(project, plc);
+            var selectedIds = sourceObjectIds is { Count: > 0 }
+                ? new HashSet<string>(sourceObjectIds, StringComparer.Ordinal)
+                : null;
+            var liveCapture = CaptureManagedSourceEvidence(project, plc, selectedIds);
             var live = liveCapture.Snapshot;
             var checksumChanged = !string.Equals(
                 baseline.Checksum?.SoftwareChecksum,
                 live.Checksum.SoftwareChecksum,
                 StringComparison.Ordinal);
-            var comparison = SourceEvidencePlanner.Compare(baseline.Objects, live.Objects, checksumChanged);
+            // A scoped task has no authority to classify unrelated checksum movement as an
+            // untrackable project change. Full scans retain the checksum gate.
+            var comparison = SourceEvidencePlanner.Compare(baseline.Objects, live.Objects,
+                selectedIds is null && checksumChanged);
             var candidateExports = ExportEvidenceCandidates(comparison, liveCapture.LiveObjects, outputDir);
 
             return new SourceEvidenceCaptureResult
@@ -630,14 +641,16 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         }
     }
 
-    private static ManagedSourceCapture CaptureManagedSourceEvidence(Project project, PlcSoftware plc)
+    private static ManagedSourceCapture CaptureManagedSourceEvidence(Project project, PlcSoftware plc,
+        ISet<string>? selectedIds = null)
     {
         var safetySurface = ReadSafetySurface(plc);
         var source = CaptureLiveSnapshot(
             plc,
             safetySurface,
             out var fBlockSignatures,
-            out var fBlockReadFailed);
+            out var fBlockReadFailed,
+            selectedIds);
         var safety = CompleteSafety(
             safetySurface,
             fBlockSignatures,
@@ -1577,7 +1590,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             plc,
             safetySurface: null,
             out _,
-            out _);
+            out _,
+            selectedIds: null);
     }
 
     /// <summary>Captures the managed-source live snapshot and, when requested by the safety
@@ -1588,7 +1602,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         PlcSoftware plc,
         SafetySurface? safetySurface,
         out List<FBlockSignatureInfo>? fBlockSignatures,
-        out bool fBlockReadFailed)
+        out bool fBlockReadFailed,
+        ISet<string>? selectedIds = null)
     {
         var snapshot = new LiveSnapshot();
         fBlockSignatures = safetySurface?.ReadBlockSignatures == true
@@ -1604,7 +1619,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 : TryGetSafetySignatureProvider(block, out safetyProvider, ref fBlockReadFailed);
             if (isFailSafe)
             {
-                if (fBlockSignatures is not null && safetyProvider is not null)
+                var fSourcePath = ExportManifest.SourcePathOf(block.Name, groupPath);
+                var fId = StableId.Create("F", fSourcePath);
+                if (fBlockSignatures is not null && safetyProvider is not null &&
+                    (selectedIds is null || selectedIds.Contains(fId)))
                 {
                     try
                     {
@@ -1614,7 +1632,7 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                         {
                             fBlockSignatures.Add(new FBlockSignatureInfo
                             {
-                                Path = ExportManifest.SourcePathOf(block.Name, groupPath),
+                                Path = fSourcePath,
                                 Signature = signature.Value.ToString("X8"),
                             });
                         }
@@ -1630,6 +1648,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var category = ExportManifest.CategoryOf(block);
             var sourcePath = ExportManifest.SourcePathOf(block.Name, groupPath);
             var id = StableId.Create(category, sourcePath);
+            if (selectedIds is not null && !selectedIds.Contains(id))
+            {
+                continue;
+            }
             var (modified, codeModified, interfaceModified) = ReadBlockTimestamps(block);
             var fingerprints = FingerprintReader.TryRead(block);
             snapshot.Live.Add(new SyncLiveComponent
@@ -1652,6 +1674,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         {
             var sourcePath = ExportManifest.SourcePathOf(table.Name, groupPath);
             var id = StableId.Create("Tags", sourcePath);
+            if (selectedIds is not null && !selectedIds.Contains(id))
+            {
+                continue;
+            }
             snapshot.Live.Add(new SyncLiveComponent
             {
                 Id = id,
@@ -1667,6 +1693,10 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         {
             var sourcePath = ExportManifest.SourcePathOf(type.Name, groupPath);
             var id = StableId.Create("UDT", sourcePath);
+            if (selectedIds is not null && !selectedIds.Contains(id))
+            {
+                continue;
+            }
             var (_, _, modified, interfaceModified) = ReadTypeMetadata(type);
             var fingerprints = FingerprintReader.TryRead(type);
             snapshot.Live.Add(new SyncLiveComponent

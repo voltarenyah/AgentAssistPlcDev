@@ -35,7 +35,7 @@ vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
   return {
     ...actual,
-    createWorktreeTask: vi.fn(async (_wb: string, _wt: string, body: { title: string }) =>
+    createGraphWorktreeTask: vi.fn(async (_wb: string, _wt: string, body: { title: string }) =>
       task({ taskId: 't-new', title: body.title })),
     updateWorktreeTask: vi.fn(async (_wb: string, _wt: string, taskId: string, patch: Partial<api.WorktreeTask>) =>
       task({ taskId, title: patch.title ?? 'updated', status: patch.status ?? 'todo' })),
@@ -56,6 +56,7 @@ const renderPanel = async (overrides: Partial<React.ComponentProps<typeof Worktr
       loading={false}
       error={null}
       onChanged={onChanged}
+      deviceIds={['device-1']}
       {...overrides}
     />,
   ))
@@ -111,7 +112,9 @@ describe('WorktreeTasksPanel', () => {
     })
     await act(async () => {})
 
-    expect(vi.mocked(api.createWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', { title: 'Add alarm handling', details: 'Type: Feature' })
+    expect(vi.mocked(api.createGraphWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', {
+      title: 'Add alarm handling', deviceId: 'device-1', type: 'feature', intent: 'Add alarm handling', expectedResult: 'Add alarm handling',
+    })
     expect(onChanged).toHaveBeenCalled()
     expect(input.value).toBe('')
 

@@ -147,13 +147,18 @@ export default function PlcSourcePanel({
   const attachSourceTask = async (item: SourceObjectInfo) => {
     const taskId = window.prompt('Task ID to attach')?.trim()
     if (!taskId) return
-    try { await api.attachTaskRelationship(workbenchId, taskId, 'sourceObject', item.id); await loadTraceability(item) }
+    try { await api.stageTaskSourceObject(workbenchId, worktreeId, taskId, `${deviceId}:${item.id}`); await loadTraceability(item) }
     catch (error) { showErrorToast(errorMessage(error)) }
   }
   const reassignSourceTask = async (item: SourceObjectInfo, currentTaskId: string) => {
     const taskId = window.prompt('New task ID', currentTaskId)?.trim()
     if (!taskId || taskId === currentTaskId) return
-    try { await api.reassignTaskRelationship(workbenchId, currentTaskId, taskId, 'sourceObject', item.id, traceability[item.id]?.tasks.find(link => link.id === currentTaskId)?.edgeId ?? ''); await loadTraceability(item) }
+    try {
+      const sourceObjectId = `${deviceId}:${item.id}`
+      await api.releaseTaskSourceObject(workbenchId, worktreeId, currentTaskId, sourceObjectId)
+      await api.stageTaskSourceObject(workbenchId, worktreeId, taskId, sourceObjectId)
+      await loadTraceability(item)
+    }
     catch (error) { showErrorToast(errorMessage(error)) }
   }
   const showUsageNetworks = async (item: SourceObjectInfo) => {

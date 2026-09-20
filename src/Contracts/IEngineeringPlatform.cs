@@ -46,14 +46,16 @@ public interface IEngineeringPlatform : IDisposable
 
     /// <summary>Acquire one read-only TIA Exclusive Access lifetime and capture all lightweight
     /// managed-source evidence for the selected PLC. Used to establish a new project's baseline.</summary>
-    SourceEvidenceCaptureResult CaptureSourceEvidence(string? plcName = null);
+    SourceEvidenceCaptureResult CaptureSourceEvidence(string? plcName = null, IReadOnlyCollection<string>? sourceObjectIds = null);
 
-    /// <summary>Acquire one read-only TIA Exclusive Access lifetime, capture all lightweight
-    /// evidence, and export XML only for candidates selected against <paramref name="baseline"/>.</summary>
+    /// <summary>Acquire one read-only TIA Exclusive Access lifetime, capture lightweight
+    /// evidence for the requested source objects (or every object when omitted), and export XML
+    /// only for candidates selected against <paramref name="baseline"/>.</summary>
     SourceEvidenceCaptureResult CompareSourceEvidence(
         SourceEvidenceSnapshot baseline,
         string outputDir,
-        string? plcName = null);
+        string? plcName = null,
+        IReadOnlyCollection<string>? sourceObjectIds = null);
 
     ExportResult ExportBlock(string blockName, string outputDir);
 
