@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Check, ChevronDown, ListTodo, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -30,6 +30,8 @@ type Props = {
   projectTasks?: api.EngineeringTask[]
   onOpenTaskDetail?: (task: api.EngineeringTask) => void
   onStartChat?: (task: TaskSurface) => void
+  openCreate?: boolean
+  onCreateClosed?: () => void
 }
 
 const displayError = (error: unknown) => {
@@ -152,7 +154,7 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = [], onOpenTaskDetail, onStartChat }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = [], onOpenTaskDetail, onStartChat, openCreate = false, onCreateClosed }: Props) {
   const [createOpen, setCreateOpen] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newType, setNewType] = useState<api.EngineeringTask['type']>('feature')
@@ -162,6 +164,10 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
   const [newRef, setNewRef] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
   const visibleTasks = [...projectTasks, ...tasks]
+
+  useEffect(() => {
+    if (openCreate) setCreateOpen(true)
+  }, [openCreate])
 
   const mutate = (action: () => Promise<unknown>) => {
     void action()
@@ -179,6 +185,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
         setNewType('feature')
         setNewDevice('')
         setCreateOpen(false)
+        onCreateClosed?.()
         onChanged()
       })
       .catch(addError => showErrorToast(`Task could not be created: ${displayError(addError)}`))
@@ -391,7 +398,8 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
             <label className="field-label"><span>Title</span><input autoFocus aria-label="New task title" className="field-input" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
             <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
             <label className="field-label"><span>Device</span><select aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{deviceIds.map(deviceId => <option key={deviceId} value={deviceId}>{deviceId}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></label>
-            <DialogFooter><button type="button" className="secondary-button" onClick={() => setCreateOpen(false)} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
+            <label className="field-label"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{deviceIds.map(deviceId => <option key={deviceId} value={deviceId}>{deviceId}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></label>
+            <DialogFooter><button type="button" className="secondary-button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

@@ -107,6 +107,8 @@ describe('WorktreeTasksPanel', () => {
     const input = dialog.querySelector('input[aria-label="New task title"]') as HTMLInputElement
 
     await act(async () => setInputValue(input, 'Add alarm handling'))
+    const device = dialog.querySelector('select[aria-label="New task device"]') as HTMLSelectElement
+    await act(async () => { device.value = 'device-1'; device.dispatchEvent(new Event('change', { bubbles: true })) })
     await act(async () => {
       dialog.querySelector('button[type="submit"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })

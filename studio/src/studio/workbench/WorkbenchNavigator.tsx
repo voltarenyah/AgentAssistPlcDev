@@ -7,6 +7,7 @@ import {
   GitBranch,
   GitMerge,
   House,
+  ListTodo,
   Monitor,
   MonitorOff,
   Minus,
@@ -17,7 +18,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { DeviceSummary, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults } from '@/api/client'
+import type { DeviceSummary, EngineeringTask, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults } from '@/api/client'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -37,6 +38,7 @@ export type WorkbenchSelection = {
 type Props = {
   workbenches: Workbench[]
   devicesByWorktree: Record<string, DeviceSummary[]>
+  tasksByWorktree?: Record<string, EngineeringTask[]>
   selection: WorkbenchSelection
   /** Which page <main> is currently showing; drives the active-row highlight. */
   viewKind: 'project' | 'worktree' | 'hardware' | 'device'
@@ -60,6 +62,8 @@ type Props = {
   onSelectWorkbench: (workbench: Workbench) => void
   onSelectWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onSelectDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
+  onSelectTask?: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => void
+  onAddTask?: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onSelectHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onReloadHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onCompareHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
@@ -76,10 +80,14 @@ type Props = {
 }
 
 const worktreeKey = (workbenchId: string, worktreeId: string) => `${workbenchId}:${worktreeId}`
+// Device actions remain wired while their task-page replacements are introduced.
+// The device tree itself is deliberately not part of the navigator anymore.
+const showLegacyDeviceTree = false
 
 export default function WorkbenchNavigator({
   workbenches,
   devicesByWorktree,
+  tasksByWorktree = {},
   selection,
   viewKind,
   knowledgeState,
@@ -99,6 +107,8 @@ export default function WorkbenchNavigator({
   onSelectWorkbench,
   onSelectWorktree,
   onSelectDevice,
+  onSelectTask = () => {},
+  onAddTask = () => {},
   onSelectHardware,
   onReloadHardware,
   onCompareHardware,
@@ -260,6 +270,7 @@ export default function WorkbenchNavigator({
                     const available = matchingWorktrees.get(worktree.worktreeId)?.available ?? true
                     const key = worktreeKey(workbench.workbenchId, worktree.worktreeId)
                     const devices = devicesByWorktree[key] ?? []
+                    const tasks = tasksByWorktree[key] ?? []
                     return (
                       <div key={worktree.worktreeId}>
                         <ContextMenu>
@@ -346,6 +357,20 @@ export default function WorkbenchNavigator({
                           </ContextMenuContent>
                         </ContextMenu>
                         {worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (
+                          <div className="ml-4 border-l pl-2" style={{ borderColor: 'var(--border)' }}>
+                            <div className="flex items-center gap-2 px-2 py-1 text-[10px] font-semibold text-muted-foreground"><ListTodo className="h-3.5 w-3.5" /> Tasks</div>
+                            {tasks.length === 0 ? (
+                              <Button variant="outline" size="xs" className="ml-2" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>
+                            ) : tasks.map(task => (
+                              <button key={task.taskId} type="button" onClick={() => onSelectTask(workbench, worktree, task)} className={`flex min-h-7 w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-accent/40 ${viewKind === 'device' && selection.deviceId === task.deviceId ? 'bg-accent/50' : ''}`} aria-label={`Open task ${task.title}`}>
+                                <ListTodo className="h-3.5 w-3.5 shrink-0 text-chart-2" />
+                                <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
+                              </button>
+                            ))}
+                            {tasks.length > 0 && <Button variant="ghost" size="xs" className="ml-2" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>}
+                          </div>
+                        )}
+                        {showLegacyDeviceTree && worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (
                           <div className="ml-4 border-l pl-2" style={{ borderColor: 'var(--border)' }}>
                             <ContextMenu>
                               <ContextMenuTrigger asChild>

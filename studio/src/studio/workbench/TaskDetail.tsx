@@ -67,7 +67,7 @@ export default function TaskDetail({ detail, loading = false, error = null, onRe
   ]
   return <article className="space-y-4" aria-label={`Task detail: ${detail.task.title}`}>
     <header className="rounded-xl border bg-card p-4" style={{ borderColor: 'var(--border)' }}>
-      <div className="flex items-start gap-2"><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold">{detail.task.title}</h2><p className="mt-1 text-[9px] text-muted-foreground">{detail.task.scope === 'project' ? 'Project' : 'Worktree'} scope · {detail.task.type} · {detail.task.status}</p></div><span className="inline-flex items-center gap-1 text-[9px] text-muted-foreground"><ExternalLink className="h-3 w-3" /> Traceability</span></div>
+      <div className="flex items-start gap-2"><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold">{detail.task.title}</h2><p className="mt-1 text-[9px] text-muted-foreground">{detail.task.scope === 'project' ? 'Project' : 'Worktree'} scope · {detail.task.type} · {detail.task.status}{detail.task.deviceId ? ` · PLC ${detail.task.deviceId}` : ''}</p></div><span className="inline-flex items-center gap-1 text-[9px] text-muted-foreground"><ExternalLink className="h-3 w-3" /> Traceability</span></div>
       {detail.task.description && <p className="mt-2 text-[10px] text-muted-foreground">{detail.task.description}</p>}
     </header>
     <div className="grid gap-3 md:grid-cols-2">{sections.map(([title, kind, items]) => <TraceabilitySection key={kind} title={title} items={items} emptyLabel={`No linked ${title.toLowerCase()} yet.`} onNavigate={onNavigate ? id => onNavigate(kind, id) : undefined} onRemove={onRemove ? item => onRemove(kind, item) : undefined} />)}</div>
