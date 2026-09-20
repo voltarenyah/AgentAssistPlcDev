@@ -101,6 +101,31 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task WorktreeEngineeringTaskRequiresARegisteredDeviceAndReturnsItsBinding()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var route = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/engineering-tasks";
+
+        var rejected = await fixture.Client.PostAsJsonAsync(route, new { title = "Wrong PLC", deviceId = "missing" });
+        Assert.Equal(HttpStatusCode.NotFound, rejected.StatusCode);
+
+        var created = await fixture.Client.PostAsJsonAsync(route, new
+        {
+            title = "Motor update",
+            deviceId = "dev-1",
+            type = "feature",
+            intent = "Update motor control",
+            expectedResult = "Motor update is traceable",
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var task = await created.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("dev-1", task.GetProperty("deviceId").GetString());
+
+        var list = await fixture.Client.GetFromJsonAsync<JsonElement>(route);
+        Assert.Equal("dev-1", list![0].GetProperty("deviceId").GetString());
+    }
+
+    [Fact]
     public async Task EngineeringTaskRelationshipApiAttachesReassignsAndReportsStableTraceability()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);

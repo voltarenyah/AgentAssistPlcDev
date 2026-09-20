@@ -54,7 +54,18 @@ public sealed record EngineeringTaskApiResponse(
     string ExpectedResult,
     string? Description,
     DateTimeOffset CreatedUtc,
-    DateTimeOffset UpdatedUtc);
+    DateTimeOffset UpdatedUtc,
+    string? DeviceId);
+
+public sealed record CreateWorktreeEngineeringTaskApiRequest(
+    string Title,
+    string DeviceId,
+    [property: JsonConverter(typeof(JsonStringEnumConverter<GraphTaskType>))] GraphTaskType Type = GraphTaskType.Feature,
+    [property: JsonConverter(typeof(JsonStringEnumConverter<GraphTaskStatus>))] GraphTaskStatus Status = GraphTaskStatus.Todo,
+    int Priority = 0,
+    string Intent = "",
+    string ExpectedResult = "",
+    string? Description = null);
 
 public sealed record EngineeringTaskRelationshipApiResponse(
     string Id,
@@ -129,6 +140,8 @@ public static class SessionGraphOperations
                     ?? throw new EngineeringGraphConstraintException("The selected task was not found in the current Workbench.");
                 if (task.ScopeKind == GraphTaskScopeKind.Worktree && task.WorktreeId != session.Header.WorktreeId)
                     throw new EngineeringGraphConstraintException("The selected task is not compatible with the current project or Workbench context.");
+                if (task.DeviceId is not null && !string.Equals(task.DeviceId, session.Header.DeviceId, StringComparison.Ordinal))
+                    throw new EngineeringGraphConstraintException("The selected task belongs to another PLC.", "TASK_DEVICE_MISMATCH");
                 graph.AddEdge(GraphEntityKind.Task, task.TaskId, GraphEntityKind.Session, session.Header.SessionId, provenance);
             }
         }

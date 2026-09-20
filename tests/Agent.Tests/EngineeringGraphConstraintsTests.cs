@@ -8,6 +8,23 @@ public sealed class EngineeringGraphConstraintsTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"engineering-graph-constraints-{Guid.NewGuid():N}");
 
     [Fact]
+    public void Device_bound_task_rejects_session_and_source_object_from_another_device()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        var task = service.CreateTask("task-device", GraphTaskScopeKind.Worktree, "wt-1", "Device task", GraphTaskType.Feature,
+            intent: "intent", expectedResult: "result", deviceId: "plc-1");
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.Session, "session-other", "wb-1", "wt-1", "plc-2"));
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject, "source-other", "wb-1", "wt-1", "plc-2"));
+
+        Assert.Equal("plc-1", service.FindTask(task.TaskId)!.DeviceId);
+        Assert.Equal("TASK_DEVICE_MISMATCH", Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.AddEdge(task, GraphEntityKind.Session, "session-other")).Code);
+        Assert.Equal("TASK_DEVICE_MISMATCH", Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.AddEdge(task, GraphEntityKind.SourceObject, "source-other")).Code);
+    }
+
+    [Fact]
     public void SupportsAllV1RelationPairsAndManyToManyTaskCommits()
     {
         using var store = new EngineeringGraphStore(_root);

@@ -395,6 +395,8 @@ export type EngineeringTask = {
   description: string | null
   createdUtc: string
   updatedUtc: string
+  /** Null or absent only for project and legacy tasks created before device binding. */
+  deviceId?: string | null
 }
 
 export type EngineeringTaskDetail = {
@@ -1395,6 +1397,16 @@ export const getProjectTaskDetail = (workbenchId: string, taskId: string) =>
   workbenchRequest<EngineeringTaskDetail>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}`)
 export const listGraphWorktreeTasks = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<EngineeringTaskList>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`)
+export const createWorktreeEngineeringTask = (workbenchId: string, worktreeId: string, task: {
+  title: string
+  deviceId: string
+  type?: EngineeringTask['type']
+  status?: WorktreeTaskStatus
+  priority?: number
+  intent?: string
+  expectedResult?: string
+  description?: string | null
+}) => workbenchRequest<EngineeringTask>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`, jsonRequest('POST', task))
 export const getWorktreeTaskDetail = (workbenchId: string, worktreeId: string, taskId: string) =>
   workbenchRequest<EngineeringTaskDetail>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`)
 export const getEngineeringTaskDetail = async (workbenchId: string, taskId: string, worktreeId?: string | null) => {

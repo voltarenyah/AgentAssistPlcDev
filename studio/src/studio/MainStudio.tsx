@@ -473,6 +473,8 @@ export default function MainStudio() {
   const [statusPopover, setStatusPopover] = useState<'runtime' | 'tia' | null>(null)
   const [sessionActionBusy, setSessionActionBusy] = useState<string | null>(null)
   const [devicesByWorktree, setDevicesByWorktree] = useState<Record<string, api.DeviceSummary[]>>({})
+  const [tasksByWorktree, setTasksByWorktree] = useState<Record<string, api.EngineeringTask[]>>({})
+  const [taskCreateWorktreeId, setTaskCreateWorktreeId] = useState<string | null>(null)
   const [navigatorTagNodes, setNavigatorTagNodes] = useState<api.TagNode[]>([])
   const [navigatorTagIds, setNavigatorTagIds] = useState<string[]>([])
   const [navigatorTagsLoading, setNavigatorTagsLoading] = useState(true)
@@ -1021,7 +1023,10 @@ export default function MainStudio() {
     setOperation('select-worktree')
     try {
       await api.selectWorktree(workbench.workbenchId, worktree.worktreeId)
-      const devices = await api.listDevices(workbench.workbenchId, worktree.worktreeId)
+      const [devices, tasks] = await Promise.all([
+        api.listDevices(workbench.workbenchId, worktree.worktreeId),
+        api.listGraphWorktreeTasks(workbench.workbenchId, worktree.worktreeId),
+      ])
       void api.getAppAssistantRuntimeState(workbench.workbenchId)
         .then(runtimeSnapshot => setAppAssistantRuntime(runtimeSnapshot))
         .catch(() => { /* Runtime refresh is best-effort; selection remains usable. */ })
@@ -1030,6 +1035,7 @@ export default function MainStudio() {
         ...previous,
         [worktreeKey(workbench.workbenchId, worktree.worktreeId)]: devices,
       }))
+      setTasksByWorktree(previous => ({ ...previous, [worktreeKey(workbench.workbenchId, worktree.worktreeId)]: tasks }))
       setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
       setMainView({ kind: 'worktree', tab: 'overview' })
       // Version control lives in the right dock of the worktree page; make
@@ -1095,6 +1101,25 @@ export default function MainStudio() {
     } finally {
       if (selectionRequestId.current === requestId) setOperation(null)
     }
+  }
+
+  const selectTask = async (workbench: api.Workbench, worktree: api.WorkbenchRegistration, task: api.EngineeringTask) => {
+    if (!task.deviceId) {
+      showErrorToast(`Task “${task.title}” has no PLC binding. Create a new device-bound task instead.`)
+      return
+    }
+    await selectDevice(workbench, worktree, task.deviceId)
+    try {
+      await api.setActiveWorktreeTask(workbench.workbenchId, worktree.worktreeId, task.taskId)
+      await openTaskDetail(task)
+    } catch (error) {
+      showErrorToast(displayError(error))
+    }
+  }
+
+  const refreshWorktreeTasks = async (workbenchId: string, worktreeId: string) => {
+    const tasks = await api.listGraphWorktreeTasks(workbenchId, worktreeId)
+    setTasksByWorktree(previous => ({ ...previous, [worktreeKey(workbenchId, worktreeId)]: tasks }))
   }
 
   const runNavigatorDeviceAction = async (
@@ -2086,6 +2111,7 @@ export default function MainStudio() {
           <WorkbenchNavigator
             workbenches={workbenches}
             devicesByWorktree={devicesByWorktree}
+            tasksByWorktree={tasksByWorktree}
             selection={selection}
             viewKind={mainView.kind}
             knowledgeState={navigatorKnowledgeState}
@@ -2121,6 +2147,11 @@ export default function MainStudio() {
             onSelectWorkbench={workbench => void selectWorkbench(workbench)}
             onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
             onSelectDevice={(workbench, worktree, deviceId) => void selectDevice(workbench, worktree, deviceId)}
+            onSelectTask={(workbench, worktree, task) => void selectTask(workbench, worktree, task)}
+            onAddTask={(_workbench, worktree) => {
+              setTaskCreateWorktreeId(worktree.worktreeId)
+              setMainView({ kind: 'worktree', tab: 'tasks' })
+            }}
             onSelectHardware={selectHardware}
             onReloadHardware={(workbench, worktree) => void reloadHardware(workbench, worktree)}
             onCompareHardware={(workbench, worktree) => void compareHardware(workbench, worktree)}
@@ -2192,6 +2223,8 @@ export default function MainStudio() {
                 </button>
               </div>
             </div>
+          ) : taskDetail || taskDetailLoading || taskDetailError ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div>
           ) : !selection.deviceId && selection.worktreeId ? (
             mainView.kind === 'hardware' ? (
             <>
@@ -2244,6 +2277,11 @@ export default function MainStudio() {
                 }}
                 onOpenTaskDetail={task => void openTaskDetail(task)}
                 onStartTaskChat={task => void createChatSessionForTask(task)}
+                openTaskCreate={taskCreateWorktreeId === selection.worktreeId}
+                onTaskCreateClosed={() => {
+                  setTaskCreateWorktreeId(null)
+                  void refreshWorktreeTasks(selection.workbenchId!, selection.worktreeId!)
+                }}
               />
             )
           ) : !selection.deviceId && selection.workbenchId ? (

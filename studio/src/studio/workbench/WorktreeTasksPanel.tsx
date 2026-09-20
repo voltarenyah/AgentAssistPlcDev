@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Check, ChevronDown, ListTodo, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -29,6 +29,8 @@ type Props = {
   projectTasks?: api.EngineeringTask[]
   onOpenTaskDetail?: (task: api.EngineeringTask) => void
   onStartChat?: (task: TaskSurface) => void
+  openCreate?: boolean
+  onCreateClosed?: () => void
 }
 
 const displayError = (error: unknown) => {
@@ -151,17 +153,25 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, projectTasks = [], onOpenTaskDetail, onStartChat }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, projectTasks = [], onOpenTaskDetail, onStartChat, openCreate = false, onCreateClosed }: Props) {
   const [createOpen, setCreateOpen] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newType, setNewType] = useState<api.EngineeringTask['type']>('feature')
   const [newDevice, setNewDevice] = useState('')
+  const [devices, setDevices] = useState<api.DeviceSummary[]>([])
   const [newSourceBlocks, setNewSourceBlocks] = useState('')
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<EditDraft | null>(null)
   const [newRef, setNewRef] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
   const visibleTasks = [...projectTasks, ...tasks]
+
+  useEffect(() => {
+    void api.listDevices(workbenchId, worktreeId).then(setDevices).catch(() => setDevices([]))
+  }, [workbenchId, worktreeId])
+  useEffect(() => {
+    if (openCreate) setCreateOpen(true)
+  }, [openCreate])
 
   const mutate = (action: () => Promise<unknown>) => {
     void action()
@@ -171,20 +181,16 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
 
   const addTask = () => {
     const title = newTitle.trim()
-    if (!title || adding) return
+    if (!title || !newDevice || adding) return
     setAdding(true)
-    const elementRefs = newSourceBlocks.split(/\r?\n/).map(value => value.trim()).filter(Boolean)
-    const details = [
-      `Type: ${taskTypeLabel(newType)}`,
-      newDevice.trim() ? `Device: ${newDevice.trim()}` : null,
-    ].filter(Boolean).join('\n')
-    void api.createWorktreeTask(workbenchId, worktreeId, { title, details, ...(elementRefs.length > 0 ? { elementRefs } : {}) })
+    void api.createWorktreeEngineeringTask(workbenchId, worktreeId, { title, deviceId: newDevice, type: newType, description: newSourceBlocks.trim() || null })
       .then(() => {
         setNewTitle('')
         setNewType('feature')
         setNewDevice('')
         setNewSourceBlocks('')
         setCreateOpen(false)
+        onCreateClosed?.()
         onChanged()
       })
       .catch(addError => showErrorToast(`Task could not be created: ${displayError(addError)}`))
@@ -393,9 +399,9 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
           <form className="space-y-3" onSubmit={event => { event.preventDefault(); addTask() }}>
             <label className="field-label"><span>Title</span><input autoFocus aria-label="New task title" className="field-input" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
             <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
-            <label className="field-label"><span>Device</span><input aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)} placeholder="Optional device identifier" /><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan for this worktree.</span></label>
-            <label className="field-label"><span>Related source blocks</span><textarea aria-label="New task source blocks" className="field-input min-h-[72px] py-1.5 font-mono text-[10px]" value={newSourceBlocks} onChange={event => setNewSourceBlocks(event.target.value)} placeholder="One block per line" /><span className="text-[9px] text-muted-foreground">Source references can be edited after creation through the existing element-reference contract.</span></label>
-            <DialogFooter><button type="button" className="secondary-button" onClick={() => setCreateOpen(false)} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
+            <label className="field-label"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select PLC…</option>{devices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName}</option>)}</select><span className="text-[9px] text-muted-foreground">Every task belongs to one PLC in this worktree.</span></label>
+            <label className="field-label"><span>Description</span><textarea aria-label="New task description" className="field-input min-h-[72px] py-1.5 text-[10px]" value={newSourceBlocks} onChange={event => setNewSourceBlocks(event.target.value)} placeholder="What needs to change?" /></label>
+            <DialogFooter><button type="button" className="secondary-button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

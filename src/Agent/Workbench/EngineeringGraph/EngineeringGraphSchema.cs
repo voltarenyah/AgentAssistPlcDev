@@ -4,7 +4,7 @@ namespace Agent.Workbench.EngineeringGraph;
 
 public static class EngineeringGraphSchema
 {
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     internal static int GetVersion(SqliteConnection connection)
     {
@@ -102,6 +102,12 @@ public static class EngineeringGraphSchema
         {
             Execute(connection, transaction, "CREATE TABLE IF NOT EXISTS graph_file_evidence (commit_sha TEXT NOT NULL, relative_path TEXT NOT NULL, recorded_utc TEXT NOT NULL, PRIMARY KEY (commit_sha, relative_path));");
             Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (2, $utc);",
+                ("$utc", DateTimeOffset.UtcNow.ToString("O")));
+        }
+        if (version < 3)
+        {
+            Execute(connection, transaction, "ALTER TABLE tasks ADD COLUMN device_id TEXT NULL;");
+            Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (3, $utc);",
                 ("$utc", DateTimeOffset.UtcNow.ToString("O")));
         }
     }

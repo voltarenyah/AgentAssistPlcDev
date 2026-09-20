@@ -855,6 +855,18 @@ public static class WorkbenchEndpoints
                 .Where(task => task.ScopeKind == Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree)
                 .Select(ToEngineeringTaskResponse));
         });
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/engineering-tasks", (
+            string id, string wt, CreateWorktreeEngineeringTaskApiRequest request,
+            WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            var workbench = state.Workbench(id);
+            state.Device(id, wt, request.DeviceId);
+            using var scope = graphs.Open(workbench);
+            var task = scope.Service.CreateTask(Guid.NewGuid().ToString("N"), GraphTaskScopeKind.Worktree, wt,
+                request.Title, request.Type, request.Status, request.Description, request.Priority,
+                request.Intent, request.ExpectedResult, request.DeviceId);
+            return Results.Created($"/api/workbenches/{id}/worktrees/{wt}/tasks/{task.TaskId}", ToEngineeringTaskResponse(task));
+        });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}", (
             string id, string wt, string taskId, WorkbenchApiState state,
             WorktreeTaskStore tasks, EngineeringGraphApiFactory graphs) =>
@@ -1972,7 +1984,7 @@ public static class WorkbenchEndpoints
         task.TaskId, task.WorkbenchId, JsonNamingPolicy.CamelCase.ConvertName(task.ScopeKind.ToString()), task.WorktreeId,
         task.Title, JsonNamingPolicy.CamelCase.ConvertName(task.Type.ToString()), JsonNamingPolicy.CamelCase.ConvertName(task.Status.ToString()),
         task.Priority, task.Intent, task.ExpectedResult, task.Description,
-        task.CreatedUtc!.Value, task.UpdatedUtc!.Value);
+        task.CreatedUtc!.Value, task.UpdatedUtc!.Value, task.DeviceId);
 
     private static EngineeringTaskRelationshipMutationApiResponse ToRelationshipMutation(GraphEdge edge) => new(
         edge.EdgeId, edge.FromId, JsonNamingPolicy.CamelCase.ConvertName(edge.ToKind.ToString()), edge.ToId,

@@ -32,7 +32,7 @@ public sealed class EngineeringGraphService
 
     public GraphTask CreateTask(string taskId, GraphTaskScopeKind scope, string? worktreeId, string title, GraphTaskType type,
         GraphTaskStatus status = GraphTaskStatus.Todo, string? description = null, int priority = 0,
-        string intent = "", string expectedResult = "")
+        string intent = "", string expectedResult = "", string? deviceId = null)
     {
         taskId = Require(taskId, nameof(taskId)); title = Require(title, nameof(title));
         if (scope == GraphTaskScopeKind.Worktree && string.IsNullOrWhiteSpace(worktreeId))
@@ -41,18 +41,20 @@ public sealed class EngineeringGraphService
             throw new EngineeringGraphConstraintException($"Worktree '{worktreeId}' is not registered in the current Workbench.");
         if (scope == GraphTaskScopeKind.Project && worktreeId is not null)
             throw new EngineeringGraphConstraintException("A project-scoped task cannot have a worktree ID.");
+        if (deviceId is not null && (scope != GraphTaskScopeKind.Worktree || string.IsNullOrWhiteSpace(worktreeId)))
+            throw new EngineeringGraphConstraintException("A task device requires worktree scope.");
         var now = DateTimeOffset.UtcNow;
         intent = Require(intent, nameof(intent));
         expectedResult = Require(expectedResult, nameof(expectedResult));
         var task = new GraphTask(taskId, _workbenchId, scope, worktreeId, title, type, status, description,
-            JsonSerializer.Serialize(new { priority, intent, expectedResult }), now, now, priority, intent, expectedResult);
+            JsonSerializer.Serialize(new { priority, intent, expectedResult }), now, now, priority, intent, expectedResult, deviceId);
         using var tx = _store.Connection.BeginTransaction();
         Execute(tx, """
-            INSERT INTO tasks (task_id, workbench_id, scope_kind, worktree_id, type, status, title, description, metadata_json, created_utc, updated_utc)
-            VALUES ($id,$wb,$scope,$wt,$type,$status,$title,$description,$metadata,$created,$updated);
-            INSERT INTO graph_entities (entity_kind, entity_id, workbench_id, worktree_id) VALUES ('task',$id,$wb,$wt);
+            INSERT INTO tasks (task_id, workbench_id, scope_kind, worktree_id, device_id, type, status, title, description, metadata_json, created_utc, updated_utc)
+            VALUES ($id,$wb,$scope,$wt,$device,$type,$status,$title,$description,$metadata,$created,$updated);
+            INSERT INTO graph_entities (entity_kind, entity_id, workbench_id, worktree_id, device_id) VALUES ('task',$id,$wb,$wt,$device);
             """, ("$id", task.TaskId), ("$wb", _workbenchId), ("$scope", task.ScopeKind.ToString().ToLowerInvariant()),
-            ("$wt", task.WorktreeId), ("$type", task.Type.ToString().ToLowerInvariant()), ("$status", task.Status.ToString().ToLowerInvariant()),
+            ("$wt", task.WorktreeId), ("$device", task.DeviceId), ("$type", task.Type.ToString().ToLowerInvariant()), ("$status", task.Status.ToString().ToLowerInvariant()),
             ("$title", task.Title), ("$description", task.Description), ("$metadata", task.MetadataJson),
             ("$created", now.ToString("O")), ("$updated", now.ToString("O")));
         tx.Commit();
@@ -154,6 +156,9 @@ public sealed class EngineeringGraphService
             throw new EngineeringGraphConstraintException("Entities must belong to the current Workbench.");
         if (fromKind == GraphEntityKind.Task && IsWorktreeTask(fromId) && from.WorktreeId != to.WorktreeId)
             throw new EngineeringGraphConstraintException("A worktree-scoped task can only link within its Worktree.");
+        if (fromKind == GraphEntityKind.Task && from.DeviceId is not null && to.DeviceId is not null
+            && !string.Equals(from.DeviceId, to.DeviceId, StringComparison.Ordinal))
+            throw new EngineeringGraphConstraintException("A device-bound task can only link to records from its selected PLC.", "TASK_DEVICE_MISMATCH");
         if (isPrimary && relation != GraphRelationKind.TaskCommit)
             throw new EngineeringGraphConstraintException("Only task-to-commit relationships may be primary.");
         var now = DateTimeOffset.UtcNow;
@@ -193,6 +198,9 @@ public sealed class EngineeringGraphService
             throw new EngineeringGraphConstraintException("Only task-to-commit relationships may be primary.");
         if (task.ScopeKind == GraphTaskScopeKind.Worktree && task.WorktreeId != target.WorktreeId)
             throw new EngineeringGraphConstraintException("A worktree-scoped task can only link within its Worktree.");
+        if (task.DeviceId is not null && target.DeviceId is not null
+            && !string.Equals(task.DeviceId, target.DeviceId, StringComparison.Ordinal))
+            throw new EngineeringGraphConstraintException("A device-bound task can only link to records from its selected PLC.", "TASK_DEVICE_MISMATCH");
         using var tx = _store.Connection.BeginTransaction();
         var deleteSql = targetKind == GraphEntityKind.Session
             ? "DELETE FROM graph_edges WHERE from_kind='task' AND to_kind='session' AND to_id=$target;"
@@ -224,6 +232,9 @@ public sealed class EngineeringGraphService
         var target = FindEntity(targetKind, targetId) ?? throw new EngineeringGraphConstraintException("Target entity was not registered in the current Workbench.", "GRAPH_TARGET_NOT_FOUND");
         if (!Relations.ContainsKey((GraphEntityKind.Task, targetKind))) throw new EngineeringGraphConstraintException("The target kind is not a supported task relationship.");
         if (replacement.ScopeKind == GraphTaskScopeKind.Worktree && replacement.WorktreeId != target.WorktreeId) throw new EngineeringGraphConstraintException("A worktree-scoped task can only link within its Worktree.");
+        if (replacement.DeviceId is not null && target.DeviceId is not null
+            && !string.Equals(replacement.DeviceId, target.DeviceId, StringComparison.Ordinal))
+            throw new EngineeringGraphConstraintException("A device-bound task can only link to records from its selected PLC.", "TASK_DEVICE_MISMATCH");
         var old = GetEdges(GraphEntityKind.Task, currentTaskId, targetKind).SingleOrDefault(edge => edge.EdgeId == currentEdgeId && edge.ToId == targetId)
             ?? throw new EngineeringGraphConstraintException("The relationship was not found in the current Workbench.", "RELATIONSHIP_NOT_FOUND");
         using var tx = _store.Connection.BeginTransaction();
@@ -251,6 +262,9 @@ public sealed class EngineeringGraphService
             task = FindTask(taskId) ?? throw new EngineeringGraphConstraintException("The selected task was not found in the current Workbench.");
             if (task.ScopeKind == GraphTaskScopeKind.Worktree && task.WorktreeId != session.WorktreeId)
                 throw new EngineeringGraphConstraintException("The selected task is not compatible with the current project or Workbench context.");
+            if (task.DeviceId is not null && session.DeviceId is not null
+                && !string.Equals(task.DeviceId, session.DeviceId, StringComparison.Ordinal))
+                throw new EngineeringGraphConstraintException("The selected task belongs to another PLC.", "TASK_DEVICE_MISMATCH");
         }
         using var tx = _store.Connection.BeginTransaction();
         Execute(tx, "DELETE FROM graph_edges WHERE to_kind='session' AND to_id=$session", ("$session", sessionId));
@@ -288,7 +302,7 @@ public sealed class EngineeringGraphService
     public GraphTask? GetTask(string taskId)
     {
         using var c = _store.Connection.CreateCommand();
-        c.CommandText = "SELECT workbench_id,scope_kind,worktree_id,title,type,status,description,metadata_json,created_utc,updated_utc FROM tasks WHERE task_id=$id AND workbench_id=$wb;";
+        c.CommandText = "SELECT workbench_id,scope_kind,worktree_id,title,type,status,description,metadata_json,created_utc,updated_utc,device_id FROM tasks WHERE task_id=$id AND workbench_id=$wb;";
         c.Parameters.AddWithValue("$id", taskId);
         c.Parameters.AddWithValue("$wb", _workbenchId);
         using var r = c.ExecuteReader();
@@ -299,7 +313,7 @@ public sealed class EngineeringGraphService
             r.IsDBNull(2) ? null : r.GetString(2), r.GetString(3), Enum.Parse<GraphTaskType>(r.GetString(4), true),
             Enum.Parse<GraphTaskStatus>(r.GetString(5), true), r.IsDBNull(6) ? null : r.GetString(6),
             r.IsDBNull(7) ? null : r.GetString(7), DateTimeOffset.Parse(r.GetString(8)), DateTimeOffset.Parse(r.GetString(9)),
-            metadata?.Priority ?? 0, metadata?.Intent ?? "", metadata?.ExpectedResult ?? "");
+            metadata?.Priority ?? 0, metadata?.Intent ?? "", metadata?.ExpectedResult ?? "", r.IsDBNull(10) ? null : r.GetString(10));
     }
     public IReadOnlyList<GraphEdge> GetEdges(GraphEntityKind fromKind, string fromId, GraphEntityKind? toKind = null) =>
         ReadEdges(fromKind, fromId, toKind);

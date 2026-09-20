@@ -35,8 +35,9 @@ vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
   return {
     ...actual,
-    createWorktreeTask: vi.fn(async (_wb: string, _wt: string, body: { title: string }) =>
-      task({ taskId: 't-new', title: body.title })),
+    createWorktreeEngineeringTask: vi.fn(async (_wb: string, _wt: string, body: { title: string; deviceId: string }) =>
+      ({ ...task({ taskId: 't-new', title: body.title }), workbenchId: 'wb1', scope: 'worktree', worktreeId: 'wt1', type: 'feature', priority: 0, intent: '', expectedResult: '', updatedUtc: '', description: null, deviceId: body.deviceId })),
+    listDevices: vi.fn(async () => [{ deviceId: 'plc-1', plcName: 'PLC 1' }]),
     updateWorktreeTask: vi.fn(async (_wb: string, _wt: string, taskId: string, patch: Partial<api.WorktreeTask>) =>
       task({ taskId, title: patch.title ?? 'updated', status: patch.status ?? 'todo' })),
     deleteWorktreeTask: vi.fn(async () => undefined),
@@ -106,12 +107,14 @@ describe('WorktreeTasksPanel', () => {
     const input = dialog.querySelector('input[aria-label="New task title"]') as HTMLInputElement
 
     await act(async () => setInputValue(input, 'Add alarm handling'))
+    const device = dialog.querySelector('select[aria-label="New task device"]') as HTMLSelectElement
+    await act(async () => { device.value = 'plc-1'; device.dispatchEvent(new Event('change', { bubbles: true })) })
     await act(async () => {
       dialog.querySelector('button[type="submit"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     await act(async () => {})
 
-    expect(vi.mocked(api.createWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', { title: 'Add alarm handling', details: 'Type: Feature' })
+    expect(vi.mocked(api.createWorktreeEngineeringTask)).toHaveBeenCalledWith('wb1', 'wt1', { title: 'Add alarm handling', deviceId: 'plc-1', type: 'feature', description: null })
     expect(onChanged).toHaveBeenCalled()
     expect(input.value).toBe('')
 
