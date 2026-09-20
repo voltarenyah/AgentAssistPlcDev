@@ -56,6 +56,16 @@ public sealed record WorkbenchTagSearchApiResponse(
     IReadOnlyList<WorkbenchTagSearchResultApiResponse> Workbenches,
     IReadOnlyList<WorkbenchTagSearchResultApiResponse> Worktrees);
 
+public sealed record WorkbenchLandingResponse(IReadOnlyList<WorkbenchLandingCard> Projects);
+public sealed record WorkbenchLandingCard(
+    string WorkbenchId, string Name, string CreatedAt, string? UpdatedAt, string? ModifiedAt,
+    string? Purpose, string? Owner, string? CoverAssetId,
+    IReadOnlyList<string> EffectiveTagIds, IReadOnlyList<WorktreeLandingSummary> Worktrees);
+public sealed record WorktreeLandingSummary(
+    string WorktreeId, string Name, string Branch, string? CreatedAt, string? UpdatedAt,
+    int? CompletedTasks, int? TotalTasks, int? DirtySourceFiles, int? SessionCount,
+    string Availability);
+
 /// <summary>Optional bootstrap body. CommitMessage customizes the first baseline commit title.</summary>
 public sealed record BootstrapApiRequest(string? CommitMessage);
 public sealed record HardwareOverwriteApiRequest(bool ConfirmOverwrite, string? Message = null);
@@ -470,6 +480,13 @@ public static class WorkbenchEndpoints
                 coordinator.RegisterWorkbench(workbench);
             return workbenches;
         });
+        app.MapGet("/api/workbenches/landing", async (WorkbenchApiState s, WorkbenchTagService tags, AtomicJsonStore store, WorktreeTaskStore tasks, ApiMcpGateway gateway, CancellationToken ct) =>
+        {
+            var cards = new List<WorkbenchLandingCard>();
+            foreach (var workbench in s.List())
+                cards.Add(await BuildLandingCard(workbench, tags, store, tasks, gateway, ct));
+            return Results.Ok(new WorkbenchLandingResponse(cards));
+        });
         app.MapGet("/api/sandbox/roots", (SandboxConfig sandbox) =>
             new { roots = sandbox.PathJail.Roots });
         app.MapPost("/api/workbenches/open", (OpenWorkbenchApiRequest r, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
@@ -519,6 +536,65 @@ public static class WorkbenchEndpoints
                 "Workbench deleted.").ConfigureAwait(false);
             s.Remove(id);
             return result;
+        });
+        app.MapPost("/api/workbenches/{id}/cover", async (string id, HttpRequest request, WorkbenchApiState s, WorkbenchCatalog catalog) =>
+        {
+            var workbench = s.Workbench(id);
+            var form = await request.ReadFormAsync();
+            var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+            if (file is null || file.Length <= 0 || file.Length > 5 * 1024 * 1024)
+                throw new ArgumentException("Cover image is missing or exceeds the 5 MB limit.");
+            var header = new byte[16];
+            await using var input = file.OpenReadStream();
+            var read = await input.ReadAsync(header);
+            var (extension, valid) = DetectCover(header.AsSpan(0, read));
+            if (!valid) throw new ArgumentException("Cover image must be a supported PNG, JPEG, GIF, or WebP image.");
+            var assetId = Guid.NewGuid().ToString("N") + extension;
+            var directory = catalog.ManagedCoverDirectory(id);
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, assetId);
+            try
+            {
+                await using (var output = File.Create(path))
+                {
+                    input.Position = 0;
+                    await input.CopyToAsync(output);
+                }
+                if (!File.Exists(path) || new FileInfo(path).Length != file.Length)
+                    throw new IOException("Cover image could not be stored completely.");
+                var previous = workbench.CoverAssetId;
+                WorkbenchMetadata updated;
+                try
+                {
+                    updated = catalog.UpdateWorkbenchCover(workbench, assetId);
+                    s.Add(updated);
+                }
+                catch
+                {
+                    try { catalog.UpdateWorkbenchCover(workbench, previous); } catch { /* preserve original failure */ }
+                    throw;
+                }
+                if (!string.IsNullOrWhiteSpace(previous))
+                {
+                    var old = Path.Combine(directory, Path.GetFileName(previous));
+                    if (!string.Equals(old, path, StringComparison.OrdinalIgnoreCase) && File.Exists(old)) File.Delete(old);
+                }
+                return Results.Ok(new { coverAssetId = updated.CoverAssetId });
+            }
+            catch
+            {
+                if (File.Exists(path)) File.Delete(path);
+                throw;
+            }
+        });
+        app.MapGet("/api/workbenches/{id}/cover", (string id, WorkbenchApiState s, WorkbenchCatalog catalog) =>
+        {
+            var workbench = s.Workbench(id);
+            if (string.IsNullOrWhiteSpace(workbench.CoverAssetId)) return Results.NoContent();
+            var name = Path.GetFileName(workbench.CoverAssetId);
+            var path = Path.Combine(catalog.ManagedCoverDirectory(id), name);
+            if (!File.Exists(path)) return Results.NoContent();
+            return Results.File(path, DetectCoverContentType(Path.GetExtension(path)));
         });
         app.MapPost("/api/workbenches/{id}/select", (string id, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
         {
@@ -1956,6 +2032,99 @@ public static class WorkbenchEndpoints
         value = default;
         return false;
     }
+
+    private static async Task<WorkbenchLandingCard> BuildLandingCard(
+        WorkbenchMetadata workbench,
+        WorkbenchTagService tags,
+        AtomicJsonStore store,
+        WorktreeTaskStore tasks,
+        ApiMcpGateway gateway,
+        CancellationToken cancellationToken)
+    {
+        var effectiveTags = Array.Empty<string>();
+        try { effectiveTags = tags.GetWorkbenchTags(workbench.WorkbenchId).EffectiveTagIds.ToArray(); }
+        catch (WorkbenchTagDomainException) { }
+        var activity = ParseActivity(workbench.UpdatedAt ?? workbench.CreatedAt);
+        var summaries = new List<WorktreeLandingSummary>();
+        foreach (var registration in workbench.Worktrees)
+        {
+            var root = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+            try
+            {
+                var metadata = store.Read<WorktreeMetadata>(Path.Combine(root, "worktree.json"));
+                var taskList = tasks.Load(root);
+                int dirty = 0;
+                var statusAvailable = true;
+                DateTimeOffset? dirtyActivity = null;
+                try
+                {
+                    var status = await gateway.For("vc_status").CallAsync<JsonElement>(
+                        "vc_status", new { repoPath = root }, cancellationToken);
+                    var entries = status.TryGetProperty("entries", out var statusEntries)
+                        ? statusEntries.EnumerateArray().ToArray() : Array.Empty<JsonElement>();
+                    dirty = entries.Length;
+                    foreach (var entry in entries)
+                    {
+                        var relativePath = entry.TryGetProperty("filePath", out var filePath) ? filePath.GetString() ?? string.Empty : string.Empty;
+                        var source = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                        var candidate = source;
+                        while (!File.Exists(candidate) && !Directory.Exists(candidate))
+                        {
+                            candidate = Path.GetDirectoryName(candidate) ?? root;
+                        }
+                        var stamp = File.GetLastWriteTimeUtc(candidate);
+                        if (stamp != DateTime.MinValue)
+                        {
+                            var value = new DateTimeOffset(DateTime.SpecifyKind(stamp, DateTimeKind.Utc));
+                            if (dirtyActivity is null || value > dirtyActivity) dirtyActivity = value;
+                        }
+                    }
+                }
+                catch { dirty = 0; statusAvailable = false; }
+                if (!statusAvailable)
+                {
+                    summaries.Add(new WorktreeLandingSummary(registration.WorktreeId, metadata.Name, metadata.Branch,
+                        metadata.CreatedAt, metadata.UpdatedAt, null, null, null, null, "unavailable"));
+                    continue;
+                }
+                var sessionDirectory = SessionManager.SessionsDirectory(root);
+                var sessions = Directory.Exists(sessionDirectory)
+                    ? Directory.EnumerateFiles(sessionDirectory, "*.json").Count()
+                    : 0;
+                var wtActivity = ParseActivity(metadata.UpdatedAt ?? metadata.CreatedAt);
+                if (dirtyActivity is not null && (wtActivity is null || dirtyActivity > wtActivity)) wtActivity = dirtyActivity;
+                if (wtActivity is not null && (activity is null || wtActivity > activity)) activity = wtActivity;
+                summaries.Add(new WorktreeLandingSummary(registration.WorktreeId, metadata.Name, metadata.Branch,
+                    metadata.CreatedAt, metadata.UpdatedAt, taskList.Tasks.Count(t => t.Status == WorktreeTaskStatus.Done),
+                    taskList.Tasks.Count, dirty, sessions, "available"));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or MetadataSchemaException)
+            {
+                summaries.Add(new WorktreeLandingSummary(registration.WorktreeId, registration.Name, registration.Branch,
+                    null, null, null, null, null, null, "unavailable"));
+            }
+        }
+        return new WorkbenchLandingCard(workbench.WorkbenchId, workbench.Name, workbench.CreatedAt,
+            workbench.UpdatedAt, activity?.ToString("O"), workbench.Purpose, workbench.Owner,
+            workbench.CoverAssetId, effectiveTags, summaries);
+    }
+
+    private static DateTimeOffset? ParseActivity(string? value) =>
+        DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
+
+    private static (string Extension, bool Valid) DetectCover(ReadOnlySpan<byte> header)
+    {
+        if (header.Length >= 8 && header[..8].SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 })) return (".png", true);
+        if (header.Length >= 3 && header[..3].SequenceEqual(new byte[] { 255, 216, 255 })) return (".jpg", true);
+        if (header.Length >= 6 && (header[..6].SequenceEqual("GIF87a"u8) || header[..6].SequenceEqual("GIF89a"u8))) return (".gif", true);
+        if (header.Length >= 12 && header[..4].SequenceEqual("RIFF"u8) && header.Slice(8, 4).SequenceEqual("WEBP"u8)) return (".webp", true);
+        return (string.Empty, false);
+    }
+
+    private static string DetectCoverContentType(string extension) => extension.ToLowerInvariant() switch
+    {
+        ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp", _ => "application/octet-stream",
+    };
 
     private static WorktreeDetailResponse ToDetail(WorktreeMetadata worktree) => new(
         worktree.WorktreeId,

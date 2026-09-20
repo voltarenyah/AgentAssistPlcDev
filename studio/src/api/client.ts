@@ -220,7 +220,37 @@ export type Workbench = {
   engineeringProjectId: string | null
   sourceProjectPath: string | null
   worktrees: WorkbenchRegistration[]
+  purpose?: string | null
+  owner?: string | null
+  updatedAt?: string | null
+  coverAssetId?: string | null
 }
+
+export type WorktreeLandingSummary = {
+  worktreeId: string
+  name: string
+  branch: string
+  createdAt: string | null
+  updatedAt: string | null
+  completedTasks: number | null
+  totalTasks: number | null
+  dirtySourceFiles: number | null
+  sessionCount: number | null
+  availability: 'available' | 'unavailable' | string
+}
+export type WorkbenchLandingCard = {
+  workbenchId: string
+  name: string
+  createdAt: string
+  updatedAt: string | null
+  modifiedAt: string | null
+  purpose: string | null
+  owner: string | null
+  coverAssetId: string | null
+  effectiveTagIds: string[]
+  worktrees: WorktreeLandingSummary[]
+}
+export type WorkbenchLanding = { projects: WorkbenchLandingCard[] }
 
 export type Worktree = {
   schemaVersion: string
@@ -946,6 +976,17 @@ const withOperation = (init: RequestInit, operationId?: string): RequestInit => 
 }
 
 export const listWorkbenches = () => workbenchRequest<Workbench[]>('/workbenches')
+export const getWorkbenchLanding = () => workbenchRequest<WorkbenchLanding>('/workbenches/landing')
+export const uploadWorkbenchCover = async (workbenchId: string, file: File) => {
+  const form = new FormData()
+  form.append('file', file)
+  return workbenchRequest<{ coverAssetId: string | null }>(
+    `/workbenches/${encodeURIComponent(workbenchId)}/cover`,
+    { method: 'POST', body: form },
+  )
+}
+export const workbenchCoverUrl = (workbenchId: string) =>
+  `${BASE}/workbenches/${encodeURIComponent(workbenchId)}/cover`
 export const getTagTaxonomy = () =>
   workbenchRequest<TagTaxonomy>('/tags')
 export const createTagPath = (path: string) =>

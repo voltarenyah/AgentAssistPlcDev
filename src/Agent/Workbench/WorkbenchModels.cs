@@ -32,7 +32,11 @@ public sealed record WorkbenchMetadata(
     string? OriginProjectPath = null,
     string? OriginImportedAt = null,
     /// <summary>Operational TIA project inside the worktree's tia/ working copy (1.2+).</summary>
-    string? ManagedTiaProjectPath = null);
+    string? ManagedTiaProjectPath = null,
+    /// <summary>Last metadata/cover activity. Legacy records omit this and fall back to CreatedAt.</summary>
+    string? UpdatedAt = null,
+    /// <summary>Opaque managed cover asset identity; never a caller path.</summary>
+    string? CoverAssetId = null);
 
 public sealed record WorkbenchWorktreeRegistration(
     string WorktreeId,
@@ -66,7 +70,9 @@ public sealed record WorktreeMetadata(
     long? BaseSvnRevision = null,
     /// <summary>The repository-wide SVN revision created by the server-side branch copy.
     /// This is the first native-history event owned by the feature worktree.</summary>
-    long? SvnBranchRevision = null);
+    long? SvnBranchRevision = null,
+    /// <summary>Last metadata activity. Legacy records omit this and fall back to CreatedAt.</summary>
+    string? UpdatedAt = null);
 
 [JsonConverter(typeof(WorktreeStatusJsonConverter))]
 public enum WorktreeStatus

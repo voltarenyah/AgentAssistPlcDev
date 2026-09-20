@@ -18,6 +18,7 @@ public sealed class WorkbenchCatalog
 
     private readonly AtomicJsonStore _store;
     private readonly string _defaultRoot;
+    private readonly string _coverRoot;
 
     public WorkbenchCatalog()
         : this(new AtomicJsonStore(), defaultRoot: null)
@@ -35,6 +36,9 @@ public sealed class WorkbenchCatalog
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "AutomationWorkbench",
                 "Project"));
+        _coverRoot = Path.Combine(
+            Directory.GetParent(_defaultRoot)?.FullName ?? _defaultRoot,
+            "ProjectCovers");
     }
 
     public WorkbenchMetadata Create(string name, string? requestedRoot)
@@ -67,7 +71,8 @@ public sealed class WorkbenchCatalog
                 null,
                 null,
                 Array.Empty<WorkbenchWorktreeRegistration>(),
-                SvnRepositoryPath: Path.Combine(root, "repository.svn"));
+                SvnRepositoryPath: Path.Combine(root, "repository.svn"),
+                UpdatedAt: DateTimeOffset.UtcNow.ToString("O"));
 
             _store.Write(MetadataPath(root), metadata);
             return metadata;
@@ -147,6 +152,7 @@ public sealed class WorkbenchCatalog
 
         ClearReadOnlyAttributes(root);
         DeleteDirectoryIfPresent(root);
+        DeleteManagedCoverDirectory(workbench.WorkbenchId);
     }
 
     public IReadOnlyList<WorkbenchMetadata> ListDefaultRoot()
@@ -185,6 +191,7 @@ public sealed class WorkbenchCatalog
         var updated = workbench with
         {
             Worktrees = workbench.Worktrees.Append(registration).ToArray(),
+            UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
         };
 
         _store.Write(MetadataPath(workbench.RootPath), updated);
@@ -229,6 +236,7 @@ public sealed class WorkbenchCatalog
             Worktrees = persisted.Worktrees
                 .Where(candidate => !string.Equals(candidate.WorktreeId, worktreeId, StringComparison.Ordinal))
                 .ToArray(),
+            UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
         };
         _store.Write(MetadataPath(persisted.RootPath), updated);
         return updated;
@@ -242,7 +250,12 @@ public sealed class WorkbenchCatalog
     {
         ArgumentNullException.ThrowIfNull(workbench);
 
-        var updated = workbench with { Purpose = purpose, Owner = owner };
+        var updated = workbench with
+        {
+            Purpose = purpose,
+            Owner = owner,
+            UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
+        };
         _store.Write(MetadataPath(workbench.RootPath), updated);
         return updated;
     }
@@ -271,8 +284,43 @@ public sealed class WorkbenchCatalog
         var worktreeRoot = WorkbenchPaths.ResolveWorktree(
             workbench.RootPath,
             registration.RelativePath);
-        _store.Write(Path.Combine(worktreeRoot, "worktree.json"), worktree);
-        return worktree;
+        var updated = worktree with { UpdatedAt = DateTimeOffset.UtcNow.ToString("O") };
+        _store.Write(Path.Combine(worktreeRoot, "worktree.json"), updated);
+        return updated;
+    }
+
+    public WorkbenchMetadata UpdateWorkbenchCover(WorkbenchMetadata workbench, string? coverAssetId)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        var persisted = Load(workbench.RootPath);
+        if (!string.Equals(persisted.WorkbenchId, workbench.WorkbenchId, StringComparison.Ordinal))
+            throw new WorkbenchCatalogException("WORKBENCH_RELATIONSHIP_MISMATCH", "Workbench metadata does not match the persisted catalog entry.");
+        var updated = persisted with { CoverAssetId = coverAssetId, UpdatedAt = DateTimeOffset.UtcNow.ToString("O") };
+        _store.Write(MetadataPath(persisted.RootPath), updated);
+        return updated;
+    }
+
+    /// <summary>Returns the catalog-owned root for managed Project cover assets.</summary>
+    public string ManagedCoverDirectory(string workbenchId)
+    {
+        if (string.IsNullOrWhiteSpace(workbenchId)
+            || workbenchId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || workbenchId.Contains(Path.DirectorySeparatorChar)
+            || workbenchId.Contains(Path.AltDirectorySeparatorChar)
+            || workbenchId is "." or "..")
+        {
+            throw new ArgumentException("Invalid workbench identity.", nameof(workbenchId));
+        }
+
+        return Path.Combine(_coverRoot, workbenchId);
+    }
+
+    /// <summary>Deletes managed cover data after the existing Project deletion succeeds.</summary>
+    public void DeleteManagedCoverDirectory(string workbenchId)
+    {
+        var directory = ManagedCoverDirectory(workbenchId);
+        ClearReadOnlyAttributes(directory);
+        DeleteDirectoryIfPresent(directory);
     }
 
     public DeviceContext ResolveDevice(
