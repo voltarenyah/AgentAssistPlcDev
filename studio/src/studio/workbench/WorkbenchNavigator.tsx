@@ -47,6 +47,7 @@ type Props = {
   filteredResults?: WorkbenchTagSearchResults | null
   /** Filter controls are owned by the caller but placed directly below the navigator header. */
   filterControl?: ReactNode
+  onShowHome: () => void
   onCreateWorkbench: () => void
   onCreateWorktree: (workbench: Workbench) => void
   onOpenWorkbench: (workbench: Workbench, upgrade: boolean) => void
@@ -85,6 +86,7 @@ export default function WorkbenchNavigator({
   filterActive = false,
   filteredResults = null,
   filterControl,
+  onShowHome,
   onCreateWorkbench,
   onCreateWorktree,
   onOpenWorkbench,
@@ -140,7 +142,10 @@ export default function WorkbenchNavigator({
   return (
     <aside data-dock-content="left" className="flex h-full min-h-0 w-full shrink-0 flex-col border-r bg-sidebar" style={{ borderColor: 'var(--border)' }}>
       <div className="flex h-12 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>
-        <div className="min-w-0 flex-1 text-sm font-semibold tracking-tight">Automation Workbench</div>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div className="truncate text-sm font-semibold tracking-tight">Automation Workbench</div>
+          <Button variant="ghost" size="xs" onClick={onShowHome}>Home</Button>
+        </div>
         <Button variant="ghost" size="icon-sm" aria-label="Refresh workbenches" title="Refresh workbenches" onClick={onRefresh}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
         </Button>

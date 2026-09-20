@@ -2105,6 +2105,15 @@ export default function MainStudio() {
                   : reloadNavigatorFilter(navigatorTagIds))}
               />
             )}
+            onShowHome={() => {
+              setSelection({ workbenchId: null, worktreeId: null, deviceId: null })
+              setMainView({ kind: 'project' })
+              setDeviceSelection(null)
+              setChatTabs(emptyChatTabs())
+              setTaskDetail(null)
+              setTaskDetailTask(null)
+              setTaskDetailError(null)
+            }}
             onCreateWorkbench={openCreateWorkbench}
             onCreateWorktree={setCreateWorktreeFor}
             onOpenWorkbench={(workbench, upgrade) => void openWorkbenchInTia(workbench, upgrade)}
