@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as api from '@/api/client'
 import WorkbenchNavigator from './WorkbenchNavigator'
 
@@ -22,7 +22,7 @@ const workbenches: api.Workbench[] = [
 ]
 
 const callbacks = {
-  onCreateWorkbench: () => {}, onCreateWorktree: () => {}, onOpenWorkbench: () => {}, onOpenWorktree: () => {}, onInspectWorkbench: () => {}, onInspectWorktree: () => {}, onArchiveWorktree: () => {}, onRefresh: () => {}, onSelectWorkbench: () => {}, onSelectWorktree: () => {}, onSelectDevice: () => {}, onSelectHardware: () => {}, onReloadHardware: () => {}, onCompareHardware: () => {}, onDeleteWorkbench: () => {}, onDeleteWorktree: () => {}, onMergeWorktree: () => {}, onOpenDevice: () => {}, onUpgradeDevice: () => {}, onInspectDevice: () => {}, onCompareDevice: () => {}, onRebuildDevice: () => {}, onUpdateKnowledge: () => {}, onRebuildKnowledge: () => {},
+  onCreateWorkbench: () => {}, onCreateWorktree: () => {}, onOpenWorkbench: () => {}, onOpenWorktree: () => {}, onInspectWorkbench: () => {}, onInspectWorktree: () => {}, onArchiveWorktree: () => {}, onRefresh: () => {}, onShowHome: () => {}, onSelectWorkbench: () => {}, onSelectWorktree: () => {}, onSelectDevice: () => {}, onSelectHardware: () => {}, onReloadHardware: () => {}, onCompareHardware: () => {}, onDeleteWorkbench: () => {}, onDeleteWorktree: () => {}, onMergeWorktree: () => {}, onOpenDevice: () => {}, onUpgradeDevice: () => {}, onInspectDevice: () => {}, onCompareDevice: () => {}, onRebuildDevice: () => {}, onUpdateKnowledge: () => {}, onRebuildKnowledge: () => {},
 }
 
 const renderNavigator = async (filteredResults: api.WorkbenchTagSearchResults | null, filterActive = true) => {
@@ -48,6 +48,31 @@ const renderNavigator = async (filteredResults: api.WorkbenchTagSearchResults | 
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('WorkbenchNavigator tag projection', () => {
+  it('offers a Home action beside the workbench title', async () => {
+    const onShowHome = vi.fn()
+    const { host, root } = await renderNavigator(null, false)
+    await act(async () => root.render(
+      <WorkbenchNavigator
+        workbenches={workbenches}
+        devicesByWorktree={{}}
+        selection={{ workbenchId: 'wb-direct', worktreeId: null, deviceId: null }}
+        viewKind="project"
+        knowledgeState={{}}
+        loading={false}
+        filterActive={false}
+        filteredResults={null}
+        {...callbacks}
+        onShowHome={onShowHome}
+      />,
+    ))
+
+    const home = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Home')
+    expect(home).toBeTruthy()
+    await act(async () => (home as HTMLButtonElement).click())
+    expect(onShowHome).toHaveBeenCalledOnce()
+    await act(async () => root.unmount())
+  })
+
   it('renders a one-tag descendant match and its parent project from the server result', async () => {
     const { host, root } = await renderNavigator({
       workbenches: [],
