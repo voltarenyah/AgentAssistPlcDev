@@ -68,7 +68,8 @@ describe('WorkbenchNavigator tag projection', () => {
 
     const home = host.querySelector('button[aria-label="Go to all projects"]')
     expect(home).toBeTruthy()
-    expect(home?.classList.contains('icon-button')).toBe(true)
+    expect(home?.getAttribute('data-variant')).toBe('ghost')
+    expect(home?.getAttribute('data-size')).toBe('icon-sm')
     await act(async () => (home as HTMLButtonElement).click())
     expect(onShowHome).toHaveBeenCalledOnce()
     await act(async () => root.unmount())
