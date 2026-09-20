@@ -6,6 +6,7 @@ import {
   Database,
   GitBranch,
   GitMerge,
+  House,
   Monitor,
   MonitorOff,
   Minus,
@@ -144,7 +145,14 @@ export default function WorkbenchNavigator({
       <div className="flex h-12 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <div className="truncate text-sm font-semibold tracking-tight">Automation Workbench</div>
-          <Button variant="ghost" size="xs" onClick={onShowHome}>Home</Button>
+          <button
+            className="icon-button"
+            aria-label="Go to all projects"
+            title="All projects"
+            onClick={onShowHome}
+          >
+            <House className="h-3.5 w-3.5" />
+          </button>
         </div>
         <Button variant="ghost" size="icon-sm" aria-label="Refresh workbenches" title="Refresh workbenches" onClick={onRefresh}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />

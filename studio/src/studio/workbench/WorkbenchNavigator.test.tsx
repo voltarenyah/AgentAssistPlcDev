@@ -48,7 +48,7 @@ const renderNavigator = async (filteredResults: api.WorkbenchTagSearchResults | 
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('WorkbenchNavigator tag projection', () => {
-  it('offers a Home action beside the workbench title', async () => {
+  it('offers an icon-only Home action beside the workbench title', async () => {
     const onShowHome = vi.fn()
     const { host, root } = await renderNavigator(null, false)
     await act(async () => root.render(
@@ -66,8 +66,9 @@ describe('WorkbenchNavigator tag projection', () => {
       />,
     ))
 
-    const home = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Home')
+    const home = host.querySelector('button[aria-label="Go to all projects"]')
     expect(home).toBeTruthy()
+    expect(home?.classList.contains('icon-button')).toBe(true)
     await act(async () => (home as HTMLButtonElement).click())
     expect(onShowHome).toHaveBeenCalledOnce()
     await act(async () => root.unmount())
