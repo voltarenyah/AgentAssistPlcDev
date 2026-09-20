@@ -7,7 +7,6 @@ import {
   CircuitBoard,
   ClipboardList,
   CloudCog,
-  Cpu,
   GitBranch,
   Loader2,
   Network,
@@ -15,7 +14,6 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  Plus,
   RefreshCw,
   Server,
   Settings,
@@ -67,6 +65,7 @@ import HardwareNetworkView from '@/studio/HardwareNetworkView'
 import HardwarePropertiesDock from '@/studio/HardwarePropertiesDock'
 import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
 import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
+import AllProjectsLandingPage from '@/studio/workbench/AllProjectsLandingPage'
 import TaskDetail, { type TraceabilityItem } from '@/studio/workbench/TaskDetail'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
@@ -467,6 +466,8 @@ function ProjectAccessDialog({
 
 export default function MainStudio() {
   const [workbenches, setWorkbenches] = useState<api.Workbench[]>([])
+  const [landingProjects, setLandingProjects] = useState<api.WorkbenchLandingCard[] | null>(null)
+  const [landingError, setLandingError] = useState<string | null>(null)
   const [sessions, setSessions] = useState<api.SessionInfo[]>([])
   const [currentSession, setCurrentSession] = useState<api.CurrentTiaSession | null>(null)
   const [statusPopover, setStatusPopover] = useState<'runtime' | 'tia' | null>(null)
@@ -702,6 +703,18 @@ export default function MainStudio() {
     return values
   }, [])
 
+  const reloadLanding = useCallback(async () => {
+    try {
+      const landing = await api.getWorkbenchLanding()
+      setLandingProjects(landing.projects)
+      setLandingError(null)
+      return landing.projects
+    } catch (error) {
+      setLandingError(displayError(error))
+      return null
+    }
+  }, [])
+
   const reloadNavigatorTags = useCallback(async () => {
     const requestId = ++navigatorTagRequestId.current
     setNavigatorTagsLoading(true)
@@ -810,15 +823,7 @@ export default function MainStudio() {
           // busy; refresh them in the background instead of blocking startup.
       void reloadSessions().catch(() => {})
       void reloadCurrentSession()
-      const loadedWorkbenches = await reloadWorkbenches()
-      if (loadedWorkbenches.length > 0) {
-        const first = loadedWorkbenches[0]
-        // Keep the API selection in sync with the local project selection so
-        // workbench-scoped features (including App Assistant) can resolve the
-        // active workbench immediately after startup.
-        await api.selectWorkbench(first.workbenchId)
-        setSelection({ workbenchId: first.workbenchId, worktreeId: null, deviceId: null })
-      }
+      await Promise.all([reloadWorkbenches(), reloadLanding()])
     } catch (error) {
       setFatalError(displayError(error))
     } finally {
@@ -827,7 +832,7 @@ export default function MainStudio() {
     void reloadKeyStatus().then(status => {
       if (status?.configured) void reloadBalance()
     })
-  }, [reloadWorkbenches, reloadSessions, reloadCurrentSession, reloadKeyStatus, reloadBalance])
+  }, [reloadWorkbenches, reloadLanding, reloadSessions, reloadCurrentSession, reloadKeyStatus, reloadBalance])
 
   useEffect(() => { void loadStartup() }, [loadStartup])
 
@@ -2250,26 +2255,26 @@ export default function MainStudio() {
               }}
             />
           ) : !selection.deviceId ? (
-            <div className="relative grid h-full place-items-center overflow-hidden p-8">
-              <div className="pointer-events-none absolute inset-0 opacity-[0.035]" style={{
-                backgroundImage: 'linear-gradient(var(--foreground) 1px, transparent 1px), linear-gradient(90deg, var(--foreground) 1px, transparent 1px)',
-                backgroundSize: '36px 36px',
-              }} />
-              <div className="relative max-w-xl text-center">
-                <div className="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-2xl border bg-card shadow-sm" style={{ borderColor: 'var(--border)' }}>
-                  <Cpu className="h-7 w-7 text-chart-2" />
-                </div>
-                <h1 className="text-xl font-semibold tracking-tight">Select a device context</h1>
-                <p className="mx-auto mt-2 max-w-md text-xs leading-4 text-muted-foreground">
-                  Choose a workbench, linked worktree, and PLC device. Every source, knowledge, and chat operation is then bound to that exact context.
-                </p>
-                {workbenches.length === 0 && (
-                  <button className="primary-button mt-5" onClick={openCreateWorkbench}>
-                    <Plus className="h-3.5 w-3.5" /> Create workbench
-                  </button>
-                )}
-              </div>
-            </div>
+            <AllProjectsLandingPage
+              projects={landingProjects}
+              loading={loading}
+              error={landingError}
+              tagNodes={navigatorTagNodes}
+              selectedTagIds={navigatorTagIds}
+              matchingWorkbenchIds={navigatorFilterResults?.workbenches.map(result => result.workbenchId ?? result.entityId) ?? null}
+              onSelectedTagIdsChange={setNavigatorTagIds}
+              onRetry={() => void loadStartup()}
+              onCreateWorkbench={openCreateWorkbench}
+              onSelectWorkbench={workbenchId => {
+                const workbench = workbenches.find(candidate => candidate.workbenchId === workbenchId)
+                if (workbench) void selectWorkbench(workbench)
+              }}
+              onSelectWorktree={(workbenchId, worktreeId) => {
+                const workbench = workbenches.find(candidate => candidate.workbenchId === workbenchId)
+                const worktree = workbench?.worktrees.find(candidate => candidate.worktreeId === worktreeId)
+                if (workbench && worktree) void selectWorktree(workbench, worktree)
+              }}
+            />
           ) : (
             <WorkspaceHost
               workspace={workspaceService}

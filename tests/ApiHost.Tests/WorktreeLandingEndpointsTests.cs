@@ -269,6 +269,53 @@ public sealed class WorktreeLandingEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task LandingKeepsWorktreeWhenManagedSourceStatusIsUnavailable()
+    {
+        await using var fixture = LandingFixture.Create(root);
+        fixture.WriteWorktree("wt-1", "master", "master");
+        fixture.CreateSecondProject();
+        var response = await fixture.Client.GetAsync("/api/workbenches/landing");
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(2, body.GetProperty("projects").GetArrayLength());
+        var worktree = Assert.Single(body.GetProperty("projects").EnumerateArray().First(project => project.GetProperty("workbenchId").GetString() == fixture.WorkbenchId).GetProperty("worktrees").EnumerateArray());
+        Assert.Equal("unavailable", worktree.GetProperty("availability").GetString());
+        Assert.Equal(JsonValueKind.Null, worktree.GetProperty("dirtySourceFiles").ValueKind);
+    }
+
+    [Fact]
+    public async Task CoverUploadUsesManagedIdentityAndReplacesPreviousCover()
+    {
+        await using var fixture = LandingFixture.Create(root);
+        var route = $"/api/workbenches/{fixture.WorkbenchId}/cover";
+        static MultipartFormDataContent Image() { var content = new ByteArrayContent(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }); content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png"); var form = new MultipartFormDataContent(); form.Add(content, "file", "user-path.png"); return form; }
+        var first = await fixture.Client.PostAsync(route, Image()); first.EnsureSuccessStatusCode();
+        var firstId = (await first.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("coverAssetId").GetString();
+        var second = await fixture.Client.PostAsync(route, Image()); second.EnsureSuccessStatusCode();
+        var secondId = (await second.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("coverAssetId").GetString();
+        Assert.NotEqual(firstId, secondId);
+        Assert.DoesNotContain("user-path", secondId, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.GetAsync(route)).StatusCode);
+    }
+
+    [Fact]
+    public async Task FailedCoverReplacementRetainsTheExistingCoverDescriptor()
+    {
+        await using var fixture = LandingFixture.Create(root);
+        var route = $"/api/workbenches/{fixture.WorkbenchId}/cover";
+        using var valid = new MultipartFormDataContent();
+        valid.Add(new ByteArrayContent(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }), "file", "first.png");
+        var first = await fixture.Client.PostAsync(route, valid); first.EnsureSuccessStatusCode();
+        var firstId = (await first.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("coverAssetId").GetString();
+        using var invalid = new MultipartFormDataContent();
+        invalid.Add(new ByteArrayContent(new byte[] { 1, 2, 3 }), "file", "bad.png");
+        Assert.Equal(HttpStatusCode.BadRequest, (await fixture.Client.PostAsync(route, invalid)).StatusCode);
+        var metadata = fixture.Store.Read<WorkbenchMetadata>(Path.Combine(fixture.WorkbenchRootPath, "workbench.json"));
+        Assert.Equal(firstId, metadata.CoverAssetId);
+        Assert.DoesNotContain(Path.DirectorySeparatorChar.ToString(), firstId);
+    }
+
+    [Fact]
     public async Task VersionControlTimelineRejectsAnInvalidPageBeforeCallingVersionControl()
     {
         await using var fixture = LandingFixture.Create(root);
@@ -338,6 +385,8 @@ public sealed class WorktreeLandingEndpointsTests : IDisposable
 
         public string WorktreeRoot(string relativePath) =>
             Path.Combine(WorkbenchRootPath, "worktrees", relativePath);
+
+        public void CreateSecondProject() => catalog.Create("Line 2", Path.Combine(Path.GetDirectoryName(WorkbenchRootPath)!, "Line2"));
 
         public void RegisterWorktree(string worktreeId, string name, string branch, string relativePath)
         {
