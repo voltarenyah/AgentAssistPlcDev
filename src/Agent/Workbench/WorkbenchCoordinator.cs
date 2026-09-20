@@ -44,6 +44,15 @@ public sealed record CreateWorktreeRequest(
 
 public sealed record SourceSavepointSelection(string WorktreeId, string GitSha);
 
+public sealed record TaskStageProblem(string SourceObjectId, string Code, string Message);
+public sealed record TaskSourceComparisonResult(
+    string TaskId,
+    string DeviceId,
+    IReadOnlyList<Contracts.Engineering.SourceEvidenceCandidate> Candidates,
+    IReadOnlyList<Contracts.Engineering.SourceEvidenceCandidateExport> CandidateExports,
+    IReadOnlyList<TaskStageProblem> Problems,
+    string? ObservedSoftwareChecksum);
+
 public sealed record BranchStartPoint(
     string WorktreeId, string WorktreeName, string Branch, string GitSha, string Message,
     string? SvnUrl, long? SvnRevision, string? ProjectChecksum, string? CompileStatus,
@@ -3364,7 +3373,8 @@ public sealed class WorkbenchCoordinator
         bool recordTiaState = true,
         bool managedSourceConsistent = false,
         IOperationProgress? progress = null,
-        IReadOnlyList<string>? additionalTaskIds = null)
+        IReadOnlyList<string>? additionalTaskIds = null,
+        string? taskEvidenceTaskId = null)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A commit message is required.", nameof(message));
@@ -3490,17 +3500,15 @@ public sealed class WorkbenchCoordinator
                 .ConfigureAwait(false);
         }
 
-        var managedSourceWarning = await TryRecordManagedSourceEvidenceAsync(
-                workbench,
-                worktree,
-                worktreeRoot,
-                registration.RelativePath,
-                result.Sha,
-                managedSourceConsistent,
-                captured: null,
-                token,
-                progress)
-            .ConfigureAwait(false);
+        var managedSourceWarning = string.IsNullOrWhiteSpace(taskEvidenceTaskId)
+            ? await TryRecordManagedSourceEvidenceAsync(
+                    workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha,
+                    managedSourceConsistent, captured: null, token, progress)
+                .ConfigureAwait(false)
+            : await TryRecordTaskStageEvidenceAsync(
+                    workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha,
+                    taskEvidenceTaskId, token, progress)
+                .ConfigureAwait(false);
         if (managedSourceWarning is not null)
             evidenceWarnings.Add(managedSourceWarning);
         var attributionWarning = AssociateCommit(workbench, worktree.WorktreeId, result.Sha, additionalTaskIds);
@@ -3547,6 +3555,20 @@ public sealed class WorkbenchCoordinator
                 + "schema 1.2 do not record native history).");
         }
 
+        // A native project savepoint is a project-wide operation. Do not let it absorb source
+        // edits that have not first been committed through their owning task. This check is
+        // intentionally independent of any task-scoped compare verdict.
+        var status = await versionControl.CallAsync<ConsistencyStatusResult>(
+            "vc_status", new { repoPath = worktreeRoot }, token).ConfigureAwait(false);
+        var pendingSource = status.Entries
+            .Select(entry => entry.FilePath.Replace('\\', '/'))
+            .Where(IsManagedSourcePath)
+            .ToArray();
+        if (pendingSource.Length > 0)
+            throw new WorkbenchLifecycleException(
+                "SVN_SAVEPOINT_SOURCE_UNCOMMITTED",
+                "Commit or resolve every changed PLC source object before creating a project SVN savepoint.");
+
         return await CommitCombinedAsync(
                 workbench, worktree, worktreeRoot, registration.RelativePath,
                 Array.Empty<string>(), message.Trim(), token, author, progress, additionalTaskIds)
@@ -3558,6 +3580,80 @@ public sealed class WorkbenchCoordinator
         && Directory.Exists(workbench.SvnRepositoryPath)
         && !string.IsNullOrWhiteSpace(worktree.ManagedTiaProjectPath)
         && Directory.Exists(WorkbenchPaths.ResolveTiaStore(worktreeRoot));
+
+    private static bool IsManagedSourcePath(string path)
+    {
+        var parts = path.Replace('\\', '/').Split('/');
+        return parts.Length >= 4
+            && string.Equals(parts[0], "devices", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(parts[2], "source", StringComparison.OrdinalIgnoreCase)
+            && parts[^1].EndsWith(".xml", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Compares only this task's staged source identities. The returned checksum is an
+    /// observation of the capture, never a project-wide clean verdict.</summary>
+    public async Task<TaskSourceComparisonResult> CompareTaskWithTiaAsync(
+        string workbenchId, string worktreeId, string taskId, CancellationToken token = default,
+        IOperationProgress? progress = null)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var worktree = LoadRegisteredWorktree(workbench, worktreeId);
+        using var graphStore = new EngineeringGraphStore(workbench.RootPath);
+        var graph = new EngineeringGraphService(graphStore, workbench.WorkbenchId,
+            id => workbench.Worktrees.Any(item => item.WorktreeId == id));
+        var task = graph.FindTask(taskId);
+        if (task is null || task.WorktreeId != worktreeId || string.IsNullOrWhiteSpace(task.DeviceId))
+            throw new WorkbenchLifecycleException("TASK_NOT_FOUND", "The selected task is not a device-bound worktree task.");
+        var stages = graph.ListActiveStages(taskId);
+        if (stages.Count == 0)
+            throw new WorkbenchLifecycleException("TASK_STAGE_EMPTY", "Add at least one source object to the task before comparing it with TIA.");
+
+        var problems = new List<TaskStageProblem>();
+        var baselineObjects = new List<ManagedSourceEvidenceObject>();
+        foreach (var stage in stages)
+        {
+            if (string.IsNullOrWhiteSpace(stage.BaselineEvidenceJson))
+            {
+                problems.Add(new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_BASELINE_MISSING", "This staged object has no Git-bound fingerprint baseline. Run a full scan and assign it before task comparison."));
+                continue;
+            }
+            var evidence = System.Text.Json.JsonSerializer.Deserialize<ManagedSourceEvidenceObject>(stage.BaselineEvidenceJson);
+            if (evidence is null)
+                problems.Add(new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_BASELINE_INVALID", "This staged object's fingerprint baseline cannot be read."));
+            else baselineObjects.Add(evidence);
+        }
+        if (problems.Count > 0)
+            return new TaskSourceComparisonResult(taskId, task.DeviceId, [], [], problems, null);
+
+        var device = LoadWorktreeDeviceContexts(workbench, worktree,
+                workbench.Worktrees.Single(item => item.WorktreeId == worktreeId).RelativePath)
+            .Single(item => item.Metadata.DeviceId == task.DeviceId);
+        var prefix = task.DeviceId + ":";
+        var ids = stages.Select(stage => stage.SourceObjectId.StartsWith(prefix, StringComparison.Ordinal)
+                ? stage.SourceObjectId[prefix.Length..]
+                : throw new WorkbenchLifecycleException("TASK_STAGE_INVALID", "A staged source object is outside the task device."))
+            .ToArray();
+        var candidateRoot = Path.Combine(device.Context.StagingRoot, ".task-candidates-" + Guid.NewGuid().ToString("N")[..8]);
+        progress?.Report("Comparing staged source fingerprints with TIA...");
+        await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await EnsureActiveProjectMatchesWorktreeAsync(device.Context, token, progress).ConfigureAwait(false);
+            var capture = await engineering.CallAsync<SourceEvidenceCaptureResult>("compare_source_evidence", new
+            {
+                baseline = new SourceEvidenceSnapshot { PlcName = device.Metadata.PlcName, Objects = baselineObjects },
+                outputDir = candidateRoot,
+                plcName = device.Metadata.PlcName,
+                sourceObjectIds = ids,
+            }, token).ConfigureAwait(false);
+            var liveIds = capture.Snapshot.Objects.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+            problems.AddRange(stages.Where(stage => !liveIds.Contains(stage.SourceObjectId[prefix.Length..]))
+                .Select(stage => new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_MISSING", "The staged object is missing, renamed, or unreadable in TIA.")));
+            return new TaskSourceComparisonResult(taskId, task.DeviceId, capture.Candidates, capture.CandidateExports,
+                problems, capture.Snapshot.Checksum.SoftwareChecksum);
+        }
+        finally { engineeringSession.Release(); }
+    }
 
     /// <summary>
     /// The native savepoint transaction: TIA Save → compile (required) → checksum → F-signature →
@@ -4096,6 +4192,71 @@ public sealed class WorkbenchCoordinator
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return $"Commit succeeded, but managed-source evidence was not recorded: {exception.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Records only the source evidence belonging to a task commit. It deliberately does not
+    /// write a new whole-project validation snapshot: another task may have live, uncommitted
+    /// edits whose fingerprints must remain compared with its previous Git baseline.
+    /// </summary>
+    private async Task<string?> TryRecordTaskStageEvidenceAsync(
+        WorkbenchMetadata workbench,
+        WorktreeMetadata worktree,
+        string worktreeRoot,
+        string worktreeRelativePath,
+        string commitSha,
+        string taskId,
+        CancellationToken token,
+        IOperationProgress? progress)
+    {
+        try
+        {
+            using var graphStore = new EngineeringGraphStore(workbench.RootPath);
+            var graph = new EngineeringGraphService(graphStore, workbench.WorkbenchId,
+                id => workbench.Worktrees.Any(item => item.WorktreeId == id));
+            var task = graph.FindTask(taskId);
+            if (task is null || task.WorktreeId != worktree.WorktreeId || string.IsNullOrWhiteSpace(task.DeviceId))
+                throw new WorkbenchLifecycleException("TASK_NOT_FOUND", "The source task is no longer available for evidence recording.");
+            var stages = graph.ListActiveStages(taskId);
+            if (stages.Count == 0)
+                throw new WorkbenchLifecycleException("TASK_STAGE_EMPTY", "The task has no active staged source objects.");
+
+            var device = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath)
+                .SingleOrDefault(item => item.Metadata.DeviceId == task.DeviceId);
+            if (device.Context is null)
+                throw new WorkbenchLifecycleException("TASK_DEVICE_NOT_FOUND", "The task device is no longer registered in this worktree.");
+            var prefix = task.DeviceId + ":";
+            var ids = stages.Select(stage => stage.SourceObjectId.StartsWith(prefix, StringComparison.Ordinal)
+                    ? stage.SourceObjectId[prefix.Length..]
+                    : throw new WorkbenchLifecycleException("TASK_STAGE_INVALID", "A staged source object does not belong to the task device."))
+                .ToArray();
+
+            progress?.Report("Capturing staged source evidence from TIA...");
+            await engineeringSession.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                await EnsureActiveProjectMatchesWorktreeAsync(device.Context, token, null).ConfigureAwait(false);
+                var capture = await engineering.CallAsync<SourceEvidenceCaptureResult>(
+                    "capture_source_evidence", new { plcName = device.Metadata.PlcName, sourceObjectIds = ids }, token).ConfigureAwait(false);
+                foreach (var stage in stages)
+                {
+                    var rawId = stage.SourceObjectId[prefix.Length..];
+                    var evidence = capture.Snapshot.Objects.SingleOrDefault(item => item.Id == rawId);
+                    if (evidence is null)
+                        throw new WorkbenchLifecycleException("TASK_STAGE_MISSING", $"Staged source '{stage.SourceObjectId}' is missing or unreadable in TIA.");
+                    graph.UpdateStageEvidence(taskId, stage.SourceObjectId, System.Text.Json.JsonSerializer.Serialize(evidence));
+                }
+            }
+            finally
+            {
+                engineeringSession.Release();
+            }
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"Commit succeeded, but staged task evidence was not recorded: {exception.Message}";
         }
     }
 

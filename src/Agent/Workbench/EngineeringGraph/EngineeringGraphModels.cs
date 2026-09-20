@@ -12,7 +12,11 @@ public sealed record GraphTask(
     string Title, GraphTaskType Type, GraphTaskStatus Status = GraphTaskStatus.Todo,
     string? Description = null, string? MetadataJson = null,
     DateTimeOffset? CreatedUtc = null, DateTimeOffset? UpdatedUtc = null,
-    int Priority = 0, string Intent = "", string ExpectedResult = "");
+    int Priority = 0, string Intent = "", string ExpectedResult = "", string? DeviceId = null);
+
+public sealed record TaskSourceStage(
+    string TaskId, string WorktreeId, string SourceObjectId, string DeviceId, string? BaselineEvidenceJson,
+    DateTimeOffset StagedUtc, DateTimeOffset? ReleasedUtc = null);
 
 public sealed record LegacyImportDiagnostic(string TaskId, string WorktreeId, string Message);
 public sealed record LegacyImportResult(int ImportedCount, IReadOnlyList<LegacyImportDiagnostic> Diagnostics);

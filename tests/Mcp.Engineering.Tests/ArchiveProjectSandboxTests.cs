@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Contracts;
 using Contracts.Engineering;
@@ -79,8 +80,8 @@ public sealed class ArchiveProjectSandboxTests : IDisposable
         public ProjectCapabilities GetProjectCapabilities() => new();
         public BlockInfo[] ListBlocks(string? plcName) => Array.Empty<BlockInfo>();
         public PlcChecksumInfo[] GetPlcChecksums(string? plcName = null) => Array.Empty<PlcChecksumInfo>();
-        public SourceEvidenceCaptureResult CaptureSourceEvidence(string? plcName = null) => new();
-        public SourceEvidenceCaptureResult CompareSourceEvidence(SourceEvidenceSnapshot baseline, string outputDir, string? plcName = null) => new();
+        public SourceEvidenceCaptureResult CaptureSourceEvidence(string? plcName = null, IReadOnlyCollection<string>? sourceObjectIds = null) => new();
+        public SourceEvidenceCaptureResult CompareSourceEvidence(SourceEvidenceSnapshot baseline, string outputDir, string? plcName = null, IReadOnlyCollection<string>? sourceObjectIds = null) => new();
         public ExportResult ExportBlock(string blockName, string outputDir) => new();
         public ExportResult ExportSourceObject(string name, string category, string outputDir, string? plcName = null) => new();
         public ExportResult[] ExportAllBlocks(string outputDir, IProgress<EngineeringProgress>? progress = null) => Array.Empty<ExportResult>();

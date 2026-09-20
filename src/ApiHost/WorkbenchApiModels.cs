@@ -28,7 +28,7 @@ public sealed record RefreshApplyApiRequest(
     string[]? ApprovedRemovalPaths = null,
     string? CommitMessage = null);
 public sealed record SourcePathApiRequest(string RelativePath);
-public sealed record CommitSourceApiRequest(string[] Paths, string Message, bool UntrackableChange, bool SafetyChange = false);
+public sealed record CommitSourceApiRequest(string[] Paths, string Message, bool UntrackableChange, bool SafetyChange = false, string? TaskId = null);
 public sealed record RestoreTiaProjectApiRequest(string? GitCommit = null);
 public sealed record NativeSavepointApiRequest(string Message);
 public sealed record TiaSynchronizationAcceptApiRequest(string[] Paths, string Message);
@@ -779,6 +779,80 @@ public static class WorkbenchEndpoints
                 .Where(task => task.ScopeKind == Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree)
                 .Select(ToEngineeringTaskResponse));
         });
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/engineering-tasks", (
+            string id, string wt, EngineeringTaskApiRequest request, WorkbenchApiState state, WorktreeTaskStore tasks, EngineeringGraphApiFactory graphs) =>
+        {
+            var workbench = state.Workbench(id);
+            var worktree = state.Worktree(id, wt);
+            if (string.IsNullOrWhiteSpace(request.DeviceId) || !worktree.DeviceIds.Contains(request.DeviceId, StringComparer.Ordinal))
+                throw new EngineeringGraphConstraintException("A worktree task must select a registered device.", "TASK_DEVICE_REQUIRED");
+            tasks.Load(state.WorktreeRoot(id, wt));
+            using var scope = graphs.Open(workbench);
+            var task = scope.Service.CreateTask(Guid.NewGuid().ToString("N"), GraphTaskScopeKind.Worktree, wt, request.Title,
+                request.Type, request.Status, request.Description, request.Priority, request.Intent, request.ExpectedResult, request.DeviceId);
+            return Results.Created($"/api/workbenches/{id}/worktrees/{wt}/tasks/{task.TaskId}", ToEngineeringTaskResponse(task));
+        });
+        app.MapPatch("/api/workbenches/{id}/worktrees/{wt}/engineering-tasks/{taskId}", (
+            string id, string wt, string taskId, EngineeringTaskUpdateApiRequest request,
+            WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var updated = scope.Service.UpdateTask(taskId, task =>
+            {
+                if (task.WorktreeId != wt) throw new KeyNotFoundException("TASK_NOT_FOUND");
+                return task with
+                {
+                    Title = request.Title?.Trim() is { Length: > 0 } title ? title : task.Title,
+                    Status = request.Status ?? task.Status,
+                    Priority = request.Priority ?? task.Priority,
+                    Intent = request.Intent?.Trim() is { Length: > 0 } intent ? intent : task.Intent,
+                    ExpectedResult = request.ExpectedResult?.Trim() is { Length: > 0 } expected ? expected : task.ExpectedResult,
+                    Description = request.Description ?? task.Description,
+                };
+            }) ?? throw new KeyNotFoundException("TASK_NOT_FOUND");
+            return Results.Ok(ToEngineeringTaskResponse(updated));
+        });
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages", (
+            string id, string wt, string taskId, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var task = scope.Service.FindTask(taskId);
+            if (task is null || task.WorktreeId != wt) throw new KeyNotFoundException("TASK_NOT_FOUND");
+            return Results.Ok(scope.Service.ListActiveStages(taskId).Select(stage => new TaskSourceStageApiResponse(stage.TaskId, stage.SourceObjectId, stage.DeviceId, stage.BaselineEvidenceJson, stage.StagedUtc)));
+        });
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/compare-tia", async (
+            string id, string wt, string taskId, WorkbenchApiState state, WorkbenchCoordinator coordinator,
+            OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
+        {
+            coordinator.RegisterWorkbench(state.Workbench(id));
+            return Results.Ok(await RunOperationAsync(http, operations, "compare-task-tia",
+                "Comparing staged task sources with TIA...",
+                progress => coordinator.CompareTaskWithTiaAsync(id, wt, taskId, ct, progress),
+                "Task source comparison completed.").ConfigureAwait(false));
+        });
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages", (
+            string id, string wt, string taskId, TaskSourceStageApiRequest request, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var task = scope.Service.FindTask(taskId);
+            if (task is null || task.WorktreeId != wt) throw new KeyNotFoundException("TASK_NOT_FOUND");
+            var device = state.Device(id, wt, task.DeviceId!);
+            foreach (var source in DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot))
+            {
+                scope.Service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject,
+                    $"{task.DeviceId}:{source.Id}", task.WorkbenchId, wt, task.DeviceId, source.RelativePath));
+            }
+            var stage = scope.Service.StageSourceObject(taskId, request.SourceObjectId, request.BaselineEvidenceJson);
+            return Results.Created($"/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages/{Uri.EscapeDataString(stage.SourceObjectId)}", new TaskSourceStageApiResponse(stage.TaskId, stage.SourceObjectId, stage.DeviceId, stage.BaselineEvidenceJson, stage.StagedUtc));
+        });
+        app.MapDelete("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages/{sourceObjectId}", (
+            string id, string wt, string taskId, string sourceObjectId, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        {
+            using var scope = graphs.Open(state.Workbench(id));
+            var task = scope.Service.FindTask(taskId);
+            if (task is null || task.WorktreeId != wt) throw new KeyNotFoundException("TASK_NOT_FOUND");
+            return scope.Service.ReleaseSourceStage(taskId, sourceObjectId) ? Results.NoContent() : throw new KeyNotFoundException("TASK_STAGE_NOT_FOUND");
+        });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}", (
             string id, string wt, string taskId, WorkbenchApiState state,
             WorktreeTaskStore tasks, EngineeringGraphApiFactory graphs) =>
@@ -990,6 +1064,21 @@ public static class WorkbenchEndpoints
             OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
         {
             var root = s.WorktreeRoot(workbenchId, worktreeId);
+            if (!string.IsNullOrWhiteSpace(body.TaskId))
+            {
+                using var graphScope = new EngineeringGraphApiFactory().Open(s.Workbench(workbenchId));
+                var task = graphScope.Service.FindTask(body.TaskId);
+                if (task is null || task.WorktreeId != worktreeId)
+                    throw new EngineeringGraphConstraintException("The requested task is not in this worktree.", "TASK_NOT_FOUND");
+                var stagedPaths = graphScope.Service.ListActiveStages(task.TaskId)
+                    .Select(stage => graphScope.Service.GetEntity(GraphEntityKind.SourceObject, stage.SourceObjectId)?.ExternalRef)
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Select(path => path!.Replace('\\', '/'))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var requestedPaths = body.Paths.Select(path => path.Replace('\\', '/')).ToArray();
+                if (requestedPaths.Length == 0 || requestedPaths.Any(path => !stagedPaths.Contains(path)))
+                    throw new EngineeringGraphConstraintException("A task commit may contain only active staged source objects.", "TASK_COMMIT_STAGE_MISMATCH");
+            }
             var hasExistingSource = body.Paths.Any(path =>
             {
                 try
@@ -1023,7 +1112,8 @@ public static class WorkbenchEndpoints
                         ct,
                         untrackableChange: body.UntrackableChange,
                         safetyChange: body.SafetyChange,
-                        progress: progress),
+                        progress: progress,
+                        taskEvidenceTaskId: body.TaskId),
                     "Commit completed.").ConfigureAwait(false));
             }
 
@@ -1896,7 +1986,7 @@ public static class WorkbenchEndpoints
         task.TaskId, task.WorkbenchId, JsonNamingPolicy.CamelCase.ConvertName(task.ScopeKind.ToString()), task.WorktreeId,
         task.Title, JsonNamingPolicy.CamelCase.ConvertName(task.Type.ToString()), JsonNamingPolicy.CamelCase.ConvertName(task.Status.ToString()),
         task.Priority, task.Intent, task.ExpectedResult, task.Description,
-        task.CreatedUtc!.Value, task.UpdatedUtc!.Value);
+        task.CreatedUtc!.Value, task.UpdatedUtc!.Value, task.DeviceId);
 
     private static EngineeringTaskRelationshipMutationApiResponse ToRelationshipMutation(GraphEdge edge) => new(
         edge.EdgeId, edge.FromId, JsonNamingPolicy.CamelCase.ConvertName(edge.ToKind.ToString()), edge.ToId,

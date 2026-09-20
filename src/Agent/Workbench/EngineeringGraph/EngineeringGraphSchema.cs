@@ -4,7 +4,7 @@ namespace Agent.Workbench.EngineeringGraph;
 
 public static class EngineeringGraphSchema
 {
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 4;
 
     internal static int GetVersion(SqliteConnection connection)
     {
@@ -102,6 +102,34 @@ public static class EngineeringGraphSchema
         {
             Execute(connection, transaction, "CREATE TABLE IF NOT EXISTS graph_file_evidence (commit_sha TEXT NOT NULL, relative_path TEXT NOT NULL, recorded_utc TEXT NOT NULL, PRIMARY KEY (commit_sha, relative_path));");
             Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (2, $utc);",
+                ("$utc", DateTimeOffset.UtcNow.ToString("O")));
+        }
+        if (version < 3)
+        {
+            Execute(connection, transaction, "ALTER TABLE tasks ADD COLUMN device_id TEXT NULL;");
+            Execute(connection, transaction, """
+                CREATE TABLE task_source_stages (
+                    task_id TEXT NOT NULL,
+                    source_object_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    baseline_evidence_json TEXT NULL,
+                    staged_utc TEXT NOT NULL,
+                    released_utc TEXT NULL,
+                    PRIMARY KEY (task_id, source_object_id)
+                );
+                CREATE UNIQUE INDEX ux_task_source_stages_active_source
+                    ON task_source_stages (source_object_id) WHERE released_utc IS NULL;
+                """);
+            Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (3, $utc);",
+                ("$utc", DateTimeOffset.UtcNow.ToString("O")));
+        }
+        if (version < 4)
+        {
+            Execute(connection, transaction, "DROP INDEX IF EXISTS ux_task_source_stages_active_source;");
+            Execute(connection, transaction, "ALTER TABLE task_source_stages ADD COLUMN worktree_id TEXT NULL;");
+            Execute(connection, transaction, "UPDATE task_source_stages SET worktree_id=(SELECT worktree_id FROM tasks WHERE tasks.task_id=task_source_stages.task_id);");
+            Execute(connection, transaction, "CREATE UNIQUE INDEX ux_task_source_stages_active_source ON task_source_stages (worktree_id, source_object_id) WHERE released_utc IS NULL;");
+            Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (4, $utc);",
                 ("$utc", DateTimeOffset.UtcNow.ToString("O")));
         }
     }

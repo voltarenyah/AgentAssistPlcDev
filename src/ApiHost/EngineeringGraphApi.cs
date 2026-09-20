@@ -39,7 +39,8 @@ public sealed record EngineeringTaskApiRequest(
     int Priority = 0,
     string Intent = "",
     string ExpectedResult = "",
-    string? Description = null);
+    string? Description = null,
+    string? DeviceId = null);
 
 public sealed record EngineeringTaskApiResponse(
     string TaskId,
@@ -54,7 +55,19 @@ public sealed record EngineeringTaskApiResponse(
     string ExpectedResult,
     string? Description,
     DateTimeOffset CreatedUtc,
-    DateTimeOffset UpdatedUtc);
+    DateTimeOffset UpdatedUtc,
+    string? DeviceId = null);
+
+public sealed record EngineeringTaskUpdateApiRequest(
+    string? Title = null,
+    [property: JsonConverter(typeof(JsonStringEnumConverter<GraphTaskStatus>))] GraphTaskStatus? Status = null,
+    int? Priority = null,
+    string? Intent = null,
+    string? ExpectedResult = null,
+    string? Description = null);
+
+public sealed record TaskSourceStageApiRequest(string SourceObjectId, string? BaselineEvidenceJson = null);
+public sealed record TaskSourceStageApiResponse(string TaskId, string SourceObjectId, string DeviceId, string? BaselineEvidenceJson, DateTimeOffset StagedUtc);
 
 public sealed record EngineeringTaskRelationshipApiResponse(
     string Id,

@@ -144,16 +144,18 @@ public sealed class EngineeringTools
     [McpServerTool(Name = "capture_source_evidence")]
     [Description("Acquire TIA Exclusive Access and capture every readable lightweight managed-source evidence value for one PLC. Establishes an initial fingerprint-first baseline; exports no XML.")]
     public CallToolResult CaptureSourceEvidence(
-        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
-        => Invoke("capture_source_evidence", () => _adapter.CaptureSourceEvidence(plcName));
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null,
+        [Description("Optional stable source object IDs; omit only for a full project scan.")] string[]? sourceObjectIds = null)
+        => Invoke("capture_source_evidence", () => _adapter.CaptureSourceEvidence(plcName, sourceObjectIds));
 
     [McpServerTool(Name = "compare_source_evidence")]
-    [Description("Acquire one TIA Exclusive Access lifetime, capture all lightweight managed-source evidence, and export XML only for candidates selected against the supplied baseline. outputDir must not already exist.")]
+    [Description("Acquire one TIA Exclusive Access lifetime, capture managed-source evidence for all objects or an explicit stable-ID subset, and export XML only for candidates selected against the supplied baseline. outputDir must not already exist.")]
     public CallToolResult CompareSourceEvidence(
         [Description("The earlier complete lightweight evidence snapshot for this PLC.")] SourceEvidenceSnapshot baseline,
         [Description("Fresh output directory for candidate XML only.")] string outputDir,
-        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null)
-        => Invoke("compare_source_evidence", () => _adapter.CompareSourceEvidence(baseline, outputDir, plcName), ("outputDir", outputDir));
+        [Description("PLC device name; optional for single-PLC projects.")] string? plcName = null,
+        [Description("Optional stable source object IDs. When present, checksum changes outside this set are informational only.")] string[]? sourceObjectIds = null)
+        => Invoke("compare_source_evidence", () => _adapter.CompareSourceEvidence(baseline, outputDir, plcName, sourceObjectIds), ("outputDir", outputDir));
 
     [McpServerTool(Name = "export_block")]
     [Description("Export a single block to XML under outputDir/Blocks|DB and upsert its record in outputDir/metadata.json (read-only w.r.t. the project).")]

@@ -36,7 +36,7 @@ public sealed class EngineeringGraphConstraintsTests : IDisposable
     {
         using var store = new EngineeringGraphStore(_root);
         var service = new EngineeringGraphService(store, "wb-1", id => id is "wt-1" or "wt-2");
-        var task = service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Fix", GraphTaskType.Feature, intent: "Because", expectedResult: "Fixed");
+        var task = service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Fix", GraphTaskType.Feature, intent: "Because", expectedResult: "Fixed", deviceId: "device-1");
         Assert.Throws<EngineeringGraphConstraintException>(() =>
             service.RegisterEntity(new GraphEntity(GraphEntityKind.GitCommit, "commit-1", "wb-2", "wt-1")));
         service.RegisterEntity(new GraphEntity(GraphEntityKind.GitCommit, "commit-2", "wb-1", "wt-2"));
@@ -72,6 +72,62 @@ public sealed class EngineeringGraphConstraintsTests : IDisposable
         Assert.Equal("A", reopened.Intent);
         Assert.Equal("B", reopened.ExpectedResult);
         Assert.Equal(7, reopened.Priority);
+    }
+
+    [Fact]
+    public void DeviceBoundStageIsExclusiveAndDoneTaskReleasesIt()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        var first = service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "First", GraphTaskType.Feature,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        var second = service.CreateTask("task-2", GraphTaskScopeKind.Worktree, "wt-1", "Second", GraphTaskType.Feature,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject, "device-1:Main", "wb-1", "wt-1", "device-1"));
+
+        service.StageSourceObject(first.TaskId, "device-1:Main", "baseline-a");
+        Assert.Throws<EngineeringGraphConstraintException>(() => service.StageSourceObject(second.TaskId, "device-1:Main"));
+
+        service.UpdateTask(first.TaskId, task => task with { Status = GraphTaskStatus.Done });
+        var stage = service.StageSourceObject(second.TaskId, "device-1:Main", "baseline-b");
+
+        Assert.Equal("baseline-b", stage.BaselineEvidenceJson);
+        Assert.Single(service.ListActiveStages(second.TaskId));
+    }
+
+    [Fact]
+    public void StageRejectsSourceFromAnotherDevice()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        var task = service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Task", GraphTaskType.Feature,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject, "device-2:Main", "wb-1", "wt-1", "device-2"));
+
+        var error = Assert.Throws<EngineeringGraphConstraintException>(() => service.StageSourceObject(task.TaskId, "device-2:Main"));
+
+        Assert.Equal("TASK_SOURCE_DEVICE_MISMATCH", error.Code);
+    }
+
+    [Fact]
+    public void ReleasingAStageAllowsTheSameTaskToRestageItAndDeletingTaskReleasesOwnership()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        var first = service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "First", GraphTaskType.Feature,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        var second = service.CreateTask("task-2", GraphTaskScopeKind.Worktree, "wt-1", "Second", GraphTaskType.Feature,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject, "device-1:Main", "wb-1", "wt-1", "device-1"));
+
+        service.StageSourceObject(first.TaskId, "device-1:Main", "old");
+        Assert.True(service.ReleaseSourceStage(first.TaskId, "device-1:Main"));
+        var restaged = service.StageSourceObject(first.TaskId, "device-1:Main", "new");
+        Assert.Equal("new", restaged.BaselineEvidenceJson);
+
+        Assert.True(service.DeleteTask(first.TaskId));
+        service.StageSourceObject(second.TaskId, "device-1:Main");
+        Assert.Single(service.ListActiveStages(second.TaskId));
     }
 
     public void Dispose()

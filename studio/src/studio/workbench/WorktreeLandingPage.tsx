@@ -445,6 +445,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
               loading={tasksLoading}
               error={tasksError}
               onChanged={() => void reloadTasks()}
+              deviceIds={detail?.deviceIds ?? []}
               onOpenTaskDetail={onOpenTaskDetail}
               onStartChat={onStartTaskChat}
             />

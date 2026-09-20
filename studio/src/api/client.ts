@@ -365,6 +365,7 @@ export type EngineeringTask = {
   description: string | null
   createdUtc: string
   updatedUtc: string
+  deviceId?: string | null
 }
 
 export type EngineeringTaskDetail = {
@@ -1354,6 +1355,20 @@ export const getProjectTaskDetail = (workbenchId: string, taskId: string) =>
   workbenchRequest<EngineeringTaskDetail>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}`)
 export const listGraphWorktreeTasks = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<EngineeringTaskList>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`)
+export const createGraphWorktreeTask = (workbenchId: string, worktreeId: string, task: { title: string; deviceId: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
+  workbenchRequest<EngineeringTask>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`, jsonRequest('POST', task))
+export type TaskSourceStage = { taskId: string; sourceObjectId: string; deviceId: string; baselineEvidenceJson: string | null; stagedUtc: string }
+export const listTaskSourceStages = (workbenchId: string, worktreeId: string, taskId: string) =>
+  workbenchRequest<TaskSourceStage[]>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/stages`)
+export const stageTaskSourceObject = (workbenchId: string, worktreeId: string, taskId: string, sourceObjectId: string, baselineEvidenceJson?: string | null) =>
+  workbenchRequest<TaskSourceStage>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/stages`, jsonRequest('POST', { sourceObjectId, baselineEvidenceJson }))
+export const releaseTaskSourceObject = (workbenchId: string, worktreeId: string, taskId: string, sourceObjectId: string) =>
+  workbenchRequest<void>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/stages/${encodeURIComponent(sourceObjectId)}`, { method: 'DELETE' })
+export type TaskSourceEvidenceCandidate = { id: string; reason: string; requiresXmlExport: boolean; isSafetyDifference: boolean }
+export type TaskSourceEvidenceCandidateExport = { id: string; sourcePath: string; export: { success: boolean; path: string | null } }
+export type TaskSourceComparison = { taskId: string; deviceId: string; candidates: TaskSourceEvidenceCandidate[]; candidateExports: TaskSourceEvidenceCandidateExport[]; problems: { sourceObjectId: string; code: string; message: string }[]; observedSoftwareChecksum: string | null }
+export const compareTaskWithTia = (workbenchId: string, worktreeId: string, taskId: string, operationId?: string) =>
+  workbenchRequest<TaskSourceComparison>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/compare-tia`, withOperation(jsonRequest('POST'), operationId))
 export const getWorktreeTaskDetail = (workbenchId: string, worktreeId: string, taskId: string) =>
   workbenchRequest<EngineeringTaskDetail>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`)
 export const getEngineeringTaskDetail = async (workbenchId: string, taskId: string, worktreeId?: string | null) => {
