@@ -109,7 +109,22 @@ component suite or a production build is not evidence of visual proportion.
 | 2b | `studio/src/studio/workbench/CreateWorkbenchDialog.tsx` | 4 | 9 | Deferred behind 2a because it is the only surface on this path needing two primitives notion-kit does not map 1:1: it has no `ToggleGroup` (the session/file mode switch must become `Tabs`, and its custom sliding indicator must be reworked) and its `Select` is Base UI rather than Radix, with `SelectValue` needing explicit `items` to render a label. Its `Input` also uses a leading icon, which notion-kit's `Input` does not support (`endIcon` only, no children). |
 | 4 | `WorktreeTasksPanel.tsx`, `ChatWorkspace.tsx`, `McpToolsHelper.tsx` | 6 / 6 / 11 | 8 / 21 / 1 | Higher density; `McpToolsHelper` is a developer surface so it can absorb early mistakes |
 | 5 | Remaining `studio/src/**` files by density | 1–4 each | varies | Mechanical by this point |
+| Dedicated | `studio/src/studio/workbench/WorkbenchNavigator.tsx` | 0 | 6 + 4 | 651 lines holding 43 menu items (26 `ContextMenuItem`, 17 `DropdownMenuItem`), 7 labels, 14 buttons, 6 dialogs. Migrate **by hand**, as one surface: it is the always-visible project tree, so a partially migrated state shows two menu styles at once in the most prominent place. |
 | Last | `studio/src/studio/MainStudio.tsx` | 9 | many | 2702-line component and the carrier of issue #109; migrate only after that issue is resolved |
+
+### WorkbenchNavigator: do not script the JSX rewrite
+
+Recorded after two failed attempts. The item and label shapes are regular and a
+brace-aware transformer converts all 43 items and 7 labels correctly, but the
+**trigger blocks are not safely scriptable**: seven `asChild` triggers wrap the
+whole row, and two of them wrap a `div` whose body contains nested `div`s, so
+balanced-tag matching mis-terminates and produces unbalanced JSX. The type checker
+rejected both attempts and the file was reverted each time.
+
+Hand-edit the triggers individually. Also note that notion-kit's `ContextMenuItem`
+and `DropdownMenuItem` share one structured API (`icon`, `label`, `desc`,
+`variant`, `onClick`), that `variant="destructive"` maps to `error`, and that the
+label components are Base UI group labels requiring a `title` prop.
 
 ## Open User Decisions
 
@@ -131,3 +146,4 @@ visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authorit
 | Date | Version | Changes |
 |---|---|---|
 | 2026-09-21 | 1.0 | Initial specification for the notion-kit foundation slice and migration order. |
+| 2026-09-21 | 1.1 | Add the WorkbenchNavigator dedicated stage and record that its trigger blocks must be hand-edited rather than scripted. |
