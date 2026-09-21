@@ -33,5 +33,6 @@ one: `sm` is `h-8 px-3` and `md` is `h-9 px-4 py-2`, which matches Studio's own
 default button height. A `Button` given only a `variant` renders with no height
 and no padding, leaving the label against the border.
 
-The component registry URL documented by Notion UI returned 404 on 2026-09-21.
-Use the installed package exports until that registry is restored.
+The component inventory and per-component install instructions are at
+<https://notion-ui.vercel.app/docs>; `studio/AGENTS.md` records how to use that
+catalogue. Use the installed package exports for anything already a dependency.
