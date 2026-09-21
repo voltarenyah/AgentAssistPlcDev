@@ -150,6 +150,12 @@ Migrated and independently verified (build, full suite, browser in both themes):
 | Operation detail switch: `ToggleGroup` to `Tabs` (ADR-0005 gap 1, first site) | `d3b92fc` |
 | `CreateWorkbenchDialog`: the last surface whose primitives map 1:1 | `c954a0f` |
 | Duplicate close control removed from three dialogs | `e9f2aaf` |
+| Navigator, assistant, settings, dock, TIA, header and MainStudio buttons | `caf63f6` … `e128fbe`, `6aba6d2` |
+| Text fields across all product surfaces (the `field-input` layer) | `cbf04ee` … `de8e31f` |
+| `TIA sessions panel` + `WindowControls` buttons | `5260a19` |
+| Remaining small-surface, version-control and chat buttons | `cf7f642`, `ad0fb3a`, `97fcf01` |
+| All `field-label` wrappers to notion-kit `Label` | `ccd1c4b`, `60a6edb` |
+| Custom-styled action group in `FeatureValidationDialog` | `0f95b74` |
 
 ### Whole-application regression sweep
 
@@ -163,10 +169,37 @@ Result: **36 of 36 steps pass** (18 surfaces × 2 themes) with zero console erro
 4xx/5xx responses, zero horizontal overflow and no mutation requests beyond the project
 selection. Destructive actions are opened but never confirmed.
 
-Remaining, all decision- or issue-gated: the `ToggleGroup` sites and the tag surfaces
-(`ADR-0005`), the device surfaces (`RefreshDialog`, `PlcSourcePanel`,
-`PlcSourceCompareDialog`, `SourceObjectInspectorPanel`, device panels — issue #109), and
-the eight primitives with no notion-kit counterpart.
+### Where the migration ends: the remaining inventory
+
+Everything reachable, verifiable and not device-gated is migrated. What is left falls
+into five buckets, and none of them is unexplained work:
+
+1. **Device surfaces (issue #109)** — roughly 14 legacy-class buttons plus about 26 raw
+   buttons across `DeviceOverviewView`, `PlcSourcePanel`, `PlcSourceCompareDialog`,
+   `NodeEdgesView`, `BlockSourceView`, `SourceObjectInspectorPanel` and
+   `HardwareConfigurationView`. Excluded by decision: device selection is blocked, so
+   these cannot be rendered or verified from the browser.
+2. **Two open decisions** — the tag surfaces (`ADR-0005` gap 2), and the ten native
+   `<select>` elements still using `field-input`, which need Base UI's `Select` and an
+   `items` collection.
+3. **By design** — the eight primitives with no notion-kit counterpart, and the catalog
+   pages, which deliberately preview Studio's own set.
+4. **Should not be converted.** An inventory of the raw `<button>` elements found roughly
+   thirty more controls that never used one of the three legacy classes, and they are not
+   uniformly "buttons to migrate": full-width list rows (the MCP tool list, version-control
+   and settings rows), segmented controls that should become `Tabs` rather than `Button`
+   (the hardware tab strip in `MainStudio`, and `VersionControlChanges`), and
+   `cursor-default` chips. Converting those to `Button` would be wrong, so this is a
+   classification task rather than a sweep.
+5. **Findings worth separate issues**, not silent fixes:
+   - `NativeStorePanel` has **no consumers**. Nothing imports it, which is why its refresh
+     control never rendered during verification; its migrated buttons are dead code.
+   - Several `cursor-default` chips are `<button>` elements that are not interactive at
+     all — focusable non-actions, a pre-existing semantic smell.
+
+Counting caution: the "legacy class" counts used throughout this migration **understate**
+what remains, because the custom-styled category in bucket 4 is invisible to them. "Zero
+legacy classes in this file" means exactly that, and not "all controls are notion-kit".
 
 ### WorkbenchNavigator: what worked and what to watch
 
@@ -218,3 +251,4 @@ visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authorit
 | 2026-09-21 | 1.2 | WorkbenchNavigator menu layer migrated; record the group-label trap, the standalone MenuLabel, the content-width trap and the submenu content difference. |
 | 2026-09-21 | 1.3 | Add the migration status with commits; point the remaining mapping gaps at ADR-0005; correct the MainStudio stage, which has nothing to migrate. |
 | 2026-09-21 | 1.4 | Record the completion of the last 1:1 surface, the duplicate-close fix, and a whole-application regression sweep of 36 passing steps. |
+| 2026-09-21 | 1.5 | Record the endgame inventory by gate, the custom-button classification, and two findings worth separate issues: `NativeStorePanel` has no consumers, and several non-interactive chips are buttons. |
