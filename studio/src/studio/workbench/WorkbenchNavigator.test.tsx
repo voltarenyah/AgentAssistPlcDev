@@ -79,8 +79,15 @@ describe('WorkbenchNavigator tag projection', () => {
     expect(host.textContent).not.toContain('Tasks')
     expect(host.querySelector('[data-task-status="inProgress"]')).toBeTruthy()
     expect(host.querySelector('[data-task-status="inProgress"]')?.className).toContain('bg-emerald-500')
-    expect(host.querySelector('button[aria-label="Open task Review motor interlock"]')?.getAttribute('aria-current')).toBe('page')
+    const task = host.querySelector('button[aria-label="Open task Review motor interlock"]')
+    expect(task?.getAttribute('aria-current')).toBe('page')
+    expect(task?.getAttribute('data-task-selected')).toBe('true')
+    expect(host.querySelector('button[aria-label="Project actions Direct project"]')).toBeTruthy()
+    expect(host.querySelector('button[aria-label="Worktree actions descendant match"]')).toBeTruthy()
+    expect(host.querySelector('[aria-label="Project available"]')).toBeNull()
+    expect(host.querySelector('[aria-label="Worktree status"]')).toBeNull()
     expect(host.querySelector('[data-lucide="ellipsis"]')).toBeNull()
+
     await act(async () => root.unmount())
   })
 

@@ -3,6 +3,7 @@ import {
   CircuitBoard,
   Cpu,
   Database,
+  Ellipsis,
   Factory,
   FileText,
   GitBranch,
@@ -28,6 +29,14 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 export type WorkbenchSelection = {
   workbenchId: string | null
@@ -227,7 +236,46 @@ export default function WorkbenchNavigator({
                       : <Plus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />}
                     <Factory className="h-4 w-4 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate text-xs font-medium">{workbench.name}</span>
-                    <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-label="Project available" />
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`Project actions ${workbench.name}`}
+                          onClick={event => event.stopPropagation()}
+                        >
+                          <Ellipsis className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuLabel>{workbench.name}</DropdownMenuLabel>
+                        <DropdownMenuItem onSelect={() => onCreateWorktree(workbench)}>
+                          <Plus className="h-3.5 w-3.5" />
+                          New linked worktree
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => onOpenWorkbench(workbench, false)}>
+                          <Monitor className="h-3.5 w-3.5" />
+                          Open TIA with UI
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => onOpenWorkbench(workbench, true)}>
+                          <RotateCw className="h-3.5 w-3.5" />
+                          Open TIA with upgrade
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => onInspectWorkbench(workbench)}>
+                          <ShieldCheck className="h-3.5 w-3.5" />
+                          Inspect TIA access
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={onRefresh}>
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Refresh project tree
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem variant="destructive" onSelect={() => onDeleteWorkbench(workbench)}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete this project
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
@@ -298,7 +346,6 @@ export default function WorkbenchNavigator({
                                 : <Plus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />}
                               <GitBranch className="h-4 w-4 text-chart-4" />
                               <span className="min-w-0 flex-1 truncate text-xs">{worktree.name}</span>
-                              <span className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground" aria-label="Worktree status" />
                               {worktree.branch !== worktree.name && <span className="max-w-[24%] truncate whitespace-nowrap font-mono text-[10px] leading-4 text-muted-foreground">{worktree.branch}</span>}
                               {!available && (
                                 <span
@@ -309,6 +356,54 @@ export default function WorkbenchNavigator({
                                   Unavailable
                                 </span>
                               )}
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    aria-label={`Worktree actions ${worktree.name}`}
+                                    onClick={event => event.stopPropagation()}
+                                  >
+                                    <Ellipsis className="h-3.5 w-3.5" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuLabel>{worktree.name}</DropdownMenuLabel>
+                                  <DropdownMenuItem onSelect={() => onSelectWorktree(workbench, worktree)}>
+                                    <GitBranch className="h-3.5 w-3.5" />
+                                    Select worktree
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onSelect={() => onCreateWorktree(workbench)}>
+                                    <Plus className="h-3.5 w-3.5" />
+                                    New linked worktree
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onSelect={() => onOpenWorktree(workbench, worktree, false)}>
+                                    <Monitor className="h-3.5 w-3.5" />
+                                    Open TIA with UI
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onSelect={() => onOpenWorktree(workbench, worktree, true)}>
+                                    <RotateCw className="h-3.5 w-3.5" />
+                                    Open TIA with upgrade
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onSelect={() => onInspectWorktree(workbench, worktree)}>
+                                    <ShieldCheck className="h-3.5 w-3.5" />
+                                    Inspect TIA access
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onSelect={() => onArchiveWorktree(workbench, worktree)}>
+                                    <Archive className="h-3.5 w-3.5" />
+                                    Archive TIA project
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem disabled={worktree.branch === 'master'} onSelect={() => onMergeWorktree(workbench, worktree)}>
+                                    <GitMerge className="h-3.5 w-3.5" />
+                                    Validate and merge to master
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem disabled={worktree.branch === 'master'} variant="destructive" onSelect={() => onDeleteWorktree(workbench, worktree)}>
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    Remove worktree
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </div>
                           </ContextMenuTrigger>
                           <ContextMenuContent>
@@ -362,7 +457,7 @@ export default function WorkbenchNavigator({
                             ) : tasks.map(task => {
                               const taskSelected = (activeTaskId ?? clickedTaskId) === task.taskId
                               return (
-                              <button key={task.taskId} type="button" onClick={() => { setClickedTaskId(task.taskId); onSelectTask(workbench, worktree, task) }} className="relative flex min-h-8 w-full items-center gap-2 border-l-2 border-transparent px-2 py-1 text-left before:absolute before:-left-2 before:top-1/2 before:h-px before:w-2 before:bg-border hover:bg-accent/40" aria-label={`Open task ${task.title}`} aria-current={taskSelected ? 'page' : undefined}>
+                              <button key={task.taskId} type="button" onClick={() => { setClickedTaskId(task.taskId); onSelectTask(workbench, worktree, task) }} className={`relative flex min-h-8 w-full items-center gap-2 border-l-2 px-2 py-1 text-left before:absolute before:-left-2 before:top-1/2 before:h-px before:w-2 before:bg-border hover:bg-accent/40 ${taskSelected ? 'rounded-sm border-ring ring-1 ring-ring/50' : 'border-transparent'}`} aria-label={`Open task ${task.title}`} aria-current={taskSelected ? 'page' : undefined} data-task-selected={taskSelected || undefined}>
                                 <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                                 <span data-task-status={task.status} className={`h-2 w-2 shrink-0 rounded-full ${taskStatusDotClass(task.status)}`} />
                                 <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
