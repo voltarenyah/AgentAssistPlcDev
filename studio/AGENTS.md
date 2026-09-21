@@ -28,11 +28,12 @@ end-to-end workspace smoke scenario.
   `learning-steps-dialog`, `navbar`, `selectable`, `sidebar`, `single-image-dropzone`, `tags-input`,
   `timeline`, `timezone-menu`, `tree`, `unsplash`. Prefer the specific subpath: the `primitives`
   barrel adds a ~250 kB chunk (85 kB gzip) to the route importing it.
-- The docs document the shadcn registry endpoint (`https://notion-ui.vercel.app/registry/notion-ui.json`)
-  for pulling component source into the project. `studio/components.json` exists but is not ready
-  for it: `tailwind.css` still points at the removed `src/renderer/src/assets/main.css` (it is now
-  `src/assets/main.css`), `registries` is empty, and this repo uses npm, so the documented
-  `pnpm dlx` becomes `npx`. Until that is settled, import from the installed package.
+- The shadcn registry route for notion-kit is not published: every endpoint shape the docs and the
+  package imply returns 404 (`/registry/notion-ui.json`, `/r/<name>.json`, `/registry.json`, and the
+  matching raw GitHub paths), checked 2026-09-21. `registries` therefore stays empty in
+  `studio/components.json`; do not add a URL that 404s. Import from the installed package instead.
+  The local shadcn config is otherwise usable: `tailwind.css` now points at the real
+  `src/assets/main.css`, and the CLI runs as `npx shadcn@latest` here because the repo uses npm.
 - Every notion-kit surface needs the `.notion-kit-surface` wrapper and an explicit `Button` size;
   see `docs/STYLEGUIDE.md`.
 
