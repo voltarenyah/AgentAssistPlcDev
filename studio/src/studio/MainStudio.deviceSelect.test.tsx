@@ -35,6 +35,23 @@ const snapshot: api.DeviceSnapshot = {
   diagnostics: [],
 }
 
+const task: api.EngineeringTask = {
+  taskId: 'task1',
+  workbenchId: 'wb1',
+  scope: 'worktree',
+  worktreeId: 'wt1',
+  title: 'Inspect startup sequence',
+  type: 'feature',
+  status: 'todo',
+  priority: 0,
+  intent: '',
+  expectedResult: '',
+  description: null,
+  createdUtc: '2026-08-02T00:00:00.000Z',
+  updatedUtc: '2026-08-02T00:00:00.000Z',
+  deviceId: 'dev1',
+}
+
 vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
   return {
@@ -43,8 +60,11 @@ vi.mock('@/api/client', async importOriginal => {
     selectWorkbench: vi.fn(async () => ({})),
     selectWorktree: vi.fn(async () => ({})),
     listDevices: vi.fn(async () => [{ deviceId: 'dev1', plcName: 'PLC_Demo' }]),
+    listGraphWorktreeTasks: vi.fn(async () => [task]),
     getDeviceInfo: vi.fn(async () => snapshot),
     listDeviceSessions: vi.fn(async () => []),
+    setActiveWorktreeTask: vi.fn(async () => ({ activeTask: task })),
+    getEngineeringTaskDetail: vi.fn(async () => ({ task, sessions: [], commits: [], sourceObjects: [], svnRevisions: [] })),
     getKeyStatus: vi.fn(async () => ({ configured: true })),
     getDeepSeekBalance: vi.fn(async () => ({ isAvailable: true, balances: [], fetchedAt: '2026-08-02T00:00:00.000Z' })),
     getSessions: vi.fn(async () => []),
@@ -159,6 +179,28 @@ describe('MainStudio device selection resilience', () => {
     await act(async () => {})
 
     expect(host.querySelector('footer')?.textContent).toContain('DemoWB/no worktree/no device')
+  })
+
+  it('opens task detail without requesting a PLC snapshot', async () => {
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    clickText(host, 'DemoWB')
+    await act(async () => {})
+    clickText(host, 'master')
+    await act(async () => {})
+
+    // The worktree landing page may independently inspect device metadata.
+    // From this point onward, a task click itself must not start another PLC snapshot.
+    vi.mocked(api.getDeviceInfo).mockClear()
+    vi.mocked(api.getDeviceInfo).mockImplementation(() => new Promise<api.DeviceSnapshot>(() => {}))
+    vi.mocked(api.getEngineeringTaskDetail).mockImplementation(() => new Promise<api.EngineeringTaskDetail>(() => {}))
+
+    clickText(host, task.title)
+    await act(async () => {})
+
+    expect(host.textContent).toContain('Loading task traceability...')
+    expect(api.getDeviceInfo).not.toHaveBeenCalled()
   })
 
   it('fills in the device view when the snapshot arrives', async () => {

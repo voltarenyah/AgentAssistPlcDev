@@ -499,6 +499,7 @@ export default function MainStudio() {
   const [hardwareBomView, setHardwareBomView] = useState<api.HardwareBomView | null>(null)
   const [hardwareNetworkView, setHardwareNetworkView] = useState<api.HardwareNetworkView | null>(null)
   const selectionRequestId = useRef(0)
+  const taskDetailRequestId = useRef(0)
   const navigatorTagRequestId = useRef(0)
   const navigatorFilterRequestId = useRef(0)
   const hardwareRequestId = useRef(0)
@@ -1100,18 +1101,17 @@ export default function MainStudio() {
     }
   }
 
-  const selectTask = async (workbench: api.Workbench, worktree: api.WorkbenchRegistration, task: api.EngineeringTask) => {
+  const selectTask = (workbench: api.Workbench, worktree: api.WorkbenchRegistration, task: api.EngineeringTask) => {
     if (!task.deviceId) {
       showErrorToast(`Task “${task.title}” has no PLC binding. Create a new device-bound task instead.`)
       return
     }
-    await selectDevice(workbench, worktree, task.deviceId)
-    try {
-      await api.setActiveWorktreeTask(workbench.workbenchId, worktree.worktreeId, task.taskId)
-      await openTaskDetail(task)
-    } catch (error) {
-      showErrorToast(displayError(error))
-    }
+    // A task click opens its graph-backed traceability view. The task keeps its
+    // PLC binding, but it must not open or reload that PLC; explicit device
+    // navigation owns the expensive block-manifest snapshot.
+    void openTaskDetail(task)
+    void api.setActiveWorktreeTask(workbench.workbenchId, worktree.worktreeId, task.taskId)
+      .catch(error => showErrorToast(displayError(error)))
   }
 
   const refreshWorktreeTasks = async (workbenchId: string, worktreeId: string) => {
@@ -1992,10 +1992,16 @@ export default function MainStudio() {
   // maximize. No-ops in a plain browser (see studio/desktopWindowBridge.ts).
   const openTaskDetail = async (task: api.EngineeringTask) => {
     if (!selection.workbenchId) return
+    const requestId = ++taskDetailRequestId.current
     setTaskDetailTask(task); setTaskDetail(null); setTaskDetailError(null); setTaskDetailLoading(true)
-    try { setTaskDetail(await api.getEngineeringTaskDetail(selection.workbenchId, task.taskId, selection.worktreeId)) }
-    catch (error) { setTaskDetailError(displayError(error)) }
-    finally { setTaskDetailLoading(false) }
+    try {
+      const detail = await api.getEngineeringTaskDetail(selection.workbenchId, task.taskId, selection.worktreeId)
+      if (taskDetailRequestId.current === requestId) setTaskDetail(detail)
+    } catch (error) {
+      if (taskDetailRequestId.current === requestId) setTaskDetailError(displayError(error))
+    } finally {
+      if (taskDetailRequestId.current === requestId) setTaskDetailLoading(false)
+    }
   }
   const reloadTaskDetail = async () => { if (taskDetailTask) await openTaskDetail(taskDetailTask) }
   const removeTaskDetailRelation = async (_kind: string, item: TraceabilityItem) => {
