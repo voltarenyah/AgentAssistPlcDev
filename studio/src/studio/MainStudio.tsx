@@ -1003,51 +1003,48 @@ export default function MainStudio() {
     }
   }, [])
 
-  const selectWorkbench = async (workbench: api.Workbench) => {
-    try {
-      await api.selectWorkbench(workbench.workbenchId)
-      setAppAssistantRuntime(null)
-      void api.getAppAssistantRuntimeState(workbench.workbenchId)
-        .then(runtimeSnapshot => setAppAssistantRuntime(runtimeSnapshot))
-        .catch(() => { /* Runtime refresh is best-effort; selection remains usable. */ })
-      setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
-      setMainView({ kind: 'project' })
-      setDeviceSelection(null)
-      setChatTabs(emptyChatTabs())
-    } catch (error) {
-      showErrorToast(displayError(error))
-    }
+  const selectWorkbench = (workbench: api.Workbench) => {
+    const requestId = ++selectionRequestId.current
+    // Local focus changes must not wait for the shared runtime acknowledgement.
+    // The workbench runtime effect refreshes the assistant state after this render.
+    setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
+    setMainView({ kind: 'project' })
+    setDeviceSelection(null)
+    setChatTabs(emptyChatTabs())
+    void api.selectWorkbench(workbench.workbenchId).catch(error => {
+      if (selectionRequestId.current === requestId) showErrorToast(displayError(error))
+    })
   }
 
-  const selectWorktree = async (workbench: api.Workbench, worktree: api.WorkbenchRegistration) => {
+  const selectWorktree = (workbench: api.Workbench, worktree: api.WorkbenchRegistration) => {
+    const requestId = ++selectionRequestId.current
+    // Selecting a worktree is local UI state. Let the landing page fetch its
+    // own details while the shared runtime acknowledgement happens in parallel.
+    setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
+    setMainView({ kind: 'worktree', tab: 'overview' })
+    // Version control lives in the right dock of the worktree page; make
+    // sure the dock is visible when navigating there.
+    setShellLayout(previous => previous.rightOpen ? previous : { ...previous, rightOpen: true })
+    setDeviceSelection(null)
+    setChatTabs(emptyChatTabs())
     setOperation('select-worktree')
-    try {
-      await api.selectWorktree(workbench.workbenchId, worktree.worktreeId)
-      const [devices, tasks] = await Promise.all([
-        api.listDevices(workbench.workbenchId, worktree.worktreeId),
-        api.listGraphWorktreeTasks(workbench.workbenchId, worktree.worktreeId),
-      ])
-      void api.getAppAssistantRuntimeState(workbench.workbenchId)
-        .then(runtimeSnapshot => setAppAssistantRuntime(runtimeSnapshot))
-        .catch(() => { /* Runtime refresh is best-effort; selection remains usable. */ })
+    void api.listDevices(workbench.workbenchId, worktree.worktreeId).then(devices => {
+      if (selectionRequestId.current !== requestId) return
       devices.forEach(device => rememberDeviceSummary(workbench.workbenchId, worktree.worktreeId, device))
       setDevicesByWorktree(previous => ({
         ...previous,
         [worktreeKey(workbench.workbenchId, worktree.worktreeId)]: devices,
       }))
+    }).catch(() => { /* The landing page reports a device-list load failure. */ })
+    void api.listGraphWorktreeTasks(workbench.workbenchId, worktree.worktreeId).then(tasks => {
+      if (selectionRequestId.current !== requestId) return
       setTasksByWorktree(previous => ({ ...previous, [worktreeKey(workbench.workbenchId, worktree.worktreeId)]: tasks }))
-      setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
-      setMainView({ kind: 'worktree', tab: 'overview' })
-      // Version control lives in the right dock of the worktree page; make
-      // sure the dock is visible when navigating there.
-      setShellLayout(previous => previous.rightOpen ? previous : { ...previous, rightOpen: true })
-      setDeviceSelection(null)
-      setChatTabs(emptyChatTabs())
-    } catch (error) {
-      showErrorToast(displayError(error))
-    } finally {
-      setOperation(null)
-    }
+    }).catch(() => { /* The landing page reports a task-list load failure. */ })
+    void api.selectWorktree(workbench.workbenchId, worktree.worktreeId).catch(error => {
+      if (selectionRequestId.current === requestId) showErrorToast(displayError(error))
+    }).finally(() => {
+      if (selectionRequestId.current === requestId) setOperation(null)
+    })
   }
 
   const selectDevice = async (

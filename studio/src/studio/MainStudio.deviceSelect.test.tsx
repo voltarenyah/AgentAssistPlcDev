@@ -135,6 +135,32 @@ describe('MainStudio device selection resilience', () => {
     expect(host.textContent).not.toContain('Generate PLC context')
   })
 
+  it('applies worktree selection instantly without waiting for its server acknowledgement', async () => {
+    vi.mocked(api.selectWorktree).mockImplementation(() => new Promise<void>(() => {}))
+
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    clickText(host, 'DemoWB')
+    await act(async () => {})
+    clickText(host, 'master')
+    await act(async () => {})
+
+    expect(host.querySelector('footer')?.textContent).toContain('DemoWB/master/worktree')
+  })
+
+  it('applies project selection instantly without waiting for its server acknowledgement', async () => {
+    vi.mocked(api.selectWorkbench).mockImplementation(() => new Promise<void>(() => {}))
+
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    clickText(host, 'DemoWB')
+    await act(async () => {})
+
+    expect(host.querySelector('footer')?.textContent).toContain('DemoWB/no worktree/no device')
+  })
+
   it('fills in the device view when the snapshot arrives', async () => {
     // clearAllMocks keeps implementations — restore resolving defaults explicitly.
     vi.mocked(api.getSessions).mockResolvedValue([])
