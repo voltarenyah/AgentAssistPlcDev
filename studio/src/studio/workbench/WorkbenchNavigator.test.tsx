@@ -113,8 +113,10 @@ describe('WorkbenchNavigator tag projection', () => {
 
     const home = host.querySelector('button[aria-label="Go to all projects"]')
     expect(home).toBeTruthy()
-    expect(home?.getAttribute('data-variant')).toBe('ghost')
-    expect(home?.getAttribute('data-size')).toBe('icon-sm')
+    // Assert the icon-only contract rather than a specific library's variant props:
+    // the control carries the accessible name, renders an icon and no visible text.
+    expect(home?.textContent?.trim()).toBe('')
+    expect(home?.querySelector('svg')).not.toBeNull()
     await act(async () => (home as HTMLButtonElement).click())
     expect(onShowHome).toHaveBeenCalledOnce()
     await act(async () => root.unmount())

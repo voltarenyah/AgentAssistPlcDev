@@ -25,16 +25,18 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DeviceSummary, EngineeringTask, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
 import {
+  Button,
   ContextMenu,
   ContextMenuContent,
-  MenuLabel,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from '@notion-kit/ui/primitives'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -42,8 +44,9 @@ import {
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
+  Input,
+  MenuLabel,
 } from '@notion-kit/ui/primitives'
-import { Input } from '@/components/ui/input'
 
 export type WorkbenchSelection = {
   workbenchId: string | null
@@ -200,8 +203,7 @@ export default function WorkbenchNavigator({
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <div className="truncate text-sm font-semibold tracking-tight">Automation Workbench</div>
           <Button
-            variant="ghost"
-            size="icon-sm"
+            variant="nav-icon"
             aria-label="Go to all projects"
             title="All projects"
             onClick={onShowHome}
@@ -209,10 +211,10 @@ export default function WorkbenchNavigator({
             <House className="h-3.5 w-3.5" />
           </Button>
         </div>
-        <Button variant="ghost" size="icon-sm" aria-label="Refresh workbenches" title="Refresh workbenches" onClick={onRefresh}>
+        <Button variant="nav-icon" aria-label="Refresh workbenches" title="Refresh workbenches" onClick={onRefresh}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
         </Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Create workbench" title="Create workbench" onClick={onCreateWorkbench}>
+        <Button variant="nav-icon" aria-label="Create workbench" title="Create workbench" onClick={onCreateWorkbench}>
           <Plus className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -266,8 +268,7 @@ export default function WorkbenchNavigator({
                     <span className="min-w-0 flex-1 truncate text-xs font-medium">{workbench.name}</span>
                     <DropdownMenu>
                       <DropdownMenuTrigger render={<Button
-                          variant="ghost"
-                          size="icon-xs"
+                          variant="nav-icon"
                           aria-label={`Project actions ${workbench.name}`}
                           onClick={event => event.stopPropagation()}
                         >
@@ -345,8 +346,7 @@ export default function WorkbenchNavigator({
                               )}
                               <DropdownMenu>
                                 <DropdownMenuTrigger render={<Button
-                                    variant="ghost"
-                                    size="icon-xs"
+                                    variant="nav-icon"
                                     aria-label={`Worktree actions ${worktree.name}`}
                                     onClick={event => event.stopPropagation()}
                                   >
@@ -383,7 +383,7 @@ export default function WorkbenchNavigator({
                         {worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (
                           <div className="ml-4 border-l py-0.5 pl-2" style={{ borderColor: 'var(--border)' }}>
                             {tasks.length === 0 ? (
-                              <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>
+                              <Button variant="link" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>
                             ) : tasks.map(task => {
                               const taskSelected = (activeTaskId ?? clickedTaskId) === task.taskId
                               const TaskIcon = taskTypeIcon[task.type]
@@ -395,7 +395,7 @@ export default function WorkbenchNavigator({
                                   <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
                                 </button>
                                 <DropdownMenu>
-                                  <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`Task actions ${task.title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
+                                  <DropdownMenuTrigger render={<Button variant="nav-icon" aria-label={`Task actions ${task.title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
                                       <Ellipsis className="h-3.5 w-3.5" />
                                     </Button>} />
                                   <DropdownMenuContent align="end" className="w-max min-w-56">
@@ -422,7 +422,7 @@ export default function WorkbenchNavigator({
                               </div>
                               )
                             })}
-                            {tasks.length > 0 && <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>}
+                            {tasks.length > 0 && <Button variant="link" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>}
                           </div>
                         )}
                         {showLegacyDeviceTree && worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (
@@ -510,8 +510,8 @@ export default function WorkbenchNavigator({
         <form className="space-y-4" onSubmit={event => { event.preventDefault(); saveTaskRename() }}>
           <Input aria-label="Task title" value={renameTitle} onChange={event => setRenameTitle(event.target.value)} autoFocus />
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setRenameTask(null)}>Cancel</Button>
-            <Button type="submit">Save</Button>
+            <Button type="button" variant="primary" size="sm" onClick={() => setRenameTask(null)}>Cancel</Button>
+            <Button type="submit" variant="blue" size="sm">Save</Button>
           </DialogFooter>
         </form>
       </DialogContent>
