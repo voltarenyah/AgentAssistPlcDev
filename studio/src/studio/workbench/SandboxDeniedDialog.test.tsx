@@ -55,9 +55,14 @@ describe('SandboxDeniedDialog', () => {
     act(() => root.unmount())
   })
 
-  it('exposes a named close control', () => {
+  it('exposes exactly one close control', () => {
     render(<SandboxDeniedDialog message="denied" roots={[]} onClose={vi.fn()} />)
 
+    // notion-kit's DialogContent renders a built-in close unless `hideClose` is set, so
+    // without it this dialog would present two overlapping close controls.
+    const closeControls = Array.from(document.body.querySelectorAll('button')).filter(button =>
+      /close/i.test(button.getAttribute('aria-label') ?? '') || /close/i.test(button.textContent ?? ''))
+    expect(closeControls).toHaveLength(1)
     expect(document.body.querySelector('button[aria-label="Close sandbox warning"]')).not.toBeNull()
   })
 })
