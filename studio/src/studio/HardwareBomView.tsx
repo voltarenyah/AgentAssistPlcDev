@@ -1,3 +1,4 @@
+import { Input } from '@notion-kit/ui/primitives'
 import {
   ChevronDown,
   ChevronRight,
@@ -92,9 +93,9 @@ export default function HardwareBomView({ view }: Props) {
 
       <div className="flex shrink-0 items-center gap-2 border-b px-5 py-2" style={{ borderColor: 'var(--border)' }}>
         <ListFilter className="h-3.5 w-3.5 text-muted-foreground" />
-        <input
+        <Input
           aria-label="Filter components"
-          className="field-input h-7 w-64 text-[10px]"
+          className="h-7! w-64! text-[10px]!"
           placeholder="Filter by name, type, order number..."
           value={filter}
           onChange={event => setFilter(event.target.value)}

@@ -1,4 +1,5 @@
 import { Download, Edit3, MessageSquare, Plus, Trash2, X } from 'lucide-react'
+import { Input } from '@notion-kit/ui/primitives'
 import { useState } from 'react'
 import type { ChatSessionInfo } from '@/api/client'
 
@@ -80,9 +81,9 @@ export default function SessionDock({
                         setEditingId(null)
                       }}
                     >
-                      <input
+                      <Input
                         name="session-title"
-                        className="field-input h-7 min-w-0 flex-1"
+                        className="h-7! min-w-0 flex-1"
                         defaultValue={session.title}
                         autoFocus
                       />
