@@ -66,9 +66,10 @@ const readOnlyValue = (value: string) => <span className="text-[11px] text-muted
 type Props = {
   onClose: () => void
   onResetLayout?: () => void
+  onOpenComponentCatalog?: () => void
 }
 
-export default function SettingsPage({ onClose, onResetLayout }: Props) {
+export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCatalog }: Props) {
   const [settings, setSettings] = useState<api.ChatSettings | null>(null)
   const settingsRef = useRef<api.ChatSettings | null>(null)
   const [status, setStatus] = useState<api.ServerStatus | null>(null)
@@ -337,6 +338,9 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
                 checked={theme === 'dark'}
                 onCheckedChange={checked => setThemePreference(checked ? 'dark' : 'light')}
               />
+            </Row>
+            <Row id="appearance.ui-components" title="UI components" description="Preview reusable components and choose one for a new Studio surface.">
+              <button className="secondary-button h-8" data-open-component-catalog onClick={onOpenComponentCatalog}>Open catalog</button>
             </Row>
           </Section>
         )

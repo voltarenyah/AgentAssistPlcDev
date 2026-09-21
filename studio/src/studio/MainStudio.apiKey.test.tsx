@@ -114,4 +114,23 @@ describe('MainStudio API key entrance', () => {
     await act(async () => {})
     expect(host.querySelector('[data-settings-page]')).not.toBeNull()
   })
+
+  it('opens the component catalog from Settings and returns to Settings', async () => {
+    const { host, root } = render(<MainStudio />)
+    await act(async () => {})
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click())
+    await act(async () => {})
+    act(() => host.querySelector<HTMLButtonElement>('[data-settings-category="appearance"]')?.click())
+    act(() => host.querySelector<HTMLButtonElement>('[data-open-component-catalog]')?.click())
+    await act(async () => {})
+
+    expect(host.querySelector('[data-component-catalog]')).not.toBeNull()
+
+    const backToSettings = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Back to settings')!
+    act(() => backToSettings.click())
+    expect(host.querySelector('[data-settings-page]')).not.toBeNull()
+
+    await act(async () => root.unmount())
+  })
 })

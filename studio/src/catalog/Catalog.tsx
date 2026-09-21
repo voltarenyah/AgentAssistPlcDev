@@ -1,7 +1,6 @@
 import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { ThemeToggle } from './ThemeToggle'
-import { Toaster } from '@/components/ui/sonner'
 
 type PageEntry = {
   id: string
@@ -10,6 +9,7 @@ type PageEntry = {
 }
 
 const pages: PageEntry[] = [
+  { id: 'notion-kit', label: 'Notion Kit', component: lazy(() => import('./pages/NotionKitPage')) },
   { id: 'buttons', label: 'Buttons', component: lazy(() => import('./pages/ButtonPage')) },
   { id: 'badges', label: 'Badges', component: lazy(() => import('./pages/BadgePage')) },
   { id: 'dialog', label: 'Dialog', component: lazy(() => import('./pages/DialogPage')) },
@@ -28,17 +28,24 @@ function PageLoader() {
   )
 }
 
-export default function Catalog() {
-  const [active, setActive] = useState('buttons')
+type Props = {
+  onClose?: () => void
+}
+
+export default function Catalog({ onClose }: Props) {
+  const [active, setActive] = useState('notion-kit')
 
   const ActivePage = pages.find((p) => p.id === active)!
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-full flex-col overflow-hidden" data-component-catalog>
       {/* Header */}
       <header className="flex h-11 items-center justify-between border-b px-4 shrink-0">
-        <h1 className="text-sm font-semibold">Orca UI — Component Catalog</h1>
-        <ThemeToggle />
+        <h1 className="text-sm font-semibold">UI Components</h1>
+        <div className="flex items-center gap-2">
+          {onClose && <button className="secondary-button h-8" onClick={onClose}>Back to settings</button>}
+          <ThemeToggle />
+        </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -67,8 +74,6 @@ export default function Catalog() {
           </Suspense>
         </main>
       </div>
-
-      <Toaster />
     </div>
   )
 }

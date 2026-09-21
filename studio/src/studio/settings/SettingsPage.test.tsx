@@ -162,6 +162,18 @@ describe('SettingsPage', () => {
     await act(async () => root.unmount())
   })
 
+  it('opens the UI component catalog from Appearance', async () => {
+    const onOpenComponentCatalog = vi.fn()
+    const { host, root } = await render(<SettingsPage onClose={vi.fn()} onOpenComponentCatalog={onOpenComponentCatalog} />)
+    await clickCategory(host, 'appearance')
+
+    const openCatalog = host.querySelector<HTMLButtonElement>('[data-open-component-catalog]')!
+    await act(async () => { openCatalog.click() })
+
+    expect(onOpenComponentCatalog).toHaveBeenCalledTimes(1)
+    await act(async () => root.unmount())
+  })
+
   it('saves a new API key and refreshes status', async () => {
     const { host, root } = await render(<SettingsPage onClose={vi.fn()} />)
     await clickCategory(host, 'assistant')

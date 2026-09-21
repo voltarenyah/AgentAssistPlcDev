@@ -70,6 +70,7 @@ import TaskDetail, { type TraceabilityItem } from '@/studio/workbench/TaskDetail
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
+import Catalog from '@/catalog/Catalog'
 import TiaSessionsPanel from '@/studio/workbench/TiaSessionsPanel'
 import { normalizeProjectPath, sessionLabelFor } from '@/studio/workbench/TiaSessionLabel'
 import TiaCloseConfirmationDialog from '@/studio/workbench/TiaCloseConfirmationDialog'
@@ -520,7 +521,7 @@ export default function MainStudio() {
   })
   const [focusedView, setFocusedView] = useState<WorkspaceViewKind | null>(() => workspaceService.getFocusedViewKind())
   useEffect(() => workspaceService.subscribe(setFocusedView), [workspaceService])
-  const [activePage, setActivePage] = useState<'studio' | 'tools' | 'settings'>('studio')
+  const [activePage, setActivePage] = useState<'studio' | 'tools' | 'settings' | 'catalog'>('studio')
   const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
   const [shellLayout, setShellLayout] = useState<ShellLayout>(() => {
     try {
@@ -2098,11 +2099,16 @@ export default function MainStudio() {
       ) : activePage === 'settings' ? (
         <SettingsPage
           onClose={() => setActivePage('studio')}
+          onOpenComponentCatalog={() => setActivePage('catalog')}
           onResetLayout={() => {
             setShellLayout(DEFAULT_SHELL_LAYOUT)
             workspaceService.resetLayout()
           }}
         />
+      ) : activePage === 'catalog' ? (
+        <div className="min-h-0 flex-1">
+          <Catalog onClose={() => setActivePage('settings')} />
+        </div>
       ) : <div className="flex min-h-0 flex-1">
         <div
           data-dock="left"
