@@ -3,33 +3,55 @@ import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(new URL('./MainStudio.tsx', import.meta.url), 'utf8')
 
+// Selection handlers are not all async: they apply local focus immediately and
+// issue the ApiHost acknowledgement in parallel, so match either form.
 const functionBody = (name: string, nextName: string) => {
-  const start = source.indexOf(`const ${name} = async`)
-  const end = source.indexOf(`const ${nextName} = async`, start)
+  const start = source.indexOf(`const ${name} =`)
+  const end = source.indexOf(`const ${nextName} =`, start)
   expect(start).toBeGreaterThanOrEqual(0)
   expect(end).toBeGreaterThan(start)
   return source.slice(start, end)
 }
 
+// The shared runtime snapshot is refreshed by an effect rather than inside the
+// selection handlers, so those contract checks read the effect owning the call.
+const effectContaining = (marker: string) => {
+  const at = source.indexOf(marker)
+  expect(at, `effect containing ${marker}`).toBeGreaterThanOrEqual(0)
+  const start = source.lastIndexOf('useEffect(', at)
+  const end = source.indexOf('])', at)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return source.slice(start, end + 2)
+}
+
 describe('MainStudio offline snapshot contract', () => {
-  it('synchronizes the ApiHost project selection before opening the assistant context', () => {
+  it('applies the project selection locally and synchronizes the ApiHost in parallel', () => {
     const body = functionBody('selectWorkbench', 'selectWorktree')
-    expect(body).toContain('await api.selectWorkbench(workbench.workbenchId)')
+    const localAt = body.indexOf('setSelection(')
+    const apiAt = body.indexOf('api.selectWorkbench(workbench.workbenchId)')
+    expect(localAt).toBeGreaterThanOrEqual(0)
+    expect(apiAt).toBeGreaterThan(localAt)
   })
 
-  it('refreshes the shared runtime snapshot after the selected workbench is synchronized', () => {
-    const body = functionBody('selectWorkbench', 'selectWorktree')
-    expect(body).toContain('api.getAppAssistantRuntimeState(workbench.workbenchId)')
+  it('refreshes the shared runtime snapshot whenever the selected project changes', () => {
+    const effect = effectContaining('api.getAppAssistantRuntimeState(selection.workbenchId)')
+    expect(effect).toContain('[selection.workbenchId]')
   })
 
-  it('synchronizes the ApiHost worktree selection before loading worktree context', () => {
+  it('applies the worktree selection locally and synchronizes the ApiHost in parallel', () => {
     const body = functionBody('selectWorktree', 'selectDevice')
-    expect(body).toContain('await api.selectWorktree(workbench.workbenchId, worktree.worktreeId)')
+    const localAt = body.indexOf('setSelection(')
+    const apiAt = body.indexOf('api.selectWorktree(workbench.workbenchId, worktree.worktreeId)')
+    expect(localAt).toBeGreaterThanOrEqual(0)
+    expect(apiAt).toBeGreaterThan(localAt)
   })
 
-  it('refreshes the shared runtime snapshot after the selected worktree is synchronized', () => {
+  it('keeps the shared runtime snapshot keyed to the project rather than each worktree', () => {
     const body = functionBody('selectWorktree', 'selectDevice')
-    expect(body).toContain('api.getAppAssistantRuntimeState(workbench.workbenchId)')
+    expect(body).not.toContain('api.getAppAssistantRuntimeState')
+    const effect = effectContaining('api.getAppAssistantRuntimeState(selection.workbenchId)')
+    expect(effect).toContain('[selection.workbenchId]')
   })
 
   it('remounts the assistant when the selected project changes', () => {
