@@ -203,6 +203,26 @@ Counting caution: the "legacy class" counts used throughout this migration **und
 what remains, because the custom-styled category in bucket 4 is invisible to them. "Zero
 legacy classes in this file" means exactly that, and not "all controls are notion-kit".
 
+### Second-generation sweep: the surfaces migrated after that
+
+The first sweep ran before roughly twenty further increments, so a second pass covered the
+surfaces migrated since: the Workbench Assistant panel, the archive dialog's labels and
+input, the tasks panel's per-task controls, the add-task dialog's labels and fields, the
+settings search and API-key fields with the refresh and catalog controls, the catalog's
+nine pages, and the TIA sessions panel.
+
+All of it renders in both themes with zero console errors, zero 4xx/5xx, zero horizontal
+overflow and no mutation requests beyond selection and the assistant's own bootstrap. The
+count of legacy-class controls rendered anywhere in the application is **one** — the
+DeepSeek balance refresh — on every surface checked, which is the clearest single number
+for how far this migration got.
+
+Three assertions in that pass were mis-specified and reported as failures while the
+application was correct: two tasks produce two Start-chat controls (not one), the create
+dialog does contain a "New task title" field (asserted absent), and the catalog has nine
+navigation pages (not one). Recorded because a sweep is only evidence if its own
+expectations are checked too.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
