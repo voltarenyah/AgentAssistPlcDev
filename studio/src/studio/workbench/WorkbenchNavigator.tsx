@@ -1,5 +1,6 @@
 import {
   Archive,
+  CircleDot,
   CircuitBoard,
   Cpu,
   Database,
@@ -13,13 +14,16 @@ import {
   MonitorOff,
   Minus,
   Plus,
+  Pencil,
   RefreshCw,
   RotateCw,
   ShieldCheck,
+  Sparkles,
   Trash2,
+  Wrench,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { DeviceSummary, EngineeringTask, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults } from '@/api/client'
+import type { DeviceSummary, EngineeringTask, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -29,20 +33,27 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 
 export type WorkbenchSelection = {
   workbenchId: string | null
   worktreeId: string | null
   deviceId: string | null
 }
+
+type TaskUpdate = { title: string; type: EngineeringTask['type']; status: WorktreeTaskStatus }
 
 type Props = {
   workbenches: Workbench[]
@@ -73,6 +84,7 @@ type Props = {
   onSelectWorktree: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onSelectDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
   onSelectTask?: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => void
+  onUpdateTask?: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask, update: Partial<TaskUpdate>) => void
   onAddTask?: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onSelectHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onReloadHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
@@ -94,6 +106,11 @@ const taskStatusDotClass = (status: string) =>
   status === 'inProgress' || status === 'active' ? 'bg-emerald-500'
     : status === 'done' ? 'bg-muted-foreground'
       : 'bg-muted-foreground'
+const taskTypeIcon = {
+  issue: CircleDot,
+  improvement: Wrench,
+  feature: Sparkles,
+} satisfies Record<EngineeringTask['type'], typeof FileText>
 // Device actions remain wired while their task-page replacements are introduced.
 // The device tree itself is deliberately not part of the navigator anymore.
 const showLegacyDeviceTree = false
@@ -123,6 +140,7 @@ export default function WorkbenchNavigator({
   onSelectWorktree,
   onSelectDevice,
   onSelectTask = () => {},
+  onUpdateTask = () => {},
   onAddTask = () => {},
   onSelectHardware,
   onReloadHardware,
@@ -145,6 +163,8 @@ export default function WorkbenchNavigator({
     () => new Set(selection.worktreeId ? [selection.worktreeId] : []),
   )
   const [clickedTaskId, setClickedTaskId] = useState<string | null>(null)
+  const [renameTask, setRenameTask] = useState<{ workbench: Workbench; worktree: WorkbenchRegistration; task: EngineeringTask } | null>(null)
+  const [renameTitle, setRenameTitle] = useState('')
   const previousSelectedWorkbenchId = useRef(selection.workbenchId)
   useEffect(() => {
     if (selection.workbenchId && selection.workbenchId !== previousSelectedWorkbenchId.current) {
@@ -165,8 +185,18 @@ export default function WorkbenchNavigator({
     ? workbenches.filter(workbench => matchingWorkbenchIds.has(workbench.workbenchId)
       || workbench.worktrees.some(worktree => matchingWorktrees.has(worktree.worktreeId)))
     : workbenches
+  const openRenameTask = (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => {
+    setRenameTitle(task.title)
+    setRenameTask({ workbench, worktree, task })
+  }
+  const saveTaskRename = () => {
+    if (!renameTask || !renameTitle.trim()) return
+    onUpdateTask(renameTask.workbench, renameTask.worktree, renameTask.task, { title: renameTitle.trim() })
+    setRenameTask(null)
+  }
 
   return (
+    <>
     <aside data-dock-content="left" className="flex h-full min-h-0 w-full shrink-0 flex-col border-r bg-sidebar" style={{ borderColor: 'var(--border)' }}>
       <div className="flex h-12 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>
         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -456,12 +486,42 @@ export default function WorkbenchNavigator({
                               <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>
                             ) : tasks.map(task => {
                               const taskSelected = (activeTaskId ?? clickedTaskId) === task.taskId
+                              const TaskIcon = taskTypeIcon[task.type]
                               return (
-                              <button key={task.taskId} type="button" onClick={() => { setClickedTaskId(task.taskId); onSelectTask(workbench, worktree, task) }} className={`relative flex min-h-8 w-full items-center gap-2 border-l-2 px-2 py-1 text-left before:absolute before:-left-2 before:top-1/2 before:h-px before:w-2 before:bg-border hover:bg-accent/40 ${taskSelected ? 'rounded-sm border-ring ring-1 ring-ring/50' : 'border-transparent'}`} aria-label={`Open task ${task.title}`} aria-current={taskSelected ? 'page' : undefined} data-task-selected={taskSelected || undefined}>
-                                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                <span data-task-status={task.status} className={`h-2 w-2 shrink-0 rounded-full ${taskStatusDotClass(task.status)}`} />
-                                <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
-                              </button>
+                              <div key={task.taskId} className="group relative">
+                                <button type="button" onClick={() => { setClickedTaskId(task.taskId); onSelectTask(workbench, worktree, task) }} className={`relative flex min-h-8 w-full items-center gap-2 rounded-md border px-2 py-1 pr-8 text-left before:absolute before:-left-2 before:top-1/2 before:h-px before:w-2 before:bg-border hover:bg-accent/40 ${taskSelected ? 'border-ring/70' : 'border-transparent'}`} aria-label={`Open task ${task.title}`} aria-current={taskSelected ? 'page' : undefined} data-task-selected={taskSelected || undefined} data-task-type={task.type}>
+                                  <TaskIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                  <span data-task-status={task.status} className={`h-2 w-2 shrink-0 rounded-full ${taskStatusDotClass(task.status)}`} />
+                                  <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
+                                </button>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" size="icon-xs" aria-label={`Task actions ${task.title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
+                                      <Ellipsis className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuLabel>{task.title}</DropdownMenuLabel>
+                                    <DropdownMenuSub>
+                                      <DropdownMenuSubTrigger>Change status</DropdownMenuSubTrigger>
+                                      <DropdownMenuSubContent>
+                                        {(['todo', 'inProgress', 'done'] as const).map(status => <DropdownMenuItem key={status} onSelect={() => onUpdateTask(workbench, worktree, task, { status })}>{status === 'inProgress' ? 'In progress' : status[0].toUpperCase() + status.slice(1)}</DropdownMenuItem>)}
+                                      </DropdownMenuSubContent>
+                                    </DropdownMenuSub>
+                                    <DropdownMenuSub>
+                                      <DropdownMenuSubTrigger>Change type and icon</DropdownMenuSubTrigger>
+                                      <DropdownMenuSubContent>
+                                        {(['issue', 'improvement', 'feature'] as const).map(type => {
+                                          const TypeIcon = taskTypeIcon[type]
+                                          return <DropdownMenuItem key={type} onSelect={() => onUpdateTask(workbench, worktree, task, { type })}><TypeIcon />{type[0].toUpperCase() + type.slice(1)}</DropdownMenuItem>
+                                        })}
+                                      </DropdownMenuSubContent>
+                                    </DropdownMenuSub>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onSelect={() => openRenameTask(workbench, worktree, task)}><Pencil />Rename task</DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
                               )
                             })}
                             {tasks.length > 0 && <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>}
@@ -579,5 +639,21 @@ export default function WorkbenchNavigator({
         })}
       </div>
     </aside>
+    <Dialog open={renameTask !== null} onOpenChange={open => { if (!open) setRenameTask(null) }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Rename task</DialogTitle>
+          <DialogDescription>Choose a concise task title for this worktree.</DialogDescription>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={event => { event.preventDefault(); saveTaskRename() }}>
+          <Input aria-label="Task title" value={renameTitle} onChange={event => setRenameTitle(event.target.value)} autoFocus />
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRenameTask(null)}>Cancel</Button>
+            <Button type="submit">Save</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }

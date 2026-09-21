@@ -121,6 +121,11 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var task = await created.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("dev-1", task.GetProperty("deviceId").GetString());
 
+        var taskId = task.GetProperty("taskId").GetString();
+        var updated = await fixture.Client.PatchAsJsonAsync($"{route}/{taskId}", new { type = "issue" });
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        Assert.Equal("issue", (await updated.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("type").GetString());
+
         var list = await fixture.Client.GetFromJsonAsync<JsonElement>(route);
         Assert.Equal("dev-1", list![0].GetProperty("deviceId").GetString());
     }

@@ -1398,6 +1398,8 @@ export const listGraphWorktreeTasks = (workbenchId: string, worktreeId: string) 
   workbenchRequest<EngineeringTaskList>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`)
 export const createGraphWorktreeTask = (workbenchId: string, worktreeId: string, task: { title: string; deviceId: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
   workbenchRequest<EngineeringTask>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`, jsonRequest('POST', task))
+export const updateGraphWorktreeTask = (workbenchId: string, worktreeId: string, taskId: string, patch: { title?: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus }) =>
+  workbenchRequest<EngineeringTask>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks/${encodeURIComponent(taskId)}`, jsonRequest('PATCH', patch))
 export type TaskSourceStage = { taskId: string; sourceObjectId: string; deviceId: string; baselineEvidenceJson: string | null; stagedUtc: string }
 export const listTaskSourceStages = (workbenchId: string, worktreeId: string, taskId: string) =>
   workbenchRequest<TaskSourceStage[]>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/stages`)

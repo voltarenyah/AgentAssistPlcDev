@@ -879,6 +879,7 @@ public static class WorkbenchEndpoints
                 return task with
                 {
                     Title = request.Title?.Trim() is { Length: > 0 } title ? title : task.Title,
+                    Type = request.Type ?? task.Type,
                     Status = request.Status ?? task.Status,
                     Priority = request.Priority ?? task.Priority,
                     Intent = request.Intent?.Trim() is { Length: > 0 } intent ? intent : task.Intent,

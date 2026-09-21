@@ -82,6 +82,8 @@ describe('WorkbenchNavigator tag projection', () => {
     const task = host.querySelector('button[aria-label="Open task Review motor interlock"]')
     expect(task?.getAttribute('aria-current')).toBe('page')
     expect(task?.getAttribute('data-task-selected')).toBe('true')
+    expect(task?.getAttribute('data-task-type')).toBe('feature')
+    expect(host.querySelector('button[aria-label="Task actions Review motor interlock"]')).toBeTruthy()
     expect(host.querySelector('button[aria-label="Project actions Direct project"]')).toBeTruthy()
     expect(host.querySelector('button[aria-label="Worktree actions descendant match"]')).toBeTruthy()
     expect(host.querySelector('[aria-label="Project available"]')).toBeNull()

@@ -2161,6 +2161,18 @@ export default function MainStudio() {
             onSelectWorktree={(workbench, worktree) => void selectWorktree(workbench, worktree)}
             onSelectDevice={(workbench, worktree, deviceId) => void selectDevice(workbench, worktree, deviceId)}
             onSelectTask={(workbench, worktree, task) => void selectTask(workbench, worktree, task)}
+            onUpdateTask={(workbench, worktree, task, update) => {
+              void api.updateGraphWorktreeTask(workbench.workbenchId, worktree.worktreeId, task.taskId, update)
+                .then(updated => {
+                  setTasksByWorktree(previous => ({
+                    ...previous,
+                    [worktreeKey(workbench.workbenchId, worktree.worktreeId)]: (previous[worktreeKey(workbench.workbenchId, worktree.worktreeId)] ?? [])
+                      .map(current => current.taskId === updated.taskId ? updated : current),
+                  }))
+                  if (taskDetailTask?.taskId === updated.taskId) void openTaskDetail(updated)
+                })
+                .catch(error => showErrorToast(`Task could not be updated: ${displayError(error)}`))
+            }}
             onAddTask={(_workbench, worktree) => {
               setTaskCreateWorktreeId(worktree.worktreeId)
               setMainView({ kind: 'worktree', tab: 'tasks' })

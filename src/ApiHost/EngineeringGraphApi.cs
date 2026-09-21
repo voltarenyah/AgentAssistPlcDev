@@ -60,6 +60,7 @@ public sealed record EngineeringTaskApiResponse(
 
 public sealed record EngineeringTaskUpdateApiRequest(
     string? Title = null,
+    [property: JsonConverter(typeof(JsonStringEnumConverter<GraphTaskType>))] GraphTaskType? Type = null,
     [property: JsonConverter(typeof(JsonStringEnumConverter<GraphTaskStatus>))] GraphTaskStatus? Status = null,
     int? Priority = null,
     string? Intent = null,
