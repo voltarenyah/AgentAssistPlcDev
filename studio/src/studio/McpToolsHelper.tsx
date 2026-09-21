@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Button } from '@notion-kit/ui/primitives'
 import {
   AlertTriangle,
   BookOpen,
@@ -227,7 +228,7 @@ export default function McpToolsHelper({ onClose }: { onClose: () => void }) {
           <div className="relative flex flex-wrap items-start gap-4">
             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-chart-2/10"><Wrench className="h-6 w-6 text-chart-2" /></div>
             <div className="min-w-0 flex-1"><div className="mb-2 flex items-center gap-2 text-[9px] font-medium uppercase tracking-[0.18em] text-chart-2"><span>MCP reference</span><span className="h-1 w-1 rounded-full bg-chart-2" /><span>Live catalog</span></div><h1 className="text-2xl font-semibold tracking-tight">Tools helper</h1><p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-muted-foreground">A working reference for every MCP tool currently exposed to the assistant: what it does, when it is safe to use, and the exact arguments it accepts.</p></div>
-            <button className="secondary-button" onClick={onClose}><X className="h-3.5 w-3.5" /> Back to studio</button>
+            <Button variant="primary" size="sm" onClick={onClose}><X className="h-3.5 w-3.5" /> Back to studio</Button>
           </div>
           <div className="relative mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <div className="rounded-lg border bg-surface-muted/20 p-3" style={{ borderColor: 'var(--border)' }}><div className="text-lg font-semibold tabular-nums">{tools.length}</div><div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">tools exposed</div></div>

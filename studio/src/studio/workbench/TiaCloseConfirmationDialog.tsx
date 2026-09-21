@@ -1,6 +1,13 @@
 import { AlertTriangle, Loader2, Save, X, XCircle } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@notion-kit/ui/primitives'
 
 type Props = {
   operationLabel: string
@@ -19,13 +26,13 @@ export default function TiaCloseConfirmationDialog({
 }: Props) {
   return (
     <Dialog open onOpenChange={open => { if (!open && !busy) onCancel() }}>
-      <DialogContent
-        showCloseButton={false}
-        className="max-w-[560px] gap-0 overflow-hidden p-0"
-        onEscapeKeyDown={event => { if (busy) event.preventDefault() }}
-        onPointerDownOutside={event => { if (busy) event.preventDefault() }}
-      >
-        <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 text-left" style={{ borderColor: 'var(--border)' }}>
+      {/*
+        notion-kit's Dialog exposes no showCloseButton / onEscapeKeyDown /
+        onPointerDownOutside props; the busy guard in onOpenChange already covers
+        Escape, overlay clicks and the close control.
+      */}
+      <DialogContent className="max-w-[560px] gap-0 overflow-hidden p-0">
+        <DialogHeader className="flex-row items-center gap-3 border-b border-border px-5 py-4 text-left">
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-amber-500/10">
             <AlertTriangle className="h-4 w-4 text-amber-500" />
           </div>
@@ -34,8 +41,7 @@ export default function TiaCloseConfirmationDialog({
             <DialogDescription className="text-[10px]">The current TIA connection must be released first.</DialogDescription>
           </div>
           <Button
-            variant="ghost"
-            size="icon-xs"
+            variant="close"
             aria-label="Close confirmation dialog"
             title="Close confirmation dialog"
             onClick={onCancel}
@@ -51,16 +57,17 @@ export default function TiaCloseConfirmationDialog({
             Save and close preserves the current project before the instance is closed. Close without saving discards unsaved changes. Cancel leaves TIA open so you can close it manually.
           </div>
         </div>
-        <DialogFooter className="flex-row flex-wrap justify-end border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <DialogFooter className="flex-row flex-wrap justify-end gap-2 border-t border-border bg-surface-muted/25 px-5 py-3">
           <Button
-            variant="outline"
+            variant="primary"
             size="xs"
             aria-label="Cancel and close manually"
             onClick={onCancel}
             disabled={busy}
           >Cancel</Button>
+          {/* red-fill keeps the destructive weight the old `destructive` variant carried. */}
           <Button
-            variant="destructive"
+            variant="red-fill"
             size="xs"
             aria-label="Close TIA instance without saving"
             onClick={onCloseWithoutSaving}
@@ -70,6 +77,7 @@ export default function TiaCloseConfirmationDialog({
             <XCircle className="h-3.5 w-3.5" /> Close without save
           </Button>
           <Button
+            variant="blue"
             size="xs"
             aria-label="Save and close TIA instance"
             onClick={onSaveAndClose}
