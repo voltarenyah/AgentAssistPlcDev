@@ -131,6 +131,21 @@ Migrated and independently verified (build, full suite, browser in both themes):
 | TIA close dialog + MCP tools helper | `1860ea6` |
 | `WorkbenchNavigator` menus, then its buttons/dialog/input | `be6436f`, `781fc66` |
 | Navigator rename dialog (test + footer fix) | `ba4dde8` |
+| Operation detail switch: `ToggleGroup` to `Tabs` (ADR-0005 gap 1, first site) | `d3b92fc` |
+| `CreateWorkbenchDialog`: the last surface whose primitives map 1:1 | `c954a0f` |
+| Duplicate close control removed from three dialogs | `e9f2aaf` |
+
+### Whole-application regression sweep
+
+After the last 1:1 surface landed, a single scripted sweep walked every migrated
+surface in both themes: the all-projects landing, the navigator dropdown and context
+menu, the project landing, tag chips, the status menu, the worktree landing, the tasks
+panel, the rename dialog, every Settings category, all nine catalog pages, the MCP tools
+helper, the create dialog in both modes, and the archive dialog.
+
+Result: **36 of 36 steps pass** (18 surfaces × 2 themes) with zero console errors, zero
+4xx/5xx responses, zero horizontal overflow and no mutation requests beyond the project
+selection. Destructive actions are opened but never confirmed.
 
 Remaining, all decision- or issue-gated: the `ToggleGroup` sites and the tag surfaces
 (`ADR-0005`), the device surfaces (`RefreshDialog`, `PlcSourcePanel`,
@@ -186,3 +201,4 @@ visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authorit
 | 2026-09-21 | 1.1 | Add the WorkbenchNavigator dedicated stage and record that its trigger blocks must be hand-edited rather than scripted. |
 | 2026-09-21 | 1.2 | WorkbenchNavigator menu layer migrated; record the group-label trap, the standalone MenuLabel, the content-width trap and the submenu content difference. |
 | 2026-09-21 | 1.3 | Add the migration status with commits; point the remaining mapping gaps at ADR-0005; correct the MainStudio stage, which has nothing to migrate. |
+| 2026-09-21 | 1.4 | Record the completion of the last 1:1 surface, the duplicate-close fix, and a whole-application regression sweep of 36 passing steps. |
