@@ -105,8 +105,8 @@ component suite or a production build is not evidence of visual proportion.
 | Stage | Surface | Collision sites | Isolated tests | Reason for position |
 |---|---|---|---|---|
 | 1 | Foundation: token switch + rename | 85 sites / 37 files | full suite | Must land first and alone so no state mixes vocabularies |
-| 2 | `studio/src/studio/workbench/CreateWorkbenchDialog.tsx` | 4 | 9 | Bounded product surface, no overlap with issue #109, enough collision sites to expose the rename |
-| 3 | `WorktreeLandingPage.tsx`, `SandboxDeniedDialog.tsx` | 2 each | 14 / 2 | Small, well-tested, adjacent to the create flow |
+| 2a | `SandboxDeniedDialog.tsx`, `TiaCloseConfirmationDialog.tsx`, `RefreshDialog.tsx` | 2 each | 0 / 2 / 2 | Dialog + Button + Input only, so they establish the dialog mapping before the big one and de-risk it. `SandboxDeniedDialog` gained a colocated test during migration. |
+| 2b | `studio/src/studio/workbench/CreateWorkbenchDialog.tsx` | 4 | 9 | Deferred behind 2a because it is the only surface on this path needing two primitives notion-kit does not map 1:1: it has no `ToggleGroup` (the session/file mode switch must become `Tabs`, and its custom sliding indicator must be reworked) and its `Select` is Base UI rather than Radix, with `SelectValue` needing explicit `items` to render a label. Its `Input` also uses a leading icon, which notion-kit's `Input` does not support (`endIcon` only, no children). |
 | 4 | `WorktreeTasksPanel.tsx`, `ChatWorkspace.tsx`, `McpToolsHelper.tsx` | 6 / 6 / 11 | 8 / 21 / 1 | Higher density; `McpToolsHelper` is a developer surface so it can absorb early mistakes |
 | 5 | Remaining `studio/src/**` files by density | 1–4 each | varies | Mechanical by this point |
 | Last | `studio/src/studio/MainStudio.tsx` | 9 | many | 2702-line component and the carrier of issue #109; migrate only after that issue is resolved |
