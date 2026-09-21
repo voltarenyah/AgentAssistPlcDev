@@ -1,5 +1,12 @@
 # Studio UI Library Integration UI Specification
 
+> **Partly superseded.** The primitive-reuse rule below — reuse the existing Orca-derived
+> Shadcn/Radix primitives and add no new dependencies — is replaced by
+> `docs/adr/ADR-0004-notion-kit-design-token-authority.md` and
+> `docs/ui-spec/notion-kit-ui-migration-ui-spec.md`, which make `@notion-kit/ui` the primitive and
+> token foundation. The accessibility requirements, the Visual Checkpoint Rule, and the preserved
+> dialog and dock behaviors recorded here still apply.
+
 ## Overview
 
 - Outcome: Studio presents consistent, accessible forms and confirmation dialogs using its existing Orca-derived Shadcn/Radix primitives.
