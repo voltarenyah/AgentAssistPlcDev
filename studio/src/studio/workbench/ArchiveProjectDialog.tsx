@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  Label,
 } from '@notion-kit/ui/primitives'
 
 type ArchiveValues = {
@@ -116,7 +117,7 @@ export default function ArchiveProjectDialog({
             </div>
           )}
 
-          <label className="field-label">
+          <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
             <span>Export directory</span>
             <div className="flex gap-1.5">
               <Input
@@ -153,9 +154,9 @@ export default function ArchiveProjectDialog({
             >
               Use this worktree folder: {worktreeDirectory}
             </Button>
-          </label>
+          </Label>
 
-          <label className="field-label">
+          <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
             <span>Archive file name</span>
             <Input
               className="font-mono"
@@ -166,9 +167,9 @@ export default function ArchiveProjectDialog({
               disabled={busy}
             />
             {archiveNameHasPath && <span className="text-[9px] text-amber-500">Enter a file name only; choose the destination directory separately.</span>}
-          </label>
+          </Label>
 
-          <label className="field-label">
+          <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
             <span>Archive mode</span>
             <select className="field-input" aria-label="Archive mode" value={archivationMode} onChange={event => setArchivationMode(event.target.value)} disabled={busy}>
               <option value="compressed">Compressed (recommended)</option>
@@ -176,7 +177,7 @@ export default function ArchiveProjectDialog({
               <option value="discard_restorable_data">Discard restorable data</option>
               <option value="discard_restorable_data_and_compressed">Discard restorable data and compression</option>
             </select>
-          </label>
+          </Label>
 
           {error && (
             <div className="flex items-start gap-2 rounded-lg bg-red-500/8 p-3 text-[9px] leading-relaxed text-red-700 dark:text-red-300" role="alert">
