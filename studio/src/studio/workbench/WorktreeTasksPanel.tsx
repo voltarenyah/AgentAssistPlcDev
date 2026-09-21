@@ -17,6 +17,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   Input,
+  Label,
   Textarea,
 } from '@notion-kit/ui/primitives'
 
@@ -79,7 +80,7 @@ export function ActiveTaskSelector({
   }
   return (
     <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
-      <label className="field-label" htmlFor="active-task-selector"><span>Active task</span></label>
+      <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!" htmlFor="active-task-selector"><span>Active task</span></Label>
       <div className="mt-1 flex items-center gap-2">
         <select
           id="active-task-selector"
@@ -345,15 +346,15 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
           </DialogHeader>
           {draft && (
             <div className="space-y-3">
-              <label className="field-label">
+              <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
                 <span>Title</span>
                 <Input
                   aria-label="Task title"
                   value={draft.title}
                   onChange={event => setDraft({ ...draft, title: event.target.value })}
                 />
-              </label>
-              <label className="field-label">
+              </Label>
+              <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
                 <span>Details / modification plan (markdown)</span>
                 <Textarea
                   aria-label="Task details"
@@ -361,8 +362,9 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                   value={draft.details}
                   onChange={event => setDraft({ ...draft, details: event.target.value })}
                 />
-              </label>
-              <div className="field-label">
+              </Label>
+              {/* A group heading, not a label for a single control, so it stays a div. */}
+              <div className="flex flex-col gap-1.5 text-[10px] font-medium text-foreground">
                 <span>PLC element references</span>
                 <div className="mt-1 flex flex-wrap items-center gap-1">
                   {draft.elementRefs.map(elementRef => (
@@ -410,9 +412,9 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
             <DialogDescription>Create a focused task for this worktree.</DialogDescription>
           </DialogHeader>
           <form className="space-y-3" onSubmit={event => { event.preventDefault(); addTask() }}>
-            <label className="field-label"><span>Title</span><Input autoFocus aria-label="New task title" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
-            <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
-            <label className="field-label"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{availableDevices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></label>
+            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Title</span><Input autoFocus aria-label="New task title" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></Label>
+            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></Label>
+            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{availableDevices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></Label>
             <DialogFooter className="flex-row justify-end gap-2"><Button variant="primary" size="sm" type="button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</Button><Button variant="blue" size="sm" type="submit" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</Button></DialogFooter>
           </form>
         </DialogContent>

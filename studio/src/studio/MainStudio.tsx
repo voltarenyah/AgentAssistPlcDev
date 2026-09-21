@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { Button, Input } from '@notion-kit/ui/primitives'
+import { Button, Input, Label } from '@notion-kit/ui/primitives'
 import {
   AlertCircle,
   Boxes,
@@ -211,17 +211,17 @@ function NewWorktreeDialog({
               </div>
             </div>
           )}
-          <label className="field-label">
+          <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
             <span>Worktree name</span>
             <Input className="h-8!" value={name} onChange={event => setName(event.target.value)} placeholder="Commissioning changes" autoFocus />
-          </label>
-          <label className="field-label">
+          </Label>
+          <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
             <span>Branch</span>
             <Input className="h-8! font-mono" value={branch} onChange={event => setBranch(event.target.value)} placeholder="feature/commissioning" />
-          </label>
+          </Label>
           {svnManaged ? (
             branchStartPoints.length > 0 ? (
-            <label className="field-label">
+            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
               <span>SVN savepoint</span>
               <select className="field-input font-mono" value={selectedSavepoint} onChange={event => setSelectedSavepoint(event.target.value)}>
                 <option value="">Select a savepoint</option>
@@ -234,17 +234,17 @@ function NewWorktreeDialog({
                   </optgroup>
                 })}
               </select>
-            </label>
+            </Label>
             ) : (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[10px] text-amber-700" data-testid="branch-start-points-unavailable">
                 No registered SVN savepoints are available. Refresh the workbench after creating a native savepoint.
               </div>
             )
           ) : (
-            <label className="field-label">
+            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
               <span>Start point</span>
               <Input className="h-8! font-mono" value={startPoint} onChange={event => setStartPoint(event.target.value)} placeholder="master" />
-            </label>
+            </Label>
           )}
         </div>
         <div className="flex items-center justify-between gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
