@@ -4,7 +4,7 @@ import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import { Slider } from '@/components/ui/slider'
 // notion-kit ships no Slider, so Slider stays on Studio's primitive; Switch moves.
-import { Switch } from '@notion-kit/ui/primitives'
+import { Input, Switch } from '@notion-kit/ui/primitives'
 import { getThemePreference, setThemePreference, subscribeTheme, type ThemeMode } from '@/studio/theme'
 import {
   EFFORT_OPTIONS,
@@ -175,10 +175,10 @@ export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCa
         disabled={!settings}
         onValueChange={values => onCommit(clampUnitInterval(values[0] ?? 0, min, max))}
       />
-      <input
+      <Input
         type="number"
         aria-label={label}
-        className="field-input h-8 w-20 px-2 text-[11px]"
+        className="h-8! w-20! px-2! text-[11px]!"
         min={min}
         max={max}
         step={0.1}
@@ -227,10 +227,10 @@ export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCa
                 <span className={`text-[10px] ${keyConfigured ? 'text-emerald-500' : 'text-muted-foreground'}`}>
                   {keyConfigured === null ? 'Checking…' : keyConfigured ? 'Configured' : 'Not configured'}
                 </span>
-                <input
+                <Input
                   type="password"
                   aria-label="DeepSeek API key"
-                  className="field-input h-8 w-48 px-2 text-[11px]"
+                  className="h-8! w-48! px-2! text-[11px]!"
                   placeholder="sk-…"
                   value={apiKeyDraft}
                   onChange={event => setApiKeyDraft(event.target.value)}
@@ -311,10 +311,10 @@ export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCa
               </Row>
             ) : fields.map(field => (
               <Row key={field.key} id={`agent-loop.${field.key}`} title={field.title} description={field.description}>
-                <input
+                <Input
                   type="number"
                   aria-label={field.title}
-                  className="field-input h-8 w-24 px-2 text-[11px]"
+                  className="h-8! w-24! px-2! text-[11px]!"
                   min={field.min}
                   max={field.max}
                   value={settings?.[field.key] ?? ''}
@@ -378,9 +378,9 @@ export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCa
           </button>
           <div className="relative mt-3">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
+            <Input
               aria-label="Search settings"
-              className="field-input h-8 pl-8 text-[11px]"
+              className="h-8! pl-8! text-[11px]!"
               placeholder="Search settings"
               value={query}
               onChange={event => setQuery(event.target.value)}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { Input } from '@notion-kit/ui/primitives'
 import {
   AlertCircle,
   Boxes,
@@ -212,11 +213,11 @@ function NewWorktreeDialog({
           )}
           <label className="field-label">
             <span>Worktree name</span>
-            <input className="field-input" value={name} onChange={event => setName(event.target.value)} placeholder="Commissioning changes" autoFocus />
+            <Input className="h-8!" value={name} onChange={event => setName(event.target.value)} placeholder="Commissioning changes" autoFocus />
           </label>
           <label className="field-label">
             <span>Branch</span>
-            <input className="field-input font-mono" value={branch} onChange={event => setBranch(event.target.value)} placeholder="feature/commissioning" />
+            <Input className="h-8! font-mono" value={branch} onChange={event => setBranch(event.target.value)} placeholder="feature/commissioning" />
           </label>
           {svnManaged ? (
             branchStartPoints.length > 0 ? (
@@ -242,7 +243,7 @@ function NewWorktreeDialog({
           ) : (
             <label className="field-label">
               <span>Start point</span>
-              <input className="field-input font-mono" value={startPoint} onChange={event => setStartPoint(event.target.value)} placeholder="master" />
+              <Input className="h-8! font-mono" value={startPoint} onChange={event => setStartPoint(event.target.value)} placeholder="master" />
             </label>
           )}
         </div>
