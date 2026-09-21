@@ -1,7 +1,7 @@
 import { Check, ChevronDown, ChevronRight } from 'lucide-react'
 import type { TagNode } from '@/api/client'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { Button } from '@notion-kit/ui/primitives'
 import { tagPaths } from './tagPaths'
 
 export type TagTreeProps = {
@@ -51,10 +51,10 @@ export function TagTree({ nodes, expandedIds = [], onExpandedChange, onSelect, s
           <div key={node.tagId} role="treeitem" aria-level={depth + 1} aria-expanded={hasChildren ? isExpanded : undefined} aria-selected={isSelected}>
             <div className={cn('flex items-center gap-1 rounded-md px-1 py-0.5', isSelected && 'bg-accent text-accent-foreground')} style={{ paddingLeft: `${depth * 16 + 4}px` }}>
               {hasChildren ? (
-                <Button type="button" variant="ghost" size="icon-xs" aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${paths.get(node.tagId) ?? node.name}`} onClick={() => toggle(node.tagId)}>
+                <Button type="button" variant="nav-icon" aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${paths.get(node.tagId) ?? node.name}`} onClick={() => toggle(node.tagId)}>
                   {isExpanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
                 </Button>
-              ) : <span className="size-6" aria-hidden="true" />}
+              ) : <span className="size-7" aria-hidden="true" />}
               <button type="button" className="min-w-0 flex-1 truncate rounded px-1 py-1 text-left text-sm hover:bg-accent" onClick={() => onSelect?.(node)} aria-label={`Select ${paths.get(node.tagId) ?? node.name}`}>
                 {paths.get(node.tagId) ?? node.name}
               </button>
