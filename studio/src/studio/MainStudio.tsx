@@ -199,7 +199,7 @@ function NewWorktreeDialog({
             <h2 className="text-sm font-semibold">New linked worktree</h2>
             <p className="text-[10px] text-muted-foreground">{workbench.name} · complete editable checkout</p>
           </div>
-          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
+          <Button variant="nav-icon" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></Button>
         </div>
         <div className="space-y-4 p-5">
           {busy && (
@@ -250,14 +250,14 @@ function NewWorktreeDialog({
         <div className="flex items-center justify-between gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <OperationStatusLine status={operationStatus} fallback={busy ? 'Creating linked worktree…' : undefined} onDismiss={onDismissOperation} />
           <div className="flex gap-2">
-            <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
-            <button className="primary-button" disabled={!valid || busy || (svnManaged && !selectedSavepoint)} onClick={() => {
+            <Button variant="primary" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
+            <Button variant="blue" size="sm" disabled={!valid || busy || (svnManaged && !selectedSavepoint)} onClick={() => {
               const [worktreeId, gitSha] = selectedSavepoint.split(':')
               void onCreate(name.trim(), branch.trim(), svnManaged ? undefined : (startPoint.trim() || undefined), worktreeId && gitSha ? { worktreeId, gitSha } : undefined)
             }}>
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Create worktree
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -287,7 +287,7 @@ function DeleteWorkbenchDialog({
             <h2 className="text-sm font-semibold">Delete “{workbench.name}”?</h2>
             <p className="text-[10px] text-muted-foreground">This action cannot be undone</p>
           </div>
-          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
+          <Button variant="nav-icon" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></Button>
         </div>
         <div className="space-y-3 p-5">
           <p className="text-[10px] leading-relaxed text-muted-foreground">
@@ -298,11 +298,11 @@ function DeleteWorkbenchDialog({
           </div>
         </div>
         <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="primary-button bg-red-600 hover:bg-red-500" onClick={onDelete} disabled={busy}>
+          <Button variant="primary" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="red-fill" size="sm" onClick={onDelete} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Delete permanently
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -333,7 +333,7 @@ function DeleteWorktreeDialog({
             <h2 className="text-sm font-semibold">Remove “{worktree.name}”?</h2>
             <p className="text-[10px] text-muted-foreground">This deletes the linked checkout and its local device context.</p>
           </div>
-          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
+          <Button variant="nav-icon" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></Button>
         </div>
         <div className="space-y-3 p-5">
           <p className="text-[10px] leading-relaxed text-muted-foreground">
@@ -346,11 +346,11 @@ function DeleteWorktreeDialog({
           </div>
         </div>
         <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="primary-button bg-red-600 hover:bg-red-500" onClick={onDelete} disabled={busy}>
+          <Button variant="primary" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="red-fill" size="sm" onClick={onDelete} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Remove worktree
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -379,7 +379,7 @@ function CompileApprovalDialog({
             <h2 className="text-sm font-semibold">PLC compile required</h2>
             <p className="text-[10px] text-muted-foreground">The export can retry after compiling the selected PLC.</p>
           </div>
-          <button className="icon-button" onClick={onCancel} disabled={busy}><X className="h-4 w-4" /></button>
+          <Button variant="nav-icon" onClick={onCancel} disabled={busy}><X className="h-4 w-4" /></Button>
         </div>
         <div className="space-y-3 p-5">
           <div className="rounded-lg border bg-surface-muted/25 p-3 text-[10px] leading-relaxed" style={{ borderColor: 'var(--border)' }}>
@@ -391,11 +391,11 @@ function CompileApprovalDialog({
           </div>
         </div>
         <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <button className="secondary-button" onClick={onCancel} disabled={busy}>Compile manually</button>
-          <button className="primary-button" onClick={onApprove} disabled={busy}>
+          <Button variant="primary" size="sm" onClick={onCancel} disabled={busy}>Compile manually</Button>
+          <Button variant="blue" size="sm" onClick={onApprove} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Compile and retry
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -422,7 +422,7 @@ function ProjectAccessDialog({
             <h2 className="text-sm font-semibold">TIA project access</h2>
             <p className="truncate text-[10px] text-muted-foreground">{project.name ?? capabilities.projectName ?? 'Connected project'}</p>
           </div>
-          <button className="icon-button" onClick={onClose}><X className="h-4 w-4" /></button>
+          <Button variant="nav-icon" onClick={onClose}><X className="h-4 w-4" /></Button>
         </div>
         <div className="grid gap-4 p-5 text-[10px] sm:grid-cols-2">
           <div className="space-y-2">
@@ -459,7 +459,7 @@ function ProjectAccessDialog({
           )}
         </div>
         <div className="flex justify-end border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <button className="secondary-button" onClick={onClose}>Close</button>
+          <Button variant="primary" size="sm" onClick={onClose}>Close</Button>
         </div>
       </div>
     </div>
@@ -2254,13 +2254,13 @@ export default function MainStudio() {
                 <AlertCircle className="mx-auto mb-3 h-8 w-8 text-red-500" />
                 <h1 className="text-sm font-semibold">Workbench API unavailable</h1>
                 <p className="mt-2 break-words text-xs leading-4 text-muted-foreground">{fatalError}</p>
-                <button className="primary-button mt-4" onClick={() => void loadStartup()}>
+                <Button variant="blue" size="sm" className="mt-4" onClick={() => void loadStartup()}>
                   <RefreshCw className="h-3.5 w-3.5" /> Retry
-                </button>
+                </Button>
               </div>
             </div>
           ) : taskDetail || taskDetailLoading || taskDetailError ? (
-            <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5"><Button type="button" variant="primary" size="sm" className="mb-3 h-7! text-[9px]!" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</Button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div>
           ) : !selection.deviceId && selection.worktreeId ? (
             mainView.kind === 'hardware' ? (
             <>
@@ -2303,7 +2303,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              taskDetail || taskDetailLoading || taskDetailError ? <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div> : <WorktreeLandingPage
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="min-h-0 flex-1 overflow-y-auto p-5"><Button type="button" variant="primary" size="sm" className="mb-3 h-7! text-[9px]!" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</Button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div> : <WorktreeLandingPage
                 workbenchId={selection.workbenchId!}
                 worktreeId={selection.worktreeId}
                 tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}
