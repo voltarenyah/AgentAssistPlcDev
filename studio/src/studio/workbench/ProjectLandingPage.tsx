@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, Boxes, Ellipsis, FolderOpen, GitBranch, Loader2, RefreshCw } from 'lucide-react'
 import * as api from '@/api/client'
-import { Button } from '@/components/ui/button'
+import { showErrorToast } from '@/components/ui/toast'
 import {
+  Button,
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { showErrorToast } from '@/components/ui/toast'
+} from '@notion-kit/ui/primitives'
 import StatusBadge from './StatusBadge'
 import TagChip from './tags/TagChip'
 import TagPicker from './tags/TagPicker'
@@ -159,9 +160,9 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree }: Pr
           </div>
           <h2 className="text-base font-semibold">Project overview unavailable</h2>
           <p className="mt-2 text-xs leading-4 text-muted-foreground">{error}</p>
-          <button className="secondary-button mt-4" onClick={() => { setLoading(true); void reload() }}>
+          <Button variant="primary" size="sm" className="mt-4" onClick={() => { setLoading(true); void reload() }}>
             <RefreshCw className="h-3.5 w-3.5" /> Retry
-          </button>
+          </Button>
         </div>
       </div>
     )
@@ -182,16 +183,36 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree }: Pr
               <p className="mt-0.5 text-xs text-muted-foreground">Created {formatDate(overview.createdAt)}</p>
             </div>
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label="Project actions">
-                  <Ellipsis className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Project paths</DropdownMenuLabel>
-                <DropdownMenuItem onSelect={() => void openRootFolder()}>
-                  <FolderOpen /> Open root folder
-                </DropdownMenuItem>
+              {/*
+                notion-kit has no `asChild`. The trigger is already a real button,
+                so a custom component must be composed with `render`; passing it as
+                a child would nest a button inside a button.
+              */}
+              <DropdownMenuTrigger
+                render={
+                  <Button variant="icon" aria-label="Project actions">
+                    <Ellipsis className="h-4 w-4" />
+                  </Button>
+                }
+              />
+              {/* notion-kit's menu content sizes to its label, which is too narrow
+                  for the source-path block; pin a width instead of letting the
+                  item text wrap. */}
+              <DropdownMenuContent align="end" className="w-80">
+                {/*
+                  notion-kit's DropdownMenuLabel is Base UI's Menu.GroupLabel: it
+                  requires a `title` prop and a DropdownMenuGroup ancestor, unlike
+                  Radix's free-standing label. Putting it directly in the content
+                  throws "MenuGroupContext is missing".
+                */}
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel title="Project paths" />
+                  <DropdownMenuItem
+                    icon={<FolderOpen />}
+                    label="Open root folder"
+                    onClick={() => void openRootFolder()}
+                  />
+                </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 <div data-source-project-path className="max-w-80 px-2 py-1.5 text-xs">
                   <div className="mb-1 font-medium text-muted-foreground">Source project</div>
