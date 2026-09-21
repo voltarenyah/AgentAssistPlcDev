@@ -10,7 +10,7 @@ import { contextLabel, contextPercentage, toolCallStats } from './usageDisplay'
 import { sourceContextPrefix, type SourceChatContext } from '../plcSourceState'
 // notion-kit's Input does not dedupe className against its own variant utilities, so any
 // padding/height/size override below carries the important modifier to actually win.
-import { Input, Textarea } from '@notion-kit/ui/primitives'
+import { Button, Input, Textarea } from '@notion-kit/ui/primitives'
 
 type Props = {
   tabs: ChatTabsState
@@ -119,14 +119,15 @@ function ChatComposer({
             {sourceContext.number != null ? ` (${sourceContext.category}${sourceContext.number})` : ''}
             {' · '}{sourceContext.relativePath}
           </span>
-          <button
+          <Button
             type="button"
-            className="icon-button shrink-0"
+            variant="nav-icon"
+            className="shrink-0"
             aria-label="Clear source context"
             onClick={onClearSourceContext}
           >
             <X className="h-3 w-3" />
-          </button>
+          </Button>
         </div>
       )}
       <div className="flex gap-2">
@@ -144,19 +145,21 @@ function ChatComposer({
           }}
         />
         {busy ? (
-          <button
+          <Button
             type="button"
-            className="secondary-button h-16 px-3 text-red-600 dark:text-red-400"
+            variant="primary"
+            size="sm"
+            className="h-16! px-3! text-red-600! dark:text-red-400!"
             onClick={onStop}
             aria-label="Stop generation"
             title="Stop generation"
           >
             <Square className="h-3.5 w-3.5 fill-current" />
-          </button>
+          </Button>
         ) : (
-          <button className="primary-button h-16 px-3" disabled={disabled} aria-label="Send message">
+          <Button variant="blue" size="sm" className="h-16! px-3!" disabled={disabled} aria-label="Send message">
             <Send className="h-3.5 w-3.5" />
-          </button>
+          </Button>
         )}
       </div>
       <div
@@ -414,15 +417,17 @@ export default function ChatWorkspace({ tabs, busy, onCreateSession, confirmatio
           <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
             Use the session dock to start a new chat or resume a saved one.
           </p>
-          <button
+          <Button
             type="button"
-            className="primary-button mt-4"
+            variant="blue"
+            size="sm"
+            className="mt-4"
             disabled={busy}
             aria-label="Create new chat session"
             onClick={() => onCreateSession?.()}
           >
             Create new chat session
-          </button>
+          </Button>
         </div>
       </div>
     )
@@ -456,14 +461,16 @@ export default function ChatWorkspace({ tabs, busy, onCreateSession, confirmatio
               </div>
               {tab.hitRoundCap && (
                 <div className="border-t px-3 pt-2" style={{ borderColor: 'var(--border)' }} data-round-cap={tab.sessionId}>
-                  <button
+                  <Button
                     type="button"
-                    className="secondary-button w-full"
+                    variant="primary"
+                    size="sm"
+                    className="w-full!"
                     disabled={busy}
                     onClick={() => onContinue(tab.sessionId)}
                   >
                     Round limit reached — Continue (+6 rounds)
-                  </button>
+                  </Button>
                 </div>
               )}
               {confirmation && tab.sessionId === tabs.activeId && (
@@ -476,20 +483,24 @@ export default function ChatWorkspace({ tabs, busy, onCreateSession, confirmatio
                       <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-surface-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{confirmation.arguments}</pre>
                     )}
                     <div className="mt-2 flex gap-2">
-                      <button
+                      <Button
                         type="button"
-                        className="primary-button h-7 px-3"
+                        variant="blue"
+                        size="sm"
+                        className="h-7! px-3!"
                         onClick={() => onConfirm?.('allowOnce')}
                       >
                         Allow once
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="secondary-button h-7 px-3 text-red-600 dark:text-red-400"
+                        variant="primary"
+                        size="sm"
+                        className="h-7! px-3! text-red-600! dark:text-red-400!"
                         onClick={() => onConfirm?.('deny')}
                       >
                         Deny
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
