@@ -192,7 +192,7 @@ export default function OperationTimingList({ status, className = '', layout = '
         </div>
         <div className="min-h-0 flex-1 p-3">
           {activeDashboardView === 'workflow' || !hasSourceExportActivity ? (
-            <section className="flex h-full min-h-0 flex-col rounded-md border border-border/60 bg-muted/20 p-3" aria-label="Workflow stages">
+            <section className="flex h-full min-h-0 flex-col rounded-md border border-border/60 bg-surface-muted/20 p-3" aria-label="Workflow stages">
               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Workflow stages</div>
               {regularRows.length > 0 || activeRegularRow ? (
                 <PhaseList phases={regularRows} current={activeRegularRow} sharedClock={sharedClock} scrollable currentFirst />

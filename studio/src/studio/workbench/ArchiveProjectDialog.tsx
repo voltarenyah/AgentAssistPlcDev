@@ -163,7 +163,7 @@ export default function ArchiveProjectDialog({
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="submit" className="primary-button" disabled={!valid || busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

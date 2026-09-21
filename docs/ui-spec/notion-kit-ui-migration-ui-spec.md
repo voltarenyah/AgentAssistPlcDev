@@ -82,7 +82,9 @@ component suite or a production build is not evidence of visual proportion.
 
 | Component / interaction | Keyboard, semantic, announcement, or contrast behavior | Source | Acceptance observation |
 |---|---|---|---|
-| Caption and description text | Body text contrast must reach WCAG AA (4.5:1); notion-kit's own `--muted` (2.61:1) must not be adopted | ADR-0004 decision; `AGENTS.md` accessibility requirement | `--muted` resolves to `#807d78`, about 4.8:1 on the `#0a0a0a` page background; captions are legible in both themes |
+| Caption and description text | Body text contrast must reach WCAG AA (4.5:1); notion-kit's own `--muted` (1.05:1 light, 2.61:1 dark) must not be adopted | ADR-0004 decision; `AGENTS.md` accessibility requirement | Pixel-sampled after the switch: 4.74:1 light, 4.83:1 dark on the Notion Kit page |
+| Form labels and menu text | notion-kit's light `--secondary` (3.39:1) must not be adopted | ADR-0004 decision | Pixel-sampled: "Task name" label is 5.23:1 light, 7.97:1 dark |
+| Gray status badge | Remaining known miss: notion-kit's own chip renders 4.18:1 in light mode, about 7% under AA | ADR-0004 accepted residual; tracked as an open decision below | Recorded as 4.18:1 by pixel sampling; must be resolved during the badge's own surface migration |
 | Focus rings | Focus stays clearly visible; notion-kit's 7%-white `--ring` must not replace Studio's focus-ring colour | ADR-0004 decision | Keyboard focus is visible on inputs, buttons, and menu items in both themes |
 | Migrated controls | Accessible names, roles and disabled states are preserved by the migration | `docs/ui-spec/studio-ui-library-integration-ui-spec.md` | Existing accessible names and disabled behavior survive the rebuild |
 | Badges and status chips | Text is not conveyed at an unreadable scale | notion-kit `Badge size` definition | Status text stays legible without relying on colour alone |
@@ -111,12 +113,14 @@ component suite or a production build is not evidence of visual proportion.
 
 ## Open User Decisions
 
-Resolved during specification: captions use `#807d78` (notion-kit's `--icon` value, about 4.8:1)
-rather than notion-kit's 2.61:1 `--muted`, and `--ring` stays Studio's so keyboard focus remains
-visible. Both are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authority.md`.
+Resolved during specification and implementation: captions use per-theme AA values (`#737373` light,
+`#807d78` dark) instead of notion-kit's 1.05:1 / 2.61:1 `--muted`; labels use `#6f6c67` light
+instead of notion-kit's 3.39:1 `--secondary`; and `--ring` stays Studio's so keyboard focus remains
+visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authority.md`.
 
 | Decision | Effect on current UI |
 |---|---|
+| Grey badge in light mode samples 4.18:1, about 7% under AA | Either accept the library's chip design as-is, or adjust the badge during its own surface migration rather than darkening the global `--secondary` further |
 | Pilot surface: `CreateWorkbenchDialog.tsx` as recommended above, or another surface | Changes which callbacks, validation and tests the pilot must preserve |
 | Whether to adopt notion-kit's `ThemeProvider`/`ThemeToggle`/`Toaster` in place of Studio's theme module and toast wrapper | Affects how the theme toggle and toasts are owned; excluded from this slice |
 | Fate of the eight primitives with no notion-kit counterpart | Whether Studio keeps maintaining them, replaces them with notion-kit blocks, or retires the features that use them |

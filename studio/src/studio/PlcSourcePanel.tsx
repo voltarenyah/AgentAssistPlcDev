@@ -297,7 +297,7 @@ export default function PlcSourcePanel({
                   </ContextMenu>
                   {expanded && (
                     <div
-                      className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t bg-muted/20 px-11 py-2 text-[9px]"
+                      className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t bg-surface-muted/20 px-11 py-2 text-[9px]"
                       style={{ borderColor: 'var(--border)' }}
                     >
                       <span className="text-muted-foreground">Path</span>
@@ -334,12 +334,12 @@ export default function PlcSourcePanel({
                       )}
                       <span className="text-muted-foreground">Task links</span>
                       <div className="flex flex-wrap items-center gap-1">
-                        {(traceability[item.id]?.tasks ?? []).length === 0 ? <span className="text-muted-foreground">Unassigned legacy source object</span> : traceability[item.id]!.tasks.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span><button type="button" className="underline font-sans" aria-label={`Reassign task ${link.id} from source object ${item.name}`} onClick={() => void reassignSourceTask(item, link.id)}>Reassign</button>{link.edgeId && <button type="button" className="underline font-sans" aria-label={`Remove task ${link.id} from source object ${item.name}`} onClick={async () => { try { await api.removeTaskRelationship(workbenchId, link.id, link.edgeId); await loadTraceability(item) } catch (error) { showErrorToast(errorMessage(error)) } }}>Remove</button>}</span>)}
+                        {(traceability[item.id]?.tasks ?? []).length === 0 ? <span className="text-muted-foreground">Unassigned legacy source object</span> : traceability[item.id]!.tasks.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span><button type="button" className="underline font-sans" aria-label={`Reassign task ${link.id} from source object ${item.name}`} onClick={() => void reassignSourceTask(item, link.id)}>Reassign</button>{link.edgeId && <button type="button" className="underline font-sans" aria-label={`Remove task ${link.id} from source object ${item.name}`} onClick={async () => { try { await api.removeTaskRelationship(workbenchId, link.id, link.edgeId); await loadTraceability(item) } catch (error) { showErrorToast(errorMessage(error)) } }}>Remove</button>}</span>)}
                         <button type="button" className="secondary-button h-6 px-2" aria-label={`Attach task to source object ${item.name}`} onClick={() => void attachSourceTask(item)}>Attach</button>
                       </div>
                       <span className="text-muted-foreground">Commit links</span>
                       <div className="flex flex-wrap items-center gap-1">
-                        {(traceability[item.id]?.commits ?? []).length === 0 ? <span className="text-muted-foreground">No linked commits yet.</span> : traceability[item.id]!.commits.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open commit ${link.id}`} onClick={() => onNavigateEntity?.('gitCommit', link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span></span>)}
+                        {(traceability[item.id]?.commits ?? []).length === 0 ? <span className="text-muted-foreground">No linked commits yet.</span> : traceability[item.id]!.commits.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open commit ${link.id}`} onClick={() => onNavigateEntity?.('gitCommit', link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span></span>)}
                       </div>
                     </div>
                   )}

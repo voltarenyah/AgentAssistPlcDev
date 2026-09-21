@@ -124,7 +124,7 @@ export default function CreateWorkbenchDialog({
           <div className="min-h-0 flex-1 overflow-hidden p-5">
             <OperationTimingList status={operationStatus} layout="dashboard" className="h-full" />
           </div>
-          <div className="border-t bg-muted/25 px-5 py-3 text-xs leading-4 text-muted-foreground">
+          <div className="border-t bg-surface-muted/25 px-5 py-3 text-xs leading-4 text-muted-foreground">
             The active phase and elapsed time refresh automatically while setup continues.
           </div>
         </DialogContent>
@@ -158,7 +158,7 @@ export default function CreateWorkbenchDialog({
 
           <div className="space-y-1.5">
             <Label className="text-xs">TIA project</Label>
-            <div className="relative w-full rounded-md border border-border bg-muted/40 p-0.5">
+            <div className="relative w-full rounded-md border border-border bg-surface-muted/40 p-0.5">
               <span
                 aria-hidden="true"
                 className={`pointer-events-none absolute inset-y-0.5 left-0.5 w-1/2 rounded-sm bg-background shadow-sm transition-transform duration-200 ease-out ${mode === 'file' ? 'translate-x-full' : 'translate-x-0'}`}
@@ -269,13 +269,13 @@ export default function CreateWorkbenchDialog({
             </div>
           </div>
 
-          <div className="rounded-lg border bg-muted/40 p-3" style={{ borderColor: 'var(--border)' }}>
+          <div className="rounded-lg border bg-surface-muted/40 p-3" style={{ borderColor: 'var(--border)' }}>
             <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Resolved location</div>
             <div className="mt-1 break-all text-xs">{rootPath.trim() || defaultPreview}</div>
           </div>
         </div>
 
-        <DialogFooter className="items-center justify-between border-t bg-muted/25 px-5 py-3 sm:flex-row">
+        <DialogFooter className="items-center justify-between border-t bg-surface-muted/25 px-5 py-3 sm:flex-row">
           <OperationStatusLine
             status={operationStatus}
             fallback={busy ? 'Preparing workbench storage...' : undefined}

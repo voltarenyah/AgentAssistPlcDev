@@ -34,8 +34,10 @@ end-to-end workspace smoke scenario.
   `studio/components.json`; do not add a URL that 404s. Import from the installed package instead.
   The local shadcn config is otherwise usable: `tailwind.css` now points at the real
   `src/assets/main.css`, and the CLI runs as `npx shadcn@latest` here because the repo uses npm.
-- Every notion-kit surface needs the `.notion-kit-surface` wrapper and an explicit `Button` size;
-  see `docs/STYLEGUIDE.md`.
+- `Button` needs an explicit `size`: it is the one primitive without a size default, so a `Button`
+  given only a `variant` renders with no height and no padding. Since `ADR-0004` gave notion-kit the
+  shared tokens, no wrapper scope is needed — Studio surfaces use `--surface-muted` and
+  `--surface-secondary`. See `docs/STYLEGUIDE.md`.
 
 ## Operation status and timing
 

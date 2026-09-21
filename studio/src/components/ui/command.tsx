@@ -100,7 +100,7 @@ function CommandInput({
   return (
     <div
       className={cn(
-        'flex items-center border-b border-border bg-muted/30 px-3 py-1',
+        'flex items-center border-b border-border bg-surface-muted/30 px-3 py-1',
         wrapperClassName
       )}
       data-cmdk-input-wrapper=""

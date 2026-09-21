@@ -246,7 +246,7 @@ function NewWorktreeDialog({
             </label>
           )}
         </div>
-        <div className="flex items-center justify-between gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center justify-between gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <OperationStatusLine status={operationStatus} fallback={busy ? 'Creating linked worktree…' : undefined} onDismiss={onDismissOperation} />
           <div className="flex gap-2">
             <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
@@ -292,11 +292,11 @@ function DeleteWorkbenchDialog({
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             This permanently deletes the workbench directory — all linked worktrees, PLC source and Git history, knowledge databases, and saved chat sessions.
           </p>
-          <div className="break-all rounded-lg border bg-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
+          <div className="break-all rounded-lg border bg-surface-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
             {workbench.rootPath}
           </div>
         </div>
-        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
           <button className="primary-button bg-red-600 hover:bg-red-500" onClick={onDelete} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -338,13 +338,13 @@ function DeleteWorktreeDialog({
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             The shared Git repository and other worktrees stay intact. Any uncommitted files in this worktree will be discarded.
           </p>
-          <div className="rounded-lg border bg-muted/25 p-3 text-[10px]" style={{ borderColor: 'var(--border)' }}>
+          <div className="rounded-lg border bg-surface-muted/25 p-3 text-[10px]" style={{ borderColor: 'var(--border)' }}>
             <span className="font-medium">{workbench.name}</span>
             <span className="mx-1 text-muted-foreground">/</span>
             <span className="font-mono text-muted-foreground">{worktree.branch}</span>
           </div>
         </div>
-        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
           <button className="primary-button bg-red-600 hover:bg-red-500" onClick={onDelete} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -381,7 +381,7 @@ function CompileApprovalDialog({
           <button className="icon-button" onClick={onCancel} disabled={busy}><X className="h-4 w-4" /></button>
         </div>
         <div className="space-y-3 p-5">
-          <div className="rounded-lg border bg-muted/25 p-3 text-[10px] leading-relaxed" style={{ borderColor: 'var(--border)' }}>
+          <div className="rounded-lg border bg-surface-muted/25 p-3 text-[10px] leading-relaxed" style={{ borderColor: 'var(--border)' }}>
             {prompt.message}
           </div>
           <div className="flex items-start gap-2 rounded-lg bg-amber-500/8 p-3 text-[9px] leading-relaxed text-amber-700 dark:text-amber-300">
@@ -389,7 +389,7 @@ function CompileApprovalDialog({
             Compile updates TIA compile state for this PLC. It does not save the project source file.
           </div>
         </div>
-        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <button className="secondary-button" onClick={onCancel} disabled={busy}>Compile manually</button>
           <button className="primary-button" onClick={onApprove} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
@@ -426,7 +426,7 @@ function ProjectAccessDialog({
         <div className="grid gap-4 p-5 text-[10px] sm:grid-cols-2">
           <div className="space-y-2">
             <div className="font-semibold">Project</div>
-            <div className="break-all rounded-lg border bg-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
+            <div className="break-all rounded-lg border bg-surface-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
               {project.path ?? capabilities.projectPath ?? '—'}
             </div>
             <div className="grid grid-cols-2 gap-2 text-muted-foreground">
@@ -457,7 +457,7 @@ function ProjectAccessDialog({
             </div>
           )}
         </div>
-        <div className="flex justify-end border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex justify-end border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <button className="secondary-button" onClick={onClose}>Close</button>
         </div>
       </div>

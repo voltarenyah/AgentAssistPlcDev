@@ -84,10 +84,10 @@ export default function HardwareNetworkView({ view }: Props) {
           <div className="p-8 text-center text-[10px] text-muted-foreground">No addressed network nodes found in the project AML.</div>
         ) : groups.map(group => (
           <section key={group.subnet} className="border-b" style={{ borderColor: 'var(--border)' }}>
-            <div className="flex items-center gap-2 border-b bg-muted/30 px-5 py-2" style={{ borderColor: 'var(--border)' }}>
+            <div className="flex items-center gap-2 border-b bg-surface-muted/30 px-5 py-2" style={{ borderColor: 'var(--border)' }}>
               <Network className="h-3.5 w-3.5 text-chart-2" />
               <span className="text-[10px] font-semibold">{group.subnet}</span>
-              <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">{group.nodes.length}</span>
+              <span className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">{group.nodes.length}</span>
             </div>
             <table className="w-full text-[10px]">
               <thead className="sticky top-0 bg-card">

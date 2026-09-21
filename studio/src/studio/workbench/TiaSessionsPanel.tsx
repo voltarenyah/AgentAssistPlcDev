@@ -80,7 +80,7 @@ export default function TiaSessionsPanel({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="font-mono text-[10px] font-medium">PID {session.id}</span>
-                  <span className="rounded-full bg-muted px-1.5 py-px text-[9px] text-muted-foreground">
+                  <span className="rounded-full bg-surface-muted px-1.5 py-px text-[9px] text-muted-foreground">
                     {sessionModeLabel(session.mode)}
                   </span>
                   {isAttached && (

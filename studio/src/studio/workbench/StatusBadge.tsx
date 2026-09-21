@@ -44,7 +44,7 @@ export default function StatusBadge({ status, onChange, disabled }: Props) {
           aria-label="Change worktree status"
           className={`inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] transition-colors ${
             status === 'finished'
-              ? 'border-border bg-muted text-muted-foreground hover:bg-accent'
+              ? 'border-border bg-surface-muted text-muted-foreground hover:bg-accent'
               : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400'
           }`}
           onClick={event => event.stopPropagation()}

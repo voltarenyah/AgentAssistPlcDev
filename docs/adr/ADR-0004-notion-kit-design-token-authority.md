@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -81,15 +81,29 @@ no pixels:
 4. Delete `.notion-kit-surface` and its use on the catalog preview page: the collision it worked
    around no longer exists.
 
-Two names deviate deliberately, because notion-kit's value for them is wrong for this application:
+Three values deviate deliberately, because notion-kit's value for them is wrong for this application.
+Contrast figures below are sampled from rendered pixels, not from computed styles.
 
-- `--muted` takes notion-kit's own `--icon` value `#807d78` instead of its `--muted` value
-  `rgba(255, 255, 255, 0.3)`. The latter measures 2.61:1 against Studio's `#0a0a0a` page background,
-  below WCAG AA for body text, and Studio's captions would inherit it. `#807d78` measures about
-  4.8:1, passes AA, and comes from the same library palette rather than an invented value.
+- `--muted` is `#737373` in light and `#807d78` in dark, instead of notion-kit's `#46444073` /
+  `rgba(255, 255, 255, 0.3)`. notion-kit's values measure 1.05:1 and 2.61:1 against Studio's page
+  backgrounds, below WCAG AA, and Studio's captions and notion-kit's descriptions both read this
+  token. One value cannot serve both themes: a grey light enough for `#0a0a0a` is too light for
+  `#ffffff`. The chosen values measure 4.74:1 and 4.83:1; the dark value is notion-kit's own
+  `--icon` colour, so it stays inside the library palette.
+- `--secondary` is `#6f6c67` in light, instead of notion-kit's `#8e8b86`, which measures 3.39:1 on
+  white. The chosen value measures 5.23:1. Dark keeps notion-kit's own `#a8a49c` (7.97:1), which
+  already passes — but it must be restated in Studio's `.dark` block, because a declaration in the
+  `:root` block silently wins over notion-kit's `.dark` rule (equal specificity, and this file loads
+  last).
 - `--ring` stays Studio's. The two systems use that name for different jobs: Studio draws focus
   rings with it, while notion-kit uses it for a subtle inset field ring. notion-kit's dark value is
   7% white, so adopting it would make keyboard focus nearly invisible on every control.
+
+One residual miss is accepted rather than fixed here: notion-kit's grey badge in light mode renders
+`#6f6c67` on its own `#cecdca`-at-50% chip, which samples at 4.18:1, about 7% under AA. That is the
+library's own light-mode chip design and it applies to one status badge; the pre-change state was
+1.05:1, so this is a large improvement, and the correct place to resolve it is the badge's own
+surface migration rather than by darkening a global text token further.
 
 ### Decision Details
 

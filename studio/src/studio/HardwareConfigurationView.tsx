@@ -135,7 +135,7 @@ export default function HardwareConfigurationView({
           <div className="flex items-center gap-2 border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
             <Cpu className="h-3.5 w-3.5 text-chart-2" />
             <span className="text-[10px] font-semibold">Project devices</span>
-            <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">{view.devices.length}</span>
+            <span className="ml-auto rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">{view.devices.length}</span>
           </div>
           <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-2">
             {view.devices.map(device => (
@@ -156,7 +156,7 @@ export default function HardwareConfigurationView({
             <Layers3 className="h-3.5 w-3.5 text-chart-3" />
             <span className="text-[10px] font-semibold">Child objects</span>
             {activeNode && <span className="min-w-0 truncate text-[9px] text-muted-foreground">under {activeNode.path}</span>}
-            <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">{children.length}</span>
+            <span className="ml-auto rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">{children.length}</span>
           </div>
           <div className="scrollbar-sleek min-h-0 overflow-y-auto p-3">
             {activeNode && (
@@ -179,7 +179,7 @@ export default function HardwareConfigurationView({
               <HardwareTagSection title={`Bound tags (${activeTags.length})`} tags={activeTags} />
             )}
             {inspectedNode && inspectedNode.id !== activeNode?.id && (
-              <div className="mt-3 rounded-xl border bg-muted/10 p-3" style={{ borderColor: 'var(--border)' }}>
+              <div className="mt-3 rounded-xl border bg-surface-muted/10 p-3" style={{ borderColor: 'var(--border)' }}>
                 <div className="mb-3 flex items-center gap-2">
                   <InfoDot />
                   <div className="min-w-0">
@@ -234,7 +234,7 @@ function HardwareTreeRow({
           <span className="block truncate text-[10px] font-medium">{node.name}</span>
           <span className="mt-0.5 block truncate font-mono text-[8px] text-muted-foreground">{typeLabel(node)}</span>
         </span>
-        <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[8px] text-muted-foreground">{node.children.length}</span>
+        <span className="shrink-0 rounded bg-surface-muted px-1 py-0.5 text-[8px] text-muted-foreground">{node.children.length}</span>
       </button>
       {expanded && node.children.filter(child => child.children.length > 0).map(child => (
         <HardwareTreeRow

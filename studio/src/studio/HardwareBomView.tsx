@@ -139,7 +139,7 @@ export default function HardwareBomView({ view }: Props) {
                     <td className="px-4 py-1.5">
                       <span className="inline-flex items-center gap-1.5">
                         {expanded ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
-                        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px]">{group.items.length}</span>
+                        <span className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[9px]">{group.items.length}</span>
                       </span>
                     </td>
                     <td className="px-4 py-1.5 font-mono">{first.orderNumber ?? '—'}</td>
@@ -149,7 +149,7 @@ export default function HardwareBomView({ view }: Props) {
                   </tr>,
                   ...(expanded
                     ? group.items.map(item => (
-                        <tr key={item.id} className="border-b bg-muted/30 text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
+                        <tr key={item.id} className="border-b bg-surface-muted/30 text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
                           <td className="px-4 py-1" />
                           <td className="px-4 py-1" colSpan={4}>
                             <span className="font-medium text-foreground">{item.name}</span>

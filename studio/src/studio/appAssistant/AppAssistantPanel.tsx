@@ -176,7 +176,7 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
           </div>
         ))}
         {state.messages.map((message, index) => (
-          <div key={`${message.role}-${index}`} className={`rounded-md px-2.5 py-2 text-[10px] leading-relaxed ${message.role === 'error' ? 'bg-red-500/10 text-red-700 dark:text-red-300' : message.role === 'user' ? 'ml-4 bg-accent' : 'bg-muted/50'}`}>
+          <div key={`${message.role}-${index}`} className={`rounded-md px-2.5 py-2 text-[10px] leading-relaxed ${message.role === 'error' ? 'bg-red-500/10 text-red-700 dark:text-red-300' : message.role === 'user' ? 'ml-4 bg-accent' : 'bg-surface-muted/50'}`}>
             {message.content}
           </div>
         ))}

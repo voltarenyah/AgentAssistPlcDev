@@ -273,7 +273,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-lg font-semibold">{detail.name}</h1>
-                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{detail.branch}</span>
+                    <span className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{detail.branch}</span>
                     <StatusBadge status={detail.status} onChange={changeStatus} />
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -424,7 +424,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                           </span>
                           <span className="mt-1 flex flex-wrap gap-1">
                             {device.blocks.map(block => (
-                              <span key={block} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+                              <span key={block} className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
                                 <FileCode2 className="h-2.5 w-2.5" /> {block}
                               </span>
                             ))}

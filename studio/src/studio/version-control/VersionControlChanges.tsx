@@ -399,7 +399,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
             data-testid="vc-create-snapshot"
             disabled={!snapshotMessage.trim() || busy}
             onClick={() => void createSnapshot()}
-            className="h-7 whitespace-nowrap rounded-lg border bg-muted px-3 text-[11px] font-semibold hover:bg-accent disabled:opacity-40"
+            className="h-7 whitespace-nowrap rounded-lg border bg-surface-muted px-3 text-[11px] font-semibold hover:bg-accent disabled:opacity-40"
             style={{ borderColor: 'var(--border)' }}
           >
             Snapshot

@@ -114,7 +114,7 @@ export function ActiveTaskSelector({
 
 const taskStatusClasses = (status: api.WorktreeTaskStatus) =>
   status === 'done'
-    ? 'border-border bg-muted text-muted-foreground'
+    ? 'border-border bg-surface-muted text-muted-foreground'
     : status === 'inProgress'
       ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
       : 'border-chart-2/30 bg-chart-2/10 text-chart-2'
@@ -273,7 +273,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
             <section key={status} className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
               <div className="flex items-center border-b px-4 py-2" style={{ borderColor: 'var(--border)' }}>
                 <span className="text-[10px] font-semibold">{taskStatusLabel(status)}</span>
-                <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{group.length}</span>
+                <span className="ml-auto rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{group.length}</span>
               </div>
               {group.length === 0 ? (
                 <div className="px-4 py-3 text-[9px] text-muted-foreground">No {taskStatusLabel(status).toLowerCase()} tasks.</div>
@@ -290,8 +290,8 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                           {task.title}
                         </div>
                         <div className="mt-1 flex gap-1 text-[8px] text-muted-foreground">
-                          <span className="rounded bg-muted px-1.5 py-0.5">{task.scope === 'project' ? 'Project' : 'Worktree'} scope</span>
-                          <span className="rounded bg-muted px-1.5 py-0.5">{taskTypeLabel(task.type)}</span>
+                          <span className="rounded bg-surface-muted px-1.5 py-0.5">{task.scope === 'project' ? 'Project' : 'Worktree'} scope</span>
+                          <span className="rounded bg-surface-muted px-1.5 py-0.5">{taskTypeLabel(task.type)}</span>
                         </div>
                         {(isLegacyTask(task) ? task.details : task.description) && (
                           <div className="mt-1 text-[9px] leading-relaxed text-muted-foreground [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-4">
@@ -301,7 +301,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                         {isLegacyTask(task) && task.elementRefs.length > 0 && (
                           <div className="mt-1.5 flex flex-wrap gap-1">
                             {task.elementRefs.map(elementRef => (
-                              <span key={elementRef} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">
+                              <span key={elementRef} className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">
                                 {elementRef}
                               </span>
                             ))}
@@ -363,7 +363,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                 <span>PLC element references</span>
                 <div className="mt-1 flex flex-wrap items-center gap-1">
                   {draft.elementRefs.map(elementRef => (
-                    <span key={elementRef} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[9px]">
+                    <span key={elementRef} className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[9px]">
                       {elementRef}
                       <button
                         type="button"

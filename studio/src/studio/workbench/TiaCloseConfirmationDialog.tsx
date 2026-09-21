@@ -47,11 +47,11 @@ export default function TiaCloseConfirmationDialog({
             <span className="font-medium text-foreground">{operationLabel} requires close current attached TIA instance.</span>{' '}
             Please choose how we can proceed.
           </p>
-          <div className="rounded-lg border bg-muted/25 p-3 text-[9px] text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
+          <div className="rounded-lg border bg-surface-muted/25 p-3 text-[9px] text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
             Save and close preserves the current project before the instance is closed. Close without saving discards unsaved changes. Cancel leaves TIA open so you can close it manually.
           </div>
         </div>
-        <DialogFooter className="flex-row flex-wrap justify-end border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <DialogFooter className="flex-row flex-wrap justify-end border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <Button
             variant="outline"
             size="xs"

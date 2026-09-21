@@ -187,7 +187,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
         {comparison && !busy && (
           <div className="space-y-2">
             {comparison.timings && comparison.timings.length > 0 && (
-              <section className="rounded-lg border border-border/70 bg-muted/25 p-2.5 text-[9px]" data-comparison-timings aria-label="TIA comparison timings">
+              <section className="rounded-lg border border-border/70 bg-surface-muted/25 p-2.5 text-[9px]" data-comparison-timings aria-label="TIA comparison timings">
                 <button
                   type="button"
                   className="flex w-full items-center gap-1.5 text-left text-[8px] font-semibold uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"

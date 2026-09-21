@@ -30,7 +30,7 @@ export default function SandboxDeniedDialog({ message, roots, onClose }: Props) 
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             Move the TIA project under one of the allowed sandbox roots, then create the workbench again:
           </p>
-          <div className="space-y-1 rounded-lg border bg-muted/40 p-3" style={{ borderColor: 'var(--border)' }}>
+          <div className="space-y-1 rounded-lg border bg-surface-muted/40 p-3" style={{ borderColor: 'var(--border)' }}>
             {roots.length === 0 ? (
               <div className="text-[9px] text-muted-foreground">Sandbox roots could not be loaded.</div>
             ) : roots.map(root => (
@@ -38,7 +38,7 @@ export default function SandboxDeniedDialog({ message, roots, onClose }: Props) 
             ))}
           </div>
         </div>
-        <DialogFooter className="flex-row justify-end border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <DialogFooter className="flex-row justify-end border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <Button size="xs" onClick={onClose}>Understood</Button>
         </DialogFooter>
       </DialogContent>

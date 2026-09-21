@@ -208,7 +208,7 @@ export default function DeviceOverviewView({
               <p className="text-xs text-muted-foreground">No cross-device lifecycle coupling</p>
             </div>
           </div>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-4" style={{ borderColor: 'var(--border)' }}>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-surface-muted/30 p-4" style={{ borderColor: 'var(--border)' }}>
             <div>
               <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">State</div>
               <div className="mt-1 flex items-center gap-2 text-lg font-semibold capitalize">

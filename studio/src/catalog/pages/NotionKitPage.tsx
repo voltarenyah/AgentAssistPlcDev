@@ -20,7 +20,7 @@ export default function NotionKitPage() {
   const [notifyAssignee, setNotifyAssignee] = useState(true)
 
   return (
-    <div className="notion-kit-surface mx-auto max-w-5xl space-y-8" data-notion-kit-preview>
+    <div className="mx-auto max-w-5xl space-y-8" data-notion-kit-preview>
       <div>
         <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Installed component source</p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">Notion Kit components</h2>

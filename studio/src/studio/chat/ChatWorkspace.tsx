@@ -33,7 +33,7 @@ const roleLabel = (message: ChatMessage) =>
 
 const messageTone = (message: ChatMessage) =>
   message.role === 'tool'
-    ? 'bg-muted/30 text-muted-foreground'
+    ? 'bg-surface-muted/30 text-muted-foreground'
     : 'bg-card'
 
 type SettingsSaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -242,7 +242,7 @@ function ChatComposer({
           <div className="flex min-w-[150px] items-center gap-1.5" data-chat-context title={context}>
             <span className="whitespace-nowrap">{context} · {percentage}%</span>
             <span
-              className="h-1.5 w-16 overflow-hidden rounded-full bg-muted/60"
+              className="h-1.5 w-16 overflow-hidden rounded-full bg-surface-muted/60"
               role="progressbar"
               data-chat-context-progress
               aria-label="Context buffer used"
@@ -272,7 +272,7 @@ function ChatComposer({
 
 function BusyRow() {
   return (
-    <div className="flex items-center gap-2 rounded-lg border bg-muted/30 p-3 text-[10px] text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
+    <div className="flex items-center gap-2 rounded-lg border bg-surface-muted/30 p-3 text-[10px] text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
       <Loader2 className="h-3.5 w-3.5 animate-spin" />
       Assistant is working...
     </div>
@@ -299,7 +299,7 @@ function ProgressBody({ content }: { content: string }) {
                 <span className="font-mono">{entry.name}</span>
               </div>
               {entry.args && entry.args !== '{}' && (
-                <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{entry.args}</pre>
+                <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-surface-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{entry.args}</pre>
               )}
             </div>
           )
@@ -356,7 +356,7 @@ function MessageList({ messages, busy }: { messages: ChatMessage[], busy: boolea
         >
           <div className="mb-1 text-[8px] uppercase tracking-[0.15em] text-muted-foreground">{roleLabel(message)}</div>
           {message.reasoningContent && (
-            <pre className="mb-2 whitespace-pre-wrap rounded-md bg-muted/40 p-2 text-[9px] text-muted-foreground">{message.reasoningContent}</pre>
+            <pre className="mb-2 whitespace-pre-wrap rounded-md bg-surface-muted/40 p-2 text-[9px] text-muted-foreground">{message.reasoningContent}</pre>
           )}
           <MessageBody message={message} />
         </div>
@@ -470,7 +470,7 @@ export default function ChatWorkspace({ tabs, busy, onCreateSession, confirmatio
                       Approval needed: <span className="font-mono">{confirmation.toolName}</span>
                     </div>
                     {confirmation.arguments && (
-                      <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{confirmation.arguments}</pre>
+                      <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-surface-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{confirmation.arguments}</pre>
                     )}
                     <div className="mt-2 flex gap-2">
                       <button

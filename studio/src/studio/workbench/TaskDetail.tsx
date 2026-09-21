@@ -24,7 +24,7 @@ export function TraceabilitySection({ title, items, emptyLabel, onNavigate, onRe
     <section className="overflow-hidden rounded-lg border bg-card" aria-label={title} style={{ borderColor: 'var(--border)' }}>
       <header className="flex items-center border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
         <h3 className="text-[10px] font-semibold">{title}</h3>
-        <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{items.length}</span>
+        <span className="ml-auto rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{items.length}</span>
       </header>
       {items.length === 0 ? (
         <p className="px-3 py-3 text-[9px] text-muted-foreground">{emptyLabel}</p>
@@ -35,7 +35,7 @@ export function TraceabilitySection({ title, items, emptyLabel, onNavigate, onRe
               {onNavigate ? (
                 <button type="button" className="min-w-0 flex-1 truncate text-left font-mono underline-offset-2 hover:underline focus-visible:underline" aria-label={`Open ${title} ${item.id}`} onClick={() => onNavigate(item.id)}>{item.id}</button>
               ) : <span className="min-w-0 flex-1 truncate font-mono">{item.id}</span>}
-              {item.isPrimary && <span className="rounded bg-muted px-1 py-0.5 text-[8px]">Primary</span>}
+              {item.isPrimary && <span className="rounded bg-surface-muted px-1 py-0.5 text-[8px]">Primary</span>}
               <span className="shrink-0 text-muted-foreground">{provenanceLabel(item.provenance)}</span>
               {onRemove && item.provenance.toLowerCase() === 'manual' && <button type="button" className="secondary-button h-6 px-2" aria-label={`Remove ${title} ${item.id}`} onClick={() => onRemove(item)}>Remove</button>}
             </li>

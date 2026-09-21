@@ -152,7 +152,7 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
           )}
         </div>
 
-        <DialogFooter className="flex-row items-center gap-3 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <DialogFooter className="flex-row items-center gap-3 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           {actionable.length > 0 ? (
             <div className="flex min-w-0 flex-1 items-center gap-2 text-[9px] text-amber-500">
               <AlertTriangle className="h-3.5 w-3.5" />

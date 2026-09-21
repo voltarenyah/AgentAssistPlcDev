@@ -119,7 +119,7 @@ function TimelineColumnView({
   const sharedChecksum = column.git.tiaChecksum ?? column.svn?.tiaChecksum ?? null
   const checksumText = displayChecksum(sharedChecksum)
   return (
-    <div data-timeline-column className="relative flex min-w-[176px] flex-1 flex-col items-center rounded-lg border bg-muted/20 px-1 py-1" style={{ borderColor: 'var(--border)' }}>
+    <div data-timeline-column className="relative flex min-w-[176px] flex-1 flex-col items-center rounded-lg border bg-surface-muted/20 px-1 py-1" style={{ borderColor: 'var(--border)' }}>
       {column.git.untrackableChange && (
         <span className="absolute right-1.5 top-1.5 z-20" title="Untrackable change — no git-file diff" data-testid="vc-untrackable-marker">
           <TriangleAlert className="h-3 w-3 text-amber-500" />
@@ -174,7 +174,7 @@ function EventDetails({ active, position, entity, onAttach, onRemove, onReassign
   return (
     <div
       data-testid="timeline-event-details"
-      className="pointer-events-none fixed z-50 w-[min(360px,calc(100vw-1rem))] rounded-lg border bg-muted/95 p-3 text-[9px] shadow-xl backdrop-blur-sm"
+      className="pointer-events-none fixed z-50 w-[min(360px,calc(100vw-1rem))] rounded-lg border bg-surface-muted/95 p-3 text-[9px] shadow-xl backdrop-blur-sm"
       style={{ left: `${position.left}px`, top: `${position.top}px`, borderColor: 'var(--border)' }}
     >
       <div className="flex items-center gap-2">
