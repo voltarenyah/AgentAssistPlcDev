@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowUpRight, FileCheck2, GitBranch, GitCompare, History, Loader2, RefreshCw } from 'lucide-react'
+import { Button } from '@notion-kit/ui/primitives'
 import * as api from '@/api/client'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 import VersionControlHistory, { type VcTimelineItem } from './VersionControlHistory'
@@ -198,9 +199,9 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
           Verify hardware configuration
         </label>
         <div className="flex-1" />
-        <button type="button" className="icon-button" title="Refresh version control" aria-label="Refresh version control" onClick={() => void refresh()} disabled={loading}>
+        <Button type="button" variant="nav-icon" title="Refresh version control" aria-label="Refresh version control" onClick={() => void refresh()} disabled={loading}>
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-        </button>
+        </Button>
       </div>
 
       <div className="shrink-0 border-b px-3.5 pb-2.5 pt-1" style={{ borderColor: 'var(--border)' }}>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { HardDrive, Loader2, RefreshCw } from 'lucide-react'
+import { Button } from '@notion-kit/ui/primitives'
 import * as api from '@/api/client'
 
 export type NativeStorePanelProps = {
@@ -93,9 +94,9 @@ export default function NativeStorePanel({ workbenchId, worktreeId }: NativeStor
       <div className="flex shrink-0 items-center gap-2 px-3 py-1">
         <HardDrive className="h-3.5 w-3.5 text-chart-4" />
         <span className="flex-1 text-[10px] font-semibold">Native TIA store (SVN)</span>
-        <button type="button" className="icon-button" title="Refresh engineering state" onClick={() => void refresh()} disabled={loading}>
+        <Button type="button" variant="nav-icon" title="Refresh engineering state" onClick={() => void refresh()} disabled={loading}>
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-        </button>
+        </Button>
       </div>
       {error && <div className="px-3 py-1 text-[9px] text-destructive">{error}</div>}
       {!error && !loading && !revision && (

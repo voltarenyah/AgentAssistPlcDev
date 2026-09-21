@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FocusEvent, type MouseEvent } from 'react'
 import { AlertCircle, GitBranch, Loader2, RefreshCw, TriangleAlert } from 'lucide-react'
+import { Button } from '@notion-kit/ui/primitives'
 import * as api from '@/api/client'
 import { buildTimelineColumns, type TimelineColumn } from './versionControlTimeline'
 
@@ -190,7 +191,7 @@ function EventDetails({ active, position, entity, onAttach, onRemove, onReassign
         {!isGit && 'gitCommitSha' in event && <span title={event.gitCommitSha}>Git commit: {shortGitHash(event.gitCommitSha)}</span>}
         {isGit && 'files' in event && event.files.length > 0 && <span>Changed files: {event.files.length}</span>}
       </div>
-      {entity && <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border)' }}><div className="mb-1 font-semibold">Task links</div>{entity.tasks.length === 0 ? <span className="text-muted-foreground">Unassigned legacy record</span> : entity.tasks.map(link => <div key={link.edgeId || link.id} className="flex items-center gap-1"><button type="button" className="pointer-events-auto underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="text-muted-foreground">{link.provenance}</span>{onReassign && <button type="button" className="pointer-events-auto underline" aria-label={`Reassign task ${link.id} from ${identifier}`} onClick={() => onReassign(link.id)}>Reassign</button>}{link.edgeId && onRemove && <button type="button" className="pointer-events-auto underline" aria-label={`Remove task ${link.id} from ${identifier}`} onClick={() => onRemove(link.id, link.edgeId)}>Remove</button>}</div>)}{onAttach && <button type="button" className="pointer-events-auto secondary-button mt-1 h-6 px-2" aria-label={`Attach task to ${identifier}`} onClick={onAttach}>Attach</button>}</div>}
+      {entity && <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border)' }}><div className="mb-1 font-semibold">Task links</div>{entity.tasks.length === 0 ? <span className="text-muted-foreground">Unassigned legacy record</span> : entity.tasks.map(link => <div key={link.edgeId || link.id} className="flex items-center gap-1"><button type="button" className="pointer-events-auto underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="text-muted-foreground">{link.provenance}</span>{onReassign && <button type="button" className="pointer-events-auto underline" aria-label={`Reassign task ${link.id} from ${identifier}`} onClick={() => onReassign(link.id)}>Reassign</button>}{link.edgeId && onRemove && <button type="button" className="pointer-events-auto underline" aria-label={`Remove task ${link.id} from ${identifier}`} onClick={() => onRemove(link.id, link.edgeId)}>Remove</button>}</div>)}{onAttach && <Button type="button" variant="primary" size="sm" className="pointer-events-auto mt-1 h-6! px-2!" aria-label={`Attach task to ${identifier}`} onClick={onAttach}>Attach</Button>}</div>}
     </div>
   )
 }
@@ -310,9 +311,9 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
         <div className="flex items-center gap-3 p-5 text-[10px] text-muted-foreground">
           <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
           <span className="min-w-0 flex-1">{error}</span>
-          <button type="button" data-testid="timeline-retry" className="secondary-button h-7 text-[9px]" onClick={() => void loadPage(0, false)}>
+          <Button type="button" data-testid="timeline-retry" variant="primary" size="sm" className="h-7! text-[9px]!" onClick={() => void loadPage(0, false)}>
             <RefreshCw className="mr-1 inline h-3 w-3" /> Retry
-          </button>
+          </Button>
         </div>
       )}
 
@@ -346,16 +347,18 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
           <div className="flex items-center justify-between border-t px-4 py-2.5" style={{ borderColor: 'var(--border)' }}>
             <span className="text-[9px] text-muted-foreground">Hover or focus a shape for commit details.</span>
             {hasMore && (
-              <button
+              <Button
                 type="button"
                 data-testid="timeline-load-more"
-                className="secondary-button h-7 text-[9px]"
+                variant="primary"
+                size="sm"
+                className="h-7! text-[9px]!"
                 disabled={loadingMore}
                 onClick={() => void loadPage(gitCommits.length, true)}
               >
                 {loadingMore && <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />}
                 {loadingMore ? 'Loading…' : 'Load more'}
-              </button>
+              </Button>
             )}
           </div>
         </>
