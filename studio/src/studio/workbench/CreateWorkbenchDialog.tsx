@@ -1,19 +1,25 @@
 import { useMemo, useState } from 'react'
 import { FileCode2, FolderOpen, FolderPlus, Loader2, RefreshCw, Server, X } from 'lucide-react'
 import type { OperationStatus, SessionInfo } from '@/api/client'
-import { Button } from '@/components/ui/button'
 import {
+  Button,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+  Input,
+  Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from '@notion-kit/ui/primitives'
 import OperationStatusLine from '@/studio/workbench/OperationStatusLine'
 import OperationTimingList from '@/studio/workbench/OperationTimingList'
 
@@ -105,12 +111,10 @@ export default function CreateWorkbenchDialog({
     return (
       <Dialog open onOpenChange={() => undefined}>
         <DialogContent
-          showCloseButton={false}
+          hideClose
           className="flex h-[calc(100vh-2.5rem)] max-h-[44rem] max-w-5xl flex-col gap-0 overflow-hidden p-0"
           data-creation-progress
           aria-live="polite"
-          onEscapeKeyDown={event => event.preventDefault()}
-          onPointerDownOutside={event => event.preventDefault()}
         >
           <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 text-left">
             <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
@@ -135,7 +139,7 @@ export default function CreateWorkbenchDialog({
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
       <DialogContent
-        showCloseButton={false}
+        hideClose
         data-create-workbench-dialog
         className="flex max-h-[85vh] max-w-[620px] flex-col gap-0 overflow-hidden p-0"
       >
@@ -147,7 +151,7 @@ export default function CreateWorkbenchDialog({
             <DialogTitle className="text-sm">Create workbench project</DialogTitle>
             <DialogDescription className="text-xs leading-4">One shared repository, complete linked worktrees, device-owned knowledge.</DialogDescription>
           </div>
-          <Button variant="ghost" size="icon-xs" onClick={onClose} disabled={busy} aria-label="Close create workbench dialog"><X /></Button>
+          <Button variant="close" onClick={onClose} disabled={busy} aria-label="Close create workbench dialog"><X /></Button>
         </DialogHeader>
 
         <div data-create-workbench-form className="scrollbar-sleek min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
@@ -158,38 +162,35 @@ export default function CreateWorkbenchDialog({
 
           <div className="space-y-1.5">
             <Label className="text-xs">TIA project</Label>
-            <div className="relative w-full rounded-md border border-border bg-surface-muted/40 p-0.5">
-              <span
-                aria-hidden="true"
-                className={`pointer-events-none absolute inset-y-0.5 left-0.5 w-1/2 rounded-sm bg-background shadow-sm transition-transform duration-200 ease-out ${mode === 'file' ? 'translate-x-full' : 'translate-x-0'}`}
-              />
-              <ToggleGroup
-                type="single"
-                value={mode}
-                variant="default"
-                size="sm"
-                spacing={0}
-                className="relative z-10 w-full gap-0"
-                onValueChange={value => {
-                  if (value === 'session' || value === 'file') setMode(value)
-                }}
-              >
-                <ToggleGroupItem value="session" className="min-w-0 flex-1 rounded-sm bg-transparent text-center text-xs whitespace-normal leading-4 data-[state=on]:bg-transparent">
+            {/* notion-kit has no ToggleGroup; ADR-0005 maps this single-select switch to Tabs,
+                which deletes the hand-rolled sliding indicator. */}
+            <Tabs value={mode} onValueChange={value => { if (value === 'session' || value === 'file') setMode(value) }}>
+              <TabsList className="w-full">
+                <TabsTrigger value="session" className="min-w-0 flex-1 text-xs whitespace-normal leading-4">
                   <Server /> Attach to running TIA
-                </ToggleGroupItem>
-                <ToggleGroupItem value="file" className="min-w-0 flex-1 rounded-sm bg-transparent text-center text-xs whitespace-normal leading-4 data-[state=on]:bg-transparent">
+                </TabsTrigger>
+                <TabsTrigger value="file" className="min-w-0 flex-1 text-xs whitespace-normal leading-4">
                   <FileCode2 /> Open project file (.ap17)
-                </ToggleGroupItem>
-              </ToggleGroup>
-            </div>
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
           </div>
 
           {mode === 'session' ? (
             <div className="space-y-1.5">
               <Label className="text-xs">Running TIA session</Label>
               <div className="flex gap-1.5">
-                <Select value={sessionId || undefined} onValueChange={setSessionId}>
-                  <SelectTrigger size="sm" className="min-w-0 flex-1 text-xs">
+                {/* notion-kit's Select is Base UI: the root needs `items` so SelectValue can
+                    render the selected label rather than its raw value. */}
+                <Select
+                  items={sessions.map(session => ({
+                    value: session.id.toString(),
+                    label: `PID ${session.id} · ${session.projectPath ?? 'No project loaded'}`,
+                  }))}
+                  value={sessionId || undefined}
+                  onValueChange={value => setSessionId(value ?? '')}
+                >
+                  <SelectTrigger className="min-w-0 flex-1 text-xs" aria-label="Running TIA session">
                     <SelectValue placeholder="Select an open TIA project…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -201,7 +202,7 @@ export default function CreateWorkbenchDialog({
                   </SelectContent>
                 </Select>
                   <Button
-                    variant="outline"
+                    variant="primary"
                     size="sm"
                     className="h-8 w-[88px] self-center justify-center text-xs"
                     aria-label="Update TIA sessions"
@@ -225,13 +226,13 @@ export default function CreateWorkbenchDialog({
                 <div className="flex gap-1.5">
                   <Input
                     id="tia-project-file"
-                    className="h-8 min-w-0 flex-1 pl-9 text-xs md:text-xs"
+                    className="h-8 min-w-0 flex-1 pl-9"
                     value={projectFile}
                     onChange={event => setProjectFile(event.target.value)}
                     placeholder="C:\\Users\\…\\Documents\\Automation\\Line\\Line.ap17"
                   />
                   <Button
-                    variant="outline"
+                    variant="primary"
                     size="sm"
                     className="w-[88px] shrink-0 justify-center text-xs"
                     type="button"
@@ -261,7 +262,7 @@ export default function CreateWorkbenchDialog({
               <FolderOpen className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
               <Input
                 id="workbench-root"
-                className="h-8 pl-9 text-xs md:text-xs"
+                className="h-8 pl-9"
                 value={rootPath}
                 onChange={event => setRootPath(event.target.value)}
                 placeholder="D:\\Automation\\MyWorkbench"
@@ -275,15 +276,16 @@ export default function CreateWorkbenchDialog({
           </div>
         </div>
 
-        <DialogFooter className="items-center justify-between border-t bg-surface-muted/25 px-5 py-3 sm:flex-row">
+        <DialogFooter className="flex-row flex-wrap items-center justify-between gap-2 border-t border-border bg-surface-muted/25 px-5 py-3">
           <OperationStatusLine
             status={operationStatus}
             fallback={busy ? 'Preparing workbench storage...' : undefined}
             onDismiss={onDismissOperation}
           />
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
+            <Button variant="primary" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
             <Button
+              variant="blue"
               size="sm"
               disabled={!valid || busy}
               onClick={() => onCreate(mode === 'session'
