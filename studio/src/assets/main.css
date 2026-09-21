@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import '@notion-kit/ui/style.css';
 @import 'tw-animate-css';
 
 @font-face {
