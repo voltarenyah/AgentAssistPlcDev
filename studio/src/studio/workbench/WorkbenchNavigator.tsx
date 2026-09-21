@@ -1,13 +1,13 @@
 import {
   Archive,
-  Boxes,
   CircuitBoard,
   Cpu,
   Database,
+  Factory,
+  FileText,
   GitBranch,
   GitMerge,
   House,
-  ListTodo,
   Monitor,
   MonitorOff,
   Minus,
@@ -39,6 +39,7 @@ type Props = {
   workbenches: Workbench[]
   devicesByWorktree: Record<string, DeviceSummary[]>
   tasksByWorktree?: Record<string, EngineeringTask[]>
+  activeTaskId?: string | null
   selection: WorkbenchSelection
   /** Which page <main> is currently showing; drives the active-row highlight. */
   viewKind: 'project' | 'worktree' | 'hardware' | 'device'
@@ -80,6 +81,10 @@ type Props = {
 }
 
 const worktreeKey = (workbenchId: string, worktreeId: string) => `${workbenchId}:${worktreeId}`
+const taskStatusDotClass = (status: string) =>
+  status === 'inProgress' || status === 'active' ? 'bg-emerald-500'
+    : status === 'done' ? 'bg-muted-foreground'
+      : 'bg-muted-foreground'
 // Device actions remain wired while their task-page replacements are introduced.
 // The device tree itself is deliberately not part of the navigator anymore.
 const showLegacyDeviceTree = false
@@ -88,6 +93,7 @@ export default function WorkbenchNavigator({
   workbenches,
   devicesByWorktree,
   tasksByWorktree = {},
+  activeTaskId = null,
   selection,
   viewKind,
   knowledgeState,
@@ -129,6 +135,7 @@ export default function WorkbenchNavigator({
   const [expandedWorktreeIds, setExpandedWorktreeIds] = useState<Set<string>>(
     () => new Set(selection.worktreeId ? [selection.worktreeId] : []),
   )
+  const [clickedTaskId, setClickedTaskId] = useState<string | null>(null)
   const previousSelectedWorkbenchId = useRef(selection.workbenchId)
   useEffect(() => {
     if (selection.workbenchId && selection.workbenchId !== previousSelectedWorkbenchId.current) {
@@ -175,6 +182,9 @@ export default function WorkbenchNavigator({
       {filterControl}
 
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-2">
+        <div className="flex items-center px-1 pb-2 pt-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground">
+          <span>PROJECTS</span>
+        </div>
         {visibleWorkbenches.length === 0 ? filterActive ? (
             <div className="px-2 py-3 text-xs leading-4 text-muted-foreground" role="status">
             {filteredResults ? 'No projects or worktrees match these tags.' : 'Filtering projects and worktrees…'}
@@ -201,7 +211,7 @@ export default function WorkbenchNavigator({
               <ContextMenu>
                 <ContextMenuTrigger asChild>
                   <div
-                    className={`group flex min-h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 ${workbenchSelected ? 'bg-accent ring-1 ring-border/60' : 'hover:bg-accent/50'}`}
+                    className={`group flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${workbenchSelected ? 'bg-accent/50' : 'hover:bg-accent/40'}`}
                     onClick={() => {
                       setExpandedWorkbenchIds(current => {
                         const next = new Set(current)
@@ -215,19 +225,9 @@ export default function WorkbenchNavigator({
                     {workbenchExpanded
                       ? <Minus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />
                       : <Plus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />}
-                    <Boxes className="h-3.5 w-3.5 text-chart-2" />
+                    <Factory className="h-4 w-4 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate text-xs font-medium">{workbench.name}</span>
-                    <button
-                      aria-label={`Create worktree in ${workbench.name}`}
-                      className="icon-button opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-                      title="New linked worktree"
-                      onClick={event => {
-                        event.stopPropagation()
-                        onCreateWorktree(workbench)
-                      }}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </button>
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-label="Project available" />
                   </div>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
@@ -276,11 +276,11 @@ export default function WorkbenchNavigator({
                         <ContextMenu>
                           <ContextMenuTrigger asChild>
                               <div
-                                className={`flex min-h-7 cursor-pointer items-center gap-1.5 rounded px-2 py-1 ${
+                                className={`group flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${
                                 worktreeSelected && viewKind === 'worktree'
-                                  ? 'bg-accent ring-1 ring-border/60'
+                                  ? 'bg-accent'
                                   : worktreeSelected
-                                    ? 'bg-accent/80'
+                                    ? 'bg-accent/70'
                                     : 'hover:bg-accent/40'
                               }`}
                               onClick={() => {
@@ -296,11 +296,10 @@ export default function WorkbenchNavigator({
                               {expandedWorktreeIds.has(worktree.worktreeId)
                                 ? <Minus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />
                                 : <Plus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />}
-                              <GitBranch className="h-3.5 w-3.5 text-chart-4" />
+                              <GitBranch className="h-4 w-4 text-chart-4" />
                               <span className="min-w-0 flex-1 truncate text-xs">{worktree.name}</span>
-                              <span className="max-w-[42%] truncate whitespace-nowrap rounded bg-muted px-1.5 py-0.5 font-mono text-xs leading-4 text-muted-foreground">
-                                {worktree.branch}
-                              </span>
+                              <span className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground" aria-label="Worktree status" />
+                              {worktree.branch !== worktree.name && <span className="max-w-[24%] truncate whitespace-nowrap font-mono text-[10px] leading-4 text-muted-foreground">{worktree.branch}</span>}
                               {!available && (
                                 <span
                                   className="max-w-[42%] truncate whitespace-nowrap rounded bg-amber-500/10 px-1.5 py-0.5 text-xs leading-4 text-amber-600 dark:text-amber-400"
@@ -357,17 +356,20 @@ export default function WorkbenchNavigator({
                           </ContextMenuContent>
                         </ContextMenu>
                         {worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (
-                          <div className="ml-4 border-l pl-2" style={{ borderColor: 'var(--border)' }}>
-                            <div className="flex items-center gap-2 px-2 py-1 text-[10px] font-semibold text-muted-foreground"><ListTodo className="h-3.5 w-3.5" /> Tasks</div>
+                          <div className="ml-4 border-l py-0.5 pl-2" style={{ borderColor: 'var(--border)' }}>
                             {tasks.length === 0 ? (
-                              <Button variant="outline" size="xs" className="ml-2" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>
-                            ) : tasks.map(task => (
-                              <button key={task.taskId} type="button" onClick={() => onSelectTask(workbench, worktree, task)} className={`flex min-h-7 w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-accent/40 ${viewKind === 'device' && selection.deviceId === task.deviceId ? 'bg-accent/50' : ''}`} aria-label={`Open task ${task.title}`}>
-                                <ListTodo className="h-3.5 w-3.5 shrink-0 text-chart-2" />
+                              <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>
+                            ) : tasks.map(task => {
+                              const taskSelected = (activeTaskId ?? clickedTaskId) === task.taskId
+                              return (
+                              <button key={task.taskId} type="button" onClick={() => { setClickedTaskId(task.taskId); onSelectTask(workbench, worktree, task) }} className="relative flex min-h-8 w-full items-center gap-2 border-l-2 border-transparent px-2 py-1 text-left before:absolute before:-left-2 before:top-1/2 before:h-px before:w-2 before:bg-border hover:bg-accent/40" aria-label={`Open task ${task.title}`} aria-current={taskSelected ? 'page' : undefined}>
+                                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                <span data-task-status={task.status} className={`h-2 w-2 shrink-0 rounded-full ${taskStatusDotClass(task.status)}`} />
                                 <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
                               </button>
-                            ))}
-                            {tasks.length > 0 && <Button variant="ghost" size="xs" className="ml-2" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>}
+                              )
+                            })}
+                            {tasks.length > 0 && <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>}
                           </div>
                         )}
                         {showLegacyDeviceTree && worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (

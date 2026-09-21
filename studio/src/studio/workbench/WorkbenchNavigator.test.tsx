@@ -48,6 +48,42 @@ const renderNavigator = async (filteredResults: api.WorkbenchTagSearchResults | 
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('WorkbenchNavigator tag projection', () => {
+  it('renders task children as a compact outline without a Tasks label', async () => {
+    const { host, root } = await renderNavigator(null, false)
+    await act(async () => root.render(
+      <WorkbenchNavigator
+        workbenches={workbenches}
+        devicesByWorktree={{}}
+        tasksByWorktree={{
+          'wb-direct:wt-descendant': [{
+            taskId: 'task-1', workbenchId: 'wb-direct', scope: 'worktree', worktreeId: 'wt-descendant',
+            title: 'Review motor interlock', type: 'feature', status: 'inProgress', priority: 0,
+            intent: 'Review', expectedResult: 'Verified', description: null, createdUtc: '', updatedUtc: '', deviceId: 'plc-1',
+          }],
+        }}
+        activeTaskId="task-1"
+        selection={{ workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-other' }}
+        viewKind="device"
+        knowledgeState={{}}
+        loading={false}
+        filterActive={false}
+        filteredResults={null}
+        {...callbacks}
+      />,
+    ))
+    const worktreeName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'descendant match')
+    await act(async () => (worktreeName?.parentElement as HTMLElement).click())
+
+    expect(host.textContent).toContain('Review motor interlock')
+    expect(host.textContent).toContain('PROJECTS')
+    expect(host.textContent).not.toContain('Tasks')
+    expect(host.querySelector('[data-task-status="inProgress"]')).toBeTruthy()
+    expect(host.querySelector('[data-task-status="inProgress"]')?.className).toContain('bg-emerald-500')
+    expect(host.querySelector('button[aria-label="Open task Review motor interlock"]')?.getAttribute('aria-current')).toBe('page')
+    expect(host.querySelector('[data-lucide="ellipsis"]')).toBeNull()
+    await act(async () => root.unmount())
+  })
+
   it('offers an icon-only Home action beside the workbench title', async () => {
     const onShowHome = vi.fn()
     const { host, root } = await renderNavigator(null, false)

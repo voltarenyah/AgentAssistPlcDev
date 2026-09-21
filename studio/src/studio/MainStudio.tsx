@@ -2112,6 +2112,7 @@ export default function MainStudio() {
             workbenches={workbenches}
             devicesByWorktree={devicesByWorktree}
             tasksByWorktree={tasksByWorktree}
+            activeTaskId={taskDetail?.task.taskId ?? taskDetailTask?.taskId ?? null}
             selection={selection}
             viewKind={mainView.kind}
             knowledgeState={navigatorKnowledgeState}

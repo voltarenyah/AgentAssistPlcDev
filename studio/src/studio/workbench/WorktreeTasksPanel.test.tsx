@@ -37,6 +37,7 @@ vi.mock('@/api/client', async importOriginal => {
     ...actual,
     createGraphWorktreeTask: vi.fn(async (_wb: string, _wt: string, body: { title: string }) =>
       task({ taskId: 't-new', title: body.title })),
+    listDevices: vi.fn(async () => [{ deviceId: 'device-1', plcName: 'Main PLC' }]),
     updateWorktreeTask: vi.fn(async (_wb: string, _wt: string, taskId: string, patch: Partial<api.WorktreeTask>) =>
       task({ taskId, title: patch.title ?? 'updated', status: patch.status ?? 'todo' })),
     deleteWorktreeTask: vi.fn(async () => undefined),
@@ -105,6 +106,8 @@ describe('WorktreeTasksPanel', () => {
     })
     const dialog = document.body.querySelector('[data-slot="dialog-content"]') as HTMLElement
     const input = dialog.querySelector('input[aria-label="New task title"]') as HTMLInputElement
+    expect(dialog.querySelectorAll('select[aria-label="New task device"]')).toHaveLength(1)
+    expect(dialog.textContent).toContain('Main PLC')
 
     await act(async () => setInputValue(input, 'Add alarm handling'))
     const device = dialog.querySelector('select[aria-label="New task device"]') as HTMLSelectElement
