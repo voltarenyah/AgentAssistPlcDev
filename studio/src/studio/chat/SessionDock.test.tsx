@@ -99,6 +99,11 @@ describe('SessionDock', () => {
 
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Rename Startup checks"]')?.click())
     const input = host.querySelector<HTMLInputElement>('input[name="session-title"]')
+    // Dispatching submit on the form bypasses the button, so assert the Save control is
+    // genuinely a submit button: notion-kit's Button sets its own type, and a plain
+    // type="button" would leave the real rename unable to submit at all.
+    const save = Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Save')
+    expect(save?.getAttribute('type')).toBe('submit')
     act(() => {
       input!.value = '  Valve diagnosis  '
       input!.dispatchEvent(new Event('input', { bubbles: true }))
