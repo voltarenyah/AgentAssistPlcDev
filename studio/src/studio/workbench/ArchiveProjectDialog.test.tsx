@@ -59,7 +59,7 @@ describe('ArchiveProjectDialog', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 7, 13, 11, 3, 0))
     try {
-      const { host } = renderDialog()
+      renderDialog()
 
       expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Archive file name"]')?.value)
         .toBe('Line 7_202608131103.zap17')
@@ -69,14 +69,14 @@ describe('ArchiveProjectDialog', () => {
   })
 
   it('defaults the export directory to the workbench archive folder', () => {
-    const { host } = renderDialog()
+    renderDialog()
 
     expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.value)
       .toBe('C:\\Automation\\Line7\\archive')
   })
 
   it('requires both an export directory and archive file name', () => {
-    const { host } = renderDialog()
+    renderDialog()
     const submit = document.body.querySelector('button[type="submit"]') as HTMLButtonElement
 
     act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, ''))
@@ -87,7 +87,7 @@ describe('ArchiveProjectDialog', () => {
 
   it('submits the selected export path, file name, and archive mode', async () => {
     const onArchive = vi.fn(() => Promise.resolve())
-    const { host } = renderDialog({ onArchive })
+    renderDialog({ onArchive })
 
     act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
     act(() => setInputValue(document.body.querySelector('input[aria-label="Archive file name"]')!, 'Line7.zap17'))
@@ -106,7 +106,7 @@ describe('ArchiveProjectDialog', () => {
   })
 
   it('rejects a path in the archive file name field', () => {
-    const { host } = renderDialog()
+    renderDialog()
     act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
     act(() => setInputValue(document.body.querySelector('input[aria-label="Archive file name"]')!, 'C:\\Exports\\Line7.zap17'))
 
@@ -116,7 +116,7 @@ describe('ArchiveProjectDialog', () => {
 
   it('fills the export directory from the system folder picker', async () => {
     const onBrowseExportDirectory = vi.fn(() => Promise.resolve('C:\\Exports'))
-    const { host } = renderDialog({ onBrowseExportDirectory })
+    renderDialog({ onBrowseExportDirectory })
 
     await act(async () => {
       document.body.querySelector<HTMLButtonElement>('button[aria-label="Browse for export directory"]')?.click()
@@ -127,7 +127,7 @@ describe('ArchiveProjectDialog', () => {
   })
 
   it('keeps the export directory field read-only so path selection goes through the explorer', () => {
-    const { host } = renderDialog()
+    renderDialog()
 
     expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.readOnly).toBe(true)
   })

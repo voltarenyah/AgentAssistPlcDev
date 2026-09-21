@@ -72,7 +72,8 @@ describe('WorkbenchNavigator tag projection', () => {
       />,
     ))
     const worktreeName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'descendant match')
-    await act(async () => (worktreeName?.parentElement as HTMLElement).click())
+    const worktreeRow = worktreeName?.parentElement
+    await act(async () => { if (worktreeRow) worktreeRow.click() })
 
     expect(host.textContent).toContain('Review motor interlock')
     expect(host.textContent).toContain('PROJECTS')
@@ -224,7 +225,8 @@ describe('WorkbenchNavigator task rename dialog', () => {
     ))
     // expand the worktree so its task row renders
     const worktreeName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'descendant match')
-    await act(async () => (worktreeName?.parentElement as HTMLElement).click())
+    const worktreeRow = worktreeName?.parentElement
+    await act(async () => { if (worktreeRow) worktreeRow.click() })
 
     const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Task actions Review motor interlock"]')
     expect(trigger).toBeTruthy()
