@@ -4,7 +4,7 @@ import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import { Slider } from '@/components/ui/slider'
 // notion-kit ships no Slider, so Slider stays on Studio's primitive; Switch moves.
-import { Input, Switch } from '@notion-kit/ui/primitives'
+import { Button, Input, Switch } from '@notion-kit/ui/primitives'
 import { getThemePreference, setThemePreference, subscribeTheme, type ThemeMode } from '@/studio/theme'
 import {
   EFFORT_OPTIONS,
@@ -213,7 +213,7 @@ export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCa
             </Section>
             <Section title="Shell layout" subtitle="Dock sizes and visibility for the studio shell.">
               <Row id="general.reset-layout" title="Reset shell layout" description="Restore the default dock layout. Applies immediately.">
-                <button className="secondary-button h-8" data-reset-layout onClick={() => onResetLayout?.()}>Reset layout</button>
+                <Button variant="primary" size="sm" className="h-8!" data-reset-layout onClick={() => onResetLayout?.()}>Reset layout</Button>
               </Row>
             </Section>
           </>
@@ -235,21 +235,22 @@ export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCa
                   value={apiKeyDraft}
                   onChange={event => setApiKeyDraft(event.target.value)}
                 />
-                <button className="primary-button h-8" disabled={apiKeySaving || !apiKeyDraft.trim()} onClick={saveKey}>Save key</button>
+                <Button variant="blue" size="sm" className="h-8!" disabled={apiKeySaving || !apiKeyDraft.trim()} onClick={saveKey}>Save key</Button>
               </div>
             </Row>
             <Row id="assistant.balance" title="Account balance" description="Current DeepSeek balance, fetched on demand.">
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {readOnlyValue(balanceError ?? (balance ? formatBalance(balance) : keyConfigured === false ? 'Configure an API key first' : 'Not fetched'))}
-                <button
-                  className="icon-button h-8 w-8"
+                <Button
+                  variant="nav-icon"
+                  className="h-8! w-8!"
                   aria-label="Refresh balance"
                   title="Refresh balance"
                   disabled={balanceBusy}
                   onClick={refreshBalance}
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${balanceBusy ? 'animate-spin' : ''}`} />
-                </button>
+                </Button>
               </div>
             </Row>
             <Row id="assistant.model" title="Model" description="Default model used for new chat rounds.">
@@ -341,7 +342,7 @@ export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCa
               />
             </Row>
             <Row id="appearance.ui-components" title="UI components" description="Preview reusable components and choose one for a new Studio surface.">
-              <button className="secondary-button h-8" data-open-component-catalog onClick={onOpenComponentCatalog}>Open catalog</button>
+              <Button variant="primary" size="sm" className="h-8!" data-open-component-catalog onClick={onOpenComponentCatalog}>Open catalog</Button>
             </Row>
           </Section>
         )
