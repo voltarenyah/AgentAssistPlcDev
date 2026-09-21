@@ -357,7 +357,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                 <span>Details / modification plan (markdown)</span>
                 <Textarea
                   aria-label="Task details"
-                  className="min-h-[120px] resize-y py-1.5 font-mono text-[10px]"
+                  className="min-h-[120px] resize-y py-1.5! font-mono text-[10px]!"
                   value={draft.details}
                   onChange={event => setDraft({ ...draft, details: event.target.value })}
                 />
@@ -380,7 +380,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                   ))}
                   <Input
                     aria-label="Add element reference"
-                    className="h-6 w-44 text-[9px]"
+                    className="h-6! w-44 text-[9px]!"
                     placeholder="Device01/FB_Motor_Control"
                     value={newRef}
                     onChange={event => setNewRef(event.target.value)}

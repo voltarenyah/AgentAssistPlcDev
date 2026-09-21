@@ -113,6 +113,22 @@ component suite or a production build is not evidence of visual proportion.
 | Dedicated | `studio/src/studio/workbench/WorkbenchNavigator.tsx` | 0 | 6 + 4 | 651 lines holding 43 menu items (26 `ContextMenuItem`, 17 `DropdownMenuItem`), 7 labels, 14 buttons, 6 dialogs. Migrate **by hand**, as one surface: it is the always-visible project tree, so a partially migrated state shows two menu styles at once in the most prominent place. |
 | Last | `studio/src/studio/MainStudio.tsx` | 9 | many | Superseded by evidence: `MainStudio`, `VersionControlChanges` and `VersionControlHistory` import only the toast helper, a sonner wrapper that stays, so they have **nothing to migrate**. |
 
+### notion-kit `Input`: className overrides need the important modifier
+
+`Input` composes its own variant utilities and the caller's `className` without
+deduping them, so the rendered class list can contain both `px-1.5` and `pl-9`. The
+library value wins, because both are plain utilities and stylesheet order decides.
+Measured: `className="pl-9"` produced 6px of padding, not 36px, which left leading
+icons overlapping their field's text.
+
+Any `className` on a notion-kit primitive that overrides a utility the variant also
+sets — padding, height, width, font size — must therefore carry Tailwind v4's
+important modifier (`pl-9!`, `h-8!`). Overrides that do not collide, such as
+`font-mono` or `min-w-0`, are unaffected. This has been applied to the leading-icon
+fields in `CreateWorkbenchDialog`, the `McpToolsHelper` search, the
+`WorktreeTasksPanel` element-reference and details fields, and `ChatWorkspace`'s
+Temperature and Top P inputs.
+
 ### Status
 
 Migrated and independently verified (build, full suite, browser in both themes):

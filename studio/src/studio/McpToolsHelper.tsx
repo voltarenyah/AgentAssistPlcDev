@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button } from '@notion-kit/ui/primitives'
+import { Button, Input } from '@notion-kit/ui/primitives'
 import {
   AlertTriangle,
   BookOpen,
@@ -239,7 +239,7 @@ export default function McpToolsHelper({ onClose }: { onClose: () => void }) {
         </section>
 
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><input className="field-input pl-9" value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search tool names and descriptions…" />{filter && <button className="icon-button absolute right-1 top-1/2 -translate-y-1/2" onClick={() => setFilter('')} aria-label="Clear search"><X className="h-3 w-3" /></button>}</div>
+          <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-9!" value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search tool names and descriptions…" />{filter && <button className="icon-button absolute right-1 top-1/2 -translate-y-1/2" onClick={() => setFilter('')} aria-label="Clear search"><X className="h-3 w-3" /></button>}</div>
           <div className="flex items-center gap-2"><select className="field-input h-9 min-w-[160px]" value={serverFilter} onChange={event => setServerFilter(event.target.value)}><option value="all">All servers</option>{servers.map(server => <option key={server} value={server}>{serverMeta[server]?.label ?? server}</option>)}</select><button className="secondary-button" onClick={() => void loadTools()} disabled={loading}><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</button></div>
         </div>
 

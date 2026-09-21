@@ -8,6 +8,9 @@ import type { ChatTabsState } from './chatTabState'
 import { parseProgressContent, progressTitle } from './progressDisplay'
 import { contextLabel, contextPercentage, toolCallStats } from './usageDisplay'
 import { sourceContextPrefix, type SourceChatContext } from '../plcSourceState'
+// notion-kit's Input does not dedupe className against its own variant utilities, so any
+// padding/height/size override below carries the important modifier to actually win.
+import { Input, Textarea } from '@notion-kit/ui/primitives'
 
 type Props = {
   tabs: ChatTabsState
@@ -127,9 +130,9 @@ function ChatComposer({
         </div>
       )}
       <div className="flex gap-2">
-        <textarea
+        <Textarea
           name="message"
-          className="field-input min-h-16 flex-1 resize-none py-2"
+          className="min-h-16 flex-1 resize-none py-2"
           disabled={disabled}
           placeholder="Ask about this PLC device..."
           value={composerDraft}
@@ -202,10 +205,10 @@ function ChatComposer({
           <>
             <label className="flex items-center gap-1">
               Temp
-              <input
+              <Input
                 type="number"
                 aria-label="Temperature"
-                className="field-input h-6 w-14 px-1 py-0 text-[9px]"
+                className="h-6! w-14! px-1! py-0! text-[9px]!"
                 min={0}
                 max={2}
                 step={0.1}
@@ -220,10 +223,10 @@ function ChatComposer({
             </label>
             <label className="flex items-center gap-1">
               Top P
-              <input
+              <Input
                 type="number"
                 aria-label="Top P"
-                className="field-input h-6 w-14 px-1 py-0 text-[9px]"
+                className="h-6! w-14! px-1! py-0! text-[9px]!"
                 min={0}
                 max={1}
                 step={0.1}

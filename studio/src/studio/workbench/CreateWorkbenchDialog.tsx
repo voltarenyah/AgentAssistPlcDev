@@ -226,7 +226,7 @@ export default function CreateWorkbenchDialog({
                 <div className="flex gap-1.5">
                   <Input
                     id="tia-project-file"
-                    className="h-8 min-w-0 flex-1 pl-9"
+                    className="h-8! min-w-0 flex-1 pl-9!"
                     value={projectFile}
                     onChange={event => setProjectFile(event.target.value)}
                     placeholder="C:\\Users\\…\\Documents\\Automation\\Line\\Line.ap17"
@@ -262,7 +262,7 @@ export default function CreateWorkbenchDialog({
               <FolderOpen className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
               <Input
                 id="workbench-root"
-                className="h-8 pl-9"
+                className="h-8! pl-9!"
                 value={rootPath}
                 onChange={event => setRootPath(event.target.value)}
                 placeholder="D:\\Automation\\MyWorkbench"
