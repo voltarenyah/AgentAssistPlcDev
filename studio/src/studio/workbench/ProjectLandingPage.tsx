@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, Boxes, GitBranch, Loader2, RefreshCw } from 'lucide-react'
+import { AlertCircle, Boxes, Ellipsis, FolderOpen, GitBranch, Loader2, RefreshCw } from 'lucide-react'
 import * as api from '@/api/client'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { showErrorToast } from '@/components/ui/toast'
-import InlineEdit from './InlineEdit'
 import StatusBadge from './StatusBadge'
 import TagChip from './tags/TagChip'
 import TagPicker from './tags/TagPicker'
@@ -103,12 +111,11 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree }: Pr
     [overview],
   )
 
-  const saveWorkbenchField = async (patch: { purpose?: string; owner?: string }) => {
+  const openRootFolder = async () => {
     try {
-      await api.updateWorkbench(workbenchId, patch)
-      await reload()
-    } catch (saveError) {
-      showErrorToast(`Project metadata could not be saved: ${displayError(saveError)}`)
+      await api.openWorkbenchRootFolder(workbenchId)
+    } catch (openError) {
+      showErrorToast(`Project root folder could not be opened: ${displayError(openError)}`)
     }
   }
 
@@ -173,32 +180,25 @@ export default function ProjectLandingPage({ workbenchId, onSelectWorktree }: Pr
             <div className="min-w-0 flex-1">
               <h1 className="text-lg font-semibold">{overview.name}</h1>
               <p className="mt-0.5 text-xs text-muted-foreground">Created {formatDate(overview.createdAt)}</p>
-              <div className="mt-2 space-y-1 font-mono text-xs text-muted-foreground">
-                <p className="truncate" title={overview.rootPath}>Root: {overview.rootPath}</p>
-                <p className="truncate" title={overview.sourceProjectPath ?? undefined}>Source project: {overview.sourceProjectPath ?? '—'}</p>
-              </div>
             </div>
-          </div>
-
-          <div className="grid gap-x-5 gap-y-3 border-t pt-4 sm:grid-cols-2" style={{ borderColor: 'var(--border)' }}>
-            <label className="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] items-center gap-3">
-              <span className="text-xs uppercase tracking-wide text-muted-foreground">Purpose</span>
-              <InlineEdit
-                ariaLabel="Project purpose"
-                placeholder="What is this project for?"
-                value={overview.purpose ?? ''}
-                onSave={purpose => saveWorkbenchField({ purpose })}
-              />
-            </label>
-            <label className="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] items-center gap-3">
-              <span className="text-xs uppercase tracking-wide text-muted-foreground">Owner</span>
-              <InlineEdit
-                ariaLabel="Project owner"
-                placeholder="Responsible person"
-                value={overview.owner ?? ''}
-                onSave={owner => saveWorkbenchField({ owner })}
-              />
-            </label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Project actions">
+                  <Ellipsis className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Project paths</DropdownMenuLabel>
+                <DropdownMenuItem onSelect={() => void openRootFolder()}>
+                  <FolderOpen /> Open root folder
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <div data-source-project-path className="max-w-80 px-2 py-1.5 text-xs">
+                  <div className="mb-1 font-medium text-muted-foreground">Source project</div>
+                  <div className="break-all font-mono text-[10px] leading-4">{overview.sourceProjectPath ?? 'No source project path'}</div>
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
 
           <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>

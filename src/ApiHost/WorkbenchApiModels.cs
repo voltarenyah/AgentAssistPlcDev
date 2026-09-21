@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Diagnostics;
 using Agent.Chat;
 using Agent.Mcp;
 using Agent.Workbench;
@@ -513,6 +514,14 @@ public static class WorkbenchEndpoints
                     progress)).Workbench),
                 "Workbench created.").ConfigureAwait(false));
         app.MapGet("/api/workbenches/{id}", (string id, WorkbenchApiState s) => s.Workbench(id));
+        app.MapPost("/api/workbenches/{id}/root-folder", (string id, WorkbenchApiState s) =>
+        {
+            var rootPath = s.Workbench(id).RootPath;
+            if (!Directory.Exists(rootPath))
+                throw new DirectoryNotFoundException($"Workbench root does not exist: {rootPath}");
+            Process.Start(new ProcessStartInfo(rootPath) { UseShellExecute = true });
+            return Results.NoContent();
+        });
         app.MapDelete("/api/workbenches/{id}", async (
             string id,
             WorkbenchApiState s,

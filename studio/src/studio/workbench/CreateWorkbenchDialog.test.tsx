@@ -47,6 +47,16 @@ afterEach(() => {
 })
 
 describe('CreateWorkbenchDialog', () => {
+  it('keeps the creation actions reachable in a viewport-bounded dialog', () => {
+    const { host } = renderDialog()
+
+    const dialog = host.querySelector('[data-create-workbench-dialog]')
+    const form = host.querySelector('[data-create-workbench-form]')
+    expect(dialog?.className).toContain('max-h-[85vh]')
+    expect(form?.className).toContain('overflow-y-auto')
+    expect([...host.querySelectorAll('button')].find(button => button.textContent?.includes('Create workbench'))).toBeTruthy()
+  })
+
   it('refreshes the TIA session list from the refresh button', async () => {
     const onRefreshSessions = vi.fn(() => Promise.resolve())
     const { host } = renderDialog({ onRefreshSessions })

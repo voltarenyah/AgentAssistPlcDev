@@ -1027,6 +1027,8 @@ export const searchWorkbenches = (tagIds: string[]) =>
 export const searchWorkbenchesByTags = searchWorkbenches
 export const openWorkbench = (rootPath: string) =>
   workbenchRequest<Workbench>('/workbenches/open', jsonRequest('POST', { rootPath }))
+export const openWorkbenchRootFolder = (workbenchId: string) =>
+  workbenchRequest<void>(`/workbenches/${encodeURIComponent(workbenchId)}/root-folder`, jsonRequest('POST'))
 export const deleteWorkbench = (workbenchId: string, operationId?: string) =>
   workbenchRequest<{ deleted: boolean }>(`/workbenches/${encodeURIComponent(workbenchId)}`, withOperation({ method: 'DELETE' }, operationId))
 export const createWorkbench = (

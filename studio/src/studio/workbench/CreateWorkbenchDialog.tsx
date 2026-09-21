@@ -134,7 +134,11 @@ export default function CreateWorkbenchDialog({
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent showCloseButton={false} className="max-w-[620px] gap-0 overflow-hidden p-0">
+      <DialogContent
+        showCloseButton={false}
+        data-create-workbench-dialog
+        className="flex max-h-[85vh] max-w-[620px] flex-col gap-0 overflow-hidden p-0"
+      >
         <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 text-left">
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
             <FolderPlus className="h-4 w-4 text-chart-2" />
@@ -146,7 +150,7 @@ export default function CreateWorkbenchDialog({
           <Button variant="ghost" size="icon-xs" onClick={onClose} disabled={busy} aria-label="Close create workbench dialog"><X /></Button>
         </DialogHeader>
 
-        <div className="space-y-4 p-5">
+        <div data-create-workbench-form className="scrollbar-sleek min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
           <div className="space-y-1.5">
             <Label htmlFor="workbench-name" className="text-xs">Workbench name</Label>
             <Input id="workbench-name" className="h-8 text-xs" value={name} onChange={event => setName(event.target.value)} placeholder="Line-7 commissioning" autoFocus />

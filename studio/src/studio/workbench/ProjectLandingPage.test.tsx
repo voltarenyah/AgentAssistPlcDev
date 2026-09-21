@@ -82,6 +82,7 @@ vi.mock('@/api/client', async importOriginal => {
     unassignWorkbenchTag: vi.fn(async () => undefined),
     updateWorkbench: vi.fn(async () => overview),
     updateWorktree: vi.fn(async () => ({} as api.WorktreeDetail)),
+    openWorkbenchRootFolder: vi.fn(async () => undefined),
   }
 })
 
@@ -122,14 +123,15 @@ beforeEach(() => {
 })
 
 describe('ProjectLandingPage', () => {
-  it('renders the project header with metadata, purpose and owner', async () => {
+  it('keeps project paths in the actions menu instead of the engineering header', async () => {
     const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
 
     expect(host.textContent).toContain('DemoWB')
-    expect(host.textContent).toContain('C:/wb')
-    expect(host.textContent).toContain('D:/proj.ap17')
-    expect((host.querySelector('input[aria-label="Project purpose"]') as HTMLInputElement).value).toBe('Line upgrade')
-    expect((host.querySelector('input[aria-label="Project owner"]') as HTMLInputElement).value).toBe('Ansel')
+    expect(host.textContent).not.toContain('C:/wb')
+    expect(host.textContent).not.toContain('D:/proj.ap17')
+    expect(host.querySelector('input[aria-label="Project purpose"]')).toBeNull()
+    expect(host.querySelector('input[aria-label="Project owner"]')).toBeNull()
+    expect(host.querySelector('button[aria-label="Project actions"]')).not.toBeNull()
 
     await act(async () => root.unmount())
   })
@@ -156,8 +158,8 @@ describe('ProjectLandingPage', () => {
     await act(async () => {})
 
     expect(api.assignWorkbenchTag).toHaveBeenCalledWith('wb1', 'tag-state')
-    expect(host.querySelector('input[aria-label="Project purpose"]')).toHaveProperty('value', 'Line upgrade')
-    expect(host.querySelector('input[aria-label="Project owner"]')).toHaveProperty('value', 'Ansel')
+    expect(host.querySelector('input[aria-label="Project purpose"]')).toBeNull()
+    expect(host.querySelector('input[aria-label="Project owner"]')).toBeNull()
     expect(host.querySelectorAll('tbody tr')).toHaveLength(3)
     expect(host.querySelector('[data-tag-id="tag-state"]')).not.toBeNull()
     expect(api.getWorkbenchOverview).toHaveBeenCalledTimes(1)
@@ -252,17 +254,19 @@ describe('ProjectLandingPage', () => {
     await act(async () => root.unmount())
   })
 
-  it('saves the purpose on blur through the workbench PATCH', async () => {
+  it('opens the managed project root from the actions menu', async () => {
     const { host, root } = await render(<ProjectLandingPage workbenchId="wb1" onSelectWorktree={() => {}} />)
-    const input = host.querySelector('input[aria-label="Project purpose"]') as HTMLInputElement
-
-    await act(async () => setInputValue(input, 'Commissioning phase'))
     await act(async () => {
-      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+      const trigger = host.querySelector('button[aria-label="Project actions"]')!
+      trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, ctrlKey: false }))
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
+    const openRootFolder = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .find(element => element.textContent?.trim() === 'Open root folder')!
+    await act(async () => openRootFolder.click())
     await act(async () => {})
 
-    expect(vi.mocked(api.updateWorkbench)).toHaveBeenCalledWith('wb1', { purpose: 'Commissioning phase' })
+    expect(vi.mocked(api.openWorkbenchRootFolder)).toHaveBeenCalledWith('wb1')
 
     await act(async () => root.unmount())
   })
