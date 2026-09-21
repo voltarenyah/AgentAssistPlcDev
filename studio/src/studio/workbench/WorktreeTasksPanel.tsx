@@ -5,19 +5,18 @@ import remarkGfm from 'remark-gfm'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import {
+  Button,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@notion-kit/ui/primitives'
 
 type Props = {
   workbenchId: string
@@ -125,19 +124,22 @@ function TaskStatusControl({ task, onChange }: {
 }) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Change status of ${task.title}`}
-          className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[8px] font-medium uppercase tracking-[0.1em] ${taskStatusClasses(task.status)}`}
-        >
-          {taskStatusLabel(task.status)}
-          <ChevronDown className="h-2.5 w-2.5" />
-        </button>
+      {/*
+        notion-kit has no `asChild`; its trigger renders a real <button>, so the
+        trigger's own props live on DropdownMenuTrigger. Use `render={<X/>}`
+        only when composing a custom component.
+      */}
+      <DropdownMenuTrigger
+        type="button"
+        aria-label={`Change status of ${task.title}`}
+        className={`inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[8px] font-medium uppercase tracking-[0.1em] ${taskStatusClasses(task.status)}`}
+      >
+        {taskStatusLabel(task.status)}
+        <ChevronDown className="h-2.5 w-2.5" />
       </DropdownMenuTrigger>
       <DropdownMenuContent>
         {taskStatusOrder.map(option => (
-          <DropdownMenuItem key={option} onSelect={() => onChange(option)}>
+          <DropdownMenuItem key={option} onClick={() => onChange(option)}>
             <Check className={`h-3.5 w-3.5 ${option === task.status ? 'opacity-100' : 'opacity-0'}`} />
             {taskStatusLabel(option)}
           </DropdownMenuItem>
@@ -392,11 +394,11 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
               </div>
             </div>
           )}
-          <DialogFooter>
-            <button className="secondary-button" onClick={() => setDraft(null)} disabled={savingEdit}>Cancel</button>
-            <button className="primary-button" onClick={saveEdit} disabled={!draft?.title.trim() || savingEdit}>
+          <DialogFooter className="flex-row justify-end gap-2">
+            <Button variant="primary" size="sm" onClick={() => setDraft(null)} disabled={savingEdit}>Cancel</Button>
+            <Button variant="blue" size="sm" onClick={saveEdit} disabled={!draft?.title.trim() || savingEdit}>
               {savingEdit && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save task
-            </button>
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -410,7 +412,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
             <label className="field-label"><span>Title</span><input autoFocus aria-label="New task title" className="field-input" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
             <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
             <label className="field-label"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{availableDevices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></label>
-            <DialogFooter><button type="button" className="secondary-button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
+            <DialogFooter className="flex-row justify-end gap-2"><Button variant="primary" size="sm" type="button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</Button><Button variant="blue" size="sm" type="submit" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</Button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
