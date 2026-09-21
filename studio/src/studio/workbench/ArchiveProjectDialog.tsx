@@ -1,6 +1,15 @@
 import { Archive, AlertCircle, FolderOpen, Loader2, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import type { Workbench, WorkbenchRegistration } from '@/api/client'
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@notion-kit/ui/primitives'
 
 type ArchiveValues = {
   targetDirectory: string
@@ -71,20 +80,29 @@ export default function ArchiveProjectDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-5 backdrop-blur-[2px]">
-      <form onSubmit={event => void submit(event)} className="w-full max-w-[560px] overflow-hidden rounded-xl border bg-card shadow-2xl" style={{ borderColor: 'var(--border)' }}>
-        <div className="flex items-center gap-3 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
+    <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}>
+      {/*
+        This was a hand-rolled fixed-position overlay with no dialog semantics.
+        notion-kit's Dialog adds role=dialog, focus containment and a portal; the
+        content now renders into document.body, which is why the tests read from
+        there rather than the render host. Escape and overlay dismissal are
+        ignored while archiving is in flight, matching the previous behaviour of
+        an undismissable busy dialog.
+      */}
+      <DialogContent className="max-w-[560px] gap-0 overflow-hidden p-0">
+        <form onSubmit={event => void submit(event)}>
+        <DialogHeader className="flex-row items-center gap-3 border-b border-border px-5 py-4 text-left">
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
             <Archive className="h-4 w-4 text-chart-2" />
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-semibold">Archive TIA project</h2>
-            <p className="truncate text-[10px] text-muted-foreground">{workbench.name} / {worktree.name} · {worktree.branch}</p>
+            <DialogTitle className="text-sm">Archive TIA project</DialogTitle>
+            <DialogDescription className="truncate text-[10px]">{workbench.name} / {worktree.name} · {worktree.branch}</DialogDescription>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} disabled={busy} aria-label="Close archive dialog">
+          <Button variant="close" onClick={onClose} disabled={busy} aria-label="Close archive dialog">
             <X className="h-4 w-4" />
-          </button>
-        </div>
+          </Button>
+        </DialogHeader>
 
         <div className="space-y-4 p-5">
           {busy && (
@@ -110,26 +128,30 @@ export default function ArchiveProjectDialog({
                 readOnly
                 disabled={busy || browsing}
               />
-              <button
+              <Button
+                variant="primary"
+                size="sm"
                 type="button"
-                className="secondary-button shrink-0"
+                className="shrink-0"
                 aria-label="Browse for export directory"
                 onClick={() => void browseExportDirectory()}
                 disabled={busy || browsing}
               >
                 {browsing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
                 Browse
-              </button>
+              </Button>
             </div>
             <span className="text-[9px] text-muted-foreground">Enter an existing folder where TIA Portal can write the archive.</span>
-            <button
+            <Button
+              variant="link"
+              size="xs"
               type="button"
-              className="self-start text-left text-[9px] text-chart-2 hover:underline"
+              className="self-start text-chart-2"
               onClick={() => setTargetDirectory(worktreeDirectory)}
               disabled={busy}
             >
               Use this worktree folder: {worktreeDirectory}
-            </button>
+            </Button>
           </label>
 
           <label className="field-label">
@@ -163,14 +185,15 @@ export default function ArchiveProjectDialog({
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="primary-button" disabled={!valid || busy}>
+        <DialogFooter className="flex-row justify-end gap-2 border-t border-border bg-surface-muted/25 px-5 py-3">
+          <Button variant="primary" size="sm" type="button" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="blue" size="sm" type="submit" disabled={!valid || busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Archive project
-          </button>
-        </div>
-      </form>
-    </div>
+          </Button>
+        </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }

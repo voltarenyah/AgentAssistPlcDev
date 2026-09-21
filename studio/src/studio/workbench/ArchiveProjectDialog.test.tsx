@@ -61,7 +61,7 @@ describe('ArchiveProjectDialog', () => {
     try {
       const { host } = renderDialog()
 
-      expect(host.querySelector<HTMLInputElement>('input[aria-label="Archive file name"]')?.value)
+      expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Archive file name"]')?.value)
         .toBe('Line 7_202608131103.zap17')
     } finally {
       vi.useRealTimers()
@@ -71,17 +71,17 @@ describe('ArchiveProjectDialog', () => {
   it('defaults the export directory to the workbench archive folder', () => {
     const { host } = renderDialog()
 
-    expect(host.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.value)
+    expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.value)
       .toBe('C:\\Automation\\Line7\\archive')
   })
 
   it('requires both an export directory and archive file name', () => {
     const { host } = renderDialog()
-    const submit = host.querySelector('button[type="submit"]') as HTMLButtonElement
+    const submit = document.body.querySelector('button[type="submit"]') as HTMLButtonElement
 
-    act(() => setInputValue(host.querySelector('input[aria-label="Export directory"]')!, ''))
+    act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, ''))
     expect(submit.disabled).toBe(true)
-    act(() => setInputValue(host.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
+    act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
     expect(submit.disabled).toBe(false)
   })
 
@@ -89,14 +89,14 @@ describe('ArchiveProjectDialog', () => {
     const onArchive = vi.fn(() => Promise.resolve())
     const { host } = renderDialog({ onArchive })
 
-    act(() => setInputValue(host.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
-    act(() => setInputValue(host.querySelector('input[aria-label="Archive file name"]')!, 'Line7.zap17'))
+    act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
+    act(() => setInputValue(document.body.querySelector('input[aria-label="Archive file name"]')!, 'Line7.zap17'))
     act(() => {
-      const select = host.querySelector('select[aria-label="Archive mode"]') as HTMLSelectElement
+      const select = document.body.querySelector('select[aria-label="Archive mode"]') as HTMLSelectElement
       select.value = 'none'
       select.dispatchEvent(new window.Event('change', { bubbles: true }))
     })
-    await act(async () => (host.querySelector('button[type="submit"]') as HTMLButtonElement).click())
+    await act(async () => (document.body.querySelector('button[type="submit"]') as HTMLButtonElement).click())
 
     expect(onArchive).toHaveBeenCalledWith({
       targetDirectory: 'C:\\Exports',
@@ -107,11 +107,11 @@ describe('ArchiveProjectDialog', () => {
 
   it('rejects a path in the archive file name field', () => {
     const { host } = renderDialog()
-    act(() => setInputValue(host.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
-    act(() => setInputValue(host.querySelector('input[aria-label="Archive file name"]')!, 'C:\\Exports\\Line7.zap17'))
+    act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
+    act(() => setInputValue(document.body.querySelector('input[aria-label="Archive file name"]')!, 'C:\\Exports\\Line7.zap17'))
 
-    expect(host.textContent).toContain('Enter a file name only')
-    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true)
+    expect(document.body.textContent).toContain('Enter a file name only')
+    expect((document.body.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('fills the export directory from the system folder picker', async () => {
@@ -119,16 +119,16 @@ describe('ArchiveProjectDialog', () => {
     const { host } = renderDialog({ onBrowseExportDirectory })
 
     await act(async () => {
-      host.querySelector<HTMLButtonElement>('button[aria-label="Browse for export directory"]')?.click()
+      document.body.querySelector<HTMLButtonElement>('button[aria-label="Browse for export directory"]')?.click()
     })
 
     expect(onBrowseExportDirectory).toHaveBeenCalledTimes(1)
-    expect(host.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.value).toBe('C:\\Exports')
+    expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.value).toBe('C:\\Exports')
   })
 
   it('keeps the export directory field read-only so path selection goes through the explorer', () => {
     const { host } = renderDialog()
 
-    expect(host.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.readOnly).toBe(true)
+    expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.readOnly).toBe(true)
   })
 })
