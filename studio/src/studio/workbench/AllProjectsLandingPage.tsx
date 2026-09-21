@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { AlertCircle, Camera, GitBranch, Loader2, Plus } from 'lucide-react'
 import * as api from '@/api/client'
 import TagFilter from './tags/TagFilter'
+import { Button } from '@notion-kit/ui/primitives'
 
 export type AllProjectsLandingPageProps = {
   projects: api.WorkbenchLandingCard[] | null
@@ -40,7 +41,7 @@ export default function AllProjectsLandingPage({
   }, [projects, matchingWorkbenchIds, sort])
 
   if (loading && projects === null) return <div className="grid h-full place-items-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading Projects…</div>
-  if (error && projects === null) return <div className="grid h-full place-items-center p-8"><div className="text-center"><AlertCircle className="mx-auto mb-3 h-7 w-7 text-destructive" /><p className="text-sm">{error}</p>{onRetry && <button className="primary-button mt-4" onClick={onRetry}>Retry</button>}</div></div>
+  if (error && projects === null) return <div className="grid h-full place-items-center p-8"><div className="text-center"><AlertCircle className="mx-auto mb-3 h-7 w-7 text-destructive" /><p className="text-sm">{error}</p>{onRetry && <Button variant="blue" size="sm" className="mt-4" onClick={onRetry}>Retry</Button>}</div></div>
 
   return <div className="min-h-0 flex-1 overflow-y-auto">
     <div className="mx-auto max-w-7xl space-y-4 p-5">
@@ -52,7 +53,7 @@ export default function AllProjectsLandingPage({
         </div>
       </div>
       {tagNodes.length > 0 && onSelectedTagIdsChange && <TagFilter nodes={tagNodes} selectedTagIds={selectedTagIds} onSelectedTagIdsChange={onSelectedTagIdsChange} />}
-      {ordered.length === 0 ? <div className="rounded-xl border bg-card p-10 text-center"><p className="text-sm text-muted-foreground">No Projects yet.</p>{onCreateWorkbench && <button className="primary-button mt-4" onClick={onCreateWorkbench}><Plus className="h-3.5 w-3.5" /> Create Project</button>}</div> : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{ordered.map(project => {
+      {ordered.length === 0 ? <div className="rounded-xl border bg-card p-10 text-center"><p className="text-sm text-muted-foreground">No Projects yet.</p>{onCreateWorkbench && <Button variant="blue" size="sm" className="mt-4" onClick={onCreateWorkbench}><Plus className="h-3.5 w-3.5" /> Create Project</Button>}</div> : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{ordered.map(project => {
         const coverAssetId = uploadedCovers[project.workbenchId] ?? project.coverAssetId
         return <article key={project.workbenchId} className="overflow-hidden rounded-xl border bg-card shadow-sm" style={{ borderColor: 'var(--border)' }}>
         <button type="button" className="block w-full p-4 text-left hover:bg-accent/30" onClick={() => onSelectWorkbench(project.workbenchId)}>
