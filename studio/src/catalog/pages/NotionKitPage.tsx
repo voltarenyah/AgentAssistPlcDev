@@ -20,7 +20,7 @@ export default function NotionKitPage() {
   const [notifyAssignee, setNotifyAssignee] = useState(true)
 
   return (
-    <div className="mx-auto max-w-5xl space-y-8" data-notion-kit-preview>
+    <div className="notion-kit-surface mx-auto max-w-5xl space-y-8" data-notion-kit-preview>
       <div>
         <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Installed component source</p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">Notion Kit components</h2>
@@ -36,12 +36,12 @@ export default function NotionKitPage() {
             <CardTitle>Actions and status</CardTitle>
             <CardDescription>Choose a clear action weight and a compact status treatment.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-5">
+          <CardContent className="p-6 pt-0 space-y-5">
             <div className="flex flex-wrap gap-2">
-              <Button variant="primary">Create task</Button>
-              <Button variant="soft-blue">Review source</Button>
-              <Button variant="red">Discard draft</Button>
-              <Button variant="link">Learn more</Button>
+              <Button variant="primary" size="md">Create task</Button>
+              <Button variant="soft-blue" size="md">Review source</Button>
+              <Button variant="red" size="md">Discard draft</Button>
+              <Button variant="link" size="md">Learn more</Button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="blue">In review</Badge>
@@ -57,7 +57,7 @@ export default function NotionKitPage() {
             <CardTitle>Fields and people</CardTitle>
             <CardDescription>Use familiar form controls for focused engineering input.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="p-6 pt-0 space-y-4">
             <div className="space-y-2">
               <Label htmlFor="notion-kit-task-name">Task name</Label>
               <Input id="notion-kit-task-name" placeholder="Describe the intended change" />
@@ -79,7 +79,7 @@ export default function NotionKitPage() {
             <CardTitle>Preference controls</CardTitle>
             <CardDescription>These controls are live so you can inspect their selected states.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="p-6 pt-0 space-y-4">
             <label className="flex items-center justify-between gap-4">
               <span>
                 <span className="block text-sm font-medium">Show page cover</span>
@@ -99,10 +99,10 @@ export default function NotionKitPage() {
             <CardTitle>Selectable card</CardTitle>
             <CardDescription>Use a card with button semantics when the whole item opens a detailed surface.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-6 pt-0">
             <div className="flex items-center justify-between text-sm">
               <span>Source comparison</span>
-              <Badge variant="blue" size="sm">Ready</Badge>
+              <Badge variant="blue">Ready</Badge>
             </div>
           </CardContent>
         </Card>

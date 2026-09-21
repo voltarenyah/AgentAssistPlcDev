@@ -140,6 +140,41 @@
   --sidebar-ring: #525252;
 }
 
+/* ── Notion-kit primitive surface ────────────────────── */
+/*
+ * `@notion-kit/ui` resolves its own colors through :root variables, and its
+ * stylesheet is imported at the top of this file. Studio reuses those variable
+ * names for surface colors in the blocks above, so a surface that renders
+ * notion-kit primitives must restore notion-kit's values. Without this, the
+ * library's `text-muted` and `text-secondary` paint with Studio's surface
+ * colors and that text is invisible in both themes.
+ *
+ * The values are notion-kit's own :root/.dark declarations. `--base` is
+ * notion-kit's and is not overridden, so `--border` resolves per theme on its
+ * own. Wrap notion-kit primitives in `.notion-kit-surface`; see
+ * `docs/STYLEGUIDE.md`.
+ *
+ * `--radius` also collides (Studio 0.625rem vs notion-kit 0.5rem), which
+ * leaves notion-kit corners ~2px larger. That difference is cosmetic and keeps
+ * the preview aligned with Studio's own radii, so it is intentionally not
+ * restored here.
+ */
+
+.notion-kit-surface {
+  --primary: #2c2c2b;
+  --secondary: #8e8b86;
+  --muted: #46444073;
+  --border: rgba(var(--base) / 0.1);
+  --ring: #0f0f0f1a;
+}
+
+.dark .notion-kit-surface {
+  --primary: #f0efed;
+  --secondary: #a8a49c;
+  --muted: rgba(var(--base) / 0.3);
+  --ring: #ffffff13;
+}
+
 /* ── Sonner toast theme ──────────────────────────────── */
 
 [data-sonner-toaster] {
