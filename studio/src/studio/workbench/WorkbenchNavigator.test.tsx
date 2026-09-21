@@ -197,3 +197,65 @@ describe('WorkbenchNavigator tag projection', () => {
     await act(async () => root.unmount())
   })
 })
+
+describe('WorkbenchNavigator task rename dialog', () => {
+  it('opens the migrated rename dialog from the task menu and closes it from Cancel', async () => {
+    const { host, root } = await renderNavigator(null, false)
+    await act(async () => root.render(
+      <WorkbenchNavigator
+        workbenches={workbenches}
+        devicesByWorktree={{}}
+        tasksByWorktree={{
+          'wb-direct:wt-descendant': [{
+            taskId: 'task-1', workbenchId: 'wb-direct', scope: 'worktree', worktreeId: 'wt-descendant',
+            title: 'Review motor interlock', type: 'feature', status: 'inProgress', priority: 0,
+            intent: 'Review', expectedResult: 'Verified', description: null, createdUtc: '', updatedUtc: '', deviceId: 'plc-1',
+          }],
+        }}
+        activeTaskId="task-1"
+        selection={{ workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-other' }}
+        viewKind="device"
+        knowledgeState={{}}
+        loading={false}
+        filterActive={false}
+        filteredResults={null}
+        {...callbacks}
+      />,
+    ))
+    // expand the worktree so its task row renders
+    const worktreeName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'descendant match')
+    await act(async () => (worktreeName?.parentElement as HTMLElement).click())
+
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Task actions Review motor interlock"]')
+    expect(trigger).toBeTruthy()
+    act(() => {
+      trigger!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, ctrlKey: false }))
+      trigger!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+
+    // notion-kit menus portal, so menu items and the dialog live in document.body
+    const rename = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .find(element => element.textContent?.trim() === 'Rename task')
+    expect(rename).toBeTruthy()
+    await act(async () => rename!.click())
+    await act(async () => {})
+
+    const dialog = document.body.querySelector('[role="dialog"]')
+    expect(dialog).toBeTruthy()
+    expect(dialog?.textContent).toContain('Rename task')
+    expect(dialog?.textContent).toContain('Choose a concise task title for this worktree.')
+    const input = document.body.querySelector<HTMLInputElement>('input[aria-label="Task title"]')
+    expect(input).toBeTruthy()
+    expect(input?.value).toBe('Review motor interlock')
+
+    const cancel = Array.from(document.body.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.trim() === 'Cancel')
+    expect(cancel).toBeTruthy()
+    await act(async () => cancel!.click())
+    await act(async () => {})
+
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+    await act(async () => root.unmount())
+  })
+})

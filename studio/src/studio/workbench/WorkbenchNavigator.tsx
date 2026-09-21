@@ -509,7 +509,7 @@ export default function WorkbenchNavigator({
         </DialogHeader>
         <form className="space-y-4" onSubmit={event => { event.preventDefault(); saveTaskRename() }}>
           <Input aria-label="Task title" value={renameTitle} onChange={event => setRenameTitle(event.target.value)} autoFocus />
-          <DialogFooter>
+          <DialogFooter className="flex-row justify-end gap-2">
             <Button type="button" variant="primary" size="sm" onClick={() => setRenameTask(null)}>Cancel</Button>
             <Button type="submit" variant="blue" size="sm">Save</Button>
           </DialogFooter>
