@@ -5,13 +5,13 @@ import remarkGfm from 'remark-gfm'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import {
-  Button,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -96,14 +96,14 @@ export function ActiveTaskSelector({
             </option>
           ))}
         </select>
-        <button type="button" className="secondary-button h-8 text-[9px]" disabled={!activeTask || saving} onClick={() => { void select('') }} onKeyDown={event => {
+        <Button type="button" variant="primary" size="sm" className="h-8! text-[9px]!" disabled={!activeTask || saving} onClick={() => { void select('') }} onKeyDown={event => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
             void select('')
           }
         }}>
           Clear
-        </button>
+        </Button>
       </div>
       <div className="mt-1 text-[9px] text-muted-foreground">
         {activeTask ? <><span className="font-medium text-foreground">{activeTask.title}</span> · {activeTask.scope === 'project' ? 'Project' : 'Worktree'} scope · {taskTypeLabel(activeTask.type)}</> : 'New sessions and actions remain unassigned until you choose a task.'}
@@ -255,12 +255,12 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <button type="button" className="primary-button h-8" onClick={() => {
+        <Button type="button" variant="blue" size="sm" className="h-8!" onClick={() => {
           setNewDevice(current => current || availableDevices[0]?.deviceId || '')
           setCreateOpen(true)
         }}>
           <Plus className="h-3.5 w-3.5" /> Add task
-        </button>
+        </Button>
       </div>
 
       {visibleTasks.length === 0 ? (
@@ -312,13 +312,13 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                           </div>
                         )}
                       </div>
-                      {onStartChat && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>Start chat</button>}
-                      {onOpenTaskDetail && !isLegacyTask(task) && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</button>}
-                      {isLegacyTask(task) && <><button className="icon-button" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
+                      {onStartChat && <Button type="button" variant="primary" size="sm" className="h-7! px-2! text-[9px]!" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>Start chat</Button>}
+                      {onOpenTaskDetail && !isLegacyTask(task) && <Button type="button" variant="primary" size="sm" className="h-7! px-2! text-[9px]!" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</Button>}
+                      {isLegacyTask(task) && <><Button variant="nav-icon" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
                         <Pencil className="h-3 w-3" />
-                      </button>
-                      <button
-                        className="icon-button"
+                      </Button>
+                      <Button
+                        variant="nav-icon"
                         aria-label={`Delete task ${task.title}`}
                         onClick={() => {
                           if (window.confirm(`Delete task "${task.title}"?`)) {
@@ -327,7 +327,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                         }}
                       >
                         <Trash2 className="h-3 w-3" />
-                      </button></>}
+                      </Button></>}
                     </div>
                   ))}
                 </div>
