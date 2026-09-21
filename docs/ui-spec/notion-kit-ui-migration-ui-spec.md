@@ -179,9 +179,11 @@ into five buckets, and none of them is unexplained work:
    `NodeEdgesView`, `BlockSourceView`, `SourceObjectInspectorPanel` and
    `HardwareConfigurationView`. Excluded by decision: device selection is blocked, so
    these cannot be rendered or verified from the browser.
-2. **Two open decisions** — the tag surfaces (`ADR-0005` gap 2), and the ten native
-   `<select>` elements still using `field-input`, which need Base UI's `Select` and an
-   `items` collection.
+2. **Two open decisions** — the tag surfaces, where `@notion-kit/ui/tags-input`'s `TagsInput` is the
+   direct mapping for the picker and both `TagsInput` and `Autocomplete` are available (see ADR-0005),
+   and the ten native `<select>` elements still using `field-input`, which need Base UI's `Select` and
+   an `items` collection. `@notion-kit/ui/selectable` was checked for both and is a marquee-selection
+   container, not a row or dropdown primitive, so it is not a candidate for either.
 3. **By design** — the eight primitives with no notion-kit counterpart, and the catalog
    pages, which deliberately preview Studio's own set.
 4. **Should not be converted.** An inventory of the raw `<button>` elements found roughly

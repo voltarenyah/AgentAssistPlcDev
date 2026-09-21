@@ -51,11 +51,19 @@ indicator.** `Tabs` is a single-select ARIA control, is already proven in this c
 custom chrome rather than reproducing it. The `CreateWorkbenchDialog` mode switch keeps its two
 labels and its `mode` state; only the control and the indicator change.
 
-**Gap 2 — adopt notion-kit `Combobox` for `TagPicker` and `Autocomplete` for `TagFilter`.** The tag
-picker is a multi-select with creatable values, which is exactly what notion-kit's `Combobox`
-documents; the tag filter is a filterable list without creation, which `Autocomplete` covers. These
-are interaction-shape changes, so each is its own slice with its own UI Spec update and tests, not a
+**Gap 2 — `TagPicker` uses notion-kit's `TagsInput`; `TagFilter` keeps a filterable list and takes
+`Autocomplete`.** `@notion-kit/ui/tags-input` ships a controlled chip input — `value: { tags, input }`,
+`onTagsChange`, `onInputChange`, an optional zod `inputSchema`, and `TagOption { value, color }` — which
+is the tag picker's exact job, down to the colour that Studio's tags already carry. The tag filter
+remains a filterable list over existing tags with no creation, which `Autocomplete` covers. These are
+interaction-shape changes, so each is its own slice with its own UI Spec update and tests, not a
 primitive swap folded into a broader commit.
+
+`@notion-kit/ui/selectable` was checked as a candidate for this gap and for the ten native `<select>`
+elements, and is **not** one: it is a rubber-band marquee selection container (`selectionRect`,
+`selectionMode`, `activationConstraint`, `onSelectStart`/`Move`/`End`) for canvas-style surfaces, not a
+row or dropdown primitive. Studio has no surface that needs marquee selection, so the native selects
+still map to Base UI's `Select` with an `items` collection.
 
 ### Decision Details
 
@@ -63,7 +71,7 @@ primitive swap folded into a broader commit.
 |---|---|
 | **Decision** | Both `ToggleGroup` sites move to notion-kit `Tabs`; `TagPicker` moves to `Combobox` and `TagFilter` to `Autocomplete`. |
 | **Why this** | It removes the last two Studio primitives that block real product surfaces, and each target is the library's documented primitive for that interaction rather than an approximation. |
-| **Known unknowns** | `Combobox` and `Autocomplete` are Base UI components with `items` collections and their own value/label accessors, so the tag surfaces need real design work, not a find-and-replace. Their tests assert cmdk-specific behaviour and will need rewriting. |
+| **Known unknowns** | The tag filter's `Autocomplete` mapping still needs design work, since it is a filterable list rather than a chip input. `TagsInput` is controlled on both tags and the draft input, so `TagPicker`'s state shape changes from one array to that pair, and its tests move with it. |
 | **Reconsider when** | `Combobox`/`Autocomplete` cannot express the tag filter's current behaviour without losing function, or the tag surfaces are judged not worth the redesign; in that case keep cmdk and record those two surfaces as permanently on Studio primitives. |
 
 ## Rationale
