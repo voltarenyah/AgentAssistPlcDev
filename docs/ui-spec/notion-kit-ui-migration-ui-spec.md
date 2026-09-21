@@ -106,11 +106,36 @@ component suite or a production build is not evidence of visual proportion.
 |---|---|---|---|---|
 | 1 | Foundation: token switch + rename | 85 sites / 37 files | full suite | Must land first and alone so no state mixes vocabularies |
 | 2a | `SandboxDeniedDialog.tsx`, `TiaCloseConfirmationDialog.tsx`, `RefreshDialog.tsx` | 2 each | 0 / 2 / 2 | Dialog + Button + Input only, so they establish the dialog mapping before the big one and de-risk it. `SandboxDeniedDialog` gained a colocated test during migration. |
-| 2b | `studio/src/studio/workbench/CreateWorkbenchDialog.tsx` | 4 | 9 | Deferred behind 2a because it is the only surface on this path needing two primitives notion-kit does not map 1:1: it has no `ToggleGroup` (the session/file mode switch must become `Tabs`, and its custom sliding indicator must be reworked) and its `Select` is Base UI rather than Radix, with `SelectValue` needing explicit `items` to render a label. Its `Input` also uses a leading icon, which notion-kit's `Input` does not support (`endIcon` only, no children). |
+| 2b | `studio/src/studio/workbench/CreateWorkbenchDialog.tsx` | 4 | 9 | Deferred behind 2a because it is the only surface on this path needing two primitives notion-kit does not map 1:1: it has no `ToggleGroup` (the session/file mode switch must become `Tabs`, and its custom sliding indicator must be reworked) and its `Select` is Base UI rather than Radix, with `SelectValue` needing explicit `items` to render a label. Its `Input` also uses a leading icon, which notion-kit's `Input` does not support (`endIcon` only, no children). The `ToggleGroup` mapping is now decided in `docs/adr/ADR-0005-primitive-mapping-for-missing-notion-kit-counterparts.md`. |
+| 2c | `OperationTimingList.tsx` (its `ToggleGroup`), `TagPicker.tsx`, `TagFilter.tsx` | — | 5 / 3 / 9 | Same two gaps as 2b. ADR-0005 decides them: `Tabs` for the `ToggleGroup`, and `Combobox`/`Autocomplete` for the tag surfaces, the latter two being interaction-shape changes that each need their own spec update rather than a primitive swap. |
 | 4 | `WorktreeTasksPanel.tsx`, `ChatWorkspace.tsx`, `McpToolsHelper.tsx` | 6 / 6 / 11 | 8 / 21 / 1 | Higher density; `McpToolsHelper` is a developer surface so it can absorb early mistakes |
 | 5 | Remaining `studio/src/**` files by density | 1–4 each | varies | Mechanical by this point |
 | Dedicated | `studio/src/studio/workbench/WorkbenchNavigator.tsx` | 0 | 6 + 4 | 651 lines holding 43 menu items (26 `ContextMenuItem`, 17 `DropdownMenuItem`), 7 labels, 14 buttons, 6 dialogs. Migrate **by hand**, as one surface: it is the always-visible project tree, so a partially migrated state shows two menu styles at once in the most prominent place. |
-| Last | `studio/src/studio/MainStudio.tsx` | 9 | many | 2702-line component and the carrier of issue #109; migrate only after that issue is resolved |
+| Last | `studio/src/studio/MainStudio.tsx` | 9 | many | Superseded by evidence: `MainStudio`, `VersionControlChanges` and `VersionControlHistory` import only the toast helper, a sonner wrapper that stays, so they have **nothing to migrate**. |
+
+### Status
+
+Migrated and independently verified (build, full suite, browser in both themes):
+
+| Surface | Commit |
+|---|---|
+| Token foundation, 37 files | `e23bf09` |
+| `SandboxDeniedDialog` (+ its first tests) | `0b3fc2b` |
+| `WorktreeTasksPanel` | `04681ea` |
+| `WorktreeLandingPage` | `dcaec73` |
+| `ProjectLandingPage` | `63d9d91` |
+| `StatusBadge` | `bce921f` |
+| `ArchiveProjectDialog` (gained dialog semantics) | `5c5c0ba` |
+| Tag chip + tag tree | `4569d75` |
+| Settings switches + header theme toggle | `59a2b67` |
+| TIA close dialog + MCP tools helper | `1860ea6` |
+| `WorkbenchNavigator` menus, then its buttons/dialog/input | `be6436f`, `781fc66` |
+| Navigator rename dialog (test + footer fix) | `ba4dde8` |
+
+Remaining, all decision- or issue-gated: the `ToggleGroup` sites and the tag surfaces
+(`ADR-0005`), the device surfaces (`RefreshDialog`, `PlcSourcePanel`,
+`PlcSourceCompareDialog`, `SourceObjectInspectorPanel`, device panels — issue #109), and
+the eight primitives with no notion-kit counterpart.
 
 ### WorkbenchNavigator: what worked and what to watch
 
@@ -160,3 +185,4 @@ visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authorit
 | 2026-09-21 | 1.0 | Initial specification for the notion-kit foundation slice and migration order. |
 | 2026-09-21 | 1.1 | Add the WorkbenchNavigator dedicated stage and record that its trigger blocks must be hand-edited rather than scripted. |
 | 2026-09-21 | 1.2 | WorkbenchNavigator menu layer migrated; record the group-label trap, the standalone MenuLabel, the content-width trap and the submenu content difference. |
+| 2026-09-21 | 1.3 | Add the migration status with commits; point the remaining mapping gaps at ADR-0005; correct the MainStudio stage, which has nothing to migrate. |
