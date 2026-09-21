@@ -77,7 +77,7 @@ describe('OperationTimingList', () => {
     vi.useFakeTimers()
     const { host, root } = render({ ...status, currentPhase: { ...status.currentPhase!, message: 'Exporting block Main...' } }, 'dashboard')
     act(() => {
-      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
+      [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
         .find(button => button.textContent?.includes('Source export'))?.click()
     })
     act(() => vi.advanceTimersByTime(2000))
@@ -93,7 +93,7 @@ describe('OperationTimingList', () => {
     vi.useFakeTimers()
     const { host } = render({ ...status, currentPhase: { ...status.currentPhase!, message: 'Exporting block Main...' } }, 'dashboard')
     const select = (label: string) => act(() => {
-      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
+      [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
         .find(button => button.textContent?.includes(label))?.click()
     })
 

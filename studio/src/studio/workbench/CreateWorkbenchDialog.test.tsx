@@ -121,7 +121,7 @@ describe('CreateWorkbenchDialog', () => {
     const workflowStages = host.querySelector('[aria-label="Workflow stages"]')
     expect(workflowStages?.textContent?.indexOf('Reading software checksum...')).toBeLessThan(workflowStages?.textContent?.indexOf('Initializing Git repository...') ?? 0)
     act(() => {
-      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
+      [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
         .find(button => button.textContent?.includes('Source export'))?.click()
     })
     const sourceExport = host.querySelector('[data-source-export-activity]')
@@ -205,7 +205,7 @@ describe('CreateWorkbenchDialog', () => {
     }
     const { host } = renderDialog({ busy: true, operationStatus })
     act(() => {
-      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
+      [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
         .find(button => button.textContent?.includes('Source export'))?.click()
     })
     const sourceExport = host.querySelector<HTMLElement>('[data-source-export-activity]')!

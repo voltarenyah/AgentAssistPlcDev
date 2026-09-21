@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { MutableRefObject } from 'react'
 import { CheckCircle2, Clock3, Loader2 } from 'lucide-react'
 import type { OperationPhaseTiming, OperationStatus } from '@/api/client'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { Tabs, TabsList, TabsTrigger } from '@notion-kit/ui/primitives'
 
 type Props = {
   status: OperationStatus | null
@@ -175,19 +175,19 @@ export default function OperationTimingList({ status, className = '', layout = '
             </div>
           </div>
           {hasSourceExportActivity && (
-            <ToggleGroup
-              type="single"
+            /* notion-kit has no ToggleGroup; this single-select switch is a Tabs control.
+               ADR-0005. */
+            <Tabs
               value={activeDashboardView}
-              variant="outline"
-              size="sm"
-              aria-label="Operation detail view"
               onValueChange={value => {
                 if (value === 'workflow' || value === 'source') setActiveDashboardView(value)
               }}
             >
-              <ToggleGroupItem value="workflow" className="text-xs">Workflow</ToggleGroupItem>
-              <ToggleGroupItem value="source" className="text-xs">Source export</ToggleGroupItem>
-            </ToggleGroup>
+              <TabsList aria-label="Operation detail view">
+                <TabsTrigger value="workflow" className="text-xs">Workflow</TabsTrigger>
+                <TabsTrigger value="source" className="text-xs">Source export</TabsTrigger>
+              </TabsList>
+            </Tabs>
           )}
         </div>
         <div className="min-h-0 flex-1 p-3">
