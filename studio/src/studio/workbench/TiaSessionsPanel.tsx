@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link2, Link2Off, Loader2, RefreshCw, Server, X, XCircle } from 'lucide-react'
 import type * as api from '@/api/client'
 import { formatSessionLabel, type SessionLabel } from './TiaSessionLabel'
+import { Button } from '@notion-kit/ui/primitives'
 
 /** Compact mode chip: TIA's enum names are verbose ("WithUserInterface"). */
 export const sessionModeLabel = (mode: string): string => {
@@ -46,18 +47,19 @@ export default function TiaSessionsPanel({
       >
         <Server className="h-3 w-3" />
         <span className="flex-1">TIA Portal instances</span>
-        <button
-          className="icon-button h-5 w-5"
+        <Button
+          variant="nav-icon"
+          className="h-5! w-5!"
           aria-label="Refresh TIA instances"
           title="Re-detect running TIA Portal instances"
           disabled={refreshing}
           onClick={onRefresh}
         >
           <RefreshCw className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`} />
-        </button>
-        <button className="icon-button h-5 w-5" aria-label="Close panel" onClick={onClose}>
+        </Button>
+        <Button variant="nav-icon" className="h-5! w-5!" aria-label="Close panel" onClick={onClose}>
           <X className="h-3 w-3" />
-        </button>
+        </Button>
       </div>
 
       <div className="scrollbar-sleek max-h-[280px] overflow-y-auto">
@@ -135,8 +137,9 @@ export default function TiaSessionsPanel({
                     </button>
                   </>
                 ) : (
-                  <button
-                    className="icon-button h-6 w-6 hover:text-red-500"
+                  <Button
+                    variant="nav-icon"
+                    className="h-6! w-6! hover:text-red-500"
                     aria-label={`Close TIA instance ${session.id}`}
                     title="Close this TIA Portal instance (TIA asks to save changes)"
                     disabled={busy !== null}
@@ -144,7 +147,7 @@ export default function TiaSessionsPanel({
                     data-tia-close={session.id}
                   >
                     <XCircle className="h-3.5 w-3.5" />
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>

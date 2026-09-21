@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Copy, Minus, Square, X } from 'lucide-react'
+import { Button } from '@notion-kit/ui/primitives'
 import {
   isDesktopShell,
   sendWindowCommand,
@@ -25,30 +26,31 @@ export default function WindowControls() {
   const maximized = windowState === 'maximized'
   return (
     <div className="flex items-center gap-1" data-window-controls>
-      <button
-        className="icon-button"
+      <Button
+        variant="nav-icon"
         aria-label="Minimize window"
         title="Minimize"
         onClick={() => sendWindowCommand('minimize')}
       >
         <Minus className="h-3.5 w-3.5" />
-      </button>
-      <button
-        className="icon-button"
+      </Button>
+      <Button
+        variant="nav-icon"
         aria-label={maximized ? 'Restore window' : 'Maximize window'}
         title={maximized ? 'Restore' : 'Maximize'}
         onClick={() => sendWindowCommand('toggle-maximize')}
       >
         {maximized ? <Copy className="h-3.5 w-3.5" /> : <Square className="h-3 w-3" />}
-      </button>
-      <button
-        className="icon-button hover:bg-red-600 hover:text-white"
+      </Button>
+      <Button
+        variant="nav-icon"
+        className="hover:bg-red-600! hover:text-white!"
         aria-label="Close window"
         title="Close"
         onClick={() => sendWindowCommand('close')}
       >
         <X className="h-3.5 w-3.5" />
-      </button>
+      </Button>
     </div>
   )
 }
