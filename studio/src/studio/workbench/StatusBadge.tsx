@@ -8,7 +8,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@notion-kit/ui/primitives'
 
 const worktreeStatusLabel = (status: WorktreeStatus) =>
   status === 'finished' ? 'Finished' : 'Ongoing'
@@ -38,30 +38,32 @@ export default function StatusBadge({ status, onChange, disabled }: Props) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild disabled={disabled || busy}>
-        <button
-          type="button"
-          aria-label="Change worktree status"
-          className={`inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] transition-colors ${
-            status === 'finished'
-              ? 'border-border bg-surface-muted text-muted-foreground hover:bg-accent'
-              : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400'
-          }`}
-          onClick={event => event.stopPropagation()}
-        >
-          {busy
-            ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
-            : <span className={`h-1.5 w-1.5 rounded-full ${status === 'finished' ? 'bg-muted-foreground' : 'bg-emerald-500'}`} />}
-          {worktreeStatusLabel(status)}
-          <ChevronDown className="h-2.5 w-2.5" />
-        </button>
+      {/* notion-kit has no asChild: the trigger is already a real button. */}
+      <DropdownMenuTrigger
+        type="button"
+        disabled={disabled || busy}
+        aria-label="Change worktree status"
+        className={`inline-flex w-fit cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] transition-colors ${
+          status === 'finished'
+            ? 'border-border bg-surface-muted text-muted-foreground hover:bg-accent'
+            : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400'
+        }`}
+        onClick={event => event.stopPropagation()}
+      >
+        {busy
+          ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          : <span className={`h-1.5 w-1.5 rounded-full ${status === 'finished' ? 'bg-muted-foreground' : 'bg-emerald-500'}`} />}
+        {worktreeStatusLabel(status)}
+        <ChevronDown className="h-2.5 w-2.5" />
       </DropdownMenuTrigger>
       <DropdownMenuContent onClick={event => event.stopPropagation()}>
         {(['ongoing', 'finished'] as const).map(option => (
-          <DropdownMenuItem key={option} onSelect={() => select(option)}>
-            <Check className={`h-3.5 w-3.5 ${option === status ? 'opacity-100' : 'opacity-0'}`} />
-            {worktreeStatusLabel(option)}
-          </DropdownMenuItem>
+          <DropdownMenuItem
+            key={option}
+            icon={<Check className={`h-3.5 w-3.5 ${option === status ? 'opacity-100' : 'opacity-0'}`} />}
+            label={worktreeStatusLabel(option)}
+            onClick={() => select(option)}
+          />
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
