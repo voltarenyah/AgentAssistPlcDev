@@ -153,7 +153,9 @@ describe('SettingsPage', () => {
     await clickCategory(host, 'appearance')
 
     const darkMode = host.querySelector<HTMLElement>('[role="switch"][aria-label="Dark mode"]')!
-    expect(darkMode.getAttribute('data-state')).toBe('checked')
+    // Base UI (notion-kit) exposes the ARIA state rather than Radix's data-state,
+    // so assert the accessible contract instead of either library's data attribute.
+    expect(darkMode.getAttribute('aria-checked')).toBe('true')
     await act(async () => { darkMode.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
 
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('light')

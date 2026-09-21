@@ -3,7 +3,8 @@ import { ArrowLeft, Bot, Gauge, Info, Palette, RefreshCw, Search, Sparkles } fro
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import { Slider } from '@/components/ui/slider'
-import { Switch } from '@/components/ui/switch'
+// notion-kit ships no Slider, so Slider stays on Studio's primitive; Switch moves.
+import { Switch } from '@notion-kit/ui/primitives'
 import { getThemePreference, setThemePreference, subscribeTheme, type ThemeMode } from '@/studio/theme'
 import {
   EFFORT_OPTIONS,
