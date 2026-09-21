@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { Input } from '@notion-kit/ui/primitives'
+import { Button, Input } from '@notion-kit/ui/primitives'
 import {
   AlertCircle,
   Boxes,
@@ -2029,24 +2029,26 @@ export default function MainStudio() {
         onMouseDown={handleHeaderMouseDown}
         onDoubleClick={handleHeaderDoubleClick}
       >
-        <button
+        <Button
+          variant="nav-icon"
           data-dock-toggle="left"
-          className="icon-button mr-1"
+          className="mr-1"
           aria-label={shellLayout.leftOpen ? 'Hide workbench project tree' : 'Show workbench project tree'}
           title={shellLayout.leftOpen ? 'Hide workbench project tree' : 'Show workbench project tree'}
           onClick={() => toggleDock('left')}
         >
           {shellLayout.leftOpen ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelLeftOpen className="h-3.5 w-3.5" />}
-        </button>
-        <button
-          className={`icon-button ${activePage === 'settings' ? 'bg-accent text-foreground' : ''}`}
+        </Button>
+        <Button
+          variant="nav-icon"
+          className={`${activePage === 'settings' ? 'bg-accent! text-foreground!' : ''}`}
           aria-label="Settings"
           title="Settings"
           aria-pressed={activePage === 'settings'}
           onClick={() => setActivePage(previous => previous === 'settings' ? 'studio' : 'settings')}
         >
           <Settings className="h-3.5 w-3.5" />
-        </button>
+        </Button>
         <div className="flex-1" />
           <div className="flex items-center gap-2">
           {activeOperation && (
@@ -2061,35 +2063,37 @@ export default function MainStudio() {
               />
             </div>
           )}
-          <button
-            className={`icon-button ${activePage === 'tools' ? 'bg-accent text-foreground' : ''}`}
+          <Button
+            variant="nav-icon"
+            className={`${activePage === 'tools' ? 'bg-accent! text-foreground!' : ''}`}
             aria-label="Open MCP tools helper"
             title="Open MCP tools helper"
             aria-pressed={activePage === 'tools'}
             onClick={() => setActivePage(previous => previous === 'tools' ? 'studio' : 'tools')}
           >
             <CircleHelp className="h-3.5 w-3.5" />
-          </button>
+          </Button>
           {selection.workbenchId && (
-            <button
-              className={`icon-button ${appAssistantOpen ? 'bg-accent text-foreground' : ''}`}
+            <Button
+              variant="nav-icon"
+              className={`${appAssistantOpen ? 'bg-accent! text-foreground!' : ''}`}
               aria-label="Open Workbench Assistant"
               title="Open Workbench Assistant"
               aria-pressed={appAssistantOpen}
               onClick={() => setAppAssistantOpen(previous => !previous)}
             >
               <Sparkles className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            variant="nav-icon"
             data-dock-toggle="right"
-            className="icon-button"
             aria-label={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
             title={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
             onClick={() => toggleDock('right')}
           >
             {shellLayout.rightOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
-          </button>
+          </Button>
           <ThemeToggle />
           <WindowControls />
         </div>
