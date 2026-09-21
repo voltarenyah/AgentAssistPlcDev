@@ -112,19 +112,31 @@ component suite or a production build is not evidence of visual proportion.
 | Dedicated | `studio/src/studio/workbench/WorkbenchNavigator.tsx` | 0 | 6 + 4 | 651 lines holding 43 menu items (26 `ContextMenuItem`, 17 `DropdownMenuItem`), 7 labels, 14 buttons, 6 dialogs. Migrate **by hand**, as one surface: it is the always-visible project tree, so a partially migrated state shows two menu styles at once in the most prominent place. |
 | Last | `studio/src/studio/MainStudio.tsx` | 9 | many | 2702-line component and the carrier of issue #109; migrate only after that issue is resolved |
 
-### WorkbenchNavigator: do not script the JSX rewrite
+### WorkbenchNavigator: what worked and what to watch
 
-Recorded after two failed attempts. The item and label shapes are regular and a
-brace-aware transformer converts all 43 items and 7 labels correctly, but the
-**trigger blocks are not safely scriptable**: seven `asChild` triggers wrap the
-whole row, and two of them wrap a `div` whose body contains nested `div`s, so
-balanced-tag matching mis-terminates and produces unbalanced JSX. The type checker
-rejected both attempts and the file was reverted each time.
+Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
+`DropdownMenu*` — onto notion-kit, covering 43 menu items, 7 labels and 7 triggers.
+The buttons, dialogs and inputs in the same file stay on Studio primitives for a
+follow-up stage.
 
-Hand-edit the triggers individually. Also note that notion-kit's `ContextMenuItem`
-and `DropdownMenuItem` share one structured API (`icon`, `label`, `desc`,
-`variant`, `onClick`), that `variant="destructive"` maps to `error`, and that the
-label components are Base UI group labels requiring a `title` prop.
+Recorded findings, each of which the type checker or the browser caught:
+
+- The item and label shapes are regular enough to transform mechanically, **but a scripted
+  trigger rewrite is not viable**: the triggers wrap whole rows, and the row bodies contain nested
+  `div`s, so balanced-tag matching mis-terminates. Two scripted attempts were rejected by the type
+  checker and reverted. `ContextMenuTrigger` renders a `div` by default, so for those four triggers
+  `asChild` can simply be **deleted** — no restructuring at all. Only the three
+  `DropdownMenuTrigger`s that wrap a `Button` need `render={<Button …/>}`, and they are small enough
+  to hand-edit.
+- `DropdownMenuLabel` and `ContextMenuLabel` are **Base UI group labels**: they require a
+  `Menu.Group` ancestor and throw `MenuGroupContext is missing` otherwise, which tears down the tree
+  through the error boundary. The tests do not open these menus, so only the browser caught it.
+  Use the standalone **`MenuLabel`** for a menu heading instead — same `title` prop, no group needed.
+- notion-kit sizes menu content to that heading, so item labels truncate. Content needs an explicit
+  width (`w-max min-w-56` here) as it did on `ProjectLandingPage`.
+- `DropdownMenuSubContent` does not exist in notion-kit; submenus use `DropdownMenuContent`.
+- `ContextMenuItem` and `DropdownMenuItem` share one structured API (`icon`, `label`, `desc`,
+  `variant`, `onClick`), and `variant="destructive"` maps to `error`.
 
 ## Open User Decisions
 
@@ -147,3 +159,4 @@ visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authorit
 |---|---|---|
 | 2026-09-21 | 1.0 | Initial specification for the notion-kit foundation slice and migration order. |
 | 2026-09-21 | 1.1 | Add the WorkbenchNavigator dedicated stage and record that its trigger blocks must be hand-edited rather than scripted. |
+| 2026-09-21 | 1.2 | WorkbenchNavigator menu layer migrated; record the group-label trap, the standalone MenuLabel, the content-width trap and the submenu content difference. |

@@ -27,24 +27,22 @@ import type { DeviceSummary, EngineeringTask, Workbench, WorkbenchRegistration, 
 import {
   ContextMenu,
   ContextMenuContent,
+  MenuLabel,
   ContextMenuItem,
-  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from '@/components/ui/context-menu'
+} from '@notion-kit/ui/primitives'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
-  DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@notion-kit/ui/primitives'
 import { Input } from '@/components/ui/input'
 
 export type WorkbenchSelection = {
@@ -248,7 +246,7 @@ export default function WorkbenchNavigator({
           return (
             <section key={workbench.workbenchId} className="mb-1">
               <ContextMenu>
-                <ContextMenuTrigger asChild>
+                <ContextMenuTrigger>
                   <div
                     className={`group flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${workbenchSelected ? 'bg-accent/50' : 'hover:bg-accent/40'}`}
                     onClick={() => {
@@ -267,77 +265,36 @@ export default function WorkbenchNavigator({
                     <Factory className="h-4 w-4 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate text-xs font-medium">{workbench.name}</span>
                     <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
+                      <DropdownMenuTrigger render={<Button
                           variant="ghost"
                           size="icon-xs"
                           aria-label={`Project actions ${workbench.name}`}
                           onClick={event => event.stopPropagation()}
                         >
                           <Ellipsis className="h-3.5 w-3.5" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>{workbench.name}</DropdownMenuLabel>
-                        <DropdownMenuItem onSelect={() => onCreateWorktree(workbench)}>
-                          <Plus className="h-3.5 w-3.5" />
-                          New linked worktree
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => onOpenWorkbench(workbench, false)}>
-                          <Monitor className="h-3.5 w-3.5" />
-                          Open TIA with UI
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => onOpenWorkbench(workbench, true)}>
-                          <RotateCw className="h-3.5 w-3.5" />
-                          Open TIA with upgrade
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => onInspectWorkbench(workbench)}>
-                          <ShieldCheck className="h-3.5 w-3.5" />
-                          Inspect TIA access
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={onRefresh}>
-                          <RefreshCw className="h-3.5 w-3.5" />
-                          Refresh project tree
-                        </DropdownMenuItem>
+                        </Button>} />
+                      <DropdownMenuContent align="end" className="w-max min-w-56">
+                        <MenuLabel title={workbench.name} />
+                        <DropdownMenuItem icon={<Plus className="h-3.5 w-3.5" />} label="New linked worktree" onClick={() => onCreateWorktree(workbench)} />
+                        <DropdownMenuItem icon={<Monitor className="h-3.5 w-3.5" />} label="Open TIA with UI" onClick={() => onOpenWorkbench(workbench, false)} />
+                        <DropdownMenuItem icon={<RotateCw className="h-3.5 w-3.5" />} label="Open TIA with upgrade" onClick={() => onOpenWorkbench(workbench, true)} />
+                        <DropdownMenuItem icon={<ShieldCheck className="h-3.5 w-3.5" />} label="Inspect TIA access" onClick={() => onInspectWorkbench(workbench)} />
+                        <DropdownMenuItem icon={<RefreshCw className="h-3.5 w-3.5" />} label="Refresh project tree" onClick={onRefresh} />
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem variant="destructive" onSelect={() => onDeleteWorkbench(workbench)}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Delete this project
-                        </DropdownMenuItem>
+                        <DropdownMenuItem variant="error" icon={<Trash2 className="h-3.5 w-3.5" />} label="Delete this project" onClick={() => onDeleteWorkbench(workbench)} />
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
                 </ContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuLabel>{workbench.name}</ContextMenuLabel>
-                  <ContextMenuItem onSelect={() => onCreateWorktree(workbench)}>
-                    <Plus className="h-3.5 w-3.5" />
-                    New linked worktree
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={() => onOpenWorkbench(workbench, false)}>
-                    <Monitor className="h-3.5 w-3.5" />
-                    Open TIA with UI
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={() => onOpenWorkbench(workbench, true)}>
-                    <RotateCw className="h-3.5 w-3.5" />
-                    Open TIA with upgrade
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={() => onInspectWorkbench(workbench)}>
-                    <ShieldCheck className="h-3.5 w-3.5" />
-                    Inspect TIA access
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={onRefresh}>
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    Refresh project tree
-                  </ContextMenuItem>
+                <ContextMenuContent className="w-max min-w-56">
+                  <MenuLabel title={workbench.name} />
+                  <ContextMenuItem icon={<Plus className="h-3.5 w-3.5" />} label="New linked worktree" onClick={() => onCreateWorktree(workbench)} />
+                  <ContextMenuItem icon={<Monitor className="h-3.5 w-3.5" />} label="Open TIA with UI" onClick={() => onOpenWorkbench(workbench, false)} />
+                  <ContextMenuItem icon={<RotateCw className="h-3.5 w-3.5" />} label="Open TIA with upgrade" onClick={() => onOpenWorkbench(workbench, true)} />
+                  <ContextMenuItem icon={<ShieldCheck className="h-3.5 w-3.5" />} label="Inspect TIA access" onClick={() => onInspectWorkbench(workbench)} />
+                  <ContextMenuItem icon={<RefreshCw className="h-3.5 w-3.5" />} label="Refresh project tree" onClick={onRefresh} />
                   <ContextMenuSeparator />
-                  <ContextMenuItem
-                    variant="destructive"
-                    onSelect={() => onDeleteWorkbench(workbench)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete this project
-                  </ContextMenuItem>
+                  <ContextMenuItem variant="error" icon={<Trash2 className="h-3.5 w-3.5" />} label="Delete this project" onClick={() => onDeleteWorkbench(workbench)} />
                 </ContextMenuContent>
               </ContextMenu>
 
@@ -352,7 +309,7 @@ export default function WorkbenchNavigator({
                     return (
                       <div key={worktree.worktreeId}>
                         <ContextMenu>
-                          <ContextMenuTrigger asChild>
+                          <ContextMenuTrigger>
                               <div
                                 className={`group flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${
                                 worktreeSelected && viewKind === 'worktree'
@@ -387,97 +344,40 @@ export default function WorkbenchNavigator({
                                 </span>
                               )}
                               <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
+                                <DropdownMenuTrigger render={<Button
                                     variant="ghost"
                                     size="icon-xs"
                                     aria-label={`Worktree actions ${worktree.name}`}
                                     onClick={event => event.stopPropagation()}
                                   >
                                     <Ellipsis className="h-3.5 w-3.5" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuLabel>{worktree.name}</DropdownMenuLabel>
-                                  <DropdownMenuItem onSelect={() => onSelectWorktree(workbench, worktree)}>
-                                    <GitBranch className="h-3.5 w-3.5" />
-                                    Select worktree
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onSelect={() => onCreateWorktree(workbench)}>
-                                    <Plus className="h-3.5 w-3.5" />
-                                    New linked worktree
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onSelect={() => onOpenWorktree(workbench, worktree, false)}>
-                                    <Monitor className="h-3.5 w-3.5" />
-                                    Open TIA with UI
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onSelect={() => onOpenWorktree(workbench, worktree, true)}>
-                                    <RotateCw className="h-3.5 w-3.5" />
-                                    Open TIA with upgrade
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onSelect={() => onInspectWorktree(workbench, worktree)}>
-                                    <ShieldCheck className="h-3.5 w-3.5" />
-                                    Inspect TIA access
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onSelect={() => onArchiveWorktree(workbench, worktree)}>
-                                    <Archive className="h-3.5 w-3.5" />
-                                    Archive TIA project
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem disabled={worktree.branch === 'master'} onSelect={() => onMergeWorktree(workbench, worktree)}>
-                                    <GitMerge className="h-3.5 w-3.5" />
-                                    Validate and merge to master
-                                  </DropdownMenuItem>
+                                  </Button>} />
+                                <DropdownMenuContent align="end" className="w-max min-w-56">
+                                  <MenuLabel title={worktree.name} />
+                                  <DropdownMenuItem icon={<GitBranch className="h-3.5 w-3.5" />} label="Select worktree" onClick={() => onSelectWorktree(workbench, worktree)} />
+                                  <DropdownMenuItem icon={<Plus className="h-3.5 w-3.5" />} label="New linked worktree" onClick={() => onCreateWorktree(workbench)} />
+                                  <DropdownMenuItem icon={<Monitor className="h-3.5 w-3.5" />} label="Open TIA with UI" onClick={() => onOpenWorktree(workbench, worktree, false)} />
+                                  <DropdownMenuItem icon={<RotateCw className="h-3.5 w-3.5" />} label="Open TIA with upgrade" onClick={() => onOpenWorktree(workbench, worktree, true)} />
+                                  <DropdownMenuItem icon={<ShieldCheck className="h-3.5 w-3.5" />} label="Inspect TIA access" onClick={() => onInspectWorktree(workbench, worktree)} />
+                                  <DropdownMenuItem icon={<Archive className="h-3.5 w-3.5" />} label="Archive TIA project" onClick={() => onArchiveWorktree(workbench, worktree)} />
+                                  <DropdownMenuItem disabled={worktree.branch === 'master'} icon={<GitMerge className="h-3.5 w-3.5" />} label="Validate and merge to master" onClick={() => onMergeWorktree(workbench, worktree)} />
                                   <DropdownMenuSeparator />
-                                  <DropdownMenuItem disabled={worktree.branch === 'master'} variant="destructive" onSelect={() => onDeleteWorktree(workbench, worktree)}>
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                    Remove worktree
-                                  </DropdownMenuItem>
+                                  <DropdownMenuItem disabled={worktree.branch === 'master'} variant="error" icon={<Trash2 className="h-3.5 w-3.5" />} label="Remove worktree" onClick={() => onDeleteWorktree(workbench, worktree)} />
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             </div>
                           </ContextMenuTrigger>
-                          <ContextMenuContent>
-                            <ContextMenuLabel>{worktree.name}</ContextMenuLabel>
-                            <ContextMenuItem onSelect={() => onSelectWorktree(workbench, worktree)}>
-                              <GitBranch className="h-3.5 w-3.5" />
-                              Select worktree
-                            </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => onCreateWorktree(workbench)}>
-                              <Plus className="h-3.5 w-3.5" />
-                              New linked worktree
-                            </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => onOpenWorktree(workbench, worktree, false)}>
-                              <Monitor className="h-3.5 w-3.5" />
-                              Open TIA with UI
-                            </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => onOpenWorktree(workbench, worktree, true)}>
-                              <RotateCw className="h-3.5 w-3.5" />
-                              Open TIA with upgrade
-                            </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => onInspectWorktree(workbench, worktree)}>
-                              <ShieldCheck className="h-3.5 w-3.5" />
-                              Inspect TIA access
-                            </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => onArchiveWorktree(workbench, worktree)}>
-                              <Archive className="h-3.5 w-3.5" />
-                              Archive TIA project
-                            </ContextMenuItem>
-                            <ContextMenuItem
-                              disabled={worktree.branch === 'master'}
-                              onSelect={() => onMergeWorktree(workbench, worktree)}
-                            >
-                              <GitMerge className="h-3.5 w-3.5" />
-                              Validate and merge to master
-                            </ContextMenuItem>
+                          <ContextMenuContent className="w-max min-w-56">
+                            <MenuLabel title={worktree.name} />
+                            <ContextMenuItem icon={<GitBranch className="h-3.5 w-3.5" />} label="Select worktree" onClick={() => onSelectWorktree(workbench, worktree)} />
+                            <ContextMenuItem icon={<Plus className="h-3.5 w-3.5" />} label="New linked worktree" onClick={() => onCreateWorktree(workbench)} />
+                            <ContextMenuItem icon={<Monitor className="h-3.5 w-3.5" />} label="Open TIA with UI" onClick={() => onOpenWorktree(workbench, worktree, false)} />
+                            <ContextMenuItem icon={<RotateCw className="h-3.5 w-3.5" />} label="Open TIA with upgrade" onClick={() => onOpenWorktree(workbench, worktree, true)} />
+                            <ContextMenuItem icon={<ShieldCheck className="h-3.5 w-3.5" />} label="Inspect TIA access" onClick={() => onInspectWorktree(workbench, worktree)} />
+                            <ContextMenuItem icon={<Archive className="h-3.5 w-3.5" />} label="Archive TIA project" onClick={() => onArchiveWorktree(workbench, worktree)} />
+                            <ContextMenuItem disabled={worktree.branch === 'master'} icon={<GitMerge className="h-3.5 w-3.5" />} label="Validate and merge to master" onClick={() => onMergeWorktree(workbench, worktree)} />
                             <ContextMenuSeparator />
-                            <ContextMenuItem
-                              disabled={worktree.branch === 'master'}
-                              variant="destructive"
-                              onSelect={() => onDeleteWorktree(workbench, worktree)}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              Remove worktree
-                            </ContextMenuItem>
+                            <ContextMenuItem disabled={worktree.branch === 'master'} variant="error" icon={<Trash2 className="h-3.5 w-3.5" />} label="Remove worktree" onClick={() => onDeleteWorktree(workbench, worktree)} />
                           </ContextMenuContent>
                         </ContextMenu>
                         {worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (
@@ -495,30 +395,28 @@ export default function WorkbenchNavigator({
                                   <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
                                 </button>
                                 <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button variant="ghost" size="icon-xs" aria-label={`Task actions ${task.title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
+                                  <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`Task actions ${task.title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
                                       <Ellipsis className="h-3.5 w-3.5" />
-                                    </Button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="end">
-                                    <DropdownMenuLabel>{task.title}</DropdownMenuLabel>
+                                    </Button>} />
+                                  <DropdownMenuContent align="end" className="w-max min-w-56">
+                                    <MenuLabel title={task.title} />
                                     <DropdownMenuSub>
                                       <DropdownMenuSubTrigger>Change status</DropdownMenuSubTrigger>
-                                      <DropdownMenuSubContent>
-                                        {(['todo', 'inProgress', 'done'] as const).map(status => <DropdownMenuItem key={status} onSelect={() => onUpdateTask(workbench, worktree, task, { status })}>{status === 'inProgress' ? 'In progress' : status[0].toUpperCase() + status.slice(1)}</DropdownMenuItem>)}
-                                      </DropdownMenuSubContent>
+                                      <DropdownMenuContent className="w-max min-w-56">
+                                        {(['todo', 'inProgress', 'done'] as const).map(status => <DropdownMenuItem key={status} label={status === 'inProgress' ? 'In progress' : status[0].toUpperCase() + status.slice(1)} onClick={() => onUpdateTask(workbench, worktree, task, { status })} />)}
+                                      </DropdownMenuContent>
                                     </DropdownMenuSub>
                                     <DropdownMenuSub>
                                       <DropdownMenuSubTrigger>Change type and icon</DropdownMenuSubTrigger>
-                                      <DropdownMenuSubContent>
+                                      <DropdownMenuContent className="w-max min-w-56">
                                         {(['issue', 'improvement', 'feature'] as const).map(type => {
                                           const TypeIcon = taskTypeIcon[type]
-                                          return <DropdownMenuItem key={type} onSelect={() => onUpdateTask(workbench, worktree, task, { type })}><TypeIcon />{type[0].toUpperCase() + type.slice(1)}</DropdownMenuItem>
+                                          return <DropdownMenuItem key={type} icon={<TypeIcon />} label={type[0].toUpperCase() + type.slice(1)} onClick={() => onUpdateTask(workbench, worktree, task, { type })} />
                                         })}
-                                      </DropdownMenuSubContent>
+                                      </DropdownMenuContent>
                                     </DropdownMenuSub>
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuItem onSelect={() => openRenameTask(workbench, worktree, task)}><Pencil />Rename task</DropdownMenuItem>
+                                    <DropdownMenuItem icon={<Pencil />} label="Rename task" onClick={() => openRenameTask(workbench, worktree, task)} />
                                   </DropdownMenuContent>
                                 </DropdownMenu>
                               </div>
@@ -530,7 +428,7 @@ export default function WorkbenchNavigator({
                         {showLegacyDeviceTree && worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (
                           <div className="ml-4 border-l pl-2" style={{ borderColor: 'var(--border)' }}>
                             <ContextMenu>
-                              <ContextMenuTrigger asChild>
+                              <ContextMenuTrigger>
                                 <button
                                   onClick={() => onSelectHardware(workbench, worktree)}
                                   className={`flex min-h-7 w-full items-center gap-2 rounded px-2 py-1 text-left ${
@@ -543,21 +441,12 @@ export default function WorkbenchNavigator({
                                   <span className="min-w-0 flex-1 truncate text-xs">Hardware configuration</span>
                                 </button>
                               </ContextMenuTrigger>
-                              <ContextMenuContent>
-                                <ContextMenuLabel>Hardware configuration</ContextMenuLabel>
-                                <ContextMenuItem onSelect={() => onSelectHardware(workbench, worktree)}>
-                                  <CircuitBoard className="h-3.5 w-3.5" />
-                                  Select hardware configuration
-                                </ContextMenuItem>
+                              <ContextMenuContent className="w-max min-w-56">
+                                <MenuLabel title="Hardware configuration" />
+                                <ContextMenuItem icon={<CircuitBoard className="h-3.5 w-3.5" />} label="Select hardware configuration" onClick={() => onSelectHardware(workbench, worktree)} />
                                 <ContextMenuSeparator />
-                                <ContextMenuItem onSelect={() => onReloadHardware(workbench, worktree)}>
-                                  <RotateCw className="h-3.5 w-3.5" />
-                                  Reload hardware configuration
-                                </ContextMenuItem>
-                                <ContextMenuItem onSelect={() => onCompareHardware(workbench, worktree)}>
-                                  <RefreshCw className="h-3.5 w-3.5" />
-                                  Compare hardware with TIA
-                                </ContextMenuItem>
+                                <ContextMenuItem icon={<RotateCw className="h-3.5 w-3.5" />} label="Reload hardware configuration" onClick={() => onReloadHardware(workbench, worktree)} />
+                                <ContextMenuItem icon={<RefreshCw className="h-3.5 w-3.5" />} label="Compare hardware with TIA" onClick={() => onCompareHardware(workbench, worktree)} />
                               </ContextMenuContent>
                             </ContextMenu>
                             {devices.length === 0 ? (
@@ -567,7 +456,7 @@ export default function WorkbenchNavigator({
                               const state = knowledgeState[device.deviceId] ?? 'missing'
                               return (
                                 <ContextMenu key={device.deviceId}>
-                                  <ContextMenuTrigger asChild>
+                                  <ContextMenuTrigger>
                                     <button
                                       title={device.deviceId}
                                       onClick={() => onSelectDevice(workbench, worktree, device.deviceId)}
@@ -583,46 +472,19 @@ export default function WorkbenchNavigator({
                                       }`} />
                                     </button>
                                   </ContextMenuTrigger>
-                                  <ContextMenuContent>
-                                    <ContextMenuLabel>{device.plcName}</ContextMenuLabel>
-                                    <ContextMenuItem onSelect={() => onSelectDevice(workbench, worktree, device.deviceId)}>
-                                      <Cpu className="h-3.5 w-3.5" />
-                                      Select device
-                                    </ContextMenuItem>
+                                  <ContextMenuContent className="w-max min-w-56">
+                                    <MenuLabel title={device.plcName} />
+                                    <ContextMenuItem icon={<Cpu className="h-3.5 w-3.5" />} label="Select device" onClick={() => onSelectDevice(workbench, worktree, device.deviceId)} />
                                     <ContextMenuSeparator />
-                                    <ContextMenuItem onSelect={() => onOpenDevice(workbench, worktree, device.deviceId, true)}>
-                                      <Monitor className="h-3.5 w-3.5" />
-                                      Open TIA with UI
-                                    </ContextMenuItem>
-                                    <ContextMenuItem onSelect={() => onOpenDevice(workbench, worktree, device.deviceId, false)}>
-                                      <MonitorOff className="h-3.5 w-3.5" />
-                                      Open TIA headless
-                                    </ContextMenuItem>
-                                    <ContextMenuItem onSelect={() => onUpgradeDevice(workbench, worktree, device.deviceId)}>
-                                      <RotateCw className="h-3.5 w-3.5" />
-                                      Open TIA with upgrade
-                                    </ContextMenuItem>
-                                    <ContextMenuItem onSelect={() => onInspectDevice(workbench, worktree, device.deviceId)}>
-                                      <ShieldCheck className="h-3.5 w-3.5" />
-                                      Inspect TIA access
-                                    </ContextMenuItem>
-                                    <ContextMenuItem onSelect={() => onCompareDevice(workbench, worktree, device.deviceId)}>
-                                      <RefreshCw className="h-3.5 w-3.5" />
-                                      Compare with TIA
-                                    </ContextMenuItem>
-                                    <ContextMenuItem onSelect={() => onRebuildDevice(workbench, worktree, device.deviceId)}>
-                                      <RotateCw className="h-3.5 w-3.5" />
-                                      Rebuild project
-                                    </ContextMenuItem>
+                                    <ContextMenuItem icon={<Monitor className="h-3.5 w-3.5" />} label="Open TIA with UI" onClick={() => onOpenDevice(workbench, worktree, device.deviceId, true)} />
+                                    <ContextMenuItem icon={<MonitorOff className="h-3.5 w-3.5" />} label="Open TIA headless" onClick={() => onOpenDevice(workbench, worktree, device.deviceId, false)} />
+                                    <ContextMenuItem icon={<RotateCw className="h-3.5 w-3.5" />} label="Open TIA with upgrade" onClick={() => onUpgradeDevice(workbench, worktree, device.deviceId)} />
+                                    <ContextMenuItem icon={<ShieldCheck className="h-3.5 w-3.5" />} label="Inspect TIA access" onClick={() => onInspectDevice(workbench, worktree, device.deviceId)} />
+                                    <ContextMenuItem icon={<RefreshCw className="h-3.5 w-3.5" />} label="Compare with TIA" onClick={() => onCompareDevice(workbench, worktree, device.deviceId)} />
+                                    <ContextMenuItem icon={<RotateCw className="h-3.5 w-3.5" />} label="Rebuild project" onClick={() => onRebuildDevice(workbench, worktree, device.deviceId)} />
                                     <ContextMenuSeparator />
-                                    <ContextMenuItem onSelect={() => onUpdateKnowledge(workbench, worktree, device.deviceId)}>
-                                      <Database className="h-3.5 w-3.5" />
-                                      Update knowledge
-                                    </ContextMenuItem>
-                                    <ContextMenuItem onSelect={() => onRebuildKnowledge(workbench, worktree, device.deviceId)}>
-                                      <Database className="h-3.5 w-3.5" />
-                                      Rebuild knowledge
-                                    </ContextMenuItem>
+                                    <ContextMenuItem icon={<Database className="h-3.5 w-3.5" />} label="Update knowledge" onClick={() => onUpdateKnowledge(workbench, worktree, device.deviceId)} />
+                                    <ContextMenuItem icon={<Database className="h-3.5 w-3.5" />} label="Rebuild knowledge" onClick={() => onRebuildKnowledge(workbench, worktree, device.deviceId)} />
                                   </ContextMenuContent>
                                 </ContextMenu>
                               )
