@@ -187,7 +187,9 @@ describe('AppAssistantPanel', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')?.click())
 
     expect(host.textContent).toContain('Approve worktree creation?')
-    expect(host.querySelector<HTMLButtonElement>('.primary-button')?.textContent).toContain('Approve')
+    // Find the approval control by its own label rather than a library styling class.
+    const approve = Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Approve')
+    expect(approve).toBeTruthy()
   })
 
   it('shows visible progress while an approved worktree is being created', async () => {
