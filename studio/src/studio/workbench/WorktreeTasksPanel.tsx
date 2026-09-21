@@ -16,6 +16,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  Input,
+  Textarea,
 } from '@notion-kit/ui/primitives'
 
 type Props = {
@@ -345,18 +347,17 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
             <div className="space-y-3">
               <label className="field-label">
                 <span>Title</span>
-                <input
+                <Input
                   aria-label="Task title"
-                  className="field-input"
                   value={draft.title}
                   onChange={event => setDraft({ ...draft, title: event.target.value })}
                 />
               </label>
               <label className="field-label">
                 <span>Details / modification plan (markdown)</span>
-                <textarea
+                <Textarea
                   aria-label="Task details"
-                  className="field-input min-h-[120px] resize-y py-1.5 font-mono text-[10px]"
+                  className="min-h-[120px] resize-y py-1.5 font-mono text-[10px]"
                   value={draft.details}
                   onChange={event => setDraft({ ...draft, details: event.target.value })}
                 />
@@ -377,9 +378,9 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                       </button>
                     </span>
                   ))}
-                  <input
+                  <Input
                     aria-label="Add element reference"
-                    className="field-input h-6 w-44 text-[9px]"
+                    className="h-6 w-44 text-[9px]"
                     placeholder="Device01/FB_Motor_Control"
                     value={newRef}
                     onChange={event => setNewRef(event.target.value)}
@@ -409,7 +410,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
             <DialogDescription>Create a focused task for this worktree.</DialogDescription>
           </DialogHeader>
           <form className="space-y-3" onSubmit={event => { event.preventDefault(); addTask() }}>
-            <label className="field-label"><span>Title</span><input autoFocus aria-label="New task title" className="field-input" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
+            <label className="field-label"><span>Title</span><Input autoFocus aria-label="New task title" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
             <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
             <label className="field-label"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{availableDevices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></label>
             <DialogFooter className="flex-row justify-end gap-2"><Button variant="primary" size="sm" type="button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</Button><Button variant="blue" size="sm" type="submit" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</Button></DialogFooter>

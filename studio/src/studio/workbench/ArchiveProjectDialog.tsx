@@ -9,6 +9,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Input,
 } from '@notion-kit/ui/primitives'
 
 type ArchiveValues = {
@@ -118,8 +119,8 @@ export default function ArchiveProjectDialog({
           <label className="field-label">
             <span>Export directory</span>
             <div className="flex gap-1.5">
-              <input
-                className="field-input min-w-0 flex-1 font-mono"
+              <Input
+                className="min-w-0 flex-1 font-mono"
                 aria-label="Export directory"
                 value={targetDirectory}
                 onChange={event => setTargetDirectory(event.target.value)}
@@ -156,8 +157,8 @@ export default function ArchiveProjectDialog({
 
           <label className="field-label">
             <span>Archive file name</span>
-            <input
-              className="field-input font-mono"
+            <Input
+              className="font-mono"
               aria-label="Archive file name"
               value={archiveName}
               onChange={event => setArchiveName(event.target.value)}
