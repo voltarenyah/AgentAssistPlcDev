@@ -18,6 +18,9 @@ vi.mock('@/api/client', async importOriginal => {
   return {
     ...actual,
     listWorkbenches: vi.fn(async () => []),
+    // Startup awaits the landing payload before it reads key status, so an
+    // unmocked endpoint here leaves the status bar on its default label.
+    getWorkbenchLanding: vi.fn(async () => ({ projects: [] })),
     getSessions: vi.fn(async () => []),
     getKeyStatus: vi.fn(async () => ({ configured: keyState.configured })),
     getDeepSeekBalance: balanceRequest,
