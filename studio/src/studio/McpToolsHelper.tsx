@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Input } from '@notion-kit/ui/primitives'
+import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@notion-kit/ui/primitives'
 import {
   AlertTriangle,
   BookOpen,
@@ -240,7 +240,7 @@ export default function McpToolsHelper({ onClose }: { onClose: () => void }) {
 
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-9!" value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search tool names and descriptions…" />{filter && <Button variant="nav-icon" className="absolute right-1 top-1/2 -translate-y-1/2" onClick={() => setFilter('')} aria-label="Clear search"><X className="h-3 w-3" /></Button>}</div>
-          <div className="flex items-center gap-2"><select className="field-input h-9 min-w-[160px]" value={serverFilter} onChange={event => setServerFilter(event.target.value)}><option value="all">All servers</option>{servers.map(server => <option key={server} value={server}>{serverMeta[server]?.label ?? server}</option>)}</select><Button variant="primary" size="sm" onClick={() => void loadTools()} disabled={loading}><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</Button></div>
+          <div className="flex items-center gap-2"><Select items={[{ value: 'all', label: 'All servers' }, ...servers.map(server => ({ value: server, label: serverMeta[server]?.label ?? server }))]} value={serverFilter} onValueChange={value => setServerFilter(value ?? 'all')}><SelectTrigger aria-label="Filter by server" className="h-9! min-w-[160px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All servers</SelectItem>{servers.map(server => <SelectItem key={server} value={server}>{serverMeta[server]?.label ?? server}</SelectItem>)}</SelectContent></Select><Button variant="primary" size="sm" onClick={() => void loadTools()} disabled={loading}><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</Button></div>
         </div>
 
         {error ? <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/8 p-4 text-[10px] text-red-700 dark:text-red-300"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><div><div className="font-medium">Tool catalog unavailable</div><div className="mt-1 opacity-80">{error}</div></div></div> : loading ? <EmptyState label="Discovering MCP tools from the connected servers…" /> : tools.length === 0 ? <EmptyState label="No MCP tools are currently exposed. Start the API host and refresh." /> : filteredTools.length === 0 ? <EmptyState label="No tools match this filter." /> : (
