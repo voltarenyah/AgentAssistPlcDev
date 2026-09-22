@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button } from '@notion-kit/ui/primitives'
+import { Button, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, MenuLabel } from '@notion-kit/ui/primitives'
 import {
   AlertCircle,
   Boxes,
@@ -19,14 +19,6 @@ import {
 import { toast } from 'sonner'
 import * as api from '@/api/client'
 import type { SourceObjectComparison, SourceObjectInfo } from '@/api/client'
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from '@/components/ui/context-menu'
 import { showErrorToast } from '@/components/ui/toast'
 import type { DeviceViewState } from './deviceSnapshot'
 import {
@@ -248,52 +240,35 @@ export default function PlcSourcePanel({
               return (
                 <div key={item.id} data-testid="plc-source-row">
                   <ContextMenu>
-                    <ContextMenuTrigger asChild>
-                      <div
-                        className="flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
-                        onClick={() => { setExpandedId(expanded ? null : item.id); if (!expanded) void loadTraceability(item) }}
-                      >
-                        {expanded
-                          ? <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                          : <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />}
-                        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate text-[10px]">{item.name}</span>
-                        {busyAction && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
-                        <span className="font-mono text-[9px] text-muted-foreground">
-                          {item.category}{item.number ?? ''}
-                        </span>
-                        {item.programmingLanguage && (
-                          <span className="text-[9px] text-muted-foreground">{item.programmingLanguage}</span>
-                        )}
-                        {item.groupPath && (
-                          <span className="max-w-[160px] truncate text-[9px] text-muted-foreground">{item.groupPath}</span>
-                        )}
-                      </div>
+                    <ContextMenuTrigger render={<div
+                      className="flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
+                      onClick={() => { setExpandedId(expanded ? null : item.id); if (!expanded) void loadTraceability(item) }}
+                    />}>
+                      {expanded
+                        ? <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        : <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />}
+                      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate text-[10px]">{item.name}</span>
+                      {busyAction && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
+                      <span className="font-mono text-[9px] text-muted-foreground">
+                        {item.category}{item.number ?? ''}
+                      </span>
+                      {item.programmingLanguage && (
+                        <span className="text-[9px] text-muted-foreground">{item.programmingLanguage}</span>
+                      )}
+                      {item.groupPath && (
+                        <span className="max-w-[160px] truncate text-[9px] text-muted-foreground">{item.groupPath}</span>
+                      )}
                     </ContextMenuTrigger>
-                    <ContextMenuContent>
-                      <ContextMenuLabel>{item.category} · {item.name}</ContextMenuLabel>
-                      <ContextMenuItem onSelect={() => onInspectObject(item.relativePath)}>
-                        <Code2 className="h-3.5 w-3.5" />
-                        Inspect object
-                      </ContextMenuItem>
-                      {item.category === 'Tags' && <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void showUsageNetworks(item)}>
-                        <Network className="h-3.5 w-3.5" />
-                        Show read/write networks
-                      </ContextMenuItem>}
+                    <ContextMenuContent className="w-max min-w-56">
+                      <MenuLabel title={`${item.category} · ${item.name}`} />
+                      <ContextMenuItem icon={<Code2 className="h-3.5 w-3.5" />} label="Inspect object" onClick={() => onInspectObject(item.relativePath)} />
+                      {item.category === 'Tags' && <ContextMenuItem disabled={Boolean(pendingAction)} icon={<Network className="h-3.5 w-3.5" />} label="Show read/write networks" onClick={() => void showUsageNetworks(item)} />}
                       <ContextMenuSeparator />
-                      <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void openInTia(item)}>
-                        <SquareArrowOutUpRight className="h-3.5 w-3.5" />
-                        Open in TIA
-                      </ContextMenuItem>
-                      <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void compareWithTia(item)}>
-                        <GitCompareArrows className="h-3.5 w-3.5" />
-                        Compare with TIA
-                      </ContextMenuItem>
+                      <ContextMenuItem disabled={Boolean(pendingAction)} icon={<SquareArrowOutUpRight className="h-3.5 w-3.5" />} label="Open in TIA" onClick={() => void openInTia(item)} />
+                      <ContextMenuItem disabled={Boolean(pendingAction)} icon={<GitCompareArrows className="h-3.5 w-3.5" />} label="Compare with TIA" onClick={() => void compareWithTia(item)} />
                       <ContextMenuSeparator />
-                      <ContextMenuItem onSelect={() => onChatWithAgent(item)}>
-                        <MessageSquare className="h-3.5 w-3.5" />
-                        Chat with Agent
-                      </ContextMenuItem>
+                      <ContextMenuItem icon={<MessageSquare className="h-3.5 w-3.5" />} label="Chat with Agent" onClick={() => onChatWithAgent(item)} />
                     </ContextMenuContent>
                   </ContextMenu>
                   {expanded && (
