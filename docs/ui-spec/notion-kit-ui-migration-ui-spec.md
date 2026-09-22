@@ -354,6 +354,30 @@ The `RefreshDialog` row is the correction worth keeping: the field-layer work wa
 to it. Anything counted by a class name inherits that blind spot - the same lesson as the custom
 -button category that the legacy-class counts could not see.
 
+### Lint state, and the two warnings this migration's own refactors added
+
+Re-running the linter after roughly twenty-five further increments, as the same check was last run
+around the buttons and fields: **14 warnings, 0 errors**, against a baseline of 12. The two new ones
+are both `react(only-export-components)`, and both come from this migration's own refactors rather
+than from the migrated components:
+
+| File | Warning came from |
+|---|---|
+| `AllProjectsLandingPage.tsx` | exporting `orderProjects` so the ordering rule could be asserted directly when Base UI's Select could not be driven |
+| `tags/TagFilter.tsx` | exporting `filterableTags` for the same reason, ahead of the autocomplete swap |
+
+Both are advisory fast-refresh warnings, of the same class the repository already carries in
+`OperationTimingList` and `TiaSessionsPanel`, where exported helpers sit beside components. So this
+is consistent with existing practice rather than a new smell - but it is a real cost of the
+extraction technique, and worth knowing before anyone reaches for it again: extracting a pure
+function into a component file is what makes the behaviour assertable, and it is also what trips
+this rule.
+
+The clean fix, if zero warnings is wanted, is to move both helpers into pure modules -
+`filterableTags` fits naturally beside `tagPaths` in the tags module - and update the three import
+sites each. Recorded rather than done, because it is churn without behaviour change and the rule is
+advisory.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
