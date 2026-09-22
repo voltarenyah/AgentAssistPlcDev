@@ -62,6 +62,16 @@ this shape, and it exports the same component names Studio already imports
 an import swap plus prop adaptation rather than a redesign. Its props are not identical — the dialog
 comes from the autocomplete family, so `value`/`onValueChange`/`onSelect` need mapping onto that API.
 
+**Correction made while implementing: it is not an import swap.** Inspecting the exported types shows
+`CommandDialogProps` extends the **Autocomplete root** and `CommandItem` extends `AutocompleteItem`.
+notion-kit's `Command` is therefore autocomplete-driven: the root owns an **items collection** and the
+filtering, whereas cmdk's version takes free-form JSX children and filters whatever it finds.
+`TagPicker`'s present shape does not map onto that directly — with an empty query it renders a browsing
+`TagTree`, and with a query it renders a filtered list plus a create-a-path item. Both must be
+re-expressed as a single items collection with a create entry, which makes this a **restructure of the
+picker rather than a port of it**. The dialog-only placement still makes `Command` the right family,
+but the effort is a design task and should be scoped as one.
+
 `TagFilter` is the inline one: a filterable list over existing tags with no creation, which
 `Autocomplete` covers. These are still interaction-shape changes, so each is its own slice with its
 own UI Spec update and tests, not a primitive swap folded into a broader commit.
