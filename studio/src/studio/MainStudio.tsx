@@ -231,7 +231,7 @@ function NewWorktreeDialog({
                 value={selectedSavepoint || undefined}
                 onValueChange={value => setSelectedSavepoint(value ?? '')}
               >
-                <SelectTrigger className="w-full font-mono">
+                <SelectTrigger aria-label="SVN savepoint" className="w-full font-mono">
                   <SelectValue placeholder="Select a savepoint" />
                 </SelectTrigger>
                 <SelectContent>
