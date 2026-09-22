@@ -471,11 +471,11 @@ const parseAssistantEvents = (body: string): AppAssistantEvent[] => body
   })
   .filter((value): value is AppAssistantEvent => value !== null)
 
-const postAppAssistant = async (path: string, message: string, approval?: Record<string, unknown>, sessionId?: string) => {
+const postAppAssistant = async (path: string, message: string, sessionId?: string) => {
   const response = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, ...(approval ? { approval } : {}), ...(sessionId ? { sessionId } : {}) }),
+    body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }),
   })
   if (!response.ok) {
     let body: { error?: string; message?: string } = {}
@@ -485,18 +485,12 @@ const postAppAssistant = async (path: string, message: string, approval?: Record
   return parseAssistantEvents(await response.text())
 }
 
+// Approvals do not travel in the request body: a destructive tool suspends the turn and is
+// resolved out of band through the shared /logs confirmation card and POST /chat/confirm/{id}.
 export const bootstrapAppAssistant = (sessionId?: string) =>
-  postAppAssistant('/app-assistant/bootstrap', '', undefined, sessionId)
-export const chatAppAssistant = (message: string, approval?: Record<string, unknown>, sessionId?: string) =>
-  postAppAssistant('/app-assistant/chat', message, approval, sessionId)
-export type AppAssistantFeedbackCategory =
-  | 'wrong_worktree'
-  | 'stale_status'
-  | 'wrong_recommendation'
-  | 'unavailable_action'
-  | 'successful_completion'
-export const submitAppAssistantFeedback = (category: AppAssistantFeedbackCategory, runId?: string) =>
-  workbenchRequest<void>('/app-assistant/feedback', jsonRequest('POST', { category, runId }))
+  postAppAssistant('/app-assistant/bootstrap', '', sessionId)
+export const chatAppAssistant = (message: string, sessionId?: string) =>
+  postAppAssistant('/app-assistant/chat', message, sessionId)
 export const getAppAssistantRuntimeState = (workbenchId: string) =>
   workbenchRequest<AppAssistantRuntimeSnapshot>(`/workbenches/${encodeURIComponent(workbenchId)}/runtime-state`)
 export const subscribeAppAssistantRuntime = (workbenchId: string, onSnapshot: (snapshot: AppAssistantRuntimeSnapshot) => void) => {
@@ -2041,6 +2035,8 @@ export type PendingConfirmation = {
   id: string
   toolName: string
   arguments: string
+  /** Session that raised the confirmation, so a surface only claims its own. */
+  requester?: string
 }
 
 /** Raw server log lines; chat destructive-tool confirmations appear here as JSON entries. */

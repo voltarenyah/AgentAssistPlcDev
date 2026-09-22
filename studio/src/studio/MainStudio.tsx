@@ -569,6 +569,7 @@ export default function MainStudio() {
   const [sourceInspectorTarget, setSourceInspectorTarget] = useState<SourceInspectorTarget | null>(null)
   const [appAssistantOpen, setAppAssistantOpen] = useState(false)
   const [appAssistantRuntime, setAppAssistantRuntime] = useState<api.AppAssistantRuntimeSnapshot | null>(null)
+  const [appAssistantSessionId, setAppAssistantSessionId] = useState<string | null>(null)
   const [projectAccess, setProjectAccess] = useState<{
     project: api.ProjectInfo
     capabilities: api.ProjectCapabilities
@@ -1457,12 +1458,12 @@ export default function MainStudio() {
         if (cancelled) return
         for (const line of lines) {
           try {
-            const entry = JSON.parse(line) as { kind?: string; id?: string; toolName?: string; arguments?: string }
+            const entry = JSON.parse(line) as { kind?: string; id?: string; toolName?: string; arguments?: string; requester?: string }
             if (entry.kind === 'confirmation' && typeof entry.id === 'string'
               && !resolvedConfirmations.current.has(entry.id)) {
               setPendingConfirmation(previous => previous?.id === entry.id
                 ? previous
-                : { id: entry.id!, toolName: entry.toolName ?? '', arguments: entry.arguments ?? '' })
+                : { id: entry.id!, toolName: entry.toolName ?? '', arguments: entry.arguments ?? '', requester: entry.requester })
               return
             }
           } catch { /* non-JSON log line */ }
@@ -2515,6 +2516,11 @@ export default function MainStudio() {
             workbenchId={selection.workbenchId}
             workbenchName={activeWorkbench?.name ?? 'Selected workbench'}
             runtime={appAssistantRuntime}
+            confirmation={pendingConfirmation && appAssistantSessionId && pendingConfirmation.requester === appAssistantSessionId
+              ? pendingConfirmation
+              : null}
+            onConfirm={decision => void decideConfirmation(decision)}
+            onSessionId={setAppAssistantSessionId}
             onClose={() => setAppAssistantOpen(false)}
             onSelectWorktree={worktreeId => {
               const worktree = activeWorkbench?.worktrees.find(item => item.worktreeId === worktreeId)

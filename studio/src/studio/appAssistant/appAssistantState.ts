@@ -14,6 +14,8 @@ export type AppAssistantClarificationOption = {
 export type AppAssistantPanelState = {
   messages: AppAssistantMessage[]
   runtime: AppAssistantRuntimeSnapshot | null
+  /** Server session id of the panel's own assistant scope, used to claim its confirmations. */
+  sessionId: string | null
   lastRunId: string | null
   feedbackSubmitted: boolean
   assistantRevision: number | null
@@ -27,6 +29,7 @@ export type AppAssistantPanelState = {
 export const initialAppAssistantState = (runtime: AppAssistantRuntimeSnapshot | null): AppAssistantPanelState => ({
   messages: [],
   runtime,
+  sessionId: null,
   lastRunId: null,
   feedbackSubmitted: false,
   assistantRevision: runtime?.workbenchRevision ?? null,
@@ -155,6 +158,7 @@ export const applyAssistantEvents = (
       next = {
         ...next,
         runtime,
+        sessionId: typeof event.data.sessionId === 'string' ? event.data.sessionId : next.sessionId,
         assistantRevision: snapshot.workbenchRevision,
         lastRunId: typeof (event.data.runMetadata as { runId?: unknown } | undefined)?.runId === 'string'
           ? (event.data.runMetadata as { runId: string }).runId

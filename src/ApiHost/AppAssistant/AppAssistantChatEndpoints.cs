@@ -2,58 +2,43 @@ using System.Text.Json;
 
 namespace ApiHost.AppAssistant;
 
+/// <summary>
+/// The Workbench Assistant panel's HTTP surface. Backed in-process by
+/// <see cref="WorkbenchAssistantService"/> over the shared <c>AgentLoop</c> (ADR-0005); the Python
+/// LangGraph sidecar that used to answer these routes is gone.
+/// </summary>
+/// <remarks>
+/// The response is a buffered, SSE-framed body — the panel reads it with <c>response.text()</c>.
+/// That is why a destructive tool's approval cannot be delivered as an <c>interrupt</c> frame: the
+/// turn is suspended awaiting the approval, so the body does not end until the user has already
+/// decided. Approvals ride the same <c>/api/logs</c> confirmation card and
+/// <c>POST /api/chat/confirm/{id}</c> as the device chat, and the <c>state</c> frame carries the
+/// panel's session id so the UI can tell its own confirmations apart.
+/// </remarks>
 public static class AppAssistantChatEndpoints
 {
     public static IEndpointRouteBuilder MapAppAssistantChatEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet(
             "/api/app-assistant/health",
-            async (AppAssistantClient client, CancellationToken cancellationToken) =>
-            {
-                try
+            (CompatibilityRuntimeState runtime, IConfiguration configuration) =>
+                Results.Ok(new
                 {
-                    return Results.Ok(await client.GetHealthAsync(cancellationToken).ConfigureAwait(false));
-                }
-                catch (AppAssistantClientException exception)
-                {
-                    return Results.Json(
-                        new { error = exception.Code, message = exception.Message },
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-            });
+                    status = "ok",
+                    service = "in-process",
+                    modelConfigured = !string.IsNullOrWhiteSpace(
+                        CompatibilityEndpoints.ResolveApiKey(runtime, configuration)),
+                }));
         app.MapPost(
             "/api/app-assistant/bootstrap",
             (HttpContext http, AppAssistantChatRequest request, WorkbenchApiState state,
-                AppAssistantClient client, CancellationToken cancellationToken) =>
-                StreamAssistantAsync(http, request, state, client, "bootstrap", cancellationToken));
+                WorkbenchAssistantService assistant, CancellationToken cancellationToken) =>
+                StreamAssistantAsync(http, request, state, assistant, "bootstrap", cancellationToken));
         app.MapPost(
             "/api/app-assistant/chat",
             (HttpContext http, AppAssistantChatRequest request, WorkbenchApiState state,
-                AppAssistantClient client, CancellationToken cancellationToken) =>
-                StreamAssistantAsync(http, request, state, client, "chat", cancellationToken));
-        app.MapPost(
-            "/api/app-assistant/feedback",
-            async (AppAssistantFeedbackRequest request, WorkbenchApiState state,
-                AppAssistantClient client, CancellationToken cancellationToken) =>
-            {
-                var workbenchId = state.Selection?.WorkbenchId;
-                if (string.IsNullOrWhiteSpace(workbenchId))
-                    return Results.BadRequest(new { error = "WORKBENCH_SELECTION_REQUIRED" });
-                if (string.IsNullOrWhiteSpace(request.Category))
-                    return Results.BadRequest(new { error = "ASSISTANT_FEEDBACK_CATEGORY_REQUIRED" });
-                try
-                {
-                    await client.SendFeedbackAsync(workbenchId, request.Category, request.RunId, cancellationToken)
-                        .ConfigureAwait(false);
-                    return Results.NoContent();
-                }
-                catch (AppAssistantClientException exception)
-                {
-                    return Results.Json(
-                        new { error = exception.Code, message = exception.Message },
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-            });
+                WorkbenchAssistantService assistant, CancellationToken cancellationToken) =>
+                StreamAssistantAsync(http, request, state, assistant, "chat", cancellationToken));
         return app;
     }
 
@@ -61,7 +46,7 @@ public static class AppAssistantChatEndpoints
         HttpContext http,
         AppAssistantChatRequest request,
         WorkbenchApiState state,
-        AppAssistantClient client,
+        WorkbenchAssistantService assistant,
         string operation,
         CancellationToken cancellationToken)
     {
@@ -78,22 +63,31 @@ public static class AppAssistantChatEndpoints
             .ConfigureAwait(false);
         try
         {
-            var payload = await client.SendAsync(operation, workbenchId, request.Message, request.Approval, request.SessionId, cancellationToken)
-                .ConfigureAwait(false);
-            await WriteEventAsync(http, "state", payload).ConfigureAwait(false);
-            if (payload.ValueKind == JsonValueKind.Object
-                && payload.TryGetProperty("pendingApproval", out var pendingApproval)
-                && pendingApproval.ValueKind == JsonValueKind.Object)
-                await WriteEventAsync(http, "interrupt", pendingApproval).ConfigureAwait(false);
-            var answer = payload.ValueKind == JsonValueKind.Object
-                && payload.TryGetProperty("answer", out var answerProperty)
-                ? answerProperty.GetString()
-                : null;
-            await WriteEventAsync(http, "answer", new { answer }).ConfigureAwait(false);
+            var turn = operation == "bootstrap"
+                ? await assistant.BootstrapAsync(workbenchId, cancellationToken).ConfigureAwait(false)
+                : await assistant.ChatAsync(
+                    workbenchId,
+                    request.Message,
+                    // Progress lines are queued by the loop but the panel reads the body only once
+                    // the turn ends, so relaying them here would change nothing the user can see.
+                    _ => { },
+                    cancellationToken).ConfigureAwait(false);
+            await WriteEventAsync(http, "state", new
+            {
+                runtimeSnapshot = turn.Context,
+                contextRevision = turn.Context.Runtime.WorkbenchRevision,
+                sessionId = turn.SessionId,
+            }).ConfigureAwait(false);
+            await WriteEventAsync(http, "answer", new { answer = turn.Answer }).ConfigureAwait(false);
         }
-        catch (AppAssistantClientException exception)
+        catch (AppAssistantGatewayException exception)
         {
             await WriteEventAsync(http, "error", new { error = exception.Code, message = exception.Message })
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await WriteEventAsync(http, "error", new { error = "APP_ASSISTANT_FAILED", message = exception.Message })
                 .ConfigureAwait(false);
         }
 
@@ -110,6 +104,4 @@ public static class AppAssistantChatEndpoints
     }
 }
 
-public sealed record AppAssistantChatRequest(string Message, JsonElement? Approval = null, string? SessionId = null);
-
-public sealed record AppAssistantFeedbackRequest(string Category, string? RunId = null);
+public sealed record AppAssistantChatRequest(string Message, string? SessionId = null);

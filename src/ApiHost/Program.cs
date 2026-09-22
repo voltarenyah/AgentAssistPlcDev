@@ -149,7 +149,7 @@ else
 builder.Services.AddSingleton<WorkbenchRuntimeStateCoordinator>();
 builder.Services.AddSingleton<AppAssistantGateway>();
 builder.Services.AddSingleton<AppAssistantAccessPolicy>();
-builder.Services.AddSingleton<AppAssistantClient>();
+builder.Services.AddSingleton<WorkbenchAssistantService>();
 builder.Services.AddSingleton<WorkbenchApiState>(services =>
 {
     var state = new WorkbenchApiState(
@@ -166,8 +166,9 @@ builder.Services.AddSingleton<IWorkbenchTagEntityLookup>(services =>
 builder.Services.AddSingleton<WorkbenchTagService>();
 builder.Services.AddSingleton<CompatibilityRuntimeState>();
 builder.Services.AddSingleton(_ => new CompatibilityConfigStore());
-// LangGraph may need longer than the normal API request window while the
-// configured model is generating an answer or waiting on a tool call.
+// Shared outbound HttpClient. The long timeout predates the removal of the LangGraph
+// sidecar (ADR-0005) and now only affects the DeepSeek balance lookup, so it is left
+// generous rather than tightened inside a removal change.
 builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(600) });
 builder.Services.AddSingleton<DeepSeekBalanceClient>();
 builder.Services.AddSingleton<ApiChatService>();
