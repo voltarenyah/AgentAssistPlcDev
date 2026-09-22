@@ -165,11 +165,13 @@ Migrated and independently verified (build, full suite, browser in both themes):
 | All `field-label` wrappers to notion-kit `Label` | `ccd1c4b`, `60a6edb` |
 | Custom-styled action group in `FeatureValidationDialog` | `0f95b74` |
 | `SourceObjectInspectorPanel`: both context menus | `9ee876e` |
-| `PlcSourcePanel`: source-object context menu — **the migration's last item** | `1e1942d` |
+| `PlcSourcePanel`: source-object context menu — **the migration's last menu** | `1e1942d` |
+| `TagPicker`: "Add tag" trigger + Retry — **the last product primitive** (found by the completion sweep) | `12403ed` |
 
 The table above lists the milestones rather than every increment; the sweeps below cover the surfaces
-migrated between them. What it now records is the end: with `PlcSourcePanel`'s menu done, no Studio
-product surface is left with an unmigrated primitive. What remains by design is recorded under "The
+migrated between them. What it now records is the end: with `PlcSourcePanel`'s menu and `TagPicker`'s
+buttons done, no Studio product surface is left with an unmigrated primitive, and "The completion
+sweep" below reduces that claim to a repeatable command. What remains by design is recorded under "The
 endgame census" — the `toast`/`sonner`/`tooltip`/`slider` primitives that notion-kit does not replace,
 the tag surfaces whose tests need behaviour a browser cannot substitute, and the sidecar-gated chat
 selects.
@@ -627,6 +629,46 @@ renders with no group-context throw, no label is clipped, `onInspectObject`, `on
 `onChatWithAgent` each fire with the expected argument, all three rows survive, and the console is
 clean.
 
+### The completion sweep, and the one button it found
+
+Rather than declaring the migration finished because the planned items were done, the end state was
+established by sweeping every non-test file outside `components/ui/` for imports from
+`@/components/ui/*` and classifying each hit. The sweep is the acceptance evidence for "no product
+surface is left", and it found exactly one thing the plan had missed.
+
+**It found `TagPicker`'s two Buttons.** `TagPicker` was recorded as decided - its cmdk palette stays on
+cmdk - and the two `Button`s around the palette were swept into that decision, even though neither is
+inside the popup. The trigger is the **"Add tag"** control on the project and worktree landing pages,
+which is browser-reachable and was sitting in plain sight the whole time. It becomes notion-kit
+`Button variant="primary" size="xs"` (Studio's `outline` maps to notion-kit's `primary`), with Retry as
+`variant="link" size="xs"`. The lesson is narrow and worth keeping: **a decision about a surface is not
+a decision about every element in its file.** When a file is marked "stays", name the parts that stay.
+
+**Everything else the sweep found is by design**, and the list is now short enough to state exactly:
+
+| Remaining import | Where | Why it stays |
+|---|---|---|
+| `toast` | 11 product files | no notion-kit counterpart; ADR-0004 leaves toasts to Studio |
+| `sonner`, `tooltip` | `App.tsx` | the theme and toast wrappers are Studio-owned by the same decision |
+| `slider` | `SettingsPage.tsx` | notion-kit ships no `Slider` |
+| `command` | `TagFilter.tsx`, `TagPicker.tsx` | the recorded behaviour-blocked decision: their tests need selection paths a browser cannot substitute |
+
+The catalog pages are excluded from the sweep on purpose: they exist to preview Studio's own
+primitives, so importing them is the catalog's job rather than leftover migration work.
+
+So the migration's answer to "is it finished" is now a command, not an opinion - re-run the sweep and
+confirm the table still accounts for every hit.
+
+### Verification: what the sweep's button was checked against
+
+`TagPicker` kept all three of its tests, and that is the useful part: two of them click through
+`getByRole('button', 'Add tag')`, so they prove the notion-kit `Button` still renders a real `<button>`
+carrying its `aria-label`, which is exactly the contract the migration could have broken. The browser
+check - on the real worktree landing page, both themes - added what the tests cannot see: the notion-kit
+class list replacing Studio's, a 24px height matching `size="xs"`, the unchanged cmdk dialog still
+opening and closing, the trigger still enabled afterwards, and no mutation beyond the two selection
+POSTs the app makes on navigation.
+
 ## Open User Decisions
 
 Resolved during specification and implementation: captions use per-theme AA values (`#737373` light,
@@ -655,3 +697,4 @@ visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authorit
 | 2026-09-21 | 1.6 | Record the milestone: the legacy button vocabulary fell from 91 occurrences to zero, including all device surfaces, and the checkboxes followed. Adds the two structural findings that cost the most time (notion-kit's Checkbox DOM shape, and Base UI's Select being undrivable in happy-dom) and revises the remaining inventory by gate. |
 | 2026-09-21 | 1.7 | `SourceObjectInspectorPanel`'s two context menus migrated. Records the two-part trigger conversion and its misleading diagnostic, promotes the menu-content width to a general rule, notes that build and suite are green through the truncation defect, and replaces the "device surfaces are build-only" ceiling with an isolated real-component browser probe - including the evidence that the app route is genuinely unreachable. |
 | 2026-09-21 | 1.8 | `PlcSourcePanel`'s menu migrated, which closes the migration's last item. Records the live group-label trap, why `render` beats deleting `asChild` on a list row, the accepted `select-none` behaviour change, and narrows the `!`-modifier rule to be about *where* the override sits. |
+| 2026-09-21 | 1.9 | Add the completion sweep that establishes the end state by classifying every remaining `@/components/ui/*` import in product code. It found one missed control - `TagPicker`'s "Add tag" trigger and its Retry, swept into a file-level "stays on cmdk" decision - and the table of by-design survivors is now exhaustive. |
