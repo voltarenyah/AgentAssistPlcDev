@@ -306,7 +306,8 @@ describe('VersionControlChanges', () => {
     await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'TIA-only change')
     expect(commitButton.disabled).toBe(true)
 
-    const checkbox = host.querySelector('[data-testid="vc-untrackable-change"]') as HTMLInputElement
+    // notion-kit's Checkbox keeps the real control in a sibling input, so query it directly.
+    const checkbox = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!
     expect(checkbox.checked).toBe(false)
     await click(checkbox)
 
@@ -323,12 +324,12 @@ describe('VersionControlChanges', () => {
     const { host } = await render([entry()])
 
     await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'TIA-only change')
-    await click(host.querySelector('[data-testid="vc-untrackable-change"]')!)
+    await click(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!)
     await click(host.querySelector('[data-testid="vc-commit-selected"]')!)
 
     expect(commit).toHaveBeenCalledWith('wb-1', 'wt-1', [], 'TIA-only change', true)
     expect((host.querySelector('textarea[aria-label="Commit message"]') as HTMLTextAreaElement).value).toBe('')
-    expect((host.querySelector('[data-testid="vc-untrackable-change"]') as HTMLInputElement).checked).toBe(false)
+    expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false)
   })
 
   it('shows an untrackable-change badge in the snapshot row when an untrackable change has no savepoint coverage', async () => {

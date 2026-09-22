@@ -75,7 +75,10 @@ describe('FeatureValidationDialog', () => {
 
     const { host } = await render()
     await clickButton(host, 'Import selected')
-    const machineValidation = host.querySelector<HTMLInputElement>('input[aria-label="Machine validation completed"]')!
+    // notion-kit's Checkbox keeps the real control in a sibling input, so reach it via the
+    // wrapper's enclosing label.
+    const field = host.querySelector<HTMLElement>('[aria-label="Machine validation completed"]')!
+    const machineValidation = (field.closest('label') ?? field.parentElement)!.querySelector('input[type="checkbox"]')!
     await act(async () => {
       machineValidation.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })

@@ -67,7 +67,8 @@ describe('RefreshDialog', () => {
     const onApply = vi.fn(async () => undefined)
     await render(onApply)
 
-    await click(document.body.querySelector('input[aria-label="Apply devices/PLC_1/source/Blocks/Main.xml"]')!)
+    // notion-kit's Checkbox renders as role="checkbox" on a button, not an input.
+    await click(document.body.querySelector('[role="checkbox"][aria-label="Apply devices/PLC_1/source/Blocks/Main.xml"]')!)
     const apply = document.body.querySelector('button[data-variant="default"]') as HTMLButtonElement
     expect(apply.disabled).toBe(true)
 

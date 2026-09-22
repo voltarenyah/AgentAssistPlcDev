@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, FileDiff, Loader2, X } from 'lucide-react'
 import { useState } from 'react'
+import { Checkbox } from '@notion-kit/ui/primitives'
 import type { ReconciliationEntry, ReconciliationPreview } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import {
@@ -94,16 +95,15 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
                 <div key={entry.relativePath} className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border)' }}>
                   <div className="flex items-center gap-3">
                     {nameOf(entry.kind) !== 'Unchanged' && (
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         aria-label={`Apply ${entry.relativePath}`}
                         checked={approvedPaths.has(entry.relativePath)}
-                        onChange={event => {
+                        onCheckedChange={checked => {
                           setApprovedPaths(current => {
                             return toggleApprovedPath(
                               current,
                               entry.relativePath,
-                              event.target.checked,
+                              Boolean(checked),
                             )
                           })
                         }}

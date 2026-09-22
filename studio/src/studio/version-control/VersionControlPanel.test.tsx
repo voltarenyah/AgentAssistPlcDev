@@ -170,7 +170,8 @@ describe('VersionControlPanel (worktree dock)', () => {
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
     const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
 
-    const checkbox = host.querySelector<HTMLInputElement>('[data-testid="vc-verify-hardware"]')!
+    // notion-kit's Checkbox keeps the real control in a sibling input, so query it directly.
+    const checkbox = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!
     expect(checkbox.checked).toBe(true)
     await click(checkbox)
     expect(checkbox.checked).toBe(false)

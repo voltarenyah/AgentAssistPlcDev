@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowUpRight, FileCheck2, GitBranch, GitCompare, History, Loader2, RefreshCw } from 'lucide-react'
-import { Button } from '@notion-kit/ui/primitives'
+import { Button, Checkbox } from '@notion-kit/ui/primitives'
 import * as api from '@/api/client'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 import VersionControlHistory, { type VcTimelineItem } from './VersionControlHistory'
@@ -190,11 +190,10 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
           <GitCompare className="h-3.5 w-3.5" /> Compare
         </button>
         <label className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[10px] text-muted-foreground">
-          <input
-            type="checkbox"
+          <Checkbox
             data-testid="vc-verify-hardware"
             checked={verifyHardware}
-            onChange={event => setVerifyHardware(event.target.checked)}
+            onCheckedChange={checked => setVerifyHardware(Boolean(checked))}
           />
           Verify hardware configuration
         </label>

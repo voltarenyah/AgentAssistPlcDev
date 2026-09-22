@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, ChevronDown, FileCode2, Folder, HardDrive, Loader2, Plus } from 'lucide-react'
+import { Checkbox } from '@notion-kit/ui/primitives'
 import * as api from '@/api/client'
 import { toast } from 'sonner'
 import { showErrorToast } from '@/components/ui/toast'
@@ -231,11 +232,10 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                 </div>
               )}
               {selectedSafetyCount === 0 && <label className="mt-1.5 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2">
-                <input
-                  type="checkbox"
+                <Checkbox
                   data-testid="vc-untrackable-change"
                   checked={untrackable}
-                  onChange={event => setUntrackable(event.target.checked)}
+                  onCheckedChange={checked => setUntrackable(Boolean(checked))}
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block text-[10px] font-medium text-amber-600">Untrackable change</span>
