@@ -17,6 +17,23 @@ export type TagFilterProps = {
   onRetry?: () => void
 }
 
+/** Tags that can still be added, optionally narrowed by a query. Previously this rule was written
+ *  out twice - once for the inline list and once for the taxonomy dialog - with the two copies
+ *  differing only in how they handled an empty query. Exported because notion-kit's autocomplete
+ *  owns its own item collection, so the rule will need to be fed to it as data, and because a
+ *  direct assertion on the rule is stronger than asserting through cmdk's rendered list. */
+export const filterableTags = (
+  nodes: TagNode[],
+  paths: Map<string, string>,
+  selectedTagIds: string[],
+  query: string,
+) => {
+  const selected = new Set(selectedTagIds)
+  const normalized = query.trim().toLowerCase()
+  return nodes.filter(node => !selected.has(node.tagId)
+    && (normalized.length === 0 || (paths.get(node.tagId) ?? node.name).toLowerCase().includes(normalized)))
+}
+
 export function TagFilter({
   nodes,
   selectedTagIds,
@@ -34,8 +51,7 @@ export function TagFilter({
   const selected = new Set(selectedTagIds)
   const selectedNodes = nodes.filter(node => selected.has(node.tagId))
   const normalizedQuery = query.trim().toLowerCase()
-  const selectableNodes = nodes.filter(node => !selected.has(node.tagId)
-    && (normalizedQuery.length === 0 || (paths.get(node.tagId) ?? node.name).toLowerCase().includes(normalizedQuery)))
+  const selectableNodes = filterableTags(nodes, paths, selectedTagIds, query)
 
   const select = (tagId: string) => {
     onSelectedTagIdsChange([...selectedTagIds, tagId])
@@ -121,8 +137,7 @@ export function TagFilter({
           ) : (
             <>
               <CommandEmpty>No matching tags.</CommandEmpty>
-              {nodes.filter(node => !selected.has(node.tagId)
-                && (paths.get(node.tagId) ?? node.name).toLowerCase().includes(dialogQuery.trim().toLowerCase())).map(node => {
+              {filterableTags(nodes, paths, selectedTagIds, dialogQuery).map(node => {
                 const path = paths.get(node.tagId) ?? node.name
                 return <CommandItem key={node.tagId} value={path} onSelect={() => select(node.tagId)} aria-label={`Filter by ${path}`}>{path}</CommandItem>
               })}
