@@ -55,41 +55,26 @@ describe('TagFilter', () => {
     await act(async () => root.unmount())
   })
 
-  it('offers full-path suggestions and selects a searched tag through keyboard interaction', async () => {
-    const onSelectedTagIdsChange = vi.fn()
-    const { root } = await render(
-      <TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={onSelectedTagIdsChange} />,
-    )
-
-    const input = document.body.querySelector('input[aria-label="Search filter tags"]') as HTMLInputElement
-    await setInputValue(input, 'Machine/Press')
-    expect(document.body.textContent).toContain('Machine/Press')
-    await act(async () => {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-
-    expect(onSelectedTagIdsChange).toHaveBeenCalledWith(['press'])
-    expect(input.value).toBe('')
-    // The same outcome asserted against the extracted rule, so the matching half of this behaviour
-    // already has a home that does not depend on which component renders the list. When the inline
-    // filter moves to notion-kit's Autocomplete, cmdk's keyboard path here is replaced by a browser
-    // check - the tag filter is reachable on the project landing page - and this rule assertion
-    // stays as it is.
+  it('exposes full-path suggestions through the rule the list is built from', async () => {
+    // The inline list is notion-kit's Autocomplete now, whose popup happy-dom does not render, so the
+    // keyboard path this test used to exercise - and the selection it produced - are proven in the
+    // browser, where the tag filter is reachable on the project landing page. What stays here is the
+    // rule that decides what the list contains, asserted directly.
     const paths = tagPaths(nodes)
     expect(filterableTags(nodes, paths, [], 'Machine/Press').map(node => node.tagId)).toEqual(['press'])
     expect(filterableTags(nodes, paths, ['press'], 'Machine/Press')).toEqual([])
     expect(filterableTags(nodes, paths, [], '').map(node => node.tagId)).toEqual(['machine', 'press', 'state'])
-    await act(async () => root.unmount())
   })
 
-  it('selects an inline suggestion by pointer', async () => {
+  it('does not select a tag merely because a query matched one', async () => {
     const onSelectedTagIdsChange = vi.fn()
     const { root } = await render(<TagFilter nodes={nodes} selectedTagIds={[]} onSelectedTagIdsChange={onSelectedTagIdsChange} />)
     const input = document.body.querySelector('input[aria-label="Search filter tags"]') as HTMLInputElement
     await setInputValue(input, 'press')
-    await act(async () => (document.body.querySelector('[aria-label="Filter by Machine/Press"]') as HTMLElement).click())
-    expect(onSelectedTagIdsChange).toHaveBeenCalledWith(['press'])
+    // The suggestion list is Autocomplete's now, whose popup happy-dom does not render, so the
+    // pointer path that selects by clicking an item is proven in the browser. What this test does
+    // keep is the guard that matters: typing a query that matches must not add that tag by itself.
+    expect(onSelectedTagIdsChange).not.toHaveBeenCalled()
     await act(async () => root.unmount())
   })
 
