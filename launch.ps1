@@ -99,8 +99,18 @@ if (-not $NoKill) {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match 'app_assistant\.server:app' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Get-Process -Name "node" -ErrorAction SilentlyContinue |
-        Stop-Process -Force -ErrorAction SilentlyContinue
+    # Kill only THIS project's Vite dev server, identified by command line, never
+    # every node.exe. A blanket "Get-Process node | Stop-Process" also kills any
+    # other Node application the user is running. The project-root path alone is
+    # NOT a safe filter either: an agent harness launched with this repository as
+    # its workspace also carries the path in its command line, so a root-only match
+    # takes the harness - and the terminal that started this script - down with the
+    # dev server. Requiring Vite as well narrows it to the dev server and its
+    # launcher. Verified: two harness node processes matched the root alone.
+    $projectRootPattern = [regex]::Escape($root)
+    Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -match $projectRootPattern -and $_.CommandLine -match 'vite' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     foreach ($name in @("Mcp.Engineering", "Mcp.Knowledge", "Mcp.VersionControl")) {
         Get-Process -Name $name -ErrorAction SilentlyContinue |
             Stop-Process -Force -ErrorAction SilentlyContinue
