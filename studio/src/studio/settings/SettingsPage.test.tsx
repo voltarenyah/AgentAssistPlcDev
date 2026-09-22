@@ -105,20 +105,19 @@ describe('SettingsPage', () => {
     await act(async () => root.unmount())
   })
 
-  it('renders the current model, leaving the change-and-save interaction to the browser', async () => {
+  it('saves a model change through the chat settings API', async () => {
     const { host, root } = await render(<SettingsPage onClose={vi.fn()} />)
     await clickCategory(host, 'assistant')
 
-    // notion-kit's Select cannot be driven in happy-dom - pointer, click, keyboard and setting
-    // a hidden native select's value were all tried - and Base UI renders both the label and
-    // the role client-side, so this environment can only assert that the control is present.
-    // That makes the browser check the load-bearing one for this control, not a supplement:
-    // it proves the trigger's role, the label SelectValue renders from the items collection,
-    // and that choosing another model saves through the API. What the unit test no longer
-    // covers is any part of the model selection. The save path itself stays covered, because
-    // the thinking-mode switch and the numeric field tests below still drive changeSettings
-    // through to the API.
-    expect(host.querySelector('[aria-label="Model"]')).not.toBeNull()
+    const modelSelect = host.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!
+    expect(modelSelect.value).toBe('deepseek-v4-flash')
+
+    await act(async () => {
+      modelSelect.value = 'deepseek-v4-pro'
+      modelSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    expect(api.saveChatSettings).toHaveBeenCalledWith({ ...settingsFixture, model: 'deepseek-v4-pro' })
 
     await act(async () => root.unmount())
   })
@@ -154,26 +153,12 @@ describe('SettingsPage', () => {
     await clickCategory(host, 'appearance')
 
     const darkMode = host.querySelector<HTMLElement>('[role="switch"][aria-label="Dark mode"]')!
-    // Base UI (notion-kit) exposes the ARIA state rather than Radix's data-state,
-    // so assert the accessible contract instead of either library's data attribute.
-    expect(darkMode.getAttribute('aria-checked')).toBe('true')
+    expect(darkMode.getAttribute('data-state')).toBe('checked')
     await act(async () => { darkMode.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
 
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('light')
     expect(document.documentElement.classList.contains('dark')).toBe(false)
 
-    await act(async () => root.unmount())
-  })
-
-  it('opens the UI component catalog from Appearance', async () => {
-    const onOpenComponentCatalog = vi.fn()
-    const { host, root } = await render(<SettingsPage onClose={vi.fn()} onOpenComponentCatalog={onOpenComponentCatalog} />)
-    await clickCategory(host, 'appearance')
-
-    const openCatalog = host.querySelector<HTMLButtonElement>('[data-open-component-catalog]')!
-    await act(async () => { openCatalog.click() })
-
-    expect(onOpenComponentCatalog).toHaveBeenCalledTimes(1)
     await act(async () => root.unmount())
   })
 

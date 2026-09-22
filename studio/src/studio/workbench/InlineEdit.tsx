@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { Input, Textarea } from '@notion-kit/ui/primitives'
 
 type Props = {
   value: string
@@ -37,7 +36,7 @@ export default function InlineEdit({ value, placeholder, ariaLabel, multiline, d
 
   const sharedProps = {
     'aria-label': ariaLabel,
-    className: `w-full text-[10px]! ${multiline ? 'min-h-[64px] resize-y py-1.5' : 'h-7!'}`,
+    className: `field-input w-full text-[10px] ${multiline ? 'min-h-[64px] resize-y py-1.5' : 'h-7'}`,
     placeholder,
     value: draft,
     disabled: disabled || saving,
@@ -61,6 +60,6 @@ export default function InlineEdit({ value, placeholder, ariaLabel, multiline, d
   }
 
   return multiline
-    ? <Textarea {...sharedProps} />
-    : <Input type="text" {...sharedProps} />
+    ? <textarea {...sharedProps} />
+    : <input type="text" {...sharedProps} />
 }

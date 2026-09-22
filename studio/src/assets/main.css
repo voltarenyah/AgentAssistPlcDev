@@ -1,5 +1,4 @@
 @import 'tailwindcss';
-@import '@notion-kit/ui/style.css';
 @import 'tw-animate-css';
 
 @font-face {
@@ -27,10 +26,10 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
-  --color-surface-secondary: var(--surface-secondary);
+  --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
-  --color-surface-muted: var(--surface-muted);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
@@ -68,33 +67,24 @@
   --font-mono:
     'SF Mono', SFMono-Regular, ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Liberation Mono',
     monospace;
-  --radius: 0.5rem;
+  --radius: 0.625rem;
   --background: #fff;
   --foreground: #0a0a0a;
   --card: #fff;
   --card-foreground: #0a0a0a;
   --popover: #fff;
   --popover-foreground: #0a0a0a;
+  --primary: #171717;
   --primary-foreground: #fafafa;
+  --secondary: #f5f5f5;
   --secondary-foreground: #171717;
-  /*
-   * `@notion-kit/ui` owns --primary, --secondary, --muted, --border and --radius,
-   * so Studio's surfaces use --surface-* instead of overloading those names.
-   * --muted and --secondary keep WCAG AA text values because both Studio
-   * captions and notion-kit descriptions and labels read them; notion-kit's own
-   * values are 1.05:1 and 3.39:1 here. Dark keeps notion-kit's --secondary
-   * (#a8a49c, 7.97:1), which already passes. See
-   * docs/adr/ADR-0004-notion-kit-design-token-authority.md.
-   */
-  --muted: #737373;
-  --secondary: #6f6c67;
+  --muted: #f5f5f5;
   --muted-foreground: #737373;
-  --surface-secondary: #f5f5f5;
-  --surface-muted: #f5f5f5;
   --accent: #f5f5f5;
   --accent-foreground: #171717;
   --destructive: #e40014;
   --destructive-foreground: #fcf3f3;
+  --border: #e5e5e5;
   --input: #e5e5e5;
   --ring: #a1a1a1;
   --chart-1: var(--color-blue-300);
@@ -121,25 +111,17 @@
   --card-foreground: #fafafa;
   --popover: #171717;
   --popover-foreground: #fafafa;
+  --primary: #e5e5e5;
   --primary-foreground: #171717;
+  --secondary: #262626;
   --secondary-foreground: #fafafa;
-  /* notion-kit's --icon value: 4.8:1 on the near-black page. notion-kit's own
-     --muted would put captions at 2.61:1, below WCAG AA. */
-  --muted: #807d78;
-  /*
-   * notion-kit's own dark --secondary (#a8a49c, 7.97:1) already passes, but it
-   * must be restated here: a declaration in the :root block above would win over
-   * notion-kit's .dark rule, because :root and .dark have equal specificity and
-   * this file loads last.
-   */
-  --secondary: #a8a49c;
+  --muted: #262626;
   --muted-foreground: #a1a1a1;
-  --surface-secondary: #262626;
-  --surface-muted: #262626;
   --accent: #404040;
   --accent-foreground: #fafafa;
   --destructive: #ff6568;
   --destructive-foreground: #df2225;
+  --border: rgb(255 255 255 / 0.07);
   --input: rgb(255 255 255 / 0.15);
   --ring: #737373;
   --chart-1: var(--color-blue-300);
@@ -564,7 +546,7 @@ select option {
 .markdown-body code {
   font-family: var(--font-mono);
   font-size: 9px;
-  background: var(--surface-muted);
+  background: var(--muted);
   border-radius: 4px;
   padding: 0.1em 0.35em;
 }
@@ -573,7 +555,7 @@ select option {
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--surface-muted);
+  background: var(--muted);
   padding: 0.5rem 0.75rem;
 }
 
@@ -596,7 +578,7 @@ select option {
 }
 
 .markdown-body th {
-  background: var(--surface-muted);
+  background: var(--muted);
   font-weight: 600;
 }
 
@@ -621,7 +603,7 @@ select option {
   --flexlayout-color-background: var(--background);
   --flexlayout-color-base: var(--background);
   --flexlayout-color-1: var(--card);
-  --flexlayout-color-2: var(--surface-muted);
+  --flexlayout-color-2: var(--muted);
   --flexlayout-color-3: var(--accent);
   --flexlayout-color-4: var(--border);
   --flexlayout-font-family: inherit;
@@ -638,7 +620,7 @@ select option {
   --flexlayout-color-tab-unselected-background: transparent;
   --flexlayout-color-splitter: var(--border);
   --flexlayout-color-splitter-hover: var(--accent);
-  --flexlayout-color-splitter-drag: var(--surface-muted);
+  --flexlayout-color-splitter-drag: var(--muted);
   --flexlayout-splitter-size: 6px;
   --flexlayout-color-edge-marker: var(--muted-foreground);
   --flexlayout-color-drag-rect: var(--foreground);

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, ChevronDown, FileCode2, Folder, HardDrive, Loader2, Plus } from 'lucide-react'
-import { Checkbox } from '@notion-kit/ui/primitives'
 import * as api from '@/api/client'
 import { toast } from 'sonner'
 import { showErrorToast } from '@/components/ui/toast'
@@ -232,10 +231,11 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
                 </div>
               )}
               {selectedSafetyCount === 0 && <label className="mt-1.5 flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2">
-                <Checkbox
+                <input
+                  type="checkbox"
                   data-testid="vc-untrackable-change"
                   checked={untrackable}
-                  onCheckedChange={checked => setUntrackable(Boolean(checked))}
+                  onChange={event => setUntrackable(event.target.checked)}
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block text-[10px] font-medium text-amber-600">Untrackable change</span>
@@ -399,7 +399,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
             data-testid="vc-create-snapshot"
             disabled={!snapshotMessage.trim() || busy}
             onClick={() => void createSnapshot()}
-            className="h-7 whitespace-nowrap rounded-lg border bg-surface-muted px-3 text-[11px] font-semibold hover:bg-accent disabled:opacity-40"
+            className="h-7 whitespace-nowrap rounded-lg border bg-muted px-3 text-[11px] font-semibold hover:bg-accent disabled:opacity-40"
             style={{ borderColor: 'var(--border)' }}
           >
             Snapshot

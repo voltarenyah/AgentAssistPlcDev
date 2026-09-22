@@ -18,9 +18,6 @@ vi.mock('@/api/client', async importOriginal => {
   return {
     ...actual,
     listWorkbenches: vi.fn(async () => []),
-    // Startup awaits the landing payload before it reads key status, so an
-    // unmocked endpoint here leaves the status bar on its default label.
-    getWorkbenchLanding: vi.fn(async () => ({ projects: [] })),
     getSessions: vi.fn(async () => []),
     getKeyStatus: vi.fn(async () => ({ configured: keyState.configured })),
     getDeepSeekBalance: balanceRequest,
@@ -116,24 +113,5 @@ describe('MainStudio API key entrance', () => {
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click())
     await act(async () => {})
     expect(host.querySelector('[data-settings-page]')).not.toBeNull()
-  })
-
-  it('opens the component catalog from Settings and returns to Settings', async () => {
-    const { host, root } = render(<MainStudio />)
-    await act(async () => {})
-
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click())
-    await act(async () => {})
-    act(() => host.querySelector<HTMLButtonElement>('[data-settings-category="appearance"]')?.click())
-    act(() => host.querySelector<HTMLButtonElement>('[data-open-component-catalog]')?.click())
-    await act(async () => {})
-
-    expect(host.querySelector('[data-component-catalog]')).not.toBeNull()
-
-    const backToSettings = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Back to settings')!
-    act(() => backToSettings.click())
-    expect(host.querySelector('[data-settings-page]')).not.toBeNull()
-
-    await act(async () => root.unmount())
   })
 })

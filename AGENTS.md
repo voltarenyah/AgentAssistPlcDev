@@ -132,12 +132,16 @@ dotnet test AgentAssistPlcDev.sln --no-build -v q
 - Check browser console errors after UI tests. Ignore unrelated external telemetry timeout messages, but never ignore errors originating from the local application.
 - Report service health, automated test totals, browser scenarios exercised, and any warnings when handing off a test run.
 
-## Studio UI/UX guide
+## Studio UI component library
 
-All Studio UI/UX work must follow [docs/STYLEGUIDE.md](docs/STYLEGUIDE.md),
-which designates the Notion design analysis as the canonical guide. Fetch the
-current source before a UI/UX change when the required detail is not already in
-context. Product safety and accessibility requirements still apply.
+All Studio UI work—layout, color, typography, spacing, component selection,
+and interaction behavior—must follow [docs/STYLEGUIDE.md](docs/STYLEGUIDE.md).
+Use the tokens in `studio/src/assets/main.css` and the Shadcn/Radix primitives
+in `studio/src/components/ui/`; do not invent one-off visual components, token
+values, or headless interaction behavior when the documented library already
+covers the need. A new shared primitive requires a demonstrated cross-surface
+need, accessible behavior, and focused tests. Domain-specific components belong
+under `studio/src/studio/` and compose the existing primitives.
 
 ## GitHub Issues and PR Workflow
 

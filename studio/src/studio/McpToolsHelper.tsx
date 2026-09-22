@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@notion-kit/ui/primitives'
 import {
   AlertTriangle,
   BookOpen,
@@ -41,7 +40,7 @@ const tierMeta: Record<string, { label: string; className: string; icon: typeof 
   read: { label: 'Read', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400', icon: ShieldCheck },
   write: { label: 'Write', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', icon: AlertTriangle },
   destructive: { label: 'Destructive', className: 'bg-red-500/10 text-red-600 dark:text-red-400', icon: ShieldAlert },
-  denied: { label: 'Denied', className: 'bg-surface-muted text-muted-foreground', icon: ShieldAlert },
+  denied: { label: 'Denied', className: 'bg-muted text-muted-foreground', icon: ShieldAlert },
   unknown: { label: 'Unclassified', className: 'bg-red-500/10 text-red-600 dark:text-red-400', icon: ShieldAlert },
 }
 
@@ -144,13 +143,13 @@ function ToolDetail({ tool }: { tool: api.ToolInfo }) {
       </div>
 
       <div className="grid gap-4 p-5 lg:grid-cols-2">
-        <section className="rounded-lg border bg-surface-muted/20 p-4" style={{ borderColor: 'var(--border)' }}>
+        <section className="rounded-lg border bg-muted/20 p-4" style={{ borderColor: 'var(--border)' }}>
           <div className="flex items-center gap-2 text-[10px] font-semibold"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> Before calling</div>
           <div className="mt-3 space-y-2">
             {guide.prerequisites.length === 0 ? <p className="text-[10px] leading-relaxed text-muted-foreground">No extra preconditions beyond the argument schema and sandbox policy.</p> : guide.prerequisites.map(item => <p key={item} className="flex items-start gap-2 text-[10px] leading-relaxed text-muted-foreground"><span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-emerald-500" />{item}</p>)}
           </div>
         </section>
-        <section className="rounded-lg border bg-surface-muted/20 p-4" style={{ borderColor: 'var(--border)' }}>
+        <section className="rounded-lg border bg-muted/20 p-4" style={{ borderColor: 'var(--border)' }}>
           <div className="flex items-center gap-2 text-[10px] font-semibold"><ShieldAlert className="h-3.5 w-3.5 text-amber-500" /> Constraints & safety</div>
           <div className="mt-3 space-y-2">
             {guide.constraints.length === 0 ? <p className="text-[10px] leading-relaxed text-muted-foreground">No additional constraints were inferred from the registered tool metadata.</p> : guide.constraints.map(item => <p key={item} className="flex items-start gap-2 text-[10px] leading-relaxed text-muted-foreground"><span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-amber-500" />{item}</p>)}
@@ -160,14 +159,14 @@ function ToolDetail({ tool }: { tool: api.ToolInfo }) {
 
       <section className="border-t" style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-center gap-2 border-b px-5 py-3" style={{ borderColor: 'var(--border)' }}><BookOpen className="h-3.5 w-3.5 text-chart-2" /><h3 className="text-[10px] font-semibold">Arguments</h3><span className="text-[9px] text-muted-foreground">{properties.length} declared · {required.size} required</span></div>
-        {properties.length === 0 ? <p className="p-5 text-[10px] text-muted-foreground">This tool accepts an empty object: <code className="rounded bg-surface-muted px-1 py-0.5 font-mono">&#123;&#125;</code></p> : (
+        {properties.length === 0 ? <p className="p-5 text-[10px] text-muted-foreground">This tool accepts an empty object: <code className="rounded bg-muted px-1 py-0.5 font-mono">&#123;&#125;</code></p> : (
           <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
             {properties.map(([name, rawSchema]) => {
               const property = rawSchema as JsonObject
               const description = asString(property.description)
               const defaultValue = getDefaultLabel(property.default)
               return <div key={name} className="grid gap-2 px-5 py-3 md:grid-cols-[minmax(150px,0.8fr)_minmax(110px,0.55fr)_minmax(0,2fr)] md:items-start">
-                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><code className="break-all text-[10px] font-semibold">{name}</code>{required.has(name) ? <span className="rounded bg-chart-2/10 px-1.5 py-0.5 text-[8px] font-medium text-chart-2">required</span> : <span className="rounded bg-surface-muted px-1.5 py-0.5 text-[8px] text-muted-foreground">optional</span>}</div></div>
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><code className="break-all text-[10px] font-semibold">{name}</code>{required.has(name) ? <span className="rounded bg-chart-2/10 px-1.5 py-0.5 text-[8px] font-medium text-chart-2">required</span> : <span className="rounded bg-muted px-1.5 py-0.5 text-[8px] text-muted-foreground">optional</span>}</div></div>
                 <div className="font-mono text-[9px] text-chart-3">{getTypeLabel(property)}</div>
                 <div className="text-[10px] leading-relaxed text-muted-foreground">{description || 'No argument description published.'}{defaultValue && <span className="ml-1 text-foreground">Default: {defaultValue}</span>}</div>
               </div>
@@ -181,7 +180,7 @@ function ToolDetail({ tool }: { tool: api.ToolInfo }) {
           <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${schemaOpen ? 'rotate-180' : ''}`} /> Raw input schema
           <span className="text-[9px] font-normal text-muted-foreground">For exact JSON / generated-client use</span>
         </button>
-        {schemaOpen && <pre className="max-h-[280px] overflow-auto border-t bg-surface-muted/25 p-5 font-mono text-[9px] leading-relaxed text-muted-foreground" style={{ borderColor: 'var(--border)' }}>{JSON.stringify(schema, null, 2)}</pre>}
+        {schemaOpen && <pre className="max-h-[280px] overflow-auto border-t bg-muted/25 p-5 font-mono text-[9px] leading-relaxed text-muted-foreground" style={{ borderColor: 'var(--border)' }}>{JSON.stringify(schema, null, 2)}</pre>}
       </section>
     </article>
   )
@@ -228,19 +227,19 @@ export default function McpToolsHelper({ onClose }: { onClose: () => void }) {
           <div className="relative flex flex-wrap items-start gap-4">
             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-chart-2/10"><Wrench className="h-6 w-6 text-chart-2" /></div>
             <div className="min-w-0 flex-1"><div className="mb-2 flex items-center gap-2 text-[9px] font-medium uppercase tracking-[0.18em] text-chart-2"><span>MCP reference</span><span className="h-1 w-1 rounded-full bg-chart-2" /><span>Live catalog</span></div><h1 className="text-2xl font-semibold tracking-tight">Tools helper</h1><p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-muted-foreground">A working reference for every MCP tool currently exposed to the assistant: what it does, when it is safe to use, and the exact arguments it accepts.</p></div>
-            <Button variant="primary" size="sm" onClick={onClose}><X className="h-3.5 w-3.5" /> Back to studio</Button>
+            <button className="secondary-button" onClick={onClose}><X className="h-3.5 w-3.5" /> Back to studio</button>
           </div>
           <div className="relative mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="rounded-lg border bg-surface-muted/20 p-3" style={{ borderColor: 'var(--border)' }}><div className="text-lg font-semibold tabular-nums">{tools.length}</div><div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">tools exposed</div></div>
-            <div className="rounded-lg border bg-surface-muted/20 p-3" style={{ borderColor: 'var(--border)' }}><div className="text-lg font-semibold tabular-nums">{servers.length}</div><div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">MCP servers</div></div>
-            <div className="rounded-lg border bg-surface-muted/20 p-3" style={{ borderColor: 'var(--border)' }}><div className="text-lg font-semibold tabular-nums text-emerald-500">{tierCounts.read ?? 0}</div><div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">read-only</div></div>
-            <div className="rounded-lg border bg-surface-muted/20 p-3" style={{ borderColor: 'var(--border)' }}><div className="text-lg font-semibold tabular-nums text-red-500">{(tierCounts.destructive ?? 0) + (tierCounts.denied ?? 0)}</div><div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">guarded / blocked</div></div>
+            <div className="rounded-lg border bg-muted/20 p-3" style={{ borderColor: 'var(--border)' }}><div className="text-lg font-semibold tabular-nums">{tools.length}</div><div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">tools exposed</div></div>
+            <div className="rounded-lg border bg-muted/20 p-3" style={{ borderColor: 'var(--border)' }}><div className="text-lg font-semibold tabular-nums">{servers.length}</div><div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">MCP servers</div></div>
+            <div className="rounded-lg border bg-muted/20 p-3" style={{ borderColor: 'var(--border)' }}><div className="text-lg font-semibold tabular-nums text-emerald-500">{tierCounts.read ?? 0}</div><div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">read-only</div></div>
+            <div className="rounded-lg border bg-muted/20 p-3" style={{ borderColor: 'var(--border)' }}><div className="text-lg font-semibold tabular-nums text-red-500">{(tierCounts.destructive ?? 0) + (tierCounts.denied ?? 0)}</div><div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">guarded / blocked</div></div>
           </div>
         </section>
 
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-9!" value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search tool names and descriptions…" />{filter && <Button variant="nav-icon" className="absolute right-1 top-1/2 -translate-y-1/2" onClick={() => setFilter('')} aria-label="Clear search"><X className="h-3 w-3" /></Button>}</div>
-          <div className="flex items-center gap-2"><Select items={[{ value: 'all', label: 'All servers' }, ...servers.map(server => ({ value: server, label: serverMeta[server]?.label ?? server }))]} value={serverFilter} onValueChange={value => setServerFilter(value ?? 'all')}><SelectTrigger aria-label="Filter by server" className="h-9! min-w-[160px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All servers</SelectItem>{servers.map(server => <SelectItem key={server} value={server}>{serverMeta[server]?.label ?? server}</SelectItem>)}</SelectContent></Select><Button variant="primary" size="sm" onClick={() => void loadTools()} disabled={loading}><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</Button></div>
+          <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><input className="field-input pl-9" value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search tool names and descriptions…" />{filter && <button className="icon-button absolute right-1 top-1/2 -translate-y-1/2" onClick={() => setFilter('')} aria-label="Clear search"><X className="h-3 w-3" /></button>}</div>
+          <div className="flex items-center gap-2"><select className="field-input h-9 min-w-[160px]" value={serverFilter} onChange={event => setServerFilter(event.target.value)}><option value="all">All servers</option>{servers.map(server => <option key={server} value={server}>{serverMeta[server]?.label ?? server}</option>)}</select><button className="secondary-button" onClick={() => void loadTools()} disabled={loading}><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh</button></div>
         </div>
 
         {error ? <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/8 p-4 text-[10px] text-red-700 dark:text-red-300"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><div><div className="font-medium">Tool catalog unavailable</div><div className="mt-1 opacity-80">{error}</div></div></div> : loading ? <EmptyState label="Discovering MCP tools from the connected servers…" /> : tools.length === 0 ? <EmptyState label="No MCP tools are currently exposed. Start the API host and refresh." /> : filteredTools.length === 0 ? <EmptyState label="No tools match this filter." /> : (

@@ -67,12 +67,8 @@ describe('RefreshDialog', () => {
     const onApply = vi.fn(async () => undefined)
     await render(onApply)
 
-    // notion-kit's Checkbox renders as role="checkbox" on a button, not an input.
-    await click(document.body.querySelector('[role="checkbox"][aria-label="Apply devices/PLC_1/source/Blocks/Main.xml"]')!)
-    // Found by its own label rather than Studio's data-variant, which no migrated button emits.
-    const apply = Array.from(document.body.querySelectorAll('button'))
-      .find(button => /^(Apply|Confirm no changes)/.test(button.textContent?.trim() ?? '')) as HTMLButtonElement
-    expect(apply).toBeTruthy()
+    await click(document.body.querySelector('input[aria-label="Apply devices/PLC_1/source/Blocks/Main.xml"]')!)
+    const apply = document.body.querySelector('button[data-variant="default"]') as HTMLButtonElement
     expect(apply.disabled).toBe(true)
 
     await input(document.body.querySelector('input[aria-label="TIA commit title"]')!, 'Accept Main from TIA')

@@ -1,5 +1,4 @@
 import { Download, Edit3, MessageSquare, Plus, Trash2, X } from 'lucide-react'
-import { Button, Input } from '@notion-kit/ui/primitives'
 import { useState } from 'react'
 import type { ChatSessionInfo } from '@/api/client'
 
@@ -46,9 +45,9 @@ export default function SessionDock({
         <MessageSquare className="h-3.5 w-3.5 text-chart-3" />
         <h2 className="text-[10px] font-semibold">AI sessions</h2>
         <span className="ml-auto text-[9px] text-muted-foreground">{sessions.length}</span>
-        <Button variant="nav-icon" disabled={busy} onClick={onCreate} aria-label="New session">
+        <button className="icon-button" disabled={busy} onClick={onCreate} aria-label="New session">
           <Plus className="h-3.5 w-3.5" />
-        </Button>
+        </button>
       </div>
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-2">
         {sessions.length === 0 ? (
@@ -81,20 +80,18 @@ export default function SessionDock({
                         setEditingId(null)
                       }}
                     >
-                      <Input
+                      <input
                         name="session-title"
-                        className="h-7! min-w-0 flex-1"
+                        className="field-input h-7 min-w-0 flex-1"
                         defaultValue={session.title}
                         autoFocus
                       />
-                      {/* notion-kit's Button sets its own type, so the implicit form submit is
-                          made explicit here. */}
-                      <Button type="submit" variant="primary" size="sm" className="h-7! px-2!" disabled={busy}>
+                      <button className="secondary-button h-7 px-2" disabled={busy}>
                         Save
-                      </Button>
-                      <Button type="button" variant="nav-icon" onClick={() => setEditingId(null)}>
+                      </button>
+                      <button type="button" className="icon-button" onClick={() => setEditingId(null)}>
                         <X className="h-3.5 w-3.5" />
-                      </Button>
+                      </button>
                     </form>
                   ) : (
                     <>
@@ -110,36 +107,36 @@ export default function SessionDock({
                             {session.turnCount} turn{session.turnCount === 1 ? '' : 's'} · {displayDate(session.updatedAt)}
                           </div>
                         </button>
-                        <Button variant="nav-icon" className="h-6! w-6!" aria-label={`Rename ${session.title}`} disabled={busy} onClick={() => setEditingId(session.sessionId)}>
+                        <button className="icon-button h-6 w-6" aria-label={`Rename ${session.title}`} disabled={busy} onClick={() => setEditingId(session.sessionId)}>
                           <Edit3 className="h-3 w-3" />
-                        </Button>
-                        <Button variant="nav-icon" className="h-6! w-6!" aria-label={`Export ${session.title}`} disabled={busy} onClick={() => onExport(session.sessionId)}>
+                        </button>
+                        <button className="icon-button h-6 w-6" aria-label={`Export ${session.title}`} disabled={busy} onClick={() => onExport(session.sessionId)}>
                           <Download className="h-3 w-3" />
-                        </Button>
-                        <Button variant="nav-icon" className="h-6! w-6!" aria-label={`Delete ${session.title}`} disabled={busy} onClick={() => setRemoveId(session.sessionId)}>
+                        </button>
+                        <button className="icon-button h-6 w-6" aria-label={`Delete ${session.title}`} disabled={busy} onClick={() => setRemoveId(session.sessionId)}>
                           <Trash2 className="h-3 w-3" />
-                        </Button>
+                        </button>
                       </div>
                       <div className="mt-2 flex items-center gap-1 text-[9px]">
                         <span aria-label={`Task for ${session.title}`} className="min-w-0 flex-1 truncate text-muted-foreground">
                           {session.taskId ? `Task: ${session.taskId} (${session.taskProvenance === 'manual' ? 'Manual' : 'Default'})` : 'Unassigned legacy session'}
                         </span>
-                        <Button variant="primary" size="sm" className="h-6! px-2!" disabled={busy} aria-label={`${session.taskId ? 'Reassign' : 'Attach'} task for ${session.title}`} onClick={() => {
+                        <button className="secondary-button h-6 px-2" disabled={busy} aria-label={`${session.taskId ? 'Reassign' : 'Attach'} task for ${session.title}`} onClick={() => {
                           const taskId = window.prompt('Task ID (leave blank to clear)', session.taskId ?? '')?.trim() ?? ''
                           onSetTask(session.sessionId, taskId || null)
-                        }}>{session.taskId ? 'Reassign' : 'Attach'}</Button>
-                        {session.taskId && <Button variant="primary" size="sm" className="h-6! px-2!" disabled={busy} aria-label={`Remove task from ${session.title}`} onClick={() => onSetTask(session.sessionId, null)}>Remove</Button>}
+                        }}>{session.taskId ? 'Reassign' : 'Attach'}</button>
+                        {session.taskId && <button className="secondary-button h-6 px-2" disabled={busy} aria-label={`Remove task from ${session.title}`} onClick={() => onSetTask(session.sessionId, null)}>Remove</button>}
                       </div>
                       {removeId === session.sessionId && (
                         <div className="mt-2 flex items-center gap-1 border-t pt-2" style={{ borderColor: 'var(--border)' }}>
                           <span className="min-w-0 flex-1 text-[9px] text-muted-foreground">Delete?</span>
-                          <Button variant="primary" size="sm" className="h-6! px-2!" onClick={() => setRemoveId(null)}>Cancel</Button>
-                          <Button variant="blue" size="sm" className="h-6! px-2!" onClick={() => {
+                          <button className="secondary-button h-6 px-2" onClick={() => setRemoveId(null)}>Cancel</button>
+                          <button className="primary-button h-6 px-2" onClick={() => {
                             onRemove(session.sessionId)
                             setRemoveId(null)
                           }}>
                             Delete
-                          </Button>
+                          </button>
                         </div>
                       )}
                     </>

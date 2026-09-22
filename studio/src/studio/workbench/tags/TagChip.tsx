@@ -1,7 +1,7 @@
 import { X } from 'lucide-react'
 import type { TagNode } from '@/api/client'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { Button } from '@notion-kit/ui/primitives'
 import { tagPaths } from './tagPaths'
 
 export type TagChipProps = {
@@ -20,7 +20,7 @@ export function TagChip({ node, nodes = [node], removable = false, inherited = f
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-full border bg-surface-muted/40 px-2 py-1 text-xs text-foreground',
+        'inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-1 text-xs text-foreground',
         inherited ? 'border-dashed border-muted-foreground/40' : 'border-border',
         className,
       )}
@@ -31,7 +31,8 @@ export function TagChip({ node, nodes = [node], removable = false, inherited = f
       {canRemove && (
         <Button
           type="button"
-          variant="close"
+          variant="ghost"
+          size="icon-xs"
           aria-label={`Remove tag ${path}`}
           onClick={() => onRemove?.(node.tagId)}
         >

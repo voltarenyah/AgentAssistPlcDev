@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { MutableRefObject } from 'react'
 import { CheckCircle2, Clock3, Loader2 } from 'lucide-react'
 import type { OperationPhaseTiming, OperationStatus } from '@/api/client'
-import { Tabs, TabsList, TabsTrigger } from '@notion-kit/ui/primitives'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 type Props = {
   status: OperationStatus | null
@@ -175,24 +175,24 @@ export default function OperationTimingList({ status, className = '', layout = '
             </div>
           </div>
           {hasSourceExportActivity && (
-            /* notion-kit has no ToggleGroup; this single-select switch is a Tabs control.
-               ADR-0005. */
-            <Tabs
+            <ToggleGroup
+              type="single"
               value={activeDashboardView}
+              variant="outline"
+              size="sm"
+              aria-label="Operation detail view"
               onValueChange={value => {
                 if (value === 'workflow' || value === 'source') setActiveDashboardView(value)
               }}
             >
-              <TabsList aria-label="Operation detail view">
-                <TabsTrigger value="workflow" className="text-xs">Workflow</TabsTrigger>
-                <TabsTrigger value="source" className="text-xs">Source export</TabsTrigger>
-              </TabsList>
-            </Tabs>
+              <ToggleGroupItem value="workflow" className="text-xs">Workflow</ToggleGroupItem>
+              <ToggleGroupItem value="source" className="text-xs">Source export</ToggleGroupItem>
+            </ToggleGroup>
           )}
         </div>
         <div className="min-h-0 flex-1 p-3">
           {activeDashboardView === 'workflow' || !hasSourceExportActivity ? (
-            <section className="flex h-full min-h-0 flex-col rounded-md border border-border/60 bg-surface-muted/20 p-3" aria-label="Workflow stages">
+            <section className="flex h-full min-h-0 flex-col rounded-md border border-border/60 bg-muted/20 p-3" aria-label="Workflow stages">
               <div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Workflow stages</div>
               {regularRows.length > 0 || activeRegularRow ? (
                 <PhaseList phases={regularRows} current={activeRegularRow} sharedClock={sharedClock} scrollable currentFirst />

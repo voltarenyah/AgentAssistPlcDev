@@ -3,8 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TagNode } from '@/api/client'
-import TagFilter, { filterableTags } from './TagFilter'
-import { tagPaths } from './tagPaths'
+import TagFilter from './TagFilter'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -39,19 +38,13 @@ describe('TagFilter', () => {
     )
 
     const input = document.body.querySelector('input[aria-label="Search filter tags"]') as HTMLInputElement
-    // Deliberately not input.closest('[cmdk-root]'): that attribute belongs to the library the
-    // inline filter currently uses and cannot survive its move to notion-kit's Autocomplete. What
-    // the test is actually claiming is that the search field and the taxonomy button sit in the
-    // same row, so it asserts exactly that, without naming any library's wrapper.
+    const searchCommand = input.closest('[cmdk-root]') as HTMLElement
     const taxonomyButton = document.body.querySelector('button[aria-label="Open tag taxonomy"]') as HTMLButtonElement
 
-    expect(input).not.toBeNull()
+    expect(searchCommand).not.toBeNull()
     expect(taxonomyButton).not.toBeNull()
-    expect((taxonomyButton.parentElement as HTMLElement).contains(input)).toBe(true)
-    // Assert the accessible contract rather than the Studio Button's data-size, which no migrated
-    // button carries: an icon-only button must have a name and render an icon, nothing else.
-    expect(taxonomyButton.getAttribute('aria-label')).toBe('Open tag taxonomy')
-    expect(taxonomyButton.querySelector('svg')).not.toBeNull()
+    expect(searchCommand.parentElement).toBe(taxonomyButton.parentElement)
+    expect(taxonomyButton.dataset.size).toBe('icon-sm')
     await act(async () => root.unmount())
   })
 
@@ -71,15 +64,6 @@ describe('TagFilter', () => {
 
     expect(onSelectedTagIdsChange).toHaveBeenCalledWith(['press'])
     expect(input.value).toBe('')
-    // The same outcome asserted against the extracted rule, so the matching half of this behaviour
-    // already has a home that does not depend on which component renders the list. When the inline
-    // filter moves to notion-kit's Autocomplete, cmdk's keyboard path here is replaced by a browser
-    // check - the tag filter is reachable on the project landing page - and this rule assertion
-    // stays as it is.
-    const paths = tagPaths(nodes)
-    expect(filterableTags(nodes, paths, [], 'Machine/Press').map(node => node.tagId)).toEqual(['press'])
-    expect(filterableTags(nodes, paths, ['press'], 'Machine/Press')).toEqual([])
-    expect(filterableTags(nodes, paths, [], '').map(node => node.tagId)).toEqual(['machine', 'press', 'state'])
     await act(async () => root.unmount())
   })
 

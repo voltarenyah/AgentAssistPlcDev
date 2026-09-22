@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { Button, Input, Label, Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@notion-kit/ui/primitives'
 import {
   AlertCircle,
   Boxes,
@@ -71,7 +70,6 @@ import TaskDetail, { type TraceabilityItem } from '@/studio/workbench/TaskDetail
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
-import Catalog from '@/catalog/Catalog'
 import TiaSessionsPanel from '@/studio/workbench/TiaSessionsPanel'
 import { normalizeProjectPath, sessionLabelFor } from '@/studio/workbench/TiaSessionLabel'
 import TiaCloseConfirmationDialog from '@/studio/workbench/TiaCloseConfirmationDialog'
@@ -199,7 +197,7 @@ function NewWorktreeDialog({
             <h2 className="text-sm font-semibold">New linked worktree</h2>
             <p className="text-[10px] text-muted-foreground">{workbench.name} · complete editable checkout</p>
           </div>
-          <Button variant="nav-icon" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></Button>
+          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
         </div>
         <div className="space-y-4 p-5">
           {busy && (
@@ -211,69 +209,53 @@ function NewWorktreeDialog({
               </div>
             </div>
           )}
-          <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
+          <label className="field-label">
             <span>Worktree name</span>
-            <Input className="h-8!" value={name} onChange={event => setName(event.target.value)} placeholder="Commissioning changes" autoFocus />
-          </Label>
-          <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
+            <input className="field-input" value={name} onChange={event => setName(event.target.value)} placeholder="Commissioning changes" autoFocus />
+          </label>
+          <label className="field-label">
             <span>Branch</span>
-            <Input className="h-8! font-mono" value={branch} onChange={event => setBranch(event.target.value)} placeholder="feature/commissioning" />
-          </Label>
+            <input className="field-input font-mono" value={branch} onChange={event => setBranch(event.target.value)} placeholder="feature/commissioning" />
+          </label>
           {svnManaged ? (
             branchStartPoints.length > 0 ? (
-            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
+            <label className="field-label">
               <span>SVN savepoint</span>
-              <Select
-                items={branchStartPoints.map(point => ({
-                  value: `${point.worktreeId}:${point.gitSha}`,
-                  label: `${point.gitSha.slice(0, 7)} · r${point.svnRevision ?? '—'} · ${point.message}${point.state ? ` · ${point.state}` : ''}${point.selectable ? '' : ` · ${point.disabledReason}`}`,
-                }))}
-                value={selectedSavepoint || undefined}
-                onValueChange={value => setSelectedSavepoint(value ?? '')}
-              >
-                <SelectTrigger aria-label="SVN savepoint" className="w-full font-mono">
-                  <SelectValue placeholder="Select a savepoint" />
-                </SelectTrigger>
-                <SelectContent>
-                  {Array.from(new Set(branchStartPoints.map(point => point.worktreeId))).map(worktreeId => {
-                    const points = branchStartPoints.filter(point => point.worktreeId === worktreeId)
-                    return (
-                      <SelectGroup key={worktreeId}>
-                        <SelectLabel title={`${points[0].worktreeName} (${points[0].branch})`} />
-                        {points.map(point => (
-                          <SelectItem key={`${point.worktreeId}:${point.gitSha}`} value={`${point.worktreeId}:${point.gitSha}`} disabled={!point.selectable}>
-                            {point.gitSha.slice(0, 7)} · r{point.svnRevision ?? '—'} · {point.message}{point.state ? ` · ${point.state}` : ''}{point.selectable ? '' : ` · ${point.disabledReason}`}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    )
-                  })}
-                </SelectContent>
-              </Select>
-            </Label>
+              <select className="field-input font-mono" value={selectedSavepoint} onChange={event => setSelectedSavepoint(event.target.value)}>
+                <option value="">Select a savepoint</option>
+                {Array.from(new Set(branchStartPoints.map(point => point.worktreeId))).map(worktreeId => {
+                  const points = branchStartPoints.filter(point => point.worktreeId === worktreeId)
+                  return <optgroup key={worktreeId} label={`${points[0].worktreeName} (${points[0].branch})`}>
+                    {points.map(point => <option key={`${point.worktreeId}:${point.gitSha}`} value={`${point.worktreeId}:${point.gitSha}`} disabled={!point.selectable}>
+                      {point.gitSha.slice(0, 7)} · r{point.svnRevision ?? '—'} · {point.message}{point.state ? ` · ${point.state}` : ''}{point.selectable ? '' : ` · ${point.disabledReason}`}
+                    </option>)}
+                  </optgroup>
+                })}
+              </select>
+            </label>
             ) : (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[10px] text-amber-700" data-testid="branch-start-points-unavailable">
                 No registered SVN savepoints are available. Refresh the workbench after creating a native savepoint.
               </div>
             )
           ) : (
-            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
+            <label className="field-label">
               <span>Start point</span>
-              <Input className="h-8! font-mono" value={startPoint} onChange={event => setStartPoint(event.target.value)} placeholder="master" />
-            </Label>
+              <input className="field-input font-mono" value={startPoint} onChange={event => setStartPoint(event.target.value)} placeholder="master" />
+            </label>
           )}
         </div>
-        <div className="flex items-center justify-between gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center justify-between gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
           <OperationStatusLine status={operationStatus} fallback={busy ? 'Creating linked worktree…' : undefined} onDismiss={onDismissOperation} />
           <div className="flex gap-2">
-            <Button variant="primary" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
-            <Button variant="blue" size="sm" disabled={!valid || busy || (svnManaged && !selectedSavepoint)} onClick={() => {
+            <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
+            <button className="primary-button" disabled={!valid || busy || (svnManaged && !selectedSavepoint)} onClick={() => {
               const [worktreeId, gitSha] = selectedSavepoint.split(':')
               void onCreate(name.trim(), branch.trim(), svnManaged ? undefined : (startPoint.trim() || undefined), worktreeId && gitSha ? { worktreeId, gitSha } : undefined)
             }}>
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Create worktree
-            </Button>
+            </button>
           </div>
         </div>
       </div>
@@ -303,22 +285,22 @@ function DeleteWorkbenchDialog({
             <h2 className="text-sm font-semibold">Delete “{workbench.name}”?</h2>
             <p className="text-[10px] text-muted-foreground">This action cannot be undone</p>
           </div>
-          <Button variant="nav-icon" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></Button>
+          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
         </div>
         <div className="space-y-3 p-5">
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             This permanently deletes the workbench directory — all linked worktrees, PLC source and Git history, knowledge databases, and saved chat sessions.
           </p>
-          <div className="break-all rounded-lg border bg-surface-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
+          <div className="break-all rounded-lg border bg-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
             {workbench.rootPath}
           </div>
         </div>
-        <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <Button variant="primary" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant="red-fill" size="sm" onClick={onDelete} disabled={busy}>
+        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary-button bg-red-600 hover:bg-red-500" onClick={onDelete} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Delete permanently
-          </Button>
+          </button>
         </div>
       </div>
     </div>
@@ -349,24 +331,24 @@ function DeleteWorktreeDialog({
             <h2 className="text-sm font-semibold">Remove “{worktree.name}”?</h2>
             <p className="text-[10px] text-muted-foreground">This deletes the linked checkout and its local device context.</p>
           </div>
-          <Button variant="nav-icon" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></Button>
+          <button className="icon-button" onClick={onClose} disabled={busy}><X className="h-4 w-4" /></button>
         </div>
         <div className="space-y-3 p-5">
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             The shared Git repository and other worktrees stay intact. Any uncommitted files in this worktree will be discarded.
           </p>
-          <div className="rounded-lg border bg-surface-muted/25 p-3 text-[10px]" style={{ borderColor: 'var(--border)' }}>
+          <div className="rounded-lg border bg-muted/25 p-3 text-[10px]" style={{ borderColor: 'var(--border)' }}>
             <span className="font-medium">{workbench.name}</span>
             <span className="mx-1 text-muted-foreground">/</span>
             <span className="font-mono text-muted-foreground">{worktree.branch}</span>
           </div>
         </div>
-        <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <Button variant="primary" size="sm" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant="red-fill" size="sm" onClick={onDelete} disabled={busy}>
+        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="primary-button bg-red-600 hover:bg-red-500" onClick={onDelete} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Remove worktree
-          </Button>
+          </button>
         </div>
       </div>
     </div>
@@ -395,10 +377,10 @@ function CompileApprovalDialog({
             <h2 className="text-sm font-semibold">PLC compile required</h2>
             <p className="text-[10px] text-muted-foreground">The export can retry after compiling the selected PLC.</p>
           </div>
-          <Button variant="nav-icon" onClick={onCancel} disabled={busy}><X className="h-4 w-4" /></Button>
+          <button className="icon-button" onClick={onCancel} disabled={busy}><X className="h-4 w-4" /></button>
         </div>
         <div className="space-y-3 p-5">
-          <div className="rounded-lg border bg-surface-muted/25 p-3 text-[10px] leading-relaxed" style={{ borderColor: 'var(--border)' }}>
+          <div className="rounded-lg border bg-muted/25 p-3 text-[10px] leading-relaxed" style={{ borderColor: 'var(--border)' }}>
             {prompt.message}
           </div>
           <div className="flex items-start gap-2 rounded-lg bg-amber-500/8 p-3 text-[9px] leading-relaxed text-amber-700 dark:text-amber-300">
@@ -406,12 +388,12 @@ function CompileApprovalDialog({
             Compile updates TIA compile state for this PLC. It does not save the project source file.
           </div>
         </div>
-        <div className="flex justify-end gap-2 border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <Button variant="primary" size="sm" onClick={onCancel} disabled={busy}>Compile manually</Button>
-          <Button variant="blue" size="sm" onClick={onApprove} disabled={busy}>
+        <div className="flex justify-end gap-2 border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <button className="secondary-button" onClick={onCancel} disabled={busy}>Compile manually</button>
+          <button className="primary-button" onClick={onApprove} disabled={busy}>
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Compile and retry
-          </Button>
+          </button>
         </div>
       </div>
     </div>
@@ -438,12 +420,12 @@ function ProjectAccessDialog({
             <h2 className="text-sm font-semibold">TIA project access</h2>
             <p className="truncate text-[10px] text-muted-foreground">{project.name ?? capabilities.projectName ?? 'Connected project'}</p>
           </div>
-          <Button variant="nav-icon" onClick={onClose}><X className="h-4 w-4" /></Button>
+          <button className="icon-button" onClick={onClose}><X className="h-4 w-4" /></button>
         </div>
         <div className="grid gap-4 p-5 text-[10px] sm:grid-cols-2">
           <div className="space-y-2">
             <div className="font-semibold">Project</div>
-            <div className="break-all rounded-lg border bg-surface-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
+            <div className="break-all rounded-lg border bg-muted/25 p-3 font-mono text-[9px]" style={{ borderColor: 'var(--border)' }}>
               {project.path ?? capabilities.projectPath ?? '—'}
             </div>
             <div className="grid grid-cols-2 gap-2 text-muted-foreground">
@@ -474,8 +456,8 @@ function ProjectAccessDialog({
             </div>
           )}
         </div>
-        <div className="flex justify-end border-t bg-surface-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
-          <Button variant="primary" size="sm" onClick={onClose}>Close</Button>
+        <div className="flex justify-end border-t bg-muted/25 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+          <button className="secondary-button" onClick={onClose}>Close</button>
         </div>
       </div>
     </div>
@@ -538,7 +520,7 @@ export default function MainStudio() {
   })
   const [focusedView, setFocusedView] = useState<WorkspaceViewKind | null>(() => workspaceService.getFocusedViewKind())
   useEffect(() => workspaceService.subscribe(setFocusedView), [workspaceService])
-  const [activePage, setActivePage] = useState<'studio' | 'tools' | 'settings' | 'catalog'>('studio')
+  const [activePage, setActivePage] = useState<'studio' | 'tools' | 'settings'>('studio')
   const [chatTabs, setChatTabs] = useState<ChatTabsState>(() => emptyChatTabs())
   const [shellLayout, setShellLayout] = useState<ShellLayout>(() => {
     try {
@@ -2045,26 +2027,24 @@ export default function MainStudio() {
         onMouseDown={handleHeaderMouseDown}
         onDoubleClick={handleHeaderDoubleClick}
       >
-        <Button
-          variant="nav-icon"
+        <button
           data-dock-toggle="left"
-          className="mr-1"
+          className="icon-button mr-1"
           aria-label={shellLayout.leftOpen ? 'Hide workbench project tree' : 'Show workbench project tree'}
           title={shellLayout.leftOpen ? 'Hide workbench project tree' : 'Show workbench project tree'}
           onClick={() => toggleDock('left')}
         >
           {shellLayout.leftOpen ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelLeftOpen className="h-3.5 w-3.5" />}
-        </Button>
-        <Button
-          variant="nav-icon"
-          className={`${activePage === 'settings' ? 'bg-accent! text-foreground!' : ''}`}
+        </button>
+        <button
+          className={`icon-button ${activePage === 'settings' ? 'bg-accent text-foreground' : ''}`}
           aria-label="Settings"
           title="Settings"
           aria-pressed={activePage === 'settings'}
           onClick={() => setActivePage(previous => previous === 'settings' ? 'studio' : 'settings')}
         >
           <Settings className="h-3.5 w-3.5" />
-        </Button>
+        </button>
         <div className="flex-1" />
           <div className="flex items-center gap-2">
           {activeOperation && (
@@ -2079,37 +2059,35 @@ export default function MainStudio() {
               />
             </div>
           )}
-          <Button
-            variant="nav-icon"
-            className={`${activePage === 'tools' ? 'bg-accent! text-foreground!' : ''}`}
+          <button
+            className={`icon-button ${activePage === 'tools' ? 'bg-accent text-foreground' : ''}`}
             aria-label="Open MCP tools helper"
             title="Open MCP tools helper"
             aria-pressed={activePage === 'tools'}
             onClick={() => setActivePage(previous => previous === 'tools' ? 'studio' : 'tools')}
           >
             <CircleHelp className="h-3.5 w-3.5" />
-          </Button>
+          </button>
           {selection.workbenchId && (
-            <Button
-              variant="nav-icon"
-              className={`${appAssistantOpen ? 'bg-accent! text-foreground!' : ''}`}
+            <button
+              className={`icon-button ${appAssistantOpen ? 'bg-accent text-foreground' : ''}`}
               aria-label="Open Workbench Assistant"
               title="Open Workbench Assistant"
               aria-pressed={appAssistantOpen}
               onClick={() => setAppAssistantOpen(previous => !previous)}
             >
               <Sparkles className="h-3.5 w-3.5" />
-            </Button>
+            </button>
           )}
-          <Button
-            variant="nav-icon"
+          <button
             data-dock-toggle="right"
+            className="icon-button"
             aria-label={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
             title={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
             onClick={() => toggleDock('right')}
           >
             {shellLayout.rightOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
-          </Button>
+          </button>
           <ThemeToggle />
           <WindowControls />
         </div>
@@ -2120,16 +2098,11 @@ export default function MainStudio() {
       ) : activePage === 'settings' ? (
         <SettingsPage
           onClose={() => setActivePage('studio')}
-          onOpenComponentCatalog={() => setActivePage('catalog')}
           onResetLayout={() => {
             setShellLayout(DEFAULT_SHELL_LAYOUT)
             workspaceService.resetLayout()
           }}
         />
-      ) : activePage === 'catalog' ? (
-        <div className="min-h-0 flex-1">
-          <Catalog onClose={() => setActivePage('settings')} />
-        </div>
       ) : <div className="flex min-h-0 flex-1">
         <div
           data-dock="left"
@@ -2270,13 +2243,13 @@ export default function MainStudio() {
                 <AlertCircle className="mx-auto mb-3 h-8 w-8 text-red-500" />
                 <h1 className="text-sm font-semibold">Workbench API unavailable</h1>
                 <p className="mt-2 break-words text-xs leading-4 text-muted-foreground">{fatalError}</p>
-                <Button variant="blue" size="sm" className="mt-4" onClick={() => void loadStartup()}>
+                <button className="primary-button mt-4" onClick={() => void loadStartup()}>
                   <RefreshCw className="h-3.5 w-3.5" /> Retry
-                </Button>
+                </button>
               </div>
             </div>
           ) : taskDetail || taskDetailLoading || taskDetailError ? (
-            <div className="min-h-0 flex-1 overflow-y-auto p-5"><Button type="button" variant="primary" size="sm" className="mb-3 h-7! text-[9px]!" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</Button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div>
           ) : !selection.deviceId && selection.worktreeId ? (
             mainView.kind === 'hardware' ? (
             <>
@@ -2319,7 +2292,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              taskDetail || taskDetailLoading || taskDetailError ? <div className="min-h-0 flex-1 overflow-y-auto p-5"><Button type="button" variant="primary" size="sm" className="mb-3 h-7! text-[9px]!" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</Button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div> : <WorktreeLandingPage
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div> : <WorktreeLandingPage
                 workbenchId={selection.workbenchId!}
                 worktreeId={selection.worktreeId}
                 tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}

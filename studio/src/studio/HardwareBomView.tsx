@@ -1,4 +1,3 @@
-import { Button, Input } from '@notion-kit/ui/primitives'
 import {
   ChevronDown,
   ChevronRight,
@@ -93,23 +92,21 @@ export default function HardwareBomView({ view }: Props) {
 
       <div className="flex shrink-0 items-center gap-2 border-b px-5 py-2" style={{ borderColor: 'var(--border)' }}>
         <ListFilter className="h-3.5 w-3.5 text-muted-foreground" />
-        <Input
+        <input
           aria-label="Filter components"
-          className="h-7! w-64! text-[10px]!"
+          className="field-input h-7 w-64 text-[10px]"
           placeholder="Filter by name, type, order number..."
           value={filter}
           onChange={event => setFilter(event.target.value)}
         />
         <div className="flex-1" />
-        <Button
+        <button
           aria-label="Toggle group by type"
-          variant="primary"
-          size="sm"
-          className={`h-7! text-[9px]! ${grouped ? 'bg-accent!' : ''}`}
+          className={`secondary-button h-7 text-[9px] ${grouped ? 'bg-accent' : ''}`}
           onClick={() => setGrouped(current => !current)}
         >
           <Rows3 className="h-3 w-3" /> Group by type
-        </Button>
+        </button>
       </div>
 
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-auto">
@@ -142,7 +139,7 @@ export default function HardwareBomView({ view }: Props) {
                     <td className="px-4 py-1.5">
                       <span className="inline-flex items-center gap-1.5">
                         {expanded ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
-                        <span className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[9px]">{group.items.length}</span>
+                        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[9px]">{group.items.length}</span>
                       </span>
                     </td>
                     <td className="px-4 py-1.5 font-mono">{first.orderNumber ?? '—'}</td>
@@ -152,7 +149,7 @@ export default function HardwareBomView({ view }: Props) {
                   </tr>,
                   ...(expanded
                     ? group.items.map(item => (
-                        <tr key={item.id} className="border-b bg-surface-muted/30 text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
+                        <tr key={item.id} className="border-b bg-muted/30 text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
                           <td className="px-4 py-1" />
                           <td className="px-4 py-1" colSpan={4}>
                             <span className="font-medium text-foreground">{item.name}</span>

@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Loader2, ShieldAlert } from 'lucide-react'
-import { Checkbox } from '@notion-kit/ui/primitives'
 import * as api from '@/api/client'
 import FeatureValidationDialog from './FeatureValidationDialog'
 import OperationTimingList, { formatElapsed } from '@/studio/workbench/OperationTimingList'
@@ -188,7 +187,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
         {comparison && !busy && (
           <div className="space-y-2">
             {comparison.timings && comparison.timings.length > 0 && (
-              <section className="rounded-lg border border-border/70 bg-surface-muted/25 p-2.5 text-[9px]" data-comparison-timings aria-label="TIA comparison timings">
+              <section className="rounded-lg border border-border/70 bg-muted/25 p-2.5 text-[9px]" data-comparison-timings aria-label="TIA comparison timings">
                 <button
                   type="button"
                   className="flex w-full items-center gap-1.5 text-left text-[8px] font-semibold uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
@@ -228,7 +227,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                         {entry.blockDifferences.map(diff => {
                           const key = `${entry.deviceId}:${diff.path}`
                           return <label key={key} className="flex cursor-pointer items-start gap-2 rounded border border-amber-500/25 bg-amber-500/5 p-1.5">
-                            <Checkbox checked={selectedSafety.has(key)} onCheckedChange={checked => toggleSafetySelection(key, Boolean(checked))} />
+                            <input type="checkbox" checked={selectedSafety.has(key)} onChange={event => toggleSafetySelection(key, event.target.checked)} />
                             <span className="min-w-0 flex-1">
                               <span className="block break-all font-mono">{diff.path}</span>
                               <span className="block text-[8px] text-muted-foreground">Safety change · {safetyKindLabel(diff.kind)}</span>
@@ -307,10 +306,11 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                     && !tagHashes
                   return (
                     <label key={`${diff.deviceId}:${path}:${diff.identity}`} className={`flex items-start gap-2 rounded-lg border p-2 ${disabled ? 'opacity-60' : 'cursor-pointer hover:bg-white/5'}`} style={{ borderColor: 'var(--border)' }}>
-                      <Checkbox
+                      <input
+                        type="checkbox"
                         disabled={disabled}
                         checked={path ? selected.has(path) : false}
-                        onCheckedChange={checked => { if (path) toggleSelection(path, Boolean(checked)) }}
+                        onChange={event => path && toggleSelection(path, event.target.checked)}
                       />
                       <span className="min-w-0 flex-1">
                         <span className="block text-[10px] font-medium">{diff.plcName} · {diff.identity || diff.relativePath}</span>

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, MenuLabel } from '@notion-kit/ui/primitives'
 import {
   AlertCircle,
   Boxes,
@@ -19,6 +18,14 @@ import {
 import { toast } from 'sonner'
 import * as api from '@/api/client'
 import type { SourceObjectComparison, SourceObjectInfo } from '@/api/client'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu'
 import { showErrorToast } from '@/components/ui/toast'
 import type { DeviceViewState } from './deviceSnapshot'
 import {
@@ -240,40 +247,57 @@ export default function PlcSourcePanel({
               return (
                 <div key={item.id} data-testid="plc-source-row">
                   <ContextMenu>
-                    <ContextMenuTrigger render={<div
-                      className="flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
-                      onClick={() => { setExpandedId(expanded ? null : item.id); if (!expanded) void loadTraceability(item) }}
-                    />}>
-                      {expanded
-                        ? <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                        : <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />}
-                      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate text-[10px]">{item.name}</span>
-                      {busyAction && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
-                      <span className="font-mono text-[9px] text-muted-foreground">
-                        {item.category}{item.number ?? ''}
-                      </span>
-                      {item.programmingLanguage && (
-                        <span className="text-[9px] text-muted-foreground">{item.programmingLanguage}</span>
-                      )}
-                      {item.groupPath && (
-                        <span className="max-w-[160px] truncate text-[9px] text-muted-foreground">{item.groupPath}</span>
-                      )}
+                    <ContextMenuTrigger asChild>
+                      <div
+                        className="flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left hover:bg-accent/40"
+                        onClick={() => { setExpandedId(expanded ? null : item.id); if (!expanded) void loadTraceability(item) }}
+                      >
+                        {expanded
+                          ? <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                          : <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />}
+                        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate text-[10px]">{item.name}</span>
+                        {busyAction && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
+                        <span className="font-mono text-[9px] text-muted-foreground">
+                          {item.category}{item.number ?? ''}
+                        </span>
+                        {item.programmingLanguage && (
+                          <span className="text-[9px] text-muted-foreground">{item.programmingLanguage}</span>
+                        )}
+                        {item.groupPath && (
+                          <span className="max-w-[160px] truncate text-[9px] text-muted-foreground">{item.groupPath}</span>
+                        )}
+                      </div>
                     </ContextMenuTrigger>
-                    <ContextMenuContent className="w-max min-w-56">
-                      <MenuLabel title={`${item.category} · ${item.name}`} />
-                      <ContextMenuItem icon={<Code2 className="h-3.5 w-3.5" />} label="Inspect object" onClick={() => onInspectObject(item.relativePath)} />
-                      {item.category === 'Tags' && <ContextMenuItem disabled={Boolean(pendingAction)} icon={<Network className="h-3.5 w-3.5" />} label="Show read/write networks" onClick={() => void showUsageNetworks(item)} />}
+                    <ContextMenuContent>
+                      <ContextMenuLabel>{item.category} · {item.name}</ContextMenuLabel>
+                      <ContextMenuItem onSelect={() => onInspectObject(item.relativePath)}>
+                        <Code2 className="h-3.5 w-3.5" />
+                        Inspect object
+                      </ContextMenuItem>
+                      {item.category === 'Tags' && <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void showUsageNetworks(item)}>
+                        <Network className="h-3.5 w-3.5" />
+                        Show read/write networks
+                      </ContextMenuItem>}
                       <ContextMenuSeparator />
-                      <ContextMenuItem disabled={Boolean(pendingAction)} icon={<SquareArrowOutUpRight className="h-3.5 w-3.5" />} label="Open in TIA" onClick={() => void openInTia(item)} />
-                      <ContextMenuItem disabled={Boolean(pendingAction)} icon={<GitCompareArrows className="h-3.5 w-3.5" />} label="Compare with TIA" onClick={() => void compareWithTia(item)} />
+                      <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void openInTia(item)}>
+                        <SquareArrowOutUpRight className="h-3.5 w-3.5" />
+                        Open in TIA
+                      </ContextMenuItem>
+                      <ContextMenuItem disabled={Boolean(pendingAction)} onSelect={() => void compareWithTia(item)}>
+                        <GitCompareArrows className="h-3.5 w-3.5" />
+                        Compare with TIA
+                      </ContextMenuItem>
                       <ContextMenuSeparator />
-                      <ContextMenuItem icon={<MessageSquare className="h-3.5 w-3.5" />} label="Chat with Agent" onClick={() => onChatWithAgent(item)} />
+                      <ContextMenuItem onSelect={() => onChatWithAgent(item)}>
+                        <MessageSquare className="h-3.5 w-3.5" />
+                        Chat with Agent
+                      </ContextMenuItem>
                     </ContextMenuContent>
                   </ContextMenu>
                   {expanded && (
                     <div
-                      className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t bg-surface-muted/20 px-11 py-2 text-[9px]"
+                      className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t bg-muted/20 px-11 py-2 text-[9px]"
                       style={{ borderColor: 'var(--border)' }}
                     >
                       <span className="text-muted-foreground">Path</span>
@@ -310,12 +334,12 @@ export default function PlcSourcePanel({
                       )}
                       <span className="text-muted-foreground">Task links</span>
                       <div className="flex flex-wrap items-center gap-1">
-                        {(traceability[item.id]?.tasks ?? []).length === 0 ? <span className="text-muted-foreground">Unassigned legacy source object</span> : traceability[item.id]!.tasks.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span><button type="button" className="underline font-sans" aria-label={`Reassign task ${link.id} from source object ${item.name}`} onClick={() => void reassignSourceTask(item, link.id)}>Reassign</button>{link.edgeId && <button type="button" className="underline font-sans" aria-label={`Remove task ${link.id} from source object ${item.name}`} onClick={async () => { try { await api.removeTaskRelationship(workbenchId, link.id, link.edgeId); await loadTraceability(item) } catch (error) { showErrorToast(errorMessage(error)) } }}>Remove</button>}</span>)}
-                        <Button type="button" variant="primary" size="sm" className="h-6! px-2!" aria-label={`Attach task to source object ${item.name}`} onClick={() => void attachSourceTask(item)}>Attach</Button>
+                        {(traceability[item.id]?.tasks ?? []).length === 0 ? <span className="text-muted-foreground">Unassigned legacy source object</span> : traceability[item.id]!.tasks.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span><button type="button" className="underline font-sans" aria-label={`Reassign task ${link.id} from source object ${item.name}`} onClick={() => void reassignSourceTask(item, link.id)}>Reassign</button>{link.edgeId && <button type="button" className="underline font-sans" aria-label={`Remove task ${link.id} from source object ${item.name}`} onClick={async () => { try { await api.removeTaskRelationship(workbenchId, link.id, link.edgeId); await loadTraceability(item) } catch (error) { showErrorToast(errorMessage(error)) } }}>Remove</button>}</span>)}
+                        <button type="button" className="secondary-button h-6 px-2" aria-label={`Attach task to source object ${item.name}`} onClick={() => void attachSourceTask(item)}>Attach</button>
                       </div>
                       <span className="text-muted-foreground">Commit links</span>
                       <div className="flex flex-wrap items-center gap-1">
-                        {(traceability[item.id]?.commits ?? []).length === 0 ? <span className="text-muted-foreground">No linked commits yet.</span> : traceability[item.id]!.commits.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open commit ${link.id}`} onClick={() => onNavigateEntity?.('gitCommit', link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span></span>)}
+                        {(traceability[item.id]?.commits ?? []).length === 0 ? <span className="text-muted-foreground">No linked commits yet.</span> : traceability[item.id]!.commits.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open commit ${link.id}`} onClick={() => onNavigateEntity?.('gitCommit', link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span></span>)}
                       </div>
                     </div>
                   )}

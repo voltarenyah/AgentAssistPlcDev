@@ -11,20 +11,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  Button,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  Textarea,
-} from '@notion-kit/ui/primitives'
+} from '@/components/ui/dropdown-menu'
 
 type Props = {
   workbenchId: string
@@ -85,15 +78,8 @@ export function ActiveTaskSelector({
   }
   return (
     <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
-      <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!" htmlFor="active-task-selector"><span>Active task</span></Label>
+      <label className="field-label" htmlFor="active-task-selector"><span>Active task</span></label>
       <div className="mt-1 flex items-center gap-2">
-        {/* Left on the native select deliberately. ActiveTaskSelector has its own two tests
-            covering keyboard selection and clear, Base UI's Select cannot be driven through
-            either in happy-dom, and unlike the dialog selects in this file this control cannot
-            be rendered in the current environment to replace that proof with a browser check -
-            it needs compatible tasks and a selected device, which issue #109 blocks. Migrating
-            it would therefore delete real behavioural coverage with nothing to put in its
-            place. Revisit when device selection works. */}
         <select
           id="active-task-selector"
           aria-label="Active task"
@@ -109,14 +95,14 @@ export function ActiveTaskSelector({
             </option>
           ))}
         </select>
-        <Button type="button" variant="primary" size="sm" className="h-8! text-[9px]!" disabled={!activeTask || saving} onClick={() => { void select('') }} onKeyDown={event => {
+        <button type="button" className="secondary-button h-8 text-[9px]" disabled={!activeTask || saving} onClick={() => { void select('') }} onKeyDown={event => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
             void select('')
           }
         }}>
           Clear
-        </Button>
+        </button>
       </div>
       <div className="mt-1 text-[9px] text-muted-foreground">
         {activeTask ? <><span className="font-medium text-foreground">{activeTask.title}</span> · {activeTask.scope === 'project' ? 'Project' : 'Worktree'} scope · {taskTypeLabel(activeTask.type)}</> : 'New sessions and actions remain unassigned until you choose a task.'}
@@ -128,7 +114,7 @@ export function ActiveTaskSelector({
 
 const taskStatusClasses = (status: api.WorktreeTaskStatus) =>
   status === 'done'
-    ? 'border-border bg-surface-muted text-muted-foreground'
+    ? 'border-border bg-muted text-muted-foreground'
     : status === 'inProgress'
       ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
       : 'border-chart-2/30 bg-chart-2/10 text-chart-2'
@@ -139,22 +125,19 @@ function TaskStatusControl({ task, onChange }: {
 }) {
   return (
     <DropdownMenu>
-      {/*
-        notion-kit has no `asChild`; its trigger renders a real <button>, so the
-        trigger's own props live on DropdownMenuTrigger. Use `render={<X/>}`
-        only when composing a custom component.
-      */}
-      <DropdownMenuTrigger
-        type="button"
-        aria-label={`Change status of ${task.title}`}
-        className={`inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[8px] font-medium uppercase tracking-[0.1em] ${taskStatusClasses(task.status)}`}
-      >
-        {taskStatusLabel(task.status)}
-        <ChevronDown className="h-2.5 w-2.5" />
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Change status of ${task.title}`}
+          className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[8px] font-medium uppercase tracking-[0.1em] ${taskStatusClasses(task.status)}`}
+        >
+          {taskStatusLabel(task.status)}
+          <ChevronDown className="h-2.5 w-2.5" />
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent>
         {taskStatusOrder.map(option => (
-          <DropdownMenuItem key={option} onClick={() => onChange(option)}>
+          <DropdownMenuItem key={option} onSelect={() => onChange(option)}>
             <Check className={`h-3.5 w-3.5 ${option === task.status ? 'opacity-100' : 'opacity-0'}`} />
             {taskStatusLabel(option)}
           </DropdownMenuItem>
@@ -268,12 +251,12 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <Button type="button" variant="blue" size="sm" className="h-8!" onClick={() => {
+        <button type="button" className="primary-button h-8" onClick={() => {
           setNewDevice(current => current || availableDevices[0]?.deviceId || '')
           setCreateOpen(true)
         }}>
           <Plus className="h-3.5 w-3.5" /> Add task
-        </Button>
+        </button>
       </div>
 
       {visibleTasks.length === 0 ? (
@@ -290,7 +273,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
             <section key={status} className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
               <div className="flex items-center border-b px-4 py-2" style={{ borderColor: 'var(--border)' }}>
                 <span className="text-[10px] font-semibold">{taskStatusLabel(status)}</span>
-                <span className="ml-auto rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{group.length}</span>
+                <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{group.length}</span>
               </div>
               {group.length === 0 ? (
                 <div className="px-4 py-3 text-[9px] text-muted-foreground">No {taskStatusLabel(status).toLowerCase()} tasks.</div>
@@ -307,8 +290,8 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                           {task.title}
                         </div>
                         <div className="mt-1 flex gap-1 text-[8px] text-muted-foreground">
-                          <span className="rounded bg-surface-muted px-1.5 py-0.5">{task.scope === 'project' ? 'Project' : 'Worktree'} scope</span>
-                          <span className="rounded bg-surface-muted px-1.5 py-0.5">{taskTypeLabel(task.type)}</span>
+                          <span className="rounded bg-muted px-1.5 py-0.5">{task.scope === 'project' ? 'Project' : 'Worktree'} scope</span>
+                          <span className="rounded bg-muted px-1.5 py-0.5">{taskTypeLabel(task.type)}</span>
                         </div>
                         {(isLegacyTask(task) ? task.details : task.description) && (
                           <div className="mt-1 text-[9px] leading-relaxed text-muted-foreground [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-4">
@@ -318,20 +301,20 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                         {isLegacyTask(task) && task.elementRefs.length > 0 && (
                           <div className="mt-1.5 flex flex-wrap gap-1">
                             {task.elementRefs.map(elementRef => (
-                              <span key={elementRef} className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">
+                              <span key={elementRef} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">
                                 {elementRef}
                               </span>
                             ))}
                           </div>
                         )}
                       </div>
-                      {onStartChat && <Button type="button" variant="primary" size="sm" className="h-7! px-2! text-[9px]!" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>Start chat</Button>}
-                      {onOpenTaskDetail && !isLegacyTask(task) && <Button type="button" variant="primary" size="sm" className="h-7! px-2! text-[9px]!" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</Button>}
-                      {isLegacyTask(task) && <><Button variant="nav-icon" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
+                      {onStartChat && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>Start chat</button>}
+                      {onOpenTaskDetail && !isLegacyTask(task) && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</button>}
+                      {isLegacyTask(task) && <><button className="icon-button" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
                         <Pencil className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        variant="nav-icon"
+                      </button>
+                      <button
+                        className="icon-button"
                         aria-label={`Delete task ${task.title}`}
                         onClick={() => {
                           if (window.confirm(`Delete task "${task.title}"?`)) {
@@ -340,7 +323,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                         }}
                       >
                         <Trash2 className="h-3 w-3" />
-                      </Button></>}
+                      </button></>}
                     </div>
                   ))}
                 </div>
@@ -358,29 +341,29 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
           </DialogHeader>
           {draft && (
             <div className="space-y-3">
-              <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
+              <label className="field-label">
                 <span>Title</span>
-                <Input
+                <input
                   aria-label="Task title"
+                  className="field-input"
                   value={draft.title}
                   onChange={event => setDraft({ ...draft, title: event.target.value })}
                 />
-              </Label>
-              <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
+              </label>
+              <label className="field-label">
                 <span>Details / modification plan (markdown)</span>
-                <Textarea
+                <textarea
                   aria-label="Task details"
-                  className="min-h-[120px] resize-y py-1.5! font-mono text-[10px]!"
+                  className="field-input min-h-[120px] resize-y py-1.5 font-mono text-[10px]"
                   value={draft.details}
                   onChange={event => setDraft({ ...draft, details: event.target.value })}
                 />
-              </Label>
-              {/* A group heading, not a label for a single control, so it stays a div. */}
-              <div className="flex flex-col gap-1.5 text-[10px] font-medium text-foreground">
+              </label>
+              <div className="field-label">
                 <span>PLC element references</span>
                 <div className="mt-1 flex flex-wrap items-center gap-1">
                   {draft.elementRefs.map(elementRef => (
-                    <span key={elementRef} className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[9px]">
+                    <span key={elementRef} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[9px]">
                       {elementRef}
                       <button
                         type="button"
@@ -392,9 +375,9 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
                       </button>
                     </span>
                   ))}
-                  <Input
+                  <input
                     aria-label="Add element reference"
-                    className="h-6! w-44 text-[9px]!"
+                    className="field-input h-6 w-44 text-[9px]"
                     placeholder="Device01/FB_Motor_Control"
                     value={newRef}
                     onChange={event => setNewRef(event.target.value)}
@@ -409,11 +392,11 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
               </div>
             </div>
           )}
-          <DialogFooter className="flex-row justify-end gap-2">
-            <Button variant="primary" size="sm" onClick={() => setDraft(null)} disabled={savingEdit}>Cancel</Button>
-            <Button variant="blue" size="sm" onClick={saveEdit} disabled={!draft?.title.trim() || savingEdit}>
+          <DialogFooter>
+            <button className="secondary-button" onClick={() => setDraft(null)} disabled={savingEdit}>Cancel</button>
+            <button className="primary-button" onClick={saveEdit} disabled={!draft?.title.trim() || savingEdit}>
               {savingEdit && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save task
-            </Button>
+            </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -424,10 +407,10 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
             <DialogDescription>Create a focused task for this worktree.</DialogDescription>
           </DialogHeader>
           <form className="space-y-3" onSubmit={event => { event.preventDefault(); addTask() }}>
-            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Title</span><Input autoFocus aria-label="New task title" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></Label>
-            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Type</span><Select items={[{ value: 'issue', label: 'Issue' }, { value: 'improvement', label: 'Improvement' }, { value: 'feature', label: 'Feature' }]} value={newType} onValueChange={value => setNewType(value as api.EngineeringTask['type'])}><SelectTrigger aria-label="New task type" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="issue">Issue</SelectItem><SelectItem value="improvement">Improvement</SelectItem><SelectItem value="feature">Feature</SelectItem></SelectContent></Select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></Label>
-            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Device</span><Select items={availableDevices.map(device => ({ value: device.deviceId, label: device.plcName || 'Unnamed PLC' }))} value={newDevice || undefined} onValueChange={value => setNewDevice(value ?? '')}><SelectTrigger aria-label="New task device" className="w-full"><SelectValue placeholder="Select a device" /></SelectTrigger><SelectContent>{availableDevices.map(device => <SelectItem key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</SelectItem>)}</SelectContent></Select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></Label>
-            <DialogFooter className="flex-row justify-end gap-2"><Button variant="primary" size="sm" type="button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</Button><Button variant="blue" size="sm" type="submit" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</Button></DialogFooter>
+            <label className="field-label"><span>Title</span><input autoFocus aria-label="New task title" className="field-input" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
+            <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
+            <label className="field-label"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{availableDevices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></label>
+            <DialogFooter><button type="button" className="secondary-button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

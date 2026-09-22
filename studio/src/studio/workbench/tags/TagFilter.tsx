@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { TagNode } from '@/api/client'
 import { ListFilter } from 'lucide-react'
-import { Button } from '@notion-kit/ui/primitives'
+import { Button } from '@/components/ui/button'
 import { Command, CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import TagChip from './TagChip'
 import TagTree from './TagTree'
@@ -15,23 +15,6 @@ export type TagFilterProps = {
   loading?: boolean
   error?: string | null
   onRetry?: () => void
-}
-
-/** Tags that can still be added, optionally narrowed by a query. Previously this rule was written
- *  out twice - once for the inline list and once for the taxonomy dialog - with the two copies
- *  differing only in how they handled an empty query. Exported because notion-kit's autocomplete
- *  owns its own item collection, so the rule will need to be fed to it as data, and because a
- *  direct assertion on the rule is stronger than asserting through cmdk's rendered list. */
-export const filterableTags = (
-  nodes: TagNode[],
-  paths: Map<string, string>,
-  selectedTagIds: string[],
-  query: string,
-) => {
-  const selected = new Set(selectedTagIds)
-  const normalized = query.trim().toLowerCase()
-  return nodes.filter(node => !selected.has(node.tagId)
-    && (normalized.length === 0 || (paths.get(node.tagId) ?? node.name).toLowerCase().includes(normalized)))
 }
 
 export function TagFilter({
@@ -51,7 +34,8 @@ export function TagFilter({
   const selected = new Set(selectedTagIds)
   const selectedNodes = nodes.filter(node => selected.has(node.tagId))
   const normalizedQuery = query.trim().toLowerCase()
-  const selectableNodes = filterableTags(nodes, paths, selectedTagIds, query)
+  const selectableNodes = nodes.filter(node => !selected.has(node.tagId)
+    && (normalizedQuery.length === 0 || (paths.get(node.tagId) ?? node.name).toLowerCase().includes(normalizedQuery)))
 
   const select = (tagId: string) => {
     onSelectedTagIdsChange([...selectedTagIds, tagId])
@@ -89,9 +73,9 @@ export function TagFilter({
         </Command>
         <Button
           type="button"
-          variant="primary"
-          size="sm"
-          className="w-8! shrink-0 justify-center px-0!"
+          variant="outline"
+          size="icon-sm"
+          className="shrink-0"
           disabled={loading}
           aria-label={loading ? 'Open tag taxonomy (loading)' : 'Open tag taxonomy'}
           onClick={() => {
@@ -137,7 +121,8 @@ export function TagFilter({
           ) : (
             <>
               <CommandEmpty>No matching tags.</CommandEmpty>
-              {filterableTags(nodes, paths, selectedTagIds, dialogQuery).map(node => {
+              {nodes.filter(node => !selected.has(node.tagId)
+                && (paths.get(node.tagId) ?? node.name).toLowerCase().includes(dialogQuery.trim().toLowerCase())).map(node => {
                 const path = paths.get(node.tagId) ?? node.name
                 return <CommandItem key={node.tagId} value={path} onSelect={() => select(node.tagId)} aria-label={`Filter by ${path}`}>{path}</CommandItem>
               })}

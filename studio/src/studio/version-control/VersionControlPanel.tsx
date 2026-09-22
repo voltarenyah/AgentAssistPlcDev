@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowUpRight, FileCheck2, GitBranch, GitCompare, History, Loader2, RefreshCw } from 'lucide-react'
-import { Button, Checkbox } from '@notion-kit/ui/primitives'
 import * as api from '@/api/client'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 import VersionControlHistory, { type VcTimelineItem } from './VersionControlHistory'
@@ -190,17 +189,18 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
           <GitCompare className="h-3.5 w-3.5" /> Compare
         </button>
         <label className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[10px] text-muted-foreground">
-          <Checkbox
+          <input
+            type="checkbox"
             data-testid="vc-verify-hardware"
             checked={verifyHardware}
-            onCheckedChange={checked => setVerifyHardware(Boolean(checked))}
+            onChange={event => setVerifyHardware(event.target.checked)}
           />
           Verify hardware configuration
         </label>
         <div className="flex-1" />
-        <Button type="button" variant="nav-icon" title="Refresh version control" aria-label="Refresh version control" onClick={() => void refresh()} disabled={loading}>
+        <button type="button" className="icon-button" title="Refresh version control" aria-label="Refresh version control" onClick={() => void refresh()} disabled={loading}>
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-        </Button>
+        </button>
       </div>
 
       <div className="shrink-0 border-b px-3.5 pb-2.5 pt-1" style={{ borderColor: 'var(--border)' }}>

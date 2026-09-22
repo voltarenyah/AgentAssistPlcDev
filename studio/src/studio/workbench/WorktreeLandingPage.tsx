@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, Cpu, FileCode2, GitBranch, LayoutDashboard, ListTodo, Loader2 } from 'lucide-react'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
-import { Button, Tabs, TabsList, TabsTrigger } from '@notion-kit/ui/primitives'
 import InlineEdit from './InlineEdit'
 import StatusBadge from './StatusBadge'
 import TagChip from './tags/TagChip'
@@ -243,23 +242,21 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <Tabs value={tab} onValueChange={value => onTabChange(value as WorktreeLandingTab)}>
-        <TabsList className="flex h-12 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
-          {worktreeTabs.map(worktreeTab => {
-            const Icon = worktreeTab.icon
-            return (
-              <TabsTrigger
-                key={worktreeTab.id}
-                value={worktreeTab.id}
-                className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs"
-              >
-                <Icon className="h-3 w-3" /> {worktreeTab.label}
-              </TabsTrigger>
-            )
-          })}
-          <div className="flex-1" />
-        </TabsList>
-      </Tabs>
+      <div className="flex h-12 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
+        {worktreeTabs.map(worktreeTab => {
+          const Icon = worktreeTab.icon
+          return (
+            <button
+              key={worktreeTab.id}
+              onClick={() => onTabChange(worktreeTab.id)}
+              className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors ${tab === worktreeTab.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+            >
+              <Icon className="h-3 w-3" /> {worktreeTab.label}
+            </button>
+          )
+        })}
+        <div className="flex-1" />
+      </div>
 
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-5 p-5">
@@ -276,7 +273,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h1 className="text-lg font-semibold">{detail.name}</h1>
-                    <span className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{detail.branch}</span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{detail.branch}</span>
                     <StatusBadge status={detail.status} onChange={changeStatus} />
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -374,9 +371,9 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                 <div className="flex items-center gap-3">
                   <ListTodo className="h-4 w-4 text-chart-2" />
                   <h2 className="text-sm font-semibold">Tasks</h2>
-                  <Button variant="primary" size="sm" className="ml-auto" onClick={() => onTabChange('tasks')}>
+                  <button className="secondary-button ml-auto h-7 text-xs" onClick={() => onTabChange('tasks')}>
                     Open task list
-                  </Button>
+                  </button>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {([
@@ -427,7 +424,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
                           </span>
                           <span className="mt-1 flex flex-wrap gap-1">
                             {device.blocks.map(block => (
-                              <span key={block} className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+                              <span key={block} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
                                 <FileCode2 className="h-2.5 w-2.5" /> {block}
                               </span>
                             ))}

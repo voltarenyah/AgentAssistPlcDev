@@ -17,28 +17,6 @@ end-to-end workspace smoke scenario.
 - Do not add a dependency for what the existing stack already covers (React 19, Vite, Tailwind,
   radix-ui, lucide, cmdk, flexlayout, sonner). A new runtime dependency is a maintainer decision.
 
-## Notion UI components
-
-- The catalog's **Notion Kit** tab previews only a few primitives. It is not the library's
-  inventory: the inventory is <https://notion-ui.vercel.app/docs> (22 components and 12 blocks as
-  of 2026-09-21). Check that catalogue before writing a new Studio component; when notion-kit
-  already ships it, import it instead of building a replacement.
-- `@notion-kit/ui` exports more than `primitives`. Also importable as `@notion-kit/ui/<name>`:
-  `alert-modal`, `calendar`, `cover`, `icon-block`, `icon-menu`, `kanban`,
-  `learning-steps-dialog`, `navbar`, `selectable`, `sidebar`, `single-image-dropzone`, `tags-input`,
-  `timeline`, `timezone-menu`, `tree`, `unsplash`. Prefer the specific subpath: the `primitives`
-  barrel adds a ~250 kB chunk (85 kB gzip) to the route importing it.
-- The shadcn registry route for notion-kit is not published: every endpoint shape the docs and the
-  package imply returns 404 (`/registry/notion-ui.json`, `/r/<name>.json`, `/registry.json`, and the
-  matching raw GitHub paths), checked 2026-09-21. `registries` therefore stays empty in
-  `studio/components.json`; do not add a URL that 404s. Import from the installed package instead.
-  The local shadcn config is otherwise usable: `tailwind.css` now points at the real
-  `src/assets/main.css`, and the CLI runs as `npx shadcn@latest` here because the repo uses npm.
-- `Button` needs an explicit `size`: it is the one primitive without a size default, so a `Button`
-  given only a `variant` renders with no height and no padding. Since `ADR-0004` gave notion-kit the
-  shared tokens, no wrapper scope is needed — Studio surfaces use `--surface-muted` and
-  `--surface-secondary`. See `docs/STYLEGUIDE.md`.
-
 ## Operation status and timing
 
 - Operation timings measured on the server must stay live in the UI: extrapolate locally on a

@@ -1,6 +1,5 @@
 import { AlertCircle, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import type { EngineeringTaskDetail } from '@/api/client'
-import { Button } from '@notion-kit/ui/primitives'
 
 export type TraceabilityItem = { id: string; edgeId: string; provenance: string; isPrimary: boolean }
 
@@ -25,7 +24,7 @@ export function TraceabilitySection({ title, items, emptyLabel, onNavigate, onRe
     <section className="overflow-hidden rounded-lg border bg-card" aria-label={title} style={{ borderColor: 'var(--border)' }}>
       <header className="flex items-center border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
         <h3 className="text-[10px] font-semibold">{title}</h3>
-        <span className="ml-auto rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{items.length}</span>
+        <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{items.length}</span>
       </header>
       {items.length === 0 ? (
         <p className="px-3 py-3 text-[9px] text-muted-foreground">{emptyLabel}</p>
@@ -36,9 +35,9 @@ export function TraceabilitySection({ title, items, emptyLabel, onNavigate, onRe
               {onNavigate ? (
                 <button type="button" className="min-w-0 flex-1 truncate text-left font-mono underline-offset-2 hover:underline focus-visible:underline" aria-label={`Open ${title} ${item.id}`} onClick={() => onNavigate(item.id)}>{item.id}</button>
               ) : <span className="min-w-0 flex-1 truncate font-mono">{item.id}</span>}
-              {item.isPrimary && <span className="rounded bg-surface-muted px-1 py-0.5 text-[8px]">Primary</span>}
+              {item.isPrimary && <span className="rounded bg-muted px-1 py-0.5 text-[8px]">Primary</span>}
               <span className="shrink-0 text-muted-foreground">{provenanceLabel(item.provenance)}</span>
-              {onRemove && item.provenance.toLowerCase() === 'manual' && <Button type="button" variant="primary" size="sm" className="h-6! px-2!" aria-label={`Remove ${title} ${item.id}`} onClick={() => onRemove(item)}>Remove</Button>}
+              {onRemove && item.provenance.toLowerCase() === 'manual' && <button type="button" className="secondary-button h-6 px-2" aria-label={`Remove ${title} ${item.id}`} onClick={() => onRemove(item)}>Remove</button>}
             </li>
           ))}
         </ul>
@@ -58,7 +57,7 @@ type Props = {
 
 export default function TaskDetail({ detail, loading = false, error = null, onRetry, onNavigate, onRemove }: Props) {
   if (loading) return <div className="flex items-center justify-center gap-2 p-10 text-[10px] text-muted-foreground" role="status"><Loader2 className="h-4 w-4 animate-spin" /> Loading task traceability...</div>
-  if (error) return <div className="flex items-center gap-3 rounded-lg border p-5 text-[10px] text-muted-foreground" role="alert" style={{ borderColor: 'var(--border)' }}><AlertCircle className="h-4 w-4 shrink-0 text-red-500" /><span className="min-w-0 flex-1">Task traceability could not be loaded: {error}</span>{onRetry && <Button type="button" variant="primary" size="sm" className="h-7! text-[9px]!" onClick={onRetry}><RefreshCw className="mr-1 inline h-3 w-3" /> Retry</Button>}</div>
+  if (error) return <div className="flex items-center gap-3 rounded-lg border p-5 text-[10px] text-muted-foreground" role="alert" style={{ borderColor: 'var(--border)' }}><AlertCircle className="h-4 w-4 shrink-0 text-red-500" /><span className="min-w-0 flex-1">Task traceability could not be loaded: {error}</span>{onRetry && <button type="button" className="secondary-button h-7 text-[9px]" onClick={onRetry}><RefreshCw className="mr-1 inline h-3 w-3" /> Retry</button>}</div>
   if (!detail) return null
   const sections: Array<[string, string, TraceabilityItem[]]> = [
     ['Sessions', 'session', detail.sessions],

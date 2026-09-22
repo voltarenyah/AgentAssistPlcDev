@@ -1,6 +1,5 @@
 import { Banknote, Loader2, RefreshCw } from 'lucide-react'
 import type { DeepSeekBalance } from '@/api/client'
-import { Button } from '@notion-kit/ui/primitives'
 
 export type DeepSeekBalanceRefreshState = 'idle' | 'refreshing' | 'success' | 'error'
 
@@ -32,9 +31,8 @@ export default function DeepSeekBalanceStatus({ balance, state, onRefresh }: Dee
       >
         {refreshMessage}
       </span>
-      <Button
-        variant="nav-icon"
-        className="h-4! w-4!"
+      <button
+        className="icon-button h-4 w-4"
         aria-label="Refresh DeepSeek balance"
         aria-busy={state === 'refreshing'}
         disabled={state === 'refreshing'}
@@ -44,7 +42,7 @@ export default function DeepSeekBalanceStatus({ balance, state, onRefresh }: Dee
         {state === 'refreshing'
           ? <Loader2 className="h-3 w-3 animate-spin" />
           : <RefreshCw className="h-3 w-3" />}
-      </Button>
+      </button>
     </span>
   )
 }

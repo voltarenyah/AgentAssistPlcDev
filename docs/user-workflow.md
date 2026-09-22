@@ -62,14 +62,6 @@ The imported origin is bootstrap-only thereafter; later operations use the manag
 
 **Design acceptance:** a read-only answer requires no approval card. A mutation proposal displays target and base context, then actionable approval/rejection controls; an old orientation answer never hides the pending proposal.
 
-### Settings and UI component catalog
-
-1. The user opens **Settings**, chooses **Appearance**, and selects **Open catalog** under **UI components**.
-2. The app opens the component catalog without changing the selected workbench, worktree, or device.
-3. The user browses the component groups and chooses **Back to settings** when finished.
-
-**Design acceptance:** the catalog is reachable from Settings, displays its component navigation and previews, and returns to the same Settings page without changing engineering context.
-
 ### 4. Understand a device offline
 
 1. The user selects a device and reads its identity, source counts, and knowledge state.
@@ -118,7 +110,7 @@ Use `./launch.ps1`, wait for health checks, then verify `http://localhost:5173/`
 | Startup and home orientation | Launch the app and wait for initialization | Loading state is visible; the main screen appears; project tree, home overview, and assistant dock render. |
 | Create workbench from session | Open creation; name project; select an open TIA session; set tags/root; confirm | Step-specific timed progress is visible; success notice appears; the new project is present on the home overview. |
 | Create workbench from file | Open creation; name project; select `.ap17` with the file browser; confirm | File attachment is visible before submit; success/failure identifies the resulting workbench or failed runtime step. |
-| Component catalog | Open Settings; select Appearance; choose Open catalog; choose Back to settings | Component catalog renders; returning restores Settings without changing engineering context. |
+| Catalog orientation | Load app; select workbench/worktree/device | Navigator preserves Workbench → worktree → device context and selected surface renders. |
 | Assistant read-only | Open assistant with no worktree; wait for orientation; ask for history/todos | No error boundary or worktree-id error; worktrees listed; answer matches request. |
 | Assistant mutation gate | Request worktree creation; choose base if prompted | Current **Approve**/**Reject** card renders; smoke test does not approve it. |
 | Knowledge freshness | Open stale/missing/current device fixtures and update through supported path | State/timestamp and stale guidance visible; success clears stale only after API success. |

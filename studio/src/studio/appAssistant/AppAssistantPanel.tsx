@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input } from '@notion-kit/ui/primitives'
 import { Loader2, Send, Sparkles, X } from 'lucide-react'
 import * as api from '@/api/client'
 import {
@@ -152,7 +151,7 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
           <h2 className="text-xs font-semibold">Workbench Assistant</h2>
           <p className="truncate text-[9px] text-muted-foreground">{workbenchName}</p>
         </div>
-        {onClose && <Button variant="nav-icon" className="h-6! w-6!" aria-label="Close Workbench Assistant" onClick={onClose}><X className="h-3 w-3" /></Button>}
+        {onClose && <button className="icon-button h-6 w-6" aria-label="Close Workbench Assistant" onClick={onClose}><X className="h-3 w-3" /></button>}
       </header>
       <div className="border-b px-3 py-2 text-[9px] text-muted-foreground">
         Runtime revision {state.runtime?.workbenchRevision ?? runtime?.workbenchRevision ?? '—'} · selection stays with you
@@ -165,21 +164,19 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
             <div className="font-medium">{worktree.name}</div>
             <div className="text-muted-foreground">{worktree.branch} · {worktree.todoCount} todo{worktree.todoCount === 1 ? '' : 's'} · {worktree.gitStatus}</div>
             {onSelectWorktree && focusedWorktreeId !== worktree.worktreeId && (
-              <Button
-                variant="primary"
-                size="sm"
-                className="mt-1 h-6! px-2! text-[9px]!"
+              <button
+                className="secondary-button mt-1 h-6 px-2 text-[9px]"
                 data-assistant-select-worktree={worktree.worktreeId}
                 disabled={selectingWorktree !== null}
                 onClick={() => void selectWorktree(worktree.worktreeId)}
               >
                 {selectingWorktree === worktree.worktreeId ? 'Selecting…' : 'Select worktree'}
-              </Button>
+              </button>
             )}
           </div>
         ))}
         {state.messages.map((message, index) => (
-          <div key={`${message.role}-${index}`} className={`rounded-md px-2.5 py-2 text-[10px] leading-relaxed ${message.role === 'error' ? 'bg-red-500/10 text-red-700 dark:text-red-300' : message.role === 'user' ? 'ml-4 bg-accent' : 'bg-surface-muted/50'}`}>
+          <div key={`${message.role}-${index}`} className={`rounded-md px-2.5 py-2 text-[10px] leading-relaxed ${message.role === 'error' ? 'bg-red-500/10 text-red-700 dark:text-red-300' : message.role === 'user' ? 'ml-4 bg-accent' : 'bg-muted/50'}`}>
             {message.content}
           </div>
         ))}
@@ -188,11 +185,9 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
             <div className="mb-1 text-muted-foreground">Choose an option:</div>
             <div className="flex flex-wrap gap-1">
               {state.clarificationOptions.map(option => (
-                <Button
+                <button
                   key={option.value}
-                  variant="primary"
-                  size="sm"
-                  className="h-6! px-2! text-[9px]!"
+                  className="secondary-button h-6 px-2 text-[9px]"
                   data-assistant-option={option.value}
                   disabled={state.busy}
                   title={option.description ?? undefined}
@@ -200,7 +195,7 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
                 >
                   {option.label}
                   {option.description && <span className="ml-1 text-muted-foreground">({option.description})</span>}
-                </Button>
+                </button>
               ))}
             </div>
           </div>
@@ -214,15 +209,15 @@ export default function AppAssistantPanel({ workbenchId, workbenchName, runtime,
                 : `${String(state.pendingApproval.name ?? 'new worktree')} · ${String(state.pendingApproval.branch ?? 'new branch')}`}
             </div>
             <div className="mt-2 flex gap-2">
-              <Button variant="blue" size="sm" className="h-6! px-2! text-[9px]!" disabled={state.busy} onClick={() => void send('', { decision: 'approve' })}>Approve</Button>
-              <Button variant="primary" size="sm" className="h-6! px-2! text-[9px]!" disabled={state.busy} onClick={() => void send('', { decision: 'reject' })}>Reject</Button>
+              <button className="primary-button h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => void send('', { decision: 'approve' })}>Approve</button>
+              <button className="secondary-button h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => void send('', { decision: 'reject' })}>Reject</button>
             </div>
           </div>
         )}
       </div>
       <form className="flex gap-2 border-t p-2" style={{ borderColor: 'var(--border)' }} onSubmit={event => { event.preventDefault(); void send(draft) }}>
-        <Input className="min-w-0 flex-1 text-[10px]!" aria-label="Workbench Assistant message" value={draft} onChange={event => setDraft(event.target.value)} placeholder="Ask about this workbench…" disabled={state.busy} />
-        <Button variant="blue" size="sm" className="h-8! w-8! justify-center px-0!" aria-label="Send assistant message" type="submit" disabled={state.busy || !draft.trim()}>{state.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</Button>
+        <input className="field-input min-w-0 flex-1 text-[10px]" aria-label="Workbench Assistant message" value={draft} onChange={event => setDraft(event.target.value)} placeholder="Ask about this workbench…" disabled={state.busy} />
+        <button className="primary-button h-8 w-8 justify-center px-0" aria-label="Send assistant message" type="submit" disabled={state.busy || !draft.trim()}>{state.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button>
       </form>
     </aside>
   )

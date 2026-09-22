@@ -59,9 +59,9 @@ describe('ArchiveProjectDialog', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 7, 13, 11, 3, 0))
     try {
-      renderDialog()
+      const { host } = renderDialog()
 
-      expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Archive file name"]')?.value)
+      expect(host.querySelector<HTMLInputElement>('input[aria-label="Archive file name"]')?.value)
         .toBe('Line 7_202608131103.zap17')
     } finally {
       vi.useRealTimers()
@@ -69,66 +69,66 @@ describe('ArchiveProjectDialog', () => {
   })
 
   it('defaults the export directory to the workbench archive folder', () => {
-    renderDialog()
+    const { host } = renderDialog()
 
-    expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.value)
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.value)
       .toBe('C:\\Automation\\Line7\\archive')
   })
 
   it('requires both an export directory and archive file name', () => {
-    renderDialog()
-    const submit = document.body.querySelector('button[type="submit"]') as HTMLButtonElement
+    const { host } = renderDialog()
+    const submit = host.querySelector('button[type="submit"]') as HTMLButtonElement
 
-    act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, ''))
+    act(() => setInputValue(host.querySelector('input[aria-label="Export directory"]')!, ''))
     expect(submit.disabled).toBe(true)
-    act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
+    act(() => setInputValue(host.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
     expect(submit.disabled).toBe(false)
   })
 
   it('submits the selected export path, file name, and archive mode', async () => {
     const onArchive = vi.fn(() => Promise.resolve())
-    renderDialog({ onArchive })
+    const { host } = renderDialog({ onArchive })
 
-    act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
-    act(() => setInputValue(document.body.querySelector('input[aria-label="Archive file name"]')!, 'Line7.zap17'))
-    // notion-kit's Select cannot be driven in happy-dom - pointer, click, keyboard and
-    // setting the hidden native select's value were all tried - so this test now asserts the
-    // default submission plus the trigger's accessible contract. The selection interaction is
-    // proven in the browser instead, which is the trade-off approved for this migration.
-    expect(document.body.querySelector('[aria-label="Archive mode"]')).not.toBeNull()
-    await act(async () => (document.body.querySelector('button[type="submit"]') as HTMLButtonElement).click())
+    act(() => setInputValue(host.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
+    act(() => setInputValue(host.querySelector('input[aria-label="Archive file name"]')!, 'Line7.zap17'))
+    act(() => {
+      const select = host.querySelector('select[aria-label="Archive mode"]') as HTMLSelectElement
+      select.value = 'none'
+      select.dispatchEvent(new window.Event('change', { bubbles: true }))
+    })
+    await act(async () => (host.querySelector('button[type="submit"]') as HTMLButtonElement).click())
 
     expect(onArchive).toHaveBeenCalledWith({
       targetDirectory: 'C:\\Exports',
       archiveName: 'Line7.zap17',
-      archivationMode: 'compressed',
+      archivationMode: 'none',
     })
   })
 
   it('rejects a path in the archive file name field', () => {
-    renderDialog()
-    act(() => setInputValue(document.body.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
-    act(() => setInputValue(document.body.querySelector('input[aria-label="Archive file name"]')!, 'C:\\Exports\\Line7.zap17'))
+    const { host } = renderDialog()
+    act(() => setInputValue(host.querySelector('input[aria-label="Export directory"]')!, 'C:\\Exports'))
+    act(() => setInputValue(host.querySelector('input[aria-label="Archive file name"]')!, 'C:\\Exports\\Line7.zap17'))
 
-    expect(document.body.textContent).toContain('Enter a file name only')
-    expect((document.body.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true)
+    expect(host.textContent).toContain('Enter a file name only')
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('fills the export directory from the system folder picker', async () => {
     const onBrowseExportDirectory = vi.fn(() => Promise.resolve('C:\\Exports'))
-    renderDialog({ onBrowseExportDirectory })
+    const { host } = renderDialog({ onBrowseExportDirectory })
 
     await act(async () => {
-      document.body.querySelector<HTMLButtonElement>('button[aria-label="Browse for export directory"]')?.click()
+      host.querySelector<HTMLButtonElement>('button[aria-label="Browse for export directory"]')?.click()
     })
 
     expect(onBrowseExportDirectory).toHaveBeenCalledTimes(1)
-    expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.value).toBe('C:\\Exports')
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.value).toBe('C:\\Exports')
   })
 
   it('keeps the export directory field read-only so path selection goes through the explorer', () => {
-    renderDialog()
+    const { host } = renderDialog()
 
-    expect(document.body.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.readOnly).toBe(true)
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Export directory"]')?.readOnly).toBe(true)
   })
 })

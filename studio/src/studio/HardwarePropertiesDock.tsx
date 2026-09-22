@@ -56,7 +56,7 @@ export default function HardwarePropertiesDock({ node, tags, hidden }: Props) {
                 <div className="mb-2 text-[8px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">I/O ranges</div>
                 <div className="space-y-2">
                   {node.ioRanges.map(range => (
-                    <div key={`${range.ioType}-${range.startAddress}-${range.lengthBits}`} className="rounded-lg border bg-surface-muted/10 p-2.5" style={{ borderColor: 'var(--border)' }}>
+                    <div key={`${range.ioType}-${range.startAddress}-${range.lengthBits}`} className="rounded-lg border bg-muted/10 p-2.5" style={{ borderColor: 'var(--border)' }}>
                       <div className="flex items-center justify-between gap-3">
                         <span className={`text-[9px] font-semibold ${range.ioType.toLowerCase() === 'output' ? 'text-amber-600 dark:text-amber-400' : 'text-sky-600 dark:text-sky-400'}`}>{range.ioType}</span>
                         <span className="font-mono text-[9px] font-semibold">{range.addressRange}</span>
@@ -76,7 +76,7 @@ export default function HardwarePropertiesDock({ node, tags, hidden }: Props) {
                 <div className="mb-2 text-[8px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Bound tags ({boundTags.length})</div>
                 <div className="space-y-2">
                   {boundTags.map(tag => (
-                    <div key={tag.id} className="rounded-lg border bg-surface-muted/10 p-2.5" style={{ borderColor: 'var(--border)' }}>
+                    <div key={tag.id} className="rounded-lg border bg-muted/10 p-2.5" style={{ borderColor: 'var(--border)' }}>
                       <div className="flex items-center justify-between gap-2">
                         <span className="min-w-0 truncate text-[9px] font-medium">{tag.name}</span>
                         <span className="font-mono text-[8px] text-muted-foreground">{tag.ioType}</span>

@@ -46,7 +46,6 @@ it('renders exact network cards in the dockable source inspector panel', async (
   expect(host.querySelectorAll('[data-lad-element-id]').length).toBe(12)
   expect(host.querySelectorAll('[data-lad-wire]').length).toBeGreaterThanOrEqual(6)
   const forwardContact = host.querySelector('[data-lad-element-id="27"]')!
-  expect(forwardContact.parentElement!.tagName.toLowerCase()).toBe('svg')
   const resetContact = host.querySelector('[data-lad-element-id="32"]')!
   const timer = host.querySelector('[data-lad-element-id="29"]')!
   const falseContact = host.querySelector('[data-lad-element-id="31"]')!
@@ -63,22 +62,4 @@ it('renders exact network cards in the dockable source inspector panel', async (
   expect(collapse.getAttribute('aria-expanded')).toBe('false')
   expect(host.querySelectorAll('[aria-label="Ladder logic diagram"]').length).toBe(1)
   expect(host.textContent).toContain('CylinderGoForwardPos')
-})
-
-it('renders context-menu triggers as the SVG group and the table row themselves', async () => {
-  inspectSourceObject.mockResolvedValue({
-    category: 'Tags', name: 'Tag table', relativePath: 'Tags/A.xml', interfaces: [],
-    tables: [{ title: 'Tag table', columns: ['Name', 'Data type'], rows: [{ Name: 'MotorRun', 'Data type': 'Bool' }] }],
-    networks: [],
-  })
-  const host = document.createElement('div'); document.body.appendChild(host)
-  const root = createRoot(host)
-  await act(async () => {
-    root.render(<SourceObjectInspectorPanel workbenchId="wb" worktreeId="wt" deviceId="dev" target={{ kind: 'object', relativePath: 'Tags/A.xml' }} referenceTargets={{}} onInspectObject={vi.fn()} onInspectUsage={vi.fn()} />)
-    await Promise.resolve(); await Promise.resolve()
-  })
-  const row = host.querySelector('tbody > tr')!
-  expect(row).not.toBeNull()
-  expect(row.parentElement!.tagName).toBe('TBODY')
-  expect(row.querySelectorAll('td').length).toBe(2)
 })

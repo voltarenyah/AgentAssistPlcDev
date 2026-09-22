@@ -1,5 +1,5 @@
 import { Moon, Sun } from 'lucide-react'
-import { Button } from '@notion-kit/ui/primitives'
+import { Button } from '@/components/ui/button'
 import { setThemePreference, useThemePreference } from '@/studio/theme'
 
 export function ThemeToggle() {
@@ -8,7 +8,8 @@ export function ThemeToggle() {
 
   return (
     <Button
-      variant="nav-icon"
+      variant="ghost"
+      size="icon"
       onClick={() => setThemePreference(dark ? 'light' : 'dark')}
       aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}
     >

@@ -60,8 +60,7 @@ describe('CreateWorkbenchDialog', () => {
   it('refreshes the TIA session list from the refresh button', async () => {
     const onRefreshSessions = vi.fn(() => Promise.resolve())
     const { host } = renderDialog({ onRefreshSessions })
-    // notion-kit's Select trigger carries no size prop; assert the accessible contract instead.
-    expect(host.querySelector('[aria-label="Running TIA session"]')).not.toBeNull()
+    expect(host.querySelector('[data-slot="select-trigger"]')?.getAttribute('data-size')).toBe('sm')
     expect(host.querySelector('button[aria-label="Update TIA sessions"]')?.textContent).toContain('Update')
     expect(host.querySelector('button[aria-label="Update TIA sessions"]')?.className).toContain('w-[88px]')
 
@@ -122,7 +121,7 @@ describe('CreateWorkbenchDialog', () => {
     const workflowStages = host.querySelector('[aria-label="Workflow stages"]')
     expect(workflowStages?.textContent?.indexOf('Reading software checksum...')).toBeLessThan(workflowStages?.textContent?.indexOf('Initializing Git repository...') ?? 0)
     act(() => {
-      [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
         .find(button => button.textContent?.includes('Source export'))?.click()
     })
     const sourceExport = host.querySelector('[data-source-export-activity]')
@@ -206,7 +205,7 @@ describe('CreateWorkbenchDialog', () => {
     }
     const { host } = renderDialog({ busy: true, operationStatus })
     act(() => {
-      [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      [...host.querySelectorAll<HTMLButtonElement>('[data-slot="toggle-group-item"]')]
         .find(button => button.textContent?.includes('Source export'))?.click()
     })
     const sourceExport = host.querySelector<HTMLElement>('[data-source-export-activity]')!
@@ -250,14 +249,12 @@ describe('CreateWorkbenchDialog', () => {
     const { host } = renderDialog({ onCreate })
     const nameInput = host.querySelector<HTMLInputElement>('input[placeholder="Line-7 commissioning"]')!
     act(() => setInputValue(nameInput, 'Line 7'))
-    // ADR-0005: the mode switch is notion-kit Tabs, and the hand-rolled sliding
-    // indicator was deleted rather than ported, so it must not come back.
-    expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2)
-    expect(host.querySelector('[aria-hidden="true"].transition-transform')).toBeNull()
+    expect(host.querySelector('[data-slot="toggle-group"]')).not.toBeNull()
+    expect(host.querySelector('[aria-hidden="true"].transition-transform')).not.toBeNull()
     const fileModeButton = [...host.querySelectorAll<HTMLButtonElement>('button')]
       .find(button => button.textContent?.includes('Open project file'))!
     act(() => fileModeButton.click())
-    expect(fileModeButton.getAttribute('aria-selected')).toBe('true')
+    expect(fileModeButton.getAttribute('data-state')).toBe('on')
 
     const createButton = () => [...host.querySelectorAll<HTMLButtonElement>('button')]
       .find(button => button.textContent?.includes('Create workbench'))!

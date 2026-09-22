@@ -8,9 +8,6 @@ import type { ChatTabsState } from './chatTabState'
 import { parseProgressContent, progressTitle } from './progressDisplay'
 import { contextLabel, contextPercentage, toolCallStats } from './usageDisplay'
 import { sourceContextPrefix, type SourceChatContext } from '../plcSourceState'
-// notion-kit's Input does not dedupe className against its own variant utilities, so any
-// padding/height/size override below carries the important modifier to actually win.
-import { Button, Input, Textarea } from '@notion-kit/ui/primitives'
 
 type Props = {
   tabs: ChatTabsState
@@ -36,7 +33,7 @@ const roleLabel = (message: ChatMessage) =>
 
 const messageTone = (message: ChatMessage) =>
   message.role === 'tool'
-    ? 'bg-surface-muted/30 text-muted-foreground'
+    ? 'bg-muted/30 text-muted-foreground'
     : 'bg-card'
 
 type SettingsSaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -119,21 +116,20 @@ function ChatComposer({
             {sourceContext.number != null ? ` (${sourceContext.category}${sourceContext.number})` : ''}
             {' · '}{sourceContext.relativePath}
           </span>
-          <Button
+          <button
             type="button"
-            variant="nav-icon"
-            className="shrink-0"
+            className="icon-button shrink-0"
             aria-label="Clear source context"
             onClick={onClearSourceContext}
           >
             <X className="h-3 w-3" />
-          </Button>
+          </button>
         </div>
       )}
       <div className="flex gap-2">
-        <Textarea
+        <textarea
           name="message"
-          className="min-h-16 flex-1 resize-none py-2"
+          className="field-input min-h-16 flex-1 resize-none py-2"
           disabled={disabled}
           placeholder="Ask about this PLC device..."
           value={composerDraft}
@@ -145,21 +141,19 @@ function ChatComposer({
           }}
         />
         {busy ? (
-          <Button
+          <button
             type="button"
-            variant="primary"
-            size="sm"
-            className="h-16! px-3! text-red-600! dark:text-red-400!"
+            className="secondary-button h-16 px-3 text-red-600 dark:text-red-400"
             onClick={onStop}
             aria-label="Stop generation"
             title="Stop generation"
           >
             <Square className="h-3.5 w-3.5 fill-current" />
-          </Button>
+          </button>
         ) : (
-          <Button variant="blue" size="sm" className="h-16! px-3!" disabled={disabled} aria-label="Send message">
+          <button className="primary-button h-16 px-3" disabled={disabled} aria-label="Send message">
             <Send className="h-3.5 w-3.5" />
-          </Button>
+          </button>
         )}
       </div>
       <div
@@ -208,10 +202,10 @@ function ChatComposer({
           <>
             <label className="flex items-center gap-1">
               Temp
-              <Input
+              <input
                 type="number"
                 aria-label="Temperature"
-                className="h-6! w-14! px-1! py-0! text-[9px]!"
+                className="field-input h-6 w-14 px-1 py-0 text-[9px]"
                 min={0}
                 max={2}
                 step={0.1}
@@ -226,10 +220,10 @@ function ChatComposer({
             </label>
             <label className="flex items-center gap-1">
               Top P
-              <Input
+              <input
                 type="number"
                 aria-label="Top P"
-                className="h-6! w-14! px-1! py-0! text-[9px]!"
+                className="field-input h-6 w-14 px-1 py-0 text-[9px]"
                 min={0}
                 max={1}
                 step={0.1}
@@ -248,7 +242,7 @@ function ChatComposer({
           <div className="flex min-w-[150px] items-center gap-1.5" data-chat-context title={context}>
             <span className="whitespace-nowrap">{context} · {percentage}%</span>
             <span
-              className="h-1.5 w-16 overflow-hidden rounded-full bg-surface-muted/60"
+              className="h-1.5 w-16 overflow-hidden rounded-full bg-muted/60"
               role="progressbar"
               data-chat-context-progress
               aria-label="Context buffer used"
@@ -278,7 +272,7 @@ function ChatComposer({
 
 function BusyRow() {
   return (
-    <div className="flex items-center gap-2 rounded-lg border bg-surface-muted/30 p-3 text-[10px] text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
+    <div className="flex items-center gap-2 rounded-lg border bg-muted/30 p-3 text-[10px] text-muted-foreground" style={{ borderColor: 'var(--border)' }}>
       <Loader2 className="h-3.5 w-3.5 animate-spin" />
       Assistant is working...
     </div>
@@ -305,7 +299,7 @@ function ProgressBody({ content }: { content: string }) {
                 <span className="font-mono">{entry.name}</span>
               </div>
               {entry.args && entry.args !== '{}' && (
-                <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-surface-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{entry.args}</pre>
+                <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{entry.args}</pre>
               )}
             </div>
           )
@@ -362,7 +356,7 @@ function MessageList({ messages, busy }: { messages: ChatMessage[], busy: boolea
         >
           <div className="mb-1 text-[8px] uppercase tracking-[0.15em] text-muted-foreground">{roleLabel(message)}</div>
           {message.reasoningContent && (
-            <pre className="mb-2 whitespace-pre-wrap rounded-md bg-surface-muted/40 p-2 text-[9px] text-muted-foreground">{message.reasoningContent}</pre>
+            <pre className="mb-2 whitespace-pre-wrap rounded-md bg-muted/40 p-2 text-[9px] text-muted-foreground">{message.reasoningContent}</pre>
           )}
           <MessageBody message={message} />
         </div>
@@ -417,17 +411,15 @@ export default function ChatWorkspace({ tabs, busy, onCreateSession, confirmatio
           <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
             Use the session dock to start a new chat or resume a saved one.
           </p>
-          <Button
+          <button
             type="button"
-            variant="blue"
-            size="sm"
-            className="mt-4"
+            className="primary-button mt-4"
             disabled={busy}
             aria-label="Create new chat session"
             onClick={() => onCreateSession?.()}
           >
             Create new chat session
-          </Button>
+          </button>
         </div>
       </div>
     )
@@ -461,16 +453,14 @@ export default function ChatWorkspace({ tabs, busy, onCreateSession, confirmatio
               </div>
               {tab.hitRoundCap && (
                 <div className="border-t px-3 pt-2" style={{ borderColor: 'var(--border)' }} data-round-cap={tab.sessionId}>
-                  <Button
+                  <button
                     type="button"
-                    variant="primary"
-                    size="sm"
-                    className="w-full!"
+                    className="secondary-button w-full"
                     disabled={busy}
                     onClick={() => onContinue(tab.sessionId)}
                   >
                     Round limit reached — Continue (+6 rounds)
-                  </Button>
+                  </button>
                 </div>
               )}
               {confirmation && tab.sessionId === tabs.activeId && (
@@ -480,27 +470,23 @@ export default function ChatWorkspace({ tabs, busy, onCreateSession, confirmatio
                       Approval needed: <span className="font-mono">{confirmation.toolName}</span>
                     </div>
                     {confirmation.arguments && (
-                      <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-surface-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{confirmation.arguments}</pre>
+                      <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{confirmation.arguments}</pre>
                     )}
                     <div className="mt-2 flex gap-2">
-                      <Button
+                      <button
                         type="button"
-                        variant="blue"
-                        size="sm"
-                        className="h-7! px-3!"
+                        className="primary-button h-7 px-3"
                         onClick={() => onConfirm?.('allowOnce')}
                       >
                         Allow once
-                      </Button>
-                      <Button
+                      </button>
+                      <button
                         type="button"
-                        variant="primary"
-                        size="sm"
-                        className="h-7! px-3! text-red-600! dark:text-red-400!"
+                        className="secondary-button h-7 px-3 text-red-600 dark:text-red-400"
                         onClick={() => onConfirm?.('deny')}
                       >
                         Deny
-                      </Button>
+                      </button>
                     </div>
                   </div>
                 </div>

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FocusEvent, type MouseEvent } from 'react'
 import { AlertCircle, GitBranch, Loader2, RefreshCw, TriangleAlert } from 'lucide-react'
-import { Button } from '@notion-kit/ui/primitives'
 import * as api from '@/api/client'
 import { buildTimelineColumns, type TimelineColumn } from './versionControlTimeline'
 
@@ -120,7 +119,7 @@ function TimelineColumnView({
   const sharedChecksum = column.git.tiaChecksum ?? column.svn?.tiaChecksum ?? null
   const checksumText = displayChecksum(sharedChecksum)
   return (
-    <div data-timeline-column className="relative flex min-w-[176px] flex-1 flex-col items-center rounded-lg border bg-surface-muted/20 px-1 py-1" style={{ borderColor: 'var(--border)' }}>
+    <div data-timeline-column className="relative flex min-w-[176px] flex-1 flex-col items-center rounded-lg border bg-muted/20 px-1 py-1" style={{ borderColor: 'var(--border)' }}>
       {column.git.untrackableChange && (
         <span className="absolute right-1.5 top-1.5 z-20" title="Untrackable change — no git-file diff" data-testid="vc-untrackable-marker">
           <TriangleAlert className="h-3 w-3 text-amber-500" />
@@ -175,7 +174,7 @@ function EventDetails({ active, position, entity, onAttach, onRemove, onReassign
   return (
     <div
       data-testid="timeline-event-details"
-      className="pointer-events-none fixed z-50 w-[min(360px,calc(100vw-1rem))] rounded-lg border bg-surface-muted/95 p-3 text-[9px] shadow-xl backdrop-blur-sm"
+      className="pointer-events-none fixed z-50 w-[min(360px,calc(100vw-1rem))] rounded-lg border bg-muted/95 p-3 text-[9px] shadow-xl backdrop-blur-sm"
       style={{ left: `${position.left}px`, top: `${position.top}px`, borderColor: 'var(--border)' }}
     >
       <div className="flex items-center gap-2">
@@ -191,7 +190,7 @@ function EventDetails({ active, position, entity, onAttach, onRemove, onReassign
         {!isGit && 'gitCommitSha' in event && <span title={event.gitCommitSha}>Git commit: {shortGitHash(event.gitCommitSha)}</span>}
         {isGit && 'files' in event && event.files.length > 0 && <span>Changed files: {event.files.length}</span>}
       </div>
-      {entity && <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border)' }}><div className="mb-1 font-semibold">Task links</div>{entity.tasks.length === 0 ? <span className="text-muted-foreground">Unassigned legacy record</span> : entity.tasks.map(link => <div key={link.edgeId || link.id} className="flex items-center gap-1"><button type="button" className="pointer-events-auto underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="text-muted-foreground">{link.provenance}</span>{onReassign && <button type="button" className="pointer-events-auto underline" aria-label={`Reassign task ${link.id} from ${identifier}`} onClick={() => onReassign(link.id)}>Reassign</button>}{link.edgeId && onRemove && <button type="button" className="pointer-events-auto underline" aria-label={`Remove task ${link.id} from ${identifier}`} onClick={() => onRemove(link.id, link.edgeId)}>Remove</button>}</div>)}{onAttach && <Button type="button" variant="primary" size="sm" className="pointer-events-auto mt-1 h-6! px-2!" aria-label={`Attach task to ${identifier}`} onClick={onAttach}>Attach</Button>}</div>}
+      {entity && <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border)' }}><div className="mb-1 font-semibold">Task links</div>{entity.tasks.length === 0 ? <span className="text-muted-foreground">Unassigned legacy record</span> : entity.tasks.map(link => <div key={link.edgeId || link.id} className="flex items-center gap-1"><button type="button" className="pointer-events-auto underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="text-muted-foreground">{link.provenance}</span>{onReassign && <button type="button" className="pointer-events-auto underline" aria-label={`Reassign task ${link.id} from ${identifier}`} onClick={() => onReassign(link.id)}>Reassign</button>}{link.edgeId && onRemove && <button type="button" className="pointer-events-auto underline" aria-label={`Remove task ${link.id} from ${identifier}`} onClick={() => onRemove(link.id, link.edgeId)}>Remove</button>}</div>)}{onAttach && <button type="button" className="pointer-events-auto secondary-button mt-1 h-6 px-2" aria-label={`Attach task to ${identifier}`} onClick={onAttach}>Attach</button>}</div>}
     </div>
   )
 }
@@ -311,9 +310,9 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
         <div className="flex items-center gap-3 p-5 text-[10px] text-muted-foreground">
           <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
           <span className="min-w-0 flex-1">{error}</span>
-          <Button type="button" data-testid="timeline-retry" variant="primary" size="sm" className="h-7! text-[9px]!" onClick={() => void loadPage(0, false)}>
+          <button type="button" data-testid="timeline-retry" className="secondary-button h-7 text-[9px]" onClick={() => void loadPage(0, false)}>
             <RefreshCw className="mr-1 inline h-3 w-3" /> Retry
-          </Button>
+          </button>
         </div>
       )}
 
@@ -347,18 +346,16 @@ export default function WorktreeVersionControlTimeline({ workbenchId, worktreeId
           <div className="flex items-center justify-between border-t px-4 py-2.5" style={{ borderColor: 'var(--border)' }}>
             <span className="text-[9px] text-muted-foreground">Hover or focus a shape for commit details.</span>
             {hasMore && (
-              <Button
+              <button
                 type="button"
                 data-testid="timeline-load-more"
-                variant="primary"
-                size="sm"
-                className="h-7! text-[9px]!"
+                className="secondary-button h-7 text-[9px]"
                 disabled={loadingMore}
                 onClick={() => void loadPage(gitCommits.length, true)}
               >
                 {loadingMore && <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />}
                 {loadingMore ? 'Loading…' : 'Load more'}
-              </Button>
+              </button>
             )}
           </div>
         </>
