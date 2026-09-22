@@ -4,13 +4,14 @@ import { toast } from 'sonner'
 import * as api from '@/api/client'
 import type { DiffLine, SourceObjectComparison } from '@/api/client'
 import {
+  Button,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+} from '@notion-kit/ui/primitives'
 import { showErrorToast } from '@/components/ui/toast'
 
 type Props = {
@@ -116,32 +117,34 @@ export default function PlcSourceCompareDialog({
             <span className="break-all">{failure}</span>
           </div>
         )}
-        <DialogFooter className="gap-2">
+        <DialogFooter className="flex-row justify-end gap-2">
           {!comparison.same && (
             <>
-              <button
+              <Button
                 type="button"
-                className="secondary-button"
+                variant="primary"
+                size="sm"
                 disabled={Boolean(action)}
                 onClick={() => void acceptTiaVersion()}
               >
                 {action === 'accept' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                 Use TIA version
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="secondary-button"
+                variant="primary"
+                size="sm"
                 disabled={Boolean(action)}
                 onClick={() => void pushLocalToTia()}
               >
                 {action === 'push' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UploadCloud className="h-3.5 w-3.5" />}
                 Push local to TIA
-              </button>
+              </Button>
             </>
           )}
-          <button type="button" className="primary-button" disabled={Boolean(action)} onClick={onClose}>
+          <Button type="button" variant="blue" size="sm" disabled={Boolean(action)} onClick={onClose}>
             Close
-          </button>
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
