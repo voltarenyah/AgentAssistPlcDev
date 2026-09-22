@@ -11,6 +11,11 @@ import {
   DialogTitle,
   Input,
   Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from '@notion-kit/ui/primitives'
 
 type ArchiveValues = {
@@ -171,12 +176,29 @@ export default function ArchiveProjectDialog({
 
           <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
             <span>Archive mode</span>
-            <select className="field-input" aria-label="Archive mode" value={archivationMode} onChange={event => setArchivationMode(event.target.value)} disabled={busy}>
-              <option value="compressed">Compressed (recommended)</option>
-              <option value="none">Uncompressed</option>
-              <option value="discard_restorable_data">Discard restorable data</option>
-              <option value="discard_restorable_data_and_compressed">Discard restorable data and compression</option>
-            </select>
+            {/* notion-kit's Select is Base UI: the root needs `items` so SelectValue can render
+                the selected label rather than the raw value. */}
+            <Select
+              items={[
+                { value: 'compressed', label: 'Compressed (recommended)' },
+                { value: 'none', label: 'Uncompressed' },
+                { value: 'discard_restorable_data', label: 'Discard restorable data' },
+                { value: 'discard_restorable_data_and_compressed', label: 'Discard restorable data and compression' },
+              ]}
+              value={archivationMode}
+              onValueChange={value => setArchivationMode(value ?? '')}
+              disabled={busy}
+            >
+              <SelectTrigger aria-label="Archive mode" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="compressed">Compressed (recommended)</SelectItem>
+                <SelectItem value="none">Uncompressed</SelectItem>
+                <SelectItem value="discard_restorable_data">Discard restorable data</SelectItem>
+                <SelectItem value="discard_restorable_data_and_compressed">Discard restorable data and compression</SelectItem>
+              </SelectContent>
+            </Select>
           </Label>
 
           {error && (
