@@ -51,13 +51,24 @@ indicator.** `Tabs` is a single-select ARIA control, is already proven in this c
 custom chrome rather than reproducing it. The `CreateWorkbenchDialog` mode switch keeps its two
 labels and its `mode` state; only the control and the indicator change.
 
-**Gap 2 — `TagPicker` uses notion-kit's `TagsInput`; `TagFilter` keeps a filterable list and takes
-`Autocomplete`.** `@notion-kit/ui/tags-input` ships a controlled chip input — `value: { tags, input }`,
-`onTagsChange`, `onInputChange`, an optional zod `inputSchema`, and `TagOption { value, color }` — which
-is the tag picker's exact job, down to the colour that Studio's tags already carry. The tag filter
-remains a filterable list over existing tags with no creation, which `Autocomplete` covers. These are
-interaction-shape changes, so each is its own slice with its own UI Spec update and tests, not a
-primitive swap folded into a broader commit.
+**Gap 2 — `TagPicker` uses notion-kit's `Command` family; `TagFilter` takes `Autocomplete`.**
+This corrects an earlier recommendation in this ADR that named `TagsInput` for the picker, which
+was wrong about what the picker is. Reading the component showed that `TagPicker` is not an inline
+tag entry field: it is an **"Add tag" button that opens a dialog** — a taxonomy browser with search,
+a tree, and create-a-path support — built on cmdk's `CommandDialog`. notion-kit's `Command` is
+documented as a dialog-only command palette built on the autocomplete primitive, which is precisely
+this shape, and it exports the same component names Studio already imports
+(`CommandDialog`, `CommandInput`, `CommandList`, `CommandItem`, `CommandEmpty`), so the migration is
+an import swap plus prop adaptation rather than a redesign. Its props are not identical — the dialog
+comes from the autocomplete family, so `value`/`onValueChange`/`onSelect` need mapping onto that API.
+
+`TagFilter` is the inline one: a filterable list over existing tags with no creation, which
+`Autocomplete` covers. These are still interaction-shape changes, so each is its own slice with its
+own UI Spec update and tests, not a primitive swap folded into a broader commit.
+
+`TagsInput` remains the right primitive if Studio ever wants inline chip entry for tags — the
+capability exists and takes `TagOption { value, color }`, down to the colour Studio's tags already
+carry — but it is not what `TagPicker` currently is.
 
 `@notion-kit/ui/selectable` was checked as a candidate for this gap and for the ten native `<select>`
 elements, and is **not** one: it is a rubber-band marquee selection container (`selectionRect`,
