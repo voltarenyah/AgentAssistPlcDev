@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle2, FileDiff, Loader2, X } from 'lucide-react'
 import { useState } from 'react'
-import { Checkbox } from '@notion-kit/ui/primitives'
+import { Checkbox, Input } from '@notion-kit/ui/primitives'
 import type { ReconciliationEntry, ReconciliationPreview } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,7 +11,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import {
   actionableEntries,
   comparedEntries,
@@ -187,7 +186,7 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
               onInput={event => setCommitTitle(event.currentTarget.value)}
               placeholder="Commit title..."
               disabled={busy}
-              className="h-7 w-44 text-[9px]"
+              className="h-7! w-44! text-[9px]!"
             />
           )}
           <Button variant="outline" size="xs" onClick={onClose} disabled={busy}>Reject</Button>
