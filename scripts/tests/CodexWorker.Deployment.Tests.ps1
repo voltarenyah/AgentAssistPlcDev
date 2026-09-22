@@ -530,7 +530,6 @@ Describe 'Codex runtime deployment' {
         $http = {
             param([string] $Uri)
             $events.Add("http:$Uri") | Out-Null
-            if ($Uri -match '8787') { return [pscustomobject]@{ StatusCode = 200; Body = '{"status":"ok","model":"fallback","fallback":true}' } }
             return [pscustomobject]@{ StatusCode = 200; Body = '{}' }
         }.GetNewClosure()
         $reader = { param([string] $Path) return (($durable.Value | ConvertTo-Json -Depth 20) | ConvertFrom-Json) }.GetNewClosure()
@@ -573,7 +572,7 @@ Describe 'Codex runtime deployment' {
         $f = New-RuntimeFixture
         $phase = @{ value = 0 }
         $f.Process = { param([string] $FilePath, [string[]] $Arguments) if ($FilePath -eq 'powershell.exe') { $phase.value++ }; return [pscustomobject]@{ ExitCode = 0; Output = ''; ProcessId = 77; CommandLine = "$FilePath $($Arguments -join ' ')" } }.GetNewClosure()
-        $f.Http = { param([string] $Uri) if ($phase.value -eq 1) { return [pscustomobject]@{ StatusCode = 500; Body = '' } }; if ($Uri -match '8787') { return [pscustomobject]@{ StatusCode = 200; Body = '{"status":"ok"}' } }; return [pscustomobject]@{ StatusCode = 200; Body = '{}' } }.GetNewClosure()
+        $f.Http = { param([string] $Uri) if ($phase.value -eq 1) { return [pscustomobject]@{ StatusCode = 500; Body = '' } }; return [pscustomobject]@{ StatusCode = 200; Body = '{}' } }.GetNewClosure()
         $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
         $result.Success | Should Be $false
         $result.RollbackSucceeded | Should Be $true
@@ -621,20 +620,6 @@ Describe 'Codex runtime deployment' {
         $f.Durable.Value.activeSlot | Should Be 'runtime-a'
         $f.Durable.Value.deployment.status | Should Be 'failed'
         @($f.Events | Where-Object { $_ -like 'http:*' }).Count | Should Be 0
-    }
-
-    It 'records the actual sidecar model contract without inventing fallback fields' {
-        $f = New-RuntimeFixture
-        $f.Http = { param([string] $Uri)
-            if ($Uri -match '8787') { return [pscustomobject]@{ StatusCode = 200; Body = '{"status":"ok","modelConfigured":false,"modelMode":"deterministic-fallback"}' } }
-            return [pscustomobject]@{ StatusCode = 200; Body = '{}' }
-        }.GetNewClosure()
-        $result = Invoke-CodexDeployment -RepositoryRoot $f.Root -DataRoot $f.Data -Config $f.Config -Deployment $f.State.deployment -StateReader $f.Reader -StateWriter $f.Writer -GitCommandRunner $f.Git -ProcessRunner $f.Process -HttpRunner $f.Http -ProcessProvider { @() } -PathInspector { param($Path) [pscustomobject]@{ IsReparsePoint = $false } }
-        $sidecar = $result.Evidence.health.'http://localhost:8787/health'
-        $sidecar.modelConfigured | Should Be $false
-        $sidecar.modelMode | Should Be 'deterministic-fallback'
-        $sidecar.fallback | Should Be $true
-        $sidecar.status | Should Be 'ok'
     }
 
     It 'fails closed on an uninspectable runtime path before any destructive git command' {

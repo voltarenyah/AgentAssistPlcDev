@@ -251,8 +251,6 @@ function Initialize-CodexIssueWorktree {
 
     $solutionPath = Join-Path $Worktree 'AgentAssistPlcDev.sln'
     $studioPath = Join-Path $Worktree 'studio'
-    $agentServicePath = Join-Path $Worktree 'agent-service'
-    $venvPath = Join-Path $agentServicePath '.venv'
     if ([string]::IsNullOrWhiteSpace($ActivityLogPath) -and $Config.PSObject.Properties.Name -contains 'activityLogPath') { $ActivityLogPath = [string] $Config.activityLogPath }
     $results = [System.Collections.Generic.List[object]]::new()
     $step = Invoke-CodexSetupStep -FilePath 'dotnet' -Arguments @('restore', $solutionPath) -ActivityLogPath $ActivityLogPath -ProcessRunner $ProcessRunner
@@ -262,20 +260,6 @@ function Initialize-CodexIssueWorktree {
         $results.Add($step) | Out-Null
     }
 
-    $bootstrapPython = [string] $Config.bootstrapPython
-    $venvPython = Join-Path $venvPath 'Scripts\python.exe'
-    $venvValid = $false
-    if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
-        $check = Invoke-CodexSetupCommand -FilePath $venvPython -Arguments @('-c', 'import app_assistant, pytest') -ProcessRunner $ProcessRunner
-        Write-CodexActivityLog -Path $ActivityLogPath -Text ("{0} -c import app_assistant, pytest`n{1}" -f $venvPython, $check.Output)
-        $venvValid = ([int]$check.ExitCode -eq 0)
-    }
-    if (-not $venvValid) {
-        $step = Invoke-CodexSetupStep -FilePath $bootstrapPython -Arguments @('-m', 'venv', $venvPath) -ActivityLogPath $ActivityLogPath -ProcessRunner $ProcessRunner
-        $results.Add($step) | Out-Null
-        $step = Invoke-CodexSetupStep -FilePath $venvPython -Arguments @('-m', 'pip', 'install', '-e', "$agentServicePath[test]") -ActivityLogPath $ActivityLogPath -ProcessRunner $ProcessRunner
-        $results.Add($step) | Out-Null
-    }
     return @($results.ToArray())
 }
 

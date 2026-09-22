@@ -142,7 +142,7 @@ function Invoke-CodexDeploymentHealth {
     param([object] $Config, [scriptblock] $HttpRunner, [scriptblock] $SleepProvider)
     if ($null -eq $HttpRunner) { $HttpRunner = { param($Uri) Invoke-WebRequest -UseBasicParsing -Uri $Uri -TimeoutSec 2 } }
     $timeout = [Math]::Max(1, [int](Get-CodexDeploymentValue $Config 'healthTimeoutSeconds' 60))
-    $uris = @('http://localhost:5173/','http://localhost:5239/api/status','http://localhost:8787/health')
+    $uris = @('http://localhost:5173/','http://localhost:5239/api/status')
     $last = [ordered]@{}
     $attempts = [Math]::Max(1, $timeout * 4)
     for ($i = 0; $i -lt $attempts; $i++) {

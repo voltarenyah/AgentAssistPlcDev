@@ -1,7 +1,9 @@
 Describe 'Codex local worker installation' {
     BeforeEach {
         $WhatIfPreference = $false
-        $script:BootstrapPython = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\agent-service\.venv\Scripts\python.exe'))
+        # The launcher no longer runs a Python sidecar (ADR-0005); bootstrapPython is only carried
+        # through the config surface by these tests, so a neutral path is used.
+        $script:BootstrapPython = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'bootstrap-python.exe'))
         Import-Module (Join-Path $PSScriptRoot '..\codex-worker\CodexWorker.psd1') -Force
     }
 

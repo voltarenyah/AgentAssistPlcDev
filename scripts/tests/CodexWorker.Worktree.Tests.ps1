@@ -184,7 +184,6 @@ Describe 'Codex worker worktrees' {
     It 'prepares dependencies through injectable process boundaries and redacts the activity log' {
         $worktree = Join-Path $TestDrive 'issue-worktree'
         New-Item -ItemType Directory -Path (Join-Path $worktree 'studio') -Force | Out-Null
-        New-Item -ItemType Directory -Path (Join-Path $worktree 'agent-service') -Force | Out-Null
         $logPath = Join-Path $TestDrive 'activity.log'
         $calls = [System.Collections.Generic.List[object]]::new()
         $runner = {
@@ -193,12 +192,10 @@ Describe 'Codex worker worktrees' {
             [pscustomobject]@{ ExitCode = if ($Arguments -contains '-c') { 1 } else { 0 }; Output = 'token=do-not-write-this' }
         }.GetNewClosure()
 
-        Initialize-CodexIssueWorktree -Worktree $worktree -Config ([pscustomobject]@{ bootstrapPython = 'bootstrap-python' }) -ActivityLogPath $logPath -ProcessRunner $runner | Out-Null
+        Initialize-CodexIssueWorktree -Worktree $worktree -Config ([pscustomobject]@{}) -ActivityLogPath $logPath -ProcessRunner $runner | Out-Null
 
         @($calls | Where-Object FilePath -eq 'dotnet').Count | Should Be 1
         @($calls | Where-Object FilePath -eq 'npm.cmd').Count | Should Be 1
-        @($calls | Where-Object FilePath -eq 'bootstrap-python').Count | Should Be 1
-        @($calls | Where-Object FilePath -like '*Scripts\python.exe' | Where-Object { $_.Arguments -contains 'pip' }).Count | Should Be 1
         (Get-Content -Raw $logPath) | Should Not Match 'do-not-write-this'
         (Get-Content -Raw $logPath) | Should Match '\[REDACTED\]'
     }
@@ -207,7 +204,6 @@ Describe 'Codex worker worktrees' {
         $worktree = Join-Path $TestDrive 'hidden-lock-worktree'
         $studio = Join-Path $worktree 'studio'
         New-Item -ItemType Directory -Path (Join-Path $studio 'node_modules') -Force | Out-Null
-        New-Item -ItemType Directory -Path (Join-Path $worktree 'agent-service') -Force | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $studio 'package-lock.json'), '{"name":"studio","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"studio","version":"1.0.0","dependencies":{"left-pad":"1.3.0"}},"node_modules/left-pad":{"version":"1.3.0"}}}')
         [System.IO.File]::WriteAllText((Join-Path $studio 'node_modules\.package-lock.json'), '{"name":"studio","version":"1.0.0","lockfileVersion":3,"packages":{"node_modules/left-pad":{"version":"1.3.0"}}}')
         $calls = [System.Collections.Generic.List[object]]::new()
