@@ -94,11 +94,21 @@ public static class AppAssistantChatEndpoints
         return Results.Empty;
     }
 
+    /// <summary>
+    /// The panel reads camelCase — it normalizes <c>runtimeSnapshot.worktrees</c>, <c>workbenchId</c>
+    /// and friends — so frames use the same web defaults as the rest of the API. Serializing with a
+    /// bare <see cref="JsonSerializer.Serialize(object?)"/> emits PascalCase, which the panel's
+    /// normalizer cannot read: it discards the whole runtime context and silently renders no
+    /// worktrees and no revision. That failure is invisible to the test suite, which asserts on
+    /// frame names rather than on the shape inside them.
+    /// </summary>
+    private static readonly JsonSerializerOptions FrameJson = new(JsonSerializerDefaults.Web);
+
     private static async Task WriteEventAsync(HttpContext http, string eventName, object payload)
     {
         await http.Response.WriteAsync($"event: {eventName}\n", http.RequestAborted).ConfigureAwait(false);
         await http.Response.WriteAsync(
-            $"data: {JsonSerializer.Serialize(payload)}\n\n",
+            $"data: {JsonSerializer.Serialize(payload, FrameJson)}\n\n",
             http.RequestAborted).ConfigureAwait(false);
         await http.Response.Body.FlushAsync(http.RequestAborted).ConfigureAwait(false);
     }
