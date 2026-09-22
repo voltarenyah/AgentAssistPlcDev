@@ -506,6 +506,61 @@ Recorded findings, each of which the type checker or the browser caught:
 - `ContextMenuItem` and `DropdownMenuItem` share one structured API (`icon`, `label`, `desc`,
   `variant`, `onClick`), and `variant="destructive"` maps to `error`.
 
+### SourceObjectInspectorPanel migrated, and a better ceiling for device surfaces
+
+Done. Both menus are notion-kit `ContextMenu` now, and the two conclusions the reconnaissance drew
+held up: the colocated test never opened a menu, so nothing was lost, and the SVG trigger did need
+`render={<g … />}` rather than a class swap.
+
+Three things are worth keeping from this one.
+
+**The orphaned closing tag, not the edit granularity.** Converting the SVG trigger is a *two-part*
+change: the opening tag becomes `render={<g … />}`, **and** the `</g>` that used to close it has to be
+deleted from `</g></ContextMenuTrigger>`. Half of that pair produces `TS2657 JSX expressions must have
+one parent element` and `TS17002 Expected corresponding JSX closing tag`, and both failures were
+initially misread as an edit-granularity problem. The same two-part shape applies to the table row,
+where `<tr className="border-t">` and its `</tr>` collapse into one `render={<tr … />}`. Expect the
+diagnostic when converting any trigger whose element wraps children, and fix both halves in one edit.
+
+**The menu-content width rule is a rule, not a one-off.** `ContextMenuContent` needed
+`className="w-max min-w-56"` exactly as `WorkbenchNavigator`'s menus and `ProjectLandingPage`'s
+dropdown did. Without it the labels are clipped to `Open referenced…` and `Show read/…`, because
+notion-kit sizes menu content to its heading and these menus have none. Treat the explicit width as
+part of migrating any notion-kit menu that has items but no heading.
+
+**Build and suite are green through that defect.** The truncation is invisible to `tsc` and to vitest:
+the DOM text is the full string, only the rendered box is clipped. It surfaced only in a browser, and
+it then broke the probe itself - clicking the centre of a clipped 118px label lands outside the popup,
+so the item never activates and the handler looks broken. A green build and a green suite are not
+evidence that a menu is usable.
+
+**A device-gated surface still has a browser check.** The earlier claim in this document - that device
+surfaces can only be build-verified while #109 blocks selection - is true of the *app route* but was
+too strong as a ceiling. The panel is genuinely unreachable through the UI today, and that is worth
+recording as evidence rather than assumption:
+
+- `SourceObjectInspectorPanel` needs a selected device, and the workspace only renders once
+  `selection.deviceId` is set.
+- The only in-app device selector (`WorktreeLandingPage`) renders devices that have **overlay-modified
+  blocks**; this worktree reports `0 devices with overlay changes`, so it renders no button at all.
+- `api.selectDevice` is a `POST`, so server selection must not be forced from the console to
+  manufacture a route the UI cannot produce.
+
+What replaces it is an isolated mount of the **real component**, which is a browser check of the
+changed code without needing the app to reach it: a temporary Vite entry rendering
+`SourceObjectInspectorPanel` with the fixture's props, `page.route` interception for
+`**/source/inspect*` and `**/source/usage*`, and Playwright in both themes. That check proved the
+whole contract - right-click on the `<g>` and on the `<tr>` opens the menu, the item label renders in
+full, clicking fires `onInspectObject` / `onInspectUsage` and closes the menu, the `<g>` stays a direct
+child of `<svg>` with its wires intact, the `<tr>` stays a direct child of `<tbody>`, and the console
+stays clean. The temporary entry is deleted afterwards; nothing about the probe ships. Prefer this over
+build-and-suite for any remaining surface the app route cannot reach.
+
+Two smaller facts from the same pass, both now covered by assertions in the colocated test so they
+cannot regress silently: `ContextMenuTrigger render={<g … />}` and `render={<tr … />}` introduce **no
+wrapper element** - a `div` around either would break the SVG and the table - and the wrapper-free
+structure is what the trigger's `render` prop guarantees.
+
 ## Open User Decisions
 
 Resolved during specification and implementation: captions use per-theme AA values (`#737373` light,
@@ -532,3 +587,4 @@ visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authorit
 | 2026-09-21 | 1.4 | Record the completion of the last 1:1 surface, the duplicate-close fix, and a whole-application regression sweep of 36 passing steps. |
 | 2026-09-21 | 1.5 | Record the endgame inventory by gate, the custom-button classification, and two findings worth separate issues: `NativeStorePanel` has no consumers, and several non-interactive chips are buttons. |
 | 2026-09-21 | 1.6 | Record the milestone: the legacy button vocabulary fell from 91 occurrences to zero, including all device surfaces, and the checkboxes followed. Adds the two structural findings that cost the most time (notion-kit's Checkbox DOM shape, and Base UI's Select being undrivable in happy-dom) and revises the remaining inventory by gate. |
+| 2026-09-21 | 1.7 | `SourceObjectInspectorPanel`'s two context menus migrated. Records the two-part trigger conversion and its misleading diagnostic, promotes the menu-content width to a general rule, notes that build and suite are green through the truncation defect, and replaces the "device surfaces are build-only" ceiling with an isolated real-component browser probe - including the evidence that the app route is genuinely unreachable. |
