@@ -434,6 +434,25 @@ migration's outstanding items stop being primitives and become **behaviours that
 reach** - which is a different kind of debt, and worth its own issue rather than another migration
 round.
 
+### The last migration item: two device panels' context menus, one small and one not
+
+Reconnaissance before touching either, since the two are very different sizes:
+
+| Panel | `ContextMenu` mentions | Shape | Sequence |
+|---|---|---|---|
+| `SourceObjectInspectorPanel.tsx` | 4 | a single menu | **first** - bounded enough to finish and verify in one pass |
+| `PlcSourcePanel.tsx` | 25 | several menus with many items | **afterwards**, as its own staged migration, the way `WorkbenchNavigator`'s 43 items were |
+
+Both have a colocated test file and no other test file renders them, so each blast radius is its own
+suite. Both are device surfaces, so neither can be browser-verified while issue #109 blocks device
+selection - their verification ceiling is the build and the suite, which is what approving the
+device-page migration already accepted.
+
+Worth stating because it is the migration's actual end state: with the tag surfaces settled as
+behaviour-blocked and this pair scheduled, **the migration has no remaining item that is merely an
+unmigrated primitive.** What is left is one bounded menu, one staged menu, device-gated things whose
+verification ceiling is already agreed, and behaviours that only the tag UI can reach.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
