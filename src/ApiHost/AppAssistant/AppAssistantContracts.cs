@@ -66,35 +66,6 @@ public sealed record WorktreeSvnHistoryResponse(
     bool Complete = false,
     string? UnavailableReason = null);
 
-public sealed record CreateWorktreeAssistantRequest(
-    string WorkbenchId,
-    string Name,
-    string Branch,
-    string? StartPoint,
-    long ExpectedWorkbenchRevision,
-    string RequestId);
-
-public sealed record CreateWorkbenchAssistantRequest(
-    string WorkbenchId,
-    string Name,
-    string? RootPath,
-    string EngineeringProjectPath,
-    long ExpectedWorkbenchRevision,
-    string RequestId);
-
-public sealed record CreateWorktreeAssistantResult(
-    string WorkbenchId,
-    string WorktreeId,
-    string Name,
-    string Branch,
-    long WorkbenchRevision,
-    bool Selected);
-
-public sealed record CreateWorkbenchAssistantResult(
-    WorkbenchMetadata Workbench,
-    WorktreeMetadata Worktree,
-    IReadOnlyList<DeviceMetadata> Devices);
-
 public sealed class AppAssistantGatewayException(
     string code,
     string message,

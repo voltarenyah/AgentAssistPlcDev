@@ -46,25 +46,6 @@ public sealed class AppAssistantGatewayTests
     }
 
     [Fact]
-    public async Task AssistantActionsKeepWorktreeCreationDisabledUntilMutationPlan()
-    {
-        await using var factory = new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder => builder.UseEnvironment("Testing"));
-        var catalog = factory.Services.GetRequiredService<WorkbenchCatalog>();
-        var state = factory.Services.GetRequiredService<WorkbenchApiState>();
-        var gateway = factory.Services.GetRequiredService<AppAssistantGateway>();
-        var root = Path.Combine(Path.GetTempPath(), "assistant-actions-" + Guid.NewGuid().ToString("N"));
-        var workbench = catalog.Create("Assistant Actions", root);
-        state.Open(root);
-
-        var actions = await gateway.GetActionsAsync(workbench.WorkbenchId);
-        var create = Assert.Single(actions, action => action.Id == "create_worktree");
-
-        Assert.False(create.Enabled);
-        Assert.Contains(create.BlockedBy, blocker => blocker.Contains("approved mutation", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
     public async Task ContextRefreshesChangedWorktreeFactsWithoutDuplicatingTheWorktree()
     {
         await using var factory = new WebApplicationFactory<Program>()

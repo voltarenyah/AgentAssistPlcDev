@@ -1,20 +1,22 @@
 using System.Text.Json;
-using System.Collections.Concurrent;
 using Agent.Mcp;
 using Agent.Workbench;
 
 namespace ApiHost.AppAssistant;
 
+/// <summary>
+/// Reads the workbench facts the Workbench Assistant panel shows. It exists for the in-process
+/// <see cref="WorkbenchAssistantService"/>; the internal HTTP routes and the LangGraph worktree and
+/// workbench mutation endpoints it used to serve the Python sidecar are gone (ADR-0005), and the
+/// panel's destructive actions now go through the shared MCP tools and the AgentSandbox approval
+/// card instead.
+/// </summary>
 public sealed class AppAssistantGateway(
     WorkbenchApiState state,
     WorkbenchRuntimeStateCoordinator runtime,
     WorktreeTaskStore tasks,
-    ApiMcpGateway mcp,
-    WorkbenchCoordinator coordinator,
-    OperationStatusRegistry operations)
+    ApiMcpGateway mcp)
 {
-    private readonly ConcurrentDictionary<string, Lazy<Task<CreateWorktreeAssistantResult>>> mutationRequests = new(StringComparer.Ordinal);
-
     public Task<AppAssistantWorkbenchContext> GetContextAsync(string workbenchId)
     {
         var workbench = state.RefreshRuntimeIfChanged(workbenchId);
@@ -214,132 +216,6 @@ public sealed class AppAssistantGateway(
             worktree.BaseSvnRevision,
             revision?.Svn.Revision,
             revision?.Validation.CompileStatus));
-    }
-
-    public async Task<IReadOnlyList<ActionCapability>> GetActionsAsync(string workbenchId)
-    {
-        var context = await GetContextAsync(workbenchId).ConfigureAwait(false);
-        return context.AvailableActions.Select(action => action.Id == "create_worktree"
-            ? action with
-            {
-                Enabled = false,
-                BlockedBy = action.BlockedBy.Append("Assistant worktree mutations require the approved mutation flow.").ToArray(),
-            }
-            : action).ToArray();
-    }
-
-    public Task<CreateWorktreeAssistantResult> CreateWorktreeAsync(
-        string workbenchId,
-        CreateWorktreeAssistantRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (!string.Equals(workbenchId, request.WorkbenchId, StringComparison.Ordinal))
-            throw new AppAssistantGatewayException("WORKBENCH_SCOPE_MISMATCH", "The mutation workbench does not match the route scope.");
-        ValidateMutationRequest(request);
-        var key = $"{workbenchId}:{request.RequestId}";
-        var operation = mutationRequests.GetOrAdd(
-            key,
-            _ => new Lazy<Task<CreateWorktreeAssistantResult>>(
-                () => ExecuteCreateWorktreeAsync(request, cancellationToken),
-                LazyThreadSafetyMode.ExecutionAndPublication));
-        return operation.Value;
-    }
-
-    public async Task<CreateWorkbenchAssistantResult> CreateWorkbenchAsync(
-        string workbenchId,
-        CreateWorkbenchAssistantRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (!string.Equals(workbenchId, request.WorkbenchId, StringComparison.Ordinal))
-            throw new AppAssistantGatewayException("WORKBENCH_SCOPE_MISMATCH", "The mutation workbench does not match the route scope.");
-        if (string.IsNullOrWhiteSpace(request.RequestId))
-            throw new AppAssistantGatewayException("REQUEST_ID_REQUIRED", "A deterministic request ID is required.");
-        if (string.IsNullOrWhiteSpace(request.Name))
-            throw new AppAssistantGatewayException("INVALID_WORKBENCH_NAME", "The workbench name is required.");
-        if (string.IsNullOrWhiteSpace(request.EngineeringProjectPath)
-            || !request.EngineeringProjectPath.EndsWith(".ap17", StringComparison.OrdinalIgnoreCase))
-            throw new AppAssistantGatewayException(
-                "INVALID_ENGINEERING_PROJECT_PATH",
-                "The engineering project path must point to a TIA .ap17 project file.");
-
-        var current = runtime.GetSnapshot(workbenchId);
-        if (current.WorkbenchRevision != request.ExpectedWorkbenchRevision)
-            throw new RuntimeStateConflictException(request.ExpectedWorkbenchRevision, current.WorkbenchRevision);
-        if (state.List().Any(item => string.Equals(item.Name, request.Name.Trim(), StringComparison.OrdinalIgnoreCase)))
-            throw new WorkbenchLifecycleException("WORKBENCH_CONFLICT", "A workbench with the same name already exists.");
-
-        var created = await coordinator.CreateWorkbenchAsync(
-            new CreateWorkbenchRequest(
-                request.Name.Trim(),
-                request.RootPath?.Trim(),
-                null,
-                request.EngineeringProjectPath.Trim()),
-            cancellationToken).ConfigureAwait(false);
-        state.Add(created.Workbench);
-        coordinator.RegisterWorkbench(created.Workbench);
-        return new CreateWorkbenchAssistantResult(created.Workbench, created.Worktree, created.Devices);
-    }
-
-    private async Task<CreateWorktreeAssistantResult> ExecuteCreateWorktreeAsync(
-        CreateWorktreeAssistantRequest request,
-        CancellationToken cancellationToken)
-    {
-        var workbench = state.Workbench(request.WorkbenchId);
-        var current = runtime.GetSnapshot(request.WorkbenchId);
-        if (current.WorkbenchRevision != request.ExpectedWorkbenchRevision)
-            throw new RuntimeStateConflictException(request.ExpectedWorkbenchRevision, current.WorkbenchRevision);
-        if (current.Operation.Status is RuntimeOperationStatus.Running or RuntimeOperationStatus.AwaitingApproval)
-            throw new WorkbenchLifecycleException("WORKBENCH_OPERATION_BUSY", "Another workbench operation is running.");
-        if (workbench.Worktrees.Any(worktree =>
-                string.Equals(worktree.Name, request.Name, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(worktree.Branch, request.Branch, StringComparison.OrdinalIgnoreCase)))
-            throw new WorkbenchLifecycleException("WORKTREE_CONFLICT", "A worktree with the same name or branch already exists.");
-
-        runtime.StartOperation(request.WorkbenchId, request.RequestId, "create-worktree");
-        operations.Start(request.RequestId, "assistant-create-worktree", "Creating linked worktree...");
-        try
-        {
-            var created = await coordinator.CreateWorktreeAsync(
-                new CreateWorktreeRequest(workbench, request.Name, request.Branch, request.StartPoint),
-                cancellationToken,
-                operations.For(request.RequestId)).ConfigureAwait(false);
-            state.Refresh(request.WorkbenchId);
-            runtime.CompleteOperation(request.WorkbenchId, request.RequestId, "Worktree created.");
-            var refreshed = runtime.GetSnapshot(request.WorkbenchId);
-            operations.Succeed(request.RequestId, "Worktree created.");
-            return new CreateWorktreeAssistantResult(
-                request.WorkbenchId,
-                created.WorktreeId,
-                created.Name,
-                created.Branch,
-                refreshed.WorkbenchRevision,
-                false);
-        }
-        catch (Exception exception)
-        {
-            runtime.FailOperation(request.WorkbenchId, request.RequestId, exception.Message);
-            operations.Fail(request.RequestId, "Worktree creation failed.", exception.Message);
-            throw;
-        }
-    }
-
-    private static void ValidateMutationRequest(CreateWorktreeAssistantRequest request)
-    {
-        if (string.IsNullOrWhiteSpace(request.RequestId))
-            throw new AppAssistantGatewayException("REQUEST_ID_REQUIRED", "A deterministic request ID is required.");
-        if (string.IsNullOrWhiteSpace(request.Name)
-            || request.Name.Contains('/')
-            || request.Name.Contains('\\')
-            || request.Name.Contains("..", StringComparison.Ordinal))
-            throw new AppAssistantGatewayException("INVALID_WORKTREE_NAME", "The worktree name must be a single relative name.");
-        if (string.IsNullOrWhiteSpace(request.Branch)
-            || Path.IsPathRooted(request.Branch)
-            || request.Branch.Contains("..", StringComparison.Ordinal))
-            throw new AppAssistantGatewayException("INVALID_BRANCH", "The branch must be a relative branch name.");
-        if (!string.IsNullOrWhiteSpace(request.StartPoint) && Path.IsPathRooted(request.StartPoint))
-            throw new AppAssistantGatewayException("INVALID_START_POINT", "The start point cannot be a filesystem path.");
     }
 
     private static int ValidateLimit(int? requested, int defaultValue, int maximum)
