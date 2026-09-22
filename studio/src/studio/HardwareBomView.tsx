@@ -1,4 +1,4 @@
-import { Input } from '@notion-kit/ui/primitives'
+import { Button, Input } from '@notion-kit/ui/primitives'
 import {
   ChevronDown,
   ChevronRight,
@@ -101,13 +101,15 @@ export default function HardwareBomView({ view }: Props) {
           onChange={event => setFilter(event.target.value)}
         />
         <div className="flex-1" />
-        <button
+        <Button
           aria-label="Toggle group by type"
-          className={`secondary-button h-7 text-[9px] ${grouped ? 'bg-accent' : ''}`}
+          variant="primary"
+          size="sm"
+          className={`h-7! text-[9px]! ${grouped ? 'bg-accent!' : ''}`}
           onClick={() => setGrouped(current => !current)}
         >
           <Rows3 className="h-3 w-3" /> Group by type
-        </button>
+        </Button>
       </div>
 
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-auto">

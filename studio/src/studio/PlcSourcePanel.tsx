@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Button } from '@notion-kit/ui/primitives'
 import {
   AlertCircle,
   Boxes,
@@ -335,7 +336,7 @@ export default function PlcSourcePanel({
                       <span className="text-muted-foreground">Task links</span>
                       <div className="flex flex-wrap items-center gap-1">
                         {(traceability[item.id]?.tasks ?? []).length === 0 ? <span className="text-muted-foreground">Unassigned legacy source object</span> : traceability[item.id]!.tasks.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-surface-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span><button type="button" className="underline font-sans" aria-label={`Reassign task ${link.id} from source object ${item.name}`} onClick={() => void reassignSourceTask(item, link.id)}>Reassign</button>{link.edgeId && <button type="button" className="underline font-sans" aria-label={`Remove task ${link.id} from source object ${item.name}`} onClick={async () => { try { await api.removeTaskRelationship(workbenchId, link.id, link.edgeId); await loadTraceability(item) } catch (error) { showErrorToast(errorMessage(error)) } }}>Remove</button>}</span>)}
-                        <button type="button" className="secondary-button h-6 px-2" aria-label={`Attach task to source object ${item.name}`} onClick={() => void attachSourceTask(item)}>Attach</button>
+                        <Button type="button" variant="primary" size="sm" className="h-6! px-2!" aria-label={`Attach task to source object ${item.name}`} onClick={() => void attachSourceTask(item)}>Attach</Button>
                       </div>
                       <span className="text-muted-foreground">Commit links</span>
                       <div className="flex flex-wrap items-center gap-1">
