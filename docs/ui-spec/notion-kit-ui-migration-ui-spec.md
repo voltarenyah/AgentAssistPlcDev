@@ -406,6 +406,34 @@ Worth recording as the migration's sharpest boundary so far: the blocker is not 
 not the harness alone - it is that a *behaviour* in a neighbouring component is only reachable
 through this UI, so changing the UI removes the only way to exercise it.
 
+### TagPicker: evaluated by the same rule, and it lands the same way
+
+Applying the rule to TagPicker before writing any code, by reading its whole test file rather than
+its neighbours, produces a finer-grained answer than "migrate" or "don't":
+
+| Test | What it depends on | Verdict |
+|---|---|---|
+| "opens with the taxonomy only and marks every active tag" | the taxonomy **tree**, which is already notion-kit, plus one cmdk-specific `[role="option"]` count | migratable - only the count assertion needs restating |
+| "shows one create action for a valid absent slash path" | a cmdk-rendered option found by role and name | depends on the popup rendering, which happy-dom does not give us |
+| "assigns an existing node by keyboard search and keeps controlled assignments on error" | cmdk's keyboard path **and**, as its subject, `onAssign` rejecting → an error toast, the assignment not applied, and the input still present | same class as the inline list |
+
+So the picker is not one decision but three. The first is a small retarget away. The second needs the
+option list to render, which is the same happy-dom limit that stopped the inline list. The third is
+the decisive one: its subject is a **failure path** - an assignment that rejects must surface an error
+and leave the controlled state alone - and reaching it requires the popup and its keyboard selection.
+A browser check cannot substitute, because reproducing a rejected `onAssign` by hand is not something
+a pass can do.
+
+The conclusion follows the inline list's: **TagPicker stays on cmdk**, and the reason is again a
+behaviour rather than the component. Two of its three tests are about things a click cannot show -
+one about a failed assignment, one about a list that must render before anything can be chosen. The
+taxonomy tree inside it is already notion-kit and is unaffected.
+
+What this does change is the shape of what remains. Once both tag surfaces are settled this way, the
+migration's outstanding items stop being primitives and become **behaviours that only this UI can
+reach** - which is a different kind of debt, and worth its own issue rather than another migration
+round.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
