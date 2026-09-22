@@ -169,16 +169,38 @@ Result: **36 of 36 steps pass** (18 surfaces × 2 themes) with zero console erro
 4xx/5xx responses, zero horizontal overflow and no mutation requests beyond the project
 selection. Destructive actions are opened but never confirmed.
 
-### Where the migration ends: the remaining inventory
+### Milestone: the old button vocabulary is gone
 
-Everything reachable, verifiable and not device-gated is migrated. What is left falls
-into five buckets, and none of them is unexplained work:
+The legacy CSS button classes — `secondary-button`, `primary-button`, `icon-button` — were
+present **91 times** in `src/studio` when this phase began. There are now **zero**. Every
+product surface uses notion-kit's `Button` with an explicit variant and size, including all
+seven device surfaces, which were migrated on explicit approval while deliberately left
+unwired. Checkboxes followed: all seven raw checkbox inputs now use notion-kit's `Checkbox`,
+so no `type="checkbox"` remains either.
 
-1. **Device surfaces (issue #109)** — roughly 14 legacy-class buttons plus about 26 raw
-   buttons across `DeviceOverviewView`, `PlcSourcePanel`, `PlcSourceCompareDialog`,
-   `NodeEdgesView`, `BlockSourceView`, `SourceObjectInspectorPanel` and
-   `HardwareConfigurationView`. Excluded by decision: device selection is blocked, so
-   these cannot be rendered or verified from the browser.
+Two findings from that work belong here, because both cost real time and neither is
+guessable from the documentation:
+
+- **notion-kit's `Checkbox` renders a `<label>` containing an `aria-checked` indicator span
+  and the real control as a *sibling* input, visually hidden with `position: fixed`.** Any
+  query scoped inside the testid element finds no input, `aria-checked` is not on the
+  control, and clicking the wrapper does not toggle in happy-dom — while a real click on the
+  label does. Tests should click the sibling input and read its `checked` property.
+- **Base UI's `Select` cannot be driven in the happy-dom test environment at all** — not by
+  `pointerdown` plus `click` on the trigger, not by keyboard, and not by setting the value of
+  the hidden native `<select>` it renders, which exists but is not the source of truth. This
+  is why the ten native selects are a decision rather than a task.
+
+What is left falls into five buckets, and none of them is unexplained work:
+
+1. **The device surfaces' remaining raw buttons** — about 26 across `DeviceOverviewView`,
+   `NodeEdgesView`, `BlockSourceView`, `SourceObjectInspectorPanel` and the rest. Their
+   legacy-class buttons are migrated, including `PlcSourceCompareDialog`, which had to be
+   done in one pass because its Studio dialog chrome and its buttons could not be split
+   without leaving one component speaking both vocabularies. What is left is mostly list
+   rows, tab strips and chips that should not become `Button` at all. They stay unrenderable
+   while issue #109 blocks device selection, so any change there is verified by build and
+   suite only.
 2. **Two open decisions** — the tag surfaces, where `@notion-kit/ui/tags-input`'s `TagsInput` is the
    direct mapping for the picker and both `TagsInput` and `Autocomplete` are available (see ADR-0005),
    and the ten native `<select>` elements still using `field-input`, which need Base UI's `Select` and
@@ -274,3 +296,4 @@ visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authorit
 | 2026-09-21 | 1.3 | Add the migration status with commits; point the remaining mapping gaps at ADR-0005; correct the MainStudio stage, which has nothing to migrate. |
 | 2026-09-21 | 1.4 | Record the completion of the last 1:1 surface, the duplicate-close fix, and a whole-application regression sweep of 36 passing steps. |
 | 2026-09-21 | 1.5 | Record the endgame inventory by gate, the custom-button classification, and two findings worth separate issues: `NativeStorePanel` has no consumers, and several non-interactive chips are buttons. |
+| 2026-09-21 | 1.6 | Record the milestone: the legacy button vocabulary fell from 91 occurrences to zero, including all device surfaces, and the checkboxes followed. Adds the two structural findings that cost the most time (notion-kit's Checkbox DOM shape, and Base UI's Select being undrivable in happy-dom) and revises the remaining inventory by gate. |
