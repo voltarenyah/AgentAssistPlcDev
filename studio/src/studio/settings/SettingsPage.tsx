@@ -284,19 +284,26 @@ export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCa
             </Row>
             {settings?.thinkingEnabled && (
               <Row id="assistant.reasoning-effort" title="Reasoning effort" description="How hard the model thinks when thinking is enabled.">
-                <select
-                  aria-label="Reasoning effort"
-                  className="field-input h-8 w-auto px-2 text-[11px]"
+                <Select
+                  items={[
+                    ...(!EFFORT_OPTIONS.includes(settings.reasoningEffort) ? [{ value: settings.reasoningEffort, label: settings.reasoningEffort }] : []),
+                    ...EFFORT_OPTIONS.map(effort => ({ value: effort, label: effort })),
+                  ]}
                   value={settings.reasoningEffort}
-                  onChange={event => changeSettings({ reasoningEffort: event.target.value })}
+                  onValueChange={value => changeSettings({ reasoningEffort: value ?? '' })}
                 >
-                  {!EFFORT_OPTIONS.includes(settings.reasoningEffort) && (
-                    <option value={settings.reasoningEffort}>{settings.reasoningEffort}</option>
-                  )}
-                  {EFFORT_OPTIONS.map(effort => (
-                    <option key={effort} value={effort}>{effort}</option>
-                  ))}
-                </select>
+                  <SelectTrigger aria-label="Reasoning effort" className="h-8! w-auto text-[11px]!">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {!EFFORT_OPTIONS.includes(settings.reasoningEffort) && (
+                      <SelectItem value={settings.reasoningEffort}>{settings.reasoningEffort}</SelectItem>
+                    )}
+                    {EFFORT_OPTIONS.map(effort => (
+                      <SelectItem key={effort} value={effort}>{effort}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </Row>
             )}
             <Row id="assistant.temperature" title="Temperature" description="Sampling randomness between 0 and 2.">
