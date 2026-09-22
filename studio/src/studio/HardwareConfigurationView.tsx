@@ -10,6 +10,7 @@ import {
 import { useEffect, useState } from 'react'
 import type { HardwareConfigurationNode, HardwareConfigurationView as HardwareView } from '@/api/client'
 import { tagsForHardwareNode } from './hardwareAddressing'
+import { Button } from '@notion-kit/ui/primitives'
 
 type Props = {
   view: HardwareView | null
@@ -47,16 +48,18 @@ function EmptyHardware({
         <h2 className="text-base font-semibold">Hardware configuration</h2>
         <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">{message}</p>
         {canReload && (
-          <button
+          <Button
             type="button"
-            className="primary-button mt-5"
+            variant="blue"
+            size="sm"
+            className="mt-5"
             aria-label="Generate hardware configuration from TIA"
             disabled={reloadBusy}
             onClick={onReload}
           >
             {reloadBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
             {reloadBusy ? 'Generating hardware configuration...' : 'Generate hardware configuration'}
-          </button>
+          </Button>
         )}
       </div>
     </div>
