@@ -308,6 +308,31 @@ honest options are to delete it or leave it alone, and that is a product decisio
 primitive one. `NodeEdgesView` is unrenderable while device selection is blocked, so its selects
 are in the same bucket as the device buttons: migrated or not, nothing can be verified.
 
+### TagFilter: the prop mapping, pinned before the swap
+
+`TagFilter` has two cmdk surfaces: an inline filter input with a dropdown of matching tags, and a
+taxonomy dialog behind a button. The inline one moves to notion-kit's `Autocomplete`, which exports
+a full set - `Autocomplete`, `AutocompleteInputGroup`, `AutocompleteInput`, `AutocompleteContent`,
+`AutocompleteList`, `AutocompleteItem`, `AutocompleteEmpty`, `AutocompleteGroup`,
+`AutocompleteLabel` and more - so this is a component swap rather than something to hand-build.
+
+The mapping, read off the exported types rather than guessed:
+
+| cmdk (Studio) | notion-kit | Note |
+|---|---|---|
+| `Command` | `Autocomplete` | the root **owns filtering**, so `shouldFilter={false}` disappears entirely |
+| `CommandInput` | `AutocompleteInputGroup` + `AutocompleteInput` | `wrapperClassName` becomes `classNames={{ wrapper }}`; the input is built on the same `Input` props, so the size overrides follow the established important-modifier rule |
+| `CommandList` (a hand-positioned absolute dropdown) | `AutocompleteContent` + `AutocompleteList` | the library positions its own popup, so that hand-written chrome is deleted rather than ported |
+| `CommandItem` | `AutocompleteItem` | takes `value` |
+| `CommandEmpty` | `AutocompleteEmpty` | |
+
+Two consequences worth stating before the code changes. Because the root owns the query filtering,
+the extracted `filterableTags` rule becomes the **items source** rather than the filter itself: its
+"exclude already-selected" half is still ours, its query half is now the library's, which is why
+extracting it first was the right order rather than wasted motion. And `items` accepts
+`AutocompleteGroupItem[]`, so when the taxonomy dialog is migrated the grouping is representable as
+data - the same grouped shape `MainStudio`'s savepoint select needed - rather than flattened.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
