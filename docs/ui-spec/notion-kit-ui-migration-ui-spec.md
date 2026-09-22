@@ -301,7 +301,7 @@ control was judged on its substitute:
 | Active task | yes | **no** — needs compatible tasks and a selected device, which #109 blocks | **left native** |
 | `NativeStorePanel` | yes | **no** — the component has no consumers, so it never renders | **not migrated** |
 | `NodeEdgesView` (2) | yes | **no** — device-gated by #109 | **not migrated** |
-| `ChatWorkspace` (2) | yes | **yes** — needs a chat session opened first, which is why it is last | pending |
+| `ChatWorkspace` (2) | yes | **not in this environment** — see below | gated on the assistant sidecar |
 
 Two of these are not really migration tasks at all. `NativeStorePanel` has no consumers, so the
 honest options are to delete it or leave it alone, and that is a product decision rather than a
