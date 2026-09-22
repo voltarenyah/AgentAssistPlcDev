@@ -275,6 +275,39 @@ moves to a browser check, or keep the picker on cmdk.
 restructure is worth doing for the same reason the rest of this migration was, but not at the
 cost of three behavioural tests becoming presence checks by accident.
 
+### The select workstream: the rule it settled on, and what it decided per control
+
+Twelve native `<select>` elements remained when the buttons and fields were done. Eight are
+migrated. The rule that decided the rest was derived the hard way, across several rounds, and
+is worth stating because it generalises to any control Base UI cannot be driven through in the
+test environment:
+
+> Migrate a control whose tests drive it only if a **browser substitute** exists for the
+> interaction those tests lose. If no substitute exists, leave it native and record why.
+
+Base UI's `Select` cannot be driven in happy-dom by pointer, click, keyboard, or by setting the
+value of any hidden native select; that was established by trying all four. So each remaining
+control was judged on its substitute:
+
+| Control | Tests drive it | Browser substitute | Outcome |
+|---|---|---|---|
+| Archive mode | yes | yes, dialog is reachable | migrated |
+| Task type, task device | one of two | yes, dialog is reachable | migrated |
+| Settings model | yes | yes | migrated |
+| Reasoning effort | no | yes, needs Thinking mode on | migrated |
+| Landing sort | yes | partially — with one project no reorder is visible, so the ordering was extracted into `orderProjects` and asserted directly instead | migrated |
+| MCP server filter | no | yes, filtering observable (93 → 36 visible) | migrated |
+| SVN savepoint | no | not confirmed — the form's savepoint data was not shown to be populated | migrated, grouping and disabled states unverified |
+| Active task | yes | **no** — needs compatible tasks and a selected device, which #109 blocks | **left native** |
+| `NativeStorePanel` | yes | **no** — the component has no consumers, so it never renders | **not migrated** |
+| `NodeEdgesView` (2) | yes | **no** — device-gated by #109 | **not migrated** |
+| `ChatWorkspace` (2) | yes | **yes** — needs a chat session opened first, which is why it is last | pending |
+
+Two of these are not really migration tasks at all. `NativeStorePanel` has no consumers, so the
+honest options are to delete it or leave it alone, and that is a product decision rather than a
+primitive one. `NodeEdgesView` is unrenderable while device selection is blocked, so its selects
+are in the same bucket as the device buttons: migrated or not, nothing can be verified.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
