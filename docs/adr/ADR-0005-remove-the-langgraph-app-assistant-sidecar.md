@@ -76,19 +76,20 @@ client must reach loopback.
 ## Decision
 
 There is one assistant. The C# `AgentLoop` serves both the device-scoped chat view and the
-workbench-scoped Workbench Assistant panel. The Python sidecar, LangGraph, the
-`/api/app-assistant/*` routes and the Studio app-assistant state module are removed.
+workbench-scoped Workbench Assistant panel. The Python sidecar, LangGraph and
+`AppAssistantClient` — the HTTP hop to it — are removed.
 
 ### Decision Details
 
 | Item | Content |
 |---|---|
-| **Decision** | Delete `agent-service/`, `src/ApiHost/AppAssistant/`, the `/api/app-assistant/*` routes, `studio/src/studio/appAssistant/`, and the launcher/packaging/desktop wiring that exists only to run the sidecar. The panel is re-served from the existing chat machinery. |
+| **Decision** | Delete `agent-service/`, `AppAssistantClient`, and the launcher/packaging/desktop wiring that exists only to run the sidecar. Remove `AppAssistantGateway`'s internal endpoints unless another caller needs them. The panel keeps its `/api/app-assistant/*` contract, re-backed **in-process** by `ApiChatService` under `ChatScopes.Workbench`. |
 | **Why this** | The sidecar duplicates reach the host already has, and its weakness is structural (no tool binding, silent fallback), not tunable. |
 | **What must survive** | The Workbench Assistant panel; the create-worktree/create-workbench approval card; server-side conversation persistence. |
-| **How each survives** | The panel stays as a presentation of the one assistant. The approval card is the **existing** `AgentSandbox` card: `pending.Add` → `{kind:"confirmation"}` on `/api/logs` → `data-confirmation` card in `ChatWorkspace.tsx:466` → `POST /api/chat/confirm/{id}` (covered by `MainStudio.chatConfirm.test.tsx`), not the panel's amber duplicate. Persistence is `SessionManager`, which is already per-device and already server-side. The two mutations are already MCP tools (`create_project`, `vc_add_worktree`) already classified destructive, so they inherit the audit trail. |
+| **How each survives** | The panel keeps its own HTTP contract and its own persisted session, so its UI, state module and tests are not rewritten — the panel is a real surface, and re-pointing it at `/api/chat` would be a large frontend change for no user-visible gain. The approval card is the **existing** `AgentSandbox` card: `pending.Add` → `{kind:"confirmation"}` on `/api/logs` → `data-confirmation` card in `ChatWorkspace.tsx:466` → `POST /api/chat/confirm/{id}` (covered by `MainStudio.chatConfirm.test.tsx`), not the panel's amber duplicate. Persistence is `SessionManager`, which is already per-device and already server-side. The two mutations are already MCP tools (`create_project`, `vc_add_worktree`) already classified destructive, so they inherit the audit trail. |
+| **Consequence of that choice** | The approval card cannot arrive as an `interrupt` frame. The panel reads a buffered response (`parseAssistantEvents(await response.text())`), so a frame queued while the turn is suspended on approval is not visible until the turn ends — which is exactly the moment the user needed it. The card is therefore driven from `/api/logs` filtered to the panel's own session id, the mechanism the chat view already uses. |
 | **Accepted non-goal** | Chatting with **no device selected**. `DeviceContext` requires a `DeviceId`, and the user decided this is not required. The panel therefore prompts for a worktree/device selection instead of answering; the device-less orientation flow is not carried over. |
-| **Known unknowns** | Whether the panel and the chat view should present the *same* session (one conversation, two views) or the panel should own a separate session for the same device. The first is fewer concepts; the second preserves today's separation. |
+| **Known unknowns** | Whether the panel and the chat view should present the *same* session (one conversation, two views) or the panel should own a separate session for the same device. The user chose the separate session. |
 | **Reconsider when** | A requirement appears that genuinely needs a Python-side agent runtime — for example an ML or graph library with no .NET equivalent. "The framework is nicer" is not that requirement. |
 
 ### Verification rules this produced
