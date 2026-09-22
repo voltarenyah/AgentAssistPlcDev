@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { TagNode } from '@/api/client'
 import { ListFilter } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button } from '@notion-kit/ui/primitives'
 import { Command, CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import TagChip from './TagChip'
 import TagTree from './TagTree'
@@ -89,9 +89,9 @@ export function TagFilter({
         </Command>
         <Button
           type="button"
-          variant="outline"
-          size="icon-sm"
-          className="shrink-0"
+          variant="primary"
+          size="sm"
+          className="w-8! shrink-0 justify-center px-0!"
           disabled={loading}
           aria-label={loading ? 'Open tag taxonomy (loading)' : 'Open tag taxonomy'}
           onClick={() => {

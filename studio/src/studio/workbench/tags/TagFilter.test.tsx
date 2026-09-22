@@ -44,7 +44,10 @@ describe('TagFilter', () => {
     expect(searchCommand).not.toBeNull()
     expect(taxonomyButton).not.toBeNull()
     expect(searchCommand.parentElement).toBe(taxonomyButton.parentElement)
-    expect(taxonomyButton.dataset.size).toBe('icon-sm')
+    // Assert the accessible contract rather than the Studio Button's data-size, which no migrated
+    // button carries: an icon-only button must have a name and render an icon, nothing else.
+    expect(taxonomyButton.getAttribute('aria-label')).toBe('Open tag taxonomy')
+    expect(taxonomyButton.querySelector('svg')).not.toBeNull()
     await act(async () => root.unmount())
   })
 
