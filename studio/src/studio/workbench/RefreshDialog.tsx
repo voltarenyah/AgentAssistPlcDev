@@ -1,8 +1,8 @@
 import { AlertTriangle, CheckCircle2, FileDiff, Loader2, X } from 'lucide-react'
 import { useState } from 'react'
 import type { ReconciliationEntry, ReconciliationPreview } from '@/api/client'
-import { Button } from '@/components/ui/button'
 import {
+  Button,
   Checkbox,
   Dialog,
   DialogContent,
@@ -66,7 +66,7 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
             <DialogTitle className="text-sm">TIA comparison</DialogTitle>
             <DialogDescription className="text-[10px]">Live source was exported to temporary staging. This comparison is non-destructive; tracked source changes only after explicit approval{autoCommit ? ', then committed with your title.' : '.'}</DialogDescription>
           </div>
-          <Button variant="ghost" size="icon-xs" onClick={onClose} disabled={busy} aria-label="Close TIA comparison"><X /></Button>
+          <Button variant="close" onClick={onClose} disabled={busy} aria-label="Close TIA comparison"><X /></Button>
         </DialogHeader>
 
         <div className="grid grid-cols-4 gap-px border-b bg-border" style={{ borderColor: 'var(--border)' }}>
@@ -160,16 +160,16 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
           {actionable.length > 0 && (
             <>
               <Button
-                variant="outline"
-                size="xs"
+                variant="primary"
+                size="sm"
                 disabled={busy || approvedPaths.size === actionable.length}
                 onClick={() => setApprovedPaths(new Set(actionable.map(entry => entry.relativePath)))}
               >
                 Check all
               </Button>
               <Button
-                variant="outline"
-                size="xs"
+                variant="primary"
+                size="sm"
                 disabled={busy || approvedPaths.size === 0}
                 onClick={() => setApprovedPaths(new Set())}
               >
@@ -188,9 +188,10 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
               className="h-7! w-44! text-[9px]!"
             />
           )}
-          <Button variant="outline" size="xs" onClick={onClose} disabled={busy}>Reject</Button>
+          <Button variant="primary" size="sm" onClick={onClose} disabled={busy}>Reject</Button>
           <Button
-            size="xs"
+            variant="blue"
+            size="sm"
             disabled={busy || (actionable.length > 0 && (approvedPaths.size === 0 || (autoCommit && !commitTitle.trim())))}
             onClick={() => onApply([...approvedPaths], autoCommit ? commitTitle.trim() : undefined)}
           >
