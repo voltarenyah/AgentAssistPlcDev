@@ -21,6 +21,7 @@ import type {
   WorkbenchRegistration,
 } from '@/api/client'
 import type { DeviceViewState } from '@/studio/deviceSnapshot'
+import { Button } from '@notion-kit/ui/primitives'
 
 export type DeviceOverviewViewProps = {
   deviceName: string | null
@@ -116,20 +117,21 @@ export default function DeviceOverviewView({
         </div>
 
         <div className="flex flex-wrap gap-2 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
-            <button className="secondary-button" disabled={Boolean(operation)} onClick={() => onOpenProjectInTia()}>
+            <Button variant="primary" size="sm" disabled={Boolean(operation)} onClick={() => onOpenProjectInTia()}>
               <Server className="h-3.5 w-3.5" /> Open project in TIA
-            </button>
+            </Button>
             {matchingTiaSession && (
-              <button className="secondary-button" disabled={Boolean(operation)} onClick={() => onAttachTiaInstance(matchingTiaSession.id)}>
+              <Button variant="primary" size="sm" disabled={Boolean(operation)} onClick={() => onAttachTiaInstance(matchingTiaSession.id)}>
                 <Server className="h-3.5 w-3.5" /> Re-attach TIA instance (PID {matchingTiaSession.id})
-              </button>
+              </Button>
             )}
-            <button className="primary-button" disabled={Boolean(operation)} onClick={() => onStageRefresh()}>
+            <Button variant="blue" size="sm" disabled={Boolean(operation)} onClick={() => onStageRefresh()}>
               <RefreshCw className="h-3.5 w-3.5" /> Compare with TIA
-            </button>
+            </Button>
             {!isBrandNewDevice && (
-              <button
-                className={rebuildArmed ? 'primary-button' : 'secondary-button'}
+              <Button
+                variant={rebuildArmed ? 'blue' : 'primary'}
+                size="sm"
                 disabled={Boolean(operation)}
                 onClick={() => {
                   if (!rebuildArmed) {
@@ -142,15 +144,15 @@ export default function DeviceOverviewView({
                 }}
               >
                 <RotateCw className="h-3.5 w-3.5" /> {rebuildArmed ? 'Confirm full rebuild?' : 'Rebuild project'}
-              </button>
+              </Button>
             )}
-            <button className="secondary-button" disabled={Boolean(operation)} onClick={() => onUpdateKnowledge(false)}>
+            <Button variant="primary" size="sm" disabled={Boolean(operation)} onClick={() => onUpdateKnowledge(false)}>
               <Database className="h-3.5 w-3.5" /> Update knowledge
-            </button>
+            </Button>
             {activeWorktree?.branch !== 'master' && (
-              <button className="secondary-button" disabled={Boolean(operation)} onClick={() => onMergeIntoMaster()}>
+              <Button variant="primary" size="sm" disabled={Boolean(operation)} onClick={() => onMergeIntoMaster()}>
                 <GitMerge className="h-3.5 w-3.5" /> Merge to master
-              </button>
+              </Button>
             )}
         </div>
 
@@ -186,9 +188,9 @@ export default function DeviceOverviewView({
               Exports the full PLC from TIA, commits it as the initial baseline, and builds the offline knowledge database — no confirmations needed.
             </p>
           </div>
-          <button className="primary-button" disabled={Boolean(operation)} onClick={() => onBootstrapDevice()}>
+          <Button variant="blue" size="sm" disabled={Boolean(operation)} onClick={() => onBootstrapDevice()}>
             <Sparkles className="h-3.5 w-3.5" /> Generate PLC context
-          </button>
+          </Button>
         </section>
       )}
 
@@ -235,12 +237,12 @@ export default function DeviceOverviewView({
             Normal update batches stale source objects. Rebuild ingests the full PLC source tree.
           </p>
           <div className="mt-5 space-y-2">
-            <button className="primary-button w-full" disabled={Boolean(operation)} onClick={() => onUpdateKnowledge(false)}>
+            <Button variant="blue" size="sm" className="w-full!" disabled={Boolean(operation)} onClick={() => onUpdateKnowledge(false)}>
               <ArrowDownToLine className="h-3.5 w-3.5" /> Update changed components
-            </button>
-            <button className="secondary-button w-full" disabled={Boolean(operation)} onClick={() => onUpdateKnowledge(true)}>
+            </Button>
+            <Button variant="primary" size="sm" className="w-full!" disabled={Boolean(operation)} onClick={() => onUpdateKnowledge(true)}>
               <RefreshCw className="h-3.5 w-3.5" /> Full device rebuild
-            </button>
+            </Button>
           </div>
           <div className="mt-5 flex items-center gap-2 text-xs text-muted-foreground">
             <ShieldCheck className="h-4 w-4 text-emerald-500" />
