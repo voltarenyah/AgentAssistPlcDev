@@ -245,6 +245,36 @@ dialog does contain a "New task title" field (asserted absent), and the catalog 
 navigation pages (not one). Recorded because a sweep is only evidence if its own
 expectations are checked too.
 
+### TagPicker: the restructure, written down before it is built
+
+`TagPicker` is the last surface whose migration is a design task rather than a conversion, so
+its shape is recorded here first. ADR-0005 carries the mapping correction; this is the plan.
+
+**What it is now.** An "Add tag" button that opens a cmdk `CommandDialog` containing a
+controlled search input, and two mutually exclusive bodies: with an empty query, a browsing
+`TagTree` whose nodes assign on click; with a query, a filtered list of matching paths plus a
+single "Create …" entry when the query is a valid path that does not exist yet. Its three
+tests exercise exactly those three behaviours — the tree marks active tags, a valid absent
+slash path yields one create action, and ArrowDown plus Enter assigns an existing node.
+
+**What it becomes.** notion-kit's `Command`, whose root is the Autocomplete root: it owns an
+items collection and the filtering. The tree browsing has to be re-expressed as data rather
+than as a rendered component, most naturally as grouped items (`CommandGroup`) keyed by tag
+segment, and the create entry becomes one more item in that collection rather than a
+conditionally rendered child.
+
+**Why this needs a decision before code.** Two things change that the tests depend on. The
+search input becomes an autocomplete input, so its `value`/`onValueChange` contract and its
+filtering both move to the root; and the keyboard path the third test relies on becomes the
+autocomplete's, not cmdk's. That is the same harness risk that stopped the select work: if
+Base UI's autocomplete cannot be driven in happy-dom, this restructure cannot keep its
+behavioural coverage either, and the same choice applies — accept that the interaction proof
+moves to a browser check, or keep the picker on cmdk.
+
+**Recommendation.** Decide the test strategy before writing the component, not after. The
+restructure is worth doing for the same reason the rest of this migration was, but not at the
+cost of three behavioural tests becoming presence checks by accident.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
