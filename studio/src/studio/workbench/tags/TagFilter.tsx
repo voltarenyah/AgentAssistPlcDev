@@ -1,17 +1,8 @@
 import { useMemo, useState } from 'react'
 import type { TagNode } from '@/api/client'
 import { ListFilter } from 'lucide-react'
-import {
-  Autocomplete,
-  AutocompleteContent,
-  AutocompleteEmpty,
-  AutocompleteInput,
-  AutocompleteInputGroup,
-  AutocompleteItem,
-  AutocompleteList,
-  Button,
-} from '@notion-kit/ui/primitives'
-import { CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { Button } from '@notion-kit/ui/primitives'
+import { Command, CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import TagChip from './TagChip'
 import TagTree from './TagTree'
 import { tagPaths } from './tagPaths'
@@ -53,17 +44,18 @@ export function TagFilter({
   onRetry,
 }: TagFilterProps) {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const [dialogQuery, setDialogQuery] = useState('')
   const [expandedIds, setExpandedIds] = useState<string[]>([])
   const paths = useMemo(() => tagPaths(nodes), [nodes])
   const selected = new Set(selectedTagIds)
   const selectedNodes = nodes.filter(node => selected.has(node.tagId))
-  // No query argument: notion-kit's Autocomplete owns the filtering, so this is its item source -
-  // every unselected tag - rather than a pre-filtered list.
-  const selectableNodes = filterableTags(nodes, paths, selectedTagIds, '')
+  const normalizedQuery = query.trim().toLowerCase()
+  const selectableNodes = filterableTags(nodes, paths, selectedTagIds, query)
 
   const select = (tagId: string) => {
     onSelectedTagIdsChange([...selectedTagIds, tagId])
+    setQuery('')
     setOpen(false)
   }
 
@@ -74,36 +66,27 @@ export function TagFilter({
   return (
     <div className="border-b px-2 py-2" style={{ borderColor: 'var(--border)' }}>
       <div className="flex items-stretch gap-1">
-        {/* Selection is handled by each item's own click rather than the root's onValueChange.
-            That callback fires while typing, because Base UI's autocomplete highlights a match as
-            the query narrows - so using it for selection would add a tag the moment the typed
-            prefix matched one, which cmdk never did. The item click keeps the original semantics:
-            a tag is added only when it is explicitly chosen. */}
-        <Autocomplete
-          items={selectableNodes.map(node => {
-            const path = paths.get(node.tagId) ?? node.name
-            return { value: path, label: path }
-          })}
-          disabled={loading}
-        >
-          <AutocompleteInputGroup className="min-w-0 flex-1">
-            <AutocompleteInput
-              placeholder={loading ? 'Loading tags…' : 'Filter tags'}
-              aria-label="Search filter tags"
-              disabled={loading}
-              className="h-8!"
-            />
-          </AutocompleteInputGroup>
-          <AutocompleteContent>
-            <AutocompleteEmpty>No matching tags.</AutocompleteEmpty>
-            <AutocompleteList>
+        <Command shouldFilter={false} className="relative h-auto w-auto min-w-0 flex-1 overflow-visible bg-transparent">
+          <CommandInput
+            value={query}
+            onValueChange={setQuery}
+            onInput={event => setQuery(event.currentTarget.value)}
+            placeholder={loading ? 'Loading tags…' : 'Filter tags'}
+            aria-label="Search filter tags"
+            disabled={loading}
+            className="h-8 py-0"
+            wrapperClassName="h-8 rounded-md border border-input bg-transparent px-2 py-0"
+          />
+          {normalizedQuery.length > 0 && (
+            <CommandList className="absolute top-full z-10 mt-1 max-h-48 w-full rounded-md border border-border bg-popover p-1 shadow-md">
+              <CommandEmpty>No matching tags.</CommandEmpty>
               {selectableNodes.map(node => {
                 const path = paths.get(node.tagId) ?? node.name
-                return <AutocompleteItem key={node.tagId} value={path} aria-label={`Filter by ${path}`} onClick={() => select(node.tagId)}>{path}</AutocompleteItem>
+                return <CommandItem key={node.tagId} value={path} onSelect={() => select(node.tagId)} aria-label={`Filter by ${path}`}>{path}</CommandItem>
               })}
-            </AutocompleteList>
-          </AutocompleteContent>
-        </Autocomplete>
+            </CommandList>
+          )}
+        </Command>
         <Button
           type="button"
           variant="primary"
