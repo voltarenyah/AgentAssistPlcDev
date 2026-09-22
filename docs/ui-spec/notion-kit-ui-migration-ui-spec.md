@@ -129,6 +129,14 @@ fields in `CreateWorkbenchDialog`, the `McpToolsHelper` search, the
 `WorktreeTasksPanel` element-reference and details fields, and `ChatWorkspace`'s
 Temperature and Top P inputs.
 
+Scope, narrowed later by the browser: the reason `pl-9` loses is that it collides with
+`px-1.5` as two *different* tailwind-merge groups, so both classes survive and stylesheet
+order decides — not that notion-kit skips merging, since its `cn` is `twMerge(cx(...))`.
+An override passed as `className` to a `cn`-composed primitive is merged properly and wins
+on its own; one placed on a **`render` element** is merged after the fact and can still
+lose. See "PlcSourcePanel migrated" for the measured table, and keep using `!` for `Button`
+and for anything put on a render element.
+
 ### Status
 
 Migrated and independently verified (build, full suite, browser in both themes):
@@ -156,6 +164,15 @@ Migrated and independently verified (build, full suite, browser in both themes):
 | Remaining small-surface, version-control and chat buttons | `cf7f642`, `ad0fb3a`, `97fcf01` |
 | All `field-label` wrappers to notion-kit `Label` | `ccd1c4b`, `60a6edb` |
 | Custom-styled action group in `FeatureValidationDialog` | `0f95b74` |
+| `SourceObjectInspectorPanel`: both context menus | `9ee876e` |
+| `PlcSourcePanel`: source-object context menu — **the migration's last item** | `1e1942d` |
+
+The table above lists the milestones rather than every increment; the sweeps below cover the surfaces
+migrated between them. What it now records is the end: with `PlcSourcePanel`'s menu done, no Studio
+product surface is left with an unmigrated primitive. What remains by design is recorded under "The
+endgame census" — the `toast`/`sonner`/`tooltip`/`slider` primitives that notion-kit does not replace,
+the tag surfaces whose tests need behaviour a browser cannot substitute, and the sidecar-gated chat
+selects.
 
 ### Whole-application regression sweep
 
@@ -561,6 +578,55 @@ cannot regress silently: `ContextMenuTrigger render={<g … />}` and `render={<t
 wrapper element** - a `div` around either would break the SVG and the table - and the wrapper-free
 structure is what the trigger's `render` prop guarantees.
 
+### PlcSourcePanel migrated: the migration's last menu, and the override rule restated
+
+Done. The panel's per-object menu - one heading, five items, two separators - is notion-kit
+`ContextMenu` now, which closes the migration's last item.
+
+**The group-label trap was live here, not hypothetical.** The original heading was a
+`ContextMenuLabel` with children, which is exactly the shape that throws `MenuGroupContext is
+missing` and tears down the tree through the error boundary. It becomes the standalone `MenuLabel`
+with a `title`. `WorkbenchNavigator` had already been corrected to `MenuLabel`, so this is the second
+surface where the trap applied - and the first where the migration had to notice it rather than
+inherit a fix.
+
+**Deleting `asChild` adds a wrapper; `render` does not.** The trigger here is a plain `div`, so the
+navigator's shortcut - delete `asChild` and let notion-kit render its own trigger element - would have
+worked. It was not used, because that nests the row div inside a new wrapper div **once per row**, and
+this list can hold hundreds of rows. `render={<div ... />}` keeps the DOM identical instead, and the
+browser check confirms the trigger element *is* the row div rather than a wrapper around it. Prefer
+`render` for a list row; deleting `asChild` remains fine for a one-off trigger.
+
+**A correction to this document's own `!`-modifier rule.** The rule as written was "colliding
+overrides need the important modifier", derived from `Button`. The browser shows it is narrower than
+that, and the distinction matters now that `render` is in use:
+
+| Where the override sits | Result |
+|---|---|
+| `className` on a `cn`-composed primitive (`cn` is `twMerge(cx(...))`) | merged by tailwind-merge; the caller's value wins for the same group |
+| `className` on a **`render` element** | merged after the component's own `cn()` call, so it can collide and lose. Evidence: the trigger rendered `class="p-2 select-text select-none"` - the caller's class present, the library's appended last by Base UI, and `user-select` computed `none` |
+| Colliding utility on `Button` (`cva` variants) | needs `!`; re-confirmed in the browser (`pl-9` renders 12px, `pl-9!` renders 36px) |
+
+So the trigger's built-in `select-none` survives a caller `select-text` placed on the render element,
+even though both classes are present on the element and both are valid utilities. Whether `!` rescues
+that case is **not** settled: the one run with `select-text!` was inconclusive, because the same class
+had no effect even on a plain control div, so it is not evidence either way. The actionable rule is
+therefore narrower than "always use `!`": prefer passing the override as the component's own
+`className`, and when it has to sit on a `render` element, check it in the browser instead of assuming
+the utility applies.
+
+**One accepted behaviour change.** `ContextMenuTrigger` is `cn("select-none", className)`, so every
+migrated trigger becomes non-selectable, including the PLC source rows. Radix's trigger did not do
+this. Accepted rather than fought: these rows are click-to-expand targets, and the navigator and
+inspector triggers already behave this way. Recorded because it is the only behaviour this migration
+took away without an equivalent replacement.
+
+**Verification** was the isolated real-component mount this document now prescribes, in both themes,
+with `page.route` stubbing the usage endpoint: right-click opens the menu, the `MenuLabel` heading
+renders with no group-context throw, no label is clipped, `onInspectObject`, `onInspectUsage` and
+`onChatWithAgent` each fire with the expected argument, all three rows survive, and the console is
+clean.
+
 ## Open User Decisions
 
 Resolved during specification and implementation: captions use per-theme AA values (`#737373` light,
@@ -588,3 +654,4 @@ visible. All are recorded in `docs/adr/ADR-0004-notion-kit-design-token-authorit
 | 2026-09-21 | 1.5 | Record the endgame inventory by gate, the custom-button classification, and two findings worth separate issues: `NativeStorePanel` has no consumers, and several non-interactive chips are buttons. |
 | 2026-09-21 | 1.6 | Record the milestone: the legacy button vocabulary fell from 91 occurrences to zero, including all device surfaces, and the checkboxes followed. Adds the two structural findings that cost the most time (notion-kit's Checkbox DOM shape, and Base UI's Select being undrivable in happy-dom) and revises the remaining inventory by gate. |
 | 2026-09-21 | 1.7 | `SourceObjectInspectorPanel`'s two context menus migrated. Records the two-part trigger conversion and its misleading diagnostic, promotes the menu-content width to a general rule, notes that build and suite are green through the truncation defect, and replaces the "device surfaces are build-only" ceiling with an isolated real-component browser probe - including the evidence that the app route is genuinely unreachable. |
+| 2026-09-21 | 1.8 | `PlcSourcePanel`'s menu migrated, which closes the migration's last item. Records the live group-label trap, why `render` beats deleting `asChild` on a list row, the accepted `select-none` behaviour change, and narrows the `!`-modifier rule to be about *where* the override sits. |
