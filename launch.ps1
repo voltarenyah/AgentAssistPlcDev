@@ -99,17 +99,32 @@ if (-not $NoKill) {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match 'app_assistant\.server:app' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    # Kill only THIS project's Vite dev server, identified by command line, never
-    # every node.exe. A blanket "Get-Process node | Stop-Process" also kills any
-    # other Node application the user is running. The project-root path alone is
-    # NOT a safe filter either: an agent harness launched with this repository as
-    # its workspace also carries the path in its command line, so a root-only match
-    # takes the harness - and the terminal that started this script - down with the
-    # dev server. Requiring Vite as well narrows it to the dev server and its
-    # launcher. Verified: two harness node processes matched the root alone.
+    # Kill only THIS project's Vite dev server, identified by its command line, never
+    # every node.exe. A blanket "Get-Process node | Stop-Process" also kills any other
+    # Node application the user is running. The project-root path alone is not a safe
+    # filter either: an agent harness whose workspace is this repository carries the
+    # path in its command line, so a root-only match takes the harness - and the
+    # terminal that started this script - down with the dev server.
+    #
+    # Requiring "vite" as well is still not sufficient. The harness runs each command
+    # through a local subprocess runner whose command line contains both the workspace
+    # path and the full text of the command being executed, so any command that merely
+    # mentions vite - reading the Vite config, listing its processes - satisfies both
+    # conditions and is killed mid-command. Two such runners were observed matching the
+    # root-plus-vite rule.
+    #
+    # Match the Vite entry point itself, and exclude the harness runner outright.
+    # Verified against the live process list: this still matches the dev server
+    # (`node ...\vite\bin\vite.js --host`) and leaves every
+    # `@deepseek-ai/dsh-subprocess-local/lib/runner.js` process alone.
     $projectRootPattern = [regex]::Escape($root)
     Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -match $projectRootPattern -and $_.CommandLine -match 'vite' } |
+        Where-Object {
+            $_.CommandLine -and
+            $_.CommandLine -match $projectRootPattern -and
+            $_.CommandLine -match 'vite[\\/]bin[\\/]vite' -and
+            $_.CommandLine -notmatch 'dsh-subprocess-local|@deepseek-ai|dsh[\\/]lib'
+        } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     foreach ($name in @("Mcp.Engineering", "Mcp.Knowledge", "Mcp.VersionControl")) {
         Get-Process -Name $name -ErrorAction SilentlyContinue |
