@@ -55,7 +55,7 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
     <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}>
       <DialogContent
         showCloseButton={false}
-        className="flex max-h-[86vh] max-w-[760px] flex-col gap-0 overflow-hidden p-0"
+        className="flex max-h-[86vh] max-w-[min(760px,calc(100%-2rem))] flex-col gap-0 overflow-hidden p-0"
         onEscapeKeyDown={event => { if (busy) event.preventDefault() }}
         onPointerDownOutside={event => { if (busy) event.preventDefault() }}
       >

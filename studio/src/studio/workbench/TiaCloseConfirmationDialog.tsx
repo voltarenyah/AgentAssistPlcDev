@@ -21,7 +21,7 @@ export default function TiaCloseConfirmationDialog({
     <Dialog open onOpenChange={open => { if (!open && !busy) onCancel() }}>
       <DialogContent
         showCloseButton={false}
-        className="max-w-[560px] gap-0 overflow-hidden p-0"
+        className="max-w-[min(560px,calc(100%-2rem))] gap-0 overflow-hidden p-0"
         onEscapeKeyDown={event => { if (busy) event.preventDefault() }}
         onPointerDownOutside={event => { if (busy) event.preventDefault() }}
       >

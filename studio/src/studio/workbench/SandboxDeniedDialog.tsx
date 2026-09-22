@@ -11,7 +11,7 @@ type Props = {
 export default function SandboxDeniedDialog({ message, roots, onClose }: Props) {
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent showCloseButton={false} className="max-w-[560px] gap-0 overflow-hidden p-0">
+      <DialogContent showCloseButton={false} className="max-w-[min(560px,calc(100%-2rem))] gap-0 overflow-hidden p-0">
         <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 text-left" style={{ borderColor: 'var(--border)' }}>
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-amber-500/10">
             <ShieldCheck className="h-4 w-4 text-amber-500" />

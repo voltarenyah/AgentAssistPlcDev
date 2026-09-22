@@ -86,7 +86,7 @@ export default function PlcSourceCompareDialog({
 
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent className="flex max-h-[85vh] max-w-4xl flex-col">
+      <DialogContent className="flex max-h-[85vh] max-w-[min(56rem,calc(100%-2rem))] flex-col">
         <DialogHeader>
           <DialogTitle className="text-sm">
             Compare with TIA · {comparison.category} {comparison.name}

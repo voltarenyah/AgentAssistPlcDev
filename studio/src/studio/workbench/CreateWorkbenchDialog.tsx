@@ -137,7 +137,7 @@ export default function CreateWorkbenchDialog({
       <DialogContent
         showCloseButton={false}
         data-create-workbench-dialog
-        className="flex max-h-[85vh] max-w-[620px] flex-col gap-0 overflow-hidden p-0"
+        className="flex max-h-[85vh] max-w-[min(620px,calc(100%-2rem))] flex-col gap-0 overflow-hidden p-0"
       >
         <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 text-left">
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-chart-2/10">
