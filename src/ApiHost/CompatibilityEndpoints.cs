@@ -91,6 +91,22 @@ public static class CompatibilityEndpoints
             return path;
         }
 
+        // Assistant scope: absent means the device chat. Unknown scopes fail closed rather than
+        // silently attaching to the device chat's live loop (see ChatScopes).
+        static string Scope(JsonElement? body, string? query)
+        {
+            var raw = query;
+            if (string.IsNullOrWhiteSpace(raw)
+                && body is { ValueKind: JsonValueKind.Object } value
+                && value.TryGetProperty("scope", out var property)
+                && property.ValueKind == JsonValueKind.String)
+                raw = property.GetString();
+            if (string.IsNullOrWhiteSpace(raw)) return ChatScopes.Device;
+            return raw is ChatScopes.Device or ChatScopes.Workbench
+                ? raw
+                : throw new ArgumentException($"ASSISTANT_SCOPE_UNKNOWN: '{raw}'.");
+        }
+
         app.MapPost("/api/connect", async (JsonElement body, ApiMcpGateway gateway, CompatibilityRuntimeState state, CancellationToken ct) =>
         {
             var result = await gateway.For("connect").CallAsync<object>("connect", body, ct);
@@ -204,7 +220,11 @@ public static class CompatibilityEndpoints
             };
             var device = Device(state);
             var requester = pending.Requester(id) ?? throw new KeyNotFoundException("CONFIRMATION_NOT_FOUND");
-            if (requester != "api" && requester != chat.ActiveSessionId(device))
+            // A confirmation belongs to the session that raised it, and the same device can have
+            // one live loop per assistant scope, so both scopes' active sessions are accepted.
+            if (requester != "api"
+                && requester != chat.ActiveSessionId(device)
+                && requester != chat.ActiveSessionId(device, ChatScopes.Workbench))
                 throw new InvalidOperationException("CONFIRMATION_CONTEXT_MISMATCH");
             return Results.Ok(await pending.ResolveAsync(
                 id, parsed, DeviceContextIdentity.Key(device), requester));
@@ -215,18 +235,19 @@ public static class CompatibilityEndpoints
             var additional = body.TryGetProperty("additional", out var value) && value.TryGetInt32(out var parsed)
                 ? parsed
                 : 6;
-            return chat.GrantMoreRounds(Device(state), additional) ? Results.NoContent() : Results.NotFound();
+            return chat.GrantMoreRounds(Device(state), additional, Scope(body, null)) ? Results.NoContent() : Results.NotFound();
         });
-        app.MapGet("/api/chat/history", (WorkbenchApiState state, ApiChatService chat) =>
-            chat.History(Device(state)));
-        app.MapPost("/api/chat/clear", (WorkbenchApiState state, ApiChatService chat) =>
+        app.MapGet("/api/chat/history", (HttpRequest request, WorkbenchApiState state, ApiChatService chat) =>
+            chat.History(Device(state), Scope(null, request.Query["scope"])));
+        app.MapPost("/api/chat/clear", (HttpRequest request, WorkbenchApiState state, ApiChatService chat) =>
         {
-            chat.Clear(Device(state));
+            chat.Clear(Device(state), Scope(null, request.Query["scope"]));
             return Results.NoContent();
         });
         app.MapPost("/api/chat", async (HttpContext http, JsonElement body, WorkbenchApiState state, ApiChatService chat, CancellationToken ct) =>
         {
             var device = Device(state);
+            var scope = Scope(body, null);
             var message = body.TryGetProperty("message", out var value) ? value.GetString() : null;
             if (string.IsNullOrWhiteSpace(message)) throw new ArgumentException("message is required.");
             http.Response.StatusCode = StatusCodes.Status200OK;
@@ -259,8 +280,9 @@ public static class CompatibilityEndpoints
                         message,
                         line => Queue(new { kind = "progress", delta = line }),
                         (kind, delta) => Queue(new { kind, delta }),
-                        ct);
-                    var snapshot = chat.TurnSnapshot(device);
+                        ct,
+                        scope);
+                    var snapshot = chat.TurnSnapshot(device, scope);
                     Queue(new
                     {
                         kind = "meta",
@@ -395,15 +417,16 @@ public static class CompatibilityEndpoints
             EngineeringGraphApiFactory graphs) =>
         {
             var device = Device(state);
+            var assistantScope = Scope(body, null);
             var selection = state.Selection!;
             using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
             var requestedTaskId = body.TryGetProperty("taskId", out var requestedTask) && requestedTask.ValueKind != JsonValueKind.Null
                 ? requestedTask.GetString()
                 : null;
             var taskId = requestedTaskId;
-            var session = chat.CreateSession(device, taskId, string.IsNullOrWhiteSpace(taskId) ? null : "default");
+            var session = chat.CreateSession(device, taskId, string.IsNullOrWhiteSpace(taskId) ? null : "default", assistantScope);
             try { SessionGraphOperations.Register(scope.Service, session, GraphProvenance.Default); }
-            catch { chat.DeleteSession(device, session.Header.SessionId); throw; }
+            catch { chat.DeleteSession(device, session.Header.SessionId, assistantScope); throw; }
             return session;
         });
         app.MapPut("/api/chat/session/task", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
@@ -412,32 +435,33 @@ public static class CompatibilityEndpoints
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
             var taskId = body.TryGetProperty("taskId", out var task) && task.ValueKind != JsonValueKind.Null ? task.GetString() : null;
             var device = Device(state);
-            var current = chat.LoadSession(device, id) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
+            var assistantScope = Scope(body, null);
+            var current = chat.LoadSession(device, id, assistantScope) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             var selection = state.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
             using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
             var updated = SessionGraphOperations.ApplyWithPersistence(scope.Service, current, taskId,
                 value => value with { Header = value.Header with { TaskId = taskId, TaskProvenance = string.IsNullOrWhiteSpace(taskId) ? null : "manual", UpdatedAt = DateTimeOffset.UtcNow.ToString("O") } },
                 value => SessionManager.SaveSession(device, value));
-            chat.LoadSession(device, id);
+            chat.LoadSession(device, id, assistantScope);
             return Results.Ok(updated);
         });
         app.MapPost("/api/chat/session/load", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
-            return chat.LoadSession(Device(state), id) is { } session ? Results.Ok(session) : Results.NotFound();
+            return chat.LoadSession(Device(state), id, Scope(body, null)) is { } session ? Results.Ok(session) : Results.NotFound();
         });
         app.MapPost("/api/chat/session/rename", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
             var title = body.GetProperty("title").GetString() ?? throw new ArgumentException("title is required.");
-            return chat.RenameSession(Device(state), id, title) is { } session
+            return chat.RenameSession(Device(state), id, title, Scope(body, null)) is { } session
                 ? Results.Ok(session)
                 : Results.NotFound();
         });
         app.MapPost("/api/chat/session/delete", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
-            chat.DeleteSession(Device(state), id);
+            chat.DeleteSession(Device(state), id, Scope(body, null));
             return Results.NoContent();
         });
         app.MapPost("/api/chat/session/export", (JsonElement body, WorkbenchApiState state) =>
@@ -448,15 +472,16 @@ public static class CompatibilityEndpoints
                 ? Results.Ok(new { path = ExportSessionFile(device, id, session) })
                 : Results.NotFound();
         });
-        app.MapGet("/api/chat/session/info", (WorkbenchApiState state, ApiChatService chat) =>
+        app.MapGet("/api/chat/session/info", (HttpRequest request, WorkbenchApiState state, ApiChatService chat) =>
         {
             var device = Device(state);
+            var assistantScope = Scope(null, request.Query["scope"]);
             return Results.Ok(new
             {
                 selection = state.Selection,
                 sessions = SessionManager.ListSessions(device).Count,
-                activeSessionId = chat.ActiveSessionId(device),
-                requiresExplicitSession = chat.RequiresExplicitSession(device),
+                activeSessionId = chat.ActiveSessionId(device, assistantScope),
+                requiresExplicitSession = chat.RequiresExplicitSession(device, assistantScope),
             });
         });
 
@@ -620,6 +645,20 @@ public static class CompatibilityEndpoints
 
 public sealed record ChatTurnSnapshot(UsageInfo? Usage, bool HitRoundCap, int Compactions, ToolCallStats ToolCalls);
 
+/// <summary>
+/// Named assistant surfaces that keep independent live loops over the same device
+/// (see <see cref="ApiChatService"/>). Persistence is deliberately shared: both scopes write
+/// sessions into the device's session directory, so a conversation is never split across two stores.
+/// </summary>
+public static class ChatScopes
+{
+    /// <summary>The device-scoped chat view.</summary>
+    public const string Device = "chat";
+
+    /// <summary>The workbench-scoped assistant panel.</summary>
+    public const string Workbench = "workbench";
+}
+
 internal sealed class ApiChatService(
     IServiceProvider services,
     IConfiguration configuration,
@@ -629,6 +668,17 @@ internal sealed class ApiChatService(
     SandboxPolicy policy)
 {
     public const int DefaultContextWindow = 128_000;
+
+    /// <summary>
+    /// In-memory key for one assistant scope over one device. The device scope reproduces
+    /// <see cref="DeviceContextIdentity.Key(DeviceContext)"/> exactly, so the device chat's live
+    /// loops keep the same keys they had before a second scope existed and its behaviour is
+    /// unchanged. The key is never persisted — sessions are addressed by session id.
+    /// </summary>
+    private static string ScopeKey(DeviceContext device, string scope) =>
+        scope == ChatScopes.Device
+            ? DeviceContextIdentity.Key(device)
+            : DeviceContextIdentity.Key(device) + "\n" + scope;
     private sealed record ActiveChat(AgentLoop Loop, ChatSessionData Session);
     private readonly ConcurrentDictionary<string, ActiveChat> chats = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ChatSessionData> pendingSessions = new(StringComparer.Ordinal);
@@ -650,21 +700,21 @@ internal sealed class ApiChatService(
         chats.Clear();
         state.IncrementChatGeneration();
     }
-    public bool RequiresExplicitSession(DeviceContext device) =>
-        sessionRequired.ContainsKey(DeviceContextIdentity.Key(device));
+    public bool RequiresExplicitSession(DeviceContext device, string scope = ChatScopes.Device) =>
+        sessionRequired.ContainsKey(ScopeKey(device, scope));
 
-    public string? ActiveSessionId(DeviceContext device) =>
-        chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
+    public string? ActiveSessionId(DeviceContext device, string scope = ChatScopes.Device) =>
+        chats.TryGetValue(ScopeKey(device, scope), out var active)
             ? active.Session.Header.SessionId
-            : pendingSessions.TryGetValue(DeviceContextIdentity.Key(device), out var pending)
+            : pendingSessions.TryGetValue(ScopeKey(device, scope), out var pending)
                 ? pending.Header.SessionId : null;
-    public IReadOnlyList<ChatMessage> History(DeviceContext device) =>
-        chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
+    public IReadOnlyList<ChatMessage> History(DeviceContext device, string scope = ChatScopes.Device) =>
+        chats.TryGetValue(ScopeKey(device, scope), out var active)
             ? active.Loop.History : Array.Empty<ChatMessage>();
 
     /// <summary>Last-turn state for the UI: exact context size (last billed prompt), the round-cap flag, compaction count.</summary>
-    public ChatTurnSnapshot TurnSnapshot(DeviceContext device) =>
-        chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)
+    public ChatTurnSnapshot TurnSnapshot(DeviceContext device, string scope = ChatScopes.Device) =>
+        chats.TryGetValue(ScopeKey(device, scope), out var active)
             ? new ChatTurnSnapshot(
                 active.Loop.RoundUsages.LastOrDefault(usage => usage is not null),
                 active.Loop.LastTurnHitRoundCap,
@@ -673,24 +723,24 @@ internal sealed class ApiChatService(
             : new ChatTurnSnapshot(null, false, 0, new ToolCallStats(0, 0));
 
     /// <summary>Extends the active loop's round budget (the "continue" affordance after a round cap).</summary>
-    public bool GrantMoreRounds(DeviceContext device, int additional)
+    public bool GrantMoreRounds(DeviceContext device, int additional, string scope = ChatScopes.Device)
     {
-        if (!chats.TryGetValue(DeviceContextIdentity.Key(device), out var active)) return false;
+        if (!chats.TryGetValue(ScopeKey(device, scope), out var active)) return false;
         active.Loop.GrantMoreRounds(additional);
         return true;
     }
-    public void Clear(DeviceContext device)
+    public void Clear(DeviceContext device, string scope = ChatScopes.Device)
     {
-        var key = DeviceContextIdentity.Key(device);
+        var key = ScopeKey(device, scope);
         if (!chats.TryGetValue(key, out var active)) return;
         active.Loop.ClearHistory();
         var cleared = active.Session with { Messages = [], RoundUsages = [] };
         SessionManager.SaveSession(device, cleared);
         chats[key] = active with { Session = cleared };
     }
-    public void DeleteSession(DeviceContext device, string sessionId)
+    public void DeleteSession(DeviceContext device, string sessionId, string scope = ChatScopes.Device)
     {
-        var key = DeviceContextIdentity.Key(device);
+        var key = ScopeKey(device, scope);
         if (chats.TryGetValue(key, out var active)
             && active.Session.Header.SessionId == sessionId)
             chats.TryRemove(key, out _);
@@ -701,9 +751,9 @@ internal sealed class ApiChatService(
         SessionManager.DeleteSession(device, sessionId);
     }
 
-    public ChatSessionData CreateSession(DeviceContext device, string? taskId = null, string? taskProvenance = null)
+    public ChatSessionData CreateSession(DeviceContext device, string? taskId = null, string? taskProvenance = null, string scope = ChatScopes.Device)
     {
-        var key = DeviceContextIdentity.Key(device);
+        var key = ScopeKey(device, scope);
         sessionRequired.TryRemove(key, out _);
         chats.TryRemove(key, out _);
         var session = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null, taskId, taskProvenance);
@@ -711,11 +761,11 @@ internal sealed class ApiChatService(
         return session;
     }
 
-    public ChatSessionData? LoadSession(DeviceContext device, string sessionId)
+    public ChatSessionData? LoadSession(DeviceContext device, string sessionId, string scope = ChatScopes.Device)
     {
         var session = SessionManager.LoadSession(device, sessionId);
         if (session is null) return null;
-        var key = DeviceContextIdentity.Key(device);
+        var key = ScopeKey(device, scope);
         sessionRequired.TryRemove(key, out _);
         if (chats.TryGetValue(key, out var active))
         {
@@ -729,13 +779,14 @@ internal sealed class ApiChatService(
     public ChatSessionData? RenameSession(
         DeviceContext device,
         string sessionId,
-        string title)
+        string title,
+        string scope = ChatScopes.Device)
     {
         var session = SessionManager.RenameSession(device, sessionId, title);
         if (session is null)
             return null;
 
-        var key = DeviceContextIdentity.Key(device);
+        var key = ScopeKey(device, scope);
         if (chats.TryGetValue(key, out var active)
             && active.Session.Header.SessionId == sessionId)
         {
@@ -749,17 +800,18 @@ internal sealed class ApiChatService(
         return session;
     }
 
-    public Task<string> RunAsync(DeviceContext device, string message, CancellationToken token) =>
-        RunStreamingAsync(device, message, _ => { }, (_, _) => { }, token);
+    public Task<string> RunAsync(DeviceContext device, string message, CancellationToken token, string scope = ChatScopes.Device) =>
+        RunStreamingAsync(device, message, _ => { }, (_, _) => { }, token, scope);
 
     public async Task<string> RunStreamingAsync(
         DeviceContext device,
         string message,
         Action<string> progress,
         Action<string, string> streamDelta,
-        CancellationToken token)
+        CancellationToken token,
+        string scope = ChatScopes.Device)
     {
-        var active = await EnsureActiveChatAsync(device, token);
+        var active = await EnsureActiveChatAsync(device, token, scope);
         void OnProgress(string line) => progress(line);
         void OnDelta(string kind, string delta) => streamDelta(kind, delta);
 
@@ -776,18 +828,18 @@ internal sealed class ApiChatService(
             // Persist even a failed/aborted turn: the loop history holds everything
             // up to the failure, and losing it lets a later session load wipe the
             // messages the user already saw from the chat view.
-            SaveActiveSession(device, active, message);
+            SaveActiveSession(device, active, message, scope);
         }
     }
 
-    private async Task<ActiveChat> EnsureActiveChatAsync(DeviceContext device, CancellationToken token)
+    private async Task<ActiveChat> EnsureActiveChatAsync(DeviceContext device, CancellationToken token, string scope)
     {
         var apiKey = CompatibilityEndpoints.ResolveApiKey(state, configuration);
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("CHAT_API_KEY_REQUIRED");
         var runtime = services.GetService<McpRuntime>()
             ?? throw new InvalidOperationException("CHAT_MCP_RUNTIME_UNAVAILABLE");
-        var contextKey = DeviceContextIdentity.Key(device);
+        var contextKey = ScopeKey(device, scope);
         if (sessionRequired.ContainsKey(contextKey))
             throw new InvalidOperationException("CHAT_SESSION_REQUIRED");
         if (!chats.TryGetValue(contextKey, out var active))
@@ -805,7 +857,7 @@ internal sealed class ApiChatService(
                 var completion = new TaskCompletionSource<ToolConfirmation>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
                 var confirmationRequester = session.Header.SessionId;
-                var id = pending.Add(contextKey, confirmationRequester, (decision, _) =>
+                var id = pending.Add(DeviceContextIdentity.Key(device), confirmationRequester, (decision, _) =>
                 {
                     completion.TrySetResult(decision);
                     return Task.FromResult<object?>(new { status = decision.ToString() });
@@ -839,9 +891,9 @@ internal sealed class ApiChatService(
         return active;
     }
 
-    private void SaveActiveSession(DeviceContext device, ActiveChat active, string message)
+    private void SaveActiveSession(DeviceContext device, ActiveChat active, string message, string scope)
     {
-        var contextKey = DeviceContextIdentity.Key(device);
+        var contextKey = ScopeKey(device, scope);
         var updated = active.Session with
         {
             Messages = active.Loop.History.ToList(),
