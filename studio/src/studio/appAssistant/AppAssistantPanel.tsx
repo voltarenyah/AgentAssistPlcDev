@@ -80,14 +80,25 @@ export default function AppAssistantPanel({
   // cleanup immediately after the request starts and cancels it. The `.then` that clears `busy`
   // is then skipped and busy stays true forever — the message box disabled and "Refreshing
   // workbench context…" on screen with no way out but closing the panel.
+  // Unmount-only flag. It MUST be reset in the effect body: React's development StrictMode runs
+  // effect setup, cleanup, then setup again, so a flag that is only ever set to true would stay
+  // true for the whole session and the refresh below would return early every time, leaving busy
+  // stuck and the message box disabled forever.
   const unmounted = useRef(false)
-  useEffect(() => () => { unmounted.current = true }, [])
+  useEffect(() => {
+    unmounted.current = false
+    return () => { unmounted.current = true }
+  }, [])
 
   useEffect(() => {
     if (!state.autoRefreshPending || state.busy || confirmation) return
     setBusyLabel('Refreshing workbench context…')
     setState(current => ({ ...current, busy: true, autoRefreshPending: false }))
-    void api.chatAppAssistant('The workbench changed. Re-read the current state and suggest the next useful move.', assistantSessionId)
+    // A refresh re-reads observed workbench state, which bootstrap already serves deterministically
+    // and instantly. Routing it through a full agent turn instead left the message box disabled for
+    // minutes after every consequential workbench change, because this panel runs the same
+    // multi-round tool-calling loop as the device chat.
+    void api.bootstrapAppAssistant(assistantSessionId)
       .then(events => {
         if (unmounted.current) return
         setBusyLabel(null)

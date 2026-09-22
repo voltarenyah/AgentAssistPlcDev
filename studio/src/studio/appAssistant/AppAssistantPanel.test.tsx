@@ -285,7 +285,7 @@ describe('AppAssistantPanel', () => {
     }))
     await act(async () => {})
 
-    expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.', expect.any(String))
+    expect(api.bootstrapAppAssistant).toHaveBeenCalledTimes(2)
     expect(host.textContent).toContain('feature')
     // The refresh must hand the panel back: its own busy/autoRefreshPending updates are its
     // dependencies, so a per-run cancellation flag would make React cancel the request it just
@@ -309,7 +309,7 @@ describe('AppAssistantPanel', () => {
     }))
     await act(async () => {})
 
-    expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.', expect.any(String))
+    expect(api.bootstrapAppAssistant).toHaveBeenCalledTimes(2)
     expect(host.textContent).toContain('context changed')
   })
 
