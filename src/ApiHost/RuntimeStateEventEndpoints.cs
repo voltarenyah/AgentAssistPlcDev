@@ -49,6 +49,15 @@ public static class RuntimeStateEventEndpoints
         return app;
     }
 
+    /// <summary>
+    /// Web defaults so the nested <see cref="WorkbenchRuntimeSnapshot"/> serializes camelCase, the
+    /// same shape the GET /runtime-state endpoint and the Studio types use. Serializing with a bare
+    /// <see cref="JsonSerializer.Serialize(object?)"/> emits PascalCase; the client then reads
+    /// <c>snapshot.workbenchRevision</c> and <c>snapshot.worktrees</c> as undefined and this stream
+    /// silently overwrites the good snapshot fetched over HTTP with an unreadable one.
+    /// </summary>
+    private static readonly JsonSerializerOptions FrameJson = new(JsonSerializerDefaults.Web);
+
     private static async Task WriteSnapshotAsync(HttpContext http, WorkbenchRuntimeSnapshot snapshot)
     {
         var payload = JsonSerializer.Serialize(new
@@ -57,7 +66,7 @@ public static class RuntimeStateEventEndpoints
             revision = snapshot.WorkbenchRevision,
             timestamp = snapshot.ObservedAt,
             snapshot,
-        });
+        }, FrameJson);
         await http.Response.WriteAsync("event: runtime-state\n", http.RequestAborted).ConfigureAwait(false);
         await http.Response.WriteAsync($"data: {payload}\n\n", http.RequestAborted).ConfigureAwait(false);
         await http.Response.Body.FlushAsync(http.RequestAborted).ConfigureAwait(false);
