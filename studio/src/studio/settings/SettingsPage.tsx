@@ -4,7 +4,7 @@ import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import { Slider } from '@/components/ui/slider'
 // notion-kit ships no Slider, so Slider stays on Studio's primitive; Switch moves.
-import { Button, Input, Switch } from '@notion-kit/ui/primitives'
+import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch } from '@notion-kit/ui/primitives'
 import { getThemePreference, setThemePreference, subscribeTheme, type ThemeMode } from '@/studio/theme'
 import {
   EFFORT_OPTIONS,
@@ -254,19 +254,25 @@ export default function SettingsPage({ onClose, onResetLayout, onOpenComponentCa
               </div>
             </Row>
             <Row id="assistant.model" title="Model" description="Default model used for new chat rounds.">
-              <select
-                aria-label="Model"
-                className="field-input h-8 w-auto px-2 text-[11px]"
-                value={settings?.model ?? ''}
+              <Select
+                items={[
+                  ...(settings && !knownModel ? [{ value: settings.model, label: settings.model }] : []),
+                  ...MODEL_OPTIONS.map(option => ({ value: option.value, label: option.label })),
+                ]}
+                value={settings?.model || undefined}
+                onValueChange={value => changeSettings({ model: value ?? '' })}
                 disabled={!settings}
-                onChange={event => changeSettings({ model: event.target.value })}
               >
-                {!settings && <option value="">Loading…</option>}
-                {settings && !knownModel && <option value={settings.model}>{settings.model}</option>}
-                {MODEL_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
+                <SelectTrigger aria-label="Model" className="h-8! w-auto text-[11px]!">
+                  <SelectValue placeholder="Loading…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {settings && !knownModel && <SelectItem value={settings.model}>{settings.model}</SelectItem>}
+                  {MODEL_OPTIONS.map(option => (
+                    <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Row>
             <Row id="assistant.thinking" title="Thinking mode" description="Let the model reason step by step before answering.">
               <Switch
