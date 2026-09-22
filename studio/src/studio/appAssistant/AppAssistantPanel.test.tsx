@@ -140,7 +140,7 @@ describe('AppAssistantPanel', () => {
     expect(host.textContent).toContain('branch master')
   })
 
-  it('normalizes the runtime context envelope returned by the sidecar', async () => {
+  it('normalizes the runtime context envelope returned by the assistant', async () => {
     vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
       {
         kind: 'state',

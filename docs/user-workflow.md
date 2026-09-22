@@ -103,7 +103,7 @@ An empty source commit is rejected unless the user explicitly marks an **Untrack
 
 ## Automated acceptance map
 
-Use `./launch.ps1`, wait for health checks, then verify `http://localhost:5173/`, `http://localhost:5239/api/status`, and `http://localhost:8787/health` before browser tests. Check visible DOM after every meaningful action and inspect local-app console errors afterwards. Fixtures or deterministic sidecar responses are acceptable; do not create or approve a real engineering worktree merely to prove that an approval card renders.
+Use `./launch.ps1`, wait for health checks, then verify `http://localhost:5173/` and `http://localhost:5239/api/status` before browser tests. Check visible DOM after every meaningful action and inspect local-app console errors afterwards. Fixtures or deterministic model responses are acceptable; do not create or approve a real engineering worktree merely to prove that an approval card renders.
 
 | Scenario | Browser actions | Observable proof |
 | --- | --- | --- |

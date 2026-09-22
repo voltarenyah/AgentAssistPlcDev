@@ -13,12 +13,12 @@ import {
   formatBalance,
   mergeChatSettings,
   parseNumberField,
-  parseSidecarHealth,
+  parseAssistantHealth,
   presentAdvancedFields,
   type SettingsCategory,
   type SettingsCategoryId,
   type SettingsIconName,
-  type SidecarHealth,
+  type AssistantHealth,
 } from './settingsState'
 
 const iconMap: Record<SettingsIconName, typeof Gauge> = {
@@ -29,9 +29,9 @@ const iconMap: Record<SettingsIconName, typeof Gauge> = {
   info: Info,
 }
 
-type SidecarState =
+type AssistantState =
   | { state: 'loading' }
-  | { state: 'ok'; health: SidecarHealth }
+  | { state: 'ok'; health: AssistantHealth }
   | { state: 'unreachable' }
 
 const errorMessage = (error: unknown, fallback: string) =>
@@ -80,7 +80,7 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
   const [balance, setBalance] = useState<api.DeepSeekBalance | null>(null)
   const [balanceBusy, setBalanceBusy] = useState(false)
   const [balanceError, setBalanceError] = useState<string | null>(null)
-  const [sidecar, setSidecar] = useState<SidecarState>({ state: 'loading' })
+  const [assistant, setAssistant] = useState<AssistantState>({ state: 'loading' })
   const [theme, setTheme] = useState<ThemeMode>(() => getThemePreference())
   const [query, setQuery] = useState('')
   const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>('general')
@@ -107,12 +107,12 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
       .then(tools => { if (!cancelled) setToolCount(tools.length) })
       .catch(() => { if (!cancelled) setToolCount(null) })
     api.getAppAssistantHealth()
-      .then(body => parseSidecarHealth(body))
+      .then(body => parseAssistantHealth(body))
       .then(health => {
         if (cancelled) return
-        setSidecar(health ? { state: 'ok', health } : { state: 'unreachable' })
+        setAssistant(health ? { state: 'ok', health } : { state: 'unreachable' })
       })
-      .catch(() => { if (!cancelled) setSidecar({ state: 'unreachable' }) })
+      .catch(() => { if (!cancelled) setAssistant({ state: 'unreachable' }) })
     return () => { cancelled = true }
   }, [])
 
@@ -349,11 +349,11 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
             <Row id="about.api-base" title="API base" description="Base path the frontend uses for API host requests.">
               <span className="font-mono text-[11px] text-muted-foreground">{new URL('/api', window.location.origin).toString()}</span>
             </Row>
-            <Row id="about.sidecar" title="LangGraph sidecar" description="Model and mode reported by the sidecar health endpoint.">
+            <Row id="about.assistant" title="Workbench Assistant" description="Availability reported by the in-process assistant endpoint.">
               {readOnlyValue(
-                sidecar.state === 'loading' ? 'checking…'
-                  : sidecar.state === 'unreachable' ? 'unreachable via API host'
-                    : `${sidecar.health.model} · ${sidecar.health.mode === 'llm' ? 'live llm' : sidecar.health.mode}`,
+                assistant.state === 'loading' ? 'checking…'
+                  : assistant.state === 'unreachable' ? 'unreachable via API host'
+                    : `${assistant.health.service} · ${assistant.health.modelConfigured ? 'model configured' : 'no model key'}`,
               )}
             </Row>
           </Section>

@@ -66,8 +66,8 @@ installer derives their storage paths). Missing settings receive the defaults
 from `config.example.json`; a new config uses the successfully selected and
 probed Bootstrap Python executable rather than a null value. With
 `-SkipPrerequisiteProbe`, `bootstrapPython` must already be an explicit,
-canonical existing non-reparse executable, or setup must safely discover one
-from the repository virtual environment or `Get-Command`; it never persists a
+canonical existing non-reparse executable, or setup must safely discover one with
+`Get-Command`; it never persists a
 blind `python.exe`. Repository, repository root, data root,
 runner root, runner name, runner label, and config path are installer-derived
 and overwrite conflicting input. Rooted `bootstrapPython` must be a canonical
@@ -269,15 +269,11 @@ then the worker runs these implemented preparation commands in that slot:
 * `dotnet build AgentAssistPlcDev.sln -v q`
 * `npm.cmd ci --prefix studio`
 * `npm.cmd run build --prefix studio`
-* the configured Bootstrap Python `-m venv agent-service\.venv`
-* the slot venv `-m pip install -e agent-service[test]`
 
 After preparation, it launches the slot with `launch.ps1 -NoBuild` and records
 command arguments, working directory, exit code, process ID, stdout, stderr,
 service processes, and health responses. Health must be HTTP 200 for
-`http://localhost:5173/` and `http://localhost:5239/api/status`, and HTTP 200
-with `status: ok` for `http://localhost:8787/health`. The health record also
-captures sidecar model/fallback fields when present.
+`http://localhost:5173/` and `http://localhost:5239/api/status`.
 
 If preparation fails, the current slot remains running. If switch or health
 verification fails after preparation, the previous active slot is relaunched

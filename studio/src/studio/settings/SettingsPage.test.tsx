@@ -38,7 +38,7 @@ vi.mock('@/api/client', async importOriginal => {
       fetchedAt: '2026-08-14T00:00:00Z',
     })),
     getStatus: vi.fn(async () => ({ ...statusFixture })),
-    getAppAssistantHealth: vi.fn(async () => ({ status: 'ok', model: 'deepseek-v4-flash', modelMode: 'llm' })),
+    getAppAssistantHealth: vi.fn(async () => ({ status: 'ok', service: 'in-process', modelConfigured: true })),
     getSessions: vi.fn(async () => [{ id: 1, mode: 'attached', projectPath: 'C:\\Demo\\demo.ap17' }]),
     getTools: vi.fn(async () => [
       { name: 'demo_tool', description: null, serverName: 'demo', schema: {}, tier: 'read' },

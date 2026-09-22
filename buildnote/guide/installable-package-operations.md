@@ -72,7 +72,7 @@ pwsh -NoProfile -File .\scripts\build-release.ps1 -Version 0.2.1
 pwsh -NoProfile -File .\scripts\build-installer.ps1 -Version 0.2.1
 ```
 
-If the machine routes traffic through a local HTTP proxy (for example `HTTP_PROXY` environment variables or a system proxy on `127.0.0.1`), clear all proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and their lowercase variants) and set `DOTNET_SYSTEM_NET_HTTP_USEPROXY=false` for the build session. Otherwise the loopback health checks in the release test run (such as the live app-assistant sidecar test) are routed to the proxy and fail even though the services are healthy.
+If the machine routes traffic through a local HTTP proxy (for example `HTTP_PROXY` environment variables or a system proxy on `127.0.0.1`), clear all proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and their lowercase variants) and set `DOTNET_SYSTEM_NET_HTTP_USEPROXY=false` for the build session. Otherwise the loopback health checks in the release test run are routed to the proxy and fail even though the services are healthy.
 
 `build-release.ps1` performs the release build and verification, including solution tests and the Studio frontend checks. It rebuilds:
 
@@ -89,20 +89,16 @@ artifacts\installer\AutomationWorkbench-0.2.1-win-x64-setup.exe.sha256
 
 The build requires the .NET 8 SDK, Node/npm, Git, and Inno Setup 6. The current packaging baseline intentionally remains on the existing framework targets; do not upgrade it to .NET 10 as part of routine package generation.
 
-The release also includes the optional `agent-service` source under the install
-root. It does not bundle Python or third-party Python packages. To enable the
-Workbench App Assistant on a machine, install Python 3.13, install the service
-dependencies from the installed `agent-service` directory, and set these user or
-machine environment variables before launching the desktop shell:
+The release does not include a separate assistant service and does not bundle
+Python. The Workbench Assistant panel is served in-process by ApiHost on the same
+agent loop as the device chat. Provide the model credential before launching the
+desktop shell:
 
 ```powershell
-py -3.13 -m pip install -e 'C:\Program Files\Automation Workbench\agent-service'
-[Environment]::SetEnvironmentVariable('AUTOMATION_WORKBENCH_APP_ASSISTANT_ENABLED', 'true', 'User')
 [Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY', '<key>', 'User')
 ```
 
-The shell passes the ApiHost URL and a writable user-local data directory to the
-sidecar. If the sidecar cannot start, ApiHost and the existing PLC AgentLoop stay
+If the assistant cannot reach the model, ApiHost and the PLC AgentLoop stay
 available; inspect `%LOCALAPPDATA%\AutomationWorkbench\logs\backend.log` for the
 diagnostic.
 

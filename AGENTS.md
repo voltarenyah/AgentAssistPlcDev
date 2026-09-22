@@ -31,7 +31,7 @@ disagree, the `docs/` file wins and the nested file is the one to fix.
 
 ## Start the local test flow
 
-When testing the application in development mode, use the repository launcher as the single service entry point. It starts the ASP.NET API, the Vite frontend, and the LangGraph Python sidecar.
+When testing the application in development mode, use the repository launcher as the single service entry point. It starts the ASP.NET API and the Vite frontend. The Workbench Assistant panel is served in-process by ApiHost, so there is no sidecar process to start.
 
 From the repository root:
 
@@ -45,23 +45,21 @@ Use `-NoBuild` when the code is already built and a faster restart is useful:
 .\launch.ps1 -NoBuild
 ```
 
-The launcher normally stops old ApiHost, Node, MCP, and LangGraph sidecar processes first. Use `-NoKill` only when intentionally keeping the existing processes.
+The launcher normally stops old ApiHost, Node, and MCP processes first. Use `-NoKill` only when intentionally keeping the existing processes.
 
 Service URLs:
 
 - Frontend: `http://localhost:5173/`
 - ApiHost: `http://localhost:5239/`
-- LangGraph sidecar: `http://localhost:8787/`
 
-Wait for the launcher to finish its health check before starting UI tests. Confirm all services are reachable:
+Wait for the launcher to finish its health check before starting UI tests. Confirm both services are reachable:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing http://localhost:5173/
 Invoke-WebRequest -UseBasicParsing http://localhost:5239/api/status
-Invoke-RestMethod http://localhost:8787/health
 ```
 
-The expected result is HTTP 200 from the frontend and ApiHost, plus `status: ok` from the sidecar. The sidecar health response also identifies the configured model and whether it is using the live model or deterministic fallback.
+The expected result is HTTP 200 from both. The Workbench Assistant is part of ApiHost: `GET /api/app-assistant/health` reports `service: in-process` and whether a model key is configured.
 
 ## Open and test the web application
 
@@ -76,39 +74,18 @@ Use the browser automation capability when available. Keep browser checks ground
 Recommended smoke flow:
 
 1. Confirm the project list and workbench overview render.
-2. Open **Workbench Assistant** from the overview while no worktree is selected. The panel must render without an error boundary or `worktreeId` exception.
-3. Wait for the orientation response and confirm the assistant lists the available worktrees.
-4. Send a read-only request, such as asking for recent commit history or todo items. Confirm the response describes the requested state.
-5. Send a mutation request, such as creating a new worktree. If a baseline is ambiguous, choose the proposed baseline option.
-6. Confirm the assistant shows an explicit approval card with **Approve** and **Reject** controls. Do not approve a mutation unless the test specifically requires exercising the mutation itself.
+2. Open **Workbench Assistant** from the overview. The panel must render without an error boundary or `worktreeId` exception, and it describes the selected workbench without needing a device.
+3. Select a worktree and device in the workbench, then send a read-only request, such as asking for recent commit history or todo items. Confirm the response describes the requested state.
+4. Send a mutation request, such as creating a new worktree. If a baseline is ambiguous, choose the proposed baseline option.
+5. Confirm the assistant shows an explicit approval card with **Approve** and **Reject** controls. Do not approve a mutation unless the test specifically requires exercising the mutation itself.
 
-For the LangGraph approval workflow, the expected API/SSE sequence is:
+A turn with no device selected is refused with `DEVICE_SELECTION_REQUIRED` inside the event stream rather than failing silently; that is deliberate, not a regression.
 
-```text
-progress -> state -> interrupt -> answer
-```
-
-The response should contain `decision.kind = mutation_proposal`, a `pendingApproval` object, and an answer that clearly says the proposal is ready for approval. An old orientation answer is a failure because it hides the current action state.
+The panel runs on the same C# `AgentLoop` as the device chat, and its destructive actions go through the shared MCP tools and the `AgentSandbox` approval card. The approval is **not** an `interrupt` frame: a destructive call suspends the turn, so the card is read from the shared server log (`kind: confirmation`) and answered through `POST /api/chat/confirm/{id}`, exactly as the device chat does. The `state` frame carries the panel's session id so the UI can claim only its own confirmations.
 
 ## Automated test commands
 
 Frontend tests: see `studio/AGENTS.md` (vitest).
-
-Python sidecar tests:
-
-```powershell
-Push-Location agent-service
-.\.venv\Scripts\python.exe -m pytest -q
-Pop-Location
-```
-
-Useful focused sidecar tests:
-
-```powershell
-Push-Location agent-service
-.\.venv\Scripts\python.exe -m pytest tests/test_mutations.py tests/test_graph.py tests/test_live_sidecar.py tests/test_observability.py -q
-Pop-Location
-```
 
 ApiHost tests:
 

@@ -119,7 +119,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
     icon: 'info',
     label: 'About',
     description: 'Runtime and service information.',
-    keywords: ['about', 'runtime', 'sidecar', 'endpoint', 'version', 'origin'],
+    keywords: ['about', 'runtime', 'assistant', 'endpoint', 'version', 'origin'],
   },
 ]
 
@@ -146,16 +146,16 @@ export const formatBalance = (balance: DeepSeekBalance | null): string => {
     .join(' · ')
 }
 
-/* ── Sidecar health ────────────────────────────────────────────────────── */
+/* ── Assistant health ──────────────────────────────────────────────────── */
 
-export type SidecarHealth = {
-  model: string
-  mode: string
+export type AssistantHealth = {
+  service: string
+  modelConfigured: boolean
 }
 
-export const parseSidecarHealth = (body: unknown): SidecarHealth | null => {
+export const parseAssistantHealth = (body: unknown): AssistantHealth | null => {
   if (!body || typeof body !== 'object') return null
   const record = body as Record<string, unknown>
-  if (typeof record.model !== 'string' || typeof record.modelMode !== 'string') return null
-  return { model: record.model, mode: record.modelMode }
+  if (typeof record.service !== 'string' || typeof record.modelConfigured !== 'boolean') return null
+  return { service: record.service, modelConfigured: record.modelConfigured }
 }
