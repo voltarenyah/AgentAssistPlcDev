@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { AlertCircle, Camera, GitBranch, Loader2, Plus } from 'lucide-react'
 import * as api from '@/api/client'
 import TagFilter from './tags/TagFilter'
-import { Button } from '@notion-kit/ui/primitives'
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@notion-kit/ui/primitives'
 
 export type AllProjectsLandingPageProps = {
   projects: api.WorkbenchLandingCard[] | null
@@ -20,6 +20,23 @@ export type AllProjectsLandingPageProps = {
 
 const formatDate = (value: string | null) => value ? new Date(value).toLocaleDateString() : 'Unknown'
 
+/** Orders the landing cards. Exported because notion-kit's Select cannot be driven in
+ *  happy-dom, so the reordering cannot be exercised through the control; asserting this
+ *  function directly checks the ordering rule itself, in both modes, which is stronger than
+ *  the rendered-card order it replaces. */
+export const orderProjects = (
+  projects: api.WorkbenchLandingCard[] | null,
+  sort: 'modified' | 'created',
+  matchingWorkbenchIds: string[] | null,
+) => {
+  const values = (projects ?? []).filter(project => matchingWorkbenchIds === null || matchingWorkbenchIds.includes(project.workbenchId))
+  return [...values].sort((left, right) => {
+    const l = Date.parse(sort === 'created' ? left.createdAt : left.modifiedAt ?? left.createdAt)
+    const r = Date.parse(sort === 'created' ? right.createdAt : right.modifiedAt ?? right.createdAt)
+    return (Number.isFinite(r) ? r : 0) - (Number.isFinite(l) ? l : 0) || left.name.localeCompare(right.name)
+  })
+}
+
 export default function AllProjectsLandingPage({
   projects, loading = false, error, tagNodes = [], selectedTagIds = [], matchingWorkbenchIds = null,
   onSelectedTagIdsChange, onRetry, onCreateWorkbench, onSelectWorkbench, onSelectWorktree,
@@ -31,14 +48,7 @@ export default function AllProjectsLandingPage({
   const [uploadedCovers, setUploadedCovers] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const coverProjectRef = useRef<string | null>(null)
-  const ordered = useMemo(() => {
-    const values = (projects ?? []).filter(project => matchingWorkbenchIds === null || matchingWorkbenchIds.includes(project.workbenchId))
-    return [...values].sort((left, right) => {
-      const l = Date.parse(sort === 'created' ? left.createdAt : left.modifiedAt ?? left.createdAt)
-      const r = Date.parse(sort === 'created' ? right.createdAt : right.modifiedAt ?? right.createdAt)
-      return (Number.isFinite(r) ? r : 0) - (Number.isFinite(l) ? l : 0) || left.name.localeCompare(right.name)
-    })
-  }, [projects, matchingWorkbenchIds, sort])
+  const ordered = useMemo(() => orderProjects(projects, sort, matchingWorkbenchIds), [projects, sort, matchingWorkbenchIds])
 
   if (loading && projects === null) return <div className="grid h-full place-items-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading Projects…</div>
   if (error && projects === null) return <div className="grid h-full place-items-center p-8"><div className="text-center"><AlertCircle className="mx-auto mb-3 h-7 w-7 text-destructive" /><p className="text-sm">{error}</p>{onRetry && <Button variant="blue" size="sm" className="mt-4" onClick={onRetry}>Retry</Button>}</div></div>
@@ -49,7 +59,24 @@ export default function AllProjectsLandingPage({
         <div><h1 className="text-xl font-semibold">All Projects</h1><p className="text-xs text-muted-foreground">Choose a Project or worktree to continue.</p></div>
         <div className="ml-auto flex items-center gap-2">
           <label className="text-xs text-muted-foreground" htmlFor="landing-sort">Sort</label>
-          <select id="landing-sort" className="h-8 rounded-md border bg-background px-2 text-xs" value={sort} onChange={event => setSort(event.target.value as typeof sort)}><option value="modified">Recently modified</option><option value="created">Created</option></select>
+          {/* notion-kit's Select is Base UI: the root needs `items` so SelectValue can render
+              the selected label rather than the raw value. */}
+          <Select
+            items={[
+              { value: 'modified', label: 'Recently modified' },
+              { value: 'created', label: 'Created' },
+            ]}
+            value={sort}
+            onValueChange={value => setSort(value as typeof sort)}
+          >
+            <SelectTrigger id="landing-sort" aria-label="Sort projects" className="h-8! w-[142px] text-xs!">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="modified">Recently modified</SelectItem>
+              <SelectItem value="created">Created</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
       {tagNodes.length > 0 && onSelectedTagIdsChange && <TagFilter nodes={tagNodes} selectedTagIds={selectedTagIds} onSelectedTagIdsChange={onSelectedTagIdsChange} />}
