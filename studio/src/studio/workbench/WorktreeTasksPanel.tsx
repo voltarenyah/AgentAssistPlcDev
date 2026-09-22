@@ -18,6 +18,11 @@ import {
   DropdownMenuTrigger,
   Input,
   Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Textarea,
 } from '@notion-kit/ui/primitives'
 
@@ -413,8 +418,8 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
           </DialogHeader>
           <form className="space-y-3" onSubmit={event => { event.preventDefault(); addTask() }}>
             <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Title</span><Input autoFocus aria-label="New task title" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></Label>
-            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></Label>
-            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{availableDevices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></Label>
+            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Type</span><Select items={[{ value: 'issue', label: 'Issue' }, { value: 'improvement', label: 'Improvement' }, { value: 'feature', label: 'Feature' }]} value={newType} onValueChange={value => setNewType(value as api.EngineeringTask['type'])}><SelectTrigger aria-label="New task type" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="issue">Issue</SelectItem><SelectItem value="improvement">Improvement</SelectItem><SelectItem value="feature">Feature</SelectItem></SelectContent></Select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></Label>
+            <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!"><span>Device</span><Select items={availableDevices.map(device => ({ value: device.deviceId, label: device.plcName || 'Unnamed PLC' }))} value={newDevice || undefined} onValueChange={value => setNewDevice(value ?? '')}><SelectTrigger aria-label="New task device" className="w-full"><SelectValue placeholder="Select a device" /></SelectTrigger><SelectContent>{availableDevices.map(device => <SelectItem key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</SelectItem>)}</SelectContent></Select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></Label>
             <DialogFooter className="flex-row justify-end gap-2"><Button variant="primary" size="sm" type="button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</Button><Button variant="blue" size="sm" type="submit" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</Button></DialogFooter>
           </form>
         </DialogContent>
