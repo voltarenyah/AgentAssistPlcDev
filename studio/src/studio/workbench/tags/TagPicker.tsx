@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { TagNode } from '@/api/client'
-import { Button } from '@/components/ui/button'
+import { Button } from '@notion-kit/ui/primitives'
 import { CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { showErrorToast } from '@/components/ui/toast'
 import TagTree from './TagTree'
@@ -52,7 +52,7 @@ export function TagPicker({ nodes, currentTagIds = [], onAssign, onCreate, loadi
 
   return (
     <>
-      <Button type="button" variant="outline" size="xs" disabled={disabled || loading} onClick={() => setOpen(true)} aria-label={loading ? 'Add tag (loading)' : 'Add tag'}>
+      <Button type="button" variant="primary" size="xs" disabled={disabled || loading} onClick={() => setOpen(true)} aria-label={loading ? 'Add tag (loading)' : 'Add tag'}>
         {loading ? 'Loading tags…' : 'Add tag'}
       </Button>
       {error && <div role="alert" className="mt-1 text-xs text-destructive">{error}{onRetry && <Button type="button" variant="link" size="xs" onClick={onRetry}>Retry</Button>}</div>}
