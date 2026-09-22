@@ -378,6 +378,34 @@ The clean fix, if zero warnings is wanted, is to move both helpers into pure mod
 sites each. Recorded rather than done, because it is churn without behaviour change and the rule is
 advisory.
 
+### TagFilter's inline list stays on cmdk, and the reason is a state machine
+
+The inline tag filter was the next swap after the selects: its suggestion list would become
+notion-kit's `Autocomplete`, with `filterableTags` as the item source. The swap works - it builds,
+and TagFilter's own nine tests pass once two of them are retargeted - but it was backed out twice,
+and the second diagnostic showed why, which changes the decision rather than the implementation.
+
+`MainStudio.tagFilter.test.tsx` has two tests that reach the filter **through** the inline list's
+keyboard path. Their subject, though, is MainStudio's own filter state machine: that
+`searchWorkbenches` is called with the selected tag ids, and - the part that matters - that a
+**stale projection is cleared while a replacement search is still pending**. notion-kit's
+Autocomplete does not render its popup in happy-dom, so there is no longer any path to a selection in
+that environment, and both tests lose their trigger.
+
+That is a different situation from the selects. There, the lost coverage was an *interaction* -
+clicking an item, choosing an option - which the browser genuinely substitutes, and that is why the
+trade was approved. Here the lost coverage is a **race between two pending searches**. No browser
+check substitutes for it; observing it would need the same deferred promises the unit test uses.
+
+So the rule this workstream already adopted applies unchanged: a test-driven control moves only when
+a browser substitute exists for what its tests lose. For the inline list, none exists for the
+clearing behaviour, so **it stays on cmdk**, and this is a decision rather than an unfinished task.
+The taxonomy dialog in the same file is a separate question, and its mapping is unaffected.
+
+Worth recording as the migration's sharpest boundary so far: the blocker is not the component, and
+not the harness alone - it is that a *behaviour* in a neighbouring component is only reachable
+through this UI, so changing the UI removes the only way to exercise it.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
