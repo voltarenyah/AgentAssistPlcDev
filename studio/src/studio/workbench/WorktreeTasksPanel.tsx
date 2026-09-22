@@ -87,6 +87,13 @@ export function ActiveTaskSelector({
     <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
       <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!" htmlFor="active-task-selector"><span>Active task</span></Label>
       <div className="mt-1 flex items-center gap-2">
+        {/* Left on the native select deliberately. ActiveTaskSelector has its own two tests
+            covering keyboard selection and clear, Base UI's Select cannot be driven through
+            either in happy-dom, and unlike the dialog selects in this file this control cannot
+            be rendered in the current environment to replace that proof with a browser check -
+            it needs compatible tasks and a selected device, which issue #109 blocks. Migrating
+            it would therefore delete real behavioural coverage with nothing to put in its
+            place. Revisit when device selection works. */}
         <select
           id="active-task-selector"
           aria-label="Active task"
