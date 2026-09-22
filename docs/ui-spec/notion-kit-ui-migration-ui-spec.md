@@ -453,6 +453,33 @@ behaviour-blocked and this pair scheduled, **the migration has no remaining item
 unmigrated primitive.** What is left is one bounded menu, one staged menu, device-gated things whose
 verification ceiling is already agreed, and behaviours that only the tag UI can reach.
 
+### SourceObjectInspectorPanel's menu: no coverage at risk, but an SVG trigger
+
+Read both files before touching either, and the two findings are of different kinds.
+
+**Its test does not exercise the menu at all.** The single test in
+`SourceObjectInspectorPanel.test.tsx` covers the Ladder network rendering - element positions, wire
+counts, the collapse control, the diagram label. Nothing opens, hovers or selects through the context
+menu. So this migration cannot break that test and costs no coverage, which is the opposite of the tag
+surfaces and the reason it can proceed on the ordinary build-and-suite standard.
+
+**The trigger is not a class swap.** The menu wraps an SVG element, not a DOM node:
+
+```
+<ContextMenu><ContextMenuTrigger asChild><g data-lad-element-id=... >...</g></ContextMenuTrigger>
+```
+
+notion-kit's `ContextMenuTrigger` renders a `div` and has no `asChild`, so a direct translation would
+put a `div` inside an SVG and break the drawing - the LAD diagram is exactly what this panel exists to
+render. The trigger therefore has to go through the `render` prop, as
+`<ContextMenuTrigger render={<g ... />}>`, which is the same escape hatch that replaced `asChild` for
+custom components when the navigator was migrated. The items are the familiar change: `onSelect`
+becomes `onClick`, `disabled` carries over, and `icon`/`label`/`variant` are props rather than loose
+children, with `destructive` becoming `error`.
+
+So this is the last bounded migration, and it is bounded in both directions: no test coverage to lose,
+one prop substitution needing care.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
