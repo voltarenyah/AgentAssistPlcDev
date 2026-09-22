@@ -612,6 +612,31 @@ public sealed class AgentLoopTests
     }
 
     [Fact]
+    public async Task CancellingAfterTheModelAnnouncesAToolCallStillAnswersIt()
+    {
+        var (loop, endpoint, caller, _, _) = Create();
+        using var cancellation = new CancellationTokenSource();
+        endpoint.RespondJson(SseToolCall("call_1", "search", "{}"));
+        // Cancel once the model has answered and announced a call, but before that call is
+        // dispatched: the assistant message naming it is already in the history. The API rejects a
+        // history where an announced tool call has no tool message, so the session would keep
+        // failing with a 400 after any interruption until it was cleared.
+        loop.Progress += line =>
+        {
+            if (line.StartsWith("usage:", StringComparison.Ordinal))
+            {
+                cancellation.Cancel();
+            }
+        };
+        caller.Respond("search", JsonDocument.Parse("""{"ok":true}""").RootElement);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => loop.RunAsync("cancel me", cancellation.Token));
+
+        AssertToolCallPairing(loop.History);
+    }
+
+    [Fact]
     public async Task LongToolResultsAreTruncated()
     {
         var (loop, endpoint, caller, _, _) = Create();

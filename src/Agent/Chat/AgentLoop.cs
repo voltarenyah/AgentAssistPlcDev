@@ -28,6 +28,13 @@ public sealed class AgentLoop
     private const string FinalRoundInstruction =
         "Tool budget exhausted. Answer now with what you have, cite what you found, and state clearly what remains unverified.";
 
+    /// <summary>
+    /// Tool result recorded for a call the turn was interrupted before answering. It exists only to
+    /// keep the assistant's tool_calls paired with a tool message, which the model API requires.
+    /// </summary>
+    private const string InterruptedToolResult =
+        "{\"error\":{\"code\":\"TOOL_CALL_INTERRUPTED\",\"message\":\"The turn was interrupted before this tool ran.\",\"retryable\":true}}";
+
     private readonly DeepSeekClient client;
     private readonly McpToolCatalog catalog;
     private readonly Func<string> contextProvider;
@@ -253,11 +260,29 @@ public sealed class AgentLoop
     private async Task AppendToolRoundAsync(ChatResponse response, CancellationToken cancellationToken)
     {
         messages.Add(ChatMessage.Assistant(response.Content, response.ToolCalls, response.ReasoningContent));
-        foreach (var call in response.ToolCalls)
+        for (var index = 0; index < response.ToolCalls.Count; index++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            Progress?.Invoke($"→ {call.Name}({Summarize(call.ArgumentsJson)})");
-            messages.Add(await ExecuteToolCallAsync(call, cancellationToken));
+            var call = response.ToolCalls[index];
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Progress?.Invoke($"→ {call.Name}({Summarize(call.ArgumentsJson)})");
+                messages.Add(await ExecuteToolCallAsync(call, cancellationToken));
+            }
+            catch (Exception)
+            {
+                // DeepSeek rejects an assistant message whose tool_calls are not each answered by a
+                // tool message. A turn cancelled between two calls would otherwise leave the calls
+                // it already announced dangling, and because this history is kept and persisted,
+                // every later turn in that session fails with a 400 until the session is cleared.
+                // Close the remaining calls before letting the cancellation out.
+                for (var remaining = index; remaining < response.ToolCalls.Count; remaining++)
+                {
+                    messages.Add(ChatMessage.Tool(response.ToolCalls[remaining].Id, InterruptedToolResult));
+                }
+
+                throw;
+            }
         }
     }
 
