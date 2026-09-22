@@ -251,9 +251,6 @@ function Invoke-CodexDeployment {
         & $run 'dotnet' @('build','AgentAssistPlcDev.sln','-v','q') | Out-Null
         & $run 'npm.cmd' @('ci','--prefix','studio') | Out-Null
         & $run 'npm.cmd' @('run','build','--prefix','studio') | Out-Null
-        $bootstrap = [string](Get-CodexDeploymentValue $Config 'bootstrapPython' 'python.exe')
-        & $run $bootstrap @('-m','venv','agent-service\.venv') | Out-Null
-        & $run (Join-Path $inactivePath 'agent-service\.venv\Scripts\python.exe') @('-m','pip','install','-e','agent-service[test]') | Out-Null
         $regPath = [string](Get-CodexDeploymentValue $Config 'tiaWhitelistPath' '')
         if ([string]::IsNullOrWhiteSpace($regPath)) { $regPath = Join-Path $inactivePath 'src\Mcp.Engineering\bin\Debug\net48\register-whitelist.reg' }
         if (-not [string]::IsNullOrWhiteSpace($regPath) -and (Test-Path -LiteralPath $regPath -PathType Leaf)) {

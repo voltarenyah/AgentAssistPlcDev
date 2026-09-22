@@ -90,14 +90,6 @@ function Resolve-CodexBootstrapPython {
     if ([IO.Path]::IsPathRooted($Candidate)) {
         return Resolve-CodexSafeExecutable -Value $Candidate -PathInspector $PathInspector
     }
-    # Prefer the repository's configured virtual environment when the
-    # prerequisite probe returned the conventional command name. This avoids
-    # persisting a WindowsApps execution alias while still requiring a real,
-    # canonical executable.
-    $venvPython = Join-Path $RepositoryRoot 'agent-service\.venv\Scripts\python.exe'
-    if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
-        return Resolve-CodexSafeExecutable -Value $venvPython -PathInspector $PathInspector
-    }
     return Resolve-CodexSafeExecutable -Value $Candidate -PathInspector $PathInspector
 }
 

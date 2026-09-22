@@ -13,14 +13,12 @@ public sealed class BackendStartupException(string message, string logPath, Exce
 public sealed class BackendProcessHost : IAsyncDisposable
 {
     private const int StartupTimeoutSeconds = 30;
-    private const int AppAssistantStartupTimeoutSeconds = 30;
     private const int ShutdownTimeoutSeconds = 5;
     private readonly RuntimePaths paths;
     private readonly HttpClient http;
     private readonly Func<ProcessStartInfo, Process> processStarter;
     private readonly object logGate = new();
     private Process? process;
-    private Process? appAssistantProcess;
     private string? shutdownToken;
 
     public BackendProcessHost(
@@ -44,7 +42,6 @@ public sealed class BackendProcessHost : IAsyncDisposable
     public string BaseUrl => paths.BaseUrl;
     public string BackendLogPath => paths.BackendLogPath;
     public bool IsRunning => process is { HasExited: false };
-    public bool IsAppAssistantRunning => appAssistantProcess is { HasExited: false };
 
     public static ProcessStartInfo CreateStartInfo(RuntimePaths paths, string shutdownToken)
     {
@@ -67,37 +64,6 @@ public sealed class BackendProcessHost : IAsyncDisposable
         };
     }
 
-    public static ProcessStartInfo CreateAppAssistantStartInfo(RuntimePaths paths)
-        => CreateAppAssistantStartInfo(paths, null);
-
-    internal static ProcessStartInfo CreateAppAssistantStartInfo(
-        RuntimePaths paths,
-        IReadOnlyList<string>? deepSeekConfigPaths)
-    {
-        var port = paths.AppAssistantPort.ToString();
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = paths.AppAssistantCommand,
-            WorkingDirectory = paths.EffectiveAppAssistantWorkingDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            ArgumentList =
-            {
-                "-3.13", "-m", "uvicorn", "app_assistant.server:app",
-                "--host", "127.0.0.1", "--port", port,
-            },
-        };
-        startInfo.Environment["APP_ASSISTANT_APIHOST_URL"] = paths.BaseUrl;
-        startInfo.Environment["APP_ASSISTANT_DATA_DIR"] = paths.AppAssistantDataDirectory;
-        var apiKey = DeepSeekCredentialResolver.ResolveApiKey(deepSeekConfigPaths);
-        if (!string.IsNullOrWhiteSpace(apiKey))
-            startInfo.Environment["DEEPSEEK_API_KEY"] = apiKey;
-        return startInfo;
-    }
-
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         if (IsRunning)
@@ -115,8 +81,6 @@ public sealed class BackendProcessHost : IAsyncDisposable
             _ = DrainAsync(process.StandardOutput, "stdout");
             _ = DrainAsync(process.StandardError, "stderr");
             await WaitForReadyAsync(cancellationToken).ConfigureAwait(false);
-            if (paths.AppAssistantEnabled)
-                await TryStartAppAssistantAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not BackendStartupException)
         {
@@ -132,7 +96,6 @@ public sealed class BackendProcessHost : IAsyncDisposable
 
     public async Task StopAsync()
     {
-        await StopAppAssistantAsync().ConfigureAwait(false);
         var current = process;
         if (current is null)
             return;
@@ -204,73 +167,6 @@ public sealed class BackendProcessHost : IAsyncDisposable
             }
 
             await Task.Delay(250, timeout.Token).ConfigureAwait(false);
-        }
-    }
-
-    private async Task TryStartAppAssistantAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            if (!Directory.Exists(paths.EffectiveAppAssistantWorkingDirectory))
-                throw new DirectoryNotFoundException(paths.EffectiveAppAssistantWorkingDirectory);
-            appAssistantProcess = processStarter(CreateAppAssistantStartInfo(paths));
-            _ = DrainAsync(appAssistantProcess.StandardOutput, "app-assistant-stdout");
-            _ = DrainAsync(appAssistantProcess.StandardError, "app-assistant-stderr");
-            await WaitForAppAssistantReadyAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            lock (logGate)
-            {
-                Directory.CreateDirectory(paths.LogDirectory);
-                File.AppendAllText(
-                    paths.BackendLogPath,
-                    $"[{DateTimeOffset.Now:O}] [app-assistant] disabled after startup failure: {exception.Message}{Environment.NewLine}");
-            }
-            await StopAppAssistantAsync().ConfigureAwait(false);
-        }
-    }
-
-    private async Task WaitForAppAssistantReadyAsync(CancellationToken cancellationToken)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(AppAssistantStartupTimeoutSeconds));
-        while (true)
-        {
-            timeout.Token.ThrowIfCancellationRequested();
-            if (appAssistantProcess is null || appAssistantProcess.HasExited)
-                throw new InvalidOperationException("The app assistant exited before health became ready.");
-            try
-            {
-                using var response = await http.GetAsync(
-                    $"{paths.AppAssistantBaseUrl}/health", timeout.Token).ConfigureAwait(false);
-                if (response.IsSuccessStatusCode)
-                    return;
-            }
-            catch (HttpRequestException) { }
-            catch (TaskCanceledException) when (!timeout.IsCancellationRequested) { }
-            await Task.Delay(250, timeout.Token).ConfigureAwait(false);
-        }
-    }
-
-    private async Task StopAppAssistantAsync()
-    {
-        var current = appAssistantProcess;
-        if (current is null)
-            return;
-        try
-        {
-            if (!current.HasExited)
-            {
-                current.Kill(entireProcessTree: true);
-                await current.WaitForExitAsync().ConfigureAwait(false);
-            }
-        }
-        catch (InvalidOperationException) { }
-        finally
-        {
-            current.Dispose();
-            appAssistantProcess = null;
         }
     }
 

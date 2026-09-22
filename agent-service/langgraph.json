@@ -1,7 +1,0 @@
-{
-  "dependencies": ["."],
-  "graphs": {
-    "app_assistant": "app_assistant.graph:graph"
-  },
-  "env": ".env"
-}
