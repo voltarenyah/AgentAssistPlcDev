@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { Button, Input, Label } from '@notion-kit/ui/primitives'
+import { Button, Input, Label, Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@notion-kit/ui/primitives'
 import {
   AlertCircle,
   Boxes,
@@ -223,17 +223,33 @@ function NewWorktreeDialog({
             branchStartPoints.length > 0 ? (
             <Label className="flex flex-col gap-1.5 text-[10px]! font-medium! text-foreground!">
               <span>SVN savepoint</span>
-              <select className="field-input font-mono" value={selectedSavepoint} onChange={event => setSelectedSavepoint(event.target.value)}>
-                <option value="">Select a savepoint</option>
-                {Array.from(new Set(branchStartPoints.map(point => point.worktreeId))).map(worktreeId => {
-                  const points = branchStartPoints.filter(point => point.worktreeId === worktreeId)
-                  return <optgroup key={worktreeId} label={`${points[0].worktreeName} (${points[0].branch})`}>
-                    {points.map(point => <option key={`${point.worktreeId}:${point.gitSha}`} value={`${point.worktreeId}:${point.gitSha}`} disabled={!point.selectable}>
-                      {point.gitSha.slice(0, 7)} · r{point.svnRevision ?? '—'} · {point.message}{point.state ? ` · ${point.state}` : ''}{point.selectable ? '' : ` · ${point.disabledReason}`}
-                    </option>)}
-                  </optgroup>
-                })}
-              </select>
+              <Select
+                items={branchStartPoints.map(point => ({
+                  value: `${point.worktreeId}:${point.gitSha}`,
+                  label: `${point.gitSha.slice(0, 7)} · r${point.svnRevision ?? '—'} · ${point.message}${point.state ? ` · ${point.state}` : ''}${point.selectable ? '' : ` · ${point.disabledReason}`}`,
+                }))}
+                value={selectedSavepoint || undefined}
+                onValueChange={value => setSelectedSavepoint(value ?? '')}
+              >
+                <SelectTrigger className="w-full font-mono">
+                  <SelectValue placeholder="Select a savepoint" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from(new Set(branchStartPoints.map(point => point.worktreeId))).map(worktreeId => {
+                    const points = branchStartPoints.filter(point => point.worktreeId === worktreeId)
+                    return (
+                      <SelectGroup key={worktreeId}>
+                        <SelectLabel title={`${points[0].worktreeName} (${points[0].branch})`} />
+                        {points.map(point => (
+                          <SelectItem key={`${point.worktreeId}:${point.gitSha}`} value={`${point.worktreeId}:${point.gitSha}`} disabled={!point.selectable}>
+                            {point.gitSha.slice(0, 7)} · r{point.svnRevision ?? '—'} · {point.message}{point.state ? ` · ${point.state}` : ''}{point.selectable ? '' : ` · ${point.disabledReason}`}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
             </Label>
             ) : (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[10px] text-amber-700" data-testid="branch-start-points-unavailable">
