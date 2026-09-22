@@ -1,16 +1,17 @@
 import { AlertTriangle, CheckCircle2, FileDiff, Loader2, X } from 'lucide-react'
 import { useState } from 'react'
-import { Checkbox, Input } from '@notion-kit/ui/primitives'
 import type { ReconciliationEntry, ReconciliationPreview } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import {
+  Checkbox,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+  Input,
+} from '@notion-kit/ui/primitives'
 import {
   actionableEntries,
   comparedEntries,
@@ -54,10 +55,8 @@ export default function RefreshDialog({ preview, busy, autoCommit, onClose, onAp
   return (
     <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}>
       <DialogContent
-        showCloseButton={false}
+        hideClose
         className="flex max-h-[86vh] max-w-[760px] flex-col gap-0 overflow-hidden p-0"
-        onEscapeKeyDown={event => { if (busy) event.preventDefault() }}
-        onPointerDownOutside={event => { if (busy) event.preventDefault() }}
       >
         <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-4 text-left" style={{ borderColor: 'var(--border)' }}>
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-amber-500/10">
