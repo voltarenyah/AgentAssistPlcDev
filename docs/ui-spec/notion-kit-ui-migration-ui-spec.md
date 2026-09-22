@@ -333,6 +333,27 @@ extracting it first was the right order rather than wasted motion. And `items` a
 `AutocompleteGroupItem[]`, so when the taxonomy dialog is migrated the grouping is representable as
 data - the same grouped shape `MainStudio`'s savepoint select needed - rather than flattened.
 
+### The endgame census: every Studio primitive still imported by a product file
+
+Counted rather than assumed, because an earlier assumption here was wrong. The legacy CSS classes
+are gone and the fields and buttons are migrated, but that does not mean every Studio primitive is
+out of the product surface. As of this writing the remaining imports are:
+
+| Primitive | Files | Disposition |
+|---|---|---|
+| `toast` | nine, across studio | **stays** - the sonner wrapper is not part of this migration |
+| `sonner`, `tooltip` | `App.tsx` | **stays** |
+| `slider` | `SettingsPage` | **stays** - notion-kit ships no slider |
+| `command` | `TagFilter`, `TagPicker` | **in flight** - the last two cmdk surfaces, each its own round |
+| `button` | `TagPicker` | pending, with its command surface |
+| **`button`, `dialog`, `input`** | **`RefreshDialog`** | **pending - a whole dialog still unmigrated**, previously overlooked because its fields never used the `field-input` class, so the field-layer count never saw it |
+| `context-menu` | `PlcSourcePanel`, `SourceObjectInspectorPanel` | pending - device panels, so build and suite only, as with their buttons |
+
+The `RefreshDialog` row is the correction worth keeping: the field-layer work was counted by the
+`field-input` class, and a file can use Studio's `Input` without that class, so the count was blind
+to it. Anything counted by a class name inherits that blind spot - the same lesson as the custom
+-button category that the legacy-class counts could not see.
+
 ### WorkbenchNavigator: what worked and what to watch
 
 Migrated in two stages. Stage 1 (done) moves the **menu layer** — `ContextMenu*` and
