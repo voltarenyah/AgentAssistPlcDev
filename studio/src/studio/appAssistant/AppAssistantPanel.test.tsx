@@ -287,6 +287,12 @@ describe('AppAssistantPanel', () => {
 
     expect(api.chatAppAssistant).toHaveBeenCalledWith('The workbench changed. Re-read the current state and suggest the next useful move.', expect.any(String))
     expect(host.textContent).toContain('feature')
+    // The refresh must hand the panel back: its own busy/autoRefreshPending updates are its
+    // dependencies, so a per-run cancellation flag would make React cancel the request it just
+    // started and leave the message box disabled forever.
+    await vi.waitFor(() => expect(
+      host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')?.disabled,
+    ).toBe(false))
   })
 
   it('refreshes the assistant when the focused worktree changes', async () => {

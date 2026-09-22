@@ -75,30 +75,34 @@ export default function AppAssistantPanel({
     setState(current => applyAssistantRuntimeSnapshot(current, snapshot, previous))
   }), [workbenchId])
 
+  // Unmount-only flag. A per-run `cancelled` flag cannot be used for the refresh below: that
+  // effect sets busy and autoRefreshPending, which are its own dependencies, so React runs the
+  // cleanup immediately after the request starts and cancels it. The `.then` that clears `busy`
+  // is then skipped and busy stays true forever — the message box disabled and "Refreshing
+  // workbench context…" on screen with no way out but closing the panel.
+  const unmounted = useRef(false)
+  useEffect(() => () => { unmounted.current = true }, [])
+
   useEffect(() => {
     if (!state.autoRefreshPending || state.busy || confirmation) return
     setBusyLabel('Refreshing workbench context…')
-    let cancelled = false
     setState(current => ({ ...current, busy: true, autoRefreshPending: false }))
     void api.chatAppAssistant('The workbench changed. Re-read the current state and suggest the next useful move.', assistantSessionId)
       .then(events => {
-        if (!cancelled) {
-          setBusyLabel(null)
-          setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
-        }
+        if (unmounted.current) return
+        setBusyLabel(null)
+        setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
       })
       .catch(error => {
-        if (!cancelled) {
-          setBusyLabel(null)
-          setState(current => ({
-            ...current,
-            busy: false,
-            contextStale: true,
-            messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Assistant refresh unavailable' }],
-          }))
-        }
+        if (unmounted.current) return
+        setBusyLabel(null)
+        setState(current => ({
+          ...current,
+          busy: false,
+          contextStale: true,
+          messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Assistant refresh unavailable' }],
+        }))
       })
-    return () => { cancelled = true }
   }, [assistantSessionId, confirmation, state.autoRefreshPending, state.busy, workbenchId])
 
   const send = async (message: string) => {
