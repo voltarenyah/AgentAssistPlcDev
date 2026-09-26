@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, Bot, Gauge, Info, Palette, RefreshCw, Search, Sparkles } from 'lucide-react'
+import { ArrowLeft, Blocks, Bot, Gauge, Info, Palette, RefreshCw, Search, Sparkles } from 'lucide-react'
 import * as api from '@/api/client'
+import Catalog from '@/catalog/Catalog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { showErrorToast } from '@/components/ui/toast'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
@@ -26,6 +30,7 @@ const iconMap: Record<SettingsIconName, typeof Gauge> = {
   sparkles: Sparkles,
   bot: Bot,
   palette: Palette,
+  blocks: Blocks,
   info: Info,
 }
 
@@ -173,10 +178,10 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
         disabled={!settings}
         onValueChange={values => onCommit(clampUnitInterval(values[0] ?? 0, min, max))}
       />
-      <input
+      <Input
         type="number"
         aria-label={label}
-        className="field-input h-8 w-20 px-2 text-[11px]"
+        className="h-8 w-20 px-2 text-xs"
         min={min}
         max={max}
         step={0.1}
@@ -211,7 +216,7 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
             </Section>
             <Section title="Shell layout" subtitle="Dock sizes and visibility for the studio shell.">
               <Row id="general.reset-layout" title="Reset shell layout" description="Restore the default dock layout. Applies immediately.">
-                <button className="secondary-button h-8" data-reset-layout onClick={() => onResetLayout?.()}>Reset layout</button>
+                <Button type="button" variant="outline" size="sm" data-reset-layout onClick={() => onResetLayout?.()}>Reset layout</Button>
               </Row>
             </Section>
           </>
@@ -225,45 +230,45 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
                 <span className={`text-[10px] ${keyConfigured ? 'text-emerald-500' : 'text-muted-foreground'}`}>
                   {keyConfigured === null ? 'Checking…' : keyConfigured ? 'Configured' : 'Not configured'}
                 </span>
-                <input
+                <Input
                   type="password"
                   aria-label="DeepSeek API key"
-                  className="field-input h-8 w-48 px-2 text-[11px]"
+                  className="h-8 w-48 px-2 text-xs"
                   placeholder="sk-…"
                   value={apiKeyDraft}
                   onChange={event => setApiKeyDraft(event.target.value)}
                 />
-                <button className="primary-button h-8" disabled={apiKeySaving || !apiKeyDraft.trim()} onClick={saveKey}>Save key</button>
+                <Button type="button" size="sm" disabled={apiKeySaving || !apiKeyDraft.trim()} onClick={saveKey}>Save key</Button>
               </div>
             </Row>
             <Row id="assistant.balance" title="Account balance" description="Current DeepSeek balance, fetched on demand.">
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {readOnlyValue(balanceError ?? (balance ? formatBalance(balance) : keyConfigured === false ? 'Configure an API key first' : 'Not fetched'))}
-                <button
-                  className="icon-button h-8 w-8"
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
                   aria-label="Refresh balance"
                   title="Refresh balance"
                   disabled={balanceBusy}
                   onClick={refreshBalance}
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${balanceBusy ? 'animate-spin' : ''}`} />
-                </button>
+                </Button>
               </div>
             </Row>
             <Row id="assistant.model" title="Model" description="Default model used for new chat rounds.">
-              <select
-                aria-label="Model"
-                className="field-input h-8 w-auto px-2 text-[11px]"
-                value={settings?.model ?? ''}
-                disabled={!settings}
-                onChange={event => changeSettings({ model: event.target.value })}
-              >
-                {!settings && <option value="">Loading…</option>}
-                {settings && !knownModel && <option value={settings.model}>{settings.model}</option>}
-                {MODEL_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
+              <Select value={settings?.model} disabled={!settings} onValueChange={model => changeSettings({ model })}>
+                <SelectTrigger aria-label="Model" size="sm" className="text-xs">
+                  <SelectValue placeholder="Loading…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {settings && !knownModel && <SelectItem value={settings.model}>{settings.model}</SelectItem>}
+                  {MODEL_OPTIONS.map(option => (
+                    <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Row>
             <Row id="assistant.thinking" title="Thinking mode" description="Let the model reason step by step before answering.">
               <Switch
@@ -275,19 +280,19 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
             </Row>
             {settings?.thinkingEnabled && (
               <Row id="assistant.reasoning-effort" title="Reasoning effort" description="How hard the model thinks when thinking is enabled.">
-                <select
-                  aria-label="Reasoning effort"
-                  className="field-input h-8 w-auto px-2 text-[11px]"
-                  value={settings.reasoningEffort}
-                  onChange={event => changeSettings({ reasoningEffort: event.target.value })}
-                >
-                  {!EFFORT_OPTIONS.includes(settings.reasoningEffort) && (
-                    <option value={settings.reasoningEffort}>{settings.reasoningEffort}</option>
-                  )}
-                  {EFFORT_OPTIONS.map(effort => (
-                    <option key={effort} value={effort}>{effort}</option>
-                  ))}
-                </select>
+                <Select value={settings.reasoningEffort} onValueChange={reasoningEffort => changeSettings({ reasoningEffort })}>
+                  <SelectTrigger aria-label="Reasoning effort" size="sm" className="text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {!EFFORT_OPTIONS.includes(settings.reasoningEffort) && (
+                      <SelectItem value={settings.reasoningEffort}>{settings.reasoningEffort}</SelectItem>
+                    )}
+                    {EFFORT_OPTIONS.map(effort => (
+                      <SelectItem key={effort} value={effort}>{effort}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </Row>
             )}
             <Row id="assistant.temperature" title="Temperature" description="Sampling randomness between 0 and 2.">
@@ -309,10 +314,10 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
               </Row>
             ) : fields.map(field => (
               <Row key={field.key} id={`agent-loop.${field.key}`} title={field.title} description={field.description}>
-                <input
+                <Input
                   type="number"
                   aria-label={field.title}
-                  className="field-input h-8 w-24 px-2 text-[11px]"
+                  className="h-8 w-24 px-2 text-xs"
                   min={field.min}
                   max={field.max}
                   value={settings?.[field.key] ?? ''}
@@ -340,6 +345,8 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
             </Row>
           </Section>
         )
+      case 'components':
+        return <Catalog />
       case 'about':
         return (
           <Section title={category.label} subtitle={category.description}>
@@ -373,9 +380,9 @@ export default function SettingsPage({ onClose, onResetLayout }: Props) {
           </button>
           <div className="relative mt-3">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
+            <Input
               aria-label="Search settings"
-              className="field-input h-8 pl-8 text-[11px]"
+              className="h-8 pl-8 text-xs"
               placeholder="Search settings"
               value={query}
               onChange={event => setQuery(event.target.value)}

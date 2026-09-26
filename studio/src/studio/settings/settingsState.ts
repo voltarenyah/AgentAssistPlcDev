@@ -67,9 +67,9 @@ export const presentAdvancedFields = (settings: ChatSettings | null): AdvancedSe
 
 /* ── Category model + sidebar search ───────────────────────────────────── */
 
-export type SettingsCategoryId = 'general' | 'assistant' | 'agent-loop' | 'appearance' | 'about'
+export type SettingsCategoryId = 'general' | 'assistant' | 'agent-loop' | 'appearance' | 'components' | 'about'
 
-export type SettingsIconName = 'gauge' | 'sparkles' | 'bot' | 'palette' | 'info'
+export type SettingsIconName = 'gauge' | 'sparkles' | 'bot' | 'palette' | 'blocks' | 'info'
 
 export type SettingsCategory = {
   id: SettingsCategoryId
@@ -112,6 +112,14 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
     label: 'Appearance',
     description: 'Theme and visual preferences.',
     keywords: ['theme', 'dark', 'light', 'color'],
+  },
+  {
+    id: 'components',
+    group: 'Interface',
+    icon: 'blocks',
+    label: 'Component Library',
+    description: 'Browse the Orca UI components available in Studio.',
+    keywords: ['orca', 'ui', 'catalog', 'buttons', 'badges', 'forms', 'dialogs'],
   },
   {
     id: 'about',

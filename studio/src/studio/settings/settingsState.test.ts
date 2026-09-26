@@ -12,7 +12,7 @@ describe('settingsState', () => {
   it('lists every category with a unique id', () => {
     const ids = SETTINGS_CATEGORIES.map(category => category.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids).toEqual(['general', 'assistant', 'agent-loop', 'appearance', 'about'])
+    expect(ids).toEqual(['general', 'assistant', 'agent-loop', 'appearance', 'components', 'about'])
   })
 
   it('matches categories by label, group, or description', () => {

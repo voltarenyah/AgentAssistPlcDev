@@ -84,11 +84,26 @@ describe('SettingsPage', () => {
     const { host, root } = await render(<SettingsPage onClose={vi.fn()} />)
 
     expect(host.querySelector('[data-settings-page]')).not.toBeNull()
-    for (const id of ['general', 'assistant', 'agent-loop', 'appearance', 'about']) {
+    for (const id of ['general', 'assistant', 'agent-loop', 'appearance', 'components', 'about']) {
       expect(host.querySelector(`[data-settings-category="${id}"]`), id).not.toBeNull()
     }
     expect(host.textContent).toContain('Application status')
     expect(host.textContent).toContain('1 MCP tools')
+
+    await act(async () => root.unmount())
+  })
+
+  it('opens the component library and lets users browse component examples', async () => {
+    const { host, root } = await render(<SettingsPage onClose={vi.fn()} />)
+    await clickCategory(host, 'components')
+
+    expect(host.querySelector('[data-component-catalog]')).not.toBeNull()
+    await vi.waitFor(() => expect(host.textContent).toContain('Variants'))
+    const badges = Array.from(host.querySelectorAll<HTMLButtonElement>('nav[aria-label="Component categories"] button'))
+      .find(button => button.textContent === 'Badges')!
+    await act(async () => { badges.click() })
+    expect(badges.getAttribute('aria-current')).toBe('page')
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-slot="badge"]').length).toBeGreaterThan(0))
 
     await act(async () => root.unmount())
   })
@@ -109,13 +124,17 @@ describe('SettingsPage', () => {
     const { host, root } = await render(<SettingsPage onClose={vi.fn()} />)
     await clickCategory(host, 'assistant')
 
-    const modelSelect = host.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!
-    expect(modelSelect.value).toBe('deepseek-v4-flash')
+    const modelSelect = host.querySelector<HTMLElement>('[data-slot="select-trigger"][aria-label="Model"]')!
+    expect(modelSelect).not.toBeNull()
+    expect(modelSelect.textContent).toContain('Flash')
 
     await act(async () => {
-      modelSelect.value = 'deepseek-v4-pro'
-      modelSelect.dispatchEvent(new Event('change', { bubbles: true }))
+      modelSelect.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse', button: 0 }))
     })
+    const proOption = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+      .find(option => option.textContent?.includes('Pro'))!
+    expect(proOption).not.toBeNull()
+    await act(async () => { proOption.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
 
     expect(api.saveChatSettings).toHaveBeenCalledWith({ ...settingsFixture, model: 'deepseek-v4-pro' })
 
@@ -167,6 +186,7 @@ describe('SettingsPage', () => {
     await clickCategory(host, 'assistant')
 
     const keyInput = host.querySelector<HTMLInputElement>('input[aria-label="DeepSeek API key"]')!
+    expect(keyInput.getAttribute('data-slot')).toBe('input')
     await typeText(keyInput, 'sk-test-key')
     const saveButton = Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Save key')!
     await act(async () => { saveButton.dispatchEvent(new MouseEvent('click', { bubbles: true })) })

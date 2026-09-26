@@ -1,7 +1,5 @@
 import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
-import { ThemeToggle } from './ThemeToggle'
-import { Toaster } from '@/components/ui/sonner'
 
 type PageEntry = {
   id: string
@@ -34,41 +32,31 @@ export default function Catalog() {
   const ActivePage = pages.find((p) => p.id === active)!
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      {/* Header */}
-      <header className="flex h-11 items-center justify-between border-b px-4 shrink-0">
-        <h1 className="text-sm font-semibold">Orca UI — Component Catalog</h1>
-        <ThemeToggle />
-      </header>
+    <div className="flex min-h-[32rem] overflow-hidden rounded-xl border bg-card" data-component-catalog>
+      <nav aria-label="Component categories" className="w-44 shrink-0 border-r p-2">
+        {pages.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => setActive(p.id)}
+            aria-current={active === p.id ? 'page' : undefined}
+            className={cn(
+              'w-full rounded px-3 py-1.5 text-left text-sm transition-colors',
+              active === p.id
+                ? 'bg-accent text-accent-foreground font-medium'
+                : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
+            )}
+          >
+            {p.label}
+          </button>
+        ))}
+      </nav>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar navigation */}
-        <nav className="w-44 shrink-0 border-r overflow-y-auto p-2">
-          {pages.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => setActive(p.id)}
-              className={cn(
-                'w-full rounded px-3 py-1.5 text-left text-sm transition-colors',
-                active === p.id
-                  ? 'bg-accent text-accent-foreground font-medium'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
-        </nav>
-
-        {/* Content area */}
-        <main className="flex-1 overflow-y-auto p-6">
-          <Suspense fallback={<PageLoader />}>
-            <ActivePage.component />
-          </Suspense>
-        </main>
+      <div className="min-w-0 flex-1 p-6">
+        <Suspense fallback={<PageLoader />}>
+          <ActivePage.component />
+        </Suspense>
       </div>
-
-      <Toaster />
     </div>
   )
 }
