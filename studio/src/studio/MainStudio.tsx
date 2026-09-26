@@ -27,7 +27,8 @@ import { ThemeToggle } from '@/catalog/ThemeToggle'
 import WindowControls from '@/studio/WindowControls'
 import { installWindowResizeHandles, isWindowDragTarget, sendWindowCommand } from '@/studio/desktopWindowBridge'
 import { showErrorToast } from '@/components/ui/toast'
-import WorkspaceHost, { type WorkspaceViewKind } from '@/studio/workspace/WorkspaceHost'
+import WorkspaceHost, { type WorkspaceChatProps, type WorkspaceViewKind } from '@/studio/workspace/WorkspaceHost'
+import ChatWorkspace from '@/studio/chat/ChatWorkspace'
 import { WorkspaceService } from '@/studio/workspace/WorkspaceService'
 import { resolveContextDock } from '@/studio/workspace/contextDock'
 import { readWorkspaceLayout, writeWorkspaceLayout } from '@/studio/workspace/workspaceLayoutStorage'
@@ -101,6 +102,7 @@ import type { SourceInspectorTarget } from '@/studio/workspace/workspaceTypes'
 export type MainView =
   | { kind: 'project' }
   | { kind: 'worktree'; tab: 'overview' | 'tasks' }
+  | { kind: 'task-chat' }
   | { kind: 'hardware'; page: 'tree' | 'bom' | 'network' }
   | { kind: 'device' }
 type ActiveOperation = {
@@ -487,6 +489,7 @@ export default function MainStudio() {
     deviceId: null,
   })
   const [deviceSelection, setDeviceSelection] = useState<DeviceSelectionState | null>(null)
+  const [taskChatContext, setTaskChatContext] = useState<DeviceContextRef | null>(null)
   const [hardwareView, setHardwareView] = useState<api.HardwareConfigurationView | null>(null)
   const [hardwareSelectedNodeId, setHardwareSelectedNodeId] = useState<string | null>(null)
   const [hardwareInspectedNodeId, setHardwareInspectedNodeId] = useState<string | null>(null)
@@ -689,13 +692,15 @@ export default function MainStudio() {
       && normalizeProjectPath(session.projectPath) === normalized) ?? null
   }, [deviceInfo?.sourceProjectPath, sessions])
   const selectedChatContext = useMemo(() => {
-    if (!selection.workbenchId || !selection.worktreeId || !selection.deviceId) return null
-    return {
+    if (!selection.workbenchId || !selection.worktreeId) return null
+    if (selection.deviceId) return {
       workbenchId: selection.workbenchId,
       worktreeId: selection.worktreeId,
       deviceId: selection.deviceId,
     }
-  }, [selection.deviceId, selection.workbenchId, selection.worktreeId])
+    return taskChatContext?.workbenchId === selection.workbenchId
+      && taskChatContext.worktreeId === selection.worktreeId ? taskChatContext : null
+  }, [selection.deviceId, selection.workbenchId, selection.worktreeId, taskChatContext])
 
   const replaceDeviceSessions = useCallback((savedSessions: api.ChatSessionInfo[]) => {
     setDeviceSelection(previous => previous ? { ...previous, sessions: savedSessions } : previous)
@@ -1012,6 +1017,7 @@ export default function MainStudio() {
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
     setMainView({ kind: 'project' })
     setDeviceSelection(null)
+    setTaskChatContext(null)
     setChatTabs(emptyChatTabs())
     void api.selectWorkbench(workbench.workbenchId).catch(error => {
       if (selectionRequestId.current === requestId) showErrorToast(displayError(error))
@@ -1028,6 +1034,7 @@ export default function MainStudio() {
     // sure the dock is visible when navigating there.
     setShellLayout(previous => previous.rightOpen ? previous : { ...previous, rightOpen: true })
     setDeviceSelection(null)
+    setTaskChatContext(null)
     setChatTabs(emptyChatTabs())
     setOperation('select-worktree')
     void api.listDevices(workbench.workbenchId, worktree.worktreeId).then(devices => {
@@ -1058,6 +1065,7 @@ export default function MainStudio() {
     // Selection is a pure metadata operation: apply it instantly. The snapshot
     // (per-block manifest work) loads in the background and fills the view.
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
+    setTaskChatContext(null)
     setMainView({ kind: 'device' })
     const cachedContext = {
       workbenchId: workbench.workbenchId,
@@ -1278,12 +1286,12 @@ export default function MainStudio() {
     )
   }, [selectedChatContext])
 
-  const refreshChatSessions = useCallback(async () => {
-    if (!selectedChatContext) return []
+  const refreshChatSessions = useCallback(async (context = selectedChatContext) => {
+    if (!context) return []
     const savedSessions = await api.listDeviceSessions(
-      selectedChatContext.workbenchId,
-      selectedChatContext.worktreeId,
-      selectedChatContext.deviceId,
+      context.workbenchId,
+      context.worktreeId,
+      context.deviceId,
     )
     replaceDeviceSessions(savedSessions)
     return savedSessions
@@ -1372,11 +1380,26 @@ export default function MainStudio() {
   const createChatSessionForTask = async (task: api.EngineeringTask | api.WorktreeTask) => {
     setChatBusy(true)
     try {
-      await ensureChatContext()
+      const { workbenchId, worktreeId } = selection
+      const deviceId = 'deviceId' in task ? task.deviceId : null
+      if (!workbenchId || !worktreeId || !deviceId || (task.worktreeId && task.worktreeId !== worktreeId)) {
+        throw new Error('This task needs a device bound to the selected worktree before chat can start.')
+      }
+      const requestId = selectionRequestId.current
+      await api.selectWorktree(workbenchId, worktreeId)
+      if (selectionRequestId.current !== requestId) return
       const session = await api.newChatSession(undefined, task.taskId)
+      if (selectionRequestId.current !== requestId) return
+      if (session.header.workbenchId !== workbenchId || session.header.worktreeId !== worktreeId
+        || session.header.deviceId !== deviceId || session.header.taskId !== task.taskId) {
+        throw new Error('The new chat session does not match the selected task and device.')
+      }
+      const context = { workbenchId, worktreeId, deviceId }
+      setTaskChatContext(context)
       setChatTabs(previous => openTab(previous, session))
+      setMainView({ kind: 'task-chat' })
       workspaceService.focusView('chat')
-      await refreshChatSessions()
+      await refreshChatSessions(context)
     } catch (error) {
       showErrorToast(displayError(error))
     } finally {
@@ -1982,7 +2005,7 @@ export default function MainStudio() {
   const contextDock = resolveContextDock({
     worktreeId: selection.worktreeId,
     deviceId: selection.deviceId,
-    mainViewKind: mainView.kind,
+    mainViewKind: mainView.kind === 'task-chat' ? 'worktree' : mainView.kind,
     hardwarePage,
     focusedView,
     hasKnowledgeContext: knowledgeContext !== null,
@@ -2018,6 +2041,21 @@ export default function MainStudio() {
   const handleHeaderDoubleClick = (event: ReactMouseEvent<HTMLElement>) => {
     if (!isWindowDragTarget(event.target)) return
     sendWindowCommand('toggle-maximize')
+  }
+
+  const chatProps: WorkspaceChatProps = {
+    tabs: chatTabs,
+    busy: chatBusy,
+    onCreateSession: createChatSessionFromEmptyState,
+    confirmation: pendingConfirmation,
+    onConfirm: decision => void decideConfirmation(decision),
+    onFocus: sessionId => void activateChatSession(sessionId),
+    onSend: (sessionId, message) => void sendChatMessage(sessionId, message),
+    onDraftChange: (sessionId, draft) => setChatTabs(previous => setDraft(previous, sessionId, draft)),
+    onStop: stopChatGeneration,
+    onContinue: sessionId => void continueChat(sessionId),
+    sourceContext: chatSourceContext,
+    onClearSourceContext: () => setChatSourceContext(null),
   }
 
   return (
@@ -2118,7 +2156,7 @@ export default function MainStudio() {
             tasksByWorktree={tasksByWorktree}
             activeTaskId={taskDetail?.task.taskId ?? taskDetailTask?.taskId ?? null}
             selection={selection}
-            viewKind={mainView.kind}
+            viewKind={mainView.kind === 'task-chat' ? 'worktree' : mainView.kind}
             knowledgeState={navigatorKnowledgeState}
             loading={loading}
             filterActive={navigatorTagIds.length > 0}
@@ -2252,7 +2290,14 @@ export default function MainStudio() {
           ) : taskDetail || taskDetailLoading || taskDetailError ? (
             <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div>
           ) : !selection.deviceId && selection.worktreeId ? (
-            mainView.kind === 'hardware' ? (
+            mainView.kind === 'task-chat' ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="shrink-0 border-b p-3" style={{ borderColor: 'var(--border)' }}>
+                  <button type="button" className="secondary-button h-7 text-[9px]" onClick={() => setMainView({ kind: 'worktree', tab: 'tasks' })}>Back to tasks</button>
+                </div>
+                <ChatWorkspace {...chatProps} />
+              </div>
+            ) : mainView.kind === 'hardware' ? (
             <>
               <div className="flex h-12 shrink-0 items-center gap-1 border-b px-3" style={{ borderColor: 'var(--border)' }}>
                 {hardwareTabs.map(tab => {
@@ -2366,20 +2411,7 @@ export default function MainStudio() {
                 onMergeIntoMaster: () => void mergeIntoMaster(),
                 onBootstrapDevice: () => void bootstrapDevice(),
               }}
-              chat={{
-                tabs: chatTabs,
-                busy: chatBusy,
-                onCreateSession: createChatSessionFromEmptyState,
-                confirmation: pendingConfirmation,
-                onConfirm: decision => void decideConfirmation(decision),
-                onFocus: sessionId => void activateChatSession(sessionId),
-                onSend: (sessionId, message) => void sendChatMessage(sessionId, message),
-                onDraftChange: (sessionId, draft) => setChatTabs(previous => setDraft(previous, sessionId, draft)),
-                onStop: stopChatGeneration,
-                onContinue: sessionId => void continueChat(sessionId),
-                sourceContext: chatSourceContext,
-                onClearSourceContext: () => setChatSourceContext(null),
-              }}
+              chat={chatProps}
               source={{
                 workbenchId: selection.workbenchId,
                 worktreeId: selection.worktreeId,

@@ -8,13 +8,13 @@
 
 ## Requirement Boundary
 
-- Current requirements: a new worktree task requires a device; selecting it selects that device; sessions and source-object links cannot cross the task's device.
+- Current requirements: a new worktree task requires a device; selecting it opens the task without loading a device snapshot; starting its chat resolves that device from the task; sessions and source-object links cannot cross the task's device.
 - Non-goals: changing the device of an existing task; converting a Git commit into a single-device record; deleting historical unbound tasks.
 
 ## Acceptance Criteria
 
 - **AC-001** — When a worktree task is created, the system shall require a device registered to that worktree and persist its device ID.
-- **AC-002** — When a device-bound task is selected, Studio shall select that task's worktree and device before opening its task detail.
+- **AC-002** — When a device-bound task is selected, Studio shall open its task detail in the worktree without loading a device snapshot. Starting a chat on that task shall use its bound device without requiring a separate device selection.
 - **AC-003** — If a task is linked to a session or source object from another device, then the API shall reject the link.
 - **AC-004** — When a worktree is expanded, the left navigator shall show its tasks, or Add task when none exist, instead of a device subtree.
 
@@ -34,7 +34,7 @@
 
 Tasks retain worktree scope. A device-bound task may link only to target graph entities from its same device when the target has a device ID. Git commits remain worktree-level records because one commit can change multiple PLCs; a commit can therefore link to several device-bound tasks.
 
-Studio receives `deviceId` in every engineering task response. The navigator loads a worktree's graph tasks lazily, displays only bound worktree tasks, and opens a task by selecting its device, making the task active, then loading the task page.
+Studio receives `deviceId` in every engineering task response. The navigator loads a worktree's graph tasks lazily, displays only bound worktree tasks, and opens task detail without loading the device page. Starting chat on the task resolves its device from the persisted task binding and keeps the worktree page open.
 
 ### Change Surface
 

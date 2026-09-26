@@ -323,7 +323,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, activeResponse.StatusCode);
         Assert.Equal(taskId, (await activeResponse.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("activeTask").GetProperty("taskId").GetString());
-        var response = await fixture.Client.PostAsync("/api/chat/session/new", null);
+        var response = await fixture.Client.PostAsJsonAsync("/api/chat/session/new", new { });
         response.EnsureSuccessStatusCode();
         var session = await response.Content.ReadFromJsonAsync<JsonElement>();
 
@@ -338,6 +338,95 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var edge = Assert.Single(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId));
         Assert.Equal(taskId, edge.FromId);
         Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Default, edge.Provenance);
+    }
+
+    [Fact]
+    public async Task DeviceBoundTaskStartsChatWithoutSeparateDeviceSelection()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var created = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Repair valve sequence", type = "issue", status = "todo", deviceId = fixture.DeviceId,
+                intent = "Diagnose the valve interlock", expectedResult = "Validated sequence" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        (await fixture.Client.PostAsync($"/api/workbenches/{wb}/worktrees/{wt}/select", null)).EnsureSuccessStatusCode();
+
+        var response = await fixture.Client.PostAsJsonAsync("/api/chat/session/new", new { taskId });
+        response.EnsureSuccessStatusCode();
+        var session = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(fixture.DeviceId, session.GetProperty("header").GetProperty("deviceId").GetString());
+        Assert.Equal(taskId, session.GetProperty("header").GetProperty("taskId").GetString());
+        var sessionId = session.GetProperty("header").GetProperty("sessionId").GetString();
+        var loaded = await fixture.Client.PostAsJsonAsync("/api/chat/session/load", new { sessionId });
+        loaded.EnsureSuccessStatusCode();
+        Assert.Equal(taskId, (await loaded.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("taskId").GetString());
+        var active = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{wb}/worktrees/{wt}/active-task");
+        Assert.Equal(taskId, active.GetProperty("activeTask").GetProperty("taskId").GetString());
+        using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == wt);
+        Assert.Equal(taskId, Assert.Single(graph.GetIncomingEdges(
+            Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId!)).FromId);
+    }
+
+    [Fact]
+    public async Task ChatRejectsTaskFromAnotherWorktreeWithoutCreatingSession()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
+        var wb = fixture.Context.WorkbenchId;
+        var created = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/wt-2/engineering-tasks",
+            new { title = "Other work", type = "issue", status = "todo", deviceId = fixture.DeviceId,
+                intent = "Inspect other branch", expectedResult = "Resolved" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        (await fixture.Client.PostAsync(
+            $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/select", null)).EnsureSuccessStatusCode();
+
+        var response = await fixture.Client.PostAsJsonAsync("/api/chat/session/new", new { taskId });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("TASK_NOT_FOUND", await response.Content.ReadAsStringAsync());
+        Assert.Empty(Agent.Chat.SessionManager.ListSessions(fixture.Context));
+    }
+
+    [Fact]
+    public async Task ActiveTaskCommitRejectsFilesOutsideItsStages()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var created = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Scoped commit", type = "issue", status = "inProgress", deviceId = fixture.DeviceId,
+                intent = "Change one block", expectedResult = "One reviewed commit" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        (await fixture.Client.PutAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/active-task", new { taskId })).EnsureSuccessStatusCode();
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
+            new { paths = new[] { "devices/PLC_1/source/Unstaged.xml" }, message = "wrong file", untrackableChange = false });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("TASK_COMMIT_STAGE_MISMATCH", await response.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("vc_commit_selected", fixture.VersionControl.Calls);
+
+        var other = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Other task", type = "issue", status = "todo", deviceId = fixture.DeviceId,
+                intent = "Different change", expectedResult = "Separate commit" });
+        other.EnsureSuccessStatusCode();
+        var otherTaskId = (await other.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        var mismatch = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
+            new { paths = new[] { "devices/PLC_1/source/Unstaged.xml" }, message = "wrong task",
+                untrackableChange = false, taskId = otherTaskId });
+        Assert.Equal(HttpStatusCode.BadRequest, mismatch.StatusCode);
+        Assert.Contains("TASK_COMMIT_TASK_MISMATCH", await mismatch.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -401,7 +490,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         await AssertSessionCreationRegistrationFailureIsCompensatedAsync(
             fixture,
-            () => fixture.Client.PostAsync("/api/chat/session/new", null),
+            () => fixture.Client.PostAsJsonAsync("/api/chat/session/new", new { }),
             assertNoActiveSession: true);
     }
 
@@ -2133,7 +2222,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             (await client.PostAsync($"/api/workbenches/{wb.WorkbenchId}/worktrees/{wtId}/devices/dev-1/select", null)).StatusCode);
         Assert.Equal(HttpStatusCode.OK,
             (await client.GetAsync("/api/devices/dev-1/sessions")).StatusCode);
-        var createdSessionResponse = await client.PostAsync("/api/chat/session/new", null);
+        var createdSessionResponse = await client.PostAsJsonAsync("/api/chat/session/new", new { });
         createdSessionResponse.EnsureSuccessStatusCode();
         var createdSession = await createdSessionResponse.Content.ReadFromJsonAsync<JsonElement>();
         var sessionId = createdSession.GetProperty("header").GetProperty("sessionId").GetString()!;
@@ -2152,7 +2241,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             (await client.PostAsJsonAsync(
                 "/api/chat/session/rename",
                 new { sessionId = SessionManager.NewSessionId(), title = "Missing" })).StatusCode);
-        var secondSessionResponse = await client.PostAsync("/api/chat/session/new", null);
+        var secondSessionResponse = await client.PostAsJsonAsync("/api/chat/session/new", new { });
         var secondSession = await secondSessionResponse.Content.ReadFromJsonAsync<JsonElement>();
         var secondId = secondSession.GetProperty("header").GetProperty("sessionId").GetString()!;
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/chat/history")).StatusCode);
@@ -2161,7 +2250,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             "/api/chat/session/delete", new { sessionId = secondId })).StatusCode);
         var deletedInfo = await client.GetFromJsonAsync<JsonElement>("/api/chat/session/info");
         Assert.True(deletedInfo.GetProperty("requiresExplicitSession").GetBoolean());
-        var thirdSession = await (await client.PostAsync("/api/chat/session/new", null))
+        var thirdSession = await (await client.PostAsJsonAsync("/api/chat/session/new", new { }))
             .Content.ReadFromJsonAsync<JsonElement>();
         var thirdId = thirdSession.GetProperty("header").GetProperty("sessionId").GetString()!;
         var newInfo = await client.GetFromJsonAsync<JsonElement>("/api/chat/session/info");
@@ -2364,7 +2453,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     public async Task SessionExportWritesMarkdownUnderWorktreeSessionExportFolder()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: true);
-        var created = await (await fixture.Client.PostAsync("/api/chat/session/new", null))
+        var created = await (await fixture.Client.PostAsJsonAsync("/api/chat/session/new", new { }))
             .Content.ReadFromJsonAsync<JsonElement>();
         var sessionId = created.GetProperty("header").GetProperty("sessionId").GetString()!;
 

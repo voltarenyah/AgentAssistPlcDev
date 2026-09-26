@@ -53,6 +53,11 @@ public sealed class EngineeringGraphEvidenceIndexerTests : IDisposable
                 DateTimeOffset.UtcNow.ToString("O"), null, null, null, [], null));
         using var store = new EngineeringGraphStore(root);
         var graph = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        var task = graph.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Save valve state",
+            GraphTaskType.Issue, intent: "Capture reviewed work", expectedResult: "Native savepoint", deviceId: "dev-1");
+        graph.RegisterEntity(new GraphEntity(GraphEntityKind.GitCommit, "savepoint-git", "wb-1", "wt-1"));
+        graph.AddEdge(GraphEntityKind.Task, task.TaskId, GraphEntityKind.GitCommit,
+            "savepoint-git", GraphProvenance.Default, isPrimary: true);
         var result = new EngineeringGraphEvidenceIndexer(graph, workbench).IndexCommit("wt-1",
             new VersionControlTimelineGitCommit("savepoint-git", "author", "savepoint", "2026-01-01",
                 [EngineeringStateWriter.RelativePath], null, 42, false));
@@ -60,6 +65,9 @@ public sealed class EngineeringGraphEvidenceIndexerTests : IDisposable
         var edge = Assert.Single(result.SvnEdges);
         Assert.Equal("wt-1:42", edge.ToId);
         Assert.Equal(GraphProvenance.Evidence, edge.Provenance);
+        var taskSavepoint = Assert.Single(graph.GetEdges(GraphEntityKind.Task, task.TaskId, GraphEntityKind.SvnRevision));
+        Assert.Equal("wt-1:42", taskSavepoint.ToId);
+        Assert.Equal(GraphProvenance.Evidence, taskSavepoint.Provenance);
         Assert.Empty(result.SourceEdges);
         Assert.Empty(result.UnresolvedFiles);
     }

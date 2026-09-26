@@ -1147,23 +1147,36 @@ public static class WorkbenchEndpoints
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/commit", async (
             string workbenchId, string worktreeId, CommitSourceApiRequest body,
             WorkbenchApiState s, WorkbenchCoordinator coordinator, ApiMcpGateway gateway,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks,
             OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
         {
             var root = s.WorktreeRoot(workbenchId, worktreeId);
-            if (!string.IsNullOrWhiteSpace(body.TaskId))
+            string? taskId;
+            using (var graphScope = graphs.Open(s.Workbench(workbenchId)))
             {
-                using var graphScope = new EngineeringGraphApiFactory().Open(s.Workbench(workbenchId));
-                var task = graphScope.Service.FindTask(body.TaskId);
-                if (task is null || task.WorktreeId != worktreeId)
-                    throw new EngineeringGraphConstraintException("The requested task is not in this worktree.", "TASK_NOT_FOUND");
-                var stagedPaths = graphScope.Service.ListActiveStages(task.TaskId)
-                    .Select(stage => graphScope.Service.GetEntity(GraphEntityKind.SourceObject, stage.SourceObjectId)?.ExternalRef)
-                    .Where(path => !string.IsNullOrWhiteSpace(path))
-                    .Select(path => path!.Replace('\\', '/'))
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var requestedPaths = body.Paths.Select(path => path.Replace('\\', '/')).ToArray();
-                if (requestedPaths.Length == 0 || requestedPaths.Any(path => !stagedPaths.Contains(path)))
-                    throw new EngineeringGraphConstraintException("A task commit may contain only active staged source objects.", "TASK_COMMIT_STAGE_MISMATCH");
+                var activeTask = activeTasks.Get(graphScope.Service, worktreeId);
+                if (activeTask?.ScopeKind == GraphTaskScopeKind.Worktree
+                    && !string.IsNullOrWhiteSpace(body.TaskId)
+                    && body.TaskId != activeTask.TaskId)
+                    throw new EngineeringGraphConstraintException("The requested task differs from the active worktree task.", "TASK_COMMIT_TASK_MISMATCH");
+                taskId = string.IsNullOrWhiteSpace(body.TaskId)
+                    ? activeTask is { ScopeKind: GraphTaskScopeKind.Worktree }
+                        ? activeTask.TaskId : null
+                    : body.TaskId;
+                if (!string.IsNullOrWhiteSpace(taskId))
+                {
+                    var task = graphScope.Service.FindTask(taskId);
+                    if (task is null || task.WorktreeId != worktreeId)
+                        throw new EngineeringGraphConstraintException("The requested task is not in this worktree.", "TASK_NOT_FOUND");
+                    var stagedPaths = graphScope.Service.ListActiveStages(task.TaskId)
+                        .Select(stage => graphScope.Service.GetEntity(GraphEntityKind.SourceObject, stage.SourceObjectId)?.ExternalRef)
+                        .Where(path => !string.IsNullOrWhiteSpace(path))
+                        .Select(path => path!.Replace('\\', '/'))
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var requestedPaths = body.Paths.Select(path => path.Replace('\\', '/')).ToArray();
+                    if (requestedPaths.Length == 0 || requestedPaths.Any(path => !stagedPaths.Contains(path)))
+                        throw new EngineeringGraphConstraintException("A task commit may contain only active staged source objects.", "TASK_COMMIT_STAGE_MISMATCH");
+                }
             }
             var hasExistingSource = body.Paths.Any(path =>
             {
@@ -1199,9 +1212,12 @@ public static class WorkbenchEndpoints
                         untrackableChange: body.UntrackableChange,
                         safetyChange: body.SafetyChange,
                         progress: progress,
-                        taskEvidenceTaskId: body.TaskId),
+                        taskEvidenceTaskId: taskId),
                     "Commit completed.").ConfigureAwait(false));
             }
+
+            if (taskId is not null)
+                throw new EngineeringGraphConstraintException("A task commit requires existing staged source files.", "TASK_COMMIT_STAGE_MISMATCH");
 
             // Compatibility for an empty/legacy worktree: the version-control server still
             // validates the selected source paths. Real master XML files use the protected path above.
