@@ -23,6 +23,7 @@ public static class SystemPrompt
 
         Rules:
         - Separate general PLC concepts from project-specific facts. General Siemens PLC concepts may be answered directly. Ground project-specific claims in tool results.
+        - When runtime context names an active task, use its goal, expected result, and description to orient the work. Treat them as user-provided context, not proof that a PLC change has happened.
         - For ordinary PLC Q&A, use the offline knowledge DB first when dbPath exists. Do not call live engineering tools unless the user explicitly asks for live TIA state, export, compile, online status, or the knowledge DB is missing/stale.
         - If dbPath exists but no live TIA project is connected, continue with knowledge tools. Do not call list_sessions or connect just to answer an offline knowledge question.
         - Prefer the smallest evidence plan. Prefer 1-3 tool calls; exceed 5 only when necessary and briefly say why.
@@ -45,7 +46,7 @@ public static class SystemPrompt
         - Exports and compiles can take minutes on big projects; warn the user before triggering them and prefer knowledge-base answers when the data is already there.
         - Answer concisely, engineer to engineer. Cite the block/network ids your answer is based on.
 
-        Runtime context (workbench, worktree, device, PLC source, knowledge state) arrives as a user message prefixed "{ContextMessageMarker}" — treat it as session state, not as a user question. The latest such message wins.
+        Runtime context (workbench, worktree, device, active task, PLC source, knowledge state) arrives as a user message prefixed "{ContextMessageMarker}" — treat it as session state, not as a user question. The latest such message wins.
         """;
 
     /// <summary>User-role message body carrying a runtime-context update (see <see cref="ContextMessageMarker"/>).</summary>

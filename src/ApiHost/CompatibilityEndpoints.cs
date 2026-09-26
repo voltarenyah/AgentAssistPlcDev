@@ -81,6 +81,30 @@ public static class CompatibilityEndpoints
                 ? state.Device(id).Context
                 : throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
 
+        static DeviceContext ChatDevice(WorkbenchApiState state, EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks, string? requestedTaskId = null)
+        {
+            var selection = state.Selection;
+            if (selection?.WorktreeId is null)
+                throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
+            using var graph = graphs.Open(state.Workbench(selection.WorkbenchId));
+            var task = string.IsNullOrWhiteSpace(requestedTaskId)
+                ? activeTasks.Get(graph.Service, selection.WorktreeId)
+                : graph.Service.FindTask(requestedTaskId)
+                    ?? throw new EngineeringGraphConstraintException("The selected task was not found in the current Workbench.", "TASK_NOT_FOUND");
+            if (task is not null)
+            {
+                if (task.ScopeKind == GraphTaskScopeKind.Project)
+                    return Device(state);
+                if (task.WorktreeId != selection.WorktreeId)
+                    throw new EngineeringGraphConstraintException("The selected task is not in this worktree.", "TASK_NOT_FOUND");
+                if (string.IsNullOrWhiteSpace(task.DeviceId))
+                    throw new EngineeringGraphConstraintException("The selected task must bind a device.", "TASK_DEVICE_REQUIRED");
+                return state.Device(selection.WorkbenchId, selection.WorktreeId, task.DeviceId).Context;
+            }
+            return Device(state);
+        }
+
         static string ExportSessionFile(DeviceContext device, string sessionId, ChatSessionData session)
         {
             var path = ChatSessionExporter.ResolveSessionExportPath(
@@ -208,7 +232,8 @@ public static class CompatibilityEndpoints
             var device = Device(state);
             return await executor.RequestAsync(request.Tool, request.Arguments ?? new(), device, "api", ct);
         });
-        app.MapPost("/api/chat/confirm/{id}", async (string id, JsonElement body, WorkbenchApiState state, PendingToolActions pending, ApiChatService chat) =>
+        app.MapPost("/api/chat/confirm/{id}", async (string id, JsonElement body, WorkbenchApiState state, PendingToolActions pending, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var decision = body.TryGetProperty("decision", out var value) ? value.GetString() : null;
             var parsed = decision switch
@@ -218,8 +243,16 @@ public static class CompatibilityEndpoints
                 "allowSession" => ToolConfirmation.AllowOnce,
                 _ => ToolConfirmation.Deny,
             };
-            var device = Device(state);
             var requester = pending.Requester(id) ?? throw new KeyNotFoundException("CONFIRMATION_NOT_FOUND");
+            var device = ChatDevice(state, graphs, activeTasks);
+            if (state.Selection?.DeviceId is not null
+                && requester != chat.ActiveSessionId(device)
+                && requester != chat.ActiveSessionId(device, ChatScopes.Workbench))
+            {
+                var selectedDevice = Device(state);
+                if (requester == chat.ActiveSessionId(selectedDevice, ChatScopes.Workbench))
+                    device = selectedDevice;
+            }
             // A confirmation belongs to the session that raised it, and the same device can have
             // one live loop per assistant scope, so both scopes' active sessions are accepted.
             if (requester != "api"
@@ -230,23 +263,27 @@ public static class CompatibilityEndpoints
                 id, parsed, DeviceContextIdentity.Key(device), requester));
         });
         app.MapGet("/api/logs", (CompatibilityRuntimeState state) => state.Logs.ToArray());
-        app.MapPost("/api/chat/grant-rounds", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
+        app.MapPost("/api/chat/grant-rounds", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var additional = body.TryGetProperty("additional", out var value) && value.TryGetInt32(out var parsed)
                 ? parsed
                 : 6;
-            return chat.GrantMoreRounds(Device(state), additional, Scope(body, null)) ? Results.NoContent() : Results.NotFound();
+            return chat.GrantMoreRounds(ChatDevice(state, graphs, activeTasks), additional, Scope(body, null)) ? Results.NoContent() : Results.NotFound();
         });
-        app.MapGet("/api/chat/history", (HttpRequest request, WorkbenchApiState state, ApiChatService chat) =>
-            chat.History(Device(state), Scope(null, request.Query["scope"])));
-        app.MapPost("/api/chat/clear", (HttpRequest request, WorkbenchApiState state, ApiChatService chat) =>
+        app.MapGet("/api/chat/history", (HttpRequest request, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+            chat.History(ChatDevice(state, graphs, activeTasks), Scope(null, request.Query["scope"])));
+        app.MapPost("/api/chat/clear", (HttpRequest request, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
-            chat.Clear(Device(state), Scope(null, request.Query["scope"]));
+            chat.Clear(ChatDevice(state, graphs, activeTasks), Scope(null, request.Query["scope"]));
             return Results.NoContent();
         });
-        app.MapPost("/api/chat", async (HttpContext http, JsonElement body, WorkbenchApiState state, ApiChatService chat, CancellationToken ct) =>
+        app.MapPost("/api/chat", async (HttpContext http, JsonElement body, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks, CancellationToken ct) =>
         {
-            var device = Device(state);
+            var device = ChatDevice(state, graphs, activeTasks);
             var scope = Scope(body, null);
             var message = body.TryGetProperty("message", out var value) ? value.GetString() : null;
             if (string.IsNullOrWhiteSpace(message)) throw new ArgumentException("message is required.");
@@ -412,29 +449,34 @@ public static class CompatibilityEndpoints
                 collapsedAnswerChars = policy.CollapsedAnswerChars,
             });
         });
-        app.MapGet("/api/chat/sessions", (WorkbenchApiState state) => SessionManager.ListSessions(Device(state)));
+        app.MapGet("/api/chat/sessions", (WorkbenchApiState state, EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks) => SessionManager.ListSessions(ChatDevice(state, graphs, activeTasks)));
         app.MapPost("/api/chat/session/new", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
-            EngineeringGraphApiFactory graphs) =>
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
-            var device = Device(state);
             var assistantScope = Scope(body, null);
-            var selection = state.Selection!;
-            using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
             var requestedTaskId = body.TryGetProperty("taskId", out var requestedTask) && requestedTask.ValueKind != JsonValueKind.Null
                 ? requestedTask.GetString()
                 : null;
-            var taskId = requestedTaskId;
+            var device = ChatDevice(state, graphs, activeTasks, requestedTaskId);
+            var selection = state.Selection!;
+            using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
+            var taskId = string.IsNullOrWhiteSpace(requestedTaskId)
+                ? activeTasks.Get(scope.Service, selection.WorktreeId)?.TaskId
+                : requestedTaskId;
             var session = chat.CreateSession(device, taskId, string.IsNullOrWhiteSpace(taskId) ? null : "default", assistantScope);
             try { SessionGraphOperations.Register(scope.Service, session, GraphProvenance.Default); }
             catch { chat.DeleteSession(device, session.Header.SessionId, assistantScope); throw; }
+            if (!string.IsNullOrWhiteSpace(taskId))
+                activeTasks.Select(scope.Service, selection.WorktreeId, taskId);
             return session;
         });
         app.MapPut("/api/chat/session/task", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
-            EngineeringGraphApiFactory graphs) =>
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
             var taskId = body.TryGetProperty("taskId", out var task) && task.ValueKind != JsonValueKind.Null ? task.GetString() : null;
-            var device = Device(state);
+            var device = ChatDevice(state, graphs, activeTasks);
             var assistantScope = Scope(body, null);
             var current = chat.LoadSession(device, id, assistantScope) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             var selection = state.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
@@ -445,36 +487,41 @@ public static class CompatibilityEndpoints
             chat.LoadSession(device, id, assistantScope);
             return Results.Ok(updated);
         });
-        app.MapPost("/api/chat/session/load", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
+        app.MapPost("/api/chat/session/load", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
-            return chat.LoadSession(Device(state), id, Scope(body, null)) is { } session ? Results.Ok(session) : Results.NotFound();
+            return chat.LoadSession(ChatDevice(state, graphs, activeTasks), id, Scope(body, null)) is { } session ? Results.Ok(session) : Results.NotFound();
         });
-        app.MapPost("/api/chat/session/rename", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
+        app.MapPost("/api/chat/session/rename", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
             var title = body.GetProperty("title").GetString() ?? throw new ArgumentException("title is required.");
-            return chat.RenameSession(Device(state), id, title, Scope(body, null)) is { } session
+            return chat.RenameSession(ChatDevice(state, graphs, activeTasks), id, title, Scope(body, null)) is { } session
                 ? Results.Ok(session)
                 : Results.NotFound();
         });
-        app.MapPost("/api/chat/session/delete", (JsonElement body, WorkbenchApiState state, ApiChatService chat) =>
+        app.MapPost("/api/chat/session/delete", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
-            chat.DeleteSession(Device(state), id, Scope(body, null));
+            chat.DeleteSession(ChatDevice(state, graphs, activeTasks), id, Scope(body, null));
             return Results.NoContent();
         });
-        app.MapPost("/api/chat/session/export", (JsonElement body, WorkbenchApiState state) =>
+        app.MapPost("/api/chat/session/export", (JsonElement body, WorkbenchApiState state,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
-            var device = Device(state);
+            var device = ChatDevice(state, graphs, activeTasks);
             return SessionManager.LoadSession(device, id) is { } session
                 ? Results.Ok(new { path = ExportSessionFile(device, id, session) })
                 : Results.NotFound();
         });
-        app.MapGet("/api/chat/session/info", (HttpRequest request, WorkbenchApiState state, ApiChatService chat) =>
+        app.MapGet("/api/chat/session/info", (HttpRequest request, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
-            var device = Device(state);
+            var device = ChatDevice(state, graphs, activeTasks);
             var assistantScope = Scope(null, request.Query["scope"]);
             return Results.Ok(new
             {
@@ -665,7 +712,9 @@ internal sealed class ApiChatService(
     CompatibilityRuntimeState state,
     DeviceToolArgumentBinder binder,
     PendingToolActions pending,
-    SandboxPolicy policy)
+    SandboxPolicy policy,
+    EngineeringGraphApiFactory graphs,
+    WorkbenchApiState workbenches)
 {
     public const int DefaultContextWindow = 128_000;
 
@@ -880,7 +929,9 @@ internal sealed class ApiChatService(
                     $"Worktree: {device.WorktreeId}",
                     $"Device: {device.DeviceId}",
                     $"PLC source: {device.SourceRoot}",
-                    $"Knowledge DB: {device.KnowledgeDbPath}"),
+                    $"Knowledge DB: {device.KnowledgeDbPath}",
+                    TaskContext(device, chats.TryGetValue(contextKey, out var current)
+                        ? current.Session.Header.TaskId : session.Header.TaskId)),
                 Settings(configuration, state),
                 sandbox);
             loop.Apply(LoopPolicy(configuration, state));
@@ -889,6 +940,22 @@ internal sealed class ApiChatService(
             chats[contextKey] = active;
         }
         return active;
+    }
+
+    private string? TaskContext(DeviceContext device, string? taskId)
+    {
+        if (string.IsNullOrWhiteSpace(taskId)) return null;
+        using var graph = graphs.Open(workbenches.Workbench(device.WorkbenchId));
+        var task = graph.Service.FindTask(taskId);
+        if (task is null || (task.ScopeKind == GraphTaskScopeKind.Worktree
+            && (task.WorktreeId != device.WorktreeId || task.DeviceId != device.DeviceId)))
+            throw new EngineeringGraphConstraintException("The chat task is no longer bound to this device.", "TASK_DEVICE_MISMATCH");
+        return string.Join('\n',
+            $"Active task: {task.Title} ({task.TaskId})",
+            $"Task type: {task.Type}; status: {task.Status}",
+            $"Task goal: {task.Intent}",
+            $"Expected result: {task.ExpectedResult}",
+            string.IsNullOrWhiteSpace(task.Description) ? null : $"Task context: {task.Description}");
     }
 
     private void SaveActiveSession(DeviceContext device, ActiveChat active, string message, string scope)

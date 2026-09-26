@@ -56,11 +56,12 @@ The imported origin is bootstrap-only thereafter; later operations use the manag
 
 ### 3. Orient and plan
 
-1. The user may add or select a focused task: title, type, optional device, modification plan, and related source blocks.
-2. The user can open **Workbench Assistant** with no selected worktree. It orients against the available worktrees and answers read-only questions.
-3. For a mutation such as creating a worktree, the assistant proposes the operation, requests a base choice when necessary, and shows **Approve** and **Reject**. It does not silently alter selection.
+1. The user selects a workbench and worktree, then creates a task with a title, type, bound device, goal, expected result, and relevant context. Source blocks can be staged on that task as the work becomes concrete.
+2. Starting a chat on the task uses its bound device and supplies its goal, expected result, and context to the assistant. The user does not need to select the device separately.
+3. The user can open **Workbench Assistant** with no selected worktree. It orients against the available worktrees and answers read-only questions.
+4. For a mutation such as creating a worktree, the assistant proposes the operation, requests a base choice when necessary, and shows **Approve** and **Reject**. It does not silently alter selection.
 
-**Design acceptance:** a read-only answer requires no approval card. A mutation proposal displays target and base context, then actionable approval/rejection controls; an old orientation answer never hides the pending proposal.
+**Design acceptance:** task chat starts from a bound device without a separate device selection and receives the task goal and context. A read-only answer requires no approval card. A mutation proposal displays target and base context, then actionable approval/rejection controls; an old orientation answer never hides the pending proposal.
 
 ### 4. Understand a device offline
 
@@ -84,13 +85,13 @@ The imported origin is bootstrap-only thereafter; later operations use the manag
 | Goal | User interaction | Required outcome |
 | --- | --- | --- |
 | Accept TIA changes into source history | Select staged rows, enter a message, approve/apply | Only selected paths enter the current worktree; ordinary commit is Git-only. |
-| Commit local source work | Select modified files and submit a message | Commit belongs to the current worktree, not native storage. |
+| Commit local source work | Stage source objects on the active task, select files, and submit a message | A task commit contains only that task's staged source objects; the Git commit is linked to the task in the engineering graph and remains Git-only. |
 | Import local source to TIA | Select eligible objects; on a feature review **Prepare feature import** and resolve conflicts | Only selected eligible objects import. The app compiles all devices and records validation before publishing a no-fast-forward feature merge. |
 | Record native state | Enter a description and choose **Create SVN savepoint** | Managed TIA project saves, compiles successfully, freezes, commits to SVN, then writes linked `revision.json` in Git. |
 
 An empty source commit is rejected unless the user explicitly marks an **Untrackable change**. That is a visible Git marker, not a replacement for a native savepoint.
 
-**Design acceptance:** validate the commit message before the action; explain disabled imports; retain retry context after failure; never claim that an ordinary source commit created an SVN revision.
+**Design acceptance:** validate the commit message before the action; reject files outside the active task's stages; explain disabled imports; retain retry context after failure; never claim that an ordinary source commit created an SVN revision. A native savepoint associated with a task is visible in that task's engineering history.
 
 ### 7. Review, recover, and finish
 

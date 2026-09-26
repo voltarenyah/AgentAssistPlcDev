@@ -77,6 +77,14 @@ public sealed class EngineeringGraphEvidenceIndexer
                 svnEdges.Add(graph.AddEdge(GraphEntityKind.GitCommit, commit.Sha,
                     GraphEntityKind.SvnRevision, svnId, GraphProvenance.Evidence));
             }
+            foreach (var taskEdge in graph.GetIncomingEdges(GraphEntityKind.GitCommit, commit.Sha)
+                         .Where(edge => edge.FromKind == GraphEntityKind.Task))
+            {
+                if (!graph.GetEdges(GraphEntityKind.Task, taskEdge.FromId, GraphEntityKind.SvnRevision)
+                        .Any(edge => edge.ToId == svnId))
+                    graph.AddEdge(GraphEntityKind.Task, taskEdge.FromId,
+                        GraphEntityKind.SvnRevision, svnId, GraphProvenance.Evidence);
+            }
         }
 
         return new EngineeringGraphEvidenceIndexResult(edges, svnEdges, unresolved);
