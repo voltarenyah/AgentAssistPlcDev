@@ -157,6 +157,8 @@ type EditDraft = {
 export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = [], onOpenTaskDetail, onStartChat, openCreate = false, onCreateClosed }: Props) {
   const [createOpen, setCreateOpen] = useState(false)
   const [newTitle, setNewTitle] = useState('')
+  const [newIntent, setNewIntent] = useState('')
+  const [newExpectedResult, setNewExpectedResult] = useState('')
   const [newType, setNewType] = useState<api.EngineeringTask['type']>('feature')
   const [newDevice, setNewDevice] = useState('')
   const [devices, setDevices] = useState<api.DeviceSummary[]>([])
@@ -189,11 +191,15 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
 
   const addTask = () => {
     const title = newTitle.trim()
-    if (!title || !newDevice || adding) return
+    const intent = newIntent.trim()
+    const expectedResult = newExpectedResult.trim()
+    if (!title || !intent || !expectedResult || !newDevice || adding) return
     setAdding(true)
-    void api.createGraphWorktreeTask(workbenchId, worktreeId, { title, deviceId: newDevice, type: newType, intent: title, expectedResult: title })
+    void api.createGraphWorktreeTask(workbenchId, worktreeId, { title, deviceId: newDevice, type: newType, intent, expectedResult })
       .then(() => {
         setNewTitle('')
+        setNewIntent('')
+        setNewExpectedResult('')
         setNewType('feature')
         setNewDevice('')
         setCreateOpen(false)
@@ -410,7 +416,9 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
             <label className="field-label"><span>Title</span><input autoFocus aria-label="New task title" className="field-input" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
             <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
             <label className="field-label"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{availableDevices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></label>
-            <DialogFooter><button type="button" className="secondary-button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
+            <label className="field-label"><span>Goal</span><input required aria-label="New task goal" className="field-input" value={newIntent} onChange={event => setNewIntent(event.target.value)} placeholder="What should change?" /></label>
+            <label className="field-label"><span>Expected result</span><textarea required aria-label="New task expected result" className="field-input min-h-16" value={newExpectedResult} onChange={event => setNewExpectedResult(event.target.value)} placeholder="How will you know it is done?" /></label>
+            <DialogFooter><button type="button" className="secondary-button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || !newIntent.trim() || !newExpectedResult.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

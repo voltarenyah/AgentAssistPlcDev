@@ -166,8 +166,33 @@ describe('AppAssistantPanel', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')?.click())
 
     expect(host.textContent).toContain('Choose a base worktree.')
+    expect(host.textContent).toContain('Which worktree should be used as the base?')
     expect(host.querySelector('[data-assistant-option="master"]')).not.toBeNull()
     expect(host.textContent).toContain('branch master')
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-assistant-option="master"]')!.click())
+    expect(api.chatAppAssistant).toHaveBeenLastCalledWith(
+      'For "Which worktree should be used as the base?", I choose "master" (value: master). Continue the requested work.',
+      expect.any(String),
+    )
+  })
+
+  it('reports a completed managed creation to refresh the shell', async () => {
+    const onManagedChange = vi.fn(async () => {})
+    vi.mocked(api.chatAppAssistant).mockResolvedValueOnce([
+      { kind: 'state', data: { runtimeSnapshot: runtime, change: { kind: 'task', workbenchId: 'wb1', worktreeId: 'wt1', taskId: 't1' } } },
+      { kind: 'answer', data: { answer: 'Created the task.' } },
+    ])
+    const { host } = render(<AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} onManagedChange={onManagedChange} />)
+    await act(async () => {})
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Create the task.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')!.click())
+    expect(onManagedChange).toHaveBeenCalledWith({ kind: 'task', workbenchId: 'wb1', worktreeId: 'wt1', taskId: 't1', deviceId: null })
+    expect(host.textContent).toContain('Created the task.')
   })
 
   it('normalizes the runtime context envelope returned by the assistant', async () => {
@@ -202,7 +227,7 @@ describe('AppAssistantPanel', () => {
         workbenchId="wb1"
         workbenchName="Demo"
         runtime={runtime}
-        confirmation={{ id: 'c1', toolName: 'vc_add_worktree', arguments: '{"name":"paused-test","branch":"assistant/paused-test"}', requester: 's1' }}
+        confirmation={{ id: 'c1', toolName: 'vc_restore', arguments: '{"path":"Blocks/Main.xml"}', requester: 's1' }}
         onConfirm={onConfirm}
       />,
     )
@@ -212,8 +237,8 @@ describe('AppAssistantPanel', () => {
     // response body. The shell reads it from the shared server log and hands it down already
     // filtered to this panel's session.
     expect(host.querySelector('[data-app-assistant-confirmation="c1"]')).not.toBeNull()
-    expect(host.textContent).toContain('vc_add_worktree')
-    expect(host.textContent).toContain('assistant/paused-test')
+    expect(host.textContent).toContain('vc_restore')
+    expect(host.textContent).toContain('Blocks/Main.xml')
 
     const buttons = [...host.querySelectorAll<HTMLButtonElement>('[data-app-assistant-confirmation="c1"] button')]
     await act(async () => buttons[0]!.click())
@@ -324,7 +349,7 @@ describe('AppAssistantPanel', () => {
         runtime={runtime}
         confirmation={{
           id: 'c2',
-          toolName: 'create_project',
+          toolName: 'assistant_create_workbench',
           arguments: '{"name":"Assistant Project","engineeringProjectPath":"C:/Projects/Line.ap17"}',
           requester: 's1',
         }}
@@ -332,7 +357,7 @@ describe('AppAssistantPanel', () => {
     )
     await act(async () => {})
 
-    expect(host.textContent).toContain('create_project')
+    expect(host.textContent).toContain('Create workbench')
     expect(host.textContent).toContain('C:/Projects/Line.ap17')
   })
 

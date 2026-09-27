@@ -73,6 +73,8 @@ public static class AppAssistantChatEndpoints
                 workbenches = turn.Workbenches,
                 contextRevision = turn.Context?.Runtime.WorkbenchRevision,
                 sessionId = turn.SessionId,
+                decision = turn.Decision,
+                change = turn.Change,
             }).ConfigureAwait(false);
             await WriteEventAsync(http, "answer", new { answer = turn.Answer }).ConfigureAwait(false);
         }

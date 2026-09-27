@@ -266,7 +266,13 @@ public static class CompatibilityEndpoints
             return Results.Ok(await pending.ResolveAsync(
                 id, parsed, DeviceContextIdentity.Key(device), requester));
         });
-        app.MapGet("/api/logs", (CompatibilityRuntimeState state) => state.Logs.ToArray());
+        app.MapGet("/api/logs", (CompatibilityRuntimeState state, PendingToolActions pending) =>
+            state.Logs.Where(line =>
+            {
+                if (!line.StartsWith("{\"kind\":\"confirmation\"", StringComparison.Ordinal)) return true;
+                using var entry = JsonDocument.Parse(line);
+                return pending.Requester(entry.RootElement.GetProperty("id").GetString()!) is not null;
+            }).ToArray());
         app.MapPost("/api/chat/grant-rounds", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {

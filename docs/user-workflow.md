@@ -56,12 +56,12 @@ The imported origin is bootstrap-only thereafter; later operations use the manag
 
 ### 3. Orient and plan
 
-1. The user selects a workbench and worktree, then creates a task with a title, type, bound device, goal, expected result, and relevant context. Source blocks can be staged on that task as the work becomes concrete.
+1. The user selects a workbench and worktree, checks whether an existing task already covers the work, then creates a task when needed with a title, type, bound device, goal, and expected result. Source blocks can be staged on that task as the work becomes concrete.
 2. Starting a chat on the task uses its bound device and supplies its goal, expected result, and context to the assistant. The user does not need to select the device separately.
 3. The user can open **Workbench Assistant** with no selected project, worktree, or device. It lists available projects, asks which one the user means when needed, and helps the user select a worktree and device. It answers project, task, and history questions before a device is selected; PLC-specific tools require a device.
-4. For a mutation such as creating a worktree, the assistant proposes the operation, requests a base choice when necessary, and shows **Approve** and **Reject**. It does not silently alter selection.
+4. For workbench, worktree, and task creation, the assistant asks only for missing details, presents selectable source, baseline, or device choices, and runs the same managed operations as the UI after the user approves the tool call. It reports the created entity and refreshes the workbench view. It does not send the user to a dialog or use raw TIA/Git creation tools.
 
-**Design acceptance:** task chat starts from a bound device without a separate device selection and receives the task goal and context. A read-only answer requires no approval card. A mutation proposal displays target and base context, then actionable approval/rejection controls; an old orientation answer never hides the pending proposal.
+**Design acceptance:** task chat starts from a bound device without a separate device selection and receives the task goal and context. A read-only answer requires no approval card. Assistant creation shows choices and a managed-operation approval card, then completes the action without asking for UI navigation. Task creation records distinct goal and expected-result text. An old orientation answer never hides the pending proposal.
 
 ### 4. Understand a device offline
 

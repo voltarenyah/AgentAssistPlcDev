@@ -74,6 +74,10 @@ vi.mock('@/api/client', async importOriginal => {
     listWorkbenches: vi.fn(async () => [workbench]),
     selectWorkbench: vi.fn(async () => ({})),
     selectWorktree: vi.fn(async () => ({})),
+    getBranchStartPoints: vi.fn(async () => []),
+    getSandboxRoots: vi.fn(async () => ({ roots: ['C:/wb'] })),
+    listProjectTasks: vi.fn(async () => []),
+    listGraphWorktreeTasks: vi.fn(async () => []),
     getWorktreeDetail: vi.fn(async () => ({
       worktreeId: 'wt1', workbenchId: 'wb1', name: 'master', branch: 'master',
       createdAt: '2026-08-01T00:00:00Z', baseCommit: null, engineeringProjectId: null,

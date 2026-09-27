@@ -1494,6 +1494,10 @@ export default function MainStudio() {
             }
           } catch { /* non-JSON log line */ }
         }
+        setPendingConfirmation(previous => previous &&
+          ((chatBusy && previous.requester === chatTabs.activeId)
+            || (appAssistantBusy && previous.requester === appAssistantSessionId))
+          ? null : previous)
       } catch { /* logs unavailable; retry next tick */ }
     }
     void poll()
@@ -1913,16 +1917,6 @@ export default function MainStudio() {
     } finally {
       setOperation(null)
     }
-  }
-
-  const handleAppAssistantWorkbenchCreated = async (workbenchId: string) => {
-    const refreshed = await reloadWorkbenches()
-    const workbench = refreshed.find(value => value.workbenchId === workbenchId)
-    if (!workbench) throw new Error('The new workbench was created but is not visible in the project list yet.')
-    await selectWorkbench(workbench)
-    const master = workbench.worktrees.find(value => value.branch === 'master') ?? workbench.worktrees[0]
-    if (master) await selectWorktree(workbench, master)
-    toast.success(`Workbench “${workbench.name}” created by Workbench Assistant`)
   }
 
   const deleteWorktree = async () => {
@@ -2572,7 +2566,30 @@ export default function MainStudio() {
             onSelectDevice={deviceId => {
               if (activeWorkbench && activeWorktree) return selectDevice(activeWorkbench, activeWorktree, deviceId)
             }}
-            onWorkbenchCreated={handleAppAssistantWorkbenchCreated}
+            onManagedChange={async change => {
+              if (change.kind === 'task' && change.worktreeId) {
+                await refreshWorktreeTasks(change.workbenchId, change.worktreeId)
+                if (selection.workbenchId !== change.workbenchId || selection.worktreeId !== change.worktreeId) {
+                  const values = await reloadWorkbenches()
+                  const workbench = values.find(item => item.workbenchId === change.workbenchId)
+                  const worktree = workbench?.worktrees.find(item => item.worktreeId === change.worktreeId)
+                  if (workbench && worktree) await selectWorktree(workbench, worktree)
+                }
+                setMainView({ kind: 'worktree', tab: 'tasks' })
+                return
+              }
+              const values = await reloadWorkbenches()
+              if (change.kind !== 'selection') void reloadLanding()
+              const created = values.find(item => item.workbenchId === change.workbenchId)
+              if (!created) return
+              if (change.worktreeId) {
+                const worktree = created.worktrees.find(item => item.worktreeId === change.worktreeId)
+                if (worktree) {
+                  if (change.deviceId) await selectDevice(created, worktree, change.deviceId)
+                  else await selectWorktree(created, worktree)
+                }
+              } else await selectWorkbench(created)
+            }}
           />
         )}
       </div>}

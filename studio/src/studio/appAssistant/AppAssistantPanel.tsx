@@ -30,7 +30,18 @@ type Props = {
   onSelectWorkbench?: (workbenchId: string) => Promise<void> | void
   onSelectWorktree?: (worktreeId: string) => Promise<void> | void
   onSelectDevice?: (deviceId: string) => Promise<void> | void
-  onWorkbenchCreated?: (workbenchId: string) => Promise<void> | void
+  onManagedChange?: (change: { kind: string; workbenchId: string; worktreeId?: string | null; taskId?: string | null; deviceId?: string | null }) => Promise<void> | void
+}
+
+const approvalName = (toolName: string): string => ({
+  assistant_create_workbench: 'Create workbench',
+  assistant_create_worktree: 'Create linked worktree',
+  assistant_create_task: 'Create device task',
+}[toolName] ?? toolName)
+
+const approvalDetails = (argumentsJson: string): string => {
+  try { return JSON.stringify(JSON.parse(argumentsJson), null, 2) }
+  catch { return argumentsJson }
 }
 
 export default function AppAssistantPanel({
@@ -47,7 +58,7 @@ export default function AppAssistantPanel({
   onSelectWorkbench,
   onSelectWorktree,
   onSelectDevice,
-  onWorkbenchCreated,
+  onManagedChange,
 }: Props) {
   const [state, setState] = useState<AppAssistantPanelState>(() => initialAppAssistantState(runtime))
   const [draft, setDraft] = useState('')
@@ -141,12 +152,21 @@ export default function AppAssistantPanel({
     try {
       const events = await api.chatAppAssistant(trimmed, assistantSessionId)
       setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
-      if (onWorkbenchCreated) {
-        const createdId = events
-          .find(event => event.kind === 'state' && event.data.detail && typeof event.data.detail === 'object')
-          ?.data.detail as { mutation?: { workbench?: { workbenchId?: unknown } } } | undefined
-        const created = createdId?.mutation?.workbench?.workbenchId
-        if (typeof created === 'string') await onWorkbenchCreated(created)
+      const change = events.find(event => event.kind === 'state')?.data.change
+      if (change && typeof change === 'object') {
+        const value = change as { kind?: unknown; workbenchId?: unknown; worktreeId?: unknown; taskId?: unknown; deviceId?: unknown }
+        if (typeof value.kind === 'string' && typeof value.workbenchId === 'string') {
+          try {
+            await onManagedChange?.({ kind: value.kind, workbenchId: value.workbenchId,
+              worktreeId: typeof value.worktreeId === 'string' ? value.worktreeId : null,
+              taskId: typeof value.taskId === 'string' ? value.taskId : null,
+              deviceId: typeof value.deviceId === 'string' ? value.deviceId : null })
+          } catch (error) {
+            setState(current => ({ ...current, messages: [...current.messages, {
+              role: 'error', content: `The action completed, but the view could not refresh: ${error instanceof Error ? error.message : 'unknown error'}`,
+            }] }))
+          }
+        }
       }
       setDraft('')
       setBusyLabel(null)
@@ -180,8 +200,8 @@ export default function AppAssistantPanel({
     }
   }
 
-  const chooseClarification = (option: string) => {
-    void send(`Use '${option}' as the selected base worktree.`)
+  const chooseClarification = (option: { value: string; label: string }) => {
+    void send(`For "${state.clarificationQuestion ?? 'your question'}", I choose "${option.label}" (value: ${option.value}). Continue the requested work.`)
   }
 
   const worktrees = useMemo(() => state.runtime?.worktrees ?? runtime?.worktrees ?? [], [runtime?.worktrees, state.runtime?.worktrees])
@@ -249,7 +269,7 @@ export default function AppAssistantPanel({
         ))}
         {state.clarificationOptions.length > 0 && (
           <div className="rounded-md border px-2.5 py-2 text-[9px]" data-assistant-clarification-options>
-            <div className="mb-1 text-muted-foreground">Choose an option:</div>
+            <div className="mb-1 text-muted-foreground">{state.clarificationQuestion ?? 'Choose an option:'}</div>
             <div className="flex flex-wrap gap-1">
               {state.clarificationOptions.map(option => (
                 <button
@@ -258,7 +278,7 @@ export default function AppAssistantPanel({
                   data-assistant-option={option.value}
                   disabled={state.busy}
                   title={option.description ?? undefined}
-                  onClick={() => chooseClarification(option.value)}
+                  onClick={() => chooseClarification(option)}
                 >
                   {option.label}
                   {option.description && <span className="ml-1 text-muted-foreground">({option.description})</span>}
@@ -269,9 +289,9 @@ export default function AppAssistantPanel({
         )}
         {confirmation && (
           <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-[10px]" data-app-assistant-confirmation={confirmation.id}>
-            <div className="font-medium">Approval needed: <span className="font-mono">{confirmation.toolName}</span></div>
+            <div className="font-medium">Approval needed: {approvalName(confirmation.toolName)}</div>
             {confirmation.arguments && (
-              <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{confirmation.arguments}</pre>
+              <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{approvalDetails(confirmation.arguments)}</pre>
             )}
             <div className="mt-2 flex gap-2">
               <button className="primary-button h-6 px-2 text-[9px]" onClick={() => onConfirm?.('allowOnce')}>Approve</button>

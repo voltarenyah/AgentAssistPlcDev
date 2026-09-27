@@ -23,6 +23,7 @@ export type AppAssistantPanelState = {
   autoRefreshPending: boolean
   pendingApproval: Record<string, unknown> | null
   clarificationOptions: AppAssistantClarificationOption[]
+  clarificationQuestion: string | null
   busy: boolean
 }
 
@@ -37,6 +38,7 @@ export const initialAppAssistantState = (runtime: AppAssistantRuntimeSnapshot | 
   autoRefreshPending: false,
   pendingApproval: null,
   clarificationOptions: [],
+  clarificationQuestion: null,
   busy: false,
 })
 
@@ -145,7 +147,7 @@ export const applyAssistantEvents = (
         ? null
         : normalizeAssistantRuntimeSnapshot(event.data.runtimeSnapshot)
       if (event.data.runtimeSnapshot !== null && !snapshot) continue
-      const decision = event.data.decision as { options?: unknown } | undefined
+      const decision = event.data.decision as { question?: unknown; options?: unknown } | undefined
       const clarificationOptions = Array.isArray(decision?.options)
         ? decision.options.filter((option): option is AppAssistantClarificationOption => {
           if (!option || typeof option !== 'object') return false
@@ -168,6 +170,7 @@ export const applyAssistantEvents = (
           : next.lastRunId,
         feedbackSubmitted: false,
         clarificationOptions,
+        clarificationQuestion: typeof decision?.question === 'string' ? decision.question : null,
         contextStale: runtime !== null && snapshot !== null && runtime.workbenchRevision > snapshot.workbenchRevision,
         autoRefreshPending: false,
       }

@@ -86,8 +86,13 @@ public sealed class AgentSandbox
                 "Run it from the App chat, where the user can approve it.");
         }
 
+        // Managed assistant creations need every supplied field visible before approval. The
+        // ordinary audit summary remains bounded; only the confirmation card gets full arguments.
+        var approvalArguments = call.Name is "assistant_create_workbench" or "assistant_create_worktree" or "assistant_create_task"
+            ? call.ArgumentsJson
+            : Summarize(call.ArgumentsJson);
         var decision = await confirm(new ToolConfirmationRequest(
-            call.Name, Summarize(call.ArgumentsJson), DestructiveCallsSoFar, MaxDestructiveCallsPerSession));
+            call.Name, approvalArguments, DestructiveCallsSoFar, MaxDestructiveCallsPerSession));
         cancellationToken.ThrowIfCancellationRequested();
 
         switch (decision)

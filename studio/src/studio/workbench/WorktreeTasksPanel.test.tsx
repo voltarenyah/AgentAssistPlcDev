@@ -110,6 +110,9 @@ describe('WorktreeTasksPanel', () => {
     expect(dialog.textContent).toContain('Main PLC')
 
     await act(async () => setInputValue(input, 'Add alarm handling'))
+    expect((dialog.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => setInputValue(dialog.querySelector('input[aria-label="New task goal"]') as HTMLInputElement, 'Add an alarm for overtemperature'))
+    await act(async () => setInputValue(dialog.querySelector('textarea[aria-label="New task expected result"]') as HTMLTextAreaElement, 'PLC raises an alarm above the configured limit'))
     const device = dialog.querySelector('select[aria-label="New task device"]') as HTMLSelectElement
     await act(async () => { device.value = 'device-1'; device.dispatchEvent(new Event('change', { bubbles: true })) })
     await act(async () => {
@@ -118,7 +121,7 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => {})
 
     expect(vi.mocked(api.createGraphWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', {
-      title: 'Add alarm handling', deviceId: 'device-1', type: 'feature', intent: 'Add alarm handling', expectedResult: 'Add alarm handling',
+      title: 'Add alarm handling', deviceId: 'device-1', type: 'feature', intent: 'Add an alarm for overtemperature', expectedResult: 'PLC raises an alarm above the configured limit',
     })
     expect(onChanged).toHaveBeenCalled()
     expect(input.value).toBe('')
