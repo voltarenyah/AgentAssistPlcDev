@@ -48,6 +48,28 @@ afterEach(() => {
 })
 
 describe('AppAssistantPanel', () => {
+  it('opens a readable conversation with its own composer from the header chat box', async () => {
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} defaultExpanded={false} />,
+    )
+    await act(async () => {})
+    const headerInput = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    expect(host.querySelector('[data-assistant-conversation-composer]')).toBeNull()
+
+    act(() => headerInput.focus())
+    const composer = host.querySelector<HTMLFormElement>('[data-assistant-conversation-composer]')
+    expect(composer).not.toBeNull()
+    const conversationInput = composer!.querySelector<HTMLInputElement>('input[aria-label="Conversation message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(conversationInput, 'Summarize the current worktree.')
+      conversationInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => composer!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(api.chatAppAssistant).toHaveBeenCalledWith('Summarize the current worktree.', expect.any(String))
+    expect(host.querySelector('[data-assistant-message-role="assistant"]')).not.toBeNull()
+  })
+
   it('keeps the conversation and session while the header chat is collapsed', async () => {
     vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
       { kind: 'state', data: { runtimeSnapshot: runtime, sessionId: 'persistent-session' } },

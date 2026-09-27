@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, Send, Sparkles, X } from 'lucide-react'
+import { Loader2, MessageSquareText, Send, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -239,12 +239,12 @@ export default function AppAssistantPanel({
         onDoubleClick={event => event.stopPropagation()}
       >
         <form
-          className="flex h-8 min-w-0 items-center gap-1 rounded-md border bg-background pl-2 pr-1 focus-within:ring-2 focus-within:ring-ring/40"
+          className="flex h-9 min-w-0 items-center gap-1 rounded-lg border border-input bg-card pl-3 pr-1 shadow-sm transition-colors hover:border-ring/60 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30"
           onSubmit={event => { event.preventDefault(); void send(draft) }}
         >
           <Sparkles className="size-4 shrink-0 text-chart-4" aria-hidden="true" />
           <Input
-            className="h-7 min-w-0 flex-1 select-text border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0"
+            className="h-8 min-w-0 flex-1 select-text border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-0"
             aria-label="Workbench Assistant message"
             value={draft}
             onFocus={() => setExpanded(true)}
@@ -257,21 +257,21 @@ export default function AppAssistantPanel({
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon-xs"
+                size="icon-sm"
                 type="button"
                 aria-label={confirmation ? 'Review Workbench Assistant approval' : expanded ? 'Hide Workbench Assistant conversation' : 'Open Workbench Assistant'}
                 aria-expanded={expanded}
                 aria-controls="workbench-assistant-conversation"
                 onClick={() => setExpanded(previous => confirmation ? true : !previous)}
               >
-                <Sparkles aria-hidden="true" />
+                <MessageSquareText aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>{confirmation ? 'Review approval' : expanded ? 'Collapse conversation' : 'Open conversation'}</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button size="icon-xs" aria-label="Send assistant message" type="submit" disabled={state.busy || !draft.trim()}>
+              <Button size="icon-sm" aria-label="Send assistant message" type="submit" disabled={state.busy || !draft.trim()}>
                 {state.busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
               </Button>
             </TooltipTrigger>
@@ -280,101 +280,152 @@ export default function AppAssistantPanel({
         </form>
         <aside
           id="workbench-assistant-conversation"
-          className={`fixed bottom-10 left-1/2 z-50 h-[min(65vh,720px)] max-h-[calc(100vh-112px)] w-[min(920px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border bg-card text-foreground shadow-xl select-text ${expanded ? 'flex' : 'hidden'}`}
+          className={`fixed bottom-10 left-1/2 z-50 h-[min(65vh,720px)] max-h-[calc(100vh-112px)] w-[min(920px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-xl border bg-card text-foreground shadow-xl select-text ${expanded ? 'flex' : 'hidden'}`}
           data-app-assistant-panel
           aria-label="Workbench Assistant conversation"
           aria-hidden={!expanded}
         >
-      <header className="flex items-center gap-2 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
-        <Sparkles className="h-3.5 w-3.5 text-chart-4" />
-        <div className="min-w-0 flex-1">
-          <h2 className="text-xs font-semibold">Workbench Assistant</h2>
-          <p className="truncate text-[9px] text-muted-foreground">{workbenchName}</p>
-        </div>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-xs" type="button" aria-label="Collapse Workbench Assistant" onClick={() => { setExpanded(false); onClose?.() }}><X aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>Collapse conversation</TooltipContent></Tooltip>
-      </header>
-      <div className="border-b px-3 py-2 text-[9px] text-muted-foreground">
-        Runtime revision {state.runtime?.workbenchRevision ?? runtime?.workbenchRevision ?? '—'} · selection stays with you
-        {state.contextStale && <span data-assistant-context-stale> · {state.autoRefreshPending ? 'refreshing suggestion…' : 'context changed; refreshes before next request'}</span>}
-        {state.busy && <div className="mt-1 flex items-center gap-1.5 text-chart-4" data-assistant-progress aria-live="polite"><Loader2 className="h-3 w-3 animate-spin" /> {busyLabel ?? 'Working…'}</div>}
-      </div>
-      <div ref={conversationScroll} className="scrollbar-sleek min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-        {!workbenchId && workbenches.map(workbench => (
-          <div key={workbench.workbenchId} className="rounded-md border px-2 py-1.5 text-[9px]" style={{ borderColor: 'var(--border)' }}>
-            <div className="font-medium">{workbench.name}</div>
-            {onSelectWorkbench && (
-              <button className="secondary-button mt-1 h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => void selectScope(() => onSelectWorkbench(workbench.workbenchId))}>
-                Select project
-              </button>
+          <header className="flex h-14 shrink-0 items-center gap-3 border-b px-5">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-chart-4">
+              <Sparkles className="size-4" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-sm font-semibold">Workbench Assistant</h2>
+              <p className="truncate text-xs text-muted-foreground">{workbenchName}</p>
+            </div>
+            {state.busy && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground" data-assistant-progress aria-live="polite">
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                <span>{busyLabel ?? 'Working…'}</span>
+              </div>
             )}
-          </div>
-        ))}
-        {worktrees.map(worktree => (
-          <div key={worktree.worktreeId} className="rounded-md border px-2 py-1.5 text-[9px]" style={{ borderColor: 'var(--border)' }}>
-            <div className="font-medium">{worktree.name}</div>
-            <div className="text-muted-foreground">{worktree.branch} · {worktree.todoCount} todo{worktree.todoCount === 1 ? '' : 's'} · {worktree.gitStatus}</div>
-            {onSelectWorktree && focusedWorktreeId !== worktree.worktreeId && (
-              <button
-                className="secondary-button mt-1 h-6 px-2 text-[9px]"
-                data-assistant-select-worktree={worktree.worktreeId}
-                disabled={state.busy || selectingWorktree !== null}
-                onClick={() => void selectScope(() => onSelectWorktree(worktree.worktreeId), worktree.worktreeId)}
-              >
-                {selectingWorktree === worktree.worktreeId ? 'Selecting…' : 'Select worktree'}
-              </button>
-            )}
-          </div>
-        ))}
-        {focusedWorktreeId && devices.map(device => (
-          <div key={device.deviceId} className="rounded-md border px-2 py-1.5 text-[9px]" style={{ borderColor: 'var(--border)' }}>
-            <div className="font-medium">{device.plcName}</div>
-            {onSelectDevice && focusedDeviceId !== device.deviceId && (
-              <button className="secondary-button mt-1 h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => void selectScope(() => onSelectDevice(device.deviceId))}>
-                Select device
-              </button>
-            )}
-          </div>
-        ))}
-        {state.messages.map((message, index) => (
-          <div key={`${message.role}-${index}`} className={`break-words rounded-md px-2.5 py-2 text-[10px] leading-relaxed ${message.role === 'error' ? 'bg-red-500/10 text-red-700 dark:text-red-300' : message.role === 'user' ? 'ml-4 bg-accent' : 'bg-muted/50'}`}>
-            {message.role === 'assistant'
-              ? <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
-              : message.content}
-          </div>
-        ))}
-        {state.clarificationOptions.length > 0 && (
-          <div className="rounded-md border px-2.5 py-2 text-[9px]" data-assistant-clarification-options>
-            <div className="mb-1 text-muted-foreground">{state.clarificationQuestion ?? 'Choose an option:'}</div>
-            <div className="flex flex-wrap gap-1">
-              {state.clarificationOptions.map(option => (
-                <button
-                  key={option.value}
-                  className="secondary-button h-6 px-2 text-[9px]"
-                  data-assistant-option={option.value}
-                  disabled={state.busy}
-                  title={option.description ?? undefined}
-                  onClick={() => chooseClarification(option)}
-                >
-                  {option.label}
-                  {option.description && <span className="ml-1 text-muted-foreground">({option.description})</span>}
-                </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" type="button" aria-label="Collapse Workbench Assistant" onClick={() => { setExpanded(false); onClose?.() }}>
+                  <X aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Collapse conversation</TooltipContent>
+            </Tooltip>
+          </header>
+          {state.contextStale && (
+            <div className="border-b bg-accent/40 px-5 py-2 text-xs text-muted-foreground" data-assistant-context-stale>
+              {state.autoRefreshPending ? 'Refreshing workbench context…' : 'Workbench context changed; it will refresh before your next request.'}
+            </div>
+          )}
+          <div ref={conversationScroll} className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
+            <div className="mx-auto max-w-3xl space-y-5">
+              {!workbenchId && workbenches.map(workbench => (
+                <div key={workbench.workbenchId} className="flex items-center justify-between gap-4 rounded-lg border bg-background px-4 py-3">
+                  <div className="min-w-0 text-sm font-medium">{workbench.name}</div>
+                  {onSelectWorkbench && (
+                    <Button variant="outline" size="xs" disabled={state.busy} onClick={() => void selectScope(() => onSelectWorkbench(workbench.workbenchId))}>
+                      Select project
+                    </Button>
+                  )}
+                </div>
               ))}
+              {worktrees.map(worktree => (
+                <div key={worktree.worktreeId} className="flex items-center justify-between gap-4 rounded-lg border bg-background px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium">{worktree.name}</div>
+                    <div className="text-xs text-muted-foreground">{worktree.branch} · {worktree.todoCount} todo{worktree.todoCount === 1 ? '' : 's'} · {worktree.gitStatus}</div>
+                  </div>
+                  {onSelectWorktree && focusedWorktreeId !== worktree.worktreeId && (
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      data-assistant-select-worktree={worktree.worktreeId}
+                      disabled={state.busy || selectingWorktree !== null}
+                      onClick={() => void selectScope(() => onSelectWorktree(worktree.worktreeId), worktree.worktreeId)}
+                    >
+                      {selectingWorktree === worktree.worktreeId ? 'Selecting…' : 'Select worktree'}
+                    </Button>
+                  )}
+                </div>
+              ))}
+              {focusedWorktreeId && devices.map(device => (
+                <div key={device.deviceId} className="flex items-center justify-between gap-4 rounded-lg border bg-background px-4 py-3">
+                  <div className="min-w-0 text-sm font-medium">{device.plcName}</div>
+                  {onSelectDevice && focusedDeviceId !== device.deviceId && (
+                    <Button variant="outline" size="xs" disabled={state.busy} onClick={() => void selectScope(() => onSelectDevice(device.deviceId))}>
+                      Select device
+                    </Button>
+                  )}
+                </div>
+              ))}
+              {state.messages.map((message, index) => (
+                <div key={`${message.role}-${index}`} data-assistant-message-role={message.role} className={message.role === 'user' ? 'flex justify-end' : ''}>
+                  <div className={message.role === 'user' ? 'max-w-[85%] rounded-2xl bg-muted px-4 py-3' : message.role === 'error' ? 'rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3' : 'px-1'}>
+                    <div className="mb-1 text-xs font-semibold text-muted-foreground">
+                      {message.role === 'user' ? 'You' : message.role === 'error' ? 'Assistant error' : 'Workbench Assistant'}
+                    </div>
+                    {message.role === 'assistant'
+                      ? <div className="markdown-body assistant-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
+                      : <div className="whitespace-pre-wrap break-words text-sm leading-6">{message.content}</div>}
+                  </div>
+                </div>
+              ))}
+              {state.clarificationOptions.length > 0 && (
+                <div className="rounded-lg border bg-background p-4" data-assistant-clarification-options>
+                  <div className="mb-3 text-sm font-medium">{state.clarificationQuestion ?? 'Choose an option:'}</div>
+                  <div className="flex flex-wrap gap-2">
+                    {state.clarificationOptions.map(option => (
+                      <Button
+                        key={option.value}
+                        variant="outline"
+                        size="xs"
+                        data-assistant-option={option.value}
+                        disabled={state.busy}
+                        onClick={() => chooseClarification(option)}
+                      >
+                        {option.label}
+                        {option.description && <span className="text-muted-foreground">({option.description})</span>}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {confirmation && (
+                <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-4" data-app-assistant-confirmation={confirmation.id}>
+                  <div className="text-sm font-semibold">Approval needed: {approvalName(confirmation.toolName)}</div>
+                  {confirmation.arguments && (
+                    <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/70 p-3 font-mono text-xs text-muted-foreground">{approvalDetails(confirmation.arguments)}</pre>
+                  )}
+                  <div className="mt-4 flex gap-2">
+                    <Button size="sm" onClick={() => onConfirm?.('allowOnce')}>Approve</Button>
+                    <Button variant="outline" size="sm" onClick={() => onConfirm?.('deny')}>Reject</Button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-        )}
-        {confirmation && (
-          <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-[10px]" data-app-assistant-confirmation={confirmation.id}>
-            <div className="font-medium">Approval needed: {approvalName(confirmation.toolName)}</div>
-            {confirmation.arguments && (
-              <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{approvalDetails(confirmation.arguments)}</pre>
-            )}
-            <div className="mt-2 flex gap-2">
-              <button className="primary-button h-6 px-2 text-[9px]" onClick={() => onConfirm?.('allowOnce')}>Approve</button>
-              <button className="secondary-button h-6 px-2 text-[9px]" onClick={() => onConfirm?.('deny')}>Reject</button>
-            </div>
-          </div>
-        )}
-      </div>
+          {expanded && (
+            <form
+              className="shrink-0 border-t bg-card px-4 py-4 sm:px-8"
+              data-assistant-conversation-composer
+              onSubmit={event => { event.preventDefault(); void send(draft) }}
+            >
+              <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-xl border border-input bg-background p-2 shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
+                <Input
+                  className="h-9 min-w-0 flex-1 border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-0"
+                  aria-label="Conversation message"
+                  value={draft}
+                  onChange={event => setDraft(event.target.value)}
+                  placeholder="Ask about a project, worktree, or device…"
+                  disabled={state.busy}
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button size="icon-sm" aria-label="Send conversation message" type="submit" disabled={state.busy || !draft.trim()}>
+                      {state.busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Send message</TooltipContent>
+                </Tooltip>
+              </div>
+            </form>
+          )}
         </aside>
       </div>
     </TooltipProvider>

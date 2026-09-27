@@ -35,7 +35,7 @@ No action silently writes to the managed TIA project. Browsing and grounded ques
    - The left dock is the project tree: workbenches, their worktrees, and their devices.
    - The main area is the home overview. It highlights recent ongoing projects, worktrees, tasks, and a **highlighted information** section. The exact content and ranking rules for highlighted information are intentionally **defined later**; its purpose is to help the user find current work and understand recent activity quickly.
    - The right dock shows context for the selected workbench, worktree, or device.
-   - The top bar has a compact **Workbench Assistant** text box. Focusing it opens a floating conversation over the main area; collapsing the conversation keeps its draft, messages, and pending approval available. The assistant remains available while navigating, including Settings and Tools.
+   - The top bar has a compact **Workbench Assistant** text box. Focusing it opens a floating conversation over the main area, with a readable message column and a text box at the bottom for follow-up questions. Collapsing the conversation keeps its draft, messages, and pending approval available. The assistant remains available while navigating, including Settings and Tools.
 4. The user selects a workbench, then the intended worktree, before selecting a device or opening version control.
 
 **Design acceptance:** loading visibly transitions to the main screen; each dock has its stated purpose; the home overview helps users resume work instead of requiring a tree search; the assistant remains available in the top bar while navigating.
