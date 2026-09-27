@@ -31,13 +31,14 @@ No action silently writes to the managed TIA project. Browsing and grounded ques
 
 1. The user launches the app and first sees a loading page while the local runtime and the workbench catalog are initialized.
 2. Within the normal local-startup target of 3–5 seconds, the main screen replaces the loading page. If initialization takes longer or fails, the loading state shows that work is continuing or presents a recoverable error; it does not appear frozen.
-3. The main screen has three persistent regions:
+3. The main screen has a persistent project tree, main area, and context dock, with Workbench Assistant available in the top bar:
    - The left dock is the project tree: workbenches, their worktrees, and their devices.
    - The main area is the home overview. It highlights recent ongoing projects, worktrees, tasks, and a **highlighted information** section. The exact content and ranking rules for highlighted information are intentionally **defined later**; its purpose is to help the user find current work and understand recent activity quickly.
-   - The right dock is the **Workbench Assistant** chat. It remains available from the home overview so the user can ask for help creating a project or worktree, finding tasks or commits, and reading recent history without leaving the current context.
+   - The right dock shows context for the selected workbench, worktree, or device.
+   - The top bar has a compact **Workbench Assistant** text box. Focusing it opens a floating conversation over the main area; collapsing the conversation keeps its draft, messages, and pending approval available. The assistant remains available while navigating, including Settings and Tools.
 4. The user selects a workbench, then the intended worktree, before selecting a device or opening version control.
 
-**Design acceptance:** loading visibly transitions to the main screen; each dock has its stated purpose; the home overview helps users resume work instead of requiring a tree search; the assistant remains available while navigating.
+**Design acceptance:** loading visibly transitions to the main screen; each dock has its stated purpose; the home overview helps users resume work instead of requiring a tree search; the assistant remains available in the top bar while navigating.
 
 ### 2. Create a workbench project
 
@@ -108,7 +109,7 @@ Use `./launch.ps1`, wait for health checks, then verify `http://localhost:5173/`
 
 | Scenario | Browser actions | Observable proof |
 | --- | --- | --- |
-| Startup and home orientation | Launch the app and wait for initialization | Loading state is visible; the main screen appears; project tree, home overview, and assistant dock render. |
+| Startup and home orientation | Launch the app and wait for initialization | Loading state is visible; the main screen appears; project tree, home overview, and compact assistant text box render. |
 | Create workbench from session | Open creation; name project; select an open TIA session; set tags/root; confirm | Step-specific timed progress is visible; success notice appears; the new project is present on the home overview. |
 | Create workbench from file | Open creation; name project; select `.ap17` with the file browser; confirm | File attachment is visible before submit; success/failure identifies the resulting workbench or failed runtime step. |
 | Catalog orientation | Load app; select workbench/worktree/device | Navigator preserves Workbench → worktree → device context and selected surface renders. |

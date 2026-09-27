@@ -48,6 +48,49 @@ afterEach(() => {
 })
 
 describe('AppAssistantPanel', () => {
+  it('keeps the conversation and session while the header chat is collapsed', async () => {
+    vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
+      { kind: 'state', data: { runtimeSnapshot: runtime, sessionId: 'persistent-session' } },
+      { kind: 'answer', data: { answer: 'Ready to help.' } },
+    ])
+    const props = { workbenchId: 'wb1', workbenchName: 'Demo', runtime, defaultExpanded: false }
+    const { host, root } = render(<AppAssistantPanel {...props} />)
+    await act(async () => {})
+
+    const conversation = host.querySelector<HTMLElement>('[data-app-assistant-panel]')!
+    expect(conversation.getAttribute('aria-hidden')).toBe('true')
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => input.focus())
+    expect(conversation.getAttribute('aria-hidden')).toBe('false')
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'What changed?')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')!.click())
+    expect(api.chatAppAssistant).toHaveBeenCalledWith('What changed?', expect.any(String))
+    expect(conversation.textContent).toContain('The worktree remains user-selected.')
+
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Collapse Workbench Assistant"]')!.click())
+    expect(conversation.getAttribute('aria-hidden')).toBe('true')
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Open Workbench Assistant"]')!.click())
+    expect(conversation.getAttribute('aria-hidden')).toBe('false')
+    expect(conversation.textContent).toContain('What changed?')
+    expect(api.bootstrapAppAssistant).toHaveBeenCalledTimes(1)
+
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Collapse Workbench Assistant"]')!.click())
+    expect(conversation.getAttribute('aria-hidden')).toBe('true')
+    act(() => root.render(<AppAssistantPanel {...props} confirmation={{ id: 'c1', toolName: 'vc_restore', arguments: '{}', requester: 'persistent-session' }} />))
+    expect(conversation.getAttribute('aria-hidden')).toBe('false')
+    expect(conversation.querySelector('[data-app-assistant-confirmation="c1"]')).not.toBeNull()
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Collapse Workbench Assistant"]')!.click())
+    expect(conversation.getAttribute('aria-hidden')).toBe('true')
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Approval needed')
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Review Workbench Assistant approval"]')!.click())
+    expect(conversation.getAttribute('aria-hidden')).toBe('false')
+  })
+
   it('offers project selection and accepts a question before any selection', async () => {
     const onSelectWorkbench = vi.fn()
     vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([

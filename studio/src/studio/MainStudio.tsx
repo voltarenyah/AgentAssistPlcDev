@@ -18,7 +18,6 @@ import {
   Server,
   Settings,
   ShieldCheck,
-  Sparkles,
   Trash2,
   X,
 } from 'lucide-react'
@@ -570,7 +569,6 @@ export default function MainStudio() {
   const [balanceRefreshState, setBalanceRefreshState] = useState<DeepSeekBalanceRefreshState>('idle')
   const [chatSourceContext, setChatSourceContext] = useState<SourceChatContext | null>(null)
   const [sourceInspectorTarget, setSourceInspectorTarget] = useState<SourceInspectorTarget | null>(null)
-  const [appAssistantOpen, setAppAssistantOpen] = useState(false)
   const [appAssistantRuntime, setAppAssistantRuntime] = useState<api.AppAssistantRuntimeSnapshot | null>(null)
   const [appAssistantSessionId, setAppAssistantSessionId] = useState<string | null>(null)
   const [appAssistantBusy, setAppAssistantBusy] = useState(false)
@@ -2081,8 +2079,61 @@ export default function MainStudio() {
         >
           <Settings className="h-3.5 w-3.5" />
         </button>
-        <div className="flex-1" />
-          <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-1 justify-center px-3">
+          <AppAssistantPanel
+            key={selection.workbenchId}
+            defaultExpanded={false}
+            workbenchId={selection.workbenchId}
+            workbenchName={activeWorkbench?.name ?? 'All projects'}
+            workbenches={workbenches.map(item => ({ workbenchId: item.workbenchId, name: item.name }))}
+            devices={selection.workbenchId && selection.worktreeId
+              ? devicesByWorktree[worktreeKey(selection.workbenchId, selection.worktreeId)] ?? []
+              : []}
+            runtime={appAssistantRuntime}
+            confirmation={pendingConfirmation && appAssistantSessionId && pendingConfirmation.requester === appAssistantSessionId
+              ? pendingConfirmation
+              : null}
+            onConfirm={decision => void decideConfirmation(decision)}
+            onSessionId={setAppAssistantSessionId}
+            onBusyChange={setAppAssistantBusy}
+            onSelectWorkbench={workbenchId => {
+              const workbench = workbenches.find(item => item.workbenchId === workbenchId)
+              if (workbench) return selectWorkbench(workbench)
+            }}
+            onSelectWorktree={worktreeId => {
+              const worktree = activeWorkbench?.worktrees.find(item => item.worktreeId === worktreeId)
+              if (activeWorkbench && worktree) return selectWorktree(activeWorkbench, worktree)
+            }}
+            onSelectDevice={deviceId => {
+              if (activeWorkbench && activeWorktree) return selectDevice(activeWorkbench, activeWorktree, deviceId)
+            }}
+            onManagedChange={async change => {
+              if (change.kind === 'task' && change.worktreeId) {
+                await refreshWorktreeTasks(change.workbenchId, change.worktreeId)
+                if (selection.workbenchId !== change.workbenchId || selection.worktreeId !== change.worktreeId) {
+                  const values = await reloadWorkbenches()
+                  const workbench = values.find(item => item.workbenchId === change.workbenchId)
+                  const worktree = workbench?.worktrees.find(item => item.worktreeId === change.worktreeId)
+                  if (workbench && worktree) await selectWorktree(workbench, worktree)
+                }
+                setMainView({ kind: 'worktree', tab: 'tasks' })
+                return
+              }
+              const values = await reloadWorkbenches()
+              if (change.kind !== 'selection') void reloadLanding()
+              const created = values.find(item => item.workbenchId === change.workbenchId)
+              if (!created) return
+              if (change.worktreeId) {
+                const worktree = created.worktrees.find(item => item.worktreeId === change.worktreeId)
+                if (worktree) {
+                  if (change.deviceId) await selectDevice(created, worktree, change.deviceId)
+                  else await selectWorktree(created, worktree)
+                }
+              } else await selectWorkbench(created)
+            }}
+          />
+        </div>
+        <div className="flex items-center gap-2">
           {activeOperation && (
             // No fixed width cap: the pill may use the free header space so long export
             // messages ("Exporting block …") render in full; min-w-0 + truncate inside
@@ -2104,17 +2155,6 @@ export default function MainStudio() {
           >
             <CircleHelp className="h-3.5 w-3.5" />
           </button>
-          {(
-            <button
-              className={`icon-button ${appAssistantOpen ? 'bg-accent text-foreground' : ''}`}
-              aria-label="Open Workbench Assistant"
-              title="Open Workbench Assistant"
-              aria-pressed={appAssistantOpen}
-              onClick={() => setAppAssistantOpen(previous => !previous)}
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-            </button>
-          )}
           <button
             data-dock-toggle="right"
             className="icon-button"
@@ -2538,59 +2578,6 @@ export default function MainStudio() {
               )}
             </div>
           </>
-        )}
-        {appAssistantOpen && (
-          <AppAssistantPanel
-            workbenchId={selection.workbenchId}
-            workbenchName={activeWorkbench?.name ?? 'All projects'}
-            workbenches={workbenches.map(item => ({ workbenchId: item.workbenchId, name: item.name }))}
-            devices={selection.workbenchId && selection.worktreeId
-              ? devicesByWorktree[worktreeKey(selection.workbenchId, selection.worktreeId)] ?? []
-              : []}
-            runtime={appAssistantRuntime}
-            confirmation={pendingConfirmation && appAssistantSessionId && pendingConfirmation.requester === appAssistantSessionId
-              ? pendingConfirmation
-              : null}
-            onConfirm={decision => void decideConfirmation(decision)}
-            onSessionId={setAppAssistantSessionId}
-            onBusyChange={setAppAssistantBusy}
-            onClose={() => setAppAssistantOpen(false)}
-            onSelectWorkbench={workbenchId => {
-              const workbench = workbenches.find(item => item.workbenchId === workbenchId)
-              if (workbench) return selectWorkbench(workbench)
-            }}
-            onSelectWorktree={worktreeId => {
-              const worktree = activeWorkbench?.worktrees.find(item => item.worktreeId === worktreeId)
-              if (activeWorkbench && worktree) return selectWorktree(activeWorkbench, worktree)
-            }}
-            onSelectDevice={deviceId => {
-              if (activeWorkbench && activeWorktree) return selectDevice(activeWorkbench, activeWorktree, deviceId)
-            }}
-            onManagedChange={async change => {
-              if (change.kind === 'task' && change.worktreeId) {
-                await refreshWorktreeTasks(change.workbenchId, change.worktreeId)
-                if (selection.workbenchId !== change.workbenchId || selection.worktreeId !== change.worktreeId) {
-                  const values = await reloadWorkbenches()
-                  const workbench = values.find(item => item.workbenchId === change.workbenchId)
-                  const worktree = workbench?.worktrees.find(item => item.worktreeId === change.worktreeId)
-                  if (workbench && worktree) await selectWorktree(workbench, worktree)
-                }
-                setMainView({ kind: 'worktree', tab: 'tasks' })
-                return
-              }
-              const values = await reloadWorkbenches()
-              if (change.kind !== 'selection') void reloadLanding()
-              const created = values.find(item => item.workbenchId === change.workbenchId)
-              if (!created) return
-              if (change.worktreeId) {
-                const worktree = created.worktrees.find(item => item.worktreeId === change.worktreeId)
-                if (worktree) {
-                  if (change.deviceId) await selectDevice(created, worktree, change.deviceId)
-                  else await selectWorktree(created, worktree)
-                }
-              } else await selectWorkbench(created)
-            }}
-          />
         )}
       </div>}
 
