@@ -594,6 +594,21 @@ select option {
   border-top: 1px solid var(--border);
 }
 
+/* The floating Workbench Assistant is a reading surface, unlike the compact device chat. */
+.assistant-markdown.markdown-body {
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+.assistant-markdown.markdown-body h1 { font-size: 1.125rem; }
+.assistant-markdown.markdown-body h2 { font-size: 1rem; }
+.assistant-markdown.markdown-body h3,
+.assistant-markdown.markdown-body h4,
+.assistant-markdown.markdown-body h5,
+.assistant-markdown.markdown-body h6 { font-size: 0.875rem; }
+.assistant-markdown.markdown-body code,
+.assistant-markdown.markdown-body table { font-size: 0.8125rem; }
+
 /* ── FlexLayout workspace docking mapped onto the app palette ── */
 /* The stock dark.css is driven entirely by --flexlayout-* variables on
    .flexlayout__layout, so remapping them makes tabsets/tabs/splitters
