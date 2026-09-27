@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Send, Sparkles, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import * as api from '@/api/client'
@@ -27,6 +30,7 @@ type Props = {
   onSessionId?: (sessionId: string | null) => void
   onBusyChange?: (busy: boolean) => void
   onClose?: () => void
+  defaultExpanded?: boolean
   onSelectWorkbench?: (workbenchId: string) => Promise<void> | void
   onSelectWorktree?: (worktreeId: string) => Promise<void> | void
   onSelectDevice?: (deviceId: string) => Promise<void> | void
@@ -55,6 +59,7 @@ export default function AppAssistantPanel({
   onSessionId,
   onBusyChange,
   onClose,
+  defaultExpanded = true,
   onSelectWorkbench,
   onSelectWorktree,
   onSelectDevice,
@@ -62,8 +67,10 @@ export default function AppAssistantPanel({
 }: Props) {
   const [state, setState] = useState<AppAssistantPanelState>(() => initialAppAssistantState(runtime))
   const [draft, setDraft] = useState('')
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const [selectingWorktree, setSelectingWorktree] = useState<string | null>(null)
   const [busyLabel, setBusyLabel] = useState<string | null>(null)
+  const conversationScroll = useRef<HTMLDivElement>(null)
   const latestRuntime = useRef<api.AppAssistantRuntimeSnapshot | null>(runtime)
   const assistantSessionId = useRef(`assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`).current
 
@@ -92,6 +99,20 @@ export default function AppAssistantPanel({
   }, [assistantSessionId, workbenchId])
 
   useEffect(() => { onSessionId?.(state.sessionId) }, [onSessionId, state.sessionId])
+  useEffect(() => { if (confirmation) setExpanded(true) }, [confirmation])
+  useEffect(() => {
+    if (expanded && conversationScroll.current) {
+      conversationScroll.current.scrollTop = conversationScroll.current.scrollHeight
+    }
+  }, [expanded, state.messages.length, confirmation])
+  useEffect(() => {
+    if (!expanded) return
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setExpanded(false)
+    }
+    document.addEventListener('keydown', onEscape)
+    return () => document.removeEventListener('keydown', onEscape)
+  }, [expanded])
   useEffect(() => {
     onBusyChange?.(state.busy)
     return () => onBusyChange?.(false)
@@ -147,6 +168,7 @@ export default function AppAssistantPanel({
   const send = async (message: string) => {
     const trimmed = message.trim()
     if (!trimmed) return
+    setExpanded(true)
     setBusyLabel('Assistant is working…')
     setState(current => ({ ...current, busy: true, messages: [...current.messages, { role: 'user', content: trimmed }] }))
     try {
@@ -209,21 +231,74 @@ export default function AppAssistantPanel({
   const focusedDeviceId = state.runtime?.focus?.deviceId ?? runtime?.focus?.deviceId ?? null
 
   return (
-    <aside className="flex h-full w-[320px] shrink-0 flex-col border-l bg-card" data-app-assistant-panel>
+    <TooltipProvider>
+      <div
+        className="w-full max-w-4xl min-w-0"
+        data-app-assistant
+        onMouseDown={event => event.stopPropagation()}
+        onDoubleClick={event => event.stopPropagation()}
+      >
+        <form
+          className="flex h-8 min-w-0 items-center gap-1 rounded-md border bg-background pl-2 pr-1 focus-within:ring-2 focus-within:ring-ring/40"
+          onSubmit={event => { event.preventDefault(); void send(draft) }}
+        >
+          <Sparkles className="size-4 shrink-0 text-chart-4" aria-hidden="true" />
+          <Input
+            className="h-7 min-w-0 flex-1 select-text border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0"
+            aria-label="Workbench Assistant message"
+            value={draft}
+            onFocus={() => setExpanded(true)}
+            onChange={event => setDraft(event.target.value)}
+            placeholder="Ask Workbench Assistant…"
+            disabled={state.busy}
+          />
+          {confirmation && <span className="shrink-0 text-xs text-amber-700 dark:text-amber-300" role="status">Approval needed</span>}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                type="button"
+                aria-label={confirmation ? 'Review Workbench Assistant approval' : expanded ? 'Hide Workbench Assistant conversation' : 'Open Workbench Assistant'}
+                aria-expanded={expanded}
+                aria-controls="workbench-assistant-conversation"
+                onClick={() => setExpanded(previous => confirmation ? true : !previous)}
+              >
+                <Sparkles aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{confirmation ? 'Review approval' : expanded ? 'Collapse conversation' : 'Open conversation'}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size="icon-xs" aria-label="Send assistant message" type="submit" disabled={state.busy || !draft.trim()}>
+                {state.busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Send message</TooltipContent>
+          </Tooltip>
+        </form>
+        <aside
+          id="workbench-assistant-conversation"
+          className={`fixed bottom-10 left-1/2 z-50 h-[min(65vh,720px)] max-h-[calc(100vh-112px)] w-[min(920px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border bg-card text-foreground shadow-xl select-text ${expanded ? 'flex' : 'hidden'}`}
+          data-app-assistant-panel
+          aria-label="Workbench Assistant conversation"
+          aria-hidden={!expanded}
+        >
       <header className="flex items-center gap-2 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
         <Sparkles className="h-3.5 w-3.5 text-chart-4" />
         <div className="min-w-0 flex-1">
           <h2 className="text-xs font-semibold">Workbench Assistant</h2>
           <p className="truncate text-[9px] text-muted-foreground">{workbenchName}</p>
         </div>
-        {onClose && <button className="icon-button h-6 w-6" aria-label="Close Workbench Assistant" onClick={onClose}><X className="h-3 w-3" /></button>}
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-xs" type="button" aria-label="Collapse Workbench Assistant" onClick={() => { setExpanded(false); onClose?.() }}><X aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>Collapse conversation</TooltipContent></Tooltip>
       </header>
       <div className="border-b px-3 py-2 text-[9px] text-muted-foreground">
         Runtime revision {state.runtime?.workbenchRevision ?? runtime?.workbenchRevision ?? '—'} · selection stays with you
         {state.contextStale && <span data-assistant-context-stale> · {state.autoRefreshPending ? 'refreshing suggestion…' : 'context changed; refreshes before next request'}</span>}
         {state.busy && <div className="mt-1 flex items-center gap-1.5 text-chart-4" data-assistant-progress aria-live="polite"><Loader2 className="h-3 w-3 animate-spin" /> {busyLabel ?? 'Working…'}</div>}
       </div>
-      <div className="scrollbar-sleek min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+      <div ref={conversationScroll} className="scrollbar-sleek min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         {!workbenchId && workbenches.map(workbench => (
           <div key={workbench.workbenchId} className="rounded-md border px-2 py-1.5 text-[9px]" style={{ borderColor: 'var(--border)' }}>
             <div className="font-medium">{workbench.name}</div>
@@ -300,10 +375,8 @@ export default function AppAssistantPanel({
           </div>
         )}
       </div>
-      <form className="flex gap-2 border-t p-2" style={{ borderColor: 'var(--border)' }} onSubmit={event => { event.preventDefault(); void send(draft) }}>
-        <input className="field-input min-w-0 flex-1 text-[10px]" aria-label="Workbench Assistant message" value={draft} onChange={event => setDraft(event.target.value)} placeholder="Ask about a project, worktree, or device…" disabled={state.busy} />
-        <button className="primary-button h-8 w-8 justify-center px-0" aria-label="Send assistant message" type="submit" disabled={state.busy || !draft.trim()}>{state.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button>
-      </form>
-    </aside>
+        </aside>
+      </div>
+    </TooltipProvider>
   )
 }

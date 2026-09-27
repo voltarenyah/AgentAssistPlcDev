@@ -150,6 +150,20 @@ beforeEach(() => {
 })
 
 describe('MainStudio chat destructive-tool confirmation', () => {
+  it('keeps the compact Assistant available on Settings', async () => {
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+    const composer = host.querySelector('[data-app-assistant]')
+    expect(composer?.closest('header')).not.toBeNull()
+    expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('aria-hidden')).toBe('true')
+
+    clickAriaLabel(host, 'Settings')
+    expect(host.querySelector('[data-app-assistant]')).toBe(composer)
+    expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('aria-hidden')).toBe('true')
+    clickAriaLabel(host, 'Open Workbench Assistant')
+    expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('aria-hidden')).toBe('false')
+  })
+
   it('opens the Workbench Assistant from home before a project is selected', async () => {
     vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
       { kind: 'state', data: { runtimeSnapshot: null, sessionId: 'assistant-session' } },
@@ -176,7 +190,9 @@ describe('MainStudio chat destructive-tool confirmation', () => {
     await act(async () => {})
     clickText(host, 'DemoWB')
     await act(async () => {})
-    clickAriaLabel(host, 'Open Workbench Assistant')
+    if (host.querySelector('[data-app-assistant-panel]')?.getAttribute('aria-hidden') === 'true') {
+      clickAriaLabel(host, 'Open Workbench Assistant')
+    }
     await act(async () => {})
 
     const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
