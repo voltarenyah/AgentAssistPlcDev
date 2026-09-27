@@ -20,6 +20,14 @@ const snapshot = (overrides: Partial<AppAssistantRuntimeSnapshot> = {}): AppAssi
 })
 
 describe('app assistant runtime state', () => {
+  it('keeps a session and clears workbench context when no project is selected', () => {
+    const next = applyAssistantEvents(initialAppAssistantState(snapshot()), [
+      { kind: 'state', data: { runtimeSnapshot: null, sessionId: 'global-session' } },
+    ])
+    expect(next.runtime).toBeNull()
+    expect(next.sessionId).toBe('global-session')
+  })
+
   it('schedules a refresh when the focused worktree changes', () => {
     const state = initialAppAssistantState(snapshot())
     const next = applyAssistantRuntimeSnapshot(state, snapshot({

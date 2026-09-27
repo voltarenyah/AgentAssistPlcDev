@@ -140,9 +140,11 @@ export const applyAssistantEvents = (
   for (const event of events) {
     if (event.kind === 'answer' && typeof event.data.answer === 'string') {
       next = appendAssistantMessage(next, event.data.answer)
-    } else if (event.kind === 'state' && event.data.runtimeSnapshot) {
-      const snapshot = normalizeAssistantRuntimeSnapshot(event.data.runtimeSnapshot)
-      if (!snapshot) continue
+    } else if (event.kind === 'state' && 'runtimeSnapshot' in event.data) {
+      const snapshot = event.data.runtimeSnapshot === null
+        ? null
+        : normalizeAssistantRuntimeSnapshot(event.data.runtimeSnapshot)
+      if (event.data.runtimeSnapshot !== null && !snapshot) continue
       const decision = event.data.decision as { options?: unknown } | undefined
       const clarificationOptions = Array.isArray(decision?.options)
         ? decision.options.filter((option): option is AppAssistantClarificationOption => {
@@ -152,20 +154,21 @@ export const applyAssistantEvents = (
         })
         : []
       const currentRuntime = next.runtime
-      const runtime = !currentRuntime || snapshot.workbenchRevision >= currentRuntime.workbenchRevision
+      const runtime = snapshot === null || !currentRuntime || snapshot.workbenchId !== currentRuntime.workbenchId
+        || snapshot.workbenchRevision >= currentRuntime.workbenchRevision
         ? snapshot
         : currentRuntime
       next = {
         ...next,
         runtime,
         sessionId: typeof event.data.sessionId === 'string' ? event.data.sessionId : next.sessionId,
-        assistantRevision: snapshot.workbenchRevision,
+        assistantRevision: snapshot?.workbenchRevision ?? null,
         lastRunId: typeof (event.data.runMetadata as { runId?: unknown } | undefined)?.runId === 'string'
           ? (event.data.runMetadata as { runId: string }).runId
           : next.lastRunId,
         feedbackSubmitted: false,
         clarificationOptions,
-        contextStale: runtime.workbenchRevision > snapshot.workbenchRevision,
+        contextStale: runtime !== null && snapshot !== null && runtime.workbenchRevision > snapshot.workbenchRevision,
         autoRefreshPending: false,
       }
     } else if (event.kind === 'error') {

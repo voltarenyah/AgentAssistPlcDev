@@ -48,6 +48,36 @@ afterEach(() => {
 })
 
 describe('AppAssistantPanel', () => {
+  it('offers project selection and accepts a question before any selection', async () => {
+    const onSelectWorkbench = vi.fn()
+    vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
+      { kind: 'state', data: { runtimeSnapshot: null, sessionId: 'global-session' } },
+      { kind: 'answer', data: { answer: 'Which project would you like to use?' } },
+    ])
+    const { host } = render(
+      <AppAssistantPanel workbenchId={null} workbenchName="All projects" runtime={null}
+        workbenches={[{ workbenchId: 'wb1', name: 'Demo' }]}
+        onSelectWorkbench={onSelectWorkbench} />,
+    )
+    await act(async () => {})
+
+    expect(host.textContent).toContain('Which project would you like to use?')
+    expect(host.textContent).toContain('Demo')
+    const select = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent === 'Select project')!
+    await act(async () => select.click())
+    expect(onSelectWorkbench).toHaveBeenCalledWith('wb1')
+
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Help me choose.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')!.click())
+    expect(api.chatAppAssistant).toHaveBeenCalledWith('Help me choose.', expect.any(String))
+  })
+
   it('keeps the first command disabled until orientation has completed', async () => {
     let resolveBootstrap: ((events: api.AppAssistantEvent[]) => void) | undefined
     vi.mocked(api.bootstrapAppAssistant).mockReturnValueOnce(new Promise(resolve => {
@@ -190,6 +220,41 @@ describe('AppAssistantPanel', () => {
     expect(onConfirm).toHaveBeenCalledWith('allowOnce')
     await act(async () => buttons[1]!.click())
     expect(onConfirm).toHaveBeenLastCalledWith('deny')
+  })
+
+  it('allows a pending confirmation while the assistant turn is waiting for it', async () => {
+    let resolveTurn!: (events: api.AppAssistantEvent[]) => void
+    vi.mocked(api.chatAppAssistant).mockReturnValueOnce(new Promise(resolve => { resolveTurn = resolve }))
+    const onConfirm = vi.fn()
+    const { host, root } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} onConfirm={onConfirm} />,
+    )
+    await act(async () => {})
+
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Restore the previous version.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')!.click())
+
+    await act(async () => root.render(
+      <AppAssistantPanel
+        workbenchId="wb1"
+        workbenchName="Demo"
+        runtime={runtime}
+        confirmation={{ id: 'c4', toolName: 'vc_restore', arguments: '{}', requester: 's1' }}
+        onConfirm={onConfirm}
+      />,
+    ))
+    const approve = host.querySelector<HTMLButtonElement>('[data-app-assistant-confirmation="c4"] button')!
+    expect(approve.disabled).toBe(false)
+    await act(async () => approve.click())
+    expect(onConfirm).toHaveBeenCalledWith('allowOnce')
+
+    resolveTurn([{ kind: 'answer', data: { answer: 'Restored.' } }])
+    await act(async () => {})
   })
 
   it('shows progress while a user turn is running', async () => {

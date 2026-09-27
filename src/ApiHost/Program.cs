@@ -170,6 +170,7 @@ builder.Services.AddSingleton(_ => new CompatibilityConfigStore());
 // generous rather than tightened inside a removal change.
 builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(600) });
 builder.Services.AddSingleton<DeepSeekBalanceClient>();
+builder.Services.AddHttpClient("workbench-assistant");
 builder.Services.AddSingleton<ApiChatService>();
 builder.Services.AddSingleton<SandboxPolicy>();
 builder.Services.AddSingleton<DeviceToolArgumentBinder>();

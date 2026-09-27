@@ -38,6 +38,7 @@ public sealed class AgentLoop
     private readonly DeepSeekClient client;
     private readonly McpToolCatalog catalog;
     private readonly Func<string> contextProvider;
+    private readonly Func<string> systemPromptProvider;
     private readonly AgentSandbox? sandbox;
     private readonly List<ChatMessage> messages = new();
     private readonly List<UsageInfo?> roundUsages = new();
@@ -48,11 +49,12 @@ public sealed class AgentLoop
     /// <summary>Last runtime context appended to the history; null when none was appended this run.</summary>
     private string? lastContext;
 
-    public AgentLoop(DeepSeekClient client, McpToolCatalog catalog, Func<string> contextProvider, ChatRequestSettings? settings = null, AgentSandbox? sandbox = null)
+    public AgentLoop(DeepSeekClient client, McpToolCatalog catalog, Func<string> contextProvider, ChatRequestSettings? settings = null, AgentSandbox? sandbox = null, Func<string>? systemPromptProvider = null)
     {
         this.client = client;
         this.catalog = catalog;
         this.contextProvider = contextProvider;
+        this.systemPromptProvider = systemPromptProvider ?? SystemPrompt.Build;
         this.sandbox = sandbox;
         Settings = settings ?? new ChatRequestSettings();
     }
@@ -759,7 +761,7 @@ public sealed class AgentLoop
     {
         // Static rules only — identical bytes every turn, so rewriting is cache-neutral and
         // transparently migrates restored sessions whose system message predates this shape.
-        var system = ChatMessage.System(SystemPrompt.Build());
+        var system = ChatMessage.System(systemPromptProvider());
         if (messages.Count > 0 && messages[0].Role == "system")
         {
             messages[0] = system;

@@ -6,6 +6,7 @@ using Agent.Mcp;
 using Agent.Chat;
 using Agent.Workbench;
 using Agent.Workbench.EngineeringGraph;
+using ApiHost.AppAssistant;
 using Contracts.Sandbox;
 using Microsoft.AspNetCore.Http.Features;
 
@@ -232,7 +233,7 @@ public static class CompatibilityEndpoints
             var device = Device(state);
             return await executor.RequestAsync(request.Tool, request.Arguments ?? new(), device, "api", ct);
         });
-        app.MapPost("/api/chat/confirm/{id}", async (string id, JsonElement body, WorkbenchApiState state, PendingToolActions pending, ApiChatService chat,
+        app.MapPost("/api/chat/confirm/{id}", async (string id, JsonElement body, WorkbenchApiState state, PendingToolActions pending, ApiChatService chat, WorkbenchAssistantService assistant,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var decision = body.TryGetProperty("decision", out var value) ? value.GetString() : null;
@@ -244,6 +245,9 @@ public static class CompatibilityEndpoints
                 _ => ToolConfirmation.Deny,
             };
             var requester = pending.Requester(id) ?? throw new KeyNotFoundException("CONFIRMATION_NOT_FOUND");
+            if (requester == assistant.ActiveSessionId)
+                return Results.Ok(await pending.ResolveAsync(
+                    id, parsed, WorkbenchAssistantService.ConfirmationContextKey, requester));
             var device = ChatDevice(state, graphs, activeTasks);
             if (state.Selection?.DeviceId is not null
                 && requester != chat.ActiveSessionId(device)

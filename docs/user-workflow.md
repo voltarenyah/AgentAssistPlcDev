@@ -58,7 +58,7 @@ The imported origin is bootstrap-only thereafter; later operations use the manag
 
 1. The user selects a workbench and worktree, then creates a task with a title, type, bound device, goal, expected result, and relevant context. Source blocks can be staged on that task as the work becomes concrete.
 2. Starting a chat on the task uses its bound device and supplies its goal, expected result, and context to the assistant. The user does not need to select the device separately.
-3. The user can open **Workbench Assistant** with no selected worktree. It orients against the available worktrees and answers read-only questions.
+3. The user can open **Workbench Assistant** with no selected project, worktree, or device. It lists available projects, asks which one the user means when needed, and helps the user select a worktree and device. It answers project, task, and history questions before a device is selected; PLC-specific tools require a device.
 4. For a mutation such as creating a worktree, the assistant proposes the operation, requests a base choice when necessary, and shows **Approve** and **Reject**. It does not silently alter selection.
 
 **Design acceptance:** task chat starts from a bound device without a separate device selection and receives the task goal and context. A read-only answer requires no approval card. A mutation proposal displays target and base context, then actionable approval/rejection controls; an old orientation answer never hides the pending proposal.

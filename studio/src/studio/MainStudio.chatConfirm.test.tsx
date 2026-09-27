@@ -28,7 +28,7 @@ const snapshot: api.DeviceSnapshot = {
   device: null,
   knowledge: { state: 'current', updatedAt: null },
   blocks: [
-    { id: 'b1', name: 'Main', number: 1, blockType: 'OB', programmingLanguage: 'LAD', groupPath: 'Area', relativePath: 'Blocks/Main [OB1].xml', modified: false },
+    { id: 'b1', name: 'Main', number: 1, blockType: 'OB', programmingLanguage: 'LAD', groupPath: 'Area', relativePath: 'Blocks/Main [OB1].xml', modified: true },
   ],
   sourceObjectCount: 1,
   diagnostics: [],
@@ -56,6 +56,17 @@ const settings: api.ChatSettings = {
   topP: 1,
 }
 
+const assistantRuntime: api.AppAssistantRuntimeSnapshot = {
+  schemaVersion: 1,
+  workbenchId: 'wb1',
+  workbenchRevision: 1,
+  focus: { worktreeId: null, deviceId: null },
+  worktrees: [],
+  availableActions: [],
+  operation: { status: 'idle', operationId: null, kind: null, message: null },
+  observedAt: '2026-08-02T00:00:00Z',
+}
+
 vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
   return {
@@ -63,6 +74,12 @@ vi.mock('@/api/client', async importOriginal => {
     listWorkbenches: vi.fn(async () => [workbench]),
     selectWorkbench: vi.fn(async () => ({})),
     selectWorktree: vi.fn(async () => ({})),
+    getWorktreeDetail: vi.fn(async () => ({
+      worktreeId: 'wt1', workbenchId: 'wb1', name: 'master', branch: 'master',
+      createdAt: '2026-08-01T00:00:00Z', baseCommit: null, engineeringProjectId: null,
+      sourceProjectPath: null, deviceIds: ['dev1'], lastReconciliationCommit: null,
+      purpose: null, owner: null, status: 'active', finishedUtc: null,
+    })),
     listDevices: vi.fn(async () => [{ deviceId: 'dev1', plcName: 'PLC_Demo' }]),
     getDeviceInfo: vi.fn(async () => snapshot),
     listDeviceSessions: vi.fn(async () => []),
@@ -77,16 +94,26 @@ vi.mock('@/api/client', async importOriginal => {
     saveChatSettings: vi.fn(async () => {}),
     getLogs: vi.fn(async () => [] as string[]),
     confirmTool: vi.fn(async () => true),
+    getAppAssistantRuntimeState: vi.fn(async () => assistantRuntime),
+    subscribeAppAssistantRuntime: vi.fn(() => () => {}),
+    bootstrapAppAssistant: vi.fn(async () => [
+      { kind: 'state', data: { runtimeSnapshot: assistantRuntime, sessionId: 'assistant-session' } },
+      { kind: 'answer', data: { answer: 'Ready.' } },
+    ]),
+    chatAppAssistant: vi.fn(async () => []),
   }
 })
 
 // happy-dom has no layout engine; swap in the lightweight FlexLayout stand-in.
 vi.mock('flexlayout-react', async () => await import('@/test/flexLayoutMock'))
 
+const mountedRoots: ReturnType<typeof createRoot>[] = []
+
 const render = (element: React.ReactNode) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
+  mountedRoots.push(root)
   act(() => root.render(element))
   return { host, root }
 }
@@ -110,6 +137,7 @@ const clickAriaLabel = (host: HTMLElement, label: string) => {
 }
 
 afterEach(() => {
+  for (const root of mountedRoots.splice(0)) act(() => root.unmount())
   document.body.innerHTML = ''
 })
 
@@ -118,6 +146,52 @@ beforeEach(() => {
 })
 
 describe('MainStudio chat destructive-tool confirmation', () => {
+  it('opens the Workbench Assistant from home before a project is selected', async () => {
+    vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
+      { kind: 'state', data: { runtimeSnapshot: null, sessionId: 'assistant-session' } },
+      { kind: 'answer', data: { answer: 'Which project would you like to use?' } },
+    ])
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    clickAriaLabel(host, 'Open Workbench Assistant')
+    await act(async () => {})
+    expect(host.querySelector('[data-app-assistant-panel]')).not.toBeNull()
+    expect(host.textContent).toContain('Which project would you like to use?')
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')?.disabled).toBe(false)
+  })
+
+  it('shows a Workbench Assistant confirmation while its turn waits', async () => {
+    vi.mocked(api.chatAppAssistant).mockImplementation(() => new Promise(() => {}))
+    vi.mocked(api.getLogs).mockResolvedValue([
+      JSON.stringify({ kind: 'confirmation', id: 'other-session', requester: 'device-session', toolName: 'import_block', arguments: '{}' }),
+      JSON.stringify({ kind: 'confirmation', id: 'assistant-confirm', requester: 'assistant-session', toolName: 'vc_restore', arguments: '{}' }),
+    ])
+
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+    clickText(host, 'DemoWB')
+    await act(async () => {})
+    clickAriaLabel(host, 'Open Workbench Assistant')
+    await act(async () => {})
+
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'Restore the previous version.')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Send assistant message"]')!.click())
+    await act(async () => {})
+
+    const card = host.querySelector('[data-app-assistant-confirmation="assistant-confirm"]')
+    expect(card).not.toBeNull()
+    const approve = card!.querySelector<HTMLButtonElement>('button')!
+    expect(approve.disabled).toBe(false)
+    await act(async () => approve.click())
+    expect(api.confirmTool).toHaveBeenCalledWith('assistant-confirm', 'allowOnce')
+  })
+
   it('shows the pending confirmation card while a turn waits and posts the decision', async () => {
     // The turn stays in-flight (chatBusy) while the server parks on the sandbox
     // confirmation; the /api/logs entry must surface as an approve/deny card.
@@ -133,7 +207,10 @@ describe('MainStudio chat destructive-tool confirmation', () => {
     await act(async () => {})
     clickText(host, 'master')
     await act(async () => {})
-    clickText(host, 'PLC_Demo')
+    const deviceButton = Array.from(host.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('PLC_Demo —'))
+    expect(deviceButton).toBeDefined()
+    act(() => deviceButton!.click())
     await act(async () => {})
     await act(async () => {})
 

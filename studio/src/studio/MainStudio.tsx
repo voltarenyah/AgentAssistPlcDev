@@ -573,6 +573,7 @@ export default function MainStudio() {
   const [appAssistantOpen, setAppAssistantOpen] = useState(false)
   const [appAssistantRuntime, setAppAssistantRuntime] = useState<api.AppAssistantRuntimeSnapshot | null>(null)
   const [appAssistantSessionId, setAppAssistantSessionId] = useState<string | null>(null)
+  const [appAssistantBusy, setAppAssistantBusy] = useState(false)
   const [projectAccess, setProjectAccess] = useState<{
     project: api.ProjectInfo
     capabilities: api.ProjectCapabilities
@@ -1019,7 +1020,7 @@ export default function MainStudio() {
     setDeviceSelection(null)
     setTaskChatContext(null)
     setChatTabs(emptyChatTabs())
-    void api.selectWorkbench(workbench.workbenchId).catch(error => {
+    return api.selectWorkbench(workbench.workbenchId).catch(error => {
       if (selectionRequestId.current === requestId) showErrorToast(displayError(error))
     })
   }
@@ -1049,7 +1050,7 @@ export default function MainStudio() {
       if (selectionRequestId.current !== requestId) return
       setTasksByWorktree(previous => ({ ...previous, [worktreeKey(workbench.workbenchId, worktree.worktreeId)]: tasks }))
     }).catch(() => { /* The landing page reports a task-list load failure. */ })
-    void api.selectWorktree(workbench.workbenchId, worktree.worktreeId).catch(error => {
+    return api.selectWorktree(workbench.workbenchId, worktree.worktreeId).catch(error => {
       if (selectionRequestId.current === requestId) showErrorToast(displayError(error))
     }).finally(() => {
       if (selectionRequestId.current === requestId) setOperation(null)
@@ -1473,7 +1474,7 @@ export default function MainStudio() {
   // waiting for an approve/deny decision, announced as JSON entries in /api/logs.
   // Poll them only while a turn runs; show the first unresolved one as a card.
   useEffect(() => {
-    if (!chatBusy) return undefined
+    if (!chatBusy && !appAssistantBusy) return undefined
     let cancelled = false
     const poll = async () => {
       try {
@@ -1483,6 +1484,8 @@ export default function MainStudio() {
           try {
             const entry = JSON.parse(line) as { kind?: string; id?: string; toolName?: string; arguments?: string; requester?: string }
             if (entry.kind === 'confirmation' && typeof entry.id === 'string'
+              && ((chatBusy && entry.requester === chatTabs.activeId)
+                || (appAssistantBusy && entry.requester === appAssistantSessionId))
               && !resolvedConfirmations.current.has(entry.id)) {
               setPendingConfirmation(previous => previous?.id === entry.id
                 ? previous
@@ -1499,7 +1502,7 @@ export default function MainStudio() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [chatBusy])
+  }, [chatBusy, chatTabs.activeId, appAssistantBusy, appAssistantSessionId])
 
   const decideConfirmation = async (decision: 'allowOnce' | 'deny') => {
     const pending = pendingConfirmation
@@ -2107,7 +2110,7 @@ export default function MainStudio() {
           >
             <CircleHelp className="h-3.5 w-3.5" />
           </button>
-          {selection.workbenchId && (
+          {(
             <button
               className={`icon-button ${appAssistantOpen ? 'bg-accent text-foreground' : ''}`}
               aria-label="Open Workbench Assistant"
@@ -2542,21 +2545,32 @@ export default function MainStudio() {
             </div>
           </>
         )}
-        {appAssistantOpen && selection.workbenchId && (
+        {appAssistantOpen && (
           <AppAssistantPanel
-            key={selection.workbenchId}
             workbenchId={selection.workbenchId}
-            workbenchName={activeWorkbench?.name ?? 'Selected workbench'}
+            workbenchName={activeWorkbench?.name ?? 'All projects'}
+            workbenches={workbenches.map(item => ({ workbenchId: item.workbenchId, name: item.name }))}
+            devices={selection.workbenchId && selection.worktreeId
+              ? devicesByWorktree[worktreeKey(selection.workbenchId, selection.worktreeId)] ?? []
+              : []}
             runtime={appAssistantRuntime}
             confirmation={pendingConfirmation && appAssistantSessionId && pendingConfirmation.requester === appAssistantSessionId
               ? pendingConfirmation
               : null}
             onConfirm={decision => void decideConfirmation(decision)}
             onSessionId={setAppAssistantSessionId}
+            onBusyChange={setAppAssistantBusy}
             onClose={() => setAppAssistantOpen(false)}
+            onSelectWorkbench={workbenchId => {
+              const workbench = workbenches.find(item => item.workbenchId === workbenchId)
+              if (workbench) return selectWorkbench(workbench)
+            }}
             onSelectWorktree={worktreeId => {
               const worktree = activeWorkbench?.worktrees.find(item => item.worktreeId === worktreeId)
               if (activeWorkbench && worktree) return selectWorktree(activeWorkbench, worktree)
+            }}
+            onSelectDevice={deviceId => {
+              if (activeWorkbench && activeWorktree) return selectDevice(activeWorkbench, activeWorktree, deviceId)
             }}
             onWorkbenchCreated={handleAppAssistantWorkbenchCreated}
           />

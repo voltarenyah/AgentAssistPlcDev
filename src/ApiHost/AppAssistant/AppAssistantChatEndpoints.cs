@@ -31,28 +31,24 @@ public static class AppAssistantChatEndpoints
                 }));
         app.MapPost(
             "/api/app-assistant/bootstrap",
-            (HttpContext http, AppAssistantChatRequest request, WorkbenchApiState state,
+            (HttpContext http, AppAssistantChatRequest request,
                 WorkbenchAssistantService assistant, CancellationToken cancellationToken) =>
-                StreamAssistantAsync(http, request, state, assistant, "bootstrap", cancellationToken));
+                StreamAssistantAsync(http, request, assistant, "bootstrap", cancellationToken));
         app.MapPost(
             "/api/app-assistant/chat",
-            (HttpContext http, AppAssistantChatRequest request, WorkbenchApiState state,
+            (HttpContext http, AppAssistantChatRequest request,
                 WorkbenchAssistantService assistant, CancellationToken cancellationToken) =>
-                StreamAssistantAsync(http, request, state, assistant, "chat", cancellationToken));
+                StreamAssistantAsync(http, request, assistant, "chat", cancellationToken));
         return app;
     }
 
     private static async Task<IResult> StreamAssistantAsync(
         HttpContext http,
         AppAssistantChatRequest request,
-        WorkbenchApiState state,
         WorkbenchAssistantService assistant,
         string operation,
         CancellationToken cancellationToken)
     {
-        var workbenchId = state.Selection?.WorkbenchId;
-        if (string.IsNullOrWhiteSpace(workbenchId))
-            return Results.BadRequest(new { error = "WORKBENCH_SELECTION_REQUIRED" });
         if (operation == "chat" && string.IsNullOrWhiteSpace(request.Message))
             return Results.BadRequest(new { error = "ASSISTANT_MESSAGE_REQUIRED" });
 
@@ -64,9 +60,8 @@ public static class AppAssistantChatEndpoints
         try
         {
             var turn = operation == "bootstrap"
-                ? await assistant.BootstrapAsync(workbenchId, cancellationToken).ConfigureAwait(false)
+                ? await assistant.BootstrapAsync(cancellationToken).ConfigureAwait(false)
                 : await assistant.ChatAsync(
-                    workbenchId,
                     request.Message,
                     // Progress lines are queued by the loop but the panel reads the body only once
                     // the turn ends, so relaying them here would change nothing the user can see.
@@ -75,7 +70,8 @@ public static class AppAssistantChatEndpoints
             await WriteEventAsync(http, "state", new
             {
                 runtimeSnapshot = turn.Context,
-                contextRevision = turn.Context.Runtime.WorkbenchRevision,
+                workbenches = turn.Workbenches,
+                contextRevision = turn.Context?.Runtime.WorkbenchRevision,
                 sessionId = turn.SessionId,
             }).ConfigureAwait(false);
             await WriteEventAsync(http, "answer", new { answer = turn.Answer }).ConfigureAwait(false);

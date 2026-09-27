@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Send, Sparkles, X } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import * as api from '@/api/client'
 import {
   applyAssistantEvents,
@@ -9,8 +11,10 @@ import {
 } from './appAssistantState'
 
 type Props = {
-  workbenchId: string
+  workbenchId: string | null
   workbenchName: string
+  workbenches?: { workbenchId: string; name: string }[]
+  devices?: api.DeviceSummary[]
   runtime: api.AppAssistantRuntimeSnapshot | null
   /**
    * The panel's own pending destructive-tool confirmation. A destructive call suspends the
@@ -21,20 +25,28 @@ type Props = {
   onConfirm?: (decision: 'allowOnce' | 'deny') => void
   /** Reports the panel's server session id so its own confirmations can be told apart. */
   onSessionId?: (sessionId: string | null) => void
+  onBusyChange?: (busy: boolean) => void
   onClose?: () => void
+  onSelectWorkbench?: (workbenchId: string) => Promise<void> | void
   onSelectWorktree?: (worktreeId: string) => Promise<void> | void
+  onSelectDevice?: (deviceId: string) => Promise<void> | void
   onWorkbenchCreated?: (workbenchId: string) => Promise<void> | void
 }
 
 export default function AppAssistantPanel({
   workbenchId,
   workbenchName,
+  workbenches = [],
+  devices = [],
   runtime,
   confirmation,
   onConfirm,
   onSessionId,
+  onBusyChange,
   onClose,
+  onSelectWorkbench,
   onSelectWorktree,
+  onSelectDevice,
   onWorkbenchCreated,
 }: Props) {
   const [state, setState] = useState<AppAssistantPanelState>(() => initialAppAssistantState(runtime))
@@ -44,11 +56,12 @@ export default function AppAssistantPanel({
   const latestRuntime = useRef<api.AppAssistantRuntimeSnapshot | null>(runtime)
   const assistantSessionId = useRef(`assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`).current
 
+  useEffect(() => { latestRuntime.current = runtime }, [runtime])
+
   useEffect(() => {
     let cancelled = false
-    latestRuntime.current = runtime
     setBusyLabel('Loading workbench context…')
-    setState({ ...initialAppAssistantState(runtime), busy: true })
+    setState(current => ({ ...current, runtime: null, busy: true }))
     void api.bootstrapAppAssistant(assistantSessionId).then(events => {
       if (!cancelled) {
         setBusyLabel(null)
@@ -68,12 +81,16 @@ export default function AppAssistantPanel({
   }, [assistantSessionId, workbenchId])
 
   useEffect(() => { onSessionId?.(state.sessionId) }, [onSessionId, state.sessionId])
+  useEffect(() => {
+    onBusyChange?.(state.busy)
+    return () => onBusyChange?.(false)
+  }, [onBusyChange, state.busy])
 
-  useEffect(() => api.subscribeAppAssistantRuntime(workbenchId, snapshot => {
+  useEffect(() => workbenchId ? api.subscribeAppAssistantRuntime(workbenchId, snapshot => {
     const previous = latestRuntime.current
     latestRuntime.current = snapshot
     setState(current => applyAssistantRuntimeSnapshot(current, snapshot, previous))
-  }), [workbenchId])
+  }) : undefined, [workbenchId])
 
   // Unmount-only flag. A per-run `cancelled` flag cannot be used for the refresh below: that
   // effect sets busy and autoRefreshPending, which are its own dependencies, so React runs the
@@ -143,17 +160,22 @@ export default function AppAssistantPanel({
     }
   }
 
-  const selectWorktree = async (worktreeId: string) => {
-    if (!onSelectWorktree) return
+  const selectScope = async (select: () => Promise<void> | void, worktreeId: string | null = null) => {
     setSelectingWorktree(worktreeId)
+    setBusyLabel('Updating workbench context…')
+    setState(current => ({ ...current, busy: true }))
     try {
-      await onSelectWorktree(worktreeId)
+      await select()
+      const events = await api.bootstrapAppAssistant(assistantSessionId)
+      setState(current => ({ ...applyAssistantEvents(current, events), busy: false }))
     } catch (error) {
       setState(current => ({
         ...current,
+        busy: false,
         messages: [...current.messages, { role: 'error', content: error instanceof Error ? error.message : 'Worktree selection failed' }],
       }))
     } finally {
+      setBusyLabel(null)
       setSelectingWorktree(null)
     }
   }
@@ -164,6 +186,7 @@ export default function AppAssistantPanel({
 
   const worktrees = useMemo(() => state.runtime?.worktrees ?? runtime?.worktrees ?? [], [runtime?.worktrees, state.runtime?.worktrees])
   const focusedWorktreeId = state.runtime?.focus?.worktreeId ?? runtime?.focus?.worktreeId ?? null
+  const focusedDeviceId = state.runtime?.focus?.deviceId ?? runtime?.focus?.deviceId ?? null
 
   return (
     <aside className="flex h-full w-[320px] shrink-0 flex-col border-l bg-card" data-app-assistant-panel>
@@ -181,6 +204,16 @@ export default function AppAssistantPanel({
         {state.busy && <div className="mt-1 flex items-center gap-1.5 text-chart-4" data-assistant-progress aria-live="polite"><Loader2 className="h-3 w-3 animate-spin" /> {busyLabel ?? 'Working…'}</div>}
       </div>
       <div className="scrollbar-sleek min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+        {!workbenchId && workbenches.map(workbench => (
+          <div key={workbench.workbenchId} className="rounded-md border px-2 py-1.5 text-[9px]" style={{ borderColor: 'var(--border)' }}>
+            <div className="font-medium">{workbench.name}</div>
+            {onSelectWorkbench && (
+              <button className="secondary-button mt-1 h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => void selectScope(() => onSelectWorkbench(workbench.workbenchId))}>
+                Select project
+              </button>
+            )}
+          </div>
+        ))}
         {worktrees.map(worktree => (
           <div key={worktree.worktreeId} className="rounded-md border px-2 py-1.5 text-[9px]" style={{ borderColor: 'var(--border)' }}>
             <div className="font-medium">{worktree.name}</div>
@@ -189,17 +222,29 @@ export default function AppAssistantPanel({
               <button
                 className="secondary-button mt-1 h-6 px-2 text-[9px]"
                 data-assistant-select-worktree={worktree.worktreeId}
-                disabled={selectingWorktree !== null}
-                onClick={() => void selectWorktree(worktree.worktreeId)}
+                disabled={state.busy || selectingWorktree !== null}
+                onClick={() => void selectScope(() => onSelectWorktree(worktree.worktreeId), worktree.worktreeId)}
               >
                 {selectingWorktree === worktree.worktreeId ? 'Selecting…' : 'Select worktree'}
               </button>
             )}
           </div>
         ))}
+        {focusedWorktreeId && devices.map(device => (
+          <div key={device.deviceId} className="rounded-md border px-2 py-1.5 text-[9px]" style={{ borderColor: 'var(--border)' }}>
+            <div className="font-medium">{device.plcName}</div>
+            {onSelectDevice && focusedDeviceId !== device.deviceId && (
+              <button className="secondary-button mt-1 h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => void selectScope(() => onSelectDevice(device.deviceId))}>
+                Select device
+              </button>
+            )}
+          </div>
+        ))}
         {state.messages.map((message, index) => (
-          <div key={`${message.role}-${index}`} className={`rounded-md px-2.5 py-2 text-[10px] leading-relaxed ${message.role === 'error' ? 'bg-red-500/10 text-red-700 dark:text-red-300' : message.role === 'user' ? 'ml-4 bg-accent' : 'bg-muted/50'}`}>
-            {message.content}
+          <div key={`${message.role}-${index}`} className={`break-words rounded-md px-2.5 py-2 text-[10px] leading-relaxed ${message.role === 'error' ? 'bg-red-500/10 text-red-700 dark:text-red-300' : message.role === 'user' ? 'ml-4 bg-accent' : 'bg-muted/50'}`}>
+            {message.role === 'assistant'
+              ? <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
+              : message.content}
           </div>
         ))}
         {state.clarificationOptions.length > 0 && (
@@ -229,14 +274,14 @@ export default function AppAssistantPanel({
               <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted/40 p-1.5 font-mono text-[8px] text-muted-foreground">{confirmation.arguments}</pre>
             )}
             <div className="mt-2 flex gap-2">
-              <button className="primary-button h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => onConfirm?.('allowOnce')}>Approve</button>
-              <button className="secondary-button h-6 px-2 text-[9px]" disabled={state.busy} onClick={() => onConfirm?.('deny')}>Reject</button>
+              <button className="primary-button h-6 px-2 text-[9px]" onClick={() => onConfirm?.('allowOnce')}>Approve</button>
+              <button className="secondary-button h-6 px-2 text-[9px]" onClick={() => onConfirm?.('deny')}>Reject</button>
             </div>
           </div>
         )}
       </div>
       <form className="flex gap-2 border-t p-2" style={{ borderColor: 'var(--border)' }} onSubmit={event => { event.preventDefault(); void send(draft) }}>
-        <input className="field-input min-w-0 flex-1 text-[10px]" aria-label="Workbench Assistant message" value={draft} onChange={event => setDraft(event.target.value)} placeholder="Ask about this workbench…" disabled={state.busy} />
+        <input className="field-input min-w-0 flex-1 text-[10px]" aria-label="Workbench Assistant message" value={draft} onChange={event => setDraft(event.target.value)} placeholder="Ask about a project, worktree, or device…" disabled={state.busy} />
         <button className="primary-button h-8 w-8 justify-center px-0" aria-label="Send assistant message" type="submit" disabled={state.busy || !draft.trim()}>{state.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button>
       </form>
     </aside>

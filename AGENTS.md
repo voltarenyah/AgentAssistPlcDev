@@ -74,12 +74,12 @@ Use the browser automation capability when available. Keep browser checks ground
 Recommended smoke flow:
 
 1. Confirm the project list and workbench overview render.
-2. Open **Workbench Assistant** from the overview. The panel must render without an error boundary or `worktreeId` exception, and it describes the selected workbench without needing a device.
-3. Select a worktree and device in the workbench, then send a read-only request, such as asking for recent commit history or todo items. Confirm the response describes the requested state.
+2. Open **Workbench Assistant** from the all-projects home, with no project, worktree, or device selected. The panel must render, accept a question, and help the user choose a project.
+3. Select a workbench and worktree, then ask for recent commit history or todo items without selecting a device. Confirm the response describes the requested state. Select a device before PLC-specific requests.
 4. Send a mutation request, such as creating a new worktree. If a baseline is ambiguous, choose the proposed baseline option.
 5. Confirm the assistant shows an explicit approval card with **Approve** and **Reject** controls. Do not approve a mutation unless the test specifically requires exercising the mutation itself.
 
-A turn with no device selected is refused with `DEVICE_SELECTION_REQUIRED` inside the event stream rather than failing silently; that is deliberate, not a regression.
+The Workbench Assistant accepts turns without a selected device. Device-specific tools still require one and report `DEVICE_SELECTION_REQUIRED` for that tool call; the assistant should ask the user to select a device.
 
 The panel runs on the same C# `AgentLoop` as the device chat, and its destructive actions go through the shared MCP tools and the `AgentSandbox` approval card. The approval is **not** an `interrupt` frame: a destructive call suspends the turn, so the card is read from the shared server log (`kind: confirmation`) and answered through `POST /api/chat/confirm/{id}`, exactly as the device chat does. The `state` frame carries the panel's session id so the UI can claim only its own confirmations.
 
