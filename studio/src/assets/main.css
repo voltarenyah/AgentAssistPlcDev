@@ -617,18 +617,14 @@ select option {
   height: 38px;
   border-radius: var(--radius);
   transition: top 480ms cubic-bezier(0.22, 1, 0.36, 1),
-    width 480ms cubic-bezier(0.22, 1, 0.36, 1),
     height 480ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-radius 480ms cubic-bezier(0.22, 1, 0.36, 1),
     box-shadow 480ms ease;
 }
 
 .assistant-conversation[data-expanded='true'] {
   @apply shadow-xl;
   top: calc(100dvh - 40px - var(--assistant-open-height));
-  width: min(920px, calc(100vw - 32px));
   height: var(--assistant-open-height);
-  border-radius: calc(var(--radius) + 4px);
 }
 
 .assistant-conversation-content {
@@ -652,14 +648,6 @@ select option {
 .assistant-conversation-composer {
   height: 36px;
   padding: 0;
-  transition: height 480ms cubic-bezier(0.22, 1, 0.36, 1),
-    padding 480ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.assistant-conversation[data-expanded='true'] .assistant-conversation-composer {
-  height: 74px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
 }
 
 .assistant-conversation-input {
@@ -669,15 +657,6 @@ select option {
   border: 0;
   border-radius: var(--radius);
   box-shadow: none;
-  transition: border-radius 480ms ease, padding 480ms ease;
-}
-
-.assistant-conversation[data-expanded='true'] .assistant-conversation-input {
-  @apply shadow-sm;
-  max-width: 48rem;
-  border: 1px solid var(--input);
-  border-radius: calc(var(--radius) + 4px);
-  padding: 0 8px;
 }
 
 @media (max-width: 640px) {
