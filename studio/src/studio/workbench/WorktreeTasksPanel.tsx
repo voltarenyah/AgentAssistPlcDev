@@ -328,7 +328,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
         </div>
       ) : (
         viewMode === 'cards'
-          ? <div className="space-y-3">{visibleTasks.map(renderTask)}</div>
+          ? <div className="grid items-start gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,22rem),1fr))]">{visibleTasks.map(renderTask)}</div>
           : <div className="overflow-x-auto rounded-xl border bg-card">
             <table className="w-full min-w-[540px] table-fixed border-collapse text-xs">
               <colgroup><col className="w-[30%]" /><col className="w-[18%]" /><col className="w-[17%]" /><col className="w-[16%]" /><col className="w-[19%]" /></colgroup>

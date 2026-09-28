@@ -20,7 +20,7 @@ type Props = {
 
 export default function WorktreeTaskCard({ model, statusControl, actions }: Props) {
   return (
-    <Card data-testid="task-card" className="gap-0 py-0">
+    <Card data-testid="task-card" className="w-full max-w-md min-w-0 gap-0 py-0">
       <CardHeader className="gap-2 px-4 py-3">
         <div className="flex flex-wrap items-start gap-3">
           <CardTitle className="min-w-0 flex-1 break-words text-sm leading-5">{model.title}</CardTitle>
