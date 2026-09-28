@@ -55,9 +55,12 @@ describe('AppAssistantPanel', () => {
     await act(async () => {})
     const headerInput = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
     const composer = host.querySelector<HTMLFormElement>('[data-assistant-conversation-composer]')!
+    const composerFrame = composer.querySelector<HTMLElement>('.assistant-conversation-input')!
     const conversation = host.querySelector<HTMLElement>('[data-app-assistant-panel]')!
     expect(conversation.dataset.expanded).toBe('false')
     expect(host.querySelectorAll('[data-assistant-conversation-composer]')).toHaveLength(1)
+    expect(composer.classList.contains('px-4')).toBe(false)
+    expect(composerFrame.classList.contains('max-w-none')).toBe(true)
 
     act(() => headerInput.focus())
     expect(conversation.dataset.expanded).toBe('false')
@@ -73,6 +76,9 @@ describe('AppAssistantPanel', () => {
     expect(headerInput.placeholder).toContain('The worktree remains user-selected.')
     act(() => headerInput.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
     expect(conversation.dataset.expanded).toBe('true')
+    expect(composer.classList.contains('px-4')).toBe(true)
+    expect(composer.classList.contains('sm:px-8')).toBe(true)
+    expect(composerFrame.classList.contains('max-w-3xl')).toBe(true)
     expect(composer.querySelector('input')).toBe(headerInput)
     expect(host.querySelector('[data-assistant-message-role="assistant"]')).not.toBeNull()
   })

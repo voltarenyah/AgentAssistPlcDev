@@ -376,14 +376,14 @@ export default function AppAssistantPanel({
           </div>
           </div>
           <form
-            className="assistant-conversation-composer shrink-0 bg-card"
+            className={`assistant-conversation-composer shrink-0 bg-card ${expanded ? 'px-4 sm:px-8' : ''}`}
             data-assistant-conversation-composer
             onDoubleClick={event => {
               if (!(event.target instanceof HTMLElement && event.target.closest('button'))) setExpanded(true)
             }}
             onSubmit={event => { event.preventDefault(); void send(draft) }}
           >
-            <div className="assistant-conversation-input mx-auto flex max-w-3xl items-center gap-2 border border-input bg-background shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
+            <div className={`assistant-conversation-input mx-auto flex w-full ${expanded ? 'max-w-3xl' : 'max-w-none'} items-center gap-2 border border-input bg-background shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30`}>
               <Sparkles className="size-4 shrink-0 text-chart-4" aria-hidden="true" />
               <Input
                 className="h-8 min-w-0 flex-1 select-text border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-0"

@@ -653,12 +653,10 @@ select option {
 
 .assistant-conversation-composer {
   height: 36px;
-  padding: 0;
 }
 
 .assistant-conversation-input {
   height: 100%;
-  max-width: none;
   padding: 0 4px 0 12px;
   border: 0;
   border-radius: var(--radius);
