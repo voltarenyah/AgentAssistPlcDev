@@ -611,7 +611,7 @@ select option {
 
 .assistant-conversation {
   @apply shadow-sm;
-  --assistant-open-height: min(65vh, 720px, calc(100dvh - 112px));
+  --assistant-open-height: min(65vh, 720px, calc(100dvh - 88px));
   top: 4px;
   width: min(896px, calc(100vw - 180px));
   height: 38px;
@@ -623,8 +623,13 @@ select option {
 
 .assistant-conversation[data-expanded='true'] {
   @apply shadow-xl;
-  top: calc(100dvh - 40px - var(--assistant-open-height));
+  top: 48px;
   height: var(--assistant-open-height);
+  max-height: calc(100dvh - 88px);
+}
+
+.assistant-conversation[data-resizing='true'] {
+  transition: none;
 }
 
 .assistant-conversation-content {
@@ -657,6 +662,19 @@ select option {
   border: 0;
   border-radius: var(--radius);
   box-shadow: none;
+}
+
+.assistant-conversation-resize-handle {
+  height: 10px;
+  border-top: 1px solid var(--border);
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.assistant-conversation-resize-handle:hover,
+.assistant-conversation-resize-handle:focus-visible {
+  background: var(--accent);
+  outline: none;
 }
 
 @media (max-width: 640px) {

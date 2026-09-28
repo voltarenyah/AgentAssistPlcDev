@@ -48,6 +48,11 @@ const approvalDetails = (argumentsJson: string): string => {
   catch { return argumentsJson }
 }
 
+const clampConversationHeight = (height: number, top: number): number => {
+  const maximum = Math.max(140, window.innerHeight - top - 40)
+  return Math.min(maximum, Math.max(Math.min(220, maximum), height))
+}
+
 export default function AppAssistantPanel({
   workbenchId,
   workbenchName,
@@ -68,6 +73,9 @@ export default function AppAssistantPanel({
   const [state, setState] = useState<AppAssistantPanelState>(() => initialAppAssistantState(runtime))
   const [draft, setDraft] = useState('')
   const [expanded, setExpanded] = useState(defaultExpanded)
+  const [panelHeight, setPanelHeight] = useState<number | null>(null)
+  const [resizing, setResizing] = useState(false)
+  const resizeStart = useRef<{ pointerId: number; y: number; height: number } | null>(null)
   const [selectingWorktree, setSelectingWorktree] = useState<string | null>(null)
   const [busyLabel, setBusyLabel] = useState<string | null>(null)
   const conversationScroll = useRef<HTMLDivElement>(null)
@@ -246,6 +254,8 @@ export default function AppAssistantPanel({
           className="assistant-conversation fixed left-1/2 z-50 flex -translate-x-1/2 flex-col overflow-hidden border border-input bg-card text-foreground select-text"
           data-app-assistant-panel
           data-expanded={expanded}
+          data-resizing={resizing}
+          style={expanded && panelHeight !== null ? { height: panelHeight } : undefined}
           aria-label="Workbench Assistant conversation"
         >
           <div className="assistant-conversation-content flex min-h-0 flex-1 flex-col" aria-hidden={!expanded} inert={!expanded}>
@@ -411,6 +421,56 @@ export default function AppAssistantPanel({
               </Tooltip>
             </div>
           </form>
+          {expanded && (
+            <div
+              className="assistant-conversation-resize-handle flex shrink-0 items-center justify-center"
+              data-assistant-resize-handle
+              role="separator"
+              aria-label="Resize Workbench Assistant conversation"
+              aria-orientation="horizontal"
+              aria-valuemin={220}
+              aria-valuemax={Math.max(220, window.innerHeight - 88)}
+              aria-valuenow={Math.round(panelHeight ?? Math.min(window.innerHeight * 0.65, 720, window.innerHeight - 88))}
+              tabIndex={0}
+              onPointerDown={event => {
+                if (event.button !== 0) return
+                event.preventDefault()
+                resizeStart.current = {
+                  pointerId: event.pointerId,
+                  y: event.clientY,
+                  height: event.currentTarget.parentElement!.getBoundingClientRect().height,
+                }
+                setResizing(true)
+                event.currentTarget.setPointerCapture(event.pointerId)
+              }}
+              onPointerMove={event => {
+                const start = resizeStart.current
+                if (!start || start.pointerId !== event.pointerId) return
+                const top = event.currentTarget.parentElement!.getBoundingClientRect().top
+                setPanelHeight(clampConversationHeight(start.height + event.clientY - start.y, top))
+              }}
+              onPointerUp={event => {
+                if (resizeStart.current?.pointerId !== event.pointerId) return
+                resizeStart.current = null
+                setResizing(false)
+                event.currentTarget.releasePointerCapture(event.pointerId)
+              }}
+              onPointerCancel={() => {
+                resizeStart.current = null
+                setResizing(false)
+              }}
+              onKeyDown={event => {
+                const current = panelHeight ?? event.currentTarget.parentElement!.getBoundingClientRect().height
+                const top = event.currentTarget.parentElement!.getBoundingClientRect().top
+                const next = event.key === 'ArrowUp' ? current - 24 : event.key === 'ArrowDown' ? current + 24 : null
+                if (next === null) return
+                event.preventDefault()
+                setPanelHeight(clampConversationHeight(next, top))
+              }}
+            >
+              <span className="h-1 w-10 rounded-full bg-border" aria-hidden="true" />
+            </div>
+          )}
         </aside>
       </div>
     </TooltipProvider>
