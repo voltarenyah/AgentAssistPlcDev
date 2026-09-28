@@ -48,7 +48,7 @@ afterEach(() => {
 })
 
 describe('AppAssistantPanel', () => {
-  it('moves the same composer between the header and expanded conversation', async () => {
+  it('sends from the focused compact composer and opens on double-click', async () => {
     const { host } = render(
       <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} defaultExpanded={false} />,
     )
@@ -60,7 +60,7 @@ describe('AppAssistantPanel', () => {
     expect(host.querySelectorAll('[data-assistant-conversation-composer]')).toHaveLength(1)
 
     act(() => headerInput.focus())
-    expect(conversation.dataset.expanded).toBe('true')
+    expect(conversation.dataset.expanded).toBe('false')
     expect(composer.querySelector('input')).toBe(headerInput)
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
@@ -69,6 +69,11 @@ describe('AppAssistantPanel', () => {
     })
     await act(async () => composer.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
     expect(api.chatAppAssistant).toHaveBeenCalledWith('Summarize the current worktree.', expect.any(String))
+    expect(conversation.dataset.expanded).toBe('false')
+    expect(headerInput.placeholder).toContain('The worktree remains user-selected.')
+    act(() => headerInput.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+    expect(conversation.dataset.expanded).toBe('true')
+    expect(composer.querySelector('input')).toBe(headerInput)
     expect(host.querySelector('[data-assistant-message-role="assistant"]')).not.toBeNull()
   })
 
@@ -85,6 +90,8 @@ describe('AppAssistantPanel', () => {
     expect(conversation.dataset.expanded).toBe('false')
     const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
     act(() => input.focus())
+    expect(conversation.dataset.expanded).toBe('false')
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Open Workbench Assistant"]')!.click())
     expect(conversation.dataset.expanded).toBe('true')
 
     act(() => {

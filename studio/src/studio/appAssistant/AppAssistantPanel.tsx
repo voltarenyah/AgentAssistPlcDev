@@ -168,7 +168,6 @@ export default function AppAssistantPanel({
   const send = async (message: string) => {
     const trimmed = message.trim()
     if (!trimmed) return
-    setExpanded(true)
     setBusyLabel('Assistant is working…')
     setState(current => ({ ...current, busy: true, messages: [...current.messages, { role: 'user', content: trimmed }] }))
     try {
@@ -229,6 +228,10 @@ export default function AppAssistantPanel({
   const worktrees = useMemo(() => state.runtime?.worktrees ?? runtime?.worktrees ?? [], [runtime?.worktrees, state.runtime?.worktrees])
   const focusedWorktreeId = state.runtime?.focus?.worktreeId ?? runtime?.focus?.worktreeId ?? null
   const focusedDeviceId = state.runtime?.focus?.deviceId ?? runtime?.focus?.deviceId ?? null
+  const lastUserMessageIndex = state.messages.map(message => message.role).lastIndexOf('user')
+  const compactReply = lastUserMessageIndex < 0 ? null : state.messages
+    .slice(lastUserMessageIndex + 1).reverse()
+    .find(message => message.role === 'assistant' || message.role === 'error')?.content.replace(/\s+/g, ' ').trim() ?? null
 
   return (
     <TooltipProvider>
@@ -365,6 +368,9 @@ export default function AppAssistantPanel({
           <form
             className="assistant-conversation-composer shrink-0 bg-card"
             data-assistant-conversation-composer
+            onDoubleClick={event => {
+              if (!(event.target instanceof HTMLElement && event.target.closest('button'))) setExpanded(true)
+            }}
             onSubmit={event => { event.preventDefault(); void send(draft) }}
           >
             <div className="assistant-conversation-input mx-auto flex max-w-3xl items-center gap-2 border border-input bg-background shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
@@ -373,9 +379,9 @@ export default function AppAssistantPanel({
                 className="h-8 min-w-0 flex-1 select-text border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-0"
                 aria-label="Workbench Assistant message"
                 value={draft}
-                onFocus={() => setExpanded(true)}
                 onChange={event => setDraft(event.target.value)}
-                placeholder={expanded ? 'Ask about a project, worktree, or device…' : 'Ask Workbench Assistant…'}
+                placeholder={expanded ? 'Ask Workbench Assistant…' : state.busy ? 'Assistant is working…' : compactReply?.slice(0, 160) ?? 'Ask Workbench Assistant…'}
+                title={!expanded && compactReply ? compactReply : undefined}
                 disabled={state.busy}
               />
               {confirmation && <span className="shrink-0 text-xs text-amber-700 dark:text-amber-300" role="status">Approval needed</span>}
