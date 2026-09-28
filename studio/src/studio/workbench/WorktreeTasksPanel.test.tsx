@@ -256,9 +256,15 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => host.querySelector('button[aria-label="List view"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(host.querySelectorAll('[data-testid="task-card"]')).toHaveLength(0)
     expect(host.querySelectorAll('[data-testid="task-list-item"]')).toHaveLength(3)
+    expect(Array.from(host.querySelectorAll('thead th')).map(cell => cell.textContent)).toEqual(['Name', 'Status', 'Type', 'PLC', 'Actions'])
+    const firstRow = host.querySelector('[data-testid="task-list-item"]') as HTMLTableRowElement
+    expect(firstRow.querySelector('th[scope="row"]')?.textContent).toContain('Todo task')
+    expect(firstRow.querySelector('th[scope="row"]')?.textContent).toContain('Worktree')
+    expect(Array.from(firstRow.querySelectorAll('td')).slice(0, 3).map(cell => cell.textContent)).toEqual(['Todo', 'Feature', '—'])
     expect(host.textContent).not.toContain('Swap the sensor scaling')
     await act(async () => host.querySelector('button[aria-label="View brief for Finished task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(host.querySelector('strong')?.textContent).toBe('Swap')
+    expect(host.querySelector('td[colspan="5"]')).not.toBeNull()
     await act(async () => host.querySelector('button[aria-label="Start chat for Todo task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(onStartChat).toHaveBeenCalledWith(tasks[0])
 

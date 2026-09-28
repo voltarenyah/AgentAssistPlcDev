@@ -277,8 +277,8 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
     /> : undefined
     const hasActions = Boolean(onStartChat || onOpenTaskDetail && !legacy || legacy)
     const actions = hasActions ? <>
-      {onStartChat && <Button type="button" variant="secondary" size="xs" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>Start chat</Button>}
-      {onOpenTaskDetail && !legacy && <Button type="button" variant="outline" size="xs" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</Button>}
+      {onStartChat && <Button type="button" variant="secondary" size="xs" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>{viewMode === 'list' ? 'Chat' : 'Start chat'}</Button>}
+      {onOpenTaskDetail && !legacy && <Button type="button" variant="outline" size="xs" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>{viewMode === 'list' ? 'Trace' : 'Traceability'}</Button>}
       {legacy && <><Button type="button" variant="ghost" size="icon-xs" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}><Pencil /></Button>
         <Button type="button" variant="ghost" size="icon-xs" aria-label={`Delete task ${task.title}`} onClick={() => {
           if (window.confirm(`Delete task "${task.title}"?`)) mutate(() => api.deleteWorktreeTask(workbenchId, worktreeId, task.taskId))
@@ -329,7 +329,21 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
       ) : (
         viewMode === 'cards'
           ? <div className="space-y-3">{visibleTasks.map(renderTask)}</div>
-          : <ul className="divide-y overflow-hidden rounded-xl border bg-card">{visibleTasks.map(renderTask)}</ul>
+          : <div className="overflow-x-auto rounded-xl border bg-card">
+            <table className="w-full min-w-[540px] table-fixed border-collapse text-xs">
+              <colgroup><col className="w-[30%]" /><col className="w-[18%]" /><col className="w-[17%]" /><col className="w-[16%]" /><col className="w-[19%]" /></colgroup>
+              <thead className="bg-muted/40 text-left text-muted-foreground">
+                <tr className="border-b">
+                  <th scope="col" className="px-2 py-2 font-medium">Name</th>
+                  <th scope="col" className="px-2 py-2 font-medium">Status</th>
+                  <th scope="col" className="px-2 py-2 font-medium">Type</th>
+                  <th scope="col" className="px-2 py-2 font-medium">PLC</th>
+                  <th scope="col" className="px-2 py-2 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>{visibleTasks.map(renderTask)}</tbody>
+            </table>
+          </div>
       )}
 
       <Dialog open={draft !== null} onOpenChange={open => { if (!open) setDraft(null) }}>
