@@ -77,6 +77,28 @@ describe('AppAssistantPanel', () => {
     expect(host.querySelector('[data-assistant-message-role="assistant"]')).not.toBeNull()
   })
 
+  it('keeps a resized conversation height when collapsed and reopened', async () => {
+    const { host } = render(
+      <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} defaultExpanded={false} />,
+    )
+    await act(async () => {})
+    expect(host.querySelector('[data-assistant-resize-handle]')).toBeNull()
+
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Open Workbench Assistant"]')!.click())
+    const panel = host.querySelector<HTMLElement>('[data-app-assistant-panel]')!
+    const handle = host.querySelector<HTMLElement>('[data-assistant-resize-handle]')!
+    expect(handle.getAttribute('role')).toBe('separator')
+    act(() => handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })))
+    const resizedHeight = panel.style.height
+    expect(parseFloat(resizedHeight)).toBeGreaterThanOrEqual(220)
+
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Collapse Workbench Assistant"]')!.click())
+    expect(panel.style.height).toBe('')
+    expect(host.querySelector('[data-assistant-resize-handle]')).toBeNull()
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Open Workbench Assistant"]')!.click())
+    expect(panel.style.height).toBe(resizedHeight)
+  })
+
   it('keeps the conversation and session while the header chat is collapsed', async () => {
     vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
       { kind: 'state', data: { runtimeSnapshot: runtime, sessionId: 'persistent-session' } },
