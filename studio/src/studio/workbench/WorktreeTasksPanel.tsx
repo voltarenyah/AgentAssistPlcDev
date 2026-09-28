@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Check, ChevronDown, LayoutGrid, List, ListTodo, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 import * as api from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -34,6 +34,7 @@ type Props = {
   projectTasks?: api.EngineeringTask[]
   onOpenTaskDetail?: (task: api.EngineeringTask) => void
   onStartChat?: (task: TaskSurface) => void
+  onOpenTaskSession?: (task: api.EngineeringTask, sessionId: string) => void
   viewMode: TaskViewMode
   onViewModeChange: (mode: TaskViewMode) => void
   openCreate?: boolean
@@ -49,6 +50,7 @@ const taskStatusLabel = (status: string) =>
   status === 'inProgress' ? 'In Progress' : status === 'done' ? 'Done' : status === 'todo' ? 'Todo' : status
 
 const taskStatusOrder: api.WorktreeTaskStatus[] = ['todo', 'inProgress', 'done']
+const EMPTY_PROJECT_TASKS: api.EngineeringTask[] = []
 
 type TaskSurface = api.WorktreeTask | api.EngineeringTask
 const isLegacyTask = (task: TaskSurface): task is api.WorktreeTask => 'elementRefs' in task
@@ -56,7 +58,7 @@ const isLegacyTask = (task: TaskSurface): task is api.WorktreeTask => 'elementRe
 const taskTypeLabel = (type?: TaskSurface['type']) =>
   type === 'issue' ? 'Issue' : type === 'improvement' ? 'Improvement' : 'Feature'
 
-const taskCardModel = (task: TaskSurface, devices: api.DeviceSummary[]): TaskCardModel => ({
+const taskCardModel = (task: TaskSurface, devices: api.DeviceSummary[], sessions: api.ChatSessionInfo[] = []): TaskCardModel => ({
   title: task.title,
   status: taskStatusLabel(task.status),
   scope: task.scope === 'project' ? 'Project' : 'Worktree',
@@ -70,6 +72,7 @@ const taskCardModel = (task: TaskSurface, devices: api.DeviceSummary[]): TaskCar
     details: (isLegacyTask(task) ? task.details : task.description) || undefined,
     elementRefs: isLegacyTask(task) ? task.elementRefs : undefined,
   },
+  sessions,
 })
 
 const taskListItemModel = (task: TaskSurface, devices: api.DeviceSummary[]): TaskListItemModel => {
@@ -181,7 +184,7 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = [], onOpenTaskDetail, onStartChat, viewMode, onViewModeChange, openCreate = false, onCreateClosed }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = EMPTY_PROJECT_TASKS, onOpenTaskDetail, onStartChat, onOpenTaskSession, viewMode, onViewModeChange, openCreate = false, onCreateClosed }: Props) {
   const [createOpen, setCreateOpen] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newIntent, setNewIntent] = useState('')
@@ -189,11 +192,15 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
   const [newType, setNewType] = useState<api.EngineeringTask['type']>('feature')
   const [newDevice, setNewDevice] = useState('')
   const [devices, setDevices] = useState<api.DeviceSummary[]>([])
+  const [sessionsByDevice, setSessionsByDevice] = useState<Record<string, api.ChatSessionInfo[]>>({})
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<EditDraft | null>(null)
   const [newRef, setNewRef] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
   const visibleTasks = [...projectTasks, ...tasks.filter(task => task.scope !== 'worktree' || task.worktreeId === worktreeId)]
+  const sessionDeviceIds = useMemo(() => [...new Set(visibleTasks.flatMap(task =>
+    !isLegacyTask(task) && task.deviceId ? [task.deviceId] : [],
+  ))], [tasks, projectTasks, worktreeId])
   const availableDevices = devices.length > 0
     ? devices
     : deviceIds.map((deviceId, index) => ({ deviceId, plcName: `Device ${index + 1}` }))
@@ -205,6 +212,17 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
       .catch(() => { if (!cancelled) setDevices([]) })
     return () => { cancelled = true }
   }, [workbenchId, worktreeId])
+
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all(sessionDeviceIds.map(async deviceId => [
+      deviceId,
+      await api.listDeviceSessions(workbenchId, worktreeId, deviceId).catch(() => []),
+    ] as const)).then(entries => {
+      if (!cancelled) setSessionsByDevice(Object.fromEntries(entries))
+    })
+    return () => { cancelled = true }
+  }, [workbenchId, worktreeId, sessionDeviceIds])
 
   useEffect(() => {
     if (openCreate) setCreateOpen(true)
@@ -277,16 +295,20 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
     /> : undefined
     const hasActions = Boolean(onStartChat || onOpenTaskDetail && !legacy || legacy)
     const actions = hasActions ? <>
-      {onStartChat && <Button type="button" variant="secondary" size="xs" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>{viewMode === 'list' ? 'Chat' : 'Start chat'}</Button>}
-      {onOpenTaskDetail && !legacy && <Button type="button" variant="outline" size="xs" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>{viewMode === 'list' ? 'Trace' : 'Traceability'}</Button>}
+      {onStartChat && <Button type="button" variant="secondary" size="xs" aria-label={`New chat for ${task.title}`} onClick={() => onStartChat(task)}>New chat</Button>}
+      {onOpenTaskDetail && !legacy && <Button type="button" variant="outline" size="xs" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Detail</Button>}
       {legacy && <><Button type="button" variant="ghost" size="icon-xs" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}><Pencil /></Button>
         <Button type="button" variant="ghost" size="icon-xs" aria-label={`Delete task ${task.title}`} onClick={() => {
           if (window.confirm(`Delete task "${task.title}"?`)) mutate(() => api.deleteWorktreeTask(workbenchId, worktreeId, task.taskId))
         }}><Trash2 /></Button></>}
     </> : undefined
 
+    const taskSessions = !legacy && task.deviceId
+      ? (sessionsByDevice[task.deviceId] ?? []).filter(session => session.taskId === task.taskId)
+      : []
+
     return viewMode === 'cards'
-      ? <WorktreeTaskCard key={task.taskId} model={taskCardModel(task, availableDevices)} statusControl={statusControl} actions={actions} />
+      ? <WorktreeTaskCard key={task.taskId} model={taskCardModel(task, availableDevices, taskSessions)} statusControl={statusControl} actions={actions} onOpenSession={!legacy && onOpenTaskSession ? sessionId => onOpenTaskSession(task, sessionId) : undefined} />
       : <WorktreeTaskListItem key={task.taskId} model={taskListItemModel(task, availableDevices)} statusControl={statusControl} actions={actions} />
   }
 

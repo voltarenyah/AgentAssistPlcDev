@@ -42,7 +42,16 @@ vi.mock('@/api/client', async importOriginal => {
       sourceProjectPath: null, deviceIds: ['dev1'], lastReconciliationCommit: null,
       purpose: null, owner: null, status: 'ongoing', finishedUtc: null,
     } satisfies api.WorktreeDetail)),
-    listDeviceSessions: vi.fn(async () => []),
+    listDeviceSessions: vi.fn(async () => [{
+      sessionId: 's1', title: 'New chat', projectName: null, workbenchId: 'wb1', worktreeId: 'wt1', deviceId: 'dev1',
+      createdAt: '2026-08-02T00:00:00Z', updatedAt: '2026-08-02T00:00:00Z', messageCount: 1, turnCount: 1,
+      firstUserMessage: 'Find startup fault', taskId: 'task1', taskProvenance: 'default',
+    }]),
+    getEngineeringTaskDetail: vi.fn(async () => ({
+      task, sessions: [{ id: 's1', edgeId: 'edge-1', provenance: 'default', isPrimary: true }],
+      commits: [], sourceObjects: [], svnRevisions: [],
+    } satisfies api.EngineeringTaskDetail)),
+    loadDeviceChatSession: vi.fn(async () => session),
     getDeviceInfo: vi.fn(),
     newChatSession: vi.fn(async () => session),
     loadChatSession: vi.fn(async () => session),
@@ -72,7 +81,7 @@ it('starts task chat from its bound device without selecting or snapshotting the
   await clickText('DemoWB')
   await clickText('master')
   await clickText('Tasks')
-  const start = host.querySelector<HTMLButtonElement>('[aria-label="Start chat for Inspect startup sequence"]')
+  const start = host.querySelector<HTMLButtonElement>('[aria-label="New chat for Inspect startup sequence"]')
   expect(start).not.toBeNull()
   vi.mocked(api.getDeviceInfo).mockClear()
   vi.mocked(api.selectDevice).mockClear()
@@ -98,5 +107,40 @@ it('starts task chat from its bound device without selecting or snapshotting the
   expect(api.sendChatMessage).toHaveBeenCalled()
   expect(api.selectDevice).toHaveBeenCalledWith('wb1', 'wt1', 'dev1')
   expect(api.getDeviceInfo).not.toHaveBeenCalled()
+  await act(async () => root.unmount())
+})
+
+it('opens a task-bound session from its task card without expanding the context dock', async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => root.render(<MainStudio />))
+
+  const clickText = async (text: string) => {
+    const target = Array.from(host.querySelectorAll<HTMLElement>('div, span, button'))
+      .filter(element => element.textContent?.trim() === text).pop()
+    expect(target).toBeDefined()
+    await act(async () => target!.click())
+  }
+  await clickText('DemoWB')
+  await clickText('master')
+  await clickText('Tasks')
+  const hideDock = host.querySelector<HTMLButtonElement>('button[aria-label="Hide context dock"]')
+  expect(hideDock).not.toBeNull()
+  await act(async () => hideDock!.click())
+  const showSessions = host.querySelector<HTMLButtonElement>('button[aria-label="Show 1 sessions for Inspect startup sequence"]')
+  expect(showSessions).not.toBeNull()
+  await act(async () => showSessions!.click())
+  const open = host.querySelector<HTMLButtonElement>('button[aria-label="Open conversation New chat"]')
+  expect(open).toBeDefined()
+  vi.mocked(api.selectDevice).mockClear()
+  vi.mocked(api.getDeviceInfo).mockClear()
+  await act(async () => open!.click())
+
+  expect(api.loadDeviceChatSession).toHaveBeenCalledWith('wb1', 'wt1', 'dev1', 's1')
+  expect(api.selectDevice).not.toHaveBeenCalled()
+  expect(api.getDeviceInfo).not.toHaveBeenCalled()
+  expect(host.querySelector('[data-session-pane="s1"]')).not.toBeNull()
+  expect(host.querySelector('button[aria-label="Show context dock"]')).not.toBeNull()
   await act(async () => root.unmount())
 })

@@ -1,7 +1,8 @@
 import { Fragment, useState, type ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { TaskBriefContent, type TaskBriefModel } from './TaskBriefDisclosure'
+import type { TaskBriefModel } from './TaskBriefDisclosure'
+import { TaskBriefContent } from './TaskBriefDisclosure'
 
 export type TaskListItemModel = {
   title: string

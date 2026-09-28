@@ -19,6 +19,7 @@ type Props = {
   onSelectDevice: (deviceId: string) => void
   onOpenTaskDetail?: (task: api.EngineeringTask) => void
   onStartTaskChat?: (task: api.EngineeringTask | api.WorktreeTask) => void
+  onOpenTaskSession?: (task: api.EngineeringTask, sessionId: string) => void
   taskViewMode: TaskViewMode
   onTaskViewModeChange: (mode: TaskViewMode) => void
   openTaskCreate?: boolean
@@ -44,7 +45,7 @@ const worktreeTabs: Array<{ id: WorktreeLandingTab; label: string; icon: typeof 
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
 ]
 
-export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail, onStartTaskChat, taskViewMode, onTaskViewModeChange, openTaskCreate = false, onTaskCreateClosed }: Props) {
+export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail, onStartTaskChat, onOpenTaskSession, taskViewMode, onTaskViewModeChange, openTaskCreate = false, onTaskCreateClosed }: Props) {
   const [detail, setDetail] = useState<api.WorktreeDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(true)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -420,6 +421,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
               deviceIds={detail?.deviceIds ?? []}
               onOpenTaskDetail={onOpenTaskDetail}
               onStartChat={onStartTaskChat}
+              onOpenTaskSession={onOpenTaskSession}
               viewMode={taskViewMode}
               onViewModeChange={onTaskViewModeChange}
               openCreate={openTaskCreate}

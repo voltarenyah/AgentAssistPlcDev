@@ -269,6 +269,7 @@
 
   .dock-resize-handle {
     @apply relative z-10 w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-chart-2/35;
+    background-color: color-mix(in srgb, var(--muted-foreground) 18%, transparent);
     transition-property: width, opacity, background-color;
     transition-duration: 280ms, 180ms, 160ms;
     transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1), ease-out, ease-out;

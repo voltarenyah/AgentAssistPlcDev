@@ -38,6 +38,7 @@ vi.mock('@/api/client', async importOriginal => {
     createGraphWorktreeTask: vi.fn(async (_wb: string, _wt: string, body: { title: string }) =>
       task({ taskId: 't-new', title: body.title })),
     listDevices: vi.fn(async () => [{ deviceId: 'device-1', plcName: 'Main PLC' }]),
+    listDeviceSessions: vi.fn(async () => []),
     updateWorktreeTask: vi.fn(async (_wb: string, _wt: string, taskId: string, patch: Partial<api.WorktreeTask>) =>
       task({ taskId, title: patch.title ?? 'updated', status: patch.status ?? 'todo' })),
     deleteWorktreeTask: vi.fn(async () => undefined),
@@ -100,9 +101,7 @@ describe('WorktreeTasksPanel', () => {
     expect(host.textContent).toContain('Finished task')
     expect(host.querySelector('strong')).toBeNull()
     expect(host.textContent).not.toContain('Device01/FB_Scale')
-    await act(async () => host.querySelector('button[aria-label="View brief for Finished task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-    expect(host.querySelector('strong')?.textContent).toBe('Swap')
-    expect(host.textContent).toContain('Device01/FB_Scale')
+    expect(host.textContent).toContain('Show 0 sessions')
 
     await act(async () => root.unmount())
   })
@@ -220,11 +219,53 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('passes the selected task to its Start chat callback', async () => {
+  it('passes the selected task to its New chat callback', async () => {
     const onStartChat = vi.fn()
     const { host, root } = await renderPanel({ onStartChat })
-    await act(async () => host.querySelector('button[aria-label="Start chat for Todo task"]')!.click())
+    await act(async () => host.querySelector('button[aria-label="New chat for Todo task"]')!.click())
     expect(onStartChat).toHaveBeenCalledWith(tasks[0])
+    await act(async () => root.unmount())
+  })
+
+  it('opens task details from the Detail action', async () => {
+    const graphTask: api.EngineeringTask = {
+      taskId: 'graph-1', workbenchId: 'wb1', scope: 'project', worktreeId: null,
+      title: 'Graph-backed task', type: 'improvement', status: 'inProgress',
+      priority: 1, intent: 'Improve traceability', expectedResult: 'Visible links',
+      description: '', createdUtc: '2026-08-01T00:00:00Z', updatedUtc: '2026-08-01T00:00:00Z',
+    }
+    const onOpenTaskDetail = vi.fn()
+    const { host, root } = await renderPanel({ tasks: [graphTask], onOpenTaskDetail })
+    await act(async () => host.querySelector('button[aria-label="Open task detail Graph-backed task"]')!.click())
+    expect(onOpenTaskDetail).toHaveBeenCalledWith(graphTask)
+    await act(async () => root.unmount())
+  })
+
+  it('shows only sessions bound to the task with a relative last response time', async () => {
+    const graphTask: api.EngineeringTask = {
+      taskId: 'graph-1', workbenchId: 'wb1', scope: 'worktree', worktreeId: 'wt1', deviceId: 'device-1',
+      title: 'Graph-backed task', type: 'improvement', status: 'inProgress',
+      priority: 1, intent: 'Goal', expectedResult: 'Result', description: '',
+      createdUtc: '2026-08-01T00:00:00Z', updatedUtc: '2026-08-01T00:00:00Z',
+    }
+    vi.mocked(api.listDeviceSessions).mockResolvedValueOnce([
+      { sessionId: 's1', title: 'Motor alarm discussion', projectName: null, workbenchId: 'wb1', worktreeId: 'wt1', deviceId: 'device-1', createdAt: '2026-08-01T00:00:00Z', updatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(), messageCount: 2, turnCount: 1, firstUserMessage: 'Help with the motor', taskId: 'graph-1' },
+      { sessionId: 's2', title: 'Other task conversation', projectName: null, workbenchId: 'wb1', worktreeId: 'wt1', deviceId: 'device-1', createdAt: '2026-08-01T00:00:00Z', updatedAt: new Date().toISOString(), messageCount: 2, turnCount: 1, firstUserMessage: 'Other', taskId: 'other-task' },
+    ])
+    const onOpenTaskSession = vi.fn()
+    const { host, root } = await renderPanel({ tasks: [graphTask], onOpenTaskSession })
+    await act(async () => {})
+    const disclosure = host.querySelector('button[aria-label="Show 1 sessions for Graph-backed task"]')!
+    expect(disclosure.textContent).toContain('Show 1 sessions')
+    await act(async () => disclosure.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(host.textContent).toContain('Motor alarm discussion')
+    expect(host.textContent).toContain('1 hour ago')
+    expect(host.textContent).not.toContain('Last response')
+    expect(host.textContent).not.toContain('Other task conversation')
+    const openButton = host.querySelector('button[aria-label="Open conversation Motor alarm discussion"]')!
+    expect(openButton.textContent).toBe('Open')
+    await act(async () => openButton.click())
+    expect(onOpenTaskSession).toHaveBeenCalledWith(graphTask, 's1')
     await act(async () => root.unmount())
   })
 
@@ -240,10 +281,7 @@ describe('WorktreeTasksPanel', () => {
     expect(host.textContent).toContain('Improvement')
     expect(host.textContent).not.toContain('Improve traceability')
     expect(host.textContent).not.toContain('Visible links')
-    await act(async () => host.querySelector('button[aria-label="View brief for Graph-backed task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-    expect(host.textContent).toContain('Improve traceability')
-    expect(host.textContent).toContain('Visible links')
-    expect(host.querySelector('strong')?.textContent).toBe('Graph')
+    expect(host.textContent).toContain('Show 0 sessions')
     await act(async () => root.unmount())
   })
 
@@ -265,7 +303,7 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => host.querySelector('button[aria-label="View brief for Finished task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(host.querySelector('strong')?.textContent).toBe('Swap')
     expect(host.querySelector('td[colspan="5"]')).not.toBeNull()
-    await act(async () => host.querySelector('button[aria-label="Start chat for Todo task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await act(async () => host.querySelector('button[aria-label="New chat for Todo task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(onStartChat).toHaveBeenCalledWith(tasks[0])
 
     await act(async () => host.querySelector('button[aria-label="Card view"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))

@@ -66,7 +66,7 @@ import HardwarePropertiesDock from '@/studio/HardwarePropertiesDock'
 import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
 import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import AllProjectsLandingPage from '@/studio/workbench/AllProjectsLandingPage'
-import TaskDetail, { type TraceabilityItem } from '@/studio/workbench/TaskDetail'
+import TaskDetail, { type TaskEditPatch, type TraceabilityItem } from '@/studio/workbench/TaskDetail'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
@@ -497,6 +497,7 @@ export default function MainStudio() {
   const [taskDetail, setTaskDetail] = useState<api.EngineeringTaskDetail | null>(null)
   const [taskDetailTask, setTaskDetailTask] = useState<api.EngineeringTask | null>(null)
   const [taskDetailLoading, setTaskDetailLoading] = useState(false)
+  const [taskDetailSaving, setTaskDetailSaving] = useState(false)
   const [taskDetailError, setTaskDetailError] = useState<string | null>(null)
   const [traceabilityTarget, setTraceabilityTarget] = useState<{ kind: string; id: string } | null>(null)
   const [hardwareBomView, setHardwareBomView] = useState<api.HardwareBomView | null>(null)
@@ -663,6 +664,9 @@ export default function MainStudio() {
   const deviceSessions = deviceSelection?.sessions ?? []
   const deviceInfo = deviceView?.snapshot ?? null
   const deviceName = deviceInfo?.plcName ?? deviceSelection?.cachedMetadata?.plcName ?? selection.deviceId
+  const taskDetailDeviceName = taskDetail?.task.deviceId && taskDetail.task.worktreeId
+    ? devicesByWorktree[worktreeKey(taskDetail.task.workbenchId, taskDetail.task.worktreeId)]?.find(device => device.deviceId === taskDetail.task.deviceId)?.plcName
+    : undefined
   const deviceMeta = deviceInfo?.device ?? null
   const hardwareSelectedNode = useMemo(
     () => hardwareView && (hardwareInspectedNodeId ?? hardwareSelectedNodeId)
@@ -2015,8 +2019,26 @@ export default function MainStudio() {
     const requestId = ++taskDetailRequestId.current
     setTaskDetailTask(task); setTaskDetail(null); setTaskDetailError(null); setTaskDetailLoading(true)
     try {
-      const detail = await api.getEngineeringTaskDetail(selection.workbenchId, task.taskId, selection.worktreeId)
-      if (taskDetailRequestId.current === requestId) setTaskDetail(detail)
+      const worktreeId = task.worktreeId ?? selection.worktreeId
+      const knownDevices = worktreeId ? devicesByWorktree[worktreeKey(selection.workbenchId, worktreeId)] : undefined
+      const [detail, sessions, devices] = await Promise.all([
+        api.getEngineeringTaskDetail(selection.workbenchId, task.taskId, worktreeId),
+        task.deviceId && worktreeId
+          ? api.listDeviceSessions(selection.workbenchId, worktreeId, task.deviceId).catch(() => [])
+          : Promise.resolve([]),
+        task.deviceId && worktreeId && !knownDevices
+          ? api.listDevices(selection.workbenchId, worktreeId).catch(() => [])
+          : Promise.resolve(knownDevices ?? []),
+      ])
+      if (task.deviceId && worktreeId && !knownDevices && devices.length > 0) {
+        setDevicesByWorktree(previous => ({ ...previous, [worktreeKey(selection.workbenchId!, worktreeId)]: devices }))
+      }
+      const sessionById = new Map(sessions.map(session => [session.sessionId, session]))
+      const enrichedDetail = { ...detail, sessions: detail.sessions.map(relationship => {
+        const session = sessionById.get(relationship.id)
+        return session ? { ...relationship, title: session.title, firstUserMessage: session.firstUserMessage, updatedAt: session.updatedAt, messageCount: session.messageCount, turnCount: session.turnCount } : relationship
+      }) }
+      if (taskDetailRequestId.current === requestId) setTaskDetail(enrichedDetail)
     } catch (error) {
       if (taskDetailRequestId.current === requestId) setTaskDetailError(displayError(error))
     } finally {
@@ -2024,10 +2046,64 @@ export default function MainStudio() {
     }
   }
   const reloadTaskDetail = async () => { if (taskDetailTask) await openTaskDetail(taskDetailTask) }
+  const saveTaskDetail = async (patch: TaskEditPatch) => {
+    if (!taskDetail || !selection.workbenchId) throw new Error('The task is no longer available.')
+    setTaskDetailSaving(true)
+    try {
+      const updated = taskDetail.task.scope === 'project'
+        ? await api.updateProjectTask(selection.workbenchId, taskDetail.task.taskId, patch)
+        : taskDetail.task.worktreeId
+          ? await api.updateGraphWorktreeTask(selection.workbenchId, taskDetail.task.worktreeId, taskDetail.task.taskId, { ...patch, description: patch.description ?? '' })
+          : (() => { throw new Error('The task worktree is unavailable.') })()
+      setTaskDetail(previous => previous ? { ...previous, task: updated } : previous)
+      if (updated.worktreeId) await refreshWorktreeTasks(updated.workbenchId, updated.worktreeId)
+    } finally {
+      setTaskDetailSaving(false)
+    }
+  }
   const removeTaskDetailRelation = async (_kind: string, item: TraceabilityItem) => {
     if (!taskDetail || !selection.workbenchId) return
     try { await api.removeTaskRelationship(selection.workbenchId, taskDetail.task.taskId, item.edgeId); await reloadTaskDetail() }
     catch (error) { showErrorToast(displayError(error)) }
+  }
+  const openTaskDetailSession = async (task: api.EngineeringTask, sessionId: string) => {
+    if (!task.deviceId || !task.worktreeId || !task.workbenchId) {
+      showErrorToast('This conversation is not available in the task device context.')
+      return
+    }
+    const context = { workbenchId: task.workbenchId, worktreeId: task.worktreeId, deviceId: task.deviceId }
+    const requestId = selectionRequestId.current
+    setChatBusy(true)
+    try {
+      const session = await api.loadDeviceChatSession(context.workbenchId, context.worktreeId, context.deviceId, sessionId)
+      if (selectionRequestId.current !== requestId) return
+      if (session.header.workbenchId !== context.workbenchId
+        || session.header.worktreeId !== context.worktreeId
+        || session.header.deviceId !== context.deviceId) {
+        throw new Error('The conversation does not match this task’s workbench, worktree, and device.')
+      }
+      await api.selectWorktree(context.workbenchId, context.worktreeId)
+      if (selectionRequestId.current !== requestId) return
+      setSelection({ workbenchId: context.workbenchId, worktreeId: context.worktreeId, deviceId: null })
+      setDeviceSelection(null)
+      setTaskChatContext(context)
+      setChatTabs(() => openTab(emptyChatTabs(), session))
+      setMainView({ kind: 'task-chat' })
+      setTaskDetail(null)
+      setTaskDetailTask(null)
+      setTaskDetailError(null)
+      workspaceService.focusView('chat')
+      await refreshChatSessions(context).catch(() => undefined)
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+  const navigateTaskDetail = (kind: string, id: string) => {
+    setTraceabilityTarget({ kind, id })
+    if (kind === 'session' && taskDetailTask) void openTaskDetailSession(taskDetailTask, id)
+    else if (kind === 'sourceObject') workspaceService.focusView('source')
   }
 
   const handleHeaderMouseDown = (event: ReactMouseEvent<HTMLElement>) => {
@@ -2326,7 +2402,7 @@ export default function MainStudio() {
               </div>
             </div>
           ) : taskDetail || taskDetailLoading || taskDetailError ? (
-            <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div>
+            <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} /></div>
           ) : !selection.deviceId && selection.worktreeId ? (
             mainView.kind === 'task-chat' ? (
               <div className="flex min-h-0 flex-1 flex-col">
@@ -2376,7 +2452,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              taskDetail || taskDetailLoading || taskDetailError ? <div className="min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} loading={taskDetailLoading} error={taskDetailError} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={(kind, id) => { setTraceabilityTarget({ kind, id }); if (kind === 'session') { workspaceService.focusView('chat'); void activateChatSession(id) } else if (kind === 'sourceObject') workspaceService.focusView('source') }} /></div> : <WorktreeLandingPage
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} /></div> : <WorktreeLandingPage
                 workbenchId={selection.workbenchId!}
                 worktreeId={selection.worktreeId}
                 tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}
@@ -2386,6 +2462,7 @@ export default function MainStudio() {
                 }}
                 onOpenTaskDetail={task => void openTaskDetail(task)}
                 onStartTaskChat={task => void createChatSessionForTask(task)}
+                onOpenTaskSession={(task, sessionId) => void openTaskDetailSession(task, sessionId)}
                 taskViewMode={worktreeTaskViewMode}
                 onTaskViewModeChange={setWorktreeTaskViewMode}
                 openTaskCreate={taskCreateWorktreeId === selection.worktreeId}

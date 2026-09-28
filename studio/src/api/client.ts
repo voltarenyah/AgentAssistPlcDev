@@ -388,7 +388,7 @@ export type EngineeringTask = {
   worktreeId: string | null
   title: string
   type: 'issue' | 'improvement' | 'feature'
-  status: string
+  status: WorktreeTaskStatus
   priority: number
   intent: string
   expectedResult: string
@@ -400,7 +400,7 @@ export type EngineeringTask = {
 
 export type EngineeringTaskDetail = {
   task: EngineeringTask
-  sessions: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  sessions: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean; title?: string | null; firstUserMessage?: string | null; updatedAt?: string; messageCount?: number; turnCount?: number }>
   commits: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
   sourceObjects: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
   svnRevisions: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
@@ -1390,11 +1390,13 @@ export const createProjectTask = (workbenchId: string, task: { title: string; ty
   workbenchRequest<EngineeringTask>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks`, jsonRequest('POST', task))
 export const getProjectTaskDetail = (workbenchId: string, taskId: string) =>
   workbenchRequest<EngineeringTaskDetail>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}`)
+export const updateProjectTask = (workbenchId: string, taskId: string, patch: { title?: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
+  workbenchRequest<EngineeringTask>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}`, jsonRequest('PATCH', patch))
 export const listGraphWorktreeTasks = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<EngineeringTaskList>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`)
 export const createGraphWorktreeTask = (workbenchId: string, worktreeId: string, task: { title: string; deviceId: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
   workbenchRequest<EngineeringTask>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`, jsonRequest('POST', task))
-export const updateGraphWorktreeTask = (workbenchId: string, worktreeId: string, taskId: string, patch: { title?: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus }) =>
+export const updateGraphWorktreeTask = (workbenchId: string, worktreeId: string, taskId: string, patch: { title?: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
   workbenchRequest<EngineeringTask>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks/${encodeURIComponent(taskId)}`, jsonRequest('PATCH', patch))
 export type TaskSourceStage = { taskId: string; sourceObjectId: string; deviceId: string; baselineEvidenceJson: string | null; stagedUtc: string }
 export const listTaskSourceStages = (workbenchId: string, worktreeId: string, taskId: string) =>
@@ -1976,6 +1978,9 @@ export async function loadChatSession(sessionId: string, _projectName?: string):
   }
   return res.json()
 }
+
+export const loadDeviceChatSession = (workbenchId: string, worktreeId: string, deviceId: string, sessionId: string) =>
+  workbenchRequest<ChatSessionData>(`${devicePath(workbenchId, worktreeId, deviceId)}/sessions/${encodeURIComponent(sessionId)}`)
 
 export async function renameChatSession(sessionId: string, title: string): Promise<ChatSessionData> {
   const res = await fetch(`${BASE}/chat/session/rename`, {
