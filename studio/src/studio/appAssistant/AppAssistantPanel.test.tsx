@@ -48,24 +48,26 @@ afterEach(() => {
 })
 
 describe('AppAssistantPanel', () => {
-  it('opens a readable conversation with its own composer from the header chat box', async () => {
+  it('moves the same composer between the header and expanded conversation', async () => {
     const { host } = render(
       <AppAssistantPanel workbenchId="wb1" workbenchName="Demo" runtime={runtime} defaultExpanded={false} />,
     )
     await act(async () => {})
     const headerInput = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
-    expect(host.querySelector('[data-assistant-conversation-composer]')).toBeNull()
+    const composer = host.querySelector<HTMLFormElement>('[data-assistant-conversation-composer]')!
+    const conversation = host.querySelector<HTMLElement>('[data-app-assistant-panel]')!
+    expect(conversation.dataset.expanded).toBe('false')
+    expect(host.querySelectorAll('[data-assistant-conversation-composer]')).toHaveLength(1)
 
     act(() => headerInput.focus())
-    const composer = host.querySelector<HTMLFormElement>('[data-assistant-conversation-composer]')
-    expect(composer).not.toBeNull()
-    const conversationInput = composer!.querySelector<HTMLInputElement>('input[aria-label="Conversation message"]')!
+    expect(conversation.dataset.expanded).toBe('true')
+    expect(composer.querySelector('input')).toBe(headerInput)
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
-      setter.call(conversationInput, 'Summarize the current worktree.')
-      conversationInput.dispatchEvent(new Event('input', { bubbles: true }))
+      setter.call(headerInput, 'Summarize the current worktree.')
+      headerInput.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    await act(async () => composer!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    await act(async () => composer.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
     expect(api.chatAppAssistant).toHaveBeenCalledWith('Summarize the current worktree.', expect.any(String))
     expect(host.querySelector('[data-assistant-message-role="assistant"]')).not.toBeNull()
   })
@@ -80,10 +82,10 @@ describe('AppAssistantPanel', () => {
     await act(async () => {})
 
     const conversation = host.querySelector<HTMLElement>('[data-app-assistant-panel]')!
-    expect(conversation.getAttribute('aria-hidden')).toBe('true')
+    expect(conversation.dataset.expanded).toBe('false')
     const input = host.querySelector<HTMLInputElement>('input[aria-label="Workbench Assistant message"]')!
     act(() => input.focus())
-    expect(conversation.getAttribute('aria-hidden')).toBe('false')
+    expect(conversation.dataset.expanded).toBe('true')
 
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
@@ -95,22 +97,24 @@ describe('AppAssistantPanel', () => {
     expect(conversation.textContent).toContain('The worktree remains user-selected.')
 
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Collapse Workbench Assistant"]')!.click())
-    expect(conversation.getAttribute('aria-hidden')).toBe('true')
+    expect(conversation.dataset.expanded).toBe('false')
+    expect(host.querySelector('[data-assistant-conversation-composer] input')).toBe(input)
+    expect(host.querySelectorAll('[data-assistant-conversation-composer]')).toHaveLength(1)
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Open Workbench Assistant"]')!.click())
-    expect(conversation.getAttribute('aria-hidden')).toBe('false')
+    expect(conversation.dataset.expanded).toBe('true')
     expect(conversation.textContent).toContain('What changed?')
     expect(api.bootstrapAppAssistant).toHaveBeenCalledTimes(1)
 
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Collapse Workbench Assistant"]')!.click())
-    expect(conversation.getAttribute('aria-hidden')).toBe('true')
+    expect(conversation.dataset.expanded).toBe('false')
     act(() => root.render(<AppAssistantPanel {...props} confirmation={{ id: 'c1', toolName: 'vc_restore', arguments: '{}', requester: 'persistent-session' }} />))
-    expect(conversation.getAttribute('aria-hidden')).toBe('false')
+    expect(conversation.dataset.expanded).toBe('true')
     expect(conversation.querySelector('[data-app-assistant-confirmation="c1"]')).not.toBeNull()
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Collapse Workbench Assistant"]')!.click())
-    expect(conversation.getAttribute('aria-hidden')).toBe('true')
+    expect(conversation.dataset.expanded).toBe('false')
     expect(host.querySelector('[role="status"]')?.textContent).toBe('Approval needed')
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Review Workbench Assistant approval"]')!.click())
-    expect(conversation.getAttribute('aria-hidden')).toBe('false')
+    expect(conversation.dataset.expanded).toBe('true')
   })
 
   it('offers project selection and accepts a question before any selection', async () => {

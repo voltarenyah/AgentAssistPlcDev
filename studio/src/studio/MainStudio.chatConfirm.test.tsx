@@ -155,13 +155,13 @@ describe('MainStudio chat destructive-tool confirmation', () => {
     await act(async () => {})
     const composer = host.querySelector('[data-app-assistant]')
     expect(composer?.closest('header')).not.toBeNull()
-    expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('aria-hidden')).toBe('true')
+    expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('data-expanded')).toBe('false')
 
     clickAriaLabel(host, 'Settings')
     expect(host.querySelector('[data-app-assistant]')).toBe(composer)
-    expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('aria-hidden')).toBe('true')
+    expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('data-expanded')).toBe('false')
     clickAriaLabel(host, 'Open Workbench Assistant')
-    expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('aria-hidden')).toBe('false')
+    expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('data-expanded')).toBe('true')
   })
 
   it('opens the Workbench Assistant from home before a project is selected', async () => {
@@ -190,7 +190,7 @@ describe('MainStudio chat destructive-tool confirmation', () => {
     await act(async () => {})
     clickText(host, 'DemoWB')
     await act(async () => {})
-    if (host.querySelector('[data-app-assistant-panel]')?.getAttribute('aria-hidden') === 'true') {
+    if (host.querySelector('[data-app-assistant-panel]')?.getAttribute('data-expanded') === 'false') {
       clickAriaLabel(host, 'Open Workbench Assistant')
     }
     await act(async () => {})
