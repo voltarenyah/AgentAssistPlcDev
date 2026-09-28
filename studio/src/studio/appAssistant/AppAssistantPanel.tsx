@@ -233,58 +233,19 @@ export default function AppAssistantPanel({
   return (
     <TooltipProvider>
       <div
-        className="w-full max-w-4xl min-w-0"
+        className="h-9 w-full max-w-4xl min-w-0"
         data-app-assistant
         onMouseDown={event => event.stopPropagation()}
         onDoubleClick={event => event.stopPropagation()}
       >
-        <form
-          className="flex h-9 min-w-0 items-center gap-1 rounded-lg border border-input bg-card pl-3 pr-1 shadow-sm transition-colors hover:border-ring/60 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30"
-          onSubmit={event => { event.preventDefault(); void send(draft) }}
-        >
-          <Sparkles className="size-4 shrink-0 text-chart-4" aria-hidden="true" />
-          <Input
-            className="h-8 min-w-0 flex-1 select-text border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-0"
-            aria-label="Workbench Assistant message"
-            value={draft}
-            onFocus={() => setExpanded(true)}
-            onChange={event => setDraft(event.target.value)}
-            placeholder="Ask Workbench Assistant…"
-            disabled={state.busy}
-          />
-          {confirmation && <span className="shrink-0 text-xs text-amber-700 dark:text-amber-300" role="status">Approval needed</span>}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                aria-label={confirmation ? 'Review Workbench Assistant approval' : expanded ? 'Hide Workbench Assistant conversation' : 'Open Workbench Assistant'}
-                aria-expanded={expanded}
-                aria-controls="workbench-assistant-conversation"
-                onClick={() => setExpanded(previous => confirmation ? true : !previous)}
-              >
-                <MessageSquareText aria-hidden="true" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{confirmation ? 'Review approval' : expanded ? 'Collapse conversation' : 'Open conversation'}</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button size="icon-sm" aria-label="Send assistant message" type="submit" disabled={state.busy || !draft.trim()}>
-                {state.busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Send message</TooltipContent>
-          </Tooltip>
-        </form>
         <aside
           id="workbench-assistant-conversation"
-          className={`fixed bottom-10 left-1/2 z-50 h-[min(65vh,720px)] max-h-[calc(100vh-112px)] w-[min(920px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-xl border bg-card text-foreground shadow-xl select-text ${expanded ? 'flex' : 'hidden'}`}
+          className="assistant-conversation fixed left-1/2 z-50 flex -translate-x-1/2 flex-col overflow-hidden border border-input bg-card text-foreground select-text"
           data-app-assistant-panel
+          data-expanded={expanded}
           aria-label="Workbench Assistant conversation"
-          aria-hidden={!expanded}
         >
+          <div className="assistant-conversation-content flex min-h-0 flex-1 flex-col" aria-hidden={!expanded} inert={!expanded}>
           <header className="flex h-14 shrink-0 items-center gap-3 border-b px-5">
             <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-chart-4">
               <Sparkles className="size-4" aria-hidden="true" />
@@ -400,32 +361,50 @@ export default function AppAssistantPanel({
               )}
             </div>
           </div>
-          {expanded && (
-            <form
-              className="shrink-0 border-t bg-card px-4 py-4 sm:px-8"
-              data-assistant-conversation-composer
-              onSubmit={event => { event.preventDefault(); void send(draft) }}
-            >
-              <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-xl border border-input bg-background p-2 shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
-                <Input
-                  className="h-9 min-w-0 flex-1 border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-0"
-                  aria-label="Conversation message"
-                  value={draft}
-                  onChange={event => setDraft(event.target.value)}
-                  placeholder="Ask about a project, worktree, or device…"
-                  disabled={state.busy}
-                />
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button size="icon-sm" aria-label="Send conversation message" type="submit" disabled={state.busy || !draft.trim()}>
-                      {state.busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Send message</TooltipContent>
-                </Tooltip>
-              </div>
-            </form>
-          )}
+          </div>
+          <form
+            className="assistant-conversation-composer shrink-0 bg-card"
+            data-assistant-conversation-composer
+            onSubmit={event => { event.preventDefault(); void send(draft) }}
+          >
+            <div className="assistant-conversation-input mx-auto flex max-w-3xl items-center gap-2 border border-input bg-background shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30">
+              <Sparkles className="size-4 shrink-0 text-chart-4" aria-hidden="true" />
+              <Input
+                className="h-8 min-w-0 flex-1 select-text border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-0"
+                aria-label="Workbench Assistant message"
+                value={draft}
+                onFocus={() => setExpanded(true)}
+                onChange={event => setDraft(event.target.value)}
+                placeholder={expanded ? 'Ask about a project, worktree, or device…' : 'Ask Workbench Assistant…'}
+                disabled={state.busy}
+              />
+              {confirmation && <span className="shrink-0 text-xs text-amber-700 dark:text-amber-300" role="status">Approval needed</span>}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    aria-label={confirmation ? 'Review Workbench Assistant approval' : expanded ? 'Hide Workbench Assistant conversation' : 'Open Workbench Assistant'}
+                    aria-expanded={expanded}
+                    aria-controls="workbench-assistant-conversation"
+                    onClick={() => setExpanded(previous => confirmation ? true : !previous)}
+                  >
+                    <MessageSquareText aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{confirmation ? 'Review approval' : expanded ? 'Collapse conversation' : 'Open conversation'}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="icon-sm" aria-label="Send assistant message" type="submit" disabled={state.busy || !draft.trim()}>
+                    {state.busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Send message</TooltipContent>
+              </Tooltip>
+            </div>
+          </form>
         </aside>
       </div>
     </TooltipProvider>

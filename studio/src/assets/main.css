@@ -609,6 +609,88 @@ select option {
 .assistant-markdown.markdown-body code,
 .assistant-markdown.markdown-body table { font-size: 0.8125rem; }
 
+.assistant-conversation {
+  @apply shadow-sm;
+  --assistant-open-height: min(65vh, 720px, calc(100dvh - 112px));
+  top: 4px;
+  width: min(896px, calc(100vw - 180px));
+  height: 38px;
+  border-radius: var(--radius);
+  transition: top 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-radius 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 480ms ease;
+}
+
+.assistant-conversation[data-expanded='true'] {
+  @apply shadow-xl;
+  top: calc(100dvh - 40px - var(--assistant-open-height));
+  width: min(920px, calc(100vw - 32px));
+  height: var(--assistant-open-height);
+  border-radius: calc(var(--radius) + 4px);
+}
+
+.assistant-conversation-content {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  clip-path: inset(100% 0 0 0);
+  transition: opacity 220ms ease, clip-path 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 420ms;
+}
+
+.assistant-conversation[data-expanded='true'] .assistant-conversation-content {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  clip-path: inset(0 0 0 0);
+  transition: opacity 280ms ease 100ms, clip-path 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s;
+}
+
+.assistant-conversation-composer {
+  height: 36px;
+  padding: 0;
+  transition: height 480ms cubic-bezier(0.22, 1, 0.36, 1),
+    padding 480ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.assistant-conversation[data-expanded='true'] .assistant-conversation-composer {
+  height: 74px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-conversation-input {
+  height: 100%;
+  max-width: none;
+  padding: 0 4px 0 12px;
+  border: 0;
+  border-radius: var(--radius);
+  box-shadow: none;
+  transition: border-radius 480ms ease, padding 480ms ease;
+}
+
+.assistant-conversation[data-expanded='true'] .assistant-conversation-input {
+  @apply shadow-sm;
+  max-width: 48rem;
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) + 4px);
+  padding: 0 8px;
+}
+
+@media (max-width: 640px) {
+  .assistant-conversation { width: calc(100vw - 120px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-conversation,
+  .assistant-conversation-content,
+  .assistant-conversation-composer,
+  .assistant-conversation-input { transition-duration: 1ms !important; transition-delay: 0ms !important; }
+}
+
 /* ── FlexLayout workspace docking mapped onto the app palette ── */
 /* The stock dark.css is driven entirely by --flexlayout-* variables on
    .flexlayout__layout, so remapping them makes tabsets/tabs/splitters
