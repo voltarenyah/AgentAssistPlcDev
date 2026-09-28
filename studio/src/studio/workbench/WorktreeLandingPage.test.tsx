@@ -149,6 +149,8 @@ const renderPage = async (overrides: Partial<React.ComponentProps<typeof Worktre
       tab="overview"
       onTabChange={onTabChange}
       onSelectDevice={onSelectDevice}
+      taskViewMode="cards"
+      onTaskViewModeChange={vi.fn()}
       {...overrides}
     />,
   ))
@@ -280,33 +282,31 @@ describe('WorktreeLandingPage', () => {
     const contextIndex = sections.findIndex(section => section.getAttribute('data-testid') === 'worktree-context')
     const metadataIndex = sections.findIndex(section => section.textContent?.includes('Worktree metadata'))
     const timelineIndex = sections.findIndex(section => section.getAttribute('aria-label') === 'Worktree version control')
-    const tasksIndex = sections.findIndex(section => section.textContent?.includes('Open task list'))
     expect(contextIndex).toBe(metadataIndex)
     expect(sections[contextIndex]?.querySelector('[aria-label="Worktree purpose"]')).not.toBeNull()
     expect(sections[contextIndex]?.querySelector('[aria-label="Worktree owner"]')).not.toBeNull()
     expect(timelineIndex).toBe(-1)
-    expect(metadataIndex).toBeLessThan(tasksIndex)
+    expect(host.textContent).not.toContain('Open task list')
 
     await act(async () => root.unmount())
   })
 
-  it('shows task counts in the summary strip and jumps to the tasks tab', async () => {
-    const { host, root, onTabChange } = await renderPage()
-
-    const strip = [...host.querySelectorAll('button')].find(button => button.textContent?.replace(/\d/g, '').trim() === 'In Progress')!
-    expect(strip.textContent).toContain('1')
-    await act(async () => strip.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-    expect(onTabChange).toHaveBeenCalledWith('tasks')
-
+  it('keeps task content off the worktree overview', async () => {
+    const { host, root } = await renderPage()
+    expect(host.textContent).not.toContain('Open task list')
+    expect(host.textContent).not.toContain('Running task')
+    expect(api.listProjectTasks).not.toHaveBeenCalled()
+    expect(api.listGraphWorktreeTasks).not.toHaveBeenCalled()
     await act(async () => root.unmount())
   })
 
-  it('renders the grouped task panel on the tasks tab', async () => {
+  it('renders task cards on the tasks tab', async () => {
     const { host, root } = await renderPage({ tab: 'tasks' })
 
     expect(host.textContent).toContain('Open task')
     expect(host.textContent).toContain('Running task')
     expect(host.textContent).toContain('Done task')
+    expect(host.querySelectorAll('[data-testid="task-card"]')).toHaveLength(4)
 
     await act(async () => root.unmount())
   })

@@ -3,7 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/api/client'
-import WorktreeTasksPanel from './WorktreeTasksPanel'
+import WorktreeTasksPanel, { type TaskViewMode } from './WorktreeTasksPanel'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -49,8 +49,9 @@ const renderPanel = async (overrides: Partial<React.ComponentProps<typeof Worktr
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
-  await act(async () => root.render(
-    <WorktreeTasksPanel
+  function Harness() {
+    const [viewMode, setViewMode] = React.useState<TaskViewMode>('cards')
+    return <WorktreeTasksPanel
       workbenchId="wb1"
       worktreeId="wt1"
       tasks={tasks}
@@ -58,9 +59,12 @@ const renderPanel = async (overrides: Partial<React.ComponentProps<typeof Worktr
       error={null}
       onChanged={onChanged}
       deviceIds={['device-1']}
+      viewMode={viewMode}
+      onViewModeChange={setViewMode}
       {...overrides}
-    />,
-  ))
+    />
+  }
+  await act(async () => root.render(<Harness />))
   return { host, root, onChanged }
 }
 
@@ -83,16 +87,20 @@ beforeEach(() => {
 })
 
 describe('WorktreeTasksPanel', () => {
-  it('groups tasks by status with per-group counts', async () => {
+  it('renders one card per task with status on each card', async () => {
     const { host, root } = await renderPanel()
 
+    expect(host.querySelectorAll('[data-testid="task-card"]')).toHaveLength(3)
+    expect(host.querySelectorAll('section')).toHaveLength(0)
     expect(host.textContent).toContain('Todo')
     expect(host.textContent).toContain('In Progress')
     expect(host.textContent).toContain('Done')
     expect(host.textContent).toContain('Todo task')
     expect(host.textContent).toContain('Active task')
     expect(host.textContent).toContain('Finished task')
-    // Markdown details render in view mode, refs show as chips.
+    expect(host.querySelector('strong')).toBeNull()
+    expect(host.textContent).not.toContain('Device01/FB_Scale')
+    await act(async () => host.querySelector('button[aria-label="View brief for Finished task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(host.querySelector('strong')?.textContent).toBe('Swap')
     expect(host.textContent).toContain('Device01/FB_Scale')
 
@@ -230,7 +238,33 @@ describe('WorktreeTasksPanel', () => {
     const { host, root } = await renderPanel({ tasks: [graphTask] })
     expect(host.textContent).toContain('Project scope')
     expect(host.textContent).toContain('Improvement')
+    expect(host.textContent).not.toContain('Improve traceability')
+    expect(host.textContent).not.toContain('Visible links')
+    await act(async () => host.querySelector('button[aria-label="View brief for Graph-backed task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(host.textContent).toContain('Improve traceability')
+    expect(host.textContent).toContain('Visible links')
     expect(host.querySelector('strong')?.textContent).toBe('Graph')
+    await act(async () => root.unmount())
+  })
+
+  it('switches between cards and list while keeping task actions and briefs available', async () => {
+    const onStartChat = vi.fn()
+    const { host, root } = await renderPanel({ onStartChat })
+    expect(host.querySelectorAll('[data-testid="task-card"]')).toHaveLength(3)
+    expect(host.querySelectorAll('[data-testid="task-list-item"]')).toHaveLength(0)
+
+    await act(async () => host.querySelector('button[aria-label="List view"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(host.querySelectorAll('[data-testid="task-card"]')).toHaveLength(0)
+    expect(host.querySelectorAll('[data-testid="task-list-item"]')).toHaveLength(3)
+    expect(host.textContent).not.toContain('Swap the sensor scaling')
+    await act(async () => host.querySelector('button[aria-label="View brief for Finished task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(host.querySelector('strong')?.textContent).toBe('Swap')
+    await act(async () => host.querySelector('button[aria-label="Start chat for Todo task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onStartChat).toHaveBeenCalledWith(tasks[0])
+
+    await act(async () => host.querySelector('button[aria-label="Card view"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(host.querySelectorAll('[data-testid="task-card"]')).toHaveLength(3)
+    expect(host.querySelectorAll('[data-testid="task-list-item"]')).toHaveLength(0)
     await act(async () => root.unmount())
   })
 })

@@ -493,6 +493,7 @@ export default function MainStudio() {
   const [hardwareSelectedNodeId, setHardwareSelectedNodeId] = useState<string | null>(null)
   const [hardwareInspectedNodeId, setHardwareInspectedNodeId] = useState<string | null>(null)
   const [mainView, setMainView] = useState<MainView>({ kind: 'project' })
+  const [worktreeTaskViewMode, setWorktreeTaskViewMode] = useState<'cards' | 'list'>('cards')
   const [taskDetail, setTaskDetail] = useState<api.EngineeringTaskDetail | null>(null)
   const [taskDetailTask, setTaskDetailTask] = useState<api.EngineeringTask | null>(null)
   const [taskDetailLoading, setTaskDetailLoading] = useState(false)
@@ -2385,6 +2386,8 @@ export default function MainStudio() {
                 }}
                 onOpenTaskDetail={task => void openTaskDetail(task)}
                 onStartTaskChat={task => void createChatSessionForTask(task)}
+                taskViewMode={worktreeTaskViewMode}
+                onTaskViewModeChange={setWorktreeTaskViewMode}
                 openTaskCreate={taskCreateWorktreeId === selection.worktreeId}
                 onTaskCreateClosed={() => {
                   setTaskCreateWorktreeId(null)

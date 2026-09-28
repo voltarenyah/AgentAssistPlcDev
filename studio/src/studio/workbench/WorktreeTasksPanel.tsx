@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Check, ChevronDown, ListTodo, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { Check, ChevronDown, LayoutGrid, List, ListTodo, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 import * as api from '@/api/client'
+import { Button } from '@/components/ui/button'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { showErrorToast } from '@/components/ui/toast'
 import {
   Dialog,
@@ -18,6 +18,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import WorktreeTaskCard, { type TaskCardModel } from './WorktreeTaskCard'
+import WorktreeTaskListItem, { type TaskListItemModel } from './WorktreeTaskListItem'
+
+export type TaskViewMode = 'cards' | 'list'
 
 type Props = {
   workbenchId: string
@@ -30,6 +34,8 @@ type Props = {
   projectTasks?: api.EngineeringTask[]
   onOpenTaskDetail?: (task: api.EngineeringTask) => void
   onStartChat?: (task: TaskSurface) => void
+  viewMode: TaskViewMode
+  onViewModeChange: (mode: TaskViewMode) => void
   openCreate?: boolean
   onCreateClosed?: () => void
 }
@@ -39,8 +45,8 @@ const displayError = (error: unknown) => {
   return error instanceof Error ? error.message : 'Unexpected operation failure'
 }
 
-const taskStatusLabel = (status: api.WorktreeTaskStatus) =>
-  status === 'inProgress' ? 'In Progress' : status === 'done' ? 'Done' : 'Todo'
+const taskStatusLabel = (status: string) =>
+  status === 'inProgress' ? 'In Progress' : status === 'done' ? 'Done' : status === 'todo' ? 'Todo' : status
 
 const taskStatusOrder: api.WorktreeTaskStatus[] = ['todo', 'inProgress', 'done']
 
@@ -49,6 +55,27 @@ const isLegacyTask = (task: TaskSurface): task is api.WorktreeTask => 'elementRe
 
 const taskTypeLabel = (type?: TaskSurface['type']) =>
   type === 'issue' ? 'Issue' : type === 'improvement' ? 'Improvement' : 'Feature'
+
+const taskCardModel = (task: TaskSurface, devices: api.DeviceSummary[]): TaskCardModel => ({
+  title: task.title,
+  status: taskStatusLabel(task.status),
+  scope: task.scope === 'project' ? 'Project' : 'Worktree',
+  type: taskTypeLabel(task.type),
+  deviceName: !isLegacyTask(task) && task.deviceId
+    ? devices.find(device => device.deviceId === task.deviceId)?.plcName || task.deviceId
+    : undefined,
+  brief: {
+    goal: !isLegacyTask(task) ? task.intent.trim() || undefined : undefined,
+    expectedResult: !isLegacyTask(task) ? task.expectedResult.trim() || undefined : undefined,
+    details: (isLegacyTask(task) ? task.details : task.description) || undefined,
+    elementRefs: isLegacyTask(task) ? task.elementRefs : undefined,
+  },
+})
+
+const taskListItemModel = (task: TaskSurface, devices: api.DeviceSummary[]): TaskListItemModel => {
+  const { title, status, scope, type, deviceName, brief } = taskCardModel(task, devices)
+  return { title, status, scope, type, deviceName, brief }
+}
 
 export function ActiveTaskSelector({
   tasks,
@@ -154,7 +181,7 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = [], onOpenTaskDetail, onStartChat, openCreate = false, onCreateClosed }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = [], onOpenTaskDetail, onStartChat, viewMode, onViewModeChange, openCreate = false, onCreateClosed }: Props) {
   const [createOpen, setCreateOpen] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newIntent, setNewIntent] = useState('')
@@ -166,7 +193,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
   const [draft, setDraft] = useState<EditDraft | null>(null)
   const [newRef, setNewRef] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
-  const visibleTasks = [...projectTasks, ...tasks]
+  const visibleTasks = [...projectTasks, ...tasks.filter(task => task.scope !== 'worktree' || task.worktreeId === worktreeId)]
   const availableDevices = devices.length > 0
     ? devices
     : deviceIds.map((deviceId, index) => ({ deviceId, plcName: `Device ${index + 1}` }))
@@ -242,6 +269,27 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
     setNewRef('')
   }
 
+  const renderTask = (task: TaskSurface) => {
+    const legacy = isLegacyTask(task)
+    const statusControl = legacy ? <TaskStatusControl
+      task={task}
+      onChange={next => mutate(() => api.updateWorktreeTask(workbenchId, worktreeId, task.taskId, { status: next }))}
+    /> : undefined
+    const hasActions = Boolean(onStartChat || onOpenTaskDetail && !legacy || legacy)
+    const actions = hasActions ? <>
+      {onStartChat && <Button type="button" variant="secondary" size="xs" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>Start chat</Button>}
+      {onOpenTaskDetail && !legacy && <Button type="button" variant="outline" size="xs" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</Button>}
+      {legacy && <><Button type="button" variant="ghost" size="icon-xs" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}><Pencil /></Button>
+        <Button type="button" variant="ghost" size="icon-xs" aria-label={`Delete task ${task.title}`} onClick={() => {
+          if (window.confirm(`Delete task "${task.title}"?`)) mutate(() => api.deleteWorktreeTask(workbenchId, worktreeId, task.taskId))
+        }}><Trash2 /></Button></>}
+    </> : undefined
+
+    return viewMode === 'cards'
+      ? <WorktreeTaskCard key={task.taskId} model={taskCardModel(task, availableDevices)} statusControl={statusControl} actions={actions} />
+      : <WorktreeTaskListItem key={task.taskId} model={taskListItemModel(task, availableDevices)} statusControl={statusControl} actions={actions} />
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 p-10 text-[10px] text-muted-foreground">
@@ -256,13 +304,19 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <button type="button" className="primary-button h-8" onClick={() => {
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <ToggleGroup type="single" value={viewMode} variant="outline" size="sm" aria-label="Task display mode" onValueChange={value => {
+          if (value === 'cards' || value === 'list') onViewModeChange(value)
+        }}>
+          <ToggleGroupItem value="cards" aria-label="Card view" className="text-xs"><LayoutGrid className="h-3.5 w-3.5" /> Cards</ToggleGroupItem>
+          <ToggleGroupItem value="list" aria-label="List view" className="text-xs"><List className="h-3.5 w-3.5" /> List</ToggleGroupItem>
+        </ToggleGroup>
+        <Button type="button" size="sm" onClick={() => {
           setNewDevice(current => current || availableDevices[0]?.deviceId || '')
           setCreateOpen(true)
         }}>
           <Plus className="h-3.5 w-3.5" /> Add task
-        </button>
+        </Button>
       </div>
 
       {visibleTasks.length === 0 ? (
@@ -273,70 +327,9 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
           </p>
         </div>
       ) : (
-        taskStatusOrder.map(status => {
-          const group = visibleTasks.filter(task => task.status === status)
-          return (
-            <section key={status} className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
-              <div className="flex items-center border-b px-4 py-2" style={{ borderColor: 'var(--border)' }}>
-                <span className="text-[10px] font-semibold">{taskStatusLabel(status)}</span>
-                <span className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">{group.length}</span>
-              </div>
-              {group.length === 0 ? (
-                <div className="px-4 py-3 text-[9px] text-muted-foreground">No {taskStatusLabel(status).toLowerCase()} tasks.</div>
-              ) : (
-                <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
-                  {group.map(task => (
-                    <div key={task.taskId} className="flex items-start gap-3 px-4 py-2.5">
-                      {isLegacyTask(task) ? <TaskStatusControl
-                        task={task}
-                        onChange={next => mutate(() => api.updateWorktreeTask(workbenchId, worktreeId, task.taskId, { status: next }))}
-                      /> : <span className="inline-flex shrink-0 rounded-full border px-2 py-0.5 text-[8px] uppercase tracking-[0.1em]">{taskStatusLabel(task.status as api.WorktreeTaskStatus)}</span>}
-                      <div className="min-w-0 flex-1">
-                        <div className={`text-[10px] font-medium ${task.status === 'done' ? 'text-muted-foreground line-through' : ''}`}>
-                          {task.title}
-                        </div>
-                        <div className="mt-1 flex gap-1 text-[8px] text-muted-foreground">
-                          <span className="rounded bg-muted px-1.5 py-0.5">{task.scope === 'project' ? 'Project' : 'Worktree'} scope</span>
-                          <span className="rounded bg-muted px-1.5 py-0.5">{taskTypeLabel(task.type)}</span>
-                        </div>
-                        {(isLegacyTask(task) ? task.details : task.description) && (
-                          <div className="mt-1 text-[9px] leading-relaxed text-muted-foreground [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-4">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{isLegacyTask(task) ? task.details : task.description}</ReactMarkdown>
-                          </div>
-                        )}
-                        {isLegacyTask(task) && task.elementRefs.length > 0 && (
-                          <div className="mt-1.5 flex flex-wrap gap-1">
-                            {task.elementRefs.map(elementRef => (
-                              <span key={elementRef} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[8px] text-muted-foreground">
-                                {elementRef}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      {onStartChat && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Start chat for ${task.title}`} onClick={() => onStartChat(task)}>Start chat</button>}
-                      {onOpenTaskDetail && !isLegacyTask(task) && <button type="button" className="secondary-button h-7 px-2 text-[9px]" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Traceability</button>}
-                      {isLegacyTask(task) && <><button className="icon-button" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}>
-                        <Pencil className="h-3 w-3" />
-                      </button>
-                      <button
-                        className="icon-button"
-                        aria-label={`Delete task ${task.title}`}
-                        onClick={() => {
-                          if (window.confirm(`Delete task "${task.title}"?`)) {
-                            mutate(() => api.deleteWorktreeTask(workbenchId, worktreeId, task.taskId))
-                          }
-                        }}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button></>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          )
-        })
+        viewMode === 'cards'
+          ? <div className="space-y-3">{visibleTasks.map(renderTask)}</div>
+          : <ul className="divide-y overflow-hidden rounded-xl border bg-card">{visibleTasks.map(renderTask)}</ul>
       )}
 
       <Dialog open={draft !== null} onOpenChange={open => { if (!open) setDraft(null) }}>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, Cpu, FileCode2, GitBranch, LayoutDashboard, ListTodo, Loader2 } from 'lucide-react'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
@@ -6,7 +6,7 @@ import InlineEdit from './InlineEdit'
 import StatusBadge from './StatusBadge'
 import TagChip from './tags/TagChip'
 import TagPicker from './tags/TagPicker'
-import WorktreeTasksPanel from './WorktreeTasksPanel'
+import WorktreeTasksPanel, { type TaskViewMode } from './WorktreeTasksPanel'
 import { rememberDeviceSnapshot } from '@/studio/deviceSnapshot'
 
 export type WorktreeLandingTab = 'overview' | 'tasks'
@@ -19,6 +19,8 @@ type Props = {
   onSelectDevice: (deviceId: string) => void
   onOpenTaskDetail?: (task: api.EngineeringTask) => void
   onStartTaskChat?: (task: api.EngineeringTask | api.WorktreeTask) => void
+  taskViewMode: TaskViewMode
+  onTaskViewModeChange: (mode: TaskViewMode) => void
   openTaskCreate?: boolean
   onTaskCreateClosed?: () => void
 }
@@ -42,7 +44,7 @@ const worktreeTabs: Array<{ id: WorktreeLandingTab; label: string; icon: typeof 
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
 ]
 
-export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail, onStartTaskChat, openTaskCreate = false, onTaskCreateClosed }: Props) {
+export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail, onStartTaskChat, taskViewMode, onTaskViewModeChange, openTaskCreate = false, onTaskCreateClosed }: Props) {
   const [detail, setDetail] = useState<api.WorktreeDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(true)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -124,6 +126,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
   }, [workbenchId, worktreeId])
 
   useEffect(() => {
+    if (tab !== 'tasks') return
     let cancelled = false
     setTasksLoading(true)
     setTasksError(null)
@@ -143,7 +146,7 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
         setTasksLoading(false)
       })
     return () => { cancelled = true }
-  }, [workbenchId, worktreeId])
+  }, [workbenchId, worktreeId, tab])
 
   useEffect(() => {
     if (tab !== 'overview') return
@@ -173,12 +176,6 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
       })
     return () => { cancelled = true }
   }, [workbenchId, worktreeId, tab])
-
-  const taskCounts = useMemo(() => ({
-    todo: tasks.filter(task => task.status === 'todo').length,
-    inProgress: tasks.filter(task => task.status === 'inProgress').length,
-    done: tasks.filter(task => task.status === 'done').length,
-  }), [tasks])
 
   const saveDetailField = async (patch: { purpose?: string; owner?: string }) => {
     try {
@@ -367,33 +364,6 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
 
           {tab === 'overview' && (
             <>
-              <section className="rounded-xl border bg-card p-5" style={{ borderColor: 'var(--border)' }}>
-                <div className="flex items-center gap-3">
-                  <ListTodo className="h-4 w-4 text-chart-2" />
-                  <h2 className="text-sm font-semibold">Tasks</h2>
-                  <button className="secondary-button ml-auto h-7 text-xs" onClick={() => onTabChange('tasks')}>
-                    Open task list
-                  </button>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {([
-                    ['Todo', taskCounts.todo],
-                    ['In Progress', taskCounts.inProgress],
-                    ['Done', taskCounts.done],
-                  ] as const).map(([label, count]) => (
-                    <button
-                      key={label}
-                      onClick={() => onTabChange('tasks')}
-                      className="flex items-center gap-2 rounded-lg border px-3 py-2 text-left hover:bg-accent/40"
-                      style={{ borderColor: 'var(--border)' }}
-                    >
-                      <span className="text-sm font-semibold">{count}</span>
-                      <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-
               <section className="overflow-hidden rounded-xl border bg-card" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
                   <span className="text-sm font-semibold">Modified blocks</span>
@@ -450,6 +420,8 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
               deviceIds={detail?.deviceIds ?? []}
               onOpenTaskDetail={onOpenTaskDetail}
               onStartChat={onStartTaskChat}
+              viewMode={taskViewMode}
+              onViewModeChange={onTaskViewModeChange}
               openCreate={openTaskCreate}
               onCreateClosed={onTaskCreateClosed}
             />
