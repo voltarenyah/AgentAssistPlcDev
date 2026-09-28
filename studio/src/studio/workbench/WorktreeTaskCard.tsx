@@ -2,7 +2,6 @@ import type { ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import type { ChatSessionInfo } from '@/api/client'
-import type { TaskBriefModel } from './TaskBriefDisclosure'
 import TaskSessionsDisclosure from './TaskSessionsDisclosure'
 
 export type TaskCardModel = {
@@ -11,7 +10,6 @@ export type TaskCardModel = {
   scope: string
   type: string
   deviceName?: string
-  brief: TaskBriefModel
   sessions: ChatSessionInfo[]
 }
 

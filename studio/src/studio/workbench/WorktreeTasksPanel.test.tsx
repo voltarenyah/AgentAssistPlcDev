@@ -266,6 +266,9 @@ describe('WorktreeTasksPanel', () => {
     expect(openButton.textContent).toBe('Open')
     await act(async () => openButton.click())
     expect(onOpenTaskSession).toHaveBeenCalledWith(graphTask, 's1')
+    await act(async () => host.querySelector('button[aria-label="List view"]')!.click())
+    const row = host.querySelector('[data-testid="task-list-item"]') as HTMLTableRowElement
+    expect(row.querySelectorAll('td')[3].textContent).toBe('1')
     await act(async () => root.unmount())
   })
 
@@ -285,7 +288,7 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('switches between cards and list while keeping task actions and briefs available', async () => {
+  it('switches between cards and list while keeping task actions available', async () => {
     const onStartChat = vi.fn()
     const { host, root } = await renderPanel({ onStartChat })
     expect(host.querySelectorAll('[data-testid="task-card"]')).toHaveLength(3)
@@ -294,21 +297,38 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => host.querySelector('button[aria-label="List view"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(host.querySelectorAll('[data-testid="task-card"]')).toHaveLength(0)
     expect(host.querySelectorAll('[data-testid="task-list-item"]')).toHaveLength(3)
-    expect(Array.from(host.querySelectorAll('thead th')).map(cell => cell.textContent)).toEqual(['Name', 'Status', 'Type', 'PLC', 'Actions'])
+    expect(Array.from(host.querySelectorAll('thead th')).map(cell => cell.textContent)).toEqual(['Name', 'Status', 'Type', 'PLC', 'Sessions', 'Actions'])
     const firstRow = host.querySelector('[data-testid="task-list-item"]') as HTMLTableRowElement
-    expect(firstRow.querySelector('th[scope="row"]')?.textContent).toContain('Todo task')
-    expect(firstRow.querySelector('th[scope="row"]')?.textContent).toContain('Worktree')
-    expect(Array.from(firstRow.querySelectorAll('td')).slice(0, 3).map(cell => cell.textContent)).toEqual(['Todo', 'Feature', '—'])
+    const name = firstRow.querySelector('th[scope="row"]')
+    expect(name?.textContent).toBe('Todo task')
+    expect(name?.querySelectorAll('*')).toHaveLength(0)
+    expect(Array.from(firstRow.querySelectorAll('td')).map(cell => cell.textContent)).toEqual(['Todo', 'Feature', '—', '0', 'New chat'])
+    expect(host.textContent).not.toContain('Worktree scope')
+    expect(host.textContent).not.toContain('View brief')
     expect(host.textContent).not.toContain('Swap the sensor scaling')
-    await act(async () => host.querySelector('button[aria-label="View brief for Finished task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-    expect(host.querySelector('strong')?.textContent).toBe('Swap')
-    expect(host.querySelector('td[colspan="5"]')).not.toBeNull()
     await act(async () => host.querySelector('button[aria-label="New chat for Todo task"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(onStartChat).toHaveBeenCalledWith(tasks[0])
 
     await act(async () => host.querySelector('button[aria-label="Card view"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(host.querySelectorAll('[data-testid="task-card"]')).toHaveLength(3)
     expect(host.querySelectorAll('[data-testid="task-list-item"]')).toHaveLength(0)
+    await act(async () => root.unmount())
+  })
+
+  it('resizes adjacent list columns by dragging their accessible separator', async () => {
+    const { host, root } = await renderPanel()
+    await act(async () => host.querySelector('button[aria-label="List view"]')!.click())
+    const columns = Array.from(host.querySelectorAll('col'))
+    const widths = [150, 150, 100, 150, 80, 120]
+    columns.forEach((column, index) => {
+      vi.spyOn(column, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, widths[index], 20))
+    })
+    const handle = host.querySelector('[role="separator"][aria-label="Resize Name column"]')!
+    await act(async () => handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 100, pointerId: 7 })))
+    await act(async () => window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 120, pointerId: 7 })))
+    expect(columns[0].getAttribute('style')).toContain('170px')
+    expect(columns[1].getAttribute('style')).toContain('130px')
+    await act(async () => window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 120, pointerId: 7 })))
     await act(async () => root.unmount())
   })
 })

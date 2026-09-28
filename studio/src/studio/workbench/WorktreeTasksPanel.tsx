@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, LayoutGrid, List, ListTodo, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 import * as api from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -51,6 +51,18 @@ const taskStatusLabel = (status: string) =>
 
 const taskStatusOrder: api.WorktreeTaskStatus[] = ['todo', 'inProgress', 'done']
 const EMPTY_PROJECT_TASKS: api.EngineeringTask[] = []
+const TASK_LIST_COLUMN_MIN_WIDTHS = [120, 92, 88, 120, 84, 116]
+const TASK_LIST_COLUMNS = [
+  { label: 'Name', align: 'left' },
+  { label: 'Status', align: 'left' },
+  { label: 'Type', align: 'left' },
+  { label: 'PLC', align: 'left' },
+  { label: 'Sessions', align: 'center' },
+  { label: 'Actions', align: 'right' },
+] as const
+
+const measureTaskListColumns = (table: HTMLTableElement) =>
+  Array.from(table.querySelectorAll('col')).map(column => column.getBoundingClientRect().width)
 
 type TaskSurface = api.WorktreeTask | api.EngineeringTask
 const isLegacyTask = (task: TaskSurface): task is api.WorktreeTask => 'elementRefs' in task
@@ -66,18 +78,12 @@ const taskCardModel = (task: TaskSurface, devices: api.DeviceSummary[], sessions
   deviceName: !isLegacyTask(task) && task.deviceId
     ? devices.find(device => device.deviceId === task.deviceId)?.plcName || task.deviceId
     : undefined,
-  brief: {
-    goal: !isLegacyTask(task) ? task.intent.trim() || undefined : undefined,
-    expectedResult: !isLegacyTask(task) ? task.expectedResult.trim() || undefined : undefined,
-    details: (isLegacyTask(task) ? task.details : task.description) || undefined,
-    elementRefs: isLegacyTask(task) ? task.elementRefs : undefined,
-  },
   sessions,
 })
 
-const taskListItemModel = (task: TaskSurface, devices: api.DeviceSummary[]): TaskListItemModel => {
-  const { title, status, scope, type, deviceName, brief } = taskCardModel(task, devices)
-  return { title, status, scope, type, deviceName, brief }
+const taskListItemModel = (task: TaskSurface, devices: api.DeviceSummary[], sessionsCount: number): TaskListItemModel => {
+  const { title, status, type, deviceName } = taskCardModel(task, devices)
+  return { title, status, type, deviceName, sessionsCount }
 }
 
 export function ActiveTaskSelector({
@@ -193,6 +199,8 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
   const [newDevice, setNewDevice] = useState('')
   const [devices, setDevices] = useState<api.DeviceSummary[]>([])
   const [sessionsByDevice, setSessionsByDevice] = useState<Record<string, api.ChatSessionInfo[]>>({})
+  const [taskListColumnWidths, setTaskListColumnWidths] = useState<number[] | null>(null)
+  const activeColumnResizeCleanup = useRef<(() => void) | null>(null)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<EditDraft | null>(null)
   const [newRef, setNewRef] = useState('')
@@ -204,6 +212,71 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
   const availableDevices = devices.length > 0
     ? devices
     : deviceIds.map((deviceId, index) => ({ deviceId, plcName: `Device ${index + 1}` }))
+
+  const startTaskListColumnResize = (columnIndex: number, event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    activeColumnResizeCleanup.current?.()
+    const table = event.currentTarget.closest('table')
+    if (!table) return
+
+    const widths = taskListColumnWidths ?? measureTaskListColumns(table)
+    if (widths.length !== TASK_LIST_COLUMNS.length || widths.some(width => width <= 0)) return
+    const startX = event.clientX
+    const body = document.body
+    const previousCursor = body.style.cursor
+    const previousUserSelect = body.style.userSelect
+    body.style.cursor = 'col-resize'
+    body.style.userSelect = 'none'
+
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerUp)
+      body.style.cursor = previousCursor
+      body.style.userSelect = previousUserSelect
+      if (activeColumnResizeCleanup.current === cleanup) activeColumnResizeCleanup.current = null
+    }
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) return
+      const delta = moveEvent.clientX - startX
+      const lowerBound = TASK_LIST_COLUMN_MIN_WIDTHS[columnIndex] - widths[columnIndex]
+      const upperBound = widths[columnIndex + 1] - TASK_LIST_COLUMN_MIN_WIDTHS[columnIndex + 1]
+      const appliedDelta = Math.max(lowerBound, Math.min(upperBound, delta))
+      const nextWidths = [...widths]
+      nextWidths[columnIndex] += appliedDelta
+      nextWidths[columnIndex + 1] -= appliedDelta
+      setTaskListColumnWidths(nextWidths)
+    }
+    const onPointerUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== event.pointerId) return
+      cleanup()
+    }
+    activeColumnResizeCleanup.current = cleanup
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+  }
+
+  const resizeTaskListColumnWithKeyboard = (columnIndex: number, event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const table = event.currentTarget.closest('table')
+    if (!table) return
+    const widths = taskListColumnWidths ?? measureTaskListColumns(table)
+    if (widths.length !== TASK_LIST_COLUMNS.length || widths.some(width => width <= 0)) return
+    const direction = event.key === 'ArrowRight' ? 1 : -1
+    const lowerBound = TASK_LIST_COLUMN_MIN_WIDTHS[columnIndex] - widths[columnIndex]
+    const upperBound = widths[columnIndex + 1] - TASK_LIST_COLUMN_MIN_WIDTHS[columnIndex + 1]
+    const appliedDelta = Math.max(lowerBound, Math.min(upperBound, direction * 8))
+    const nextWidths = [...widths]
+    nextWidths[columnIndex] += appliedDelta
+    nextWidths[columnIndex + 1] -= appliedDelta
+    setTaskListColumnWidths(nextWidths)
+  }
+
+  useEffect(() => () => activeColumnResizeCleanup.current?.(), [])
 
   useEffect(() => {
     let cancelled = false
@@ -309,7 +382,7 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
 
     return viewMode === 'cards'
       ? <WorktreeTaskCard key={task.taskId} model={taskCardModel(task, availableDevices, taskSessions)} statusControl={statusControl} actions={actions} onOpenSession={!legacy && onOpenTaskSession ? sessionId => onOpenTaskSession(task, sessionId) : undefined} />
-      : <WorktreeTaskListItem key={task.taskId} model={taskListItemModel(task, availableDevices)} statusControl={statusControl} actions={actions} />
+      : <WorktreeTaskListItem key={task.taskId} model={taskListItemModel(task, availableDevices, taskSessions.length)} statusControl={statusControl} actions={actions} />
   }
 
   if (loading) {
@@ -352,15 +425,14 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
         viewMode === 'cards'
           ? <div className="grid items-start gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,22rem),1fr))]">{visibleTasks.map(renderTask)}</div>
           : <div className="overflow-x-auto rounded-xl border bg-card">
-            <table className="w-full min-w-[540px] table-fixed border-collapse text-xs">
-              <colgroup><col className="w-[30%]" /><col className="w-[18%]" /><col className="w-[17%]" /><col className="w-[16%]" /><col className="w-[19%]" /></colgroup>
+            <table className="w-full min-w-[680px] table-fixed border-collapse text-xs" style={taskListColumnWidths ? { width: `${taskListColumnWidths.reduce((sum, width) => sum + width, 0)}px` } : undefined}>
+              <colgroup>{TASK_LIST_COLUMNS.map((column, index) => <col key={column.label} className={taskListColumnWidths ? undefined : ['w-[27%]', 'w-[13%]', 'w-[13%]', 'w-[19%]', 'w-[10%]', 'w-[18%]'][index]} style={taskListColumnWidths ? { width: `${taskListColumnWidths[index]}px` } : undefined} />)}</colgroup>
               <thead className="bg-muted/40 text-left text-muted-foreground">
                 <tr className="border-b">
-                  <th scope="col" className="px-2 py-2 font-medium">Name</th>
-                  <th scope="col" className="px-2 py-2 font-medium">Status</th>
-                  <th scope="col" className="px-2 py-2 font-medium">Type</th>
-                  <th scope="col" className="px-2 py-2 font-medium">PLC</th>
-                  <th scope="col" className="px-2 py-2 text-right font-medium">Actions</th>
+                  {TASK_LIST_COLUMNS.map((column, index) => <th key={column.label} scope="col" className={`relative px-2 py-2 font-medium ${column.align === 'center' ? 'text-center' : column.align === 'right' ? 'text-right' : 'text-left'}`}>
+                    {column.label}
+                    {index < TASK_LIST_COLUMNS.length - 1 && <div role="separator" aria-orientation="vertical" aria-label={`Resize ${column.label} column`} tabIndex={0} className="absolute right-0 top-0 z-10 h-full w-2 translate-x-1/2 cursor-col-resize touch-none after:absolute after:inset-y-1 after:left-1/2 after:w-px after:bg-border hover:bg-primary/10 hover:after:bg-primary focus-visible:outline-none focus-visible:after:bg-primary" onPointerDown={event => startTaskListColumnResize(index, event)} onKeyDown={event => resizeTaskListColumnWithKeyboard(index, event)} />}
+                  </th>)}
                 </tr>
               </thead>
               <tbody>{visibleTasks.map(renderTask)}</tbody>
