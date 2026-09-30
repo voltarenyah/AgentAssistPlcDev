@@ -61,6 +61,31 @@ Invoke-WebRequest -UseBasicParsing http://localhost:5239/api/status
 
 The expected result is HTTP 200 from both. The Workbench Assistant is part of ApiHost: `GET /api/app-assistant/health` reports `service: in-process` and whether a model key is configured.
 
+### When the launcher or ApiHost will not start
+
+Symptoms: `.\launch.ps1` refuses to load ("is not digitally signed", or `AuthorizationManager check
+failed` under Windows PowerShell 5.1), the ApiHost console window flashes and closes, ApiHost dies
+with a managed-exception Application-log entry, or every workbench API returns 500 with
+`UnauthorizedAccessException` on `%APPDATA%\AutomationWorkbench\...`.
+
+Check the workspace integrity label before anything else. The agent sandbox (Orca/Codex) marks the
+workspace with a **Low mandatory integrity label**; everything executed from that path then runs at
+Low integrity, and Windows No-Write-Up blocks `%APPDATA%\AutomationWorkbench` and the HKLM EventLog
+source — which produces every symptom above at once.
+
+```powershell
+Copy-Item C:\Windows\System32\whoami.exe .\tmp\probe.exe
+.\tmp\probe.exe /groups | Select-String "Mandatory Label"   # Low => the label is back
+icacls . /setintegritylevel (OI)(CI)Medium /C /Q            # then src and tests with /T
+icacls .\src /setintegritylevel (OI)(CI)Medium /T /C /Q
+icacls .\tests /setintegritylevel (OI)(CI)Medium /T /C /Q
+```
+
+The label is per object and comes back whenever the sandbox re-provisions the workspace, so re-run the
+relabel if the symptoms return. Keep `launch.ps1` runnable on Windows PowerShell 5.1 as well:
+PowerShell 6+ only syntax such as `-AsHashtable` made its dependency check fail closed, which ran a
+destructive `npm ci` and still exited 1, so the frontend never started.
+
 ## Open and test the web application
 
 After the health checks pass, open or navigate the in-app browser to:

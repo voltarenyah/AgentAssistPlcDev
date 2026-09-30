@@ -21,6 +21,24 @@ Options:
 
 $root = $PSScriptRoot
 
+# A lockfile v3 document contains a root entry whose property name is the empty string, which
+# ConvertFrom-Json rejects unless -AsHashtable is used. -AsHashtable itself only exists in
+# PowerShell 6+, so parsing the document is not portable: on Windows PowerShell 5.1 the parse
+# threw, the readiness check always reported "not ready", and every launch ran a destructive
+# `npm ci` before still exiting 1 - so the frontend never started. The two identity fields this
+# check needs are top-level scalars written first in the file, so read them directly instead.
+function Get-PackageLockIdentity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $raw = Get-Content -Raw -LiteralPath $Path
+    $name = [regex]::Match($raw, '"name"\s*:\s*"((?:[^"\\]|\\.)*)"').Groups[1].Value
+    $lockfileVersion = [regex]::Match($raw, '"lockfileVersion"\s*:\s*(\d+)').Groups[1].Value
+    return "$name|$lockfileVersion"
+}
+
 function Test-StudioDependenciesReady {
     param(
         [Parameter(Mandatory = $true)]
@@ -37,12 +55,8 @@ function Test-StudioDependenciesReady {
     }
 
     try {
-        $checkedIn = Get-Content -Raw -LiteralPath $packageLock | ConvertFrom-Json -AsHashtable
-        $installed = Get-Content -Raw -LiteralPath $installedLock | ConvertFrom-Json -AsHashtable
-        foreach ($property in @("name", "lockfileVersion")) {
-            if ($checkedIn[$property] -ne $installed[$property]) {
-                return $false
-            }
+        if ((Get-PackageLockIdentity -Path $packageLock) -ne (Get-PackageLockIdentity -Path $installedLock)) {
+            return $false
         }
         return $true
     } catch {
