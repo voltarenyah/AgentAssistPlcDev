@@ -15,9 +15,19 @@ disagree, the `docs/` file wins and the nested file is the one to fix.
 - Decided design and architecture decisions: `docs/design/`, `docs/adr/`
 - UI specifications: `docs/ui-spec/`
 - Implementation plans: `docs/plans/`
+- Prompts written ahead of execution, and the queue an agent runs them from: `docs/agent-prompts/README.md`
 - Codex worker operations: `docs/local-codex-worker.md`
 
 `docs/superpowers/` holds historical plans and specifications (July–August 2026): background, not current authority.
+
+## Pending agent prompts
+
+`docs/agent-prompts/` records work that is described before it is executed: a human writes the prompt
+and the requirement there, and an agent runs it later. At the start of a work request, read
+`docs/agent-prompts/README.md` and take the lowest-numbered item whose `Status` is `pending`, unless
+the human names a different item. Run one item per work unit, then update that item's status and
+evidence. Items there carry the same Goal / Context / Constraints / Done when contract, and the same
+scope, validation, and PR rules, as any other task in this file.
 
 ## Two-store version-control invariant
 
