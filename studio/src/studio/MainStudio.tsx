@@ -1876,6 +1876,32 @@ export default function MainStudio() {
     }
   }
 
+  const openTaskInTia = async (task: api.EngineeringTask | api.WorktreeTask) => {
+    const { workbenchId, worktreeId } = selection
+    const deviceId = 'deviceId' in task ? task.deviceId : null
+    if (!workbenchId || !worktreeId) {
+      showErrorToast('Select a workbench and worktree before opening a task in TIA Portal.')
+      return
+    }
+    if (task.worktreeId && task.worktreeId !== worktreeId) {
+      showErrorToast('This task belongs to a different worktree than the selected one.')
+      return
+    }
+    setOperation('open-tia-project')
+    const op = beginOperation('open-tia-project', 'Opening the task project in TIA Portal...')
+    try {
+      // A device-bound task opens its own PLC; a task without a device falls back to the whole
+      // worktree project, which is the only project it can be talked about in.
+      if (deviceId) await api.openDeviceProject(workbenchId, worktreeId, deviceId, op.id, true, false)
+      else await api.openWorktreeProject(workbenchId, worktreeId, op.id, true, false)
+      toast.success('Task project opened in TIA Portal')
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setOperation(null)
+    }
+  }
+
   const archiveWorktreeProject = async (values: {
     targetDirectory: string
     archiveName: string
@@ -2462,6 +2488,7 @@ export default function MainStudio() {
                 }}
                 onOpenTaskDetail={task => void openTaskDetail(task)}
                 onStartTaskChat={task => void createChatSessionForTask(task)}
+                onOpenTaskInTia={task => void openTaskInTia(task)}
                 onOpenTaskSession={(task, sessionId) => void openTaskDetailSession(task, sessionId)}
                 taskViewMode={worktreeTaskViewMode}
                 onTaskViewModeChange={setWorktreeTaskViewMode}

@@ -34,6 +34,7 @@ type Props = {
   projectTasks?: api.EngineeringTask[]
   onOpenTaskDetail?: (task: api.EngineeringTask) => void
   onStartChat?: (task: TaskSurface) => void
+  onOpenInTia?: (task: TaskSurface) => void
   onOpenTaskSession?: (task: api.EngineeringTask, sessionId: string) => void
   viewMode: TaskViewMode
   onViewModeChange: (mode: TaskViewMode) => void
@@ -190,7 +191,7 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = EMPTY_PROJECT_TASKS, onOpenTaskDetail, onStartChat, onOpenTaskSession, viewMode, onViewModeChange, openCreate = false, onCreateClosed }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = EMPTY_PROJECT_TASKS, onOpenTaskDetail, onStartChat, onOpenInTia, onOpenTaskSession, viewMode, onViewModeChange, openCreate = false, onCreateClosed }: Props) {
   const [createOpen, setCreateOpen] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newIntent, setNewIntent] = useState('')
@@ -366,9 +367,10 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
       task={task}
       onChange={next => mutate(() => api.updateWorktreeTask(workbenchId, worktreeId, task.taskId, { status: next }))}
     /> : undefined
-    const hasActions = Boolean(onStartChat || onOpenTaskDetail && !legacy || legacy)
+    const hasActions = Boolean(onStartChat || onOpenInTia && !legacy || onOpenTaskDetail && !legacy || legacy)
     const actions = hasActions ? <>
       {onStartChat && <Button type="button" variant="secondary" size="xs" aria-label={`New chat for ${task.title}`} onClick={() => onStartChat(task)}>New chat</Button>}
+      {onOpenInTia && !legacy && <Button type="button" variant="outline" size="xs" aria-label={`Open ${task.title} in TIA Portal`} onClick={() => onOpenInTia(task)}>Open in TIA</Button>}
       {onOpenTaskDetail && !legacy && <Button type="button" variant="outline" size="xs" aria-label={`Open task detail ${task.title}`} onClick={() => onOpenTaskDetail(task)}>Detail</Button>}
       {legacy && <><Button type="button" variant="ghost" size="icon-xs" aria-label={`Edit task ${task.title}`} onClick={() => openEdit(task)}><Pencil /></Button>
         <Button type="button" variant="ghost" size="icon-xs" aria-label={`Delete task ${task.title}`} onClick={() => {

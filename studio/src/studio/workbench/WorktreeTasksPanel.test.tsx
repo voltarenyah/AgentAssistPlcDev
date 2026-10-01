@@ -241,6 +241,27 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => root.unmount())
   })
 
+  it('opens the task project in TIA from the task actions', async () => {
+    const graphTask: api.EngineeringTask = {
+      taskId: 'graph-1', workbenchId: 'wb1', scope: 'worktree', worktreeId: 'wt1', deviceId: 'device-1',
+      title: 'Graph-backed task', type: 'improvement', status: 'inProgress',
+      priority: 1, intent: 'Goal', expectedResult: 'Result', description: '',
+      createdUtc: '2026-08-01T00:00:00Z', updatedUtc: '2026-08-01T00:00:00Z',
+    }
+    const onOpenInTia = vi.fn()
+    const { host, root } = await renderPanel({ tasks: [graphTask], onOpenInTia })
+    await act(async () => host.querySelector('button[aria-label="Open Graph-backed task in TIA Portal"]')!.click())
+    expect(onOpenInTia).toHaveBeenCalledWith(graphTask)
+    await act(async () => root.unmount())
+  })
+
+  it('omits the TIA action for legacy worktree tasks', async () => {
+    const onOpenInTia = vi.fn()
+    const { host, root } = await renderPanel({ onOpenInTia })
+    expect(host.querySelector('button[aria-label="Open Todo task in TIA Portal"]')).toBeNull()
+    await act(async () => root.unmount())
+  })
+
   it('shows only sessions bound to the task with a relative last response time', async () => {
     const graphTask: api.EngineeringTask = {
       taskId: 'graph-1', workbenchId: 'wb1', scope: 'worktree', worktreeId: 'wt1', deviceId: 'device-1',
