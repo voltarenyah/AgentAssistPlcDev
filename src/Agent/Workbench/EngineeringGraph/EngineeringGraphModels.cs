@@ -2,6 +2,7 @@ namespace Agent.Workbench.EngineeringGraph;
 
 public enum GraphEntityKind { Task, Session, GitCommit, SourceObject, SvnRevision }
 public enum GraphTaskScopeKind { Project, Worktree }
+public enum GraphTaskTargetKind { Device, Hardware }
 public enum GraphTaskType { Issue, Improvement, Feature }
 public enum GraphTaskStatus { Todo, InProgress, Done }
 public enum GraphRelationKind { TaskSession, TaskCommit, TaskSourceObject, TaskSvnRevision, CommitSourceObject, CommitSvnRevision }
@@ -12,7 +13,8 @@ public sealed record GraphTask(
     string Title, GraphTaskType Type, GraphTaskStatus Status = GraphTaskStatus.Todo,
     string? Description = null, string? MetadataJson = null,
     DateTimeOffset? CreatedUtc = null, DateTimeOffset? UpdatedUtc = null,
-    int Priority = 0, string Intent = "", string ExpectedResult = "", string? DeviceId = null);
+    int Priority = 0, string Intent = "", string ExpectedResult = "", string? DeviceId = null,
+    GraphTaskTargetKind TargetKind = GraphTaskTargetKind.Device);
 
 public sealed record TaskSourceStage(
     string TaskId, string WorktreeId, string SourceObjectId, string DeviceId, string? BaselineEvidenceJson,

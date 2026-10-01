@@ -158,7 +158,7 @@ public sealed class WorktreeTaskStoreTests : IDisposable
         {
             Assert.Equal(2, Convert.ToInt32(Scalar(graphStore.Connection, "SELECT COUNT(*) FROM tasks;")));
         }
-        var added = store.Add(firstRoot, "Mirrored");
+        var added = store.Add(firstRoot, "Mirrored", deviceId: "device-1");
         Assert.Contains(new AtomicJsonStore().Read<WorktreeTaskList>(WorktreeTaskStore.TasksPath(firstRoot)).Tasks, item => item.TaskId == added.TaskId);
         var changed = store.Update(firstRoot, added.TaskId, item => item with { Title = "Changed" });
         Assert.Equal("Changed", Assert.Single(new AtomicJsonStore().Read<WorktreeTaskList>(WorktreeTaskStore.TasksPath(firstRoot)).Tasks, item => item.TaskId == added.TaskId).Title);

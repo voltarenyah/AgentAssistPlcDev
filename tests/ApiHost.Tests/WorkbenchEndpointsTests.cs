@@ -71,7 +71,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         var worktreeTask = await fixture.Client.PostAsJsonAsync(
             $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/tasks",
-            new { title = "Worktree-only task" });
+            new { title = "Worktree-only task", deviceId = fixture.DeviceId });
         Assert.Equal(HttpStatusCode.Created, worktreeTask.StatusCode);
         var worktreeTaskId = (await worktreeTask.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
         Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.GetAsync($"{route}/{worktreeTaskId}")).StatusCode);
@@ -120,6 +120,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var task = await created.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("dev-1", task.GetProperty("deviceId").GetString());
+        Assert.Equal("device", task.GetProperty("targetKind").GetString());
 
         var taskId = task.GetProperty("taskId").GetString();
         var updated = await fixture.Client.PatchAsJsonAsync($"{route}/{taskId}", new { type = "issue" });
@@ -128,6 +129,32 @@ public sealed class WorkbenchEndpointsTests : IDisposable
 
         var list = await fixture.Client.GetFromJsonAsync<JsonElement>(route);
         Assert.Equal("dev-1", list![0].GetProperty("deviceId").GetString());
+    }
+
+    [Fact]
+    public async Task HardwareTargetedTaskIsAcceptedWithoutADeviceWhileAnUntargetedOneIsStillRejected()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var route = $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/engineering-tasks";
+
+        var untargeted = await fixture.Client.PostAsJsonAsync(route, new { title = "No target" });
+        Assert.Equal(HttpStatusCode.BadRequest, untargeted.StatusCode);
+        Assert.Contains("TASK_DEVICE_REQUIRED", await untargeted.Content.ReadAsStringAsync());
+
+        var hardware = await fixture.Client.PostAsJsonAsync(route, new
+        {
+            title = "Rack layout",
+            targetKind = "hardware",
+            intent = "Move the rack",
+            expectedResult = "Rack layout is committed",
+        });
+        Assert.Equal(HttpStatusCode.Created, hardware.StatusCode);
+        var task = await hardware.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("hardware", task.GetProperty("targetKind").GetString());
+        Assert.Equal(JsonValueKind.Null, task.GetProperty("deviceId").ValueKind);
+
+        var listed = await fixture.Client.GetFromJsonAsync<JsonElement>(route);
+        Assert.Equal("hardware", listed![0].GetProperty("targetKind").GetString());
     }
 
     [Fact]
@@ -181,7 +208,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(0, detail.GetProperty("sessions").GetArrayLength());
         detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/tasks/{otherTaskId}");
         Assert.Equal("session-a", detail.GetProperty("sessions")[0].GetProperty("id").GetString());
-        var crossTaskResponse = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/wt-2/tasks", new { title = "Cross", details = "cross" });
+        var crossTaskResponse = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/wt-2/tasks", new { title = "Cross", details = "cross", deviceId = fixture.DeviceId });
         var crossTaskId = (await crossTaskResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
         var cross = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks/{crossTaskId}/relationships", new { targetKind = "session", targetId = "session-a" });
         Assert.Equal(HttpStatusCode.BadRequest, cross.StatusCode);
@@ -209,7 +236,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var wb = fixture.Context.WorkbenchId;
         var project = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks", new { title = "Project task", type = "feature", intent = "Intent", expectedResult = "Result" });
         var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
-        var local = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Local task" });
+        var local = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Local task", deviceId = fixture.DeviceId });
         var localId = (await local.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
         var route = $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/active-task";
 
@@ -229,7 +256,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
         var wb = fixture.Context.WorkbenchId;
-        var local = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Local task" });
+        var local = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Local task", deviceId = fixture.DeviceId });
         var localId = (await local.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
         var response = await fixture.Client.PutAsJsonAsync($"/api/workbenches/{wb}/worktrees/wt-2/active-task", new { taskId = localId });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -607,7 +634,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
         var wb = fixture.Context.WorkbenchId;
         var taskResponse = await fixture.Client.PostAsJsonAsync(
-            $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Worktree A task" });
+            $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/tasks", new { title = "Worktree A task", deviceId = fixture.DeviceId });
         taskResponse.EnsureSuccessStatusCode();
         var taskId = (await taskResponse.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("taskId").GetString()!;

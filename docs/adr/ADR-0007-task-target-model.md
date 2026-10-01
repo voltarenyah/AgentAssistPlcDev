@@ -24,8 +24,10 @@ Repository evidence that constrains the choice:
 
 - `GraphEntityKind = { Task, Session, GitCommit, SourceObject, SvnRevision }` — there is **no** hardware
   entity kind (`EngineeringGraphModels.cs:3`).
-- The task table's `device_id` is **already nullable** and `CreateTask` does not require it
-  (`EngineeringGraphService.cs:33-59`). The API check above is the only non-null enforcement.
+- The task table's `device_id` is **already nullable**, and the device requirement is enforced in two
+  places, not one: the API check above, and the service-level guard at
+  `EngineeringGraphService.cs:40-41` (`b4c70c2`, "feat: scope TIA compare to staged task sources").
+  Both relax together, or a hardware task is still rejected at the graph.
 - Every same-device relationship rule already tolerates a null task device
   (`EngineeringGraphService.cs:211,252,285,314` all read `task.DeviceId is not null && target.DeviceId is not null && …`).
 - A task with a null device already cannot stage source objects

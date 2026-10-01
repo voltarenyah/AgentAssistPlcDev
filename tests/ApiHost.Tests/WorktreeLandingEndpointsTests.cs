@@ -28,9 +28,9 @@ public sealed class WorktreeLandingEndpointsTests : IDisposable
             finishedUtc: new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero));
         var tasks = new WorktreeTaskStore(fixture.Store);
         var wt2Root = fixture.WorktreeRoot("feature-a");
-        tasks.Add(wt2Root, "Adapt FB_Motor_Control");
-        tasks.Add(wt2Root, "Update HMI tags");
-        var done = tasks.Add(wt2Root, "Review interlocks");
+        tasks.Add(wt2Root, "Adapt FB_Motor_Control", deviceId: "dev-1");
+        tasks.Add(wt2Root, "Update HMI tags", deviceId: "dev-1");
+        var done = tasks.Add(wt2Root, "Review interlocks", deviceId: "dev-1");
         tasks.Update(wt2Root, done.TaskId, task => task with { Status = WorktreeTaskStatus.Done });
         // A registered worktree without any files on disk still shows up with defaults.
         fixture.RegisterWorktree("wt-3", "Empty", "empty", "empty");
@@ -192,6 +192,7 @@ public sealed class WorktreeLandingEndpointsTests : IDisposable
             title = "Adapt FB_Motor_Control",
             details = "Rework the interlock logic",
             elementRefs = new[] { "Device01/FB_Motor_Control" },
+            deviceId = "dev-1",
         });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var createdTask = await created.Content.ReadFromJsonAsync<JsonElement>();
@@ -229,6 +230,7 @@ public sealed class WorktreeLandingEndpointsTests : IDisposable
         {
             title = "Original",
             details = "Plan A",
+            deviceId = "dev-1",
         });
         var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("taskId").GetString()!;
@@ -240,6 +242,22 @@ public sealed class WorktreeLandingEndpointsTests : IDisposable
         Assert.Equal("Renamed", body.GetProperty("title").GetString());
         Assert.Equal("Plan A", body.GetProperty("details").GetString());
         Assert.Equal("todo", body.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task LegacyWorktreeTaskRouteOwesTheSameTargetAsTheGraphRoute()
+    {
+        await using var fixture = LandingFixture.Create(root);
+        fixture.WriteWorktree("wt-1", "master", "master");
+        var tasksRoute = $"/api/workbenches/{fixture.WorkbenchId}/worktrees/wt-1/tasks";
+
+        var untargeted = await fixture.Client.PostAsJsonAsync(tasksRoute, new { title = "No target" });
+        Assert.Equal(HttpStatusCode.BadRequest, untargeted.StatusCode);
+        Assert.Contains("TASK_DEVICE_REQUIRED", await untargeted.Content.ReadAsStringAsync());
+
+        var hardware = await fixture.Client.PostAsJsonAsync(
+            tasksRoute, new { title = "Rack layout", targetKind = "hardware" });
+        Assert.Equal(HttpStatusCode.Created, hardware.StatusCode);
     }
 
     [Fact]

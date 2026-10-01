@@ -32,12 +32,15 @@ public sealed class EngineeringGraphService
 
     public GraphTask CreateTask(string taskId, GraphTaskScopeKind scope, string? worktreeId, string title, GraphTaskType type,
         GraphTaskStatus status = GraphTaskStatus.Todo, string? description = null, int priority = 0,
-        string intent = "", string expectedResult = "", string? deviceId = null)
+        string intent = "", string expectedResult = "", string? deviceId = null,
+        GraphTaskTargetKind targetKind = GraphTaskTargetKind.Device)
     {
         taskId = Require(taskId, nameof(taskId)); title = Require(title, nameof(title));
         if (scope == GraphTaskScopeKind.Worktree && string.IsNullOrWhiteSpace(worktreeId))
             throw new EngineeringGraphConstraintException("A worktree-scoped task requires a worktree ID.");
-        if (scope == GraphTaskScopeKind.Worktree && string.IsNullOrWhiteSpace(deviceId))
+        // A hardware task is the one target that resolves without a PLC device (ADR-0007); every other
+        // worktree task still needs one, and that rejection code is part of the contract.
+        if (scope == GraphTaskScopeKind.Worktree && targetKind == GraphTaskTargetKind.Device && string.IsNullOrWhiteSpace(deviceId))
             throw new EngineeringGraphConstraintException("A worktree-scoped task requires one PLC device.", "TASK_DEVICE_REQUIRED");
         if (worktreeId is not null && !_worktreeExists(worktreeId))
             throw new EngineeringGraphConstraintException($"Worktree '{worktreeId}' is not registered in the current Workbench.");
@@ -45,18 +48,21 @@ public sealed class EngineeringGraphService
             throw new EngineeringGraphConstraintException("A project-scoped task cannot have a worktree ID.");
         if (scope != GraphTaskScopeKind.Worktree && deviceId is not null)
             throw new EngineeringGraphConstraintException("Only worktree tasks can bind a PLC device.");
+        if (scope != GraphTaskScopeKind.Worktree && targetKind != GraphTaskTargetKind.Device)
+            throw new EngineeringGraphConstraintException("Only worktree tasks can target hardware configuration.");
         var now = DateTimeOffset.UtcNow;
         intent = Require(intent, nameof(intent));
         expectedResult = Require(expectedResult, nameof(expectedResult));
         var task = new GraphTask(taskId, _workbenchId, scope, worktreeId, title, type, status, description,
-            JsonSerializer.Serialize(new { priority, intent, expectedResult }), now, now, priority, intent, expectedResult, deviceId);
+            JsonSerializer.Serialize(new { priority, intent, expectedResult }), now, now, priority, intent, expectedResult, deviceId, targetKind);
         using var tx = _store.Connection.BeginTransaction();
         Execute(tx, """
-            INSERT INTO tasks (task_id, workbench_id, scope_kind, worktree_id, device_id, type, status, title, description, metadata_json, created_utc, updated_utc)
-            VALUES ($id,$wb,$scope,$wt,$device,$type,$status,$title,$description,$metadata,$created,$updated);
+            INSERT INTO tasks (task_id, workbench_id, scope_kind, worktree_id, device_id, target_kind, type, status, title, description, metadata_json, created_utc, updated_utc)
+            VALUES ($id,$wb,$scope,$wt,$device,$target,$type,$status,$title,$description,$metadata,$created,$updated);
             INSERT INTO graph_entities (entity_kind, entity_id, workbench_id, worktree_id, device_id) VALUES ('task',$id,$wb,$wt,$device);
             """, ("$id", task.TaskId), ("$wb", _workbenchId), ("$scope", task.ScopeKind.ToString().ToLowerInvariant()),
-            ("$wt", task.WorktreeId), ("$device", task.DeviceId), ("$type", task.Type.ToString().ToLowerInvariant()), ("$status", task.Status.ToString().ToLowerInvariant()),
+            ("$wt", task.WorktreeId), ("$device", task.DeviceId), ("$target", TargetKind(task.TargetKind)),
+            ("$type", task.Type.ToString().ToLowerInvariant()), ("$status", task.Status.ToString().ToLowerInvariant()),
             ("$title", task.Title), ("$description", task.Description), ("$metadata", task.MetadataJson),
             ("$created", now.ToString("O")), ("$updated", now.ToString("O")));
         tx.Commit();
@@ -66,7 +72,7 @@ public sealed class EngineeringGraphService
     public TaskSourceStage StageSourceObject(string taskId, string sourceObjectId, string? baselineEvidenceJson = null)
     {
         var task = FindTask(taskId) ?? throw new EngineeringGraphConstraintException("Task was not found.", "TASK_NOT_FOUND");
-        if (task.ScopeKind != GraphTaskScopeKind.Worktree || string.IsNullOrWhiteSpace(task.DeviceId))
+        if (task.ScopeKind != GraphTaskScopeKind.Worktree || task.TargetKind != GraphTaskTargetKind.Device || string.IsNullOrWhiteSpace(task.DeviceId))
             throw new EngineeringGraphConstraintException("A task must bind one device before staging source objects.", "TASK_DEVICE_REQUIRED");
         var source = FindEntity(GraphEntityKind.SourceObject, sourceObjectId)
             ?? throw new EngineeringGraphConstraintException("Source object was not registered.", "GRAPH_TARGET_NOT_FOUND");
@@ -148,7 +154,8 @@ public sealed class EngineeringGraphService
         if (current is null) return null;
         var updated = change(current) with { UpdatedUtc = DateTimeOffset.UtcNow };
         if (updated.WorkbenchId != _workbenchId || updated.TaskId != current.TaskId ||
-            updated.ScopeKind != current.ScopeKind || updated.WorktreeId != current.WorktreeId || updated.DeviceId != current.DeviceId)
+            updated.ScopeKind != current.ScopeKind || updated.WorktreeId != current.WorktreeId || updated.DeviceId != current.DeviceId ||
+            updated.TargetKind != current.TargetKind)
             throw new EngineeringGraphConstraintException("Task identity and scope cannot be changed.");
         var metadata = UpdatedMetadataJson(updated);
         ExecuteNonQuery("UPDATE tasks SET title=$title,description=$description,type=$type,status=$status,metadata_json=$metadata,updated_utc=$updated WHERE task_id=$id AND workbench_id=$wb",
@@ -350,7 +357,7 @@ public sealed class EngineeringGraphService
     public GraphTask? GetTask(string taskId)
     {
         using var c = _store.Connection.CreateCommand();
-        c.CommandText = "SELECT workbench_id,scope_kind,worktree_id,device_id,title,type,status,description,metadata_json,created_utc,updated_utc FROM tasks WHERE task_id=$id AND workbench_id=$wb;";
+        c.CommandText = "SELECT workbench_id,scope_kind,worktree_id,device_id,title,type,status,description,metadata_json,created_utc,updated_utc,target_kind FROM tasks WHERE task_id=$id AND workbench_id=$wb;";
         c.Parameters.AddWithValue("$id", taskId);
         c.Parameters.AddWithValue("$wb", _workbenchId);
         using var r = c.ExecuteReader();
@@ -361,7 +368,8 @@ public sealed class EngineeringGraphService
             r.IsDBNull(2) ? null : r.GetString(2), r.GetString(4), Enum.Parse<GraphTaskType>(r.GetString(5), true),
             Enum.Parse<GraphTaskStatus>(r.GetString(6), true), r.IsDBNull(7) ? null : r.GetString(7),
             r.IsDBNull(8) ? null : r.GetString(8), DateTimeOffset.Parse(r.GetString(9)), DateTimeOffset.Parse(r.GetString(10)),
-            metadata?.Priority ?? 0, metadata?.Intent ?? "", metadata?.ExpectedResult ?? "", r.IsDBNull(3) ? null : r.GetString(3));
+            metadata?.Priority ?? 0, metadata?.Intent ?? "", metadata?.ExpectedResult ?? "", r.IsDBNull(3) ? null : r.GetString(3),
+            ParseTargetKind(r.IsDBNull(11) ? null : r.GetString(11)));
     }
     public IReadOnlyList<GraphEdge> GetEdges(GraphEntityKind fromKind, string fromId, GraphEntityKind? toKind = null) =>
         ReadEdges(fromKind, fromId, toKind);
@@ -411,6 +419,8 @@ public sealed class EngineeringGraphService
     private static string Relation(GraphRelationKind k)=>k switch { GraphRelationKind.TaskSession=>"task_session",GraphRelationKind.TaskCommit=>"task_commit",GraphRelationKind.TaskSourceObject=>"task_source_object",GraphRelationKind.TaskSvnRevision=>"task_svn_revision",GraphRelationKind.CommitSourceObject=>"commit_source_object", _=>"commit_svn_revision" };
     private static GraphRelationKind ParseRelation(string value)=>value switch { "task_session"=>GraphRelationKind.TaskSession,"task_commit"=>GraphRelationKind.TaskCommit,"task_source_object"=>GraphRelationKind.TaskSourceObject,"task_svn_revision"=>GraphRelationKind.TaskSvnRevision,"commit_source_object"=>GraphRelationKind.CommitSourceObject,_=>GraphRelationKind.CommitSvnRevision };
     private static GraphProvenance ParseProvenance(string value)=>value switch { "default"=>GraphProvenance.Default,"evidence"=>GraphProvenance.Evidence,_=>GraphProvenance.Manual };
+    private static string TargetKind(GraphTaskTargetKind k)=>k switch { GraphTaskTargetKind.Hardware=>"hardware", _=>"device" };
+    private static GraphTaskTargetKind ParseTargetKind(string? value)=>value switch { "hardware"=>GraphTaskTargetKind.Hardware, _=>GraphTaskTargetKind.Device };
     private sealed record TaskMetadata(int Priority, string Intent, string ExpectedResult);
     private static string Require(string? value,string name)=>string.IsNullOrWhiteSpace(value)?throw new ArgumentException("A value is required.",name):value;
 

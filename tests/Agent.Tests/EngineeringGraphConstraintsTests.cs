@@ -147,6 +147,70 @@ public sealed class EngineeringGraphConstraintsTests : IDisposable
         Assert.Single(service.ListActiveStages(second.TaskId));
     }
 
+    [Fact]
+    public void WorktreeTaskWithoutADeviceIsRejectedUnlessItTargetsHardware()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+
+        var rejected = Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.CreateTask("task-unbound", GraphTaskScopeKind.Worktree, "wt-1", "Unbound", GraphTaskType.Feature,
+                intent: "A", expectedResult: "B"));
+        Assert.Equal("TASK_DEVICE_REQUIRED", rejected.Code);
+
+        var hardware = service.CreateTask("task-hardware", GraphTaskScopeKind.Worktree, "wt-1", "Hardware", GraphTaskType.Feature,
+            intent: "A", expectedResult: "B", targetKind: GraphTaskTargetKind.Hardware);
+
+        Assert.Equal(GraphTaskTargetKind.Hardware, hardware.TargetKind);
+        Assert.Null(hardware.DeviceId);
+        Assert.Null(service.GetTask("task-unbound"));
+    }
+
+    [Fact]
+    public void HardwareTaskPersistsItsTargetAndCannotStageSourceObjects()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        var task = service.CreateTask("task-hardware", GraphTaskScopeKind.Worktree, "wt-1", "Hardware", GraphTaskType.Feature,
+            intent: "A", expectedResult: "B", targetKind: GraphTaskTargetKind.Hardware);
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject, "device-1:Main", "wb-1", "wt-1", "device-1"));
+
+        Assert.Equal("TASK_DEVICE_REQUIRED", Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.StageSourceObject(task.TaskId, "device-1:Main")).Code);
+
+        store.Dispose();
+        using var reopenedStore = new EngineeringGraphStore(_root);
+        var reopened = new EngineeringGraphService(reopenedStore, "wb-1", id => id == "wt-1").GetTask(task.TaskId)!;
+        Assert.Equal(GraphTaskTargetKind.Hardware, reopened.TargetKind);
+    }
+
+    [Fact]
+    public void PreTargetModelRowReadsAsADeviceTaskWithoutBeingRewritten()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Device task", GraphTaskType.Feature,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+
+        // A row written before the target column existed carries no value for it.
+        Execute(store, "UPDATE tasks SET target_kind=NULL WHERE task_id='task-1';");
+
+        Assert.Equal(GraphTaskTargetKind.Device, service.GetTask("task-1")!.TargetKind);
+        Assert.Equal(1, Convert.ToInt32(Scalar(store, "SELECT target_kind IS NULL FROM tasks WHERE task_id='task-1';")));
+    }
+
+    [Fact]
+    public void ProjectTaskCannotTargetHardware()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+
+        Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.CreateTask("task-1", GraphTaskScopeKind.Project, null, "Project task", GraphTaskType.Feature,
+                intent: "A", expectedResult: "B", targetKind: GraphTaskTargetKind.Hardware));
+        Assert.Null(service.GetTask("task-1"));
+    }
+
     public void Dispose()
     {
         SqliteCleanup();
@@ -154,4 +218,18 @@ public sealed class EngineeringGraphConstraintsTests : IDisposable
     }
 
     private static void SqliteCleanup() => Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+    private static object? Scalar(EngineeringGraphStore store, string sql)
+    {
+        using var command = store.Connection.CreateCommand();
+        command.CommandText = sql;
+        return command.ExecuteScalar();
+    }
+
+    private static void Execute(EngineeringGraphStore store, string sql)
+    {
+        using var command = store.Connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
 }

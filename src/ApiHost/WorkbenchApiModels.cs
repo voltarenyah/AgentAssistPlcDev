@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Diagnostics;
 using Agent.Chat;
 using Agent.Mcp;
@@ -118,7 +119,10 @@ public sealed record WorktreeDetailResponse(
 public sealed record CreateWorktreeTaskApiRequest(
     string Title,
     string? Details,
-    string[]? ElementRefs);
+    string[]? ElementRefs,
+    string? DeviceId = null,
+    [property: JsonConverter(typeof(JsonStringEnumConverter<GraphTaskTargetKind>))]
+    GraphTaskTargetKind TargetKind = GraphTaskTargetKind.Device);
 
 /// <summary>Device list entry: opaque object id plus the human-readable PLC name from device.json.</summary>
 public sealed record DeviceSummary(string DeviceId, string PlcName);
@@ -869,12 +873,15 @@ public static class WorkbenchEndpoints
         {
             var workbench = state.Workbench(id);
             var worktree = state.Worktree(id, wt);
-            if (string.IsNullOrWhiteSpace(request.DeviceId) || !worktree.DeviceIds.Contains(request.DeviceId, StringComparer.Ordinal))
+            // A hardware task is the only target that resolves without a registered device (ADR-0007, AC-010);
+            // every other worktree task still has to name one and keeps the TASK_DEVICE_REQUIRED rejection (AC-011).
+            if (request.TargetKind == GraphTaskTargetKind.Device &&
+                (string.IsNullOrWhiteSpace(request.DeviceId) || !worktree.DeviceIds.Contains(request.DeviceId, StringComparer.Ordinal)))
                 throw new EngineeringGraphConstraintException("A worktree task must select a registered device.", "TASK_DEVICE_REQUIRED");
             tasks.Load(state.WorktreeRoot(id, wt));
             using var scope = graphs.Open(workbench);
             var task = scope.Service.CreateTask(Guid.NewGuid().ToString("N"), GraphTaskScopeKind.Worktree, wt, request.Title,
-                request.Type, request.Status, request.Description, request.Priority, request.Intent, request.ExpectedResult, request.DeviceId);
+                request.Type, request.Status, request.Description, request.Priority, request.Intent, request.ExpectedResult, request.DeviceId, request.TargetKind);
             return Results.Created($"/api/workbenches/{id}/worktrees/{wt}/tasks/{task.TaskId}", ToEngineeringTaskResponse(task));
         });
         app.MapPatch("/api/workbenches/{id}/worktrees/{wt}/engineering-tasks/{taskId}", (
@@ -983,7 +990,13 @@ public static class WorkbenchEndpoints
             WorkbenchApiState s,
             WorktreeTaskStore tasks) =>
         {
-            var task = tasks.Add(s.WorktreeRoot(id, wt), r.Title, r.Details, r.ElementRefs);
+            // This route predates the graph task contract, but it creates a worktree task in the same
+            // graph, so it owes the same target: a registered device, or the worktree's hardware (ADR-0007).
+            var worktree = s.Worktree(id, wt);
+            if (r.TargetKind == GraphTaskTargetKind.Device &&
+                (string.IsNullOrWhiteSpace(r.DeviceId) || !worktree.DeviceIds.Contains(r.DeviceId, StringComparer.Ordinal)))
+                throw new EngineeringGraphConstraintException("A worktree task must select a registered device.", "TASK_DEVICE_REQUIRED");
+            var task = tasks.Add(s.WorktreeRoot(id, wt), r.Title, r.Details, r.ElementRefs, r.DeviceId, r.TargetKind);
             return Results.Created(
                 $"/api/workbenches/{id}/worktrees/{wt}/tasks/{task.TaskId}",
                 task);
@@ -2088,7 +2101,8 @@ public static class WorkbenchEndpoints
         task.TaskId, task.WorkbenchId, JsonNamingPolicy.CamelCase.ConvertName(task.ScopeKind.ToString()), task.WorktreeId,
         task.Title, JsonNamingPolicy.CamelCase.ConvertName(task.Type.ToString()), JsonNamingPolicy.CamelCase.ConvertName(task.Status.ToString()),
         task.Priority, task.Intent, task.ExpectedResult, task.Description,
-        task.CreatedUtc!.Value, task.UpdatedUtc!.Value, task.DeviceId);
+        task.CreatedUtc!.Value, task.UpdatedUtc!.Value, task.DeviceId,
+        JsonNamingPolicy.CamelCase.ConvertName(task.TargetKind.ToString()));
 
     private static EngineeringTaskRelationshipMutationApiResponse ToRelationshipMutation(GraphEdge edge) => new(
         edge.EdgeId, edge.FromId, JsonNamingPolicy.CamelCase.ConvertName(edge.ToKind.ToString()), edge.ToId,

@@ -56,7 +56,9 @@ public sealed class WorktreeTaskStore
         string worktreeRoot,
         string title,
         string? details = null,
-        IReadOnlyList<string>? elementRefs = null)
+        IReadOnlyList<string>? elementRefs = null,
+        string? deviceId = null,
+        GraphTaskTargetKind targetKind = GraphTaskTargetKind.Device)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
 
@@ -65,7 +67,7 @@ public sealed class WorktreeTaskStore
             using (graphStore)
             {
                 ImportRegisteredWorktrees(graph, workbench!);
-                var graphTask = graph.CreateTask(Guid.NewGuid().ToString("N"), GraphTaskScopeKind.Worktree, worktreeId, title, GraphTaskType.Feature, description: details, intent: "Legacy task", expectedResult: "Unspecified");
+                var graphTask = graph.CreateTask(Guid.NewGuid().ToString("N"), GraphTaskScopeKind.Worktree, worktreeId, title, GraphTaskType.Feature, description: details, intent: "Legacy task", expectedResult: "Unspecified", deviceId: deviceId, targetKind: targetKind);
                 var legacy = new WorktreeTask(graphTask.TaskId, graphTask.Title, graphTask.Description, WorktreeTaskStatus.Todo, elementRefs?.ToArray() ?? [], graphTask.CreatedUtc!.Value, null);
                 graph.UpdateTask(graphTask.TaskId, current => ToGraph(legacy, current));
                 SaveLegacy(worktreeRoot, LoadLegacy(worktreeRoot) with { Tasks = [..LoadLegacy(worktreeRoot).Tasks, legacy] });

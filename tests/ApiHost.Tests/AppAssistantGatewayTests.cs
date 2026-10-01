@@ -73,7 +73,7 @@ public sealed class AppAssistantGatewayTests
                 null,
                 null,
                 null,
-                Array.Empty<string>(),
+                new[] { "device-1" },
                 null));
         state.Open(root);
 
@@ -90,14 +90,14 @@ public sealed class AppAssistantGatewayTests
                 null,
                 null,
                 null,
-                Array.Empty<string>(),
+                new[] { "device-1" },
                 null));
         EngineeringStateWriter.Write(
             worktreeRoot,
             EngineeringStateWriter.Create("^/native/main", 4, null, null, EngineeringCompileStatus.Success));
         var tasks = new WorktreeTaskStore(store);
-        tasks.Add(worktreeRoot, "Fix that bug");
-        var secondTask = tasks.Add(worktreeRoot, "Implement new function");
+        tasks.Add(worktreeRoot, "Fix that bug", deviceId: "device-1");
+        var secondTask = tasks.Add(worktreeRoot, "Implement new function", deviceId: "device-1");
         tasks.Update(worktreeRoot, secondTask.TaskId, task => task with { Status = WorktreeTaskStatus.InProgress });
 
         var context = await gateway.GetContextAsync(workbench.WorkbenchId);

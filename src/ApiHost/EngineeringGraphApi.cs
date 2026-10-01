@@ -40,7 +40,8 @@ public sealed record EngineeringTaskApiRequest(
     string Intent = "",
     string ExpectedResult = "",
     string? Description = null,
-    string? DeviceId = null);
+    string? DeviceId = null,
+    [property: JsonConverter(typeof(JsonStringEnumConverter<GraphTaskTargetKind>))] GraphTaskTargetKind TargetKind = GraphTaskTargetKind.Device);
 
 public sealed record EngineeringTaskApiResponse(
     string TaskId,
@@ -56,7 +57,8 @@ public sealed record EngineeringTaskApiResponse(
     string? Description,
     DateTimeOffset CreatedUtc,
     DateTimeOffset UpdatedUtc,
-    string? DeviceId = null);
+    string? DeviceId = null,
+    string TargetKind = "device");
 
 public sealed record EngineeringTaskUpdateApiRequest(
     string? Title = null,

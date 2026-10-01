@@ -381,6 +381,8 @@ export type WorktreeTaskList = {
   tasks: WorktreeTask[]
 }
 
+export type EngineeringTaskTargetKind = 'device' | 'hardware'
+
 export type EngineeringTask = {
   taskId: string
   workbenchId: string
@@ -396,7 +398,15 @@ export type EngineeringTask = {
   createdUtc: string
   updatedUtc: string
   deviceId?: string | null
+  targetKind?: EngineeringTaskTargetKind
 }
+
+/**
+ * The task's target, resolved to a concrete kind. A task that carries no kind is a row from before the
+ * target model, whose effective target is its PLC device (ADR-0007).
+ */
+export const taskTargetKind = (task: Pick<EngineeringTask, 'targetKind'>): EngineeringTaskTargetKind =>
+  task.targetKind === 'hardware' ? 'hardware' : 'device'
 
 export type EngineeringTaskDetail = {
   task: EngineeringTask
@@ -1394,7 +1404,7 @@ export const updateProjectTask = (workbenchId: string, taskId: string, patch: { 
   workbenchRequest<EngineeringTask>(`/workbenches/${encodeURIComponent(workbenchId)}/tasks/${encodeURIComponent(taskId)}`, jsonRequest('PATCH', patch))
 export const listGraphWorktreeTasks = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<EngineeringTaskList>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`)
-export const createGraphWorktreeTask = (workbenchId: string, worktreeId: string, task: { title: string; deviceId: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
+export const createGraphWorktreeTask = (workbenchId: string, worktreeId: string, task: { title: string; deviceId?: string | null; targetKind?: EngineeringTaskTargetKind; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
   workbenchRequest<EngineeringTask>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks`, jsonRequest('POST', task))
 export const updateGraphWorktreeTask = (workbenchId: string, worktreeId: string, taskId: string, patch: { title?: string; type?: EngineeringTask['type']; status?: WorktreeTaskStatus; priority?: number; intent?: string; expectedResult?: string; description?: string | null }) =>
   workbenchRequest<EngineeringTask>(`${worktreePath(workbenchId, worktreeId)}/engineering-tasks/${encodeURIComponent(taskId)}`, jsonRequest('PATCH', patch))
