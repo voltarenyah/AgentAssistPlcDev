@@ -21,29 +21,56 @@ const workbenches: api.Workbench[] = [
   },
 ]
 
+const tasksByWorktree: Record<string, api.EngineeringTask[]> = {
+  'wb-direct:wt-descendant': [{
+    taskId: 'task-1', workbenchId: 'wb-direct', scope: 'worktree', worktreeId: 'wt-descendant',
+    title: 'Review motor interlock', type: 'feature', status: 'inProgress', priority: 0,
+    intent: 'Review', expectedResult: 'Verified', description: null, createdUtc: '', updatedUtc: '', deviceId: 'plc-1',
+  }],
+}
+
 const callbacks = {
   onCreateWorkbench: () => {}, onCreateWorktree: () => {}, onOpenWorkbench: () => {}, onOpenWorktree: () => {}, onInspectWorkbench: () => {}, onInspectWorktree: () => {}, onArchiveWorktree: () => {}, onRefresh: () => {}, onShowHome: () => {}, onSelectWorkbench: () => {}, onSelectWorktree: () => {}, onSelectDevice: () => {}, onSelectHardware: () => {}, onReloadHardware: () => {}, onCompareHardware: () => {}, onDeleteWorkbench: () => {}, onDeleteWorktree: () => {}, onMergeWorktree: () => {}, onOpenDevice: () => {}, onUpgradeDevice: () => {}, onInspectDevice: () => {}, onCompareDevice: () => {}, onRebuildDevice: () => {}, onUpdateKnowledge: () => {}, onRebuildKnowledge: () => {},
 }
 
-const renderNavigator = async (filteredResults: api.WorkbenchTagSearchResults | null, filterActive = true) => {
+type NavigatorProps = React.ComponentProps<typeof WorkbenchNavigator>
+
+const navigatorProps = (overrides: Partial<NavigatorProps> = {}): NavigatorProps => ({
+  workbenches,
+  devicesByWorktree: {},
+  selection: { workbenchId: null, worktreeId: null, deviceId: null },
+  viewKind: 'project',
+  knowledgeState: {},
+  loading: false,
+  filterActive: false,
+  filteredResults: null,
+  ...callbacks,
+  ...overrides,
+})
+
+const renderNavigator = async (
+  filteredResults: api.WorkbenchTagSearchResults | null,
+  filterActive = true,
+  overrides: Partial<NavigatorProps> = {},
+) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
   await act(async () => root.render(
-    <WorkbenchNavigator
-      workbenches={workbenches}
-      devicesByWorktree={{}}
-      selection={{ workbenchId: null, worktreeId: null, deviceId: null }}
-      viewKind="project"
-      knowledgeState={{}}
-      loading={false}
-      filterActive={filterActive}
-      filteredResults={filteredResults}
-      {...callbacks}
-    />,
+    <WorkbenchNavigator {...navigatorProps({ filteredResults, filterActive, ...overrides })} />,
   ))
   return { host, root }
 }
+
+const sectionIds = (host: HTMLElement) => Array.from(host.querySelectorAll('[data-navigator-section]'))
+  .map(node => node.getAttribute('data-navigator-section'))
+
+const section = (host: HTMLElement, id: string) => host.querySelector(`[data-navigator-section="${id}"]`) as HTMLElement
+
+const sectionHeader = (host: HTMLElement, id: string) =>
+  host.querySelector(`[data-navigator-section="${id}"] button[aria-expanded]`) as HTMLButtonElement
+
+const sectionBody = (host: HTMLElement, id: string) => host.querySelector(`#navigator-section-${id}`) as HTMLElement
 
 afterEach(() => { document.body.innerHTML = '' })
 
@@ -51,25 +78,12 @@ describe('WorkbenchNavigator tag projection', () => {
   it('renders task children as a compact outline without a Tasks label', async () => {
     const { host, root } = await renderNavigator(null, false)
     await act(async () => root.render(
-      <WorkbenchNavigator
-        workbenches={workbenches}
-        devicesByWorktree={{}}
-        tasksByWorktree={{
-          'wb-direct:wt-descendant': [{
-            taskId: 'task-1', workbenchId: 'wb-direct', scope: 'worktree', worktreeId: 'wt-descendant',
-            title: 'Review motor interlock', type: 'feature', status: 'inProgress', priority: 0,
-            intent: 'Review', expectedResult: 'Verified', description: null, createdUtc: '', updatedUtc: '', deviceId: 'plc-1',
-          }],
-        }}
-        activeTaskId="task-1"
-        selection={{ workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-other' }}
-        viewKind="device"
-        knowledgeState={{}}
-        loading={false}
-        filterActive={false}
-        filteredResults={null}
-        {...callbacks}
-      />,
+      <WorkbenchNavigator {...navigatorProps({
+        tasksByWorktree,
+        activeTaskId: 'task-1',
+        selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-other' },
+        viewKind: 'device',
+      })} />,
     ))
     const worktreeName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'descendant match')
     await act(async () => (worktreeName?.parentElement as HTMLElement).click())
@@ -95,21 +109,10 @@ describe('WorkbenchNavigator tag projection', () => {
 
   it('offers an icon-only Home action beside the workbench title', async () => {
     const onShowHome = vi.fn()
-    const { host, root } = await renderNavigator(null, false)
-    await act(async () => root.render(
-      <WorkbenchNavigator
-        workbenches={workbenches}
-        devicesByWorktree={{}}
-        selection={{ workbenchId: 'wb-direct', worktreeId: null, deviceId: null }}
-        viewKind="project"
-        knowledgeState={{}}
-        loading={false}
-        filterActive={false}
-        filteredResults={null}
-        {...callbacks}
-        onShowHome={onShowHome}
-      />,
-    ))
+    const { host, root } = await renderNavigator(null, false, {
+      selection: { workbenchId: 'wb-direct', worktreeId: null, deviceId: null },
+      onShowHome,
+    })
 
     const home = host.querySelector('button[aria-label="Go to all projects"]')
     expect(home).toBeTruthy()
@@ -154,44 +157,144 @@ describe('WorkbenchNavigator tag projection', () => {
     expect(host.textContent).not.toContain('unmatched worktree')
 
     await act(async () => root.render(
-      <WorkbenchNavigator
-        workbenches={workbenches}
-        devicesByWorktree={{}}
-        selection={{ workbenchId: 'wb-direct', worktreeId: null, deviceId: null }}
-        viewKind="project"
-        knowledgeState={{}}
-        loading={false}
-        filterActive={false}
-        filteredResults={null}
-        {...callbacks}
-      />,
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: 'wb-direct', worktreeId: null, deviceId: null },
+      })} />,
     ))
 
     expect(host.textContent).toContain('unmatched worktree')
     await act(async () => root.unmount())
   })
 
-  it('keeps previously expanded projects open when another project is selected', async () => {
+  it('shows only PROJECTS and WORKTREE while the tag filter is active and brings the task rows back when it clears (AC-006)', async () => {
+    const result = {
+      workbenches: [] as api.WorkbenchTagSearchResult[],
+      worktrees: [{ entityType: 'worktree' as const, entityId: 'wt-descendant', workbenchId: 'wb-direct', direct: ['press'], effective: ['press'], available: true }],
+    }
+    const selection = { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null }
+    const { host, root } = await renderNavigator(result, true, { selection, tasksByWorktree })
+
+    expect(sectionIds(host)).toEqual(['projects', 'worktree'])
+    expect(section(host, 'worktree').textContent).toContain('descendant match')
+    expect(host.textContent).not.toContain('Review motor interlock')
+
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        filterActive: false,
+        filteredResults: null,
+        selection,
+        tasksByWorktree,
+      })} />,
+    ))
+
+    expect(sectionIds(host)).toEqual(['projects', 'worktree'])
+    expect(host.textContent).toContain('Review motor interlock')
+    await act(async () => root.unmount())
+  })
+})
+
+describe('WorkbenchNavigator section cascade', () => {
+  it('lists every workbench as a flat PROJECTS row and creates a workbench from the section header (AC-001)', async () => {
+    const onCreateWorkbench = vi.fn()
+    const { host, root } = await renderNavigator(null, false, {
+      selection: { workbenchId: 'wb-parent', worktreeId: null, deviceId: null },
+      onCreateWorkbench,
+    })
+
+    const projects = section(host, 'projects')
+    expect(projects).toBeTruthy()
+    expect(projects.textContent).toContain('Direct project')
+    expect(projects.textContent).toContain('Parent-only project')
+    // A workbench row is flat: the selected workbench's worktree lives in WORKTREE, never under it.
+    expect(projects.textContent).not.toContain('unavailable match')
+
+    const current = Array.from(projects.querySelectorAll('[aria-current]'))
+    expect(current).toHaveLength(1)
+    expect(current[0].textContent).toContain('Parent-only project')
+
+    const create = projects.querySelector('button[aria-label="Create workbench"]') as HTMLButtonElement
+    expect(create).toBeTruthy()
+    await act(async () => create.click())
+    expect(onCreateWorkbench).toHaveBeenCalledOnce()
+    await act(async () => root.unmount())
+  })
+
+  it('hides WORKTREE until a workbench is selected (AC-002)', async () => {
     const { host, root } = await renderNavigator(null, false)
-    const directName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'Direct project')
-    const directRow = directName?.parentElement
-    expect(directName).toBeTruthy()
-    expect(directRow).toBeTruthy()
+    expect(sectionIds(host)).toEqual(['projects'])
 
-    await act(async () => (directRow as HTMLElement).click())
-    expect(host.textContent).toContain('descendant match')
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: 'wb-direct', worktreeId: null, deviceId: null },
+      })} />,
+    ))
+    expect(sectionIds(host)).toEqual(['projects', 'worktree'])
+    await act(async () => root.unmount())
+  })
 
-    const parentName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'Parent-only project')
-    const parentRow = parentName?.parentElement
-    expect(parentRow).toBeTruthy()
-    await act(async () => (parentRow as HTMLElement).click())
+  it('derives WORKTREE from the selected workbench only and creates a worktree from its header (AC-002)', async () => {
+    const onCreateWorktree = vi.fn()
+    const { host, root } = await renderNavigator(null, false, {
+      selection: { workbenchId: 'wb-direct', worktreeId: null, deviceId: null },
+      onCreateWorktree,
+    })
 
-    expect(host.textContent).toContain('descendant match')
-    expect(host.textContent).toContain('unavailable match')
+    expect(section(host, 'worktree').textContent).toContain('descendant match')
+    expect(section(host, 'worktree').textContent).toContain('unmatched worktree')
+    expect(section(host, 'worktree').textContent).not.toContain('unavailable match')
 
-    await act(async () => (parentRow as HTMLElement).click())
-    expect(host.textContent).toContain('descendant match')
-    expect(host.textContent).not.toContain('unavailable match')
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: 'wb-parent', worktreeId: null, deviceId: null },
+        onCreateWorktree,
+      })} />,
+    ))
+
+    expect(section(host, 'worktree').textContent).toContain('unavailable match')
+    expect(section(host, 'worktree').textContent).not.toContain('descendant match')
+    expect(section(host, 'worktree').textContent).not.toContain('unmatched worktree')
+
+    const create = section(host, 'worktree')
+      .querySelector('button[aria-label="Create worktree for Parent-only project"]') as HTMLButtonElement
+    expect(create).toBeTruthy()
+    await act(async () => create.click())
+    expect(onCreateWorktree).toHaveBeenCalledWith(workbenches[1])
+    await act(async () => root.unmount())
+  })
+
+  it('collapses only the activated section and keeps its body addressable (AC-007)', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      selection: { workbenchId: 'wb-direct', worktreeId: null, deviceId: null },
+    })
+
+    const projectsHeader = sectionHeader(host, 'projects')
+    const worktreeHeader = sectionHeader(host, 'worktree')
+    const projectsBody = sectionBody(host, 'projects')
+    const worktreeBody = sectionBody(host, 'worktree')
+
+    expect(projectsHeader.getAttribute('aria-expanded')).toBe('true')
+    expect(projectsHeader.getAttribute('aria-controls')).toBe(projectsBody.id)
+    expect(worktreeHeader.getAttribute('aria-expanded')).toBe('true')
+    expect(projectsBody.hasAttribute('hidden')).toBe(false)
+    expect(worktreeBody.hasAttribute('hidden')).toBe(false)
+
+    // The header must sit outside the body's scroll region, otherwise a long section could
+    // scroll its own header out of view. Scrolling a non-ancestor can never move it.
+    expect(projectsBody.contains(projectsHeader)).toBe(false)
+    expect(worktreeBody.contains(worktreeHeader)).toBe(false)
+
+    await act(async () => projectsHeader.click())
+
+    expect(projectsHeader.getAttribute('aria-expanded')).toBe('false')
+    expect(projectsBody.hasAttribute('hidden')).toBe(true)
+    expect(worktreeHeader.getAttribute('aria-expanded')).toBe('true')
+    expect(worktreeBody.hasAttribute('hidden')).toBe(false)
+
+    await act(async () => projectsHeader.click())
+
+    expect(projectsHeader.getAttribute('aria-expanded')).toBe('true')
+    expect(projectsBody.hasAttribute('hidden')).toBe(false)
+    expect(worktreeHeader.getAttribute('aria-expanded')).toBe('true')
     await act(async () => root.unmount())
   })
 })
