@@ -6,6 +6,16 @@
 - Scope: left navigator, task creation, task detail, and task selection in Studio.
 - Explicit exclusions: project-scoped tasks and changing a task's device are not presented in this navigation.
 
+> **Partially superseded.** Two later decisions replace the shape this specification assumes.
+> [ADR-0006](../adr/ADR-0006-studio-navigator-ownership-and-shape.md) turns the navigator into a scope
+> cascade, so the device subtree returns as a flat `DEVICE` section and `TASKS` becomes that section's
+> tasks: **AC-002** and **AC-004** below no longer describe the target UI.
+> [ADR-0007](../adr/ADR-0007-task-target-model.md) gives a worktree task an explicit target kind, so a
+> hardware task carries no device and **AC-001** ("must select a registered device") no longer holds for
+> every task. Their text is revised in the same change that implements those decisions; until then this
+> specification still describes the shipped behaviour. Target surface:
+> [studio-information-architecture-ui-spec.md](studio-information-architecture-ui-spec.md).
+
 ## UI Surface and Flow
 
 | View or state | Entry / trigger | User-visible result |
