@@ -209,6 +209,7 @@ public sealed class CombinedCommitTests : IDisposable
 
         // Retry: git side only, same SVN revision, no second SVN commit.
         var retryVersionControl = new FakeToolCaller()
+            .Respond("vc_status", new ConsistencyStatusResult())
             .Respond("vc_log", new ConsistencyLogResult
             {
                 Commits = new[] { new ConsistencyCommit { Sha = "head-1" } },
@@ -272,7 +273,7 @@ public sealed class CombinedCommitTests : IDisposable
         var graph = new EngineeringGraphService(graphStore, CombinedFixture.WorkbenchId,
             id => id == CombinedFixture.WorktreeId);
         graph.CreateTask("task-1", GraphTaskScopeKind.Worktree, CombinedFixture.WorktreeId,
-            "Savepoint", GraphTaskType.Feature, intent: "intent", expectedResult: "result");
+            "Savepoint", GraphTaskType.Feature, intent: "intent", expectedResult: "result", deviceId: "device-1");
         var attribution = new EngineeringGraphCommitAttribution(graph);
         graphStore.Dispose();
         var coordinator = fixture.CreateCoordinator(
@@ -552,6 +553,7 @@ public sealed class CombinedCommitTests : IDisposable
             }
             caller
                 .Respond("svn_status", new CoordinatorSvnStatusResult { IsClean = !svnDirty })
+                .Respond("vc_status", new ConsistencyStatusResult())
                 .Respond("svn_commit", new CoordinatorSvnCommitResult { Committed = true, Revision = 2 });
             if (failGitCommit)
             {

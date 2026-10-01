@@ -1208,7 +1208,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 created.Workbench,
                 "feature-a",
                 "feature-a",
-                "master"));
+                null,
+                new SourceSavepointSelection(created.Worktree.WorktreeId, "baseline-sha")));
 
         Assert.Equal(created.Worktree.DeviceIds, feature.DeviceIds);
         var featureDevicePath = Path.Combine(
@@ -1239,7 +1240,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline",
-                "vc_commit_selected", "vc_commit_state_create", "vc_validation_create", "vc_add_worktree",
+                "vc_commit_selected", "vc_commit_state_create", "vc_validation_create",
+                "vc_log", "vc_show_file", "svn_log", "vc_add_worktree", "svn_copy_branch", "svn_checkout",
             },
             versionControl.Calls);
     }
@@ -1280,7 +1282,9 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline",
-                "vc_commit_selected", "vc_commit_state_create", "vc_validation_create", "vc_add_worktree", "vc_remove_worktree",
+                "vc_commit_selected", "vc_commit_state_create", "vc_validation_create",
+                "vc_log", "vc_show_file", "svn_log", "vc_add_worktree", "svn_copy_branch", "svn_checkout",
+                "vc_remove_worktree",
             },
             versionControl.Calls);
         var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
@@ -1320,7 +1324,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             new[]
             {
                 "vc_init_shared", "svn_init_shared", "svn_commit_native_baseline",
-                "vc_commit_selected", "vc_commit_state_create", "vc_validation_create", "vc_add_worktree", "vc_remove_worktree",
+                "vc_commit_selected", "vc_commit_state_create", "vc_validation_create",
+                "vc_log", "vc_show_file", "svn_log", "vc_add_worktree", "vc_remove_worktree",
             },
             versionControl.Calls);
         var rollback = versionControl.CallArgs["vc_remove_worktree"].Single();
@@ -2766,10 +2771,31 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     private static FakeToolCaller ScriptCreateVersionControl(FakeToolCaller caller) =>
         caller
             .Respond("vc_init_shared", new object())
-            .Respond("svn_init_shared", new CoordinatorSvnInitResult
+            .Respond("vc_log", new ConsistencyLogResult
             {
-                RepositoryPath = "repository.svn",
-                RepositoryUri = "file:///repository.svn/",
+                Commits = new[] { new ConsistencyCommit { Sha = "baseline-sha" } },
+            })
+            .Respond("vc_show_file", new ShowFileResult { Content = MetadataRemovingWorktreeCaller.MasterRevisionStateJson() })
+            .Respond("svn_copy_branch", new CoordinatorSvnBranchCopyResult { Revision = 2 })
+            .Respond("svn_checkout", args =>
+            {
+                var path = Property<string>(args, "path");
+                Directory.CreateDirectory(path);
+                File.WriteAllText(Path.Combine(path, "Line.ap17"), "managed project");
+                return new object();
+            })
+            .Respond("svn_init_shared", args =>
+            {
+                // The real gateway creates the native store. Mirror it here, otherwise every
+                // directory-existence check (WorkbenchCoordinator.IsSvnManaged and the create-worktree
+                // guard) reports SVN_HISTORY_UNAVAILABLE against a workbench that is in fact managed.
+                Directory.CreateDirectory(
+                    Path.Combine(Property<string>(args, "workbenchRoot"), "repository.svn"));
+                return new CoordinatorSvnInitResult
+                {
+                    RepositoryPath = "repository.svn",
+                    RepositoryUri = "file:///repository.svn/",
+                };
             })
             .Respond("svn_commit_native_baseline", new CoordinatorSvnCommitResult { Committed = true, Revision = 1 })
             .Respond("vc_commit_selected", new WorkbenchCommitResult(
@@ -2847,11 +2873,46 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                 File.Delete(masterDevicePath);
             }
 
+            if (tool == "svn_log")
+            {
+                // The collision pre-check reads this as "the branch does not exist" when it fails,
+                // which is the same convention FeatureSvnBranchTests relies on.
+                throw new InvalidOperationException("svn_log: the native branch does not exist.");
+            }
+
+            if (tool == "svn_checkout")
+            {
+                var path = Property<string>(args, "path");
+                Directory.CreateDirectory(path);
+                File.WriteAllText(Path.Combine(path, "Line.ap17"), "managed project");
+                return Task.FromResult((T)(object)new object());
+            }
+
+            if (tool == "svn_init_shared")
+            {
+                // Same reason as ScriptCreateVersionControl and PartialWorktreeCreationCaller: this
+                // fake bypasses the script queue, so it has to create the native store itself.
+                Directory.CreateDirectory(
+                    Path.Combine(Property<string>(args, "workbenchRoot"), "repository.svn"));
+            }
+
             return Task.FromResult((T)CreateFlowResult(tool));
         }
 
+        /// <summary>The committed revision state a savepoint-aware flow reads through
+        /// <c>vc_show_file</c>: an SVN URL plus revision, so the workbench counts as branchable.</summary>
+        internal static string MasterRevisionStateJson() => JsonSerializer.Serialize(
+            EngineeringStateWriter.Create(
+                "^/native/main", 7, "PLC_1:checksum", null, EngineeringCompileStatus.Success),
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
         internal static object CreateFlowResult(string tool) => tool switch
         {
+            "vc_log" => new ConsistencyLogResult
+            {
+                Commits = new[] { new ConsistencyCommit { Sha = "baseline-sha" } },
+            },
+            "vc_show_file" => new ShowFileResult { Content = MasterRevisionStateJson() },
             "svn_init_shared" => new CoordinatorSvnInitResult
             {
                 RepositoryPath = "repository.svn",
@@ -2890,6 +2951,28 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
                     "GIT_PARTIAL",
                     "linked checkout creation was interrupted",
                     null);
+            }
+
+            if (tool == "svn_init_shared")
+            {
+                // Same reason as ScriptCreateVersionControl: this fake bypasses the script queue,
+                // so it has to create the native store itself.
+                Directory.CreateDirectory(
+                    Path.Combine(Property<string>(args, "workbenchRoot"), "repository.svn"));
+            }
+
+            if (tool == "svn_log")
+            {
+                // See MetadataRemovingWorktreeCaller: a failed log read means "no branch yet".
+                throw new InvalidOperationException("svn_log: the native branch does not exist.");
+            }
+
+            if (tool == "svn_checkout")
+            {
+                var path = Property<string>(args, "path");
+                Directory.CreateDirectory(path);
+                File.WriteAllText(Path.Combine(path, "Line.ap17"), "managed project");
+                return Task.FromResult((T)(object)new object());
             }
 
             return Task.FromResult((T)MetadataRemovingWorktreeCaller.CreateFlowResult(tool));

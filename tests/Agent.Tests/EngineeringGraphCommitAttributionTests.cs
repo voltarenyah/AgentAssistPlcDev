@@ -12,9 +12,9 @@ public sealed class EngineeringGraphCommitAttributionTests : IDisposable
     {
         using var store = new EngineeringGraphStore(root);
         var graph = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
-        var first = graph.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Primary", GraphTaskType.Feature, intent: "intent", expectedResult: "result");
-        graph.CreateTask("task-2", GraphTaskScopeKind.Worktree, "wt-1", "Additional", GraphTaskType.Issue, intent: "intent", expectedResult: "result");
-        graph.CreateTask("task-3", GraphTaskScopeKind.Worktree, "wt-1", "Additional 2", GraphTaskType.Improvement, intent: "intent", expectedResult: "result");
+        var first = graph.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Primary", GraphTaskType.Feature, intent: "intent", expectedResult: "result", deviceId: "device-1");
+        graph.CreateTask("task-2", GraphTaskScopeKind.Worktree, "wt-1", "Additional", GraphTaskType.Issue, intent: "intent", expectedResult: "result", deviceId: "device-1");
+        graph.CreateTask("task-3", GraphTaskScopeKind.Worktree, "wt-1", "Additional 2", GraphTaskType.Improvement, intent: "intent", expectedResult: "result", deviceId: "device-1");
         var active = new ActiveTaskContextService();
         active.Select(graph, "wt-1", first.TaskId);
 
@@ -52,7 +52,7 @@ public sealed class EngineeringGraphCommitAttributionTests : IDisposable
     {
         using var store = new EngineeringGraphStore(root);
         var graph = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
-        graph.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Task", GraphTaskType.Feature, intent: "intent", expectedResult: "result");
+        graph.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "Task", GraphTaskType.Feature, intent: "intent", expectedResult: "result", deviceId: "device-1");
         var attribution = new EngineeringGraphCommitAttribution(graph);
         Assert.Null(attribution.Associate("wb-1", "wt-1", "prior-commit", "task-1"));
 
