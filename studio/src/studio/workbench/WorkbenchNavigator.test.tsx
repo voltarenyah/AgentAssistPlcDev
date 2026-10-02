@@ -684,16 +684,21 @@ describe('WorkbenchNavigator sessions section', () => {
     await act(async () => root.unmount())
   })
 
-  it('starts a conversation bound to the selected task from the header (AC-016)', async () => {
+  it('starts a conversation in the scope the section is showing from its header (AC-016)', async () => {
     const onAddSession = vi.fn()
-    // With no task selected there is nothing to bind a new conversation to, so the action is not offered.
+    // With no task selected the section is the device's task-less list, so its header starts a
+    // device-scoped conversation that no task owns — exactly the list it is showing.
     const { host, root } = await renderNavigator(null, false, {
       selection: deviceSelection, ...overrides, onAddSession,
     })
     expect(section(host, 'sessions')).toBeTruthy()
-    expect(host.querySelector('button[aria-label^="Start a conversation"]')).toBeNull()
+    const startDevice = section(host, 'sessions')
+      .querySelector('button[aria-label="Start a conversation for this device"]') as HTMLButtonElement
+    expect(startDevice).toBeTruthy()
+    await act(async () => startDevice.click())
+    expect(onAddSession).toHaveBeenCalledWith(null)
 
-    // Selecting the task that owns the conversations offers the action, named for that task.
+    // Selecting the task that owns the conversations binds the new one to that task, named for it.
     await act(async () => root.render(
       <WorkbenchNavigator {...navigatorProps({
         selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onAddSession,
@@ -727,22 +732,128 @@ describe('WorkbenchNavigator sessions section', () => {
     await act(async () => root.unmount())
   })
 
-  it('offers open, rename and delete on a conversation row (AC-017)', async () => {
+  it('offers every operation the repository performs on a conversation row (AC-017)', async () => {
     const { host, root } = await renderNavigator(null, false, {
-      selection: deviceSelection, activeTaskId: 'task-device', ...overrides,
+      selection: deviceSelection, ...overrides,
     })
-    const trigger = section(host, 'sessions')
-      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    // A conversation that no task owns can be opened, renamed, exported, attached to a task or
+    // deleted, but it has no task link to remove. The row menu is its only entry point, so it has to
+    // carry all of them.
+    const unbound = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Ad-hoc question"]') as HTMLButtonElement
     // The row menu is visible without hovering, like every other row's menu in the navigator.
-    const conversationTriggerClasses = trigger.className.split(/\s+/)
+    const conversationTriggerClasses = unbound.className.split(/\s+/)
     expect(conversationTriggerClasses).not.toContain('opacity-0')
     expect(conversationTriggerClasses).not.toContain('pointer-events-none')
 
-    const items = (await openRowMenu(trigger)).map(item => item.textContent?.trim())
+    expect((await openRowMenu(unbound)).map(item => item.textContent?.trim())).toEqual([
+      'Open conversation',
+      'Rename conversation',
+      'Export conversation',
+      'Attach task',
+      'Delete conversation',
+    ])
 
-    // Re-binding is out of scope for now, so the menu is exactly the operations the repository performs.
-    expect(items).toEqual(['Open conversation', 'Rename conversation', 'Delete conversation'])
+    // A bound conversation names the binding operations for what they do to it.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: deviceSelection, activeTaskId: 'task-device', ...overrides,
+      })} />,
+    ))
+    const bound = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    expect((await openRowMenu(bound)).map(item => item.textContent?.trim())).toEqual([
+      'Open conversation',
+      'Rename conversation',
+      'Export conversation',
+      'Reassign task',
+      'Remove task',
+      'Delete conversation',
+    ])
     await act(async () => root.unmount())
+  })
+
+  it('exports a conversation from its row menu', async () => {
+    const onExportSession = vi.fn()
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, ...overrides, onExportSession,
+    })
+    const trigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Ad-hoc question"]') as HTMLButtonElement
+    const item = (await openRowMenu(trigger)).find(entry => entry.textContent?.trim() === 'Export conversation')!
+
+    await act(async () => item.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(onExportSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-unbound', deviceId: 'plc-1' }))
+    await act(async () => root.unmount())
+  })
+
+  it('binds a conversation to one of the worktree\'s tasks through a picker, and clears it', async () => {
+    const onSetSessionTask = vi.fn()
+    // The task-less row offers the attach operation, and the picker lists the worktree's tasks.
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, ...overrides, onSetSessionTask,
+    })
+    const trigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Ad-hoc question"]') as HTMLButtonElement
+    const attach = (await openRowMenu(trigger)).find(entry => entry.textContent?.trim() === 'Attach task')!
+    await act(async () => attach.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    // A task that cannot own a conversation is not a valid binding, so it is not offered.
+    const offered = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
+      .map(option => option.textContent?.trim())
+    expect(offered).toEqual(['Device task'])
+    expect(offered).not.toContain('Hardware task')
+    expect(offered).not.toContain('Unbound task')
+
+    const search = document.body.querySelector<HTMLInputElement>('input[aria-label="Search this worktree\'s tasks"]')!
+    expect(search).toBeTruthy()
+    await act(async () => {
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(onSetSessionTask).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-unbound' }), 'task-device')
+
+    // Clearing uses the same menu: a bound conversation can be left owned by no task again.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onSetSessionTask,
+      })} />,
+    ))
+    const boundTrigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    const clear = (await openRowMenu(boundTrigger)).find(entry => entry.textContent?.trim() === 'Remove task')!
+    await act(async () => clear.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(onSetSessionTask).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-bound' }), null)
+    await act(async () => root.unmount())
+  })
+
+  it('moves a conversation between the task list and the task-less list when its binding changes', async () => {
+    // Bound: the conversation is in the list of the task it names, under that task's heading.
+    const rebound = {
+      'wb-direct:wt-descendant': [
+        sessionsByWorktree['wb-direct:wt-descendant'][0],
+        { ...sessionsByWorktree['wb-direct:wt-descendant'][1], taskId: 'task-device' },
+      ],
+    }
+    const bound = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device',
+      devicesByWorktree, tasksByWorktree: targetTasks, sessionsByWorktree: rebound,
+    })
+    expect(section(bound.host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('task-device')
+    expect(section(bound.host, 'sessions').textContent).toContain('Ad-hoc question')
+    await act(async () => bound.root.unmount())
+
+    // Cleared: the same conversation is out of that task's list and back in the device's task-less one.
+    const cleared = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    expect(section(cleared.host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('unbound')
+    expect(section(cleared.host, 'sessions').textContent).toContain('Ad-hoc question')
+    expect(section(cleared.host, 'sessions').textContent).not.toContain('Interlock review')
+    await act(async () => cleared.root.unmount())
   })
 
   it('offers the task row menu without hovering too', async () => {

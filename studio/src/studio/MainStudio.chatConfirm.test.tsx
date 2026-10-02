@@ -236,7 +236,8 @@ describe('MainStudio chat destructive-tool confirmation', () => {
 
     clickText(host, 'AI chat')
     await act(async () => {})
-    clickAriaLabel(host, 'New session')
+    // The conversation is started from the chat surface: the right dock's sessions page is retired.
+    clickAriaLabel(host, 'Create new chat session')
     await act(async () => {})
     await act(async () => {})
 

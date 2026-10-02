@@ -6,12 +6,14 @@ import {
   CircuitBoard,
   Cpu,
   Database,
+  Download,
   Ellipsis,
   Factory,
   FileText,
   GitBranch,
   GitMerge,
   House,
+  Link2,
   MessageSquareText,
   Monitor,
   MonitorOff,
@@ -23,6 +25,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  Unlink,
   Wrench,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -38,6 +41,7 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Button } from '@/components/ui/button'
+import { CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -105,10 +109,17 @@ type Props = {
   onOpenSession?: (session: ChatSessionInfo) => void
   /** Renames a conversation. */
   onRenameSession?: (session: ChatSessionInfo, title: string) => void
+  /** Exports a conversation to a file. */
+  onExportSession?: (session: ChatSessionInfo) => void
+  /** Binds a conversation to a task, or clears the binding when `taskId` is null. */
+  onSetSessionTask?: (session: ChatSessionInfo, taskId: string | null) => void
   /** Deletes a conversation, after the user confirms. */
   onDeleteSession?: (session: ChatSessionInfo) => void
-  /** Starts a conversation bound to the selected task. */
-  onAddSession?: (task: EngineeringTask) => void
+  /**
+   * Starts the conversation the section's header offers: bound to `task`, or — when `task` is null —
+   * the device's own conversation, owned by no task, which is the list the section is showing then.
+   */
+  onAddSession?: (task: EngineeringTask | null) => void
   onSelectHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onReloadHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onCompareHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
@@ -401,6 +412,10 @@ type SessionRowProps = {
   session: ChatSessionInfo
   onOpen: (session: ChatSessionInfo) => void
   onRename: (session: ChatSessionInfo) => void
+  onExport: (session: ChatSessionInfo) => void
+  /** Opens the task picker the row binds the conversation through. */
+  onBindTask: (session: ChatSessionInfo) => void
+  onClearTask: (session: ChatSessionInfo) => void
   onDelete: (session: ChatSessionInfo) => void
 }
 
@@ -408,8 +423,10 @@ type SessionRowProps = {
  * One conversation row. It shows what the task surface already shows for the same conversation — its
  * title, falling back to its first message, and how long ago it last changed — so a conversation reads
  * the same wherever it appears, and it carries that conversation's operations in its own 3-dots menu.
+ * The menu is the conversation's only entry point, so it offers everything the repository performs on
+ * one: open, rename, export, bind or clear its task, and delete (ADR-0009, ADR-0010).
  */
-function SessionRow({ session, onOpen, onRename, onDelete }: SessionRowProps) {
+function SessionRow({ session, onOpen, onRename, onExport, onBindTask, onClearTask, onDelete }: SessionRowProps) {
   const title = conversationTitle(session)
   return (
     <div className="group relative" data-session={session.sessionId}>
@@ -440,6 +457,21 @@ function SessionRow({ session, onOpen, onRename, onDelete }: SessionRowProps) {
             <Pencil className="h-3.5 w-3.5" />
             Rename conversation
           </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onExport(session)}>
+            <Download className="h-3.5 w-3.5" />
+            Export conversation
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => onBindTask(session)}>
+            <Link2 className="h-3.5 w-3.5" />
+            {session.taskId ? 'Reassign task' : 'Attach task'}
+          </DropdownMenuItem>
+          {session.taskId && (
+            <DropdownMenuItem onSelect={() => onClearTask(session)}>
+              <Unlink className="h-3.5 w-3.5" />
+              Remove task
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onSelect={() => onDelete(session)}>
             <Trash2 className="h-3.5 w-3.5" />
@@ -480,6 +512,8 @@ export default function WorkbenchNavigator({
   onAddTask = () => {},
   onOpenSession = () => {},
   onRenameSession = () => {},
+  onExportSession = () => {},
+  onSetSessionTask = () => {},
   onDeleteSession = () => {},
   onAddSession = () => {},
   onSelectHardware,
@@ -516,6 +550,9 @@ export default function WorkbenchNavigator({
   const [renameTitle, setRenameTitle] = useState('')
   const [renameSession, setRenameSession] = useState<ChatSessionInfo | null>(null)
   const [renameSessionTitle, setRenameSessionTitle] = useState('')
+  /** The conversation whose task binding the picker below is choosing, or null while it is closed. */
+  const [bindTaskSession, setBindTaskSession] = useState<ChatSessionInfo | null>(null)
+  const [bindTaskQuery, setBindTaskQuery] = useState('')
   const matchingWorkbenchIds = new Set(filteredResults?.workbenches.map(result => result.entityId) ?? [])
   const matchingWorktrees = new Map(
     (filteredResults?.worktrees ?? []).map(result => [result.entityId, result]),
@@ -617,6 +654,22 @@ export default function WorkbenchNavigator({
         : []
   /** What the list is, said above it: the task that owns these conversations, or that no task does. */
   const sessionsHeading = selectedWorktreeTask ? selectedWorktreeTask.title : 'No task'
+  /**
+   * The tasks a conversation can be bound to: the worktree's own, minus the ones that cannot own a
+   * conversation at all. A session resolves through a device, so a hardware or untargeted task is
+   * never a valid binding (ADR-0009). The picker asks for a choice from that list rather than for a
+   * raw id, so binding a conversation never needs an out-of-band prompt.
+   */
+  const bindableTasks = selectedTasks.filter(task => task.deviceId)
+  const openBindTaskPicker = (session: ChatSessionInfo) => {
+    setBindTaskQuery('')
+    setBindTaskSession(session)
+  }
+  const bindSessionTask = (taskId: string) => {
+    if (!bindTaskSession) return
+    onSetSessionTask(bindTaskSession, taskId)
+    setBindTaskSession(null)
+  }
 
   const selectRowTask = (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => {
     setClickedTaskId(task.taskId)
@@ -854,9 +907,10 @@ export default function WorkbenchNavigator({
 
   /**
    * `SESSIONS`: the conversations of the task the user has selected, or — while no task is selected —
-   * the selected device's conversations that no task owns. Its header starts one bound to the selected
-   * task, which is the only state that has a task to bind to, so the action is offered only then, and
-   * never for the hardware target, which cannot own a conversation at all.
+   * the selected device's conversations that no task owns. Its header starts a conversation in the
+   * scope the list itself is showing: bound to the selected task, or the device's own and owned by no
+   * task while none is selected. The hardware target never reaches this section: it cannot own a
+   * conversation at all.
    */
   const renderSessionsSection = () => {
     if (!selectedWorktreeRow || sessionRows.length === 0) return null
@@ -866,17 +920,19 @@ export default function WorkbenchNavigator({
         title="SESSIONS"
         height={sectionHeights.sessions ?? null}
         fillsRemainingSpace={isDeepestSection('sessions')}
-        action={selectedWorktreeTask ? (
+        action={(
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label={`Start a conversation for ${selectedWorktreeTask.title}`}
+            aria-label={selectedWorktreeTask
+              ? `Start a conversation for ${selectedWorktreeTask.title}`
+              : 'Start a conversation for this device'}
             title="Start a conversation"
             onClick={() => onAddSession(selectedWorktreeTask)}
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
-        ) : undefined}
+        )}
       >
         <div data-session-group={selectedWorktreeTask?.taskId ?? 'unbound'}>
           <div className="truncate px-2 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={sessionsHeading}>
@@ -888,6 +944,9 @@ export default function WorkbenchNavigator({
               session={session}
               onOpen={onOpenSession}
               onRename={openRenameSession}
+              onExport={onExportSession}
+              onBindTask={openBindTaskPicker}
+              onClearTask={session => onSetSessionTask(session, null)}
               onDelete={confirmDeleteSession}
             />
           ))}
@@ -1267,6 +1326,36 @@ export default function WorkbenchNavigator({
         </form>
       </DialogContent>
     </Dialog>
+    {/* The conversation's task binding is chosen from this worktree's tasks, never typed in. */}
+    <CommandDialog
+      open={bindTaskSession !== null}
+      onOpenChange={open => { if (!open) setBindTaskSession(null) }}
+      title={bindTaskSession?.taskId ? 'Reassign conversation task' : 'Attach a task to the conversation'}
+      description={bindTaskSession
+        ? `Choose the task “${conversationTitle(bindTaskSession)}” is bound to.`
+        : 'Choose the task this conversation is bound to.'}
+    >
+      <CommandInput
+        value={bindTaskQuery}
+        onValueChange={setBindTaskQuery}
+        placeholder="Search this worktree's tasks"
+        aria-label="Search this worktree's tasks"
+      />
+      <CommandList>
+        <CommandEmpty>No matching tasks.</CommandEmpty>
+        {bindableTasks.map(task => (
+          <CommandItem
+            key={task.taskId}
+            value={`${task.title} ${task.taskId}`}
+            onSelect={() => bindSessionTask(task.taskId)}
+            aria-label={`Bind conversation to ${task.title}`}
+          >
+            <CircleDot className="h-3.5 w-3.5" />
+            {task.title}
+          </CommandItem>
+        ))}
+      </CommandList>
+    </CommandDialog>
     </>
   )
 }

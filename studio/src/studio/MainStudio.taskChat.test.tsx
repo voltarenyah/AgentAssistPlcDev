@@ -59,6 +59,7 @@ vi.mock('@/api/client', async importOriginal => {
     loadDeviceChatSession: vi.fn(async () => session),
     renameChatSession: vi.fn(async () => session),
     deleteChatSession: vi.fn(async () => {}),
+    deleteDeviceSession: vi.fn(async () => {}),
     getDeviceInfo: vi.fn(async () => snapshot),
     newChatSession: vi.fn(async () => session),
     loadChatSession: vi.fn(async () => session),
@@ -203,10 +204,14 @@ it('opens a navigator conversation without dropping the selected device or its t
   expect(host.querySelector('[data-task-selected="true"]')?.textContent).toContain('Inspect startup sequence')
   expect(host.querySelector('[data-session="s1"]')).not.toBeNull()
   expect(host.querySelector('[data-session-pane="s1"]')).not.toBeNull()
+  // The device is on its chat view, which has no right dock any more: the sessions page is retired,
+  // so neither the dock shell nor its resize handle is left behind.
+  expect(host.querySelector('[data-dock="right"]')).toBeNull()
+  expect(host.querySelector('[aria-label="Resize context dock"]')).toBeNull()
   await act(async () => root.unmount())
 })
 
-/** Renders the device workspace with the task's conversation open, and the session dock beside it. */
+/** Renders the device workspace with the task's conversation open, and its SESSIONS row beside it. */
 const openTaskConversation = async () => {
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -226,23 +231,36 @@ const openTaskConversation = async () => {
   return { host, root }
 }
 
-it('follows a conversation renamed in the session dock', async () => {
+/** Opens one conversation row's 3-dots menu and returns the menu item with that label. */
+const rowMenuItem = async (host: HTMLElement, title: string, label: string) => {
+  const trigger = host.querySelector<HTMLButtonElement>(`button[aria-label="Conversation actions ${title}"]`)!
+  expect(trigger).not.toBeNull()
+  await act(async () => {
+    trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, ctrlKey: false }))
+    trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  const item = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    .find(entry => entry.textContent?.trim() === label)
+  expect(item, `menu item ${label}`).toBeDefined()
+  return item!
+}
+
+it('follows a conversation renamed from its SESSIONS row menu', async () => {
   const { host, root } = await openTaskConversation()
   expect(host.querySelector('[data-session="s1"]')?.textContent).toContain('New chat')
 
-  // The dock renames through the same route and the server then reports the new title.
+  // The row menu renames through the same route and the server then reports the new title.
   vi.mocked(api.listDeviceSessions).mockResolvedValue([sessionInfo('Valve diagnosis')])
-  const rename = host.querySelector<HTMLButtonElement>('button[aria-label="Rename New chat"]')
-  expect(rename).not.toBeNull()
-  await act(async () => rename!.click())
-  const form = host.querySelector<HTMLFormElement>('form[data-session-rename="s1"]')
-  expect(form).not.toBeNull()
-  const input = form!.querySelector<HTMLInputElement>('input[name="session-title"]')!
+  const item = await rowMenuItem(host, 'New chat', 'Rename conversation')
+  await act(async () => item.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+  const input = document.body.querySelector<HTMLInputElement>('input[aria-label="Conversation title"]')
+  expect(input).not.toBeNull()
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'Valve diagnosis')
-    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input!.dispatchEvent(new Event('input', { bubbles: true }))
   })
-  await act(async () => form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  const save = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('Save'))!
+  await act(async () => save.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
   expect(api.renameChatSession).toHaveBeenCalledWith('s1', 'Valve diagnosis')
   // The navigator's row is the same conversation, so it has to show the new name too.
@@ -250,20 +268,21 @@ it('follows a conversation renamed in the session dock', async () => {
   await act(async () => root.unmount())
 })
 
-it('drops a conversation deleted in the session dock', async () => {
+it('drops a conversation deleted from its SESSIONS row menu', async () => {
   const { host, root } = await openTaskConversation()
   expect(host.querySelector('[data-session="s1"]')).not.toBeNull()
 
-  // The dock deletes through the same route and the server then reports no conversations.
+  // The row menu deletes through the ADR-0010 device-scoped route, after asking.
+  const confirm = vi.fn(() => true)
+  vi.stubGlobal('confirm', confirm)
   vi.mocked(api.listDeviceSessions).mockResolvedValue([])
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Delete New chat"]')!.click())
-  const confirmRow = Array.from(host.querySelectorAll<HTMLButtonElement>('button'))
-    .filter(button => button.textContent?.trim() === 'Delete')
-  expect(confirmRow).toHaveLength(1)
-  await act(async () => confirmRow[0].click())
+  const item = await rowMenuItem(host, 'New chat', 'Delete conversation')
+  await act(async () => item.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
-  expect(api.deleteChatSession).toHaveBeenCalledWith('s1')
+  expect(confirm).toHaveBeenCalled()
+  expect(api.deleteDeviceSession).toHaveBeenCalledWith('wb1', 'wt1', 'dev1', 's1')
   // A deleted conversation cannot be opened, so its row must not be left behind in the navigator.
   expect(host.querySelector('[data-session="s1"]')).toBeNull()
+  vi.unstubAllGlobals()
   await act(async () => root.unmount())
 })
