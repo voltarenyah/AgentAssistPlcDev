@@ -69,8 +69,15 @@ public sealed record EngineeringTaskUpdateApiRequest(
     string? ExpectedResult = null,
     string? Description = null);
 
+/// <summary>Stage request. <c>BaselineEvidenceJson</c> is accepted for wire compatibility and
+/// deliberately ignored: the stage baseline is always derived from the object's committed Git
+/// content, so a caller-supplied (live-TIA) baseline can never become task evidence (ADR-0003).</summary>
 public sealed record TaskSourceStageApiRequest(string SourceObjectId, string? BaselineEvidenceJson = null);
 public sealed record TaskSourceStageApiResponse(string TaskId, string SourceObjectId, string DeviceId, string? BaselineEvidenceJson, DateTimeOffset StagedUtc);
+
+/// <summary>One active stage in a worktree with its owning task, for pickers that must show the
+/// current owner before taking a source object over.</summary>
+public sealed record WorktreeSourceStageApiResponse(string TaskId, string TaskTitle, string SourceObjectId, string DeviceId, string? BaselineEvidenceJson, DateTimeOffset StagedUtc);
 
 public sealed record EngineeringTaskRelationshipApiResponse(
     string Id,

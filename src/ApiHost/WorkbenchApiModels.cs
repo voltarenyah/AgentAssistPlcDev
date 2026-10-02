@@ -923,19 +923,37 @@ public static class WorkbenchEndpoints
                 progress => coordinator.CompareTaskWithTiaAsync(id, wt, taskId, ct, progress),
                 "Task source comparison completed.").ConfigureAwait(false));
         });
-        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages", (
-            string id, string wt, string taskId, TaskSourceStageApiRequest request, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/source-stages", (
+            string id, string wt, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
             using var scope = graphs.Open(state.Workbench(id));
-            var task = scope.Service.FindTask(taskId);
-            if (task is null || task.WorktreeId != wt) throw new KeyNotFoundException("TASK_NOT_FOUND");
-            var device = state.Device(id, wt, task.DeviceId!);
-            foreach (var source in DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot))
+            return Results.Ok(scope.Service.ListWorktreeActiveStages(wt)
+                .Select(item => new WorktreeSourceStageApiResponse(
+                    item.Stage.TaskId, item.TaskTitle, item.Stage.SourceObjectId, item.Stage.DeviceId,
+                    item.Stage.BaselineEvidenceJson, item.Stage.StagedUtc)));
+        });
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages", async (
+            string id, string wt, string taskId, TaskSourceStageApiRequest request, WorkbenchApiState state,
+            EngineeringGraphApiFactory graphs, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            var workbench = state.Workbench(id);
+            using (var scope = graphs.Open(workbench))
             {
-                scope.Service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject,
-                    $"{task.DeviceId}:{source.Id}", task.WorkbenchId, wt, task.DeviceId, source.RelativePath));
+                var task = scope.Service.FindTask(taskId);
+                if (task is null || task.WorktreeId != wt) throw new KeyNotFoundException("TASK_NOT_FOUND");
+                var device = state.Device(id, wt, task.DeviceId!);
+                foreach (var source in DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot))
+                {
+                    scope.Service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject,
+                        $"{task.DeviceId}:{source.Id}", task.WorkbenchId, wt, task.DeviceId, source.RelativePath));
+                }
             }
-            var stage = scope.Service.StageSourceObject(taskId, request.SourceObjectId, request.BaselineEvidenceJson);
+            // The stage baseline is always derived from the object's committed Git content, never
+            // taken from the request: a client-supplied value could only be a live-TIA shortcut,
+            // which ADR-0003 rejects as a baseline.
+            coordinator.RegisterWorkbench(workbench);
+            var stage = await coordinator.StageTaskSourceObjectAsync(id, wt, taskId, request.SourceObjectId, ct)
+                .ConfigureAwait(false);
             return Results.Created($"/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages/{Uri.EscapeDataString(stage.SourceObjectId)}", new TaskSourceStageApiResponse(stage.TaskId, stage.SourceObjectId, stage.DeviceId, stage.BaselineEvidenceJson, stage.StagedUtc));
         });
         app.MapDelete("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages/{sourceObjectId}", (

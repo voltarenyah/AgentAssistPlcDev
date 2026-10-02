@@ -20,6 +20,10 @@ public sealed record TaskSourceStage(
     string TaskId, string WorktreeId, string SourceObjectId, string DeviceId, string? BaselineEvidenceJson,
     DateTimeOffset StagedUtc, DateTimeOffset? ReleasedUtc = null);
 
+/// <summary>One active stage as seen from the worktree: the owning task's identity travels with the
+/// stage so a picker can show who owns a source object before taking it over.</summary>
+public sealed record WorktreeSourceStage(TaskSourceStage Stage, string TaskTitle);
+
 public sealed record LegacyImportDiagnostic(string TaskId, string WorktreeId, string Message);
 public sealed record LegacyImportResult(int ImportedCount, IReadOnlyList<LegacyImportDiagnostic> Diagnostics);
 
