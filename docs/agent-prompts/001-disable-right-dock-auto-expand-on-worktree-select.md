@@ -1,6 +1,6 @@
 # 001. Remove every right-dock auto-expand
 
-Status: pending
+Status: done
 Created: 2026-09-30
 Scope broadened: 2026-09-30 — was "auto-expand on worktree selection"; now every action-driven
 auto-expand.
@@ -91,5 +91,53 @@ Supporting facts:
 
 ## Evidence
 
-Not yet executed. Record commands, results, branch, commit, and any skipped check here, then move the
-index row in `README.md` to the same status.
+Executed 2026-09-30 in the isolated worktree `.worktrees/001-right-dock-auto-expand`.
+
+- Branch: `codex/001-right-dock-auto-expand`
+- Commit: `fix: remove right-dock auto-expand (001)` — the single commit on that branch carrying the
+  code, the test, this item, and the index row. Its SHA cannot be written into the commit that
+  contains it; the branch-head SHA is reported in the work-item handoff.
+
+### Files changed
+
+- `studio/src/studio/MainStudio.tsx` — removed the forced
+  `setShellLayout(previous => ... rightOpen: true)` and its stale comment from `selectWorktree`, and
+  the forced set from `createChatSessionFromEmptyState` (now only `void createChatSession()`).
+- `studio/src/studio/MainStudio.rightDock.test.tsx` — new colocated test: 4 cases covering both
+  actions with the dock collapsed and with the dock open.
+- `docs/agent-prompts/001-disable-right-dock-auto-expand-on-worktree-select.md` and
+  `docs/agent-prompts/README.md` — status and this evidence.
+
+Nothing else changed: the dock toggle, the resize handlers, the settings reset-layout action,
+`shellLayout.rightOpen` as the single source of truth, the storage key/shape, and
+`DEFAULT_SHELL_LAYOUT` are untouched.
+
+### Commands and observed results
+
+| Check | Command | Result |
+|---|---|---|
+| 1 (colocated test discriminates) | `cd studio; npm test -- src/studio/MainStudio.rightDock.test.tsx` (before the source edit) | 2 failed / 2 passed: both collapsed-dock cases reported `expected 'open' to be 'closed'`, i.e. the test reproduces exactly the two forced opens |
+| 1 + 2 (after the edit) | same command | 4 passed (4) |
+| 4 | `cd studio; npm test -- src/studio/MainStudio.deviceSelect.test.tsx src/studio/MainStudio.apiKey.test.tsx` | 2 files, 14 passed — including `collapses and reopens the left and right docks independently` and `keeps the status bar and settings entry point available with both docks collapsed` |
+| 3 | `git grep -n "rightOpen: true" -- studio/src` | `studio/src/studio/shellLayout.ts:16` (`DEFAULT_SHELL_LAYOUT`, expected) and `studio/src/studio/shellLayout.test.ts:35` (pre-existing persistence-fixture object — not a writer, outside this item's scope, left unchanged) |
+| 3 | `git grep -n "previous, rightOpen: true" -- studio/src` | no matches (exit 1): no `{ ...previous, rightOpen: true }` remains anywhere |
+| 5 | `cd studio; npm test -- --run` | 84 files, 535 tests, all passed |
+| 5 | `cd studio; npm run build` | `tsc -b` clean, `vite build` succeeded (`✓ built in 1.06s`); only the pre-existing >500 kB chunk-size warning |
+| extra | `cd studio; npm run lint` | 0 errors, 15 pre-existing warnings; none in the touched files |
+
+`grep` is not installed as a shell command in this Windows environment, so the literal
+`grep -rn "rightOpen: true" studio/src` was run as the equivalent `git grep -n … -- studio/src`.
+Done-when 3 is met in substance (no forced-open writer remains); its literal wording "matches only
+`DEFAULT_SHELL_LAYOUT` in `shellLayout.ts`" is off by one pre-existing test fixture, reported above
+rather than edited out of scope.
+
+### Skipped
+
+- Done-when 6 (runtime check with `.\launch.ps1`: collapse the dock, select another worktree, start a
+  conversation from the chat empty state, confirm it stays collapsed and is still collapsed after a
+  reload) — **skipped**. This unattended run must not start the launcher (it binds the shared ports
+  5173/5239 and TIA is unavailable). Residual risk: the persistence round trip (`readShellLayout` /
+  `writeShellLayout` with the unchanged `plc-studio.shell-layout.v1` key) and the real browser
+  interaction path are not exercised end-to-end; they are covered by `shellLayout.test.ts` and the new
+  component tests only. No production code path for storing or restoring `rightOpen` changed, so the
+  remaining risk is confined to that unexercised browser/reload path.

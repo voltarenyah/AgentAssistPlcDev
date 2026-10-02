@@ -1069,9 +1069,6 @@ export default function MainStudio() {
     // own details while the shared runtime acknowledgement happens in parallel.
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null, targetKind: null })
     setMainView({ kind: 'worktree', tab: 'overview' })
-    // Version control lives in the right dock of the worktree page; make
-    // sure the dock is visible when navigating there.
-    setShellLayout(previous => previous.rightOpen ? previous : { ...previous, rightOpen: true })
     setDeviceSelection(null)
     setTaskChatContext(null)
     setChatTabs(emptyChatTabs())
@@ -1373,7 +1370,6 @@ export default function MainStudio() {
   }
 
   const createChatSessionFromEmptyState = () => {
-    setShellLayout(previous => previous.rightOpen ? previous : { ...previous, rightOpen: true })
     void createChatSession()
   }
 
