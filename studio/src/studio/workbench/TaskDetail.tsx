@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, Loader2, MessageSquareText, RefreshCw, Save, X } from 'lucide-react'
 import type { EngineeringTask, EngineeringTaskDetail, WorktreeTaskStatus } from '@/api/client'
+import { taskTargetKind } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -79,6 +80,8 @@ type Props = {
 export default function TaskDetail({ detail, deviceName, loading = false, error = null, saving = false, onRetry, onSave, onNavigate, onRemove }: Props) {
   const [draft, setDraft] = useState<TaskDraft | null>(detail ? taskDraftFrom(detail.task) : null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  // A hardware task has no device, so "Not device-bound" would state the opposite of the truth.
+  const hardwareTask = detail ? taskTargetKind(detail.task) === 'hardware' : false
 
   useEffect(() => {
     setDraft(detail ? taskDraftFrom(detail.task) : null)
@@ -140,7 +143,7 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
         <div><Label htmlFor="task-type">Type</Label><Select value={draft.type} onValueChange={value => updateDraft('type', value as EngineeringTask['type'])}><SelectTrigger id="task-type" className={fieldClass}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="issue">Issue</SelectItem><SelectItem value="improvement">Improvement</SelectItem><SelectItem value="feature">Feature</SelectItem></SelectContent></Select></div>
         <div><Label htmlFor="task-status">Status</Label><Select value={draft.status} onValueChange={value => updateDraft('status', value as WorktreeTaskStatus)}><SelectTrigger id="task-status" className={fieldClass}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="todo">Todo</SelectItem><SelectItem value="inProgress">In progress</SelectItem><SelectItem value="done">Done</SelectItem></SelectContent></Select></div>
         <div><Label htmlFor="task-priority">Priority</Label><Input id="task-priority" type="number" min="0" step="1" className={fieldClass} value={draft.priority} onChange={event => updateDraft('priority', Math.max(0, Number(event.target.value) || 0))} /></div>
-        <div><Label htmlFor="task-device">Device / PLC</Label><Input id="task-device" className={fieldClass} value={detail.task.deviceId ? deviceName || 'Unknown device' : 'Not device-bound'} readOnly aria-describedby="task-device-note" /><p id="task-device-note" className="mt-1.5 text-xs text-muted-foreground">Device binding is fixed when the task is created.</p></div>
+        <div><Label htmlFor="task-device">{hardwareTask ? 'Target' : 'Device / PLC'}</Label><Input id="task-device" className={fieldClass} value={hardwareTask ? 'Hardware configuration' : detail.task.deviceId ? deviceName || 'Unknown device' : 'Not device-bound'} readOnly aria-describedby="task-device-note" /><p id="task-device-note" className="mt-1.5 text-xs text-muted-foreground">{hardwareTask ? 'A hardware task covers this worktree’s hardware configuration and binds no PLC device; stage source objects from a device task instead.' : 'Device binding is fixed when the task is created.'}</p></div>
         <div className="md:col-span-2"><Label htmlFor="task-intent">Intent</Label><textarea id="task-intent" className={`${fieldClass} min-h-20 rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50`} value={draft.intent} onChange={event => updateDraft('intent', event.target.value)} /></div>
         <div className="md:col-span-2"><Label htmlFor="task-expected-result">Expected result</Label><textarea id="task-expected-result" className={`${fieldClass} min-h-20 rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50`} value={draft.expectedResult} onChange={event => updateDraft('expectedResult', event.target.value)} /></div>
         <div className="md:col-span-2"><Label htmlFor="task-description">Description</Label><textarea id="task-description" className={`${fieldClass} min-h-24 rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50`} value={draft.description ?? ''} onChange={event => updateDraft('description', event.target.value)} /></div>

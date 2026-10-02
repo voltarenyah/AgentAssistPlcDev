@@ -26,6 +26,14 @@ describe('TaskDetail', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open SVN revisions r42"]')?.click())
     expect(navigate).toHaveBeenCalledWith('svnRevision', 'r42')
   })
+  it('states the hardware target instead of calling a hardware task unbound', async () => {
+    const host = await render({ detail: { ...detail, task: { ...detail.task, deviceId: null, targetKind: 'hardware' } } })
+    expect(host.textContent).toContain('Target')
+    expect(host.querySelector<HTMLInputElement>('#task-device')?.value).toBe('Hardware configuration')
+    expect(host.textContent).toContain('binds no PLC device')
+    // Its device is genuinely absent, but "not device-bound" would state the wrong reason.
+    expect(host.textContent).not.toContain('Not device-bound')
+  })
   it('carries the exact source-object identifier through navigation', async () => {
     const navigate = vi.fn()
     const host = await render({ detail: { ...detail, sourceObjects: [{ id: 'device-7/Blocks/Main', edgeId: 'edge-source', provenance: 'manual', isPrimary: false }] }, onNavigate: navigate })
