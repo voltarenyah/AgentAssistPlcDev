@@ -114,6 +114,9 @@ public sealed class SandboxPolicy
             ["vc_config"] = SandboxTier.Write,
             // Version control — destructive (overwrites working tree).
             ["vc_restore"] = SandboxTier.Destructive,
+            // Workbench — the agent proposes a task stage mutation; the write itself is the
+            // coordinator's guarded stage path, so it is destructive (never a silent write).
+            ["stage_task_source_object"] = SandboxTier.Destructive,
         };
 
     public IReadOnlyDictionary<string, SandboxTier> Tiers => tiers;

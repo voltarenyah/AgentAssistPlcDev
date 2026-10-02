@@ -98,6 +98,10 @@ import type { SourceInspectorTarget } from '@/studio/workspace/workspaceTypes'
 
 // What <main> renders for the current selection. Replaces the old hardwarePage
 // ternary: project and worktree selections now have their own landing pages.
+/** The agent's staging tool. Its approved call changes the active task's stage basis, so the task
+ * page is refreshed; an unrelated approval must not reload the page and discard unsaved edits. */
+const STAGE_SOURCE_OBJECT_TOOL = 'stage_task_source_object'
+
 export type MainView =
   | { kind: 'project' }
   | { kind: 'worktree'; tab: 'overview' | 'tasks' }
@@ -507,6 +511,8 @@ export default function MainStudio() {
   const [taskDetailLoading, setTaskDetailLoading] = useState(false)
   const [taskDetailSaving, setTaskDetailSaving] = useState(false)
   const [taskDetailError, setTaskDetailError] = useState<string | null>(null)
+  /** Bumped after an approved agent stage call, so the open task page re-reads its Source objects. */
+  const [taskStagesRefreshToken, setTaskStagesRefreshToken] = useState(0)
   const [traceabilityTarget, setTraceabilityTarget] = useState<{ kind: string; id: string } | null>(null)
   const [hardwareBomView, setHardwareBomView] = useState<api.HardwareBomView | null>(null)
   const [hardwareNetworkView, setHardwareNetworkView] = useState<api.HardwareNetworkView | null>(null)
@@ -1604,6 +1610,13 @@ export default function MainStudio() {
     try {
       await api.confirmTool(pending.id, decision)
     } catch { /* expired or already resolved server-side */ }
+    // An approved task-stage call changes the active task's stage basis, so refresh the task page
+    // the same way an in-page stage change does. Only this tool: reloading the detail for an
+    // unrelated approval would discard the user's unsaved task edits.
+    if (decision === 'allowOnce' && pending.toolName === STAGE_SOURCE_OBJECT_TOOL) {
+      setTaskStagesRefreshToken(value => value + 1)
+      await reloadTaskDetail()
+    }
   }
 
   const continueChat = async (sessionId: string) => {
@@ -2564,7 +2577,7 @@ export default function MainStudio() {
               </div>
             </div>
           ) : taskDetail || taskDetailLoading || taskDetailError ? (
-            <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} /></div>
+            <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div>
           ) : !selection.deviceId && selection.worktreeId ? (
             mainView.kind === 'task-chat' ? (
               <div className="flex min-h-0 flex-1 flex-col">
@@ -2614,7 +2627,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} /></div> : <WorktreeLandingPage
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div> : <WorktreeLandingPage
                 workbenchId={selection.workbenchId!}
                 worktreeId={selection.worktreeId}
                 tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}
