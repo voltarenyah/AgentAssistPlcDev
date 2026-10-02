@@ -35,7 +35,9 @@ sections, and persisting a dragged height across sessions.
   height. Source: ADR-0008.
 - **AC-013** — **The** system **shall** size each section to its content by default, so a section
   holding one row occupies one row's height and a collapsed section occupies its header only, leaving
-  no reserved space between the sections. Source: ADR-0008.
+  no reserved space between the sections; the deepest section on screen **shall** take the dock's
+  remaining height so its lower boundary is the dock's lower boundary and its body does not scroll
+  before its rows fill that room. Source: ADR-0008.
 - **AC-014** — **When** the sections' content is taller than the dock, **the** system **shall** shrink
   the sections and scroll each section's own body, keeping every section header visible, rather than
   scrolling the column. Source: ADR-0006, ADR-0008.
@@ -58,6 +60,7 @@ sections, and persisting a dragged height across sessions.
 | Layer | Change | Why this shape |
 |---|---|---|
 | Section box | `flex min-h-0 flex-1 flex-col` → `flex min-h-0 flex-initial flex-col` (`flex: 0 1 auto`) plus a minimum height when expanded | `flex-grow: 0` makes the box its content height; `flex-shrink: 1` lets it give height back when the column overflows; the floor keeps its header reachable. |
+| Deepest section | The deepest visible section is `flex-auto` (`flex: 1 1 auto`) while it is expanded | Nothing sits below it to receive the dock's leftover height, so it takes that height instead of leaving an unused strip below the last section, and its body stops scrolling until its rows fill the room. Its `auto` basis keeps the pair-wise drag arithmetic honest: the pair's total is the dock's height, so redistributing inside it adds no leftover for `flex-grow` to absorb. |
 | Section body | Stays `min-h-0 flex-1 overflow-y-auto` (`flex: 1 1 auto`) | Its `auto` basis is its content, which is what the section box measures; when the box is dragged taller the body grows into it, and when the box is squeezed the body scrolls. |
 | Column | Unchanged (`gap-2 overflow-hidden`) | It is the reason a long section cannot push its neighbours' headers off screen (AC-014). |
 | Height overrides | `useState<Record<string, number>>` keyed by section id, applied as an inline `height` only while the section is expanded | Collapse must release the height, or the sections below could not move up (AC-013). Nothing outside the navigator reads it. |
@@ -71,7 +74,7 @@ touched.
 
 | File | Change | ACs | Preserved |
 |---|---|---|---|
-| `studio/src/studio/workbench/WorkbenchNavigator.tsx` | Move `PROJECTS` and `WORKTREE` into one ordered list of rendered sections; render a separator between adjacent ones; give each section a content-sized box with a minimum height and an optional dragged height; add the separator's pointer and keyboard resize | AC-012, AC-013, AC-014 | The section set, their titles and header actions, the collapse contract (`aria-expanded`/`aria-controls`), the tag-filter rule, every row and its menu, the cascade |
+| `studio/src/studio/workbench/WorkbenchNavigator.tsx` | Move `PROJECTS` and `WORKTREE` into one ordered list of rendered sections; render a separator between adjacent ones; give each section a content-sized box with a minimum height and an optional dragged height; let the deepest visible section grow into the dock's remaining height; add the separator's pointer and keyboard resize | AC-012, AC-013, AC-014 | The section set, their titles and header actions, the collapse contract (`aria-expanded`/`aria-controls`), the tag-filter rule, every row and its menu, the cascade |
 | `studio/src/studio/workbench/WorkbenchNavigator.test.tsx` | Cases for the three criteria | AC-012, AC-013, AC-014 | The existing AC-001…AC-011 cases |
 | `docs/ui-spec/studio-information-architecture-ui-spec.md` | The sizing, scroll and separator rows | — | Every other criterion |
 
@@ -116,6 +119,8 @@ removing the state and the separators.
 | Claim / AC | Level | Command or operation | Observable pass condition |
 |---|---|---|---|
 | A section is content-sized until dragged, and collapse releases its height | L1 | `npm test -- --run` in `studio/`, new cases in `WorkbenchNavigator.test.tsx` | No section carries an explicit height before a drag; a collapsed section carries none and its body is `hidden` |
+| The deepest section takes the dock's remaining height, and folding it releases that height | L1 | the same lane | Exactly the deepest visible section carries the grow hook, it follows the selection, and a folded deepest section carries none |
+| The deepest section's boundary is the dock's, and it does not scroll early | L3 | the running app via `.\launch.ps1`, driven with Playwright | Its rendered bottom equals the column's inner bottom, its body's client height is at least its content height, and no scrollbar is present while the rows fit |
 | A separator resizes exactly its pair, by pointer and by keyboard | L1 | the same lane | `ArrowUp`/`ArrowDown` give the upper section the step and take it from the lower one, both clamped at the floor, and a third section's height is unchanged |
 | Every section header stays visible while a body scrolls | L1 | the same lane | The column still does not scroll (`overflow-hidden`) and every section keeps its own scrollable body |
 | The dock follows content, and dragging follows the cursor | L3 | the running app via `.\launch.ps1`, driven with Playwright | A screenshot shows no gap reserved between sections; a drag changes the two boxes and no third; collapsing an upper section moves the lower ones up; the console shows no local-application error |
@@ -126,6 +131,7 @@ removing the state and the separators.
 | Risk | Why it could happen | Mitigation |
 |---|---|---|
 | A section is squeezed to an unusable height | `flex-shrink` applies to every section once the content overflows | Every expanded section has a minimum height of its header plus one row, and a resize clamps to it |
+| The deepest section absorbs the dock's slack, so its body can be taller than its rows | Growing is how the dock avoids an unused strip below the last section, and the user asked for the last section to reach the bottom | The extra room is the dock's leftover, not a loss: without the grow it appears as an unused strip in the same place, and a separator drag still moves exactly its pair |
 | The content-sized default does not resolve, so sections collapse to their headers | A body with `flex-basis: 0%` contributes no height to an `auto`-basis parent | The body keeps `flex: 1 1 auto`, whose basis is its content; the first checkpoint verifies the rendered result, not just the class names |
 | A stored height becomes wrong when the selection changes the section count | Overrides are keyed by section id and sections appear and disappear with the target | An override applies only to its own section; the other sections keep sizing to content, and the column's shrink absorbs the difference |
 | The separators are unreachable or invisible | A one-pixel target, or a drag that only works with a pointer | The hit area is wider than the rule, the separator is focusable, and the arrow keys resize it |
@@ -143,3 +149,4 @@ removing the state and the separators.
 | Date | Version | Changes |
 |---|---|---|
 | 2026-10-02 | 1.0 | Initial design for content-sized, resizable navigator sections. |
+| 2026-10-02 | 1.1 | The deepest section on screen takes the dock's remaining height, so its boundary is the dock's boundary and its body does not scroll before its rows fill that room. |

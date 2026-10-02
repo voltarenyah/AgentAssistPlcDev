@@ -36,7 +36,8 @@
 | `TASKS` section | A PLC device or the `Hardware` row is selected | Lists the tasks bound to that device, or the worktree's hardware tasks; its header creates a task already bound to that target. | AC-005 |
 | Tag filter active | The user types in the tag filter | Only `PROJECTS` and `WORKTREE` are shown; the unbound-task group, `DEVICE` and `TASKS` are hidden. | AC-006 |
 | Section collapse | The user activates a section header | That section alone collapses or expands; the others keep their state, and a collapsed section releases its height so the sections below move up. | AC-007, AC-013 |
-| Section height | Always | Each section is as tall as its content, so a section holding one row is one row tall and no section reserves height it does not use. | AC-013 |
+| Section height | Always | Every section but the deepest is as tall as its content, so a section holding one row is one row tall and no section reserves height it does not use. The deepest section on screen takes the dock's remaining height, so its lower boundary is the dock's lower boundary. | AC-013 |
+| Deepest section | A target or worktree is selected | The deepest section reaches the bottom of the dock, and its body shows no scrollbar while its rows fit that room. Folding it releases the room, so the dock's bottom is then unused. | AC-013 |
 | Section separator | The user drags the separator between two adjacent sections, or focuses it and presses `ArrowUp`/`ArrowDown` | The upper section grows and the lower one shrinks by the same amount, each within its minimum height; the sections below the pair do not move. | AC-012 |
 | Sections that do not fit | The sections' content is taller than the dock | The sections shrink and each scrolls its own body; every section header stays visible and the column itself does not scroll. | AC-014 |
 | Row 3-dots menu | Any section row | Shows that object's operations (project, worktree, device, task) without navigating to it first. | AC-008 |
@@ -72,6 +73,7 @@
 | `TASKS` section | The `Hardware` row is selected and the worktree has no hardware task | Empty list with the existing `Add task` affordance. | Creating a task populates the list. | AC-009 |
 | Any section | Holds fewer rows than an equal share of the dock | It occupies only its header plus those rows, and the sections below it move up. | A deeper selection adds a section, which takes its own content height. | AC-013 |
 | Any section | Collapsed | Its header only. | Expanding restores its content height, or the height it was dragged to. | AC-007, AC-013 |
+| Deepest section | Its rows fit the dock's remaining height | It fills that height, so its lower boundary is the dock's, and its body does not scroll. | A separator drag or a collapse above it changes how much room it has. | AC-013 |
 | Any section | Its content is taller than the dock can give it | Its body scrolls; its header stays visible. | Give it more height by dragging its separator or by collapsing another section. | AC-014 |
 | Any section | The user dragged its separator | The pair keeps the dragged split while the app stays open. | A reload returns every section to its content height. | AC-012 |
 | Any reachable section | Section content fails to load | Existing error text for that collection; other sections keep rendering. | Retry through the existing refresh actions. | Preserved behaviour |
@@ -81,7 +83,7 @@
 | Element / view | Constraint | Repository or approved design source | Acceptance observation |
 |---|---|---|---|
 | Section headers | Reuse the existing dense sidebar heading treatment and tokens from `studio/src/assets/main.css`. | `docs/STYLEGUIDE.md` | Headers are visually consistent with the current `PROJECTS` heading. |
-| Section height | Each section's default height is its content height; only a drag sets a height that stops following content. | ADR-0008 | A dock with one workbench and one device shows a short `PROJECTS` and a short `DEVICE`, with no gap reserved for a section that holds little. |
+| Section height | Every section's default height is its content height; only a drag sets a height that stops following content, and only the deepest section grows beyond its content to reach the dock's bottom. | ADR-0008 | A dock with one workbench and one device shows a short `PROJECTS` and a short `DEVICE`, with no gap reserved for a section that holds little, and the deepest section's boundary at the dock's bottom. |
 | Section scroll regions | Each section keeps its own bounded scroll region with a sticky header; the column itself does not scroll its headers away, so a long section is squeezed and scrolls rather than pushing its neighbours' headers off screen. | ADR-0006, ADR-0008 | With all sections populated, every header stays visible while a single section scrolls. |
 | Active section | The section containing the current scope keeps at least enough height to show its rows, and every section keeps a minimum height of its header plus one row. | ADR-0006, ADR-0008 | The selected row is visible without manual scrolling after a selection; no section can be dragged or squeezed to an unusable height. |
 | Section separator | A one-pixel rule between adjacent sections, with a wider invisible hit area and the existing focus treatment. | `WorktreeTasksPanel` column resize | The separator is discoverable on hover and focusable by keyboard, and it is visually consistent with the task list's column separators. |
@@ -111,7 +113,7 @@
 | AC-010 | Task creation from the `Hardware` row | The created task appears under the `Hardware` row's `TASKS` list, not in the unbound-task group. |
 | AC-011 | Task creation without a resolvable target | Creation stays blocked and no task appears in any section. |
 | AC-012 | Section separator | Dragging or arrowing a separator grows one section and shrinks its neighbour by the same amount, and neither moves a third section. |
-| AC-013 | Section height | A section holding one row is one row tall, and collapsing a section moves the sections below it up. |
+| AC-013 | Section height | A section holding one row is one row tall, collapsing a section moves the sections below it up, and the deepest section's lower boundary is the dock's lower boundary with no scrollbar while its rows fit. |
 | AC-014 | Sections that do not fit | Every section header stays visible while the section bodies scroll, and the column itself does not scroll. |
 | Preserved behaviour | Worktree `Tasks` tab | The main-area Tasks view still renders in the worktree tab strip and is unchanged. |
 
@@ -128,3 +130,4 @@
 |---|---|---|
 | 2026-09-30 | 1.0 | Initial specification |
 | 2026-10-02 | 1.1 | Sections size to their content and release their height when collapsed (AC-013); they shrink and scroll their own bodies before the column scrolls (AC-014); a separator resizes two adjacent sections (AC-012). Per ADR-0008. |
+| 2026-10-02 | 1.2 | The deepest section on screen takes the dock's remaining height, so its boundary is the dock's boundary and its body does not scroll before its rows fill that room; folding it releases the room. Per ADR-0008. |

@@ -46,7 +46,9 @@ leave empty space in the middle of the dock, and their heights cannot be adjuste
 
 ## Decision
 
-A section's height follows its content. The user may override the height of two adjacent sections by
+A section's height follows its content. The deepest section on screen takes the dock's remaining
+height instead, so its lower boundary sits at the bottom and its body does not scroll until its
+content actually fills that room. The user may override the height of two adjacent sections by
 dragging the separator between them, for the current session. The column never scrolls its own
 headers away: when the sections no longer fit, they shrink and each section's own body scrolls.
 
@@ -54,8 +56,8 @@ headers away: when the sections no longer fit, they shrink and each section's ow
 
 | Item | Content |
 |------|---------|
-| **Decision** | Content-sized sections (`flex: 0 1 auto`) with a minimum height floor, plus a pairwise drag separator that redistributes height between two adjacent sections. |
-| **Why this** | It removes the dead space at its cause instead of hiding it, and it keeps every section header on screen, which is the property the deeper sections depend on to stay reachable. |
+| **Decision** | Content-sized sections (`flex: 0 1 auto`) with a minimum height floor, the deepest section growing into the remaining height, plus a pairwise drag separator that redistributes height between two adjacent sections. |
+| **Why this** | It removes the dead space at its cause instead of hiding it, it keeps every section header on screen, and it puts the dock's slack inside the one section that has nothing below it to hand it to. |
 | **Known unknowns** | Whether a user ever wants a height that outlives the session. The override is component state, so adding persistence later changes no contract. |
 | **Reconsider when** | Users ask for their section split to survive a reload, or the section set becomes user-orderable, which would make the separators part of an ordering interaction too. |
 
@@ -65,9 +67,11 @@ headers away: when the sections no longer fit, they shrink and each section's ow
 |---|---|---|
 | Keep `flex-1` and add separators | Smallest diff | The reported dead space stays: a section with one row still reserves an equal share until the user drags it |
 | Content-sized sections, column scrolls | Simple CSS; long lists simply grow | A long list pushes the deeper sections' headers off screen, reversing the bounded-region decision this specification already took |
-| Content-sized sections, each shrinks and scrolls its own body | Keeps every header visible and puts space where content is | Needs a minimum height floor, or a short section is squeezed to nothing by its neighbours |
+| Content-sized sections, each shrinks and scrolls its own body | Keeps every header visible and puts space where content is | Needs a minimum height floor, or a short section is squeezed to nothing by its neighbours; the dock's leftover height then sits unused below the last section, where it reads as a truncated panel and puts a scrollbar on a body that already fits |
+| Content-sized sections with the deepest one growing | Every section boundary lands where the user expects, and the slack sits inside a section rather than below the last one | The deepest section can hold more room than its content needs, which is what absorbing the dock's slack means |
 
-**Selected**: the third. Space follows content, and the scroll owner stays the section.
+**Selected**: the fourth. Space follows content, the scroll owner stays the section, and the dock's
+last boundary is the dock's own.
 
 ## Rationale
 
@@ -87,6 +91,8 @@ headers away: when the sections no longer fit, they shrink and each section's ow
 
 - A section that holds one row occupies one row. The dock's empty space moves to where no section
   needs it, and a collapsed section releases its space so the sections below move up.
+- The deepest section's lower boundary is the dock's lower boundary, so the dock reads as a complete
+  panel and its last body shows no scrollbar until its content genuinely fills the room it was given.
 - Every section header stays visible while any single section scrolls, which is what keeps `DEVICE`
   and `TASKS` reachable when `PROJECTS` or `WORKTREE` is long.
 - Automatic collapse of shallower sections stays addable without relayout: collapse already frees
@@ -94,6 +100,8 @@ headers away: when the sections no longer fit, they shrink and each section's ow
 
 ### Negative Consequences
 
+- The deepest section holds the dock's slack, so its body can be taller than its rows. That room is
+  the alternative to an unused strip below the last section, not a gain.
 - A dragged height is session state, so a reload returns to the content-sized layout. A user who
   wants a particular split every time has to redo it.
 - A section squeezed to its floor scrolls internally at a smaller height than its content, which can
@@ -114,10 +122,12 @@ either. The dock's own layout, the flexlayout host, and `MainStudio`'s props are
 ## Implementation Guidance
 
 Derive the default from content, not from a measurement: a section is `flex: 0 1 auto`, so the
-browser already knows its height. Only a drag needs numbers, so only a drag records them. Reuse the
-resize contract `WorktreeTasksPanel` already implements for its list columns — `role="separator"`,
-a pointer drag on `window`, arrow keys, and cleanup on unmount — with `aria-orientation="horizontal"`
-and `ArrowUp`/`ArrowDown`, so both resize interactions behave the same way.
+browser already knows its height. Only a drag needs numbers, so only a drag records them. Give the
+grow to the deepest section on screen and only while it is expanded, because a collapsed section that
+still grew would be a header on top of an empty box. Reuse the resize contract `WorktreeTasksPanel`
+already implements for its list columns — `role="separator"`, a pointer drag on `window`, arrow keys,
+and cleanup on unmount — with `aria-orientation="horizontal"` and `ArrowUp`/`ArrowDown`, so both
+resize interactions behave the same way.
 
 ## Related Information
 
