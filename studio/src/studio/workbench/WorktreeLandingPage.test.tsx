@@ -321,7 +321,7 @@ describe('WorktreeLandingPage', () => {
 
   it('renders a Start chat action for each task', async () => {
     const { host, root } = await renderPage({ tab: 'tasks', onStartTaskChat: vi.fn() })
-    expect(host.querySelector('button[aria-label="Start chat for Open task"]')).not.toBeNull()
+    expect(host.querySelector('button[aria-label="New chat for Open task"]')).not.toBeNull()
     await act(async () => root.unmount())
   })
 
