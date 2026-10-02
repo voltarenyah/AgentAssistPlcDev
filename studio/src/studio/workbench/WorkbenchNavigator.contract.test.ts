@@ -4,14 +4,9 @@ import { describe, expect, it } from 'vitest'
 const source = readFileSync(new URL('./WorkbenchNavigator.tsx', import.meta.url), 'utf8')
 
 describe('hardware worktree tree item', () => {
-  it('renders hardware configuration before the PLC device list', () => {
-    const hardwareIndex = source.indexOf('Hardware configuration')
-    const devicesIndex = source.indexOf('devices.map')
-
-    expect(hardwareIndex).toBeGreaterThanOrEqual(0)
-    expect(devicesIndex).toBeGreaterThan(hardwareIndex)
-  })
-
+  // The hardware row's position relative to the PLC device list is asserted against the rendered
+  // DOM in WorkbenchNavigator.test.tsx. A source-text index cannot state it: it broke when the
+  // device list stopped rendering through a local named `devices` while the order was unchanged.
   it('exposes reload and compare actions from the hardware context menu', () => {
     expect(source).toContain('Reload hardware configuration')
     expect(source).toContain('Compare hardware with TIA')

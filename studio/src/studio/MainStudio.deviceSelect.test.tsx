@@ -189,6 +189,13 @@ describe('MainStudio device selection resilience', () => {
     await act(async () => {})
     clickText(host, 'master')
     await act(async () => {})
+    // A task is reached through its target: TASKS lists the selected target's tasks, so the device
+    // entry point in DEVICE has to be selected before its task row exists (AC-005).
+    act(() => {
+      host.querySelector<HTMLElement>('[data-device-target="dev1"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
 
     // The worktree landing page may independently inspect device metadata.
     // From this point onward, a task click itself must not start another PLC snapshot.
@@ -196,10 +203,13 @@ describe('MainStudio device selection resilience', () => {
     vi.mocked(api.getDeviceInfo).mockImplementation(() => new Promise<api.DeviceSnapshot>(() => {}))
     vi.mocked(api.getEngineeringTaskDetail).mockImplementation(() => new Promise<api.EngineeringTaskDetail>(() => {}))
 
-    clickText(host, task.title)
+    act(() => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Open task Inspect startup sequence"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
     await act(async () => {})
 
-    expect(host.textContent).toContain('Loading task traceability...')
+    expect(host.textContent).toContain('Loading task details...')
     expect(api.getDeviceInfo).not.toHaveBeenCalled()
   })
 

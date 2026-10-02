@@ -408,6 +408,12 @@ export type EngineeringTask = {
 export const taskTargetKind = (task: Pick<EngineeringTask, 'targetKind'>): EngineeringTaskTargetKind =>
   task.targetKind === 'hardware' ? 'hardware' : 'device'
 
+/**
+ * The target a new task is created against: one of the worktree's PLC devices, or the worktree's
+ * hardware configuration. Every worktree task has exactly one, and a hardware task binds no device.
+ */
+export type TaskTarget = { kind: 'device'; deviceId: string } | { kind: 'hardware' }
+
 export type EngineeringTaskDetail = {
   task: EngineeringTask
   sessions: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean; title?: string | null; firstUserMessage?: string | null; updatedAt?: string; messageCount?: number; turnCount?: number }>

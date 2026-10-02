@@ -39,6 +39,8 @@ type Props = {
   viewMode: TaskViewMode
   onViewModeChange: (mode: TaskViewMode) => void
   openCreate?: boolean
+  /** The target the create action was invoked from, preselected when the dialog opens. */
+  taskCreateTarget?: api.TaskTarget | null
   onCreateClosed?: () => void
 }
 
@@ -52,6 +54,8 @@ const taskStatusLabel = (status: string) =>
 
 const taskStatusOrder: api.WorktreeTaskStatus[] = ['todo', 'inProgress', 'done']
 const EMPTY_PROJECT_TASKS: api.EngineeringTask[] = []
+/** The target select's sentinel for the worktree's hardware configuration, which has no device id. */
+const HARDWARE_TARGET = 'hardware'
 const TASK_LIST_COLUMN_MIN_WIDTHS = [120, 92, 88, 120, 84, 116]
 const TASK_LIST_COLUMNS = [
   { label: 'Name', align: 'left' },
@@ -191,13 +195,14 @@ type EditDraft = {
   elementRefs: string[]
 }
 
-export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = EMPTY_PROJECT_TASKS, onOpenTaskDetail, onStartChat, onOpenInTia, onOpenTaskSession, viewMode, onViewModeChange, openCreate = false, onCreateClosed }: Props) {
+export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loading, error, onChanged, deviceIds = [], projectTasks = EMPTY_PROJECT_TASKS, onOpenTaskDetail, onStartChat, onOpenInTia, onOpenTaskSession, viewMode, onViewModeChange, openCreate = false, taskCreateTarget = null, onCreateClosed }: Props) {
   const [createOpen, setCreateOpen] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newIntent, setNewIntent] = useState('')
   const [newExpectedResult, setNewExpectedResult] = useState('')
   const [newType, setNewType] = useState<api.EngineeringTask['type']>('feature')
   const [newDevice, setNewDevice] = useState('')
+  const [newTargetKind, setNewTargetKind] = useState<api.EngineeringTaskTargetKind>('device')
   const [devices, setDevices] = useState<api.DeviceSummary[]>([])
   const [sessionsByDevice, setSessionsByDevice] = useState<Record<string, api.ChatSessionInfo[]>>({})
   const [taskListColumnWidths, setTaskListColumnWidths] = useState<number[] | null>(null)
@@ -298,9 +303,16 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
     return () => { cancelled = true }
   }, [workbenchId, worktreeId, sessionDeviceIds])
 
+  // The origin target is read as values, not as an object: the dialog re-applies it only when the
+  // origin actually changes, so a target the user picks inside the dialog is never overwritten.
+  const createTargetKind = taskCreateTarget?.kind ?? null
+  const createTargetDeviceId = taskCreateTarget?.kind === 'device' ? taskCreateTarget.deviceId : null
   useEffect(() => {
-    if (openCreate) setCreateOpen(true)
-  }, [openCreate])
+    if (!openCreate) return
+    setNewTargetKind(createTargetKind === 'hardware' ? 'hardware' : 'device')
+    setNewDevice(createTargetDeviceId ?? '')
+    setCreateOpen(true)
+  }, [openCreate, createTargetKind, createTargetDeviceId])
 
   const mutate = (action: () => Promise<unknown>) => {
     void action()
@@ -312,15 +324,20 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
     const title = newTitle.trim()
     const intent = newIntent.trim()
     const expectedResult = newExpectedResult.trim()
-    if (!title || !intent || !expectedResult || !newDevice || adding) return
+    const hardwareTarget = newTargetKind === 'hardware'
+    // A hardware task is the one target that needs no device; every other task still needs one.
+    if (!title || !intent || !expectedResult || adding || (!hardwareTarget && !newDevice)) return
     setAdding(true)
-    void api.createGraphWorktreeTask(workbenchId, worktreeId, { title, deviceId: newDevice, type: newType, intent, expectedResult })
+    void api.createGraphWorktreeTask(workbenchId, worktreeId, hardwareTarget
+      ? { title, targetKind: 'hardware', type: newType, intent, expectedResult }
+      : { title, deviceId: newDevice, type: newType, intent, expectedResult })
       .then(() => {
         setNewTitle('')
         setNewIntent('')
         setNewExpectedResult('')
         setNewType('feature')
         setNewDevice('')
+        setNewTargetKind('device')
         setCreateOpen(false)
         onCreateClosed?.()
         onChanged()
@@ -409,6 +426,9 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
           <ToggleGroupItem value="list" aria-label="List view" className="text-xs"><List className="h-3.5 w-3.5" /> List</ToggleGroupItem>
         </ToggleGroup>
         <Button type="button" size="sm" onClick={() => {
+          // This panel's own action defaults to a PLC device; the navigator's action preselects
+          // whatever target it was invoked from instead.
+          if (newTargetKind === 'hardware') setNewTargetKind('device')
           setNewDevice(current => current || availableDevices[0]?.deviceId || '')
           setCreateOpen(true)
         }}>
@@ -518,10 +538,10 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
           <form className="space-y-3" onSubmit={event => { event.preventDefault(); addTask() }}>
             <label className="field-label"><span>Title</span><input autoFocus aria-label="New task title" className="field-input" value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
             <label className="field-label"><span>Type</span><select aria-label="New task type" className="field-input" value={newType} onChange={event => setNewType(event.target.value as api.EngineeringTask['type'])}><option value="issue">Issue</option><option value="improvement">Improvement</option><option value="feature">Feature</option></select><span className="text-[9px] text-muted-foreground">Saved with the task’s modification plan.</span></label>
-            <label className="field-label"><span>Device</span><select required aria-label="New task device" className="field-input" value={newDevice} onChange={event => setNewDevice(event.target.value)}><option value="">Select a device</option>{availableDevices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</option>)}</select><span className="text-[9px] text-muted-foreground">A task belongs to exactly one device. Add source objects from the task detail after creation.</span></label>
+            <label className="field-label"><span>Target</span><select required aria-label="New task target" className="field-input" value={newTargetKind === 'hardware' ? HARDWARE_TARGET : newDevice} onChange={event => { const value = event.target.value; if (value === HARDWARE_TARGET) { setNewTargetKind('hardware'); setNewDevice(''); return } setNewTargetKind('device'); setNewDevice(value) }}><option value="">Select a device or the hardware configuration</option><option value={HARDWARE_TARGET}>Hardware configuration</option>{availableDevices.map(device => <option key={device.deviceId} value={device.deviceId}>{device.plcName || 'Unnamed PLC'}</option>)}</select><span className="text-[9px] text-muted-foreground">{newTargetKind === 'hardware' ? 'A hardware task covers this worktree’s hardware configuration and binds no PLC device.' : 'A task belongs to exactly one device. Add source objects from the task detail after creation.'}</span></label>
             <label className="field-label"><span>Goal</span><input required aria-label="New task goal" className="field-input" value={newIntent} onChange={event => setNewIntent(event.target.value)} placeholder="What should change?" /></label>
             <label className="field-label"><span>Expected result</span><textarea required aria-label="New task expected result" className="field-input min-h-16" value={newExpectedResult} onChange={event => setNewExpectedResult(event.target.value)} placeholder="How will you know it is done?" /></label>
-            <DialogFooter><button type="button" className="secondary-button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || !newIntent.trim() || !newExpectedResult.trim() || !newDevice || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
+            <DialogFooter><button type="button" className="secondary-button" onClick={() => { setCreateOpen(false); onCreateClosed?.() }} disabled={adding}>Cancel</button><button type="submit" className="primary-button" disabled={!newTitle.trim() || !newIntent.trim() || !newExpectedResult.trim() || (newTargetKind !== 'hardware' && !newDevice) || adding}>{adding && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Create task</button></DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

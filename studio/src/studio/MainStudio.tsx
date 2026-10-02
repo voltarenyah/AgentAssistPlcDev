@@ -476,6 +476,8 @@ export default function MainStudio() {
   const [devicesByWorktree, setDevicesByWorktree] = useState<Record<string, api.DeviceSummary[]>>({})
   const [tasksByWorktree, setTasksByWorktree] = useState<Record<string, api.EngineeringTask[]>>({})
   const [taskCreateWorktreeId, setTaskCreateWorktreeId] = useState<string | null>(null)
+  /** The target the navigator's create action was invoked from, handed to the task dialog. */
+  const [taskCreateTarget, setTaskCreateTarget] = useState<api.TaskTarget | null>(null)
   const [navigatorTagNodes, setNavigatorTagNodes] = useState<api.TagNode[]>([])
   const [navigatorTagIds, setNavigatorTagIds] = useState<string[]>([])
   const [navigatorTagsLoading, setNavigatorTagsLoading] = useState(true)
@@ -1018,7 +1020,7 @@ export default function MainStudio() {
     const requestId = ++selectionRequestId.current
     // Local focus changes must not wait for the shared runtime acknowledgement.
     // The workbench runtime effect refreshes the assistant state after this render.
-    setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
+    setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null, targetKind: null })
     setMainView({ kind: 'project' })
     setDeviceSelection(null)
     setTaskChatContext(null)
@@ -1032,7 +1034,7 @@ export default function MainStudio() {
     const requestId = ++selectionRequestId.current
     // Selecting a worktree is local UI state. Let the landing page fetch its
     // own details while the shared runtime acknowledgement happens in parallel.
-    setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
+    setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null, targetKind: null })
     setMainView({ kind: 'worktree', tab: 'overview' })
     // Version control lives in the right dock of the worktree page; make
     // sure the dock is visible when navigating there.
@@ -1068,7 +1070,7 @@ export default function MainStudio() {
     const requestId = ++selectionRequestId.current
     // Selection is a pure metadata operation: apply it instantly. The snapshot
     // (per-block manifest work) loads in the background and fills the view.
-    setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId })
+    setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId, targetKind: 'device' })
     setTaskChatContext(null)
     setMainView({ kind: 'device' })
     const cachedContext = {
@@ -1148,7 +1150,7 @@ export default function MainStudio() {
     worktree: api.WorkbenchRegistration,
     page: 'tree' | 'bom' | 'network',
   ) => {
-    setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null })
+    setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null, targetKind: 'hardware' })
     setMainView({ kind: 'hardware', page })
     setDeviceSelection(null)
     setChatTabs(emptyChatTabs())
@@ -2296,7 +2298,6 @@ export default function MainStudio() {
             tasksByWorktree={tasksByWorktree}
             activeTaskId={taskDetail?.task.taskId ?? taskDetailTask?.taskId ?? null}
             selection={selection}
-            viewKind={mainView.kind === 'task-chat' ? 'worktree' : mainView.kind}
             knowledgeState={navigatorKnowledgeState}
             loading={loading}
             filterActive={navigatorTagIds.length > 0}
@@ -2352,8 +2353,9 @@ export default function MainStudio() {
                 })
                 .catch(error => showErrorToast(`Task could not be updated: ${displayError(error)}`))
             }}
-            onAddTask={(_workbench, worktree) => {
+            onAddTask={(_workbench, worktree, target) => {
               setTaskCreateWorktreeId(worktree.worktreeId)
+              setTaskCreateTarget(target)
               setMainView({ kind: 'worktree', tab: 'tasks' })
             }}
             onSelectHardware={selectHardware}
@@ -2493,8 +2495,10 @@ export default function MainStudio() {
                 taskViewMode={worktreeTaskViewMode}
                 onTaskViewModeChange={setWorktreeTaskViewMode}
                 openTaskCreate={taskCreateWorktreeId === selection.worktreeId}
+                taskCreateTarget={taskCreateTarget}
                 onTaskCreateClosed={() => {
                   setTaskCreateWorktreeId(null)
+                  setTaskCreateTarget(null)
                   void refreshWorktreeTasks(selection.workbenchId!, selection.worktreeId!)
                 }}
               />

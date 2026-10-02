@@ -25,7 +25,8 @@ import {
   Wrench,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import type { DeviceSummary, EngineeringTask, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
+import type { DeviceSummary, EngineeringTask, EngineeringTaskTargetKind, TaskTarget, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
+import { taskTargetKind } from '@/api/client'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -53,6 +54,12 @@ export type WorkbenchSelection = {
   workbenchId: string | null
   worktreeId: string | null
   deviceId: string | null
+  /**
+   * Which target below the selected worktree the shell shows: one of its PLC devices, or its hardware
+   * configuration. Absent or null means the worktree itself is the deepest selected scope, which is
+   * what the sections derive their visibility and their highlight from.
+   */
+  targetKind?: EngineeringTaskTargetKind | null
 }
 
 type TaskUpdate = { title: string; type: EngineeringTask['type']; status: WorktreeTaskStatus }
@@ -63,8 +70,6 @@ type Props = {
   tasksByWorktree?: Record<string, EngineeringTask[]>
   activeTaskId?: string | null
   selection: WorkbenchSelection
-  /** Which page <main> is currently showing; drives the active-row highlight. */
-  viewKind: 'project' | 'worktree' | 'hardware' | 'device'
   knowledgeState: Record<string, 'current' | 'stale' | 'missing' | 'failed'>
   loading: boolean
   /** A tag search is active; rows come only from the server-owned result below. */
@@ -87,7 +92,8 @@ type Props = {
   onSelectDevice: (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => void
   onSelectTask?: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => void
   onUpdateTask?: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask, update: Partial<TaskUpdate>) => void
-  onAddTask?: (workbench: Workbench, worktree: WorkbenchRegistration) => void
+  /** Creates a task already bound to the target the user created it from. */
+  onAddTask?: (workbench: Workbench, worktree: WorkbenchRegistration, target: TaskTarget) => void
   onSelectHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onReloadHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onCompareHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
@@ -113,9 +119,11 @@ const taskTypeIcon = {
   improvement: Wrench,
   feature: Sparkles,
 } satisfies Record<EngineeringTask['type'], typeof FileText>
-// Device actions remain wired while their task-page replacements are introduced.
-// The device tree itself is deliberately not part of the navigator anymore.
-const showLegacyDeviceTree = false
+const knowledgeDotClass = (state: 'current' | 'stale' | 'missing' | 'failed') =>
+  state === 'current' ? 'text-emerald-500'
+    : state === 'stale' ? 'text-amber-500'
+      : state === 'failed' ? 'text-red-500'
+        : 'text-muted-foreground'
 
 type NavigatorSectionProps = {
   /** Stable section identity, used for the header/body pairing and for test and style hooks. */
@@ -160,13 +168,74 @@ function NavigatorSection({ id, title, action, children }: NavigatorSectionProps
   )
 }
 
+type TaskRowProps = {
+  workbench: Workbench
+  worktree: WorkbenchRegistration
+  task: EngineeringTask
+  selected: boolean
+  onSelect: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => void
+  onUpdate: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask, update: Partial<TaskUpdate>) => void
+  onRename: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => void
+}
+
+/**
+ * One task row. The same row is used by the `TASKS` section and by the unbound-task group, so a task
+ * never changes its affordances with the group it happens to appear in.
+ */
+function TaskRow({ workbench, worktree, task, selected, onSelect, onUpdate, onRename }: TaskRowProps) {
+  const TaskIcon = taskTypeIcon[task.type]
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={() => onSelect(workbench, worktree, task)}
+        className={`relative flex min-h-8 w-full items-center gap-2 rounded-md border px-2 py-1 pr-8 text-left hover:bg-accent/40 ${selected ? 'border-ring/70' : 'border-transparent'}`}
+        aria-label={`Open task ${task.title}`}
+        aria-current={selected ? 'page' : undefined}
+        data-task-selected={selected || undefined}
+        data-task-type={task.type}
+      >
+        <TaskIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span data-task-status={task.status} className={`h-2 w-2 shrink-0 rounded-full ${taskStatusDotClass(task.status)}`} />
+        <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-xs" aria-label={`Task actions ${task.title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
+            <Ellipsis className="h-3.5 w-3.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuLabel>{task.title}</DropdownMenuLabel>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>Change status</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {(['todo', 'inProgress', 'done'] as const).map(status => <DropdownMenuItem key={status} onSelect={() => onUpdate(workbench, worktree, task, { status })}>{status === 'inProgress' ? 'In progress' : status[0].toUpperCase() + status.slice(1)}</DropdownMenuItem>)}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>Change type and icon</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {(['issue', 'improvement', 'feature'] as const).map(type => {
+                const TypeIcon = taskTypeIcon[type]
+                return <DropdownMenuItem key={type} onSelect={() => onUpdate(workbench, worktree, task, { type })}><TypeIcon />{type[0].toUpperCase() + type.slice(1)}</DropdownMenuItem>
+              })}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => onRename(workbench, worktree, task)}><Pencil />Rename task</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
 export default function WorkbenchNavigator({
   workbenches,
   devicesByWorktree,
   tasksByWorktree = {},
   activeTaskId = null,
   selection,
-  viewKind,
   knowledgeState,
   loading,
   filterActive = false,
@@ -234,6 +303,224 @@ export default function WorkbenchNavigator({
     if (!renameTask || !renameTitle.trim()) return
     onUpdateTask(renameTask.workbench, renameTask.worktree, renameTask.task, { title: renameTitle.trim() })
     setRenameTask(null)
+  }
+
+  // The cascade's tail: which target below the selected worktree is showing, and what it owns.
+  const selectedWorktreeRow = worktreeRows.find(row => row.worktree.worktreeId === selection.worktreeId) ?? null
+  const selectedWorktreeKey = selectedWorktreeRow
+    ? worktreeKey(selectedWorktreeRow.workbench.workbenchId, selectedWorktreeRow.worktree.worktreeId)
+    : null
+  const selectedDevices = selectedWorktreeKey ? devicesByWorktree[selectedWorktreeKey] ?? [] : []
+  const selectedTasks = selectedWorktreeKey ? tasksByWorktree[selectedWorktreeKey] ?? [] : []
+  // A set deviceId always means that device is the target; the shell only has to name the target when
+  // no device is selected, because a worktree whose hardware row is open still has a null deviceId.
+  const selectedTargetKind: EngineeringTaskTargetKind | null =
+    selection.deviceId ? 'device' : selection.targetKind === 'hardware' ? 'hardware' : null
+  // A task with no device and no hardware kind predates the target model (AC-011 makes it uncreatable
+  // now), which is exactly the "unbound" group AC-003 asks for and AC-010 keeps hardware tasks out of.
+  const targetTasks = selectedTargetKind === 'hardware'
+    ? selectedTasks.filter(task => taskTargetKind(task) === 'hardware')
+    : selectedTargetKind === 'device'
+      ? selectedTasks.filter(task => task.deviceId === selection.deviceId)
+      : []
+  const selectedTarget: TaskTarget | null = selectedWorktreeRow
+    ? selectedTargetKind === 'hardware'
+      ? { kind: 'hardware' }
+      : selectedTargetKind === 'device' && selection.deviceId
+        ? { kind: 'device', deviceId: selection.deviceId }
+        : null
+    : null
+
+  const selectRowTask = (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => {
+    setClickedTaskId(task.taskId)
+    onSelectTask(workbench, worktree, task)
+  }
+
+  /**
+   * `DEVICE`: the selected worktree's PLC devices plus its single hardware target. The header action
+   * is refresh only, and every operation the removed device subtree used to hold lives in the row's
+   * own 3-dots menu, so no operation lost its entry point when that subtree went away.
+   */
+  const renderDeviceSection = () => {
+    if (!selectedWorktreeRow) return null
+    const { workbench, worktree } = selectedWorktreeRow
+    const hardwareSelected = selectedTargetKind === 'hardware'
+    return (
+      <NavigatorSection
+        id="device"
+        title="DEVICE"
+        action={(
+          <Button variant="ghost" size="icon-xs" aria-label="Refresh devices" title="Refresh devices" onClick={onRefresh}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </Button>
+        )}
+      >
+        <div
+          className={`group mb-1 flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${hardwareSelected ? 'bg-accent' : 'hover:bg-accent/40'}`}
+          aria-current={hardwareSelected ? 'true' : undefined}
+          data-device-target="hardware"
+          onClick={() => onSelectHardware(workbench, worktree)}
+        >
+          <CircuitBoard className={`h-4 w-4 ${hardwareSelected ? 'text-chart-2' : 'text-muted-foreground'}`} />
+          <span className="min-w-0 flex-1 truncate text-xs">Hardware configuration</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Hardware configuration actions"
+                onClick={event => event.stopPropagation()}
+              >
+                <Ellipsis className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Hardware configuration</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => onSelectHardware(workbench, worktree)}>
+                <CircuitBoard className="h-3.5 w-3.5" />
+                Select hardware configuration
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => onReloadHardware(workbench, worktree)}>
+                <RotateCw className="h-3.5 w-3.5" />
+                Reload hardware configuration
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onCompareHardware(workbench, worktree)}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Compare hardware with TIA
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        {selectedDevices.length === 0 && (
+          <div className="px-2 py-2 text-xs leading-4 text-muted-foreground">No registered PLC devices</div>
+        )}
+        {selectedDevices.map(device => {
+          const selected = !hardwareSelected && selection.deviceId === device.deviceId
+          const state = knowledgeState[device.deviceId] ?? 'missing'
+          return (
+            <div
+              key={device.deviceId}
+              className={`group mb-1 flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${selected ? 'bg-accent' : 'hover:bg-accent/40'}`}
+              aria-current={selected ? 'true' : undefined}
+              data-device-target={device.deviceId}
+              onClick={() => onSelectDevice(workbench, worktree, device.deviceId)}
+            >
+              <Cpu className={`h-4 w-4 ${selected ? 'text-chart-2' : 'text-muted-foreground'}`} />
+              <span className="min-w-0 flex-1 truncate text-xs">{device.plcName}</span>
+              <Database className={`h-3 w-3 ${knowledgeDotClass(state)}`} />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`Device actions ${device.plcName}`}
+                    onClick={event => event.stopPropagation()}
+                  >
+                    <Ellipsis className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>{device.plcName}</DropdownMenuLabel>
+                  <DropdownMenuItem onSelect={() => onSelectDevice(workbench, worktree, device.deviceId)}>
+                    <Cpu className="h-3.5 w-3.5" />
+                    Select device
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => onOpenDevice(workbench, worktree, device.deviceId, true)}>
+                    <Monitor className="h-3.5 w-3.5" />
+                    Open TIA with UI
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onOpenDevice(workbench, worktree, device.deviceId, false)}>
+                    <MonitorOff className="h-3.5 w-3.5" />
+                    Open TIA headless
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onUpgradeDevice(workbench, worktree, device.deviceId)}>
+                    <RotateCw className="h-3.5 w-3.5" />
+                    Open TIA with upgrade
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onInspectDevice(workbench, worktree, device.deviceId)}>
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Inspect TIA access
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onCompareDevice(workbench, worktree, device.deviceId)}>
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Compare with TIA
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onRebuildDevice(workbench, worktree, device.deviceId)}>
+                    <RotateCw className="h-3.5 w-3.5" />
+                    Rebuild project
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => onUpdateKnowledge(workbench, worktree, device.deviceId)}>
+                    <Database className="h-3.5 w-3.5" />
+                    Update knowledge
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => onRebuildKnowledge(workbench, worktree, device.deviceId)}>
+                    <Database className="h-3.5 w-3.5" />
+                    Rebuild knowledge
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )
+        })}
+      </NavigatorSection>
+    )
+  }
+
+  /**
+   * `TASKS`: what the selected target owns. It exists only once a target is selected, and its header
+   * creates a task already bound to that target, so creating from the hardware row cannot silently
+   * fall back to a PLC device.
+   */
+  const renderTasksSection = () => {
+    if (!selectedWorktreeRow || !selectedTarget) return null
+    const { workbench, worktree } = selectedWorktreeRow
+    const targetLabel = selectedTarget.kind === 'hardware'
+      ? 'hardware configuration'
+      : selectedDevices.find(device => device.deviceId === selectedTarget.deviceId)?.plcName ?? selectedTarget.deviceId
+    const addTask = () => onAddTask(workbench, worktree, selectedTarget)
+    const addButton = (
+      <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground" onClick={addTask}>
+        <Plus className="h-3 w-3" /> Add task
+      </Button>
+    )
+    return (
+      <NavigatorSection
+        id="tasks"
+        title="TASKS"
+        action={(
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Create task for ${targetLabel}`}
+            title="Create task"
+            onClick={addTask}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        )}
+      >
+        {targetTasks.length === 0 ? addButton : (
+          <>
+            {targetTasks.map(task => (
+              <TaskRow
+                key={task.taskId}
+                workbench={workbench}
+                worktree={worktree}
+                task={task}
+                selected={(activeTaskId ?? clickedTaskId) === task.taskId}
+                onSelect={selectRowTask}
+                onUpdate={onUpdateTask}
+                onRename={openRenameTask}
+              />
+            ))}
+            {addButton}
+          </>
+        )}
+      </NavigatorSection>
+    )
   }
 
   return (
@@ -393,15 +680,17 @@ export default function WorkbenchNavigator({
               const worktreeSelected = selection.worktreeId === worktree.worktreeId
               const available = matchingWorktrees.get(worktree.worktreeId)?.available ?? true
               const key = worktreeKey(workbench.workbenchId, worktree.worktreeId)
-              const devices = devicesByWorktree[key] ?? []
-              const tasks = tasksByWorktree[key] ?? []
+              // The unbound group is per worktree: it exists only for the selected one and only while
+              // it actually holds a task that resolves to no target.
+              const rowUnboundTasks = (tasksByWorktree[key] ?? [])
+                .filter(task => !task.deviceId && taskTargetKind(task) === 'device')
               return (
                 <div key={key}>
                   <ContextMenu>
                     <ContextMenuTrigger asChild>
                         <div
                           className={`group flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${
-                          worktreeSelected && viewKind === 'worktree'
+                          worktreeSelected && selectedTargetKind === null
                             ? 'bg-accent'
                             : worktreeSelected
                               ? 'bg-accent/70'
@@ -527,155 +816,26 @@ export default function WorkbenchNavigator({
                       </ContextMenuItem>
                     </ContextMenuContent>
                   </ContextMenu>
-                  {/* While the tag filter is active only the catalog sections show; the tasks nested
-                      under their worktree row return as soon as the filter clears. */}
-                  {!filterActive && worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (
-                    <div className="ml-4 border-l py-0.5 pl-2" style={{ borderColor: 'var(--border)' }}>
-                      {tasks.length === 0 ? (
-                        <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>
-                      ) : tasks.map(task => {
-                        const taskSelected = (activeTaskId ?? clickedTaskId) === task.taskId
-                        const TaskIcon = taskTypeIcon[task.type]
-                        return (
-                        <div key={task.taskId} className="group relative">
-                          <button type="button" onClick={() => { setClickedTaskId(task.taskId); onSelectTask(workbench, worktree, task) }} className={`relative flex min-h-8 w-full items-center gap-2 rounded-md border px-2 py-1 pr-8 text-left before:absolute before:-left-2 before:top-1/2 before:h-px before:w-2 before:bg-border hover:bg-accent/40 ${taskSelected ? 'border-ring/70' : 'border-transparent'}`} aria-label={`Open task ${task.title}`} aria-current={taskSelected ? 'page' : undefined} data-task-selected={taskSelected || undefined} data-task-type={task.type}>
-                            <TaskIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                            <span data-task-status={task.status} className={`h-2 w-2 shrink-0 rounded-full ${taskStatusDotClass(task.status)}`} />
-                            <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
-                          </button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon-xs" aria-label={`Task actions ${task.title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
-                                <Ellipsis className="h-3.5 w-3.5" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuLabel>{task.title}</DropdownMenuLabel>
-                              <DropdownMenuSub>
-                                <DropdownMenuSubTrigger>Change status</DropdownMenuSubTrigger>
-                                <DropdownMenuSubContent>
-                                  {(['todo', 'inProgress', 'done'] as const).map(status => <DropdownMenuItem key={status} onSelect={() => onUpdateTask(workbench, worktree, task, { status })}>{status === 'inProgress' ? 'In progress' : status[0].toUpperCase() + status.slice(1)}</DropdownMenuItem>)}
-                                </DropdownMenuSubContent>
-                              </DropdownMenuSub>
-                              <DropdownMenuSub>
-                                <DropdownMenuSubTrigger>Change type and icon</DropdownMenuSubTrigger>
-                                <DropdownMenuSubContent>
-                                  {(['issue', 'improvement', 'feature'] as const).map(type => {
-                                    const TypeIcon = taskTypeIcon[type]
-                                    return <DropdownMenuItem key={type} onSelect={() => onUpdateTask(workbench, worktree, task, { type })}><TypeIcon />{type[0].toUpperCase() + type.slice(1)}</DropdownMenuItem>
-                                  })}
-                                </DropdownMenuSubContent>
-                              </DropdownMenuSub>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem onSelect={() => openRenameTask(workbench, worktree, task)}><Pencil />Rename task</DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                        )
-                      })}
-                      {tasks.length > 0 && <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground" onClick={() => onAddTask(workbench, worktree)}><Plus className="h-3 w-3" /> Add task</Button>}
-                    </div>
-                  )}
-                  {showLegacyDeviceTree && worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && (
-                    <div className="ml-4 border-l pl-2" style={{ borderColor: 'var(--border)' }}>
-                      <ContextMenu>
-                        <ContextMenuTrigger asChild>
-                          <button
-                            onClick={() => onSelectHardware(workbench, worktree)}
-                            className={`flex min-h-7 w-full items-center gap-2 rounded px-2 py-1 text-left ${
-                              viewKind === 'hardware' ? 'bg-accent ring-1 ring-border/60' : 'hover:bg-accent/40'
-                            }`}
-                          >
-                            <CircuitBoard className={`h-3.5 w-3.5 ${
-                              viewKind === 'hardware' ? 'text-chart-2' : 'text-muted-foreground'
-                            }`} />
-                            <span className="min-w-0 flex-1 truncate text-xs">Hardware configuration</span>
-                          </button>
-                        </ContextMenuTrigger>
-                        <ContextMenuContent>
-                          <ContextMenuLabel>Hardware configuration</ContextMenuLabel>
-                          <ContextMenuItem onSelect={() => onSelectHardware(workbench, worktree)}>
-                            <CircuitBoard className="h-3.5 w-3.5" />
-                            Select hardware configuration
-                          </ContextMenuItem>
-                          <ContextMenuSeparator />
-                          <ContextMenuItem onSelect={() => onReloadHardware(workbench, worktree)}>
-                            <RotateCw className="h-3.5 w-3.5" />
-                            Reload hardware configuration
-                          </ContextMenuItem>
-                          <ContextMenuItem onSelect={() => onCompareHardware(workbench, worktree)}>
-                            <RefreshCw className="h-3.5 w-3.5" />
-                            Compare hardware with TIA
-                          </ContextMenuItem>
-                        </ContextMenuContent>
-                      </ContextMenu>
-                      {devices.length === 0 ? (
-                        <div className="px-2 py-2 text-xs leading-4 text-muted-foreground">No registered PLC devices</div>
-                      ) : devices.map(device => {
-                        const selected = selection.deviceId === device.deviceId
-                        const state = knowledgeState[device.deviceId] ?? 'missing'
-                        return (
-                          <ContextMenu key={device.deviceId}>
-                            <ContextMenuTrigger asChild>
-                              <button
-                                title={device.deviceId}
-                                onClick={() => onSelectDevice(workbench, worktree, device.deviceId)}
-                                className={`flex min-h-7 w-full items-center gap-2 rounded px-2 py-1 text-left ${selected ? 'bg-accent ring-1 ring-border/60' : 'hover:bg-accent/40'}`}
-                              >
-                                <Cpu className={`h-3.5 w-3.5 ${selected ? 'text-chart-2' : 'text-muted-foreground'}`} />
-                                <span className="min-w-0 flex-1 truncate text-xs">{device.plcName}</span>
-                                <Database className={`h-3 w-3 ${
-                                  state === 'current' ? 'text-emerald-500'
-                                    : state === 'stale' ? 'text-amber-500'
-                                      : state === 'failed' ? 'text-red-500'
-                                        : 'text-muted-foreground'
-                                }`} />
-                              </button>
-                            </ContextMenuTrigger>
-                            <ContextMenuContent>
-                              <ContextMenuLabel>{device.plcName}</ContextMenuLabel>
-                              <ContextMenuItem onSelect={() => onSelectDevice(workbench, worktree, device.deviceId)}>
-                                <Cpu className="h-3.5 w-3.5" />
-                                Select device
-                              </ContextMenuItem>
-                              <ContextMenuSeparator />
-                              <ContextMenuItem onSelect={() => onOpenDevice(workbench, worktree, device.deviceId, true)}>
-                                <Monitor className="h-3.5 w-3.5" />
-                                Open TIA with UI
-                              </ContextMenuItem>
-                              <ContextMenuItem onSelect={() => onOpenDevice(workbench, worktree, device.deviceId, false)}>
-                                <MonitorOff className="h-3.5 w-3.5" />
-                                Open TIA headless
-                              </ContextMenuItem>
-                              <ContextMenuItem onSelect={() => onUpgradeDevice(workbench, worktree, device.deviceId)}>
-                                <RotateCw className="h-3.5 w-3.5" />
-                                Open TIA with upgrade
-                              </ContextMenuItem>
-                              <ContextMenuItem onSelect={() => onInspectDevice(workbench, worktree, device.deviceId)}>
-                                <ShieldCheck className="h-3.5 w-3.5" />
-                                Inspect TIA access
-                              </ContextMenuItem>
-                              <ContextMenuItem onSelect={() => onCompareDevice(workbench, worktree, device.deviceId)}>
-                                <RefreshCw className="h-3.5 w-3.5" />
-                                Compare with TIA
-                              </ContextMenuItem>
-                              <ContextMenuItem onSelect={() => onRebuildDevice(workbench, worktree, device.deviceId)}>
-                                <RotateCw className="h-3.5 w-3.5" />
-                                Rebuild project
-                              </ContextMenuItem>
-                              <ContextMenuSeparator />
-                              <ContextMenuItem onSelect={() => onUpdateKnowledge(workbench, worktree, device.deviceId)}>
-                                <Database className="h-3.5 w-3.5" />
-                                Update knowledge
-                              </ContextMenuItem>
-                              <ContextMenuItem onSelect={() => onRebuildKnowledge(workbench, worktree, device.deviceId)}>
-                                <Database className="h-3.5 w-3.5" />
-                                Rebuild knowledge
-                              </ContextMenuItem>
-                            </ContextMenuContent>
-                          </ContextMenu>
-                        )
-                      })}
+                  {/* The unbound group: the selected worktree's tasks that resolve to no target. It
+                      carries no creation action, because a targetless task stays rejected (AC-011). */}
+                  {!filterActive && worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && rowUnboundTasks.length > 0 && (
+                    <div className="ml-4 border-l py-0.5 pl-2" style={{ borderColor: 'var(--border)' }} data-unbound-tasks>
+                      <div className="px-2 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground">NO TARGET</div>
+                      {rowUnboundTasks.map(task => (
+                        <TaskRow
+                          key={task.taskId}
+                          workbench={workbench}
+                          worktree={worktree}
+                          task={task}
+                          selected={(activeTaskId ?? clickedTaskId) === task.taskId}
+                          onSelect={(selectedWorkbench, selectedWorktree, selectedTask) => {
+                            setClickedTaskId(selectedTask.taskId)
+                            onSelectTask(selectedWorkbench, selectedWorktree, selectedTask)
+                          }}
+                          onUpdate={onUpdateTask}
+                          onRename={openRenameTask}
+                        />
+                      ))}
                     </div>
                   )}
                 </div>
@@ -683,6 +843,10 @@ export default function WorkbenchNavigator({
             })}
           </NavigatorSection>
         )}
+
+        {!filterActive && renderDeviceSection()}
+
+        {!filterActive && renderTasksSection()}
       </div>
     </aside>
     <Dialog open={renameTask !== null} onOpenChange={open => { if (!open) setRenameTask(null) }}>

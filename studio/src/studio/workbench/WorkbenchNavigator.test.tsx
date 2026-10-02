@@ -29,6 +29,25 @@ const tasksByWorktree: Record<string, api.EngineeringTask[]> = {
   }],
 }
 
+const devicesByWorktree: Record<string, api.DeviceSummary[]> = {
+  'wb-direct:wt-descendant': [{ deviceId: 'plc-1', plcName: 'Main PLC' }],
+}
+
+const graphTask = (overrides: Partial<api.EngineeringTask> & { taskId: string; title: string }): api.EngineeringTask => ({
+  workbenchId: 'wb-direct', scope: 'worktree', worktreeId: 'wt-descendant', type: 'feature', status: 'todo',
+  priority: 0, intent: 'Intent', expectedResult: 'Result', description: null, createdUtc: '', updatedUtc: '',
+  ...overrides,
+})
+
+/** One task per target, including the untargeted row only a pre-target-model worktree can hold. */
+const targetTasks: Record<string, api.EngineeringTask[]> = {
+  'wb-direct:wt-descendant': [
+    graphTask({ taskId: 'task-device', title: 'Device task', deviceId: 'plc-1', targetKind: 'device' }),
+    graphTask({ taskId: 'task-hardware', title: 'Hardware task', deviceId: null, targetKind: 'hardware' }),
+    graphTask({ taskId: 'task-unbound', title: 'Unbound task', deviceId: null }),
+  ],
+}
+
 const callbacks = {
   onCreateWorkbench: () => {}, onCreateWorktree: () => {}, onOpenWorkbench: () => {}, onOpenWorktree: () => {}, onInspectWorkbench: () => {}, onInspectWorktree: () => {}, onArchiveWorktree: () => {}, onRefresh: () => {}, onShowHome: () => {}, onSelectWorkbench: () => {}, onSelectWorktree: () => {}, onSelectDevice: () => {}, onSelectHardware: () => {}, onReloadHardware: () => {}, onCompareHardware: () => {}, onDeleteWorkbench: () => {}, onDeleteWorktree: () => {}, onMergeWorktree: () => {}, onOpenDevice: () => {}, onUpgradeDevice: () => {}, onInspectDevice: () => {}, onCompareDevice: () => {}, onRebuildDevice: () => {}, onUpdateKnowledge: () => {}, onRebuildKnowledge: () => {},
 }
@@ -39,7 +58,6 @@ const navigatorProps = (overrides: Partial<NavigatorProps> = {}): NavigatorProps
   workbenches,
   devicesByWorktree: {},
   selection: { workbenchId: null, worktreeId: null, deviceId: null },
-  viewKind: 'project',
   knowledgeState: {},
   loading: false,
   filterActive: false,
@@ -75,28 +93,25 @@ const sectionBody = (host: HTMLElement, id: string) => host.querySelector(`#navi
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('WorkbenchNavigator tag projection', () => {
-  it('renders task children as a compact outline without a Tasks label', async () => {
-    const { host, root } = await renderNavigator(null, false)
-    await act(async () => root.render(
-      <WorkbenchNavigator {...navigatorProps({
-        tasksByWorktree,
-        activeTaskId: 'task-1',
-        selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-other' },
-        viewKind: 'device',
-      })} />,
-    ))
-    const worktreeName = Array.from(host.querySelectorAll('span')).find(node => node.textContent === 'descendant match')
-    await act(async () => (worktreeName?.parentElement as HTMLElement).click())
+  it('renders the selected target tasks as a compact outline in the TASKS section', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      tasksByWorktree,
+      devicesByWorktree,
+      activeTaskId: 'task-1',
+      selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-1', targetKind: 'device' },
+    })
 
     expect(host.textContent).toContain('Review motor interlock')
     expect(host.textContent).toContain('PROJECTS')
-    expect(host.textContent).not.toContain('Tasks')
     expect(host.querySelector('[data-task-status="inProgress"]')).toBeTruthy()
     expect(host.querySelector('[data-task-status="inProgress"]')?.className).toContain('bg-emerald-500')
     const task = host.querySelector('button[aria-label="Open task Review motor interlock"]')
     expect(task?.getAttribute('aria-current')).toBe('page')
     expect(task?.getAttribute('data-task-selected')).toBe('true')
     expect(task?.getAttribute('data-task-type')).toBe('feature')
+    // The task lives in TASKS, never under its worktree row.
+    expect(section(host, 'tasks').contains(task)).toBe(true)
+    expect(section(host, 'worktree').contains(task)).toBe(false)
     expect(host.querySelector('button[aria-label="Task actions Review motor interlock"]')).toBeTruthy()
     expect(host.querySelector('button[aria-label="Project actions Direct project"]')).toBeTruthy()
     expect(host.querySelector('button[aria-label="Worktree actions descendant match"]')).toBeTruthy()
@@ -166,13 +181,14 @@ describe('WorkbenchNavigator tag projection', () => {
     await act(async () => root.unmount())
   })
 
-  it('shows only PROJECTS and WORKTREE while the tag filter is active and brings the task rows back when it clears (AC-006)', async () => {
+  it('shows only PROJECTS and WORKTREE while the tag filter is active and brings the deeper sections back when it clears (AC-006)', async () => {
     const result = {
       workbenches: [] as api.WorkbenchTagSearchResult[],
       worktrees: [{ entityType: 'worktree' as const, entityId: 'wt-descendant', workbenchId: 'wb-direct', direct: ['press'], effective: ['press'], available: true }],
     }
-    const selection = { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null }
-    const { host, root } = await renderNavigator(result, true, { selection, tasksByWorktree })
+    const selection = { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-1', targetKind: 'device' as const }
+    const overrides = { selection, tasksByWorktree, devicesByWorktree }
+    const { host, root } = await renderNavigator(result, true, overrides)
 
     expect(sectionIds(host)).toEqual(['projects', 'worktree'])
     expect(section(host, 'worktree').textContent).toContain('descendant match')
@@ -182,13 +198,182 @@ describe('WorkbenchNavigator tag projection', () => {
       <WorkbenchNavigator {...navigatorProps({
         filterActive: false,
         filteredResults: null,
-        selection,
-        tasksByWorktree,
+        ...overrides,
       })} />,
     ))
 
-    expect(sectionIds(host)).toEqual(['projects', 'worktree'])
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
     expect(host.textContent).toContain('Review motor interlock')
+    await act(async () => root.unmount())
+  })
+})
+
+describe('WorkbenchNavigator target cascade', () => {
+  const deviceSelection = { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-1', targetKind: 'device' as const }
+  const hardwareSelection = { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null, targetKind: 'hardware' as const }
+  const worktreeRow = workbenches[0]
+  const descendantWorktree = workbenches[0].worktrees[0]
+
+  const openRowMenu = async (trigger: HTMLButtonElement) => {
+    await act(async () => {
+      trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, ctrlKey: false }))
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    return Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .map(item => item.textContent?.trim())
+  }
+
+  it('opens the hardware pages from the DEVICE row that also carries the worktree devices (AC-004, AC-009)', async () => {
+    const onRefresh = vi.fn()
+    const onSelectDevice = vi.fn()
+    const onSelectHardware = vi.fn()
+    const { host, root } = await renderNavigator(null, false, {
+      selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null, targetKind: null },
+      devicesByWorktree,
+      onRefresh,
+      onSelectDevice,
+      onSelectHardware,
+    })
+
+    const deviceSection = section(host, 'device')
+    expect(deviceSection).toBeTruthy()
+    // The hardware target is the worktree-level one, so it is listed before its PLC devices.
+    expect(Array.from(deviceSection.querySelectorAll('[data-device-target]'))
+      .map(node => node.getAttribute('data-device-target'))).toEqual(['hardware', 'plc-1'])
+
+    const refresh = deviceSection.querySelector('button[aria-label="Refresh devices"]') as HTMLButtonElement
+    expect(refresh).toBeTruthy()
+    // The DEVICE header carries refresh only; creation belongs to TASKS.
+    expect(deviceSection.querySelector('button[aria-label^="Create"]')).toBeNull()
+    await act(async () => refresh.click())
+    expect(onRefresh).toHaveBeenCalledOnce()
+
+    await act(async () => (deviceSection.querySelector('[data-device-target="plc-1"]') as HTMLElement).click())
+    expect(onSelectDevice).toHaveBeenCalledWith(worktreeRow, descendantWorktree, 'plc-1')
+
+    // This click is what makes the shell's hardware pages reachable again.
+    await act(async () => (deviceSection.querySelector('[data-device-target="hardware"]') as HTMLElement).click())
+    expect(onSelectHardware).toHaveBeenCalledWith(worktreeRow, descendantWorktree)
+
+    await act(async () => root.unmount())
+  })
+
+  it('lists only the selected target tasks and creates a task bound to it (AC-005)', async () => {
+    const onAddTask = vi.fn()
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection,
+      devicesByWorktree,
+      tasksByWorktree: targetTasks,
+      onAddTask,
+    })
+
+    expect(section(host, 'tasks').textContent).toContain('Device task')
+    expect(section(host, 'tasks').textContent).not.toContain('Hardware task')
+    expect(section(host, 'tasks').textContent).not.toContain('Unbound task')
+
+    const create = section(host, 'tasks').querySelector('button[aria-label="Create task for Main PLC"]') as HTMLButtonElement
+    expect(create).toBeTruthy()
+    await act(async () => create.click())
+    expect(onAddTask).toHaveBeenCalledWith(worktreeRow, descendantWorktree, { kind: 'device', deviceId: 'plc-1' })
+
+    await act(async () => root.unmount())
+  })
+
+  it('lists the worktree hardware tasks under the hardware row and nothing else (AC-009, AC-010)', async () => {
+    const onAddTask = vi.fn()
+    const { host, root } = await renderNavigator(null, false, {
+      selection: hardwareSelection,
+      devicesByWorktree,
+      tasksByWorktree: targetTasks,
+      onAddTask,
+    })
+
+    expect(section(host, 'tasks').textContent).toContain('Hardware task')
+    expect(section(host, 'tasks').textContent).not.toContain('Device task')
+    expect(section(host, 'tasks').textContent).not.toContain('Unbound task')
+    // A hardware task is never the untargeted kind, so the group for those stays empty.
+    expect(section(host, 'worktree').querySelector('[data-unbound-tasks]')?.textContent ?? '').not.toContain('Hardware task')
+
+    const create = section(host, 'tasks')
+      .querySelector('button[aria-label="Create task for hardware configuration"]') as HTMLButtonElement
+    expect(create).toBeTruthy()
+    await act(async () => create.click())
+    expect(onAddTask).toHaveBeenCalledWith(worktreeRow, descendantWorktree, { kind: 'hardware' })
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows the unbound group only while the worktree holds a task that resolves to no target (AC-003)', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection,
+      devicesByWorktree,
+      tasksByWorktree: targetTasks,
+    })
+
+    const unbound = section(host, 'worktree').querySelector('[data-unbound-tasks]') as HTMLElement
+    expect(unbound).toBeTruthy()
+    expect(unbound.textContent).toContain('Unbound task')
+    expect(unbound.textContent).not.toContain('Device task')
+    expect(unbound.textContent).not.toContain('Hardware task')
+    // The group carries a task row and its menu, and nothing else: it has no creation action,
+    // because a targetless task stays rejected.
+    expect(Array.from(unbound.querySelectorAll('button')).map(button => button.getAttribute('aria-label')))
+      .toEqual(['Open task Unbound task', 'Task actions Unbound task'])
+
+    const withoutUnbound = { 'wb-direct:wt-descendant': targetTasks['wb-direct:wt-descendant'].filter(task => task.deviceId) }
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: deviceSelection,
+        devicesByWorktree,
+        tasksByWorktree: withoutUnbound,
+      })} />,
+    ))
+    expect(section(host, 'worktree').querySelector('[data-unbound-tasks]')).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('offers the removed device subtree operations from the device row menu (AC-008)', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection,
+      devicesByWorktree,
+      tasksByWorktree: targetTasks,
+    })
+
+    const trigger = section(host, 'device')
+      .querySelector('button[aria-label="Device actions Main PLC"]') as HTMLButtonElement
+
+    expect(await openRowMenu(trigger)).toEqual([
+      'Select device',
+      'Open TIA with UI',
+      'Open TIA headless',
+      'Open TIA with upgrade',
+      'Inspect TIA access',
+      'Compare with TIA',
+      'Rebuild project',
+      'Update knowledge',
+      'Rebuild knowledge',
+    ])
+
+    await act(async () => root.unmount())
+  })
+
+  it('offers the hardware operations from the hardware row menu (AC-009)', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection,
+      devicesByWorktree,
+      tasksByWorktree: targetTasks,
+    })
+
+    const trigger = section(host, 'device')
+      .querySelector('button[aria-label="Hardware configuration actions"]') as HTMLButtonElement
+
+    expect(await openRowMenu(trigger)).toEqual([
+      'Select hardware configuration',
+      'Reload hardware configuration',
+      'Compare hardware with TIA',
+    ])
+
     await act(async () => root.unmount())
   })
 })
