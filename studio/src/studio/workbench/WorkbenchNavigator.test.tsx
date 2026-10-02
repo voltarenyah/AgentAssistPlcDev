@@ -57,8 +57,8 @@ const conversation = (overrides: Partial<api.ChatSessionInfo> & { sessionId: str
 /** One conversation bound to the device task, one bound to nothing, as the live data has both. */
 const sessionsByWorktree: Record<string, api.ChatSessionInfo[]> = {
   'wb-direct:wt-descendant': [
-    conversation({ sessionId: 'session-bound', title: 'Interlock review', taskId: 'task-device' }),
-    conversation({ sessionId: 'session-unbound', title: 'Ad-hoc question', taskId: null }),
+    conversation({ sessionId: 'session-bound', title: 'Interlock review', taskId: 'task-device', deviceId: 'plc-1' }),
+    conversation({ sessionId: 'session-unbound', title: 'Ad-hoc question', taskId: null, deviceId: 'plc-1' }),
   ],
 }
 
@@ -602,31 +602,60 @@ describe('WorkbenchNavigator sessions section', () => {
     return Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
   }
 
-  it('lists a task\'s conversations under that task and omits one bound to no task (AC-015)', async () => {
-    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+  it('lists the selected task\'s conversations under it, and no other task\'s (AC-015)', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...overrides,
+    })
 
     const sessions = section(host, 'sessions')
     expect(sessions).toBeTruthy()
-    // The owning task is the group heading; the conversation is a row inside it.
+    // The selected task is the heading; its conversation is a row inside it.
     expect(sessions.textContent).toContain('Device task')
     expect(sessions.textContent).toContain('Interlock review')
-    // A conversation bound to no task is out of scope by decision, and another target's task is not this
-    // section's to show.
+    // Another task's conversation and one bound to no task are not this list's to show.
     expect(sessions.textContent).not.toContain('Ad-hoc question')
     expect(sessions.textContent).not.toContain('Hardware task')
+    expect(sessions.querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('task-device')
     expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks', 'sessions'])
 
     await act(async () => root.unmount())
   })
 
-  it('shows no SESSIONS section when nothing under the target qualifies (AC-015)', async () => {
-    const unboundOnly = { 'wb-direct:wt-descendant': sessionsByWorktree['wb-direct:wt-descendant'].filter(item => !item.taskId) }
+  it('lists the device\'s task-less conversations while no task is selected (AC-015)', async () => {
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+
+    const sessions = section(host, 'sessions')
+    expect(sessions).toBeTruthy()
+    // Nothing is selected in TASKS, so the list is the conversations no task owns, and it says so.
+    expect(sessions.textContent).toContain('No task')
+    expect(sessions.textContent).toContain('Ad-hoc question')
+    expect(sessions.textContent).not.toContain('Interlock review')
+    expect(sessions.querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('unbound')
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows no SESSIONS section when the list its rule yields is empty (AC-015)', async () => {
+    const boundOnly = { 'wb-direct:wt-descendant': sessionsByWorktree['wb-direct:wt-descendant'].filter(item => item.taskId) }
+    // No task selected, and every conversation belongs to one: there is no task-less list to show.
     const { host, root } = await renderNavigator(null, false, {
       selection: deviceSelection,
       devicesByWorktree,
       tasksByWorktree: targetTasks,
-      sessionsByWorktree: unboundOnly,
+      sessionsByWorktree: boundOnly,
     })
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
+
+    // A selected task with no conversation of its own is the same absence.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: deviceSelection,
+        activeTaskId: 'task-unbound',
+        devicesByWorktree,
+        tasksByWorktree: targetTasks,
+        sessionsByWorktree: boundOnly,
+      })} />,
+    ))
     expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
 
     // The hardware target cannot own a conversation at all, so it has neither the section nor its action.
@@ -641,31 +670,47 @@ describe('WorkbenchNavigator sessions section', () => {
 
   it('opens a conversation from its row (AC-015)', async () => {
     const onOpenSession = vi.fn()
-    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides, onOpenSession })
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onOpenSession,
+    })
 
     const row = section(host, 'sessions').querySelector('button[aria-label="Open conversation Interlock review"]') as HTMLButtonElement
     expect(row).toBeTruthy()
     await act(async () => row.click())
 
-    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-device' }), 'session-bound')
+    // The row hands over the conversation, which carries the device that owns it.
+    expect(onOpenSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-bound', deviceId: 'plc-1', taskId: 'task-device' }))
     await act(async () => root.unmount())
   })
 
-  it('starts a conversation for the selected target from the header (AC-016)', async () => {
+  it('starts a conversation bound to the selected task from the header (AC-016)', async () => {
     const onAddSession = vi.fn()
-    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides, onAddSession })
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onAddSession,
+    })
 
     const start = section(host, 'sessions')
-      .querySelector('button[aria-label="Start a conversation for Main PLC"]') as HTMLButtonElement
+      .querySelector('button[aria-label="Start a conversation for Device task"]') as HTMLButtonElement
     expect(start).toBeTruthy()
     await act(async () => start.click())
 
-    expect(onAddSession).toHaveBeenCalledWith(workbenches[0], workbenches[0].worktrees[0], { kind: 'device', deviceId: 'plc-1' })
+    expect(onAddSession).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-device' }))
+
+    // With no task selected there is nothing to bind a new conversation to, so the action is not offered.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({ selection: deviceSelection, ...overrides, onAddSession })} />,
+    ))
+    expect(section(host, 'sessions')).toBeTruthy()
+    expect(host.querySelector('button[aria-label^="Start a conversation"]')).toBeNull()
+
     await act(async () => root.unmount())
   })
 
   it('offers open, rename and delete on a conversation row (AC-017)', async () => {
-    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...overrides,
+    })
     const trigger = section(host, 'sessions')
       .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
 
@@ -678,7 +723,9 @@ describe('WorkbenchNavigator sessions section', () => {
 
   it('renames a conversation from its row menu', async () => {
     const onRenameSession = vi.fn()
-    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides, onRenameSession })
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onRenameSession,
+    })
     const trigger = section(host, 'sessions')
       .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
     const rename = (await openRowMenu(trigger)).find(item => item.textContent?.trim() === 'Rename conversation')!
@@ -694,7 +741,7 @@ describe('WorkbenchNavigator sessions section', () => {
     await act(async () => save.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
     expect(onRenameSession).toHaveBeenCalledWith(
-      expect.objectContaining({ taskId: 'task-device' }), 'session-bound', 'Renamed conversation')
+      expect.objectContaining({ sessionId: 'session-bound', deviceId: 'plc-1' }), 'Renamed conversation')
     await act(async () => root.unmount())
   })
 
@@ -703,24 +750,36 @@ describe('WorkbenchNavigator sessions section', () => {
     // happy-dom has no window.confirm; the browser does, and the row uses it to ask.
     const confirm = vi.fn(() => false)
     vi.stubGlobal('confirm', confirm)
-    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides, onDeleteSession })
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onDeleteSession,
+    })
 
-    const deleteRow = async () => {
+    const deleteRow = async (title: string) => {
       const trigger = section(host, 'sessions')
-        .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+        .querySelector(`button[aria-label="Conversation actions ${title}"]`) as HTMLButtonElement
       const item = (await openRowMenu(trigger)).find(entry => entry.textContent?.trim() === 'Delete conversation')!
       await act(async () => item.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     }
 
-    await deleteRow()
+    await deleteRow('Interlock review')
     expect(confirm).toHaveBeenCalled()
     // The confirmation says what a delete costs, because the link to the task goes with it.
     expect(confirm.mock.calls[0]?.[0]).toContain('link to this task is lost')
     expect(onDeleteSession).not.toHaveBeenCalled()
 
     confirm.mockReturnValue(true)
-    await deleteRow()
-    expect(onDeleteSession).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-device' }), 'session-bound')
+    await deleteRow('Interlock review')
+    expect(onDeleteSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-bound', deviceId: 'plc-1' }))
+
+    // A conversation that no task owns has no task link to lose, so its confirmation does not claim one.
+    confirm.mockClear()
+    confirm.mockReturnValue(false)
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({ selection: deviceSelection, ...overrides, onDeleteSession })} />,
+    ))
+    await deleteRow('Ad-hoc question')
+    expect(confirm.mock.calls[0]?.[0]).not.toContain('link to this task is lost')
 
     vi.unstubAllGlobals()
     await act(async () => root.unmount())

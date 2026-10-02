@@ -68,7 +68,6 @@ import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import AllProjectsLandingPage from '@/studio/workbench/AllProjectsLandingPage'
 import TaskDetail, { type TaskEditPatch, type TraceabilityItem } from '@/studio/workbench/TaskDetail'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
-import ChooseConversationTaskDialog from '@/studio/workbench/ChooseConversationTaskDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
 import TiaSessionsPanel from '@/studio/workbench/TiaSessionsPanel'
@@ -485,8 +484,6 @@ export default function MainStudio() {
   const [taskCreateWorktreeId, setTaskCreateWorktreeId] = useState<string | null>(null)
   /** The target the navigator's create action was invoked from, handed to the task dialog. */
   const [taskCreateTarget, setTaskCreateTarget] = useState<api.TaskTarget | null>(null)
-  /** A target's tasks, while the user says which one a new conversation belongs to. */
-  const [conversationTasks, setConversationTasks] = useState<api.EngineeringTask[] | null>(null)
   const [navigatorTagNodes, setNavigatorTagNodes] = useState<api.TagNode[]>([])
   const [navigatorTagIds, setNavigatorTagIds] = useState<string[]>([])
   const [navigatorTagsLoading, setNavigatorTagsLoading] = useState(true)
@@ -1055,7 +1052,14 @@ export default function MainStudio() {
     if (requestId !== undefined && selectionRequestId.current !== requestId) return
     setSessionsByWorktree(previous => ({
       ...previous,
-      [worktreeKey(workbenchId, worktreeId)]: perDevice.flat(),
+      // A conversation is listed per device, so a result only knows its device from the request that
+      // returned it. A conversation that no task owns has no task to carry those ids to its row.
+      [worktreeKey(workbenchId, worktreeId)]: perDevice.flatMap((sessions, index) => sessions.map(session => ({
+        ...session,
+        workbenchId: session.workbenchId ?? workbenchId,
+        worktreeId: session.worktreeId ?? worktreeId,
+        deviceId: session.deviceId ?? devices[index]?.deviceId ?? null,
+      }))),
     }))
   })
 
@@ -1418,57 +1422,35 @@ export default function MainStudio() {
     loadWorktreeSessions(workbenchId, worktreeId, devicesByWorktree[worktreeKey(workbenchId, worktreeId)] ?? [])
 
   /** Renames a conversation from a navigator row, then re-reads the section's list. */
-  const renameNavigatorSession = async (sessionId: string, title: string, workbenchId: string, worktreeId: string) => {
-    await renameChatSession(sessionId, title)
-    await refreshNavigatorSessions(workbenchId, worktreeId)
+  const renameNavigatorSession = async (session: api.ChatSessionInfo, title: string) => {
+    await renameChatSession(session.sessionId, title)
+    if (session.workbenchId && session.worktreeId) {
+      await refreshNavigatorSessions(session.workbenchId, session.worktreeId)
+    }
   }
 
   /**
-   * Deletes a conversation from the navigator. The device that owns it is named rather than taken from
-   * the current selection, because the delete removes the conversation from the graph as well as disk
-   * (ADR-0010).
+   * Deletes a conversation from the navigator. The device that owns it is named by the conversation
+   * rather than taken from the current selection, because the delete removes it from the graph as well
+   * as disk (ADR-0010), and a conversation that no task owns has no task to name its device.
    */
-  const deleteNavigatorSession = async (task: api.EngineeringTask, sessionId: string) => {
-    if (!task.workbenchId || !task.worktreeId || !task.deviceId) {
-      showErrorToast('This conversation is not available in the task device context.')
+  const deleteNavigatorSession = async (session: api.ChatSessionInfo) => {
+    const { workbenchId, worktreeId, deviceId } = session
+    if (!workbenchId || !worktreeId || !deviceId) {
+      showErrorToast('This conversation is not available in the device context that owns it.')
       return
     }
     setChatBusy(true)
     try {
-      await api.deleteDeviceSession(task.workbenchId, task.worktreeId, task.deviceId, sessionId)
-      setChatTabs(previous => closeTab(previous, sessionId))
+      await api.deleteDeviceSession(workbenchId, worktreeId, deviceId, session.sessionId)
+      setChatTabs(previous => closeTab(previous, session.sessionId))
       await refreshChatSessions()
-      await refreshNavigatorSessions(task.workbenchId, task.worktreeId)
+      await refreshNavigatorSessions(workbenchId, worktreeId)
     } catch (error) {
       showErrorToast(displayError(error))
     } finally {
       setChatBusy(false)
     }
-  }
-
-  /**
-   * Starts a conversation for the navigator's selected target. A conversation must be bound to a task to
-   * appear in the section, so this prefers the task the worktree is already working in when it belongs
-   * to that target, and otherwise asks which of the target's tasks it is (ADR-0009).
-   */
-  const startConversationForTarget = async (
-    workbench: api.Workbench,
-    worktree: api.WorkbenchRegistration,
-    target: api.TaskTarget,
-  ) => {
-    if (target.kind !== 'device') return
-    const tasks = (tasksByWorktree[worktreeKey(workbench.workbenchId, worktree.worktreeId)] ?? [])
-      .filter(task => task.deviceId === target.deviceId)
-    if (tasks.length === 0) return
-    const active = await api.getActiveWorktreeTask(workbench.workbenchId, worktree.worktreeId)
-      .then(response => response.activeTask)
-      .catch(() => null)
-    const preferred = active && tasks.some(task => task.taskId === active.taskId) ? active : null
-    if (preferred) {
-      await startConversationForTask(preferred)
-      return
-    }
-    setConversationTasks(tasks)
   }
 
   /** Starts a conversation for one task and re-reads the navigator's list, so the section stays true. */
@@ -2188,12 +2170,11 @@ export default function MainStudio() {
     try { await api.removeTaskRelationship(selection.workbenchId, taskDetail.task.taskId, item.edgeId); await reloadTaskDetail() }
     catch (error) { showErrorToast(displayError(error)) }
   }
-  const openTaskDetailSession = async (task: api.EngineeringTask, sessionId: string) => {
-    if (!task.deviceId || !task.worktreeId || !task.workbenchId) {
-      showErrorToast('This conversation is not available in the task device context.')
-      return
-    }
-    const context = { workbenchId: task.workbenchId, worktreeId: task.worktreeId, deviceId: task.deviceId }
+  /** Opens a conversation in the device context that owns it, and focuses the chat surface on it. */
+  const openSessionInContext = async (
+    context: { workbenchId: string; worktreeId: string; deviceId: string },
+    sessionId: string,
+  ) => {
     const requestId = selectionRequestId.current
     setChatBusy(true)
     try {
@@ -2202,7 +2183,7 @@ export default function MainStudio() {
       if (session.header.workbenchId !== context.workbenchId
         || session.header.worktreeId !== context.worktreeId
         || session.header.deviceId !== context.deviceId) {
-        throw new Error('The conversation does not match this task’s workbench, worktree, and device.')
+        throw new Error('The conversation does not match this workbench, worktree, and device.')
       }
       await api.selectWorktree(context.workbenchId, context.worktreeId)
       if (selectionRequestId.current !== requestId) return
@@ -2222,6 +2203,32 @@ export default function MainStudio() {
       setChatBusy(false)
     }
   }
+
+  /**
+   * Opens a conversation from a navigator row. The conversation carries the workbench, worktree and
+   * device that own it, so one that no task owns opens the same way one of a task's does.
+   */
+  const openNavigatorSession = async (navigatorSession: api.ChatSessionInfo) => {
+    const { workbenchId, worktreeId, deviceId } = navigatorSession
+    if (!workbenchId || !worktreeId || !deviceId) {
+      showErrorToast('This conversation is not available in the device context that owns it.')
+      return
+    }
+    await openSessionInContext({ workbenchId, worktreeId, deviceId }, navigatorSession.sessionId)
+  }
+
+  /** Opens one of a task's conversations from the task detail's own traceability list. */
+  const openTaskDetailSession = async (task: api.EngineeringTask, sessionId: string) => {
+    if (!task.workbenchId || !task.worktreeId || !task.deviceId) {
+      showErrorToast('This conversation is not available in the task device context.')
+      return
+    }
+    await openSessionInContext(
+      { workbenchId: task.workbenchId, worktreeId: task.worktreeId, deviceId: task.deviceId },
+      sessionId,
+    )
+  }
+
   const navigateTaskDetail = (kind: string, id: string) => {
     setTraceabilityTarget({ kind, id })
     if (kind === 'session' && taskDetailTask) void openTaskDetailSession(taskDetailTask, id)
@@ -2453,12 +2460,10 @@ export default function MainStudio() {
               setTaskCreateTarget(target)
               setMainView({ kind: 'worktree', tab: 'tasks' })
             }}
-            onOpenSession={(task, sessionId) => void openTaskDetailSession(task, sessionId)}
-            onRenameSession={(task, sessionId, title) => {
-              if (task.worktreeId) void renameNavigatorSession(sessionId, title, task.workbenchId, task.worktreeId)
-            }}
-            onDeleteSession={(task, sessionId) => void deleteNavigatorSession(task, sessionId)}
-            onAddSession={(workbench, worktree, target) => void startConversationForTarget(workbench, worktree, target)}
+            onOpenSession={session => void openNavigatorSession(session)}
+            onRenameSession={(session, title) => void renameNavigatorSession(session, title)}
+            onDeleteSession={session => void deleteNavigatorSession(session)}
+            onAddSession={task => void startConversationForTask(task)}
             onSelectHardware={selectHardware}
             onReloadHardware={(workbench, worktree) => void reloadHardware(workbench, worktree)}
             onCompareHardware={(workbench, worktree) => void compareHardware(workbench, worktree)}
@@ -2935,15 +2940,6 @@ export default function MainStudio() {
           onArchive={archiveWorktreeProject}
         />
       )}
-      <ChooseConversationTaskDialog
-        open={conversationTasks !== null}
-        tasks={conversationTasks ?? []}
-        onChoose={task => {
-          setConversationTasks(null)
-          void startConversationForTask(task)
-        }}
-        onClose={() => setConversationTasks(null)}
-      />
       {preview && (
         <RefreshDialog
           preview={preview}

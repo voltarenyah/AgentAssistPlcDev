@@ -101,14 +101,14 @@ type Props = {
   onUpdateTask?: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask, update: Partial<TaskUpdate>) => void
   /** Creates a task already bound to the target the user created it from. */
   onAddTask?: (workbench: Workbench, worktree: WorkbenchRegistration, target: TaskTarget) => void
-  /** Opens one of a task's conversations. */
-  onOpenSession?: (task: EngineeringTask, sessionId: string) => void
-  /** Renames one of a task's conversations. */
-  onRenameSession?: (task: EngineeringTask, sessionId: string, title: string) => void
-  /** Deletes one of a task's conversations, after the user confirms. */
-  onDeleteSession?: (task: EngineeringTask, sessionId: string) => void
-  /** Starts a conversation for the selected target, bound to a task under it. */
-  onAddSession?: (workbench: Workbench, worktree: WorkbenchRegistration, target: TaskTarget) => void
+  /** Opens a conversation. It carries its own workbench, worktree and device, so it needs no task. */
+  onOpenSession?: (session: ChatSessionInfo) => void
+  /** Renames a conversation. */
+  onRenameSession?: (session: ChatSessionInfo, title: string) => void
+  /** Deletes a conversation, after the user confirms. */
+  onDeleteSession?: (session: ChatSessionInfo) => void
+  /** Starts a conversation bound to the selected task. */
+  onAddSession?: (task: EngineeringTask) => void
   onSelectHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onReloadHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onCompareHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
@@ -403,11 +403,10 @@ function TaskRow({ workbench, worktree, task, selected, onSelect, onUpdate, onRe
 }
 
 type SessionRowProps = {
-  task: EngineeringTask
   session: ChatSessionInfo
-  onOpen: (task: EngineeringTask, sessionId: string) => void
-  onRename: (task: EngineeringTask, session: ChatSessionInfo) => void
-  onDelete: (task: EngineeringTask, session: ChatSessionInfo) => void
+  onOpen: (session: ChatSessionInfo) => void
+  onRename: (session: ChatSessionInfo) => void
+  onDelete: (session: ChatSessionInfo) => void
 }
 
 /**
@@ -415,13 +414,13 @@ type SessionRowProps = {
  * title, falling back to its first message, and how long ago it last changed — so a conversation reads
  * the same wherever it appears, and it carries that conversation's operations in its own 3-dots menu.
  */
-function SessionRow({ task, session, onOpen, onRename, onDelete }: SessionRowProps) {
+function SessionRow({ session, onOpen, onRename, onDelete }: SessionRowProps) {
   const title = conversationTitle(session)
   return (
     <div className="group relative" data-session={session.sessionId}>
       <button
         type="button"
-        onClick={() => onOpen(task, session.sessionId)}
+        onClick={() => onOpen(session)}
         className="relative flex min-h-8 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1 pr-8 text-left hover:bg-accent/40"
         aria-label={`Open conversation ${title}`}
         data-session-open={session.sessionId}
@@ -438,16 +437,16 @@ function SessionRow({ task, session, onOpen, onRename, onDelete }: SessionRowPro
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuLabel>{title}</DropdownMenuLabel>
-          <DropdownMenuItem onSelect={() => onOpen(task, session.sessionId)}>
+          <DropdownMenuItem onSelect={() => onOpen(session)}>
             <MessageSquareText className="h-3.5 w-3.5" />
             Open conversation
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => onRename(task, session)}>
+          <DropdownMenuItem onSelect={() => onRename(session)}>
             <Pencil className="h-3.5 w-3.5" />
             Rename conversation
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onSelect={() => onDelete(task, session)}>
+          <DropdownMenuItem variant="destructive" onSelect={() => onDelete(session)}>
             <Trash2 className="h-3.5 w-3.5" />
             Delete conversation
           </DropdownMenuItem>
@@ -514,7 +513,7 @@ export default function WorkbenchNavigator({
   const [sectionHeights, setSectionHeights] = useState<Record<string, number>>({})
   const [renameTask, setRenameTask] = useState<{ workbench: Workbench; worktree: WorkbenchRegistration; task: EngineeringTask } | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
-  const [renameSession, setRenameSession] = useState<{ task: EngineeringTask; session: ChatSessionInfo } | null>(null)
+  const [renameSession, setRenameSession] = useState<ChatSessionInfo | null>(null)
   const [renameSessionTitle, setRenameSessionTitle] = useState('')
   const matchingWorkbenchIds = new Set(filteredResults?.workbenches.map(result => result.entityId) ?? [])
   const matchingWorktrees = new Map(
@@ -544,20 +543,26 @@ export default function WorkbenchNavigator({
     onUpdateTask(renameTask.workbench, renameTask.worktree, renameTask.task, { title: renameTitle.trim() })
     setRenameTask(null)
   }
-  const openRenameSession = (task: EngineeringTask, session: ChatSessionInfo) => {
+  const openRenameSession = (session: ChatSessionInfo) => {
     setRenameSessionTitle(conversationTitle(session))
-    setRenameSession({ task, session })
+    setRenameSession(session)
   }
   const saveSessionRename = () => {
     if (!renameSession || !renameSessionTitle.trim()) return
-    onRenameSession(renameSession.task, renameSession.session.sessionId, renameSessionTitle.trim())
+    onRenameSession(renameSession, renameSessionTitle.trim())
     setRenameSession(null)
   }
-  /** A conversation's graph edge is also the record of which task it belonged to, so say what it costs. */
-  const confirmDeleteSession = (task: EngineeringTask, session: ChatSessionInfo) => {
+  /**
+   * Deleting a task-bound conversation also removes the graph edge that records which task it belonged
+   * to, so say what it costs. A conversation that no task owns has no such link to lose.
+   */
+  const confirmDeleteSession = (session: ChatSessionInfo) => {
     const named = conversationTitle(session)
-    if (!window.confirm(`Delete "${named}"? Its link to this task is lost, and a deleted conversation cannot be recovered.`)) return
-    onDeleteSession(task, session.sessionId)
+    const cost = session.taskId
+      ? ' Its link to this task is lost, and a deleted conversation cannot be recovered.'
+      : ' A deleted conversation cannot be recovered.'
+    if (!window.confirm(`Delete "${named}"?${cost}`)) return
+    onDeleteSession(session)
   }
 
   // The cascade's tail: which target below the selected worktree is showing, and what it owns.
@@ -586,21 +591,24 @@ export default function WorkbenchNavigator({
         : null
     : null
 
-  // What the selected target's tasks are carrying. A conversation bound to no task is out of scope by
-  // decision, and one bound to another target's task belongs under that target instead (AC-015).
+  /**
+   * The task the `TASKS` section shows as selected — the same expression that marks its row — and the
+   * conversations the `SESSIONS` section is about: that task's while one is selected, and otherwise the
+   * selected device's conversations that no task owns (AC-015). One list at a time, so the section can
+   * never show a task the user is not working in.
+   */
+  const selectedWorktreeTask = targetTasks.find(task => task.taskId === (activeTaskId ?? clickedTaskId)) ?? null
+  const sessionsSectionVisible = !filterActive && selectedTargetKind !== 'hardware'
   const selectedSessions = selectedWorktreeKey ? sessionsByWorktree[selectedWorktreeKey] ?? [] : []
-  const sessionsByTask = new Map<string, ChatSessionInfo[]>()
-  for (const session of selectedSessions) {
-    if (!session.taskId) continue
-    const bound = sessionsByTask.get(session.taskId)
-    if (bound) bound.push(session)
-    else sessionsByTask.set(session.taskId, [session])
-  }
-  const sessionGroups = targetTasks
-    .map(task => ({ task, sessions: sessionsByTask.get(task.taskId) ?? [] }))
-    .filter(group => group.sessions.length > 0)
-  // The hardware target cannot own a conversation, so it never has one to list (AC-015).
-  const sessionsSectionVisible = !filterActive && selectedTargetKind !== 'hardware' && sessionGroups.length > 0
+  const sessionRows = !sessionsSectionVisible
+    ? []
+    : selectedWorktreeTask
+      ? selectedSessions.filter(session => session.taskId === selectedWorktreeTask.taskId)
+      : selection.deviceId
+        ? selectedSessions.filter(session => !session.taskId && session.deviceId === selection.deviceId)
+        : []
+  /** What the list is, said above it: the task that owns these conversations, or that no task does. */
+  const sessionsHeading = selectedWorktreeTask ? selectedWorktreeTask.title : 'No task'
 
   const selectRowTask = (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => {
     setClickedTaskId(task.taskId)
@@ -617,7 +625,7 @@ export default function WorkbenchNavigator({
     ...(showWorktreeSection ? ['worktree'] : []),
     ...(deviceSectionVisible ? ['device'] : []),
     ...(tasksSectionVisible ? ['tasks'] : []),
-    ...(sessionsSectionVisible ? ['sessions'] : []),
+    ...(sessionRows.length > 0 ? ['sessions'] : []),
   ]
   const applySectionHeights = (upperId: string, upperHeight: number, lowerId: string, lowerHeight: number) =>
     setSectionHeights(current => ({
@@ -837,54 +845,45 @@ export default function WorkbenchNavigator({
   }
 
   /**
-   * `SESSIONS`: what the selected target's tasks are carrying. It exists only while at least one task
-   * under the target owns a conversation, and its header starts one for the target — which needs a task
-   * to bind to, so the action is offered only when the target has one, and never for the hardware
-   * target, which cannot own a conversation at all.
+   * `SESSIONS`: the conversations of the task the user has selected, or — while no task is selected —
+   * the selected device's conversations that no task owns. Its header starts one bound to the selected
+   * task, which is the only state that has a task to bind to, so the action is offered only then, and
+   * never for the hardware target, which cannot own a conversation at all.
    */
   const renderSessionsSection = () => {
-    if (!selectedWorktreeRow || sessionGroups.length === 0) return null
-    const { workbench, worktree } = selectedWorktreeRow
-    const startTarget = selectedTarget
-    const startLabel = startTarget?.kind === 'device'
-      ? selectedDevices.find(device => device.deviceId === startTarget.deviceId)?.plcName ?? startTarget.deviceId
-      : ''
-    const canStart = startTarget !== null && startTarget.kind === 'device' && targetTasks.length > 0
+    if (!selectedWorktreeRow || sessionRows.length === 0) return null
     return (
       <NavigatorSection
         id="sessions"
         title="SESSIONS"
         height={sectionHeights.sessions ?? null}
         fillsRemainingSpace={isDeepestSection('sessions')}
-        action={canStart ? (
+        action={selectedWorktreeTask ? (
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label={`Start a conversation for ${startLabel}`}
+            aria-label={`Start a conversation for ${selectedWorktreeTask.title}`}
             title="Start a conversation"
-            onClick={() => { if (startTarget) onAddSession(workbench, worktree, startTarget) }}
+            onClick={() => onAddSession(selectedWorktreeTask)}
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
         ) : undefined}
       >
-        {sessionGroups.map(({ task, sessions }) => (
-          <div key={task.taskId} className="mb-1" data-session-group={task.taskId}>
-            <div className="truncate px-2 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={task.title}>
-              {task.title}
-            </div>
-            {sessions.map(session => (
-              <SessionRow
-                key={session.sessionId}
-                task={task}
-                session={session}
-                onOpen={onOpenSession}
-                onRename={openRenameSession}
-                onDelete={confirmDeleteSession}
-              />
-            ))}
+        <div data-session-group={selectedWorktreeTask?.taskId ?? 'unbound'}>
+          <div className="truncate px-2 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={sessionsHeading}>
+            {sessionsHeading}
           </div>
-        ))}
+          {sessionRows.map(session => (
+            <SessionRow
+              key={session.sessionId}
+              session={session}
+              onOpen={onOpenSession}
+              onRename={openRenameSession}
+              onDelete={confirmDeleteSession}
+            />
+          ))}
+        </div>
       </NavigatorSection>
     )
   }
