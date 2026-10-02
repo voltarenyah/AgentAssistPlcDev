@@ -55,7 +55,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 | [003](003-compare-task-mode-in-version-control.md) | Compare task mode in the version-control surface | pending | 002 | `studio/src/studio/version-control/VersionControlCompare.tsx` |
 | [004](004-task-commits-with-involved-source-objects.md) | Task page Commits section: which source objects each commit touched | pending | 002 | `studio/src/studio/workbench/TaskDetail.tsx`, `src/ApiHost/WorkbenchApiModels.cs` |
 | [005](005-agent-stages-source-objects-with-approval.md) | Agent stages source objects for the current task through an approval card | pending | 002 | `src/Mcp.Engineering/Tools/EngineeringTools.cs` |
-| [006](006-remove-right-dock-ai-sessions-page.md) | Remove the right dock's AI sessions page and move its operations into the navigator's conversations | pending | 001 | `studio/src/studio/chat/SessionDock.tsx`, `studio/src/studio/workbench/WorkbenchNavigator.tsx` |
+| [006](006-remove-right-dock-ai-sessions-page.md) | Remove the right dock's AI sessions page and move its operations into the navigator's conversations | done | 001 | `studio/src/studio/chat/SessionDock.tsx`, `studio/src/studio/workbench/WorkbenchNavigator.tsx` |
 
 Items 002–005 implement the missing execution layer of an already accepted design: task-scoped
 source evidence (`docs/adr/ADR-0003-task-scoped-source-evidence.md`,
