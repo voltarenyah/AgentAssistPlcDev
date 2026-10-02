@@ -65,8 +65,10 @@ let a task acquire a compare basis, and the surfaces that show it, did not. Run 
 only item that establishes a usable stage baseline, and 003–005 depend on it.
 
 Items 001 and 006 are independent of that work: they remove action-driven auto-expansion of the right
-dock and retire the right dock's AI sessions page. Run 001 before 006, because both edit
-`createChatSessionFromEmptyState` in `MainStudio.tsx`.
+dock and retire the right dock's AI sessions page. They both touch `MainStudio.tsx`, but in disjoint
+regions — 001 changes the two forced-open call sites near the top of the component, 006 changes the
+dock's render block and the `SessionDock` import — so they can be implemented in separate worktrees at
+the same time; only the eventual merge touches both.
 
 ## Template
 
