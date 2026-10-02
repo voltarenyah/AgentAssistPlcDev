@@ -418,12 +418,13 @@ type SessionRowProps = {
 function SessionRow({ task, session, onOpen, onRename, onDelete }: SessionRowProps) {
   const title = conversationTitle(session)
   return (
-    <div className="group relative">
+    <div className="group relative" data-session={session.sessionId}>
       <button
         type="button"
         onClick={() => onOpen(task, session.sessionId)}
         className="relative flex min-h-8 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1 pr-8 text-left hover:bg-accent/40"
         aria-label={`Open conversation ${title}`}
+        data-session-open={session.sessionId}
       >
         <MessageSquareText className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-xs">{title}</span>

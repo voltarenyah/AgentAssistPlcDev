@@ -1465,10 +1465,16 @@ export default function MainStudio() {
       .catch(() => null)
     const preferred = active && tasks.some(task => task.taskId === active.taskId) ? active : null
     if (preferred) {
-      await createChatSessionForTask(preferred)
+      await startConversationForTask(preferred)
       return
     }
     setConversationTasks(tasks)
+  }
+
+  /** Starts a conversation for one task and re-reads the navigator's list, so the section stays true. */
+  const startConversationForTask = async (task: api.EngineeringTask) => {
+    await createChatSessionForTask(task)
+    if (task.workbenchId && task.worktreeId) await refreshNavigatorSessions(task.workbenchId, task.worktreeId)
   }
 
   const createChatSessionForTask = async (task: api.EngineeringTask | api.WorktreeTask) => {
@@ -2934,7 +2940,7 @@ export default function MainStudio() {
         tasks={conversationTasks ?? []}
         onChoose={task => {
           setConversationTasks(null)
-          void createChatSessionForTask(task)
+          void startConversationForTask(task)
         }}
         onClose={() => setConversationTasks(null)}
       />
