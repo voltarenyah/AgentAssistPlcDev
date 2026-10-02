@@ -506,6 +506,12 @@ export default function WorkbenchNavigator({
   )
   const [clickedTaskId, setClickedTaskId] = useState<string | null>(null)
   /**
+   * A task detail opened from the worktree's own task surface is adopted as the navigator's selection,
+   * so the highlighted row and the `SESSIONS` section follow the detail that is open. Adopting it also
+   * keeps that selection after the detail yields the main area to a conversation.
+   */
+  useEffect(() => { if (activeTaskId) setClickedTaskId(activeTaskId) }, [activeTaskId])
+  /**
    * The heights the user dragged sections to, in pixels, for as long as the app stays open. A
    * section with no entry here follows its content, which is what keeps the dock free of reserved
    * space; only a drag introduces a number.
@@ -592,12 +598,19 @@ export default function WorkbenchNavigator({
     : null
 
   /**
+   * The task the navigator treats as selected: the row the user picked, which also outlives the task
+   * detail yielding the main area to a conversation, or the task a detail opened from the worktree's own
+   * task surface is showing. The row highlight and the `SESSIONS` section both read it, so the two can
+   * never disagree about which task is current (AC-015).
+   */
+  const selectedTaskId = clickedTaskId ?? activeTaskId
+  /**
    * The task the `TASKS` section shows as selected — the same expression that marks its row — and the
    * conversations the `SESSIONS` section is about: that task's while one is selected, and otherwise the
    * selected device's conversations that no task owns (AC-015). One list at a time, so the section can
    * never show a task the user is not working in.
    */
-  const selectedWorktreeTask = targetTasks.find(task => task.taskId === (activeTaskId ?? clickedTaskId)) ?? null
+  const selectedWorktreeTask = targetTasks.find(task => task.taskId === selectedTaskId) ?? null
   const sessionsSectionVisible = !filterActive && selectedTargetKind !== 'hardware'
   const selectedSessions = selectedWorktreeKey ? sessionsByWorktree[selectedWorktreeKey] ?? [] : []
   const sessionRows = !sessionsSectionVisible
@@ -831,7 +844,7 @@ export default function WorkbenchNavigator({
                 workbench={workbench}
                 worktree={worktree}
                 task={task}
-                selected={(activeTaskId ?? clickedTaskId) === task.taskId}
+                selected={selectedTaskId === task.taskId}
                 onSelect={selectRowTask}
                 onUpdate={onUpdateTask}
                 onRename={openRenameTask}
@@ -1197,7 +1210,7 @@ export default function WorkbenchNavigator({
                           workbench={workbench}
                           worktree={worktree}
                           task={task}
-                          selected={(activeTaskId ?? clickedTaskId) === task.taskId}
+                          selected={selectedTaskId === task.taskId}
                           onSelect={(selectedWorkbench, selectedWorktree, selectedTask) => {
                             setClickedTaskId(selectedTask.taskId)
                             onSelectTask(selectedWorkbench, selectedWorktree, selectedTask)

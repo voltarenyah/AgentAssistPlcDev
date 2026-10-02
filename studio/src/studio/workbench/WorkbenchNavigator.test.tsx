@@ -686,23 +686,43 @@ describe('WorkbenchNavigator sessions section', () => {
 
   it('starts a conversation bound to the selected task from the header (AC-016)', async () => {
     const onAddSession = vi.fn()
+    // With no task selected there is nothing to bind a new conversation to, so the action is not offered.
     const { host, root } = await renderNavigator(null, false, {
-      selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onAddSession,
+      selection: deviceSelection, ...overrides, onAddSession,
     })
+    expect(section(host, 'sessions')).toBeTruthy()
+    expect(host.querySelector('button[aria-label^="Start a conversation"]')).toBeNull()
 
+    // Selecting the task that owns the conversations offers the action, named for that task.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onAddSession,
+      })} />,
+    ))
     const start = section(host, 'sessions')
       .querySelector('button[aria-label="Start a conversation for Device task"]') as HTMLButtonElement
     expect(start).toBeTruthy()
     await act(async () => start.click())
 
     expect(onAddSession).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-device' }))
+    await act(async () => root.unmount())
+  })
 
-    // With no task selected there is nothing to bind a new conversation to, so the action is not offered.
+  it('keeps the selected task after the task detail yields the main area (AC-015)', async () => {
+    // Opening a conversation closes the detail, so `activeTaskId` goes away while the user is still
+    // working in that task: the row and the section have to stay where they were.
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...overrides,
+    })
+    expect(host.querySelector('[data-task-selected="true"]')?.textContent).toContain('Device task')
+
     await act(async () => root.render(
-      <WorkbenchNavigator {...navigatorProps({ selection: deviceSelection, ...overrides, onAddSession })} />,
+      <WorkbenchNavigator {...navigatorProps({ selection: deviceSelection, activeTaskId: null, ...overrides })} />,
     ))
-    expect(section(host, 'sessions')).toBeTruthy()
-    expect(host.querySelector('button[aria-label^="Start a conversation"]')).toBeNull()
+
+    expect(host.querySelector('[data-task-selected="true"]')?.textContent).toContain('Device task')
+    expect(section(host, 'sessions').textContent).toContain('Interlock review')
+    expect(section(host, 'sessions').textContent).not.toContain('Ad-hoc question')
 
     await act(async () => root.unmount())
   })
@@ -751,7 +771,7 @@ describe('WorkbenchNavigator sessions section', () => {
     const confirm = vi.fn(() => false)
     vi.stubGlobal('confirm', confirm)
     const { host, root } = await renderNavigator(null, false, {
-      selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onDeleteSession,
+      selection: deviceSelection, ...overrides, onDeleteSession,
     })
 
     const deleteRow = async (title: string) => {
@@ -761,9 +781,21 @@ describe('WorkbenchNavigator sessions section', () => {
       await act(async () => item.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     }
 
-    await deleteRow('Interlock review')
+    // A conversation that no task owns has no task link to lose, so its confirmation does not claim one.
+    await deleteRow('Ad-hoc question')
     expect(confirm).toHaveBeenCalled()
-    // The confirmation says what a delete costs, because the link to the task goes with it.
+    expect(confirm.mock.calls[0]?.[0]).not.toContain('link to this task is lost')
+    expect(onDeleteSession).not.toHaveBeenCalled()
+
+    // Selecting the task that owns the other conversation switches the list to it, and that
+    // confirmation says what the delete costs, because the link to the task goes with it.
+    confirm.mockClear()
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onDeleteSession,
+      })} />,
+    ))
+    await deleteRow('Interlock review')
     expect(confirm.mock.calls[0]?.[0]).toContain('link to this task is lost')
     expect(onDeleteSession).not.toHaveBeenCalled()
 
@@ -771,15 +803,6 @@ describe('WorkbenchNavigator sessions section', () => {
     await deleteRow('Interlock review')
     expect(onDeleteSession).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'session-bound', deviceId: 'plc-1' }))
-
-    // A conversation that no task owns has no task link to lose, so its confirmation does not claim one.
-    confirm.mockClear()
-    confirm.mockReturnValue(false)
-    await act(async () => root.render(
-      <WorkbenchNavigator {...navigatorProps({ selection: deviceSelection, ...overrides, onDeleteSession })} />,
-    ))
-    await deleteRow('Ad-hoc question')
-    expect(confirm.mock.calls[0]?.[0]).not.toContain('link to this task is lost')
 
     vi.unstubAllGlobals()
     await act(async () => root.unmount())

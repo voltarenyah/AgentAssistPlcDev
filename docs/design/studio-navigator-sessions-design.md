@@ -64,6 +64,11 @@ repository performs.
   ask for confirmation naming the conversation, and on confirmation **shall** remove it from both the
   section and the task's own conversation list; cancelling **shall** leave both unchanged. Source:
   ADR-0010.
+- **AC-018** — **When** the user opens a conversation from its row, **the** system **shall** leave the
+  navigator's workbench, worktree, device and task selection unchanged — with the section's list and the
+  selected task row still on screen — and **shall** show the conversation in the chat view of that scope;
+  a conversation whose device is not the selected one **shall** open in the worktree-level chat view.
+  Source: ADR-0009.
 
 ## Existing Evidence
 
@@ -93,6 +98,8 @@ repository performs.
 | Delete | One shared `ApiHost` operation removes the graph entity and its edges first, then the session file; a device-scoped `DELETE` route and the existing compatibility route both call it | The graph edge is what the task detail reads, so removing it first keeps the readable state consistent with what can be loaded; the file delete stays best-effort and idempotent (ADR-0010) |
 | Header action | Calls `onAddSession(task)` with the selected task; absent for the hardware target and while no task is selected | A conversation must bind to a task to appear in the section, so the only state that has a correct binding is a selected task; the navigator already holds it and `MainStudio` needs no lookup |
 | Row identity | A row carries its whole `ChatSessionInfo`, and the callbacks take that conversation rather than its task | A conversation that no task owns has no task carrying its workbench, worktree and device, so the row states its own context; a task owner was only ever a carrier for those three ids |
+| Row open | Opening a row loads the conversation and shows it in the chat view of the scope already selected: the device workspace's chat view when the conversation's device is selected, the worktree-level chat view otherwise. It leaves the workbench, worktree, device and task selection as it found them, and only closes the task detail, which renders ahead of the device workspace | A row is read in the list it was listed in, so opening it must not delete that list from under the user; the detail is the one thing that has to yield, and the task the section is scoped to therefore has to outlive the detail |
+| Task selection | The navigator remembers the task it is showing — the row the user picked, or the task a detail opened from elsewhere is showing — instead of deriving it from the open detail alone | The detail closes when a conversation opens, so a derived-only selection would silently move the section to the task-less list at that moment |
 | Filter rule | `SESSIONS` is hidden while the tag filter is active, like `DEVICE` and `TASKS` | The tag filter is catalog-level; conversations carry no tags |
 | Sizing | Nothing extra: the section is a `NavigatorSection` and becomes the deepest one, so ADR-0008's grow rule follows automatically | No second sizing rule to maintain |
 
@@ -100,8 +107,8 @@ repository performs.
 
 | File | Change | ACs | Preserved |
 |---|---|---|---|
-| `studio/src/studio/workbench/WorkbenchNavigator.tsx` | A fifth `NavigatorSection` with a heading and conversation rows, a row menu, and the header action; the separator list and the deepest-section rule follow from the existing `visibleSectionIds`; the session callbacks take a conversation instead of its task | AC-015, AC-016 | The four existing sections, their header actions, the row menus, the collapse contract, the separator contract, the tag-filter rule |
-| `studio/src/studio/MainStudio.tsx` | Load the worktree's conversations, stamp each with its device, and pass them down; add `onOpenSession`, `onRenameSession`, `onDeleteSession` and `onAddSession`, each working from the conversation; drop the target-resolution path the header action no longer needs | AC-015, AC-016 | The task surface's own conversation list and create flow |
+| `studio/src/studio/workbench/WorkbenchNavigator.tsx` | A fifth `NavigatorSection` with a heading and conversation rows, a row menu, and the header action; the separator list and the deepest-section rule follow from the existing `visibleSectionIds`; the session callbacks take a conversation instead of its task; the selected task is remembered rather than derived from the open detail | AC-015, AC-016, AC-018 | The four existing sections, their header actions, the row menus, the collapse contract, the separator contract, the tag-filter rule |
+| `studio/src/studio/MainStudio.tsx` | Load the worktree's conversations, stamp each with its device, and pass them down; add `onOpenSession`, `onRenameSession`, `onDeleteSession` and `onAddSession`, each working from the conversation; open a conversation in the scope that is already selected, releasing the device only when the conversation belongs to another one; drop the target-resolution path the header action no longer needs | AC-015, AC-016, AC-018 | The task surface's own conversation list and create flow; the task detail's own conversation links, which still move the scope they belong to |
 | `studio/src/api/client.ts` | Reuse `listDeviceSessions`, `loadDeviceChatSession`, `renameChatSession`; add a typed device-scoped delete beside them | AC-017 | No new type; the existing legacy `deleteChatSession` keeps working and gains the graph cleanup through the shared operation |
 | `studio/src/studio/workbench/ChooseConversationTaskDialog.tsx` | Removed, with its test: the header action binds to the selected task, so the chooser has no caller | AC-016 | Nothing else used it |
 | `src/ApiHost/WorkbenchApiModels.cs` | A device-scoped `DELETE …/devices/{device}/sessions/{session}` that resolves the device explicitly and performs the combined delete | AC-017 | The sibling `GET` routes and the device-scoped session list |
@@ -118,7 +125,7 @@ No API, graph, route, entity kind, relation kind, or persisted shape changes.
 | Component | Input | Interaction and response |
 |---|---|---|
 | `SESSIONS` section | the selected task, the selected device, the worktree's conversations, the open conversation id | Renders one heading and the rows of the list its content rule selects; renders nothing when that list is empty |
-| Conversation row | a conversation | Opens the conversation through `onOpenSession(session)`; its menu opens, renames or deletes it |
+| Conversation row | a conversation | Opens the conversation through `onOpenSession(session)` in the chat view of the selected scope, leaving that scope alone; its menu opens, renames or deletes it |
 | Heading | the selected task, or the task-less case | A non-interactive label naming what the list shows, so the section does not carry a second interactive task row |
 | Header action | the selected task | Starts a conversation for that task and opens it, or is not offered |
 
@@ -157,6 +164,8 @@ previous four-section cascade.
 | The section shows the selected task's conversations, and the device's task-less ones while no task is selected | L1 | `npm test -- --run` in `studio/`, cases in `WorkbenchNavigator.test.tsx` | With a task selected only its conversations appear, under a heading naming it; with none selected only the device's task-less conversations appear; never both, and the section is absent when the list is empty |
 | The hardware target shows no section and no action | L1 | the same lane | No `sessions` section id and no header action for the hardware target |
 | The header action binds to the selected task | L1 | `studio/src/studio/MainStudio.deviceSelect.test.tsx` or a new case | Activating it calls the create flow with the selected task; with no task selected the action is not rendered |
+| Opening a conversation leaves the navigator's selection alone | L1 | `studio/src/studio/MainStudio.taskChat.test.tsx` (a navigator row opened with a device and a task selected) and the navigator lane | The device row keeps `aria-current`, the task row stays selected, the section keeps its list, and the conversation renders in the device workspace's chat view |
+| The task selection outlives the task detail | L1 | the studio lane (`WorkbenchNavigator.test.tsx`) | With the detail closed — `activeTaskId` gone — the row stays selected and the section keeps that task's conversations |
 | A delete removes the conversation from both stores | L1 | `dotnet test tests/ApiHost.Tests/ApiHost.Tests.csproj --no-build -v q` | After a delete the task detail no longer lists the conversation, the graph holds no `Session` entity or `TaskSession` edge for it, and an unknown conversation returns `404` |
 | The row menu offers exactly open, rename and delete, and confirms before deleting | L1 | the studio lane | The menu's items are those three; choosing delete asks first, and cancelling calls nothing |
 | The section is the one that grows | L1 | the same lane | The deepest-section hook moves from `tasks` to `sessions` |
@@ -172,6 +181,7 @@ previous four-section cascade.
 | The section changes content when the task selection changes | The rule follows the task selection | The heading states what is shown, so the change is visible rather than silent |
 | The load fans out per device and grows with the device count | The repository has no worktree-level conversation list | The fan-out is over the devices the navigator already receives (one to three in practice); a worktree-level endpoint is the follow-up if a device count makes it matter |
 | A conversation is bound to a task under another device | Bindings are manual and can be changed elsewhere | The section shows the selected task's conversations, and the task belongs to the selected device, so the two cannot disagree |
+| Reading a conversation hides the list it came from | The task detail is rendered ahead of the device workspace, so opening a conversation closes it | The conversation opens in the chat view of the scope that is already selected, so the navigator keeps the device, the task row and the section's list; the detail is reachable again from its task row |
 | Re-binding a conversation to another task makes it vanish from the section | Re-binding is out of scope for now, so this cannot happen from the navigator; it can from the task surface | Out of scope by decision; the section simply shows the conversation under whichever task owns it |
 | A delete leaves an orphan session file when the file write fails after the graph write | The two stores cannot be updated atomically | The graph write happens first, so the failure leaves something invisible and re-registerable rather than a task detail listing a conversation that cannot load; the orphan costs disk only and is recorded in ADR-0010 |
 | A delete removes task evidence | The `TaskSession` edge is the record of which task a conversation belonged to | The confirmation states that the link is lost before the user commits |
@@ -196,3 +206,4 @@ previous four-section cascade.
 | 2026-10-02 | 1.0 | Initial design for the navigator's conversations section. |
 | 2026-10-02 | 1.1 | The row menu offers open, rename and delete instead of re-binding; the delete adds a shared `ApiHost` operation and a device-scoped route, because the existing path removed only the session file and left its `TaskSession` edge behind. Per ADR-0010. |
 | 2026-10-02 | 1.2 | The section lists one task's conversations at a time — the selected task's, or the selected device's task-less ones while no task is selected — and a heading names what it shows. The header action binds to the selected task and is offered only while one is selected, which removes the task chooser; the session callbacks take the conversation instead of its task, because a task-less conversation has no task to carry its context. Per the revised ADR-0009. |
+| 2026-10-02 | 1.3 | Opening a conversation from a row no longer changes the navigator: the scope stays selected and the conversation opens in that scope's chat view, with the device released only when the conversation belongs to another one. The navigator therefore remembers the task it is showing, so the section survives the task detail yielding the main area (AC-018). Per ADR-0009. |

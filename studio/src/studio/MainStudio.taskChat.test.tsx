@@ -144,3 +144,47 @@ it('opens a task-bound session from its task card without expanding the context 
   expect(host.querySelector('button[aria-label="Show context dock"]')).not.toBeNull()
   await act(async () => root.unmount())
 })
+
+it('opens a navigator conversation without dropping the selected device or its task', async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => root.render(<MainStudio />))
+
+  const clickText = async (text: string) => {
+    const target = Array.from(host.querySelectorAll<HTMLElement>('div, span, button'))
+      .filter(element => element.textContent?.trim() === text).pop()
+    expect(target).toBeDefined()
+    await act(async () => target!.click())
+  }
+  const sections = () => Array.from(host.querySelectorAll('[data-navigator-section]'))
+    .map(node => node.getAttribute('data-navigator-section'))
+
+  await clickText('DemoWB')
+  await clickText('master')
+  await clickText('PLC_Demo')
+
+  // The only conversation is bound to the task, so with no task selected there is no list to show.
+  expect(sections()).not.toContain('sessions')
+
+  const taskRow = host.querySelector<HTMLButtonElement>('button[aria-label="Open task Inspect startup sequence"]')
+  expect(taskRow).not.toBeNull()
+  await act(async () => taskRow!.click())
+  expect(sections()).toContain('sessions')
+  expect(host.querySelector('[data-session="s1"]')).not.toBeNull()
+
+  const open = host.querySelector<HTMLButtonElement>('[data-session-open="s1"]')
+  expect(open).not.toBeNull()
+  vi.mocked(api.selectWorktree).mockClear()
+  vi.mocked(api.loadDeviceChatSession).mockClear()
+  await act(async () => open!.click())
+
+  // The conversation is what changed: the navigator keeps the device, the task and the section.
+  expect(api.loadDeviceChatSession).toHaveBeenCalledWith('wb1', 'wt1', 'dev1', 's1')
+  expect(host.querySelector('[data-device-target="dev1"]')?.getAttribute('aria-current')).toBe('true')
+  expect(sections()).toEqual(['projects', 'worktree', 'device', 'tasks', 'sessions'])
+  expect(host.querySelector('[data-task-selected="true"]')?.textContent).toContain('Inspect startup sequence')
+  expect(host.querySelector('[data-session="s1"]')).not.toBeNull()
+  expect(host.querySelector('[data-session-pane="s1"]')).not.toBeNull()
+  await act(async () => root.unmount())
+})

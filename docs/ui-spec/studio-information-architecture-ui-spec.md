@@ -39,7 +39,7 @@
 | `SESSIONS` section | A task is selected and it has at least one conversation | Lists that task's conversations under a heading naming the task; its header starts a conversation bound to that task. | AC-015, AC-016 |
 | `SESSIONS` section | No task is selected, and the selected device has at least one task-less conversation | Lists the selected device's conversations that no task owns, under a heading stating that they belong to no task. | AC-015 |
 | `SESSIONS` section | The selected target is the worktree's hardware, or the list the rule above yields is empty | Section absent, so the navigator does not reserve a row for a list that cannot exist. A conversation needs a device, so the hardware target cannot own one. | AC-015 |
-| Session row | Click a conversation row | Opens that conversation in the chat surface, whether or not a task owns it. | AC-015 |
+| Session row | Click a conversation row | Opens that conversation in the chat surface of the scope already selected, and leaves the navigator's workbench, worktree, device and task selection unchanged, so the list the row was read from stays on screen. | AC-015, AC-018 |
 | `SESSIONS` header action | Click it while a task is selected | Starts a conversation bound to that task and opens it. | AC-016 |
 | `SESSIONS` header action | No task is selected | Not offered, because a new conversation has to bind to a task, and this section is not the list of any task's conversations while none is selected. | AC-016 |
 | Tag filter active | The user types in the tag filter | Only `PROJECTS` and `WORKTREE` are shown; the unbound-task group, `DEVICE`, `TASKS` and `SESSIONS` are hidden. | AC-006 |
@@ -91,6 +91,8 @@
 | `SESSIONS` section | The list its content rule yields is empty | Section absent, so the navigator does not reserve a row for a list that cannot exist. | Selecting a task that owns a conversation makes the section appear. For a task that owns none, the conversation is started from the task's own surface, because the section's header action is part of the section. | AC-015 |
 | Session row | The conversation has no title | Falls back to its first user message, then to an untitled label, as the task surface already does. | Renaming it from the row menu gives it a title. | AC-015 |
 | Session row | Delete is chosen from its menu | A confirmation names the conversation and states that its link to the task is lost. | Confirming removes the conversation from the section and from the task's own conversation list; cancelling changes nothing. | AC-017 |
+| Session row | A conversation is opened while its task's detail is in the main area | The detail yields the main area to the conversation, and the navigator keeps the device, the highlighted task row and the section's list. | The detail is still reachable from its task row, and the conversation is open in the chat view. | AC-018 |
+| Session row | A conversation's device is not the selected one | It opens in the worktree-level chat view, which is the scope that has no device; the device selection is released with it. | Selecting the device the conversation belongs to opens it in that device's workspace instead. | AC-018 |
 | Any reachable section | Section content fails to load | Existing error text for that collection; other sections keep rendering. | Retry through the existing refresh actions. | Preserved behaviour |
 
 ## Visual Constraints (When Applicable)
@@ -135,6 +137,7 @@
 | AC-015 | `SESSIONS` section | The section shows the selected task's conversations under a heading naming that task, or — when no task is selected — the selected device's conversations that no task owns, under a heading stating that. It is absent when its rule yields nothing, including for the hardware target, which cannot own a conversation. |
 | AC-016 | `SESSIONS` header action | The header starts a conversation bound to the selected task and opens it; the hardware target and a state with no selected task offer no such action. |
 | AC-017 | Deleting a conversation | Choosing delete on a row asks for confirmation naming the conversation; confirming removes it from the section and from the task's conversation list, and cancelling leaves both unchanged. |
+| AC-018 | Opening a conversation from a row | Opening it leaves the navigator's workbench, worktree, device and task selection unchanged, with the section's list and the selected task row still on screen, and shows the conversation in the chat view of that scope; a conversation whose device is not the selected one opens in the worktree-level chat view instead. |
 | Preserved behaviour | Worktree `Tasks` tab | The main-area Tasks view still renders in the worktree tab strip and is unchanged. |
 
 ## Open User Decisions
@@ -154,3 +157,4 @@
 | 2026-10-02 | 1.3 | A fifth `SESSIONS` section below `TASKS` lists the selected target's task-bound conversations under the task that owns each one, with a creation action in its header and a per-row menu; conversations bound to no task are out of scope, and the hardware target has none. Per ADR-0009. |
 | 2026-10-02 | 1.4 | The conversation row menu offers opening, renaming and deleting; deleting confirms first and removes the conversation from the section and the task's list. Re-binding a conversation to another task is out of scope for now. Per ADR-0010. |
 | 2026-10-02 | 1.5 | `SESSIONS` now shows one task's conversations at a time: the selected task's, or the selected device's conversations that no task owns while no task is selected; a heading names what the list is showing. The header action binds to the selected task and is offered only while one is selected. Per the revised ADR-0009. |
+| 2026-10-02 | 1.6 | Opening a conversation from a row no longer changes the navigator: the workbench, worktree, device and task selection stay as they were, and the conversation opens in the chat view of that scope; a conversation whose device is not the selected one opens in the worktree-level chat view (AC-018). Per ADR-0009. |

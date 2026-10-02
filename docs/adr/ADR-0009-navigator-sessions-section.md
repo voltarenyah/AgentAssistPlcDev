@@ -45,6 +45,12 @@ that is, selecting no task — listed conversations belonging to tasks the user 
 list had no relation to the task being worked on, and a worktree whose conversations are all task-bound
 showed every one of them at once. This ADR records the revised rule; the earlier one is not kept.
 
+The row's open behaviour was inherited from the task detail's own conversation links, which had to
+switch the whole scope to the worktree-level chat view. Reusing that path for a navigator row meant
+reading a conversation dropped the selected device and emptied the `TASKS` and `SESSIONS` sections, so
+the list the row came from disappeared as it was opened. The rule below separates the two: a row shows a
+conversation, and the task detail's link still moves the scope it belongs to.
+
 ## Decision Point
 
 - **Question**: where does a task's conversation live in the navigator, and which conversations does
@@ -61,14 +67,17 @@ A fifth navigator section, `SESSIONS`, sits below `TASKS`. It shows the conversa
 user has selected in `TASKS`. While no task is selected, it shows the selected device's conversations
 that no task owns. Its header starts a new conversation bound to the selected task, and is offered only
 while a task is selected, because a conversation needs a task to bind to in order to appear here. The
-action is never offered for the worktree's hardware, which cannot own a conversation.
+action is never offered for the worktree's hardware, which cannot own a conversation. Opening a row
+shows that conversation and changes nothing else: the navigator keeps the selection the row was listed
+under, so the list the user just read stays where it was.
 
 ### Decision Details
 
 | Item | Content |
 |------|---------|
-| **Decision** | A fifth flat section listing the conversations of the selected task, or the selected device's task-less conversations while no task is selected, with a creation action in its header and a per-row menu whose operations ADR-0010 governs. |
+| **Decision** | A fifth flat section listing the conversations of the selected task, or the selected device's task-less conversations while no task is selected, with a creation action in its header and a per-row menu whose operations ADR-0010 governs. Opening a row is a content action: it does not change what the navigator is showing. |
 | **Header action** | Starts a conversation bound to the selected task. Offered only while a task is selected: with no selected task there is no task to bind the new conversation to, so the section would not be the list it appeared in. |
+| **Row open** | Opens the conversation in the chat view of the scope that is already selected, and leaves the workbench, worktree, device and task selection untouched. A conversation whose device is not the selected one — which the worktree's own task surface can ask for — has no device workspace to open in, so it opens in the worktree-level chat view, the one scope without a device. |
 | **Why this** | It keeps the cascade one section per scope level, keeps every list bounded and scrollable on its own, and makes the list say exactly what the row above it says is selected, without reopening the nesting ADR-0006 removed. |
 | **Known unknowns** | Whether a conversation ever needs to be reachable without its task outside the task-less case this rule now covers, and whether the section needs a cap once a task accumulates many conversations. |
 | **Reconsider when** | Users ask to see conversations belonging to several tasks at once, or to reach a conversation from the navigator without selecting the task that owns it. |
@@ -119,6 +128,8 @@ guessed at.
   sections can never disagree about which task the user is working in.
 - A conversation that belongs to no task is reachable from the navigator, which is the only state the
   live `master` worktree's conversations are in.
+- Reading a conversation leaves the navigator where it was, so the list a row was read from is still
+  there when the user comes back to it, and the task selection is not lost with the task detail.
 
 ### Negative Consequences
 
@@ -161,6 +172,14 @@ device that owns it and a task-less conversation has no task to carry it. Reuse
 rows always visible: the section is the container, so a disclosure inside it would be a second,
 redundant expander. A row menu offers only the operations the repository performs — open, rename, and
 delete — and the delete follows ADR-0010 rather than being reimplemented here.
+
+Opening a row is not navigation. It loads the conversation into the chat surface of the scope that is
+already selected — the device workspace's chat view when a device is selected, the worktree-level chat
+view otherwise — and it leaves the workbench, worktree, device and task selection as it found them. The
+one thing it must clear is the task detail, because the detail renders ahead of the device workspace and
+would otherwise stay in front of the conversation; the task the navigator treats as selected therefore
+has to outlive the detail it was opened from, which is why the navigator remembers the task it is
+showing rather than deriving it from the detail alone.
 
 ## Related Information
 

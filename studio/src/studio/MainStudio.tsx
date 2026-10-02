@@ -2170,7 +2170,31 @@ export default function MainStudio() {
     try { await api.removeTaskRelationship(selection.workbenchId, taskDetail.task.taskId, item.edgeId); await reloadTaskDetail() }
     catch (error) { showErrorToast(displayError(error)) }
   }
-  /** Opens a conversation in the device context that owns it, and focuses the chat surface on it. */
+  /** Loads a conversation through the device route and checks that it belongs to the context it names. */
+  const loadSessionInContext = async (
+    context: { workbenchId: string; worktreeId: string; deviceId: string },
+    sessionId: string,
+  ) => {
+    const session = await api.loadDeviceChatSession(context.workbenchId, context.worktreeId, context.deviceId, sessionId)
+    if (session.header.workbenchId !== context.workbenchId
+      || session.header.worktreeId !== context.worktreeId
+      || session.header.deviceId !== context.deviceId) {
+      throw new Error('The conversation does not match this workbench, worktree, and device.')
+    }
+    return session
+  }
+
+  /**
+   * Opens a conversation in the device context that owns it. Opening one is a content action, so it
+   * leaves the navigator showing what it was showing: the selected device stays selected, and the task
+   * the user is working in stays current, so `TASKS` and `SESSIONS` do not empty out under them. Only
+   * the main area changes — the task detail yields it, because the detail renders ahead of the device
+   * workspace — and the conversation opens in the chat view of the scope that is already selected.
+   *
+   * A conversation whose device is not the selected one, which the worktree's own task surface can ask
+   * for, has no device workspace to open in, so it opens in the worktree-level chat view instead: the
+   * one scope that has no device.
+   */
   const openSessionInContext = async (
     context: { workbenchId: string; worktreeId: string; deviceId: string },
     sessionId: string,
@@ -2178,23 +2202,20 @@ export default function MainStudio() {
     const requestId = selectionRequestId.current
     setChatBusy(true)
     try {
-      const session = await api.loadDeviceChatSession(context.workbenchId, context.worktreeId, context.deviceId, sessionId)
+      const session = await loadSessionInContext(context, sessionId)
       if (selectionRequestId.current !== requestId) return
-      if (session.header.workbenchId !== context.workbenchId
-        || session.header.worktreeId !== context.worktreeId
-        || session.header.deviceId !== context.deviceId) {
-        throw new Error('The conversation does not match this workbench, worktree, and device.')
-      }
       await api.selectWorktree(context.workbenchId, context.worktreeId)
       if (selectionRequestId.current !== requestId) return
-      setSelection({ workbenchId: context.workbenchId, worktreeId: context.worktreeId, deviceId: null })
-      setDeviceSelection(null)
-      setTaskChatContext(context)
-      setChatTabs(() => openTab(emptyChatTabs(), session))
-      setMainView({ kind: 'task-chat' })
+      if (selection.deviceId !== context.deviceId) {
+        setSelection({ workbenchId: context.workbenchId, worktreeId: context.worktreeId, deviceId: null })
+        setDeviceSelection(null)
+        setTaskChatContext(context)
+        setMainView({ kind: 'task-chat' })
+        setTaskDetailTask(null)
+      }
       setTaskDetail(null)
-      setTaskDetailTask(null)
       setTaskDetailError(null)
+      setChatTabs(() => openTab(emptyChatTabs(), session))
       workspaceService.focusView('chat')
       await refreshChatSessions(context).catch(() => undefined)
     } catch (error) {
