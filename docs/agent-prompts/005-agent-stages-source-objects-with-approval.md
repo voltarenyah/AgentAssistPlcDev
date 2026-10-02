@@ -32,6 +32,8 @@ the card leaves the task unchanged.
 - Staging is device-scoped: the object id is `"{deviceId}:{sourceId}"` and a staged object must belong
   to the task's device, otherwise the compare rejects it with `TASK_STAGE_INVALID`
   (`WorkbenchCoordinator.cs:3631-3635`).
+- Line numbers here are from commit `366bd16`; this item's anchors are backend and stable, but locate
+  each by symbol name and confirm its current line before relying on it.
 
 ## Constraints
 

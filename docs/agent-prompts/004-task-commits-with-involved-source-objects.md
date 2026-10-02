@@ -14,7 +14,7 @@ silently dropped.
 ## Context
 
 - The task's commit edges already exist in the API response: `detail.commits` is an array of
-  `{ id, edgeId, provenance, isPrimary }` (`studio/src/api/client.ts:401-407`), populated from the
+  `{ id, edgeId, provenance, isPrimary }` (`studio/src/api/client.ts:417`), populated from the
   task's `GitCommit` edges (`src/ApiHost/WorkbenchApiModels.cs:2127-2142`).
 - Today they render as bare ids, and only when non-empty:
   `studio/src/studio/workbench/TaskDetail.tsx:92-96,118,167` (`TraceabilitySection`, `:28-53`).
@@ -32,10 +32,12 @@ silently dropped.
 - The read side is missing: `GET /api/workbenches/{id}/engineering-graph/{entityKind}/{entityId}`
   returns only `tasks` and `commits` for an entity
   (`src/ApiHost/WorkbenchApiModels.cs:734-759`), so a commit's outgoing source-object edges cannot be
-  read; `EngineeringGraphEntityDetail` has no field for them (`client.ts:409-416`).
+  read; `EngineeringGraphEntityDetail` has no field for them (`client.ts:425`).
 - Navigation gap: `navigateTaskDetail` handles only `session` and `sourceObject`
-  (`studio/src/studio/MainStudio.tsx:2129-2133`); `commit` and `svnRevision` fall through to
+  (`studio/src/studio/MainStudio.tsx:2260`); `commit` and `svnRevision` fall through to
   `setTraceabilityTarget` with no destination.
+- Line numbers here are from commit `366bd16`. `client.ts` and `MainStudio.tsx` shift often; locate
+  every anchor by symbol name and confirm its current line before relying on it.
 - Existing commit presentation to reuse or stay consistent with:
   `studio/src/studio/version-control/VersionControlHistory.tsx:63` (expanded commit shows author,
   time, sha, checksum, "Changed files · N" at `:234` and file rows at `:247-259` — paths only), fed by

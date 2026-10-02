@@ -20,8 +20,8 @@ project-wide result.
 - `docs/design/task-scoped-tia-compare-design.md` AC-002 — a clean scoped result is labelled
   task-clean and cannot permit a project-wide claim or savepoint.
 - The client function already exists with **no caller**: `compareTaskWithTia`
-  (`studio/src/api/client.ts:1411-1412`, route `POST /workbenches/{id}/worktrees/{wt}/tasks/{taskId}/compare-tia`,
-  response type `TaskSourceComparison` at `:1410`).
+  (`studio/src/api/client.ts:1430`, route `POST /workbenches/{id}/worktrees/{wt}/tasks/{taskId}/compare-tia`,
+  response type `TaskSourceComparison` at `:1429`).
 - The backend is implemented and correctly scoped:
   `WorkbenchCoordinator.CompareTaskWithTiaAsync` (`src/Agent/Workbench/WorkbenchCoordinator.cs:3595-3656`)
   reads only `ListActiveStages`, calls `compare_source_evidence` with `sourceObjectIds`, and returns
@@ -33,8 +33,10 @@ project-wide result.
   `VersionControlWorkflow.test.tsx:12,41-53` asserts the `/vc/compare-tia` request path and
   `includeHardware=false`.
 - The active task for a worktree comes from `ActiveTaskContextService`; the task detail state lives in
-  `MainStudio` (`taskDetail*`, `studio/src/studio/MainStudio.tsx:497-501`) and the version-control
-  surface receives its context from `MainStudio.tsx:2659-2669`.
+  `MainStudio` (`taskDetail*`, `studio/src/studio/MainStudio.tsx:505-509`) and the version-control
+  surface receives its context from `MainStudio.tsx:2797-2809`.
+- Line numbers here are from commit `366bd16`. `client.ts` and `MainStudio.tsx` shift often; locate
+  every anchor by symbol name and confirm its current line before relying on it.
 
 ## Constraints
 
