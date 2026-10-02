@@ -2198,6 +2198,77 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task DeletingAConversationRemovesItsGraphBindingAsWellAsItsFile()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.DeviceId;
+        var created = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Conversation task", deviceId = device, intent = "Ask about the drive", expectedResult = "Answered" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var sessionRoute = $"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/sessions";
+        var session = await fixture.Client.PostAsJsonAsync(sessionRoute, new { settings = new { }, runtimeContext = (string?)null });
+        session.EnsureSuccessStatusCode();
+        var sessionId = (await session.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("sessionId").GetString()!;
+        (await fixture.Client.PutAsJsonAsync($"{sessionRoute}/{sessionId}/task", new { taskId })).EnsureSuccessStatusCode();
+
+        // While the conversation exists, its task lists it and the graph knows it.
+        var before = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskId}");
+        Assert.Equal(sessionId, Assert.Single(before.GetProperty("sessions").EnumerateArray()).GetProperty("id").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.GetAsync(
+            $"/api/workbenches/{wb}/engineering-graph/session/{sessionId}")).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"{sessionRoute}/{sessionId}")).StatusCode);
+
+        // The task detail is read from the graph edge, so it stops listing the conversation only if the
+        // delete removed the binding and not just the session file.
+        var after = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskId}");
+        Assert.Equal(0, after.GetProperty("sessions").GetArrayLength());
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.GetAsync(
+            $"/api/workbenches/{wb}/engineering-graph/session/{sessionId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.GetAsync($"{sessionRoute}/{sessionId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.DeleteAsync($"{sessionRoute}/{sessionId}")).StatusCode);
+        // Deleting a conversation that belongs to another device is not found either.
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.DeleteAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/devices/missing/sessions/{sessionId}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task CompatibilityDeleteAlsoRemovesTheConversationsGraphBinding()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.DeviceId;
+        var created = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Compatibility task", deviceId = device, intent = "Ask", expectedResult = "Answered" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var sessionRoute = $"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/sessions";
+        var session = await fixture.Client.PostAsJsonAsync(sessionRoute, new { settings = new { }, runtimeContext = (string?)null });
+        session.EnsureSuccessStatusCode();
+        var sessionId = (await session.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("sessionId").GetString()!;
+        (await fixture.Client.PutAsJsonAsync($"{sessionRoute}/{sessionId}/task", new { taskId })).EnsureSuccessStatusCode();
+        (await fixture.Client.PostAsync($"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/select", null)).EnsureSuccessStatusCode();
+
+        Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.PostAsJsonAsync(
+            "/api/chat/session/delete", new { sessionId })).StatusCode);
+
+        // This route used to delete only the session file, which left the task listing a conversation
+        // that could no longer be loaded.
+        var after = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskId}");
+        Assert.Equal(0, after.GetProperty("sessions").GetArrayLength());
+        Assert.Equal(HttpStatusCode.NotFound, (await fixture.Client.GetAsync(
+            $"/api/workbenches/{wb}/engineering-graph/session/{sessionId}")).StatusCode);
+    }
+
+    [Fact]
     public async Task SelectionResolvesRegisteredDeviceAndUnknownApprovalIsConflict()
     {
         var store = new AtomicJsonStore();

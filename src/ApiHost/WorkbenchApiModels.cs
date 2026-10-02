@@ -1867,6 +1867,19 @@ public static class WorkbenchEndpoints
             string workbenchId, string worktreeId, string device, string session, WorkbenchApiState s) =>
             SessionManager.LoadSession(s.Device(workbenchId, worktreeId, device).Context, session) is { } value
                 ? Results.Ok(value) : Results.NotFound());
+        // Deleting a conversation removes it from both stores, so the device it belongs to is named
+        // rather than resolved from the current selection (ADR-0010).
+        app.MapDelete("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
+            string workbenchId, string worktreeId, string device, string session, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, ApiChatService chat) =>
+        {
+            var context = s.Device(workbenchId, worktreeId, device).Context;
+            if (SessionManager.LoadSession(context, session) is null)
+                throw new KeyNotFoundException("SESSION_NOT_FOUND");
+            using var graph = graphs.Open(s.Workbench(workbenchId));
+            SessionGraphOperations.Delete(graph.Service, chat, context, session, ChatScopes.Device);
+            return Results.NoContent();
+        });
         app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
             string workbenchId, string worktreeId, string device, string session,
             SessionSaveApiRequest r, WorkbenchApiState s, EngineeringGraphApiFactory graphs,

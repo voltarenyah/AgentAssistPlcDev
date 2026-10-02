@@ -161,4 +161,17 @@ public static class SessionGraphOperations
             session.Header.WorkbenchId, session.Header.WorktreeId, session.Header.DeviceId));
         graph.ReplaceSessionTask(session.Header.SessionId, taskId, GraphProvenance.Manual);
     }
+
+    /// <summary>
+    /// Deletes a conversation from both stores it lives in, graph first: the entity and its edges go
+    /// before the session file, so a failure in between leaves an orphan file that nothing points at
+    /// rather than a task detail listing a conversation that can no longer be loaded (ADR-0010).
+    /// Both delete routes call this, so the order cannot be reimplemented differently.
+    /// </summary>
+    internal static void Delete(EngineeringGraphService graph, ApiChatService chat, DeviceContext device,
+        string sessionId, string scope)
+    {
+        graph.RemoveEntity(GraphEntityKind.Session, sessionId);
+        chat.DeleteSession(device, sessionId, scope);
+    }
 }

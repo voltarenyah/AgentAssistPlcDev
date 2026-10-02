@@ -516,7 +516,11 @@ public static class CompatibilityEndpoints
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
-            chat.DeleteSession(ChatDevice(state, graphs, activeTasks), id, Scope(body, null));
+            var device = ChatDevice(state, graphs, activeTasks);
+            // The graph half of the binding has to go with the file, or the task detail keeps listing a
+            // conversation that can no longer be loaded (ADR-0010).
+            using var scope = graphs.Open(state.Workbench(device.WorkbenchId));
+            SessionGraphOperations.Delete(scope.Service, chat, device, id, Scope(body, null));
             return Results.NoContent();
         });
         app.MapPost("/api/chat/session/export", (JsonElement body, WorkbenchApiState state,
