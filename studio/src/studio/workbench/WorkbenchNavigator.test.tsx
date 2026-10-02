@@ -529,6 +529,50 @@ describe('WorkbenchNavigator section sizing', () => {
 
     await act(async () => second.root.unmount())
   })
+
+  it('gives the dock\'s remaining height to the deepest section only (AC-013)', async () => {
+    const fills = (host: HTMLElement) => Array.from(host.querySelectorAll('[data-section-fills]'))
+      .map(node => node.getAttribute('data-navigator-section'))
+
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    // Nothing sits below TASKS, so TASKS reaches the dock's bottom instead of leaving it unused.
+    expect(fills(host)).toEqual(['tasks'])
+
+    // Reaching the worktree but no target leaves DEVICE deepest, and it takes that room instead.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null, targetKind: null },
+        ...overrides,
+      })} />,
+    ))
+    expect(fills(host)).toEqual(['device'])
+
+    // Only one section on screen, so it is the one that fills.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: null, worktreeId: null, deviceId: null },
+        ...overrides,
+      })} />,
+    ))
+    expect(fills(host)).toEqual(['projects'])
+
+    await act(async () => root.unmount())
+  })
+
+  it('releases the deepest section\'s room when it is collapsed (AC-013)', async () => {
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    expect(host.querySelector('[data-section-fills]')?.getAttribute('data-navigator-section')).toBe('tasks')
+
+    // Folding the deepest section asks for less room, not for a header over an empty box.
+    await act(async () => sectionHeader(host, 'tasks').click())
+    expect(host.querySelector('[data-section-fills]')).toBeNull()
+    expect(sectionBody(host, 'tasks').hasAttribute('hidden')).toBe(true)
+
+    await act(async () => sectionHeader(host, 'tasks').click())
+    expect(host.querySelector('[data-section-fills]')?.getAttribute('data-navigator-section')).toBe('tasks')
+
+    await act(async () => root.unmount())
+  })
 })
 
 describe('WorkbenchNavigator section cascade', () => {

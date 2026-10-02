@@ -133,6 +133,13 @@ type NavigatorSectionProps = {
   action?: ReactNode
   /** The height the user dragged this section to, in pixels; unset means it follows its content. */
   height?: number | null
+  /**
+   * Whether this is the deepest section on screen. It takes the dock's remaining height so its lower
+   * boundary sits at the bottom: with nothing below it to fill that room, leaving it unused would put
+   * a scrollbar on a body that already fits. Only the last section grows, so every other one still
+   * follows its content.
+   */
+  fillsRemainingSpace?: boolean
   children: ReactNode
 }
 
@@ -155,13 +162,17 @@ const SECTION_MIN_HEIGHT = 72
  * what the box measures; when the dock cannot give it that much, the box shrinks to its floor and the
  * body scrolls.
  */
-function NavigatorSection({ id, title, action, height = null, children }: NavigatorSectionProps) {
+function NavigatorSection({ id, title, action, height = null, fillsRemainingSpace = false, children }: NavigatorSectionProps) {
   const [collapsed, setCollapsed] = useState(false)
   const bodyId = `navigator-section-${id}`
+  // A collapsed section releases its height even when it is the deepest one: folding it is a request
+  // for less room, not for a header on top of an empty box.
+  const grows = fillsRemainingSpace && !collapsed
   return (
     <section
       data-navigator-section={id}
-      className="flex min-h-0 flex-initial flex-col"
+      data-section-fills={grows || undefined}
+      className={`flex min-h-0 flex-col ${grows ? 'flex-auto' : 'flex-initial'}`}
       // A collapsed section keeps no height at all, so the sections below it move up. A dragged
       // height is a number the user chose, so it replaces the content-driven default until then.
       style={collapsed ? undefined : height === null ? { minHeight: SECTION_MIN_HEIGHT } : { minHeight: SECTION_MIN_HEIGHT, height }}
@@ -502,6 +513,8 @@ export default function WorkbenchNavigator({
       [upperId]: Math.round(upperHeight),
       [lowerId]: Math.round(lowerHeight),
     }))
+  /** The deepest section on screen takes the dock's remaining height, so its boundary reaches the bottom. */
+  const isDeepestSection = (id: string) => visibleSectionIds[visibleSectionIds.length - 1] === id
   /** The separator above a section, or nothing when that section is the first one on screen. */
   const separatorBefore = (id: string) => {
     const index = visibleSectionIds.indexOf(id)
@@ -534,6 +547,7 @@ export default function WorkbenchNavigator({
         id="device"
         title="DEVICE"
         height={sectionHeights.device ?? null}
+        fillsRemainingSpace={isDeepestSection('device')}
         action={(
           <Button variant="ghost" size="icon-xs" aria-label="Refresh devices" title="Refresh devices" onClick={onRefresh}>
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -676,6 +690,7 @@ export default function WorkbenchNavigator({
         id="tasks"
         title="TASKS"
         height={sectionHeights.tasks ?? null}
+        fillsRemainingSpace={isDeepestSection('tasks')}
         action={(
           <Button
             variant="ghost"
@@ -736,6 +751,7 @@ export default function WorkbenchNavigator({
           id="projects"
           title="PROJECTS"
           height={sectionHeights.projects ?? null}
+          fillsRemainingSpace={isDeepestSection('projects')}
           action={(
             <Button variant="ghost" size="icon-xs" aria-label="Create workbench" title="Create workbench" onClick={onCreateWorkbench}>
               <Plus className="h-3.5 w-3.5" />
@@ -853,6 +869,7 @@ export default function WorkbenchNavigator({
             id="worktree"
             title="WORKTREE"
             height={sectionHeights.worktree ?? null}
+            fillsRemainingSpace={isDeepestSection('worktree')}
             action={!filterActive && selectedWorkbench ? (
               <Button
                 variant="ghost"
