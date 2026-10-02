@@ -96,10 +96,19 @@ public sealed record EngineeringTaskRelationshipMutationApiResponse(
     string EdgeId, string TaskId, string TargetKind, string TargetId, string Relation,
     string Provenance, bool IsPrimary);
 
+/// <summary>One graph entity as the traceability surfaces read it. <c>Tasks</c> and <c>Commits</c>
+/// keep their existing meaning (incoming task edges, and the commits that touched this entity).
+/// <c>SourceObjects</c> and <c>UnresolvedFiles</c> are additive and are filled for a
+/// <c>git_commit</c> entity only: the source objects that commit touched (its outgoing
+/// <c>CommitSourceObject</c> evidence edges) and the changed files the evidence indexer could not
+/// resolve to a source object. Both are empty for every other entity kind, so no reader can mistake
+/// a task's own stage edges for commit evidence.</summary>
 public sealed record EngineeringGraphEntityDetailApiResponse(
     string Kind, string Id, string WorkbenchId, string? WorktreeId,
     IReadOnlyList<EngineeringTaskRelationshipApiResponse> Tasks,
-    IReadOnlyList<EngineeringTaskRelationshipApiResponse> Commits);
+    IReadOnlyList<EngineeringTaskRelationshipApiResponse> Commits,
+    IReadOnlyList<EngineeringTaskRelationshipApiResponse> SourceObjects,
+    IReadOnlyList<string> UnresolvedFiles);
 
 public sealed record EngineeringTaskDetailApiResponse(
     EngineeringTaskApiResponse Task,

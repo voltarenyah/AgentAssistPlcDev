@@ -757,9 +757,21 @@ public static class WorkbenchEndpoints
             var commits = evidenceCommits.OrderBy(edge => edge.FromId, StringComparer.Ordinal)
                 .Select(edge => new EngineeringTaskRelationshipApiResponse(edge.FromId, edge.EdgeId,
                     JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary)).ToArray();
+            // A commit's own evidence is the direction the response above cannot express: the source
+            // objects it touched and the changed files no source object could be resolved for. Both
+            // are filled for a commit entity only, so `tasks`/`commits` keep their exact meaning.
+            var sourceObjectEdges = kind == GraphEntityKind.GitCommit
+                ? scope.Service.GetEdges(GraphEntityKind.GitCommit, entityId, GraphEntityKind.SourceObject)
+                    .OrderBy(edge => edge.ToId, StringComparer.Ordinal)
+                    .Select(edge => new EngineeringTaskRelationshipApiResponse(edge.ToId, edge.EdgeId,
+                        JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary)).ToArray()
+                : Array.Empty<EngineeringTaskRelationshipApiResponse>();
+            var unresolvedFiles = kind == GraphEntityKind.GitCommit
+                ? scope.Service.GetFileEvidence(entityId).Select(item => item.RelativePath).ToArray()
+                : Array.Empty<string>();
             return Results.Ok(new EngineeringGraphEntityDetailApiResponse(
                 JsonNamingPolicy.CamelCase.ConvertName(kind.ToString()), entity.EntityId,
-                entity.WorkbenchId, entity.WorktreeId, tasks, commits));
+                entity.WorkbenchId, entity.WorktreeId, tasks, commits, sourceObjectEdges, unresolvedFiles));
         });
         app.MapPatch("/api/workbenches/{id}/tasks/{taskId}", (
             string id, string taskId, JsonElement body, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
