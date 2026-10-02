@@ -58,6 +58,14 @@ navigator kept its own copy of the list and only its own rows refreshed it: a re
 its old name, and a deleted one kept a row that could no longer be opened. The list is therefore read
 from the same device list every surface changes, in one place, rather than owned by the section.
 
+The section is now also the only surface that lists a device's conversations. The right context dock's
+"AI sessions" page was removed: it reserved a panel for a list the navigator already showed, and it
+duplicated the list's operations behind a second copy that could disagree with it. That page was,
+however, the only entry point for two operations — exporting a conversation, and binding one to a task
+through a prompt for a raw task id — so the removal moves them into the row menu instead of deleting
+them. The page's creation action also served the device-scoped, task-less state, so the section's
+header action has to cover that state too rather than being offered only while a task is selected.
+
 ## Decision Point
 
 - **Question**: where does a task's conversation live in the navigator, and which conversations does
@@ -72,9 +80,12 @@ from the same device list every surface changes, in one place, rather than owned
 
 A fifth navigator section, `SESSIONS`, sits below `TASKS`. It shows the conversations of the task the
 user has selected in `TASKS`. While no task is selected, it shows the selected device's conversations
-that no task owns. Its header starts a new conversation bound to the selected task, and is offered only
-while a task is selected, because a conversation needs a task to bind to in order to appear here. The
-action is never offered for the worktree's hardware, which cannot own a conversation. Opening a row
+that no task owns. Its header starts a new conversation in the scope the list itself is showing: bound
+to the selected task, or — while no task is selected — the device's own and owned by no task, which is
+exactly the list on screen then. The action is never offered for the worktree's hardware, which cannot
+own a conversation. Each row's menu carries every operation the repository performs on a conversation —
+open, rename, export, bind it to one of the worktree's tasks or clear that binding, and delete under
+ADR-0010 — because the row, not the removed dock page, is now their only entry point. Opening a row
 shows that conversation and changes nothing else: the navigator keeps the selection the row was listed
 under, so the list the user just read stays where it was.
 
@@ -82,8 +93,9 @@ under, so the list the user just read stays where it was.
 
 | Item | Content |
 |------|---------|
-| **Decision** | A fifth flat section listing the conversations of the selected task, or the selected device's task-less conversations while no task is selected, with a creation action in its header and a per-row menu whose operations ADR-0010 governs. Opening a row is a content action: it does not change what the navigator is showing. |
-| **Header action** | Starts a conversation bound to the selected task. Offered only while a task is selected: with no selected task there is no task to bind the new conversation to, so the section would not be the list it appeared in. |
+| **Decision** | A fifth flat section listing the conversations of the selected task, or the selected device's task-less conversations while no task is selected, with a creation action in its header and a per-row menu carrying every operation the repository performs on a conversation. Opening a row is a content action: it does not change what the navigator is showing. |
+| **Header action** | Starts a conversation in the scope the section is showing: bound to the selected task, or the selected device's own and owned by no task while none is selected. Never offered for the hardware target, which cannot own a conversation. |
+| **Row menu** | The conversation's only entry point, so it holds open, rename, export, bind to a task or clear that binding, and delete. Binding chooses from the worktree's tasks that can own a conversation — a searchable picker, never a prompt for a raw task id — and clearing it is a separate item rather than an empty choice. |
 | **Row open** | Opens the conversation in the chat view of the scope that is already selected, and leaves the workbench, worktree, device and task selection untouched. A conversation whose device is not the selected one — which the worktree's own task surface can ask for — has no device workspace to open in, so it opens in the worktree-level chat view, the one scope without a device. |
 | **Row contents** | The section is a view of the device's conversation list, not a copy of it: it is re-read wherever that list changes, so a conversation renamed, deleted or re-bound in any surface is reflected in the section without a reload. Its menu is visible without hovering, like the navigator's other row menus. |
 | **Why this** | It keeps the cascade one section per scope level, keeps every list bounded and scrollable on its own, and makes the list say exactly what the row above it says is selected, without reopening the nesting ADR-0006 removed. |
@@ -138,6 +150,9 @@ guessed at.
   live `master` worktree's conversations are in.
 - Reading a conversation leaves the navigator where it was, so the list a row was read from is still
   there when the user comes back to it, and the task selection is not lost with the task detail.
+- Retiring the right dock's "AI sessions" page loses no capability: export and task binding, which only
+  that page offered, are row-menu operations now, and binding asks for a choice from the worktree's
+  tasks instead of requiring a task id the user had to know.
 
 ### Negative Consequences
 
@@ -151,22 +166,26 @@ guessed at.
 - The section is absent, rather than empty, whenever its rule yields nothing, so its absence can mean
   "this task has no conversations", "this device has none that no task owns", or "the tasks are still
   loading"; the heading the section shows when it is present is what tells the first two apart.
-- The header action lives in the section, so a selected task that owns no conversation shows no section
-  and therefore no action. Starting the first conversation for such a task happens in the task's own
-  surface, which already offers it.
+- The header action lives in the section, so a state whose list is empty shows no section and therefore
+  no action: a selected task that owns no conversation cannot start its first one from here, and neither
+  can a device that has no task-less conversation. The task's own surface offers creation for the first
+  case and the chat surface's empty state for the second. Rendering the section whenever a device is
+  selected would contradict the content rule above, which is why the gap is stated rather than closed.
 
 ### Neutral Consequences
 
 This section itself adds no route, entity kind, relation kind, or persisted shape. The task surface keeps rendering its
-own conversations exactly as it does today, and a conversation is still created and bound through the
-operations that already exist.
+own conversations exactly as it does today, and a conversation is still created, bound, exported and deleted through the
+operations that already exist — the row menu only gives them their entry point back where the retired dock page held it.
 
 ## Architecture Impact
 
-`WorkbenchNavigator` gains a section, and `MainStudio` gains the load and the callbacks it needs — one to
-open a conversation, one to start one. The session data itself is already available per device, so
-showing the conversations involves no API, graph, or storage change; the delete those rows offer is a
-separate decision with its own architecture impact (ADR-0010).
+`WorkbenchNavigator` gains a section, and `MainStudio` gains the load and the callbacks it needs — open,
+rename, export, bind, delete, and one to start a conversation. The session data itself is already
+available per device, so showing the conversations involves no API, graph, or storage change; the delete
+those rows offer is a separate decision with its own architecture impact (ADR-0010), and the retired dock
+page takes its `sessions` content kind with it, so `contextDock` resolves a device on a chat or source
+view to no dock at all.
 
 ## Implementation Guidance
 
@@ -174,12 +193,18 @@ Load the conversations the way the task surface already does: fan out the existi
 the selected worktree's devices, then select from that fan-out by the task the `TASKS` section shows as
 selected — the task whose detail is open, or the task row last clicked, the same expression that
 highlights the row — and fall back to the selected device's task-less conversations when that selection
-is empty. Keep the device on each loaded conversation, because a row's open, rename and delete need the
-device that owns it and a task-less conversation has no task to carry it. Reuse
+is empty. Keep the device on each loaded conversation, because a row's open, export, re-binding and
+delete need the device that owns it and a task-less conversation has no task to carry it. Reuse
 `TaskSessionsDisclosure`'s row content and its relative-time formatting for the row itself, but keep the
 rows always visible: the section is the container, so a disclosure inside it would be a second,
-redundant expander. A row menu offers only the operations the repository performs — open, rename, and
-delete — and the delete follows ADR-0010 rather than being reimplemented here.
+redundant expander. A row menu offers the operations the repository performs — open, rename, export,
+bind to a task or clear that binding, and delete — and the delete follows ADR-0010 rather than being
+reimplemented here. Binding a conversation is a choice from the worktree's tasks that can own one — a
+session resolves through a device, so a hardware or untargeted task is not offered — presented as a
+searchable picker rather than an id prompt. Starting a conversation from the header follows the list the
+section is showing: bound to the selected task, or the device's own and owned by no task while none is
+selected, in which case the create route's fallback to the worktree's active task is cleared first so the
+new conversation cannot silently acquire a binding the list it appeared in does not show.
 
 Opening a row is not navigation. It loads the conversation into the chat surface of the scope that is
 already selected — the device workspace's chat view when a device is selected, the worktree-level chat
@@ -190,11 +215,18 @@ has to outlive the detail it was opened from, which is why the navigator remembe
 showing rather than deriving it from the detail alone.
 
 The section is not the owner of the conversations it lists. Re-read the device's list in the one place
-every conversation change already goes through — the refresh the chat surfaces call after a create,
-rename, delete or re-binding — and let the section read that, rather than refreshing it only from its own
-rows. Otherwise a rename made in the session dock leaves the old name in the navigator, and a delete made
-there leaves a row that can no longer be opened. Its row menu is visible without hovering, like the
-menus on the navigator's other rows.
+every conversation change already goes through — the refresh every chat surface and every row operation
+calls after a create, rename, export, re-binding or delete — and let the section read that, rather than
+refreshing it only from its own rows. Otherwise a rename made elsewhere leaves the old name in the
+navigator, and a delete made elsewhere leaves a row that can no longer be opened. Its row menu is visible
+without hovering, like the menus on the navigator's other rows.
+
+## Update History
+
+| Date | Version | Changes |
+|---|---|---|
+| 2026-10-02 | 1.0 | The fifth `SESSIONS` section, its content rule, the header action bound to the selected task, and the row menu with open, rename and delete. The earlier revisions of those decisions are recorded in `docs/design/studio-navigator-sessions-design.md`. |
+| 2026-10-03 | 1.1 | The right dock's "AI sessions" page is retired, so this section becomes the only surface listing a device's conversations. Its row menu gains the export and task binding operations that page alone offered — binding from a picker over the worktree's tasks rather than an id prompt — and its header action starts a conversation in the scope the section is showing, including the device-scoped, task-less state, instead of only while a task is selected. |
 
 ## Related Information
 
