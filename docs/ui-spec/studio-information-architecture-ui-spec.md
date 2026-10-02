@@ -3,15 +3,17 @@
 ## Overview
 
 - Outcome: the left navigator presents the current scope cascade as flat, independently collapsible
-  sections — `PROJECTS`, `WORKTREE`, an unbound-task group when present, `DEVICE`, `TASKS` — instead of
-  one global project tree, and each section carries its own creation action in its header.
+  sections — `PROJECTS`, `WORKTREE`, an unbound-task group when present, `DEVICE`, `TASKS`, `SESSIONS` —
+  instead of one global project tree, and each section carries its own creation action in its header.
 - Scope: the left navigator's sections, their appearance conditions, header actions, collapse and
   scroll behaviour, how their vertical space is allocated and overridden, and their interaction with
   the existing tag filter.
-- PRD or requirement carrier: `docs/adr/ADR-0006-studio-navigator-ownership-and-shape.md`
+- PRD or requirement carrier: `docs/adr/ADR-0006-studio-navigator-ownership-and-shape.md`,
+  `docs/adr/ADR-0009-navigator-sessions-section.md`
 - Explicit exclusions: main-area view or tab-strip ownership; relocating row action menus; automatic
-  cross-section collapse; reordering sections; persisting a dragged height across sessions; the
-  contents of any feature page.
+  cross-section collapse; reordering sections; persisting a dragged height across sessions;
+  conversations that are bound to no task; a session-level scope below a task; deleting a conversation;
+  the contents of any feature page.
 
 ## Design Evidence
 
@@ -34,7 +36,12 @@
 | Unbound-task group | The selected worktree has at least one task with no `deviceId` | Lists those tasks under the `WORKTREE` section; carries no creation action. | AC-003 |
 | `DEVICE` section | A worktree is selected | Lists that worktree's PLC devices plus one `Hardware` row for the worktree's hardware target; its header carries a refresh action only. | AC-004 |
 | `TASKS` section | A PLC device or the `Hardware` row is selected | Lists the tasks bound to that device, or the worktree's hardware tasks; its header creates a task already bound to that target. | AC-005 |
-| Tag filter active | The user types in the tag filter | Only `PROJECTS` and `WORKTREE` are shown; the unbound-task group, `DEVICE` and `TASKS` are hidden. | AC-006 |
+| `SESSIONS` section | The selected target has at least one task with a bound conversation | Lists those conversations grouped under the task that owns each one; its header starts a conversation for the selected target. | AC-015, AC-016 |
+| `SESSIONS` section | The selected target is the worktree's hardware, or no task under it has a bound conversation | Section absent. A conversation needs a device, so the hardware target cannot own one, and a conversation bound to no task is out of scope by decision. | AC-015 |
+| Session row | Click a conversation row | Opens that conversation in the task's chat surface. | AC-015 |
+| `SESSIONS` header action | Click it while the selected target has tasks | Binds the new conversation to the worktree's active task when that task belongs to the target, and otherwise asks which of the target's tasks to use; then opens it. | AC-016 |
+| `SESSIONS` header action | The selected target has no task | Not offered, because a conversation has to bind to a task to appear in this section. | AC-016 |
+| Tag filter active | The user types in the tag filter | Only `PROJECTS` and `WORKTREE` are shown; the unbound-task group, `DEVICE`, `TASKS` and `SESSIONS` are hidden. | AC-006 |
 | Section collapse | The user activates a section header | That section alone collapses or expands; the others keep their state, and a collapsed section releases its height so the sections below move up. | AC-007, AC-013 |
 | Section height | Always | Every section but the deepest is as tall as its content, so a section holding one row is one row tall and no section reserves height it does not use. The deepest section on screen takes the dock's remaining height, so its lower boundary is the dock's lower boundary. | AC-013 |
 | Deepest section | A target or worktree is selected | The deepest section reaches the bottom of the dock, and its body shows no scrollbar while its rows fit that room. Folding it releases the room, so the dock's bottom is then unused. | AC-013 |
@@ -56,6 +63,9 @@
 | Unbound-task list | New group inside `WORKTREE` | selected worktree's tasks with `deviceId == null` | Selecting a task opens its detail; the group is absent when no such task exists. | AC-003 |
 | `DEVICE` list | Restored as a flat list | devices of the selected worktree plus one hardware row | Selecting a PLC device or the hardware row sets the cascade level and reveals that target's tasks. | AC-004, AC-009 |
 | `TASKS` list | Extend existing task rows | selected device's tasks | Selecting a task opens its detail; creation pre-binds the selected device. | AC-005 |
+| `SESSIONS` list | New, reusing `TaskSessionsDisclosure`'s row content and relative time | the selected target's tasks and the conversations bound to them | Lists each task with the conversations it owns, always expanded: the section is already the container, so a disclosure inside it would be a second expander. | AC-015 |
+| `SESSIONS` header action | New | the selected target, the worktree's active task, the target's tasks | Starts a conversation for that target and opens it: the worktree's active task when it belongs to the target, otherwise a task the user picks. Not offered for the hardware target or a target with no task. | AC-016 |
+| Session row menu | New | the conversation, its task, the target's tasks | Offers only what the API performs: open the conversation, rename it, and re-bind it to another task or to no task. No deletion is offered because no delete operation exists. | AC-008, AC-015 |
 | Project / worktree / task row menus | Preserved unchanged | existing per-row actions | Existing menus keep their current behaviour and placement. | Preserved behaviour |
 | Device row menu | Restored | selected device, existing device callbacks | The device operations the removed subtree held become reachable again from the `DEVICE` section row menu. | AC-008 |
 | Hardware row | Restored | selected worktree | Adds the hardware target the navigator lost: it opens the shell's hardware pages and lists that target's tasks. | AC-009 |
@@ -76,6 +86,9 @@
 | Deepest section | Its rows fit the dock's remaining height | It fills that height, so its lower boundary is the dock's, and its body does not scroll. | A separator drag or a collapse above it changes how much room it has. | AC-013 |
 | Any section | Its content is taller than the dock can give it | Its body scrolls; its header stays visible. | Give it more height by dragging its separator or by collapsing another section. | AC-014 |
 | Any section | The user dragged its separator | The pair keeps the dragged split while the app stays open. | A reload returns every section to its content height. | AC-012 |
+| `SESSIONS` section | The selected target's tasks are still loading | Section absent while the tasks load, then present or absent per its content rule. | The task load settles it; the section never shows a loading placeholder of its own. | AC-015 |
+| `SESSIONS` section | The selected target's tasks have no bound conversation | Section absent, so the navigator does not reserve a row for a list that cannot exist. | Starting a conversation from `TASKS` or the task surface makes the section appear. | AC-015 |
+| Session row | The conversation has no title | Falls back to its first user message, then to an untitled label, as the task surface already does. | Renaming it from the row menu gives it a title. | AC-015 |
 | Any reachable section | Section content fails to load | Existing error text for that collection; other sections keep rendering. | Retry through the existing refresh actions. | Preserved behaviour |
 
 ## Visual Constraints (When Applicable)
@@ -86,6 +99,7 @@
 | Section height | Every section's default height is its content height; only a drag sets a height that stops following content, and only the deepest section grows beyond its content to reach the dock's bottom. | ADR-0008 | A dock with one workbench and one device shows a short `PROJECTS` and a short `DEVICE`, with no gap reserved for a section that holds little, and the deepest section's boundary at the dock's bottom. |
 | Section scroll regions | Each section keeps its own bounded scroll region with a sticky header; the column itself does not scroll its headers away, so a long section is squeezed and scrolls rather than pushing its neighbours' headers off screen. | ADR-0006, ADR-0008 | With all sections populated, every header stays visible while a single section scrolls. |
 | Active section | The section containing the current scope keeps at least enough height to show its rows, and every section keeps a minimum height of its header plus one row. | ADR-0006, ADR-0008 | The selected row is visible without manual scrolling after a selection; no section can be dragged or squeezed to an unusable height. |
+| Session rows | Reuse the conversation row treatment the task surface already uses — title, relative last response time, and the dense sidebar row — with its own group heading per task. | `TaskSessionsDisclosure` | A conversation row is visually consistent with the same conversation in the task surface, and a task's group is distinguishable from the rows inside it. |
 | Section separator | A one-pixel rule between adjacent sections, with a wider invisible hit area and the existing focus treatment. | `WorktreeTasksPanel` column resize | The separator is discoverable on hover and focusable by keyboard, and it is visually consistent with the task list's column separators. |
 
 ## Accessibility Requirements (When Applicable)
@@ -94,6 +108,7 @@
 |---|---|---|---|
 | Section headers | Native buttons exposing `aria-expanded` and `aria-controls`. | Preserved repository rule (native buttons with accessible labels) | Keyboard users can collapse and expand each section. |
 | Section rows | Native buttons with accessible names; the current scope is marked with `aria-current`. | `WorkbenchNavigator.tsx` existing row pattern | Keyboard and screen-reader users can identify the selected item per section. |
+| Session rows | Native buttons with an accessible name naming the conversation, and a 3-dots menu naming the conversation too. | `TaskSessionsDisclosure` row labels | Keyboard and screen-reader users can identify and open a conversation, and reach its operations without opening it first. |
 | Section separators | A window splitter: `role="separator"`, `aria-orientation="horizontal"`, an accessible name naming the section it resizes, `aria-valuenow`/`aria-valuemin`/`aria-valuemax` in pixels, and `ArrowUp`/`ArrowDown` to resize by a fixed step. | `WorktreeTasksPanel` column resize (preserved repository rule) | Keyboard users can resize every separator without a pointer, and a screen reader announces the section, its current height and its range. |
 | Header actions | Each action keeps a distinct accessible name that names its collection. | Existing `Create workbench` / `Refresh workbenches` pattern | Two header actions are distinguishable by name alone. |
 
@@ -115,6 +130,8 @@
 | AC-012 | Section separator | Dragging or arrowing a separator grows one section and shrinks its neighbour by the same amount, and neither moves a third section. |
 | AC-013 | Section height | A section holding one row is one row tall, collapsing a section moves the sections below it up, and the deepest section's lower boundary is the dock's lower boundary with no scrollbar while its rows fit. |
 | AC-014 | Sections that do not fit | Every section header stays visible while the section bodies scroll, and the column itself does not scroll. |
+| AC-015 | `SESSIONS` section | A task with bound conversations shows them under its own group, a conversation bound to no task appears nowhere in the navigator, and the section is absent when the target has none — including the hardware target, which cannot own a conversation. |
+| AC-016 | `SESSIONS` header action | The header starts a conversation bound to the worktree's active task when that task belongs to the selected target, and otherwise to a task the user picks, then opens it; the hardware target and a target with no task offer no such action. |
 | Preserved behaviour | Worktree `Tasks` tab | The main-area Tasks view still renders in the worktree tab strip and is unchanged. |
 
 ## Open User Decisions
@@ -131,3 +148,4 @@
 | 2026-09-30 | 1.0 | Initial specification |
 | 2026-10-02 | 1.1 | Sections size to their content and release their height when collapsed (AC-013); they shrink and scroll their own bodies before the column scrolls (AC-014); a separator resizes two adjacent sections (AC-012). Per ADR-0008. |
 | 2026-10-02 | 1.2 | The deepest section on screen takes the dock's remaining height, so its boundary is the dock's boundary and its body does not scroll before its rows fill that room; folding it releases the room. Per ADR-0008. |
+| 2026-10-02 | 1.3 | A fifth `SESSIONS` section below `TASKS` lists the selected target's task-bound conversations under the task that owns each one, with a creation action in its header and a per-row menu; conversations bound to no task are out of scope, and the hardware target has none. Per ADR-0009. |
