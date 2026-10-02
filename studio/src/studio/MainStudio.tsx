@@ -68,6 +68,7 @@ import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import AllProjectsLandingPage from '@/studio/workbench/AllProjectsLandingPage'
 import TaskDetail, { type TaskEditPatch, type TraceabilityItem } from '@/studio/workbench/TaskDetail'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
+import ChooseConversationTaskDialog from '@/studio/workbench/ChooseConversationTaskDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
 import TiaSessionsPanel from '@/studio/workbench/TiaSessionsPanel'
@@ -475,9 +476,17 @@ export default function MainStudio() {
   const [sessionActionBusy, setSessionActionBusy] = useState<string | null>(null)
   const [devicesByWorktree, setDevicesByWorktree] = useState<Record<string, api.DeviceSummary[]>>({})
   const [tasksByWorktree, setTasksByWorktree] = useState<Record<string, api.EngineeringTask[]>>({})
+  /**
+   * The conversations each worktree's devices hold. The repository lists conversations per device, so
+   * this is the fan-out over a worktree's devices; the navigator groups them by the task they are bound
+   * to.
+   */
+  const [sessionsByWorktree, setSessionsByWorktree] = useState<Record<string, api.ChatSessionInfo[]>>({})
   const [taskCreateWorktreeId, setTaskCreateWorktreeId] = useState<string | null>(null)
   /** The target the navigator's create action was invoked from, handed to the task dialog. */
   const [taskCreateTarget, setTaskCreateTarget] = useState<api.TaskTarget | null>(null)
+  /** A target's tasks, while the user says which one a new conversation belongs to. */
+  const [conversationTasks, setConversationTasks] = useState<api.EngineeringTask[] | null>(null)
   const [navigatorTagNodes, setNavigatorTagNodes] = useState<api.TagNode[]>([])
   const [navigatorTagIds, setNavigatorTagIds] = useState<string[]>([])
   const [navigatorTagsLoading, setNavigatorTagsLoading] = useState(true)
@@ -1030,6 +1039,26 @@ export default function MainStudio() {
     })
   }
 
+  /**
+   * Loads a worktree's conversations. The repository lists conversations per device, so this fans out
+   * over the worktree's devices; a device whose list fails contributes nothing rather than failing the
+   * whole worktree.
+   */
+  const loadWorktreeSessions = (
+    workbenchId: string,
+    worktreeId: string,
+    devices: api.DeviceSummary[],
+    requestId?: number,
+  ) => Promise.all(devices.map(device =>
+    api.listDeviceSessions(workbenchId, worktreeId, device.deviceId).catch(() => [] as api.ChatSessionInfo[]),
+  )).then(perDevice => {
+    if (requestId !== undefined && selectionRequestId.current !== requestId) return
+    setSessionsByWorktree(previous => ({
+      ...previous,
+      [worktreeKey(workbenchId, worktreeId)]: perDevice.flat(),
+    }))
+  })
+
   const selectWorktree = (workbench: api.Workbench, worktree: api.WorkbenchRegistration) => {
     const requestId = ++selectionRequestId.current
     // Selecting a worktree is local UI state. Let the landing page fetch its
@@ -1050,6 +1079,7 @@ export default function MainStudio() {
         ...previous,
         [worktreeKey(workbench.workbenchId, worktree.worktreeId)]: devices,
       }))
+      return loadWorktreeSessions(workbench.workbenchId, worktree.worktreeId, devices, requestId)
     }).catch(() => { /* The landing page reports a device-list load failure. */ })
     void api.listGraphWorktreeTasks(workbench.workbenchId, worktree.worktreeId).then(tasks => {
       if (selectionRequestId.current !== requestId) return
@@ -1381,6 +1411,64 @@ export default function MainStudio() {
     } finally {
       setChatBusy(false)
     }
+  }
+
+  /** Re-reads a worktree's conversations for the navigator's section. */
+  const refreshNavigatorSessions = async (workbenchId: string, worktreeId: string) =>
+    loadWorktreeSessions(workbenchId, worktreeId, devicesByWorktree[worktreeKey(workbenchId, worktreeId)] ?? [])
+
+  /** Renames a conversation from a navigator row, then re-reads the section's list. */
+  const renameNavigatorSession = async (sessionId: string, title: string, workbenchId: string, worktreeId: string) => {
+    await renameChatSession(sessionId, title)
+    await refreshNavigatorSessions(workbenchId, worktreeId)
+  }
+
+  /**
+   * Deletes a conversation from the navigator. The device that owns it is named rather than taken from
+   * the current selection, because the delete removes the conversation from the graph as well as disk
+   * (ADR-0010).
+   */
+  const deleteNavigatorSession = async (task: api.EngineeringTask, sessionId: string) => {
+    if (!task.workbenchId || !task.worktreeId || !task.deviceId) {
+      showErrorToast('This conversation is not available in the task device context.')
+      return
+    }
+    setChatBusy(true)
+    try {
+      await api.deleteDeviceSession(task.workbenchId, task.worktreeId, task.deviceId, sessionId)
+      setChatTabs(previous => closeTab(previous, sessionId))
+      await refreshChatSessions()
+      await refreshNavigatorSessions(task.workbenchId, task.worktreeId)
+    } catch (error) {
+      showErrorToast(displayError(error))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  /**
+   * Starts a conversation for the navigator's selected target. A conversation must be bound to a task to
+   * appear in the section, so this prefers the task the worktree is already working in when it belongs
+   * to that target, and otherwise asks which of the target's tasks it is (ADR-0009).
+   */
+  const startConversationForTarget = async (
+    workbench: api.Workbench,
+    worktree: api.WorkbenchRegistration,
+    target: api.TaskTarget,
+  ) => {
+    if (target.kind !== 'device') return
+    const tasks = (tasksByWorktree[worktreeKey(workbench.workbenchId, worktree.worktreeId)] ?? [])
+      .filter(task => task.deviceId === target.deviceId)
+    if (tasks.length === 0) return
+    const active = await api.getActiveWorktreeTask(workbench.workbenchId, worktree.worktreeId)
+      .then(response => response.activeTask)
+      .catch(() => null)
+    const preferred = active && tasks.some(task => task.taskId === active.taskId) ? active : null
+    if (preferred) {
+      await createChatSessionForTask(preferred)
+      return
+    }
+    setConversationTasks(tasks)
   }
 
   const createChatSessionForTask = async (task: api.EngineeringTask | api.WorktreeTask) => {
@@ -2296,6 +2384,7 @@ export default function MainStudio() {
             workbenches={workbenches}
             devicesByWorktree={devicesByWorktree}
             tasksByWorktree={tasksByWorktree}
+            sessionsByWorktree={sessionsByWorktree}
             activeTaskId={taskDetail?.task.taskId ?? taskDetailTask?.taskId ?? null}
             selection={selection}
             knowledgeState={navigatorKnowledgeState}
@@ -2358,6 +2447,12 @@ export default function MainStudio() {
               setTaskCreateTarget(target)
               setMainView({ kind: 'worktree', tab: 'tasks' })
             }}
+            onOpenSession={(task, sessionId) => void openTaskDetailSession(task, sessionId)}
+            onRenameSession={(task, sessionId, title) => {
+              if (task.worktreeId) void renameNavigatorSession(sessionId, title, task.workbenchId, task.worktreeId)
+            }}
+            onDeleteSession={(task, sessionId) => void deleteNavigatorSession(task, sessionId)}
+            onAddSession={(workbench, worktree, target) => void startConversationForTarget(workbench, worktree, target)}
             onSelectHardware={selectHardware}
             onReloadHardware={(workbench, worktree) => void reloadHardware(workbench, worktree)}
             onCompareHardware={(workbench, worktree) => void compareHardware(workbench, worktree)}
@@ -2834,6 +2929,15 @@ export default function MainStudio() {
           onArchive={archiveWorktreeProject}
         />
       )}
+      <ChooseConversationTaskDialog
+        open={conversationTasks !== null}
+        tasks={conversationTasks ?? []}
+        onChoose={task => {
+          setConversationTasks(null)
+          void createChatSessionForTask(task)
+        }}
+        onClose={() => setConversationTasks(null)}
+      />
       {preview && (
         <RefreshDialog
           preview={preview}

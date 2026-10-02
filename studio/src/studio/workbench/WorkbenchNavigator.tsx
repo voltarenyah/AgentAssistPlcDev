@@ -12,6 +12,7 @@ import {
   GitBranch,
   GitMerge,
   House,
+  MessageSquareText,
   Monitor,
   MonitorOff,
   Minus,
@@ -25,8 +26,9 @@ import {
   Wrench,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { DeviceSummary, EngineeringTask, EngineeringTaskTargetKind, TaskTarget, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
+import type { ChatSessionInfo, DeviceSummary, EngineeringTask, EngineeringTaskTargetKind, TaskTarget, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
 import { taskTargetKind } from '@/api/client'
+import { formatRelativeTime } from './TaskSessionsDisclosure'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -68,6 +70,11 @@ type Props = {
   workbenches: Workbench[]
   devicesByWorktree: Record<string, DeviceSummary[]>
   tasksByWorktree?: Record<string, EngineeringTask[]>
+  /**
+   * The selected worktree's conversations, fanned out over its devices. The `SESSIONS` section groups
+   * them by the task each is bound to; a conversation bound to no task is not shown.
+   */
+  sessionsByWorktree?: Record<string, ChatSessionInfo[]>
   activeTaskId?: string | null
   selection: WorkbenchSelection
   knowledgeState: Record<string, 'current' | 'stale' | 'missing' | 'failed'>
@@ -94,6 +101,14 @@ type Props = {
   onUpdateTask?: (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask, update: Partial<TaskUpdate>) => void
   /** Creates a task already bound to the target the user created it from. */
   onAddTask?: (workbench: Workbench, worktree: WorkbenchRegistration, target: TaskTarget) => void
+  /** Opens one of a task's conversations. */
+  onOpenSession?: (task: EngineeringTask, sessionId: string) => void
+  /** Renames one of a task's conversations. */
+  onRenameSession?: (task: EngineeringTask, sessionId: string, title: string) => void
+  /** Deletes one of a task's conversations, after the user confirms. */
+  onDeleteSession?: (task: EngineeringTask, sessionId: string) => void
+  /** Starts a conversation for the selected target, bound to a task under it. */
+  onAddSession?: (workbench: Workbench, worktree: WorkbenchRegistration, target: TaskTarget) => void
   onSelectHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onReloadHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
   onCompareHardware: (workbench: Workbench, worktree: WorkbenchRegistration) => void
@@ -124,6 +139,9 @@ const knowledgeDotClass = (state: 'current' | 'stale' | 'missing' | 'failed') =>
     : state === 'stale' ? 'text-amber-500'
       : state === 'failed' ? 'text-red-500'
         : 'text-muted-foreground'
+/** The title a conversation shows, falling back the way its task surface already does. */
+const conversationTitle = (session: ChatSessionInfo) =>
+  session.title?.trim() || session.firstUserMessage?.trim() || 'Untitled conversation'
 
 type NavigatorSectionProps = {
   /** Stable section identity, used for the header/body pairing and for test and style hooks. */
@@ -384,10 +402,65 @@ function TaskRow({ workbench, worktree, task, selected, onSelect, onUpdate, onRe
   )
 }
 
+type SessionRowProps = {
+  task: EngineeringTask
+  session: ChatSessionInfo
+  onOpen: (task: EngineeringTask, sessionId: string) => void
+  onRename: (task: EngineeringTask, session: ChatSessionInfo) => void
+  onDelete: (task: EngineeringTask, session: ChatSessionInfo) => void
+}
+
+/**
+ * One conversation row. It shows what the task surface already shows for the same conversation — its
+ * title, falling back to its first message, and how long ago it last changed — so a conversation reads
+ * the same wherever it appears, and it carries that conversation's operations in its own 3-dots menu.
+ */
+function SessionRow({ task, session, onOpen, onRename, onDelete }: SessionRowProps) {
+  const title = conversationTitle(session)
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={() => onOpen(task, session.sessionId)}
+        className="relative flex min-h-8 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1 pr-8 text-left hover:bg-accent/40"
+        aria-label={`Open conversation ${title}`}
+      >
+        <MessageSquareText className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-xs">{title}</span>
+        <time className="shrink-0 text-[10px] text-muted-foreground" dateTime={session.updatedAt}>{formatRelativeTime(session.updatedAt)}</time>
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-xs" aria-label={`Conversation actions ${title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
+            <Ellipsis className="h-3.5 w-3.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuLabel>{title}</DropdownMenuLabel>
+          <DropdownMenuItem onSelect={() => onOpen(task, session.sessionId)}>
+            <MessageSquareText className="h-3.5 w-3.5" />
+            Open conversation
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onRename(task, session)}>
+            <Pencil className="h-3.5 w-3.5" />
+            Rename conversation
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onSelect={() => onDelete(task, session)}>
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete conversation
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
 export default function WorkbenchNavigator({
   workbenches,
   devicesByWorktree,
   tasksByWorktree = {},
+  sessionsByWorktree = {},
   activeTaskId = null,
   selection,
   knowledgeState,
@@ -410,6 +483,10 @@ export default function WorkbenchNavigator({
   onSelectTask = () => {},
   onUpdateTask = () => {},
   onAddTask = () => {},
+  onOpenSession = () => {},
+  onRenameSession = () => {},
+  onDeleteSession = () => {},
+  onAddSession = () => {},
   onSelectHardware,
   onReloadHardware,
   onCompareHardware,
@@ -436,6 +513,8 @@ export default function WorkbenchNavigator({
   const [sectionHeights, setSectionHeights] = useState<Record<string, number>>({})
   const [renameTask, setRenameTask] = useState<{ workbench: Workbench; worktree: WorkbenchRegistration; task: EngineeringTask } | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
+  const [renameSession, setRenameSession] = useState<{ task: EngineeringTask; session: ChatSessionInfo } | null>(null)
+  const [renameSessionTitle, setRenameSessionTitle] = useState('')
   const matchingWorkbenchIds = new Set(filteredResults?.workbenches.map(result => result.entityId) ?? [])
   const matchingWorktrees = new Map(
     (filteredResults?.worktrees ?? []).map(result => [result.entityId, result]),
@@ -464,6 +543,21 @@ export default function WorkbenchNavigator({
     onUpdateTask(renameTask.workbench, renameTask.worktree, renameTask.task, { title: renameTitle.trim() })
     setRenameTask(null)
   }
+  const openRenameSession = (task: EngineeringTask, session: ChatSessionInfo) => {
+    setRenameSessionTitle(conversationTitle(session))
+    setRenameSession({ task, session })
+  }
+  const saveSessionRename = () => {
+    if (!renameSession || !renameSessionTitle.trim()) return
+    onRenameSession(renameSession.task, renameSession.session.sessionId, renameSessionTitle.trim())
+    setRenameSession(null)
+  }
+  /** A conversation's graph edge is also the record of which task it belonged to, so say what it costs. */
+  const confirmDeleteSession = (task: EngineeringTask, session: ChatSessionInfo) => {
+    const named = conversationTitle(session)
+    if (!window.confirm(`Delete "${named}"? Its link to this task is lost, and a deleted conversation cannot be recovered.`)) return
+    onDeleteSession(task, session.sessionId)
+  }
 
   // The cascade's tail: which target below the selected worktree is showing, and what it owns.
   const selectedWorktreeRow = worktreeRows.find(row => row.worktree.worktreeId === selection.worktreeId) ?? null
@@ -491,6 +585,22 @@ export default function WorkbenchNavigator({
         : null
     : null
 
+  // What the selected target's tasks are carrying. A conversation bound to no task is out of scope by
+  // decision, and one bound to another target's task belongs under that target instead (AC-015).
+  const selectedSessions = selectedWorktreeKey ? sessionsByWorktree[selectedWorktreeKey] ?? [] : []
+  const sessionsByTask = new Map<string, ChatSessionInfo[]>()
+  for (const session of selectedSessions) {
+    if (!session.taskId) continue
+    const bound = sessionsByTask.get(session.taskId)
+    if (bound) bound.push(session)
+    else sessionsByTask.set(session.taskId, [session])
+  }
+  const sessionGroups = targetTasks
+    .map(task => ({ task, sessions: sessionsByTask.get(task.taskId) ?? [] }))
+    .filter(group => group.sessions.length > 0)
+  // The hardware target cannot own a conversation, so it never has one to list (AC-015).
+  const sessionsSectionVisible = !filterActive && selectedTargetKind !== 'hardware' && sessionGroups.length > 0
+
   const selectRowTask = (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => {
     setClickedTaskId(task.taskId)
     onSelectTask(workbench, worktree, task)
@@ -498,7 +608,7 @@ export default function WorkbenchNavigator({
 
   const deviceSectionVisible = !filterActive && selectedWorktreeRow !== null
   const tasksSectionVisible = !filterActive && selectedWorktreeRow !== null && selectedTarget !== null
-  const sectionTitles: Record<string, string> = { projects: 'PROJECTS', worktree: 'WORKTREE', device: 'DEVICE', tasks: 'TASKS' }
+  const sectionTitles: Record<string, string> = { projects: 'PROJECTS', worktree: 'WORKTREE', device: 'DEVICE', tasks: 'TASKS', sessions: 'SESSIONS' }
   // Which sections are on screen, in order. The separators go between the pairs that are actually
   // rendered, so the count follows the selection rather than being fixed.
   const visibleSectionIds = [
@@ -506,6 +616,7 @@ export default function WorkbenchNavigator({
     ...(showWorktreeSection ? ['worktree'] : []),
     ...(deviceSectionVisible ? ['device'] : []),
     ...(tasksSectionVisible ? ['tasks'] : []),
+    ...(sessionsSectionVisible ? ['sessions'] : []),
   ]
   const applySectionHeights = (upperId: string, upperHeight: number, lowerId: string, lowerHeight: number) =>
     setSectionHeights(current => ({
@@ -720,6 +831,59 @@ export default function WorkbenchNavigator({
             {addButton}
           </>
         )}
+      </NavigatorSection>
+    )
+  }
+
+  /**
+   * `SESSIONS`: what the selected target's tasks are carrying. It exists only while at least one task
+   * under the target owns a conversation, and its header starts one for the target — which needs a task
+   * to bind to, so the action is offered only when the target has one, and never for the hardware
+   * target, which cannot own a conversation at all.
+   */
+  const renderSessionsSection = () => {
+    if (!selectedWorktreeRow || sessionGroups.length === 0) return null
+    const { workbench, worktree } = selectedWorktreeRow
+    const startTarget = selectedTarget
+    const startLabel = startTarget?.kind === 'device'
+      ? selectedDevices.find(device => device.deviceId === startTarget.deviceId)?.plcName ?? startTarget.deviceId
+      : ''
+    const canStart = startTarget !== null && startTarget.kind === 'device' && targetTasks.length > 0
+    return (
+      <NavigatorSection
+        id="sessions"
+        title="SESSIONS"
+        height={sectionHeights.sessions ?? null}
+        fillsRemainingSpace={isDeepestSection('sessions')}
+        action={canStart ? (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Start a conversation for ${startLabel}`}
+            title="Start a conversation"
+            onClick={() => { if (startTarget) onAddSession(workbench, worktree, startTarget) }}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        ) : undefined}
+      >
+        {sessionGroups.map(({ task, sessions }) => (
+          <div key={task.taskId} className="mb-1" data-session-group={task.taskId}>
+            <div className="truncate px-2 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={task.title}>
+              {task.title}
+            </div>
+            {sessions.map(session => (
+              <SessionRow
+                key={session.sessionId}
+                task={task}
+                session={session}
+                onOpen={onOpenSession}
+                onRename={openRenameSession}
+                onDelete={confirmDeleteSession}
+              />
+            ))}
+          </div>
+        ))}
       </NavigatorSection>
     )
   }
@@ -1055,6 +1219,9 @@ export default function WorkbenchNavigator({
 
         {separatorBefore('tasks')}
         {!filterActive && renderTasksSection()}
+
+        {separatorBefore('sessions')}
+        {!filterActive && renderSessionsSection()}
       </div>
     </aside>
     <Dialog open={renameTask !== null} onOpenChange={open => { if (!open) setRenameTask(null) }}>
@@ -1067,6 +1234,21 @@ export default function WorkbenchNavigator({
           <Input aria-label="Task title" value={renameTitle} onChange={event => setRenameTitle(event.target.value)} autoFocus />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setRenameTask(null)}>Cancel</Button>
+            <Button type="submit">Save</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={renameSession !== null} onOpenChange={open => { if (!open) setRenameSession(null) }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Rename conversation</DialogTitle>
+          <DialogDescription>Choose the title this conversation shows in the navigator and on its task.</DialogDescription>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={event => { event.preventDefault(); saveSessionRename() }}>
+          <Input aria-label="Conversation title" value={renameSessionTitle} onChange={event => setRenameSessionTitle(event.target.value)} autoFocus />
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRenameSession(null)}>Cancel</Button>
             <Button type="submit">Save</Button>
           </DialogFooter>
         </form>

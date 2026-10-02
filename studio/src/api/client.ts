@@ -1374,6 +1374,9 @@ export const mergeWorktree = (workbenchId: string, sourceWorktreeId: string, tar
   workbenchRequest<unknown>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(sourceWorktreeId)}/merge`, withOperation(jsonRequest('POST', { targetWorktreeId }), operationId))
 export const listDeviceSessions = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<ChatSessionInfo[]>(`${devicePath(workbenchId, worktreeId, deviceId)}/sessions`)
+/** Deletes a conversation from the device it belongs to, naming that device rather than the selection. */
+export const deleteDeviceSession = (workbenchId: string, worktreeId: string, deviceId: string, sessionId: string) =>
+  workbenchRequest<void>(`${devicePath(workbenchId, worktreeId, deviceId)}/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 export const getOperationStatus = (operationId: string) =>
   workbenchRequest<OperationStatus>(`/operations/${encodeURIComponent(operationId)}`)
 export const dismissOperationStatus = (operationId: string) =>

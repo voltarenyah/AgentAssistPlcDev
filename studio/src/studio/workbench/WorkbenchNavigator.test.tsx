@@ -48,6 +48,20 @@ const targetTasks: Record<string, api.EngineeringTask[]> = {
   ],
 }
 
+const conversation = (overrides: Partial<api.ChatSessionInfo> & { sessionId: string }): api.ChatSessionInfo => ({
+  title: null, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z',
+  messageCount: 2, turnCount: 1, firstUserMessage: null, taskId: null,
+  ...overrides,
+})
+
+/** One conversation bound to the device task, one bound to nothing, as the live data has both. */
+const sessionsByWorktree: Record<string, api.ChatSessionInfo[]> = {
+  'wb-direct:wt-descendant': [
+    conversation({ sessionId: 'session-bound', title: 'Interlock review', taskId: 'task-device' }),
+    conversation({ sessionId: 'session-unbound', title: 'Ad-hoc question', taskId: null }),
+  ],
+}
+
 const callbacks = {
   onCreateWorkbench: () => {}, onCreateWorktree: () => {}, onOpenWorkbench: () => {}, onOpenWorktree: () => {}, onInspectWorkbench: () => {}, onInspectWorktree: () => {}, onArchiveWorktree: () => {}, onRefresh: () => {}, onShowHome: () => {}, onSelectWorkbench: () => {}, onSelectWorktree: () => {}, onSelectDevice: () => {}, onSelectHardware: () => {}, onReloadHardware: () => {}, onCompareHardware: () => {}, onDeleteWorkbench: () => {}, onDeleteWorktree: () => {}, onMergeWorktree: () => {}, onOpenDevice: () => {}, onUpgradeDevice: () => {}, onInspectDevice: () => {}, onCompareDevice: () => {}, onRebuildDevice: () => {}, onUpdateKnowledge: () => {}, onRebuildKnowledge: () => {},
 }
@@ -571,6 +585,144 @@ describe('WorkbenchNavigator section sizing', () => {
     await act(async () => sectionHeader(host, 'tasks').click())
     expect(host.querySelector('[data-section-fills]')?.getAttribute('data-navigator-section')).toBe('tasks')
 
+    await act(async () => root.unmount())
+  })
+})
+
+describe('WorkbenchNavigator sessions section', () => {
+  const deviceSelection = { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-1', targetKind: 'device' as const }
+  const hardwareSelection = { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null, targetKind: 'hardware' as const }
+  const overrides = { devicesByWorktree, tasksByWorktree: targetTasks, sessionsByWorktree }
+
+  const openRowMenu = async (trigger: HTMLButtonElement) => {
+    await act(async () => {
+      trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, ctrlKey: false }))
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    return Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+  }
+
+  it('lists a task\'s conversations under that task and omits one bound to no task (AC-015)', async () => {
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+
+    const sessions = section(host, 'sessions')
+    expect(sessions).toBeTruthy()
+    // The owning task is the group heading; the conversation is a row inside it.
+    expect(sessions.textContent).toContain('Device task')
+    expect(sessions.textContent).toContain('Interlock review')
+    // A conversation bound to no task is out of scope by decision, and another target's task is not this
+    // section's to show.
+    expect(sessions.textContent).not.toContain('Ad-hoc question')
+    expect(sessions.textContent).not.toContain('Hardware task')
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks', 'sessions'])
+
+    await act(async () => root.unmount())
+  })
+
+  it('shows no SESSIONS section when nothing under the target qualifies (AC-015)', async () => {
+    const unboundOnly = { 'wb-direct:wt-descendant': sessionsByWorktree['wb-direct:wt-descendant'].filter(item => !item.taskId) }
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection,
+      devicesByWorktree,
+      tasksByWorktree: targetTasks,
+      sessionsByWorktree: unboundOnly,
+    })
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
+
+    // The hardware target cannot own a conversation at all, so it has neither the section nor its action.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({ selection: hardwareSelection, ...overrides })} />,
+    ))
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
+    expect(host.querySelector('button[aria-label^="Start a conversation"]')).toBeNull()
+
+    await act(async () => root.unmount())
+  })
+
+  it('opens a conversation from its row (AC-015)', async () => {
+    const onOpenSession = vi.fn()
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides, onOpenSession })
+
+    const row = section(host, 'sessions').querySelector('button[aria-label="Open conversation Interlock review"]') as HTMLButtonElement
+    expect(row).toBeTruthy()
+    await act(async () => row.click())
+
+    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-device' }), 'session-bound')
+    await act(async () => root.unmount())
+  })
+
+  it('starts a conversation for the selected target from the header (AC-016)', async () => {
+    const onAddSession = vi.fn()
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides, onAddSession })
+
+    const start = section(host, 'sessions')
+      .querySelector('button[aria-label="Start a conversation for Main PLC"]') as HTMLButtonElement
+    expect(start).toBeTruthy()
+    await act(async () => start.click())
+
+    expect(onAddSession).toHaveBeenCalledWith(workbenches[0], workbenches[0].worktrees[0], { kind: 'device', deviceId: 'plc-1' })
+    await act(async () => root.unmount())
+  })
+
+  it('offers open, rename and delete on a conversation row (AC-017)', async () => {
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    const trigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+
+    const items = (await openRowMenu(trigger)).map(item => item.textContent?.trim())
+
+    // Re-binding is out of scope for now, so the menu is exactly the operations the repository performs.
+    expect(items).toEqual(['Open conversation', 'Rename conversation', 'Delete conversation'])
+    await act(async () => root.unmount())
+  })
+
+  it('renames a conversation from its row menu', async () => {
+    const onRenameSession = vi.fn()
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides, onRenameSession })
+    const trigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    const rename = (await openRowMenu(trigger)).find(item => item.textContent?.trim() === 'Rename conversation')!
+
+    await act(async () => rename.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const input = document.body.querySelector('input[aria-label="Conversation title"]') as HTMLInputElement
+    expect(input?.value).toBe('Interlock review')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'Renamed conversation')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const save = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.includes('Save'))!
+    await act(async () => save.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(onRenameSession).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: 'task-device' }), 'session-bound', 'Renamed conversation')
+    await act(async () => root.unmount())
+  })
+
+  it('asks before deleting a conversation, and only deletes when confirmed (AC-017)', async () => {
+    const onDeleteSession = vi.fn()
+    // happy-dom has no window.confirm; the browser does, and the row uses it to ask.
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirm)
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides, onDeleteSession })
+
+    const deleteRow = async () => {
+      const trigger = section(host, 'sessions')
+        .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+      const item = (await openRowMenu(trigger)).find(entry => entry.textContent?.trim() === 'Delete conversation')!
+      await act(async () => item.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    }
+
+    await deleteRow()
+    expect(confirm).toHaveBeenCalled()
+    // The confirmation says what a delete costs, because the link to the task goes with it.
+    expect(confirm.mock.calls[0]?.[0]).toContain('link to this task is lost')
+    expect(onDeleteSession).not.toHaveBeenCalled()
+
+    confirm.mockReturnValue(true)
+    await deleteRow()
+    expect(onDeleteSession).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-device' }), 'session-bound')
+
+    vi.unstubAllGlobals()
     await act(async () => root.unmount())
   })
 })
