@@ -48,9 +48,20 @@ stays lighter than `docs/plans/` and `docs/design/`.
 
 ## Index
 
-| # | Item | Status | Primary files |
-|---|------|--------|---------------|
-| [001](001-disable-right-dock-auto-expand-on-worktree-select.md) | Disable right-dock auto-expand when a worktree is selected | pending | `studio/src/studio/MainStudio.tsx` |
+| # | Item | Status | Depends on | Primary files |
+|---|------|--------|------------|---------------|
+| [001](001-disable-right-dock-auto-expand-on-worktree-select.md) | Disable right-dock auto-expand when a worktree is selected | pending | — | `studio/src/studio/MainStudio.tsx` |
+| [002](002-task-page-source-objects-stages-and-git-bound-baseline.md) | Task page: editable staged source objects with a Git-bound baseline | pending | — | `studio/src/studio/workbench/TaskDetail.tsx`, `src/Agent/Workbench/WorkbenchCoordinator.cs` |
+| [003](003-compare-task-mode-in-version-control.md) | Compare task mode in the version-control surface | pending | 002 | `studio/src/studio/version-control/VersionControlCompare.tsx` |
+| [004](004-task-commits-with-involved-source-objects.md) | Task page Commits section: which source objects each commit touched | pending | 002 | `studio/src/studio/workbench/TaskDetail.tsx`, `src/ApiHost/WorkbenchApiModels.cs` |
+| [005](005-agent-stages-source-objects-with-approval.md) | Agent stages source objects for the current task through an approval card | pending | 002 | `src/Mcp.Engineering/Tools/EngineeringTools.cs` |
+
+Items 002–005 implement the missing execution layer of an already accepted design: task-scoped
+source evidence (`docs/adr/ADR-0003-task-scoped-source-evidence.md`,
+`docs/design/task-scoped-tia-compare-design.md`,
+`docs/ui-spec/task-scoped-tia-compare-ui-spec.md`). The backend skeleton shipped; the entry points that
+let a task acquire a compare basis, and the surfaces that show it, did not. Run 002 first: it is the
+only item that establishes a usable stage baseline, and 003–005 depend on it.
 
 ## Template
 
