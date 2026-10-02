@@ -58,6 +58,8 @@ vi.mock('@/api/client', async importOriginal => {
     } satisfies api.EngineeringTaskDetail)),
     loadDeviceChatSession: vi.fn(async () => session),
     renameChatSession: vi.fn(async () => session),
+    setChatSessionTask: vi.fn(async () => session),
+    exportChatSession: vi.fn(async () => ({ path: 'C:/wb/s1.md' })),
     deleteChatSession: vi.fn(async () => {}),
     deleteDeviceSession: vi.fn(async () => {}),
     getDeviceInfo: vi.fn(async () => snapshot),
@@ -283,6 +285,48 @@ it('drops a conversation deleted from its SESSIONS row menu', async () => {
   expect(api.deleteDeviceSession).toHaveBeenCalledWith('wb1', 'wt1', 'dev1', 's1')
   // A deleted conversation cannot be opened, so its row must not be left behind in the navigator.
   expect(host.querySelector('[data-session="s1"]')).toBeNull()
+  vi.unstubAllGlobals()
+  await act(async () => root.unmount())
+})
+
+it('exports a conversation and binds a task-less one from the SESSIONS row menu', async () => {
+  // The only conversation belongs to no task, so the section lists the device's task-less one.
+  vi.mocked(api.listDeviceSessions).mockResolvedValue([{ ...sessionInfo(), taskId: null }])
+  const prompt = vi.fn()
+  vi.stubGlobal('prompt', prompt)
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => root.render(<MainStudio />))
+  const clickText = async (text: string) => {
+    const target = Array.from(host.querySelectorAll<HTMLElement>('div, span, button'))
+      .filter(element => element.textContent?.trim() === text).pop()
+    expect(target).toBeDefined()
+    await act(async () => target!.click())
+  }
+  await clickText('DemoWB')
+  await clickText('master')
+  await clickText('PLC_Demo')
+  expect(host.querySelector('[data-session-group="unbound"]')).not.toBeNull()
+
+  // Export acts on the conversation the row names, not on whatever the current selection is.
+  const exportItem = await rowMenuItem(host, 'New chat', 'Export conversation')
+  await act(async () => exportItem.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+  expect(api.exportChatSession).toHaveBeenCalledWith('s1')
+
+  // Binding picks from the worktree's tasks rather than asking for a task id.
+  const attachItem = await rowMenuItem(host, 'New chat', 'Attach task')
+  await act(async () => attachItem.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+  const search = document.body.querySelector<HTMLInputElement>('input[aria-label="Search this worktree\'s tasks"]')
+  expect(search).not.toBeNull()
+  await act(async () => {
+    search!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    search!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  })
+
+  expect(api.setChatSessionTask).toHaveBeenCalledWith('s1', 'task1')
+  expect(prompt).not.toHaveBeenCalled()
   vi.unstubAllGlobals()
   await act(async () => root.unmount())
 })
