@@ -70,6 +70,24 @@ regions — 001 changes the two forced-open call sites near the top of the compo
 dock's render block and the `SessionDock` import — so they can be implemented in separate worktrees at
 the same time; only the eventual merge touches both.
 
+## Known baseline in this environment
+
+Recorded from the primary checkout at commit `366bd16`, so a run can attribute a failure instead of
+guessing. Re-measure before blaming an item for a failure in a lane that is green here.
+
+| Lane | Command | Baseline result |
+|---|---|---|
+| Frontend | `cd studio && npm test` | 83 files, 531 tests, all passed |
+| ApiHost | `dotnet test tests/ApiHost.Tests/ApiHost.Tests.csproj --no-build -v q` | 177 passed |
+| Agent | `dotnet test tests/Agent.Tests/Agent.Tests.csproj --no-build -v q` | 453 passed |
+| Knowledge | `dotnet test tests/Mcp.Knowledge.Tests/Mcp.Knowledge.Tests.csproj --no-build -v q` | 168 passed |
+| Version control | `dotnet test tests/Mcp.VersionControl.Tests/Mcp.VersionControl.Tests.csproj --no-build -v q` | 158 passed |
+| E2E | `dotnet test tests/E2E.Tests/E2E.Tests.csproj --no-build -v q` | **14 failed / 2 passed before any change.** `WorkbenchLifecycleTests` drives real workbenches and needs a live TIA/SVN environment plus a writable `%APPDATA%\AutomationWorkbench`; in this sandbox it fails for environment reasons. Treat a failure here as pre-existing unless it names code you changed. |
+| Solution build | `dotnet build AgentAssistPlcDev.sln -v q` | Fails while the development ApiHost is running: it locks `src/Agent/bin/Debug/net8.0/Agent.dll` (`MSB3027` / `MSB3021`). Stop the launcher first, or build only the project you need. |
+
+Two consequences for running an item: the `.NET` lane an item names is `tests/ApiHost.Tests`, which is
+green above, and `--no-build` needs a build in that worktree first — a fresh worktree has none.
+
 ## Template
 
 ```markdown
