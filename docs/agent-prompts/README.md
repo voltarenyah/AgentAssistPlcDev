@@ -52,7 +52,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 |---|------|--------|------------|---------------|
 | [001](001-disable-right-dock-auto-expand-on-worktree-select.md) | Remove every right-dock auto-expand | pending | — | `studio/src/studio/MainStudio.tsx` |
 | [002](002-task-page-source-objects-stages-and-git-bound-baseline.md) | Task page: editable staged source objects with a Git-bound baseline | pending | — | `studio/src/studio/workbench/TaskDetail.tsx`, `src/Agent/Workbench/WorkbenchCoordinator.cs` |
-| [003](003-compare-task-mode-in-version-control.md) | Compare task mode in the version-control surface | pending | 002 | `studio/src/studio/version-control/VersionControlCompare.tsx` |
+| [003](003-compare-task-mode-in-version-control.md) | Compare task mode in the version-control surface | in-progress | 002 | `studio/src/studio/version-control/VersionControlCompare.tsx` |
 | [004](004-task-commits-with-involved-source-objects.md) | Task page Commits section: which source objects each commit touched | pending | 002 | `studio/src/studio/workbench/TaskDetail.tsx`, `src/ApiHost/WorkbenchApiModels.cs` |
 | [005](005-agent-stages-source-objects-with-approval.md) | Agent stages source objects for the current task through an approval card | pending | 002 | `src/Mcp.Engineering/Tools/EngineeringTools.cs` |
 | [006](006-remove-right-dock-ai-sessions-page.md) | Remove the right dock's AI sessions page and move its operations into the navigator's conversations | pending | 001 | `studio/src/studio/chat/SessionDock.tsx`, `studio/src/studio/workbench/WorkbenchNavigator.tsx` |
