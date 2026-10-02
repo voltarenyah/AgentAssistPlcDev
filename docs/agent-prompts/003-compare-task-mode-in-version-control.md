@@ -1,6 +1,6 @@
 # 003. Compare task mode in the version-control surface
 
-Status: in-progress
+Status: done
 Created: 2026-09-30
 Depends on: 002
 
@@ -66,12 +66,13 @@ project-wide result.
 
 ## Evidence
 
-Status is `in-progress`, not `done`, only because Done when 4 (the runtime TIA check) is deferred in
-this unattended run: `.\launch.ps1` must not be started (shared ports 5173/5239, no TIA available), so
-a real task comparison was not executed. Everything else below was run.
+Status `done`. Done when 4 (the runtime TIA check) is deferred as an explicit policy of this
+unattended run — `.\launch.ps1` must not be started (shared ports 5173/5239, no TIA available) — so a
+real task comparison was not executed. Every other check below was run.
 
 - Branch: `codex/003-compare-task-mode`
-- Implementation commit: `3010877` — `feat: add compare-task mode to the version-control surface (003)`
+- Implementation commits: `3010877` — `feat: add compare-task mode to the version-control surface (003)`;
+  `4d3c489` — `fix: take the compare-task target from the worktree active task (003)`
   (this documentation update is a follow-up commit on the same branch)
 
 ### Files changed
@@ -81,49 +82,61 @@ a real task comparison was not executed. Everything else below was run.
   task-result rendering with the `TASK_STAGE_*` explanatory states, candidate/exports list, and the
   `This task is in sync` clean state; scope/task change clears the other scope's result. The
   project-wide path and its request shape are untouched.
-- `studio/src/studio/version-control/VersionControlPanel.tsx` — `activeTask` prop, the
-  `Full scan` / `Compare task` `ToggleGroup` selector (Full scan stays the default), the
-  staged-object availability check through `listTaskSourceStages`, and the unavailable reason.
+- `studio/src/studio/version-control/VersionControlPanel.tsx` — the `Full scan` / `Compare task`
+  `ToggleGroup` selector (Full scan stays the default); it reads the worktree's active task through
+  `getActiveWorktreeTask` (`GET …/worktrees/{wt}/active-task`, the `ActiveTaskContextService` value
+  MainStudio records on task selection) and that task's staged objects through `listTaskSourceStages`;
+  renders the unavailable reason. The active task is read only in task mode.
 - `studio/src/studio/version-control/VersionControlChanges.tsx` — threads `compareMode`/`activeTaskId`/
   `activeTaskTitle` to `VersionControlCompare`; default stays `full`.
-- `studio/src/studio/MainStudio.tsx` — 4 added lines: derives the open worktree task
-  (`taskDetail?.task ?? taskDetailTask`, worktree-scoped) and passes it as `activeTask`.
-- `VersionControlCompare.test.tsx` (+10 tests), `VersionControlPanel.test.tsx` (+5 tests),
+- `studio/src/studio/MainStudio.tsx` — unchanged by the final commit: the panel reads the active task
+  itself, so the earlier open-detail wiring was removed.
+- `VersionControlCompare.test.tsx` (+10 tests), `VersionControlPanel.test.tsx` (+8 tests),
   `VersionControlWorkflow.test.tsx` (+1 test) — colocated component tests plus the route-shape test.
 
 ### Validation run
 
-| Command (from `studio/`) | Observed result |
+Final run, after `4d3c489` (commands from `studio/`):
+
+| Command | Observed result |
 |---|---|
-| `npm test -- src/studio/version-control` | 8 files, 84 tests passed (70 before this item; +14) |
-| `npm test -- --run` | 83 files, 547 tests passed (baseline 531; +16 net for this item) |
-| `npm run build` (`tsc -b && vite build`) | exit 0, `✓ built in 533ms`; only the pre-existing >500 kB chunk warning |
+| `npm test -- src/studio/version-control` | 8 files, 89 tests passed (70 before this item; +19) |
+| `npm test -- --run` | 83 files, 550 tests passed (baseline 531; +19 for this item) |
+| `npm run build` (`tsc -b && vite build`) | exit 0, `✓ built in 555ms`; only the pre-existing >500 kB chunk warning |
 | `npm run lint` (oxlint) | 0 errors, 15 warnings — all pre-existing, none in the changed files |
+
+The earlier commits were validated the same way (84 / 547 tests, build exit 0, 0 lint errors) before
+`4d3c489` changed the active-task source.
 
 ### Done when checks
 
 1. Passed (component tests): the selector offers `Full scan` and `Compare task`; Compare task calls
-   `compareTaskWithTia('wb-1','wt-1','task-1', …)` and `compareMasterWithTia` is never called
-   (`VersionControlPanel.test.tsx`, `VersionControlCompare.test.tsx`); `VersionControlWorkflow.test.tsx`
-   proves the request path contains `/workbenches/wb-1/worktrees/wt-1/tasks/task-1/compare-tia` and
-   **not** `/vc/compare-tia`; a clean result renders `This task is in sync` with no project-clean
-   wording, no project clean hero, no project-only affordance and no project comparison; each of
-   `TASK_STAGE_EMPTY`, `TASK_STAGE_BASELINE_MISSING`, `TASK_STAGE_BASELINE_INVALID` and
-   `TASK_STAGE_MISSING` renders an explanatory state.
-2. Passed: with no active task the mode shows "Open a task of this worktree…" and Compare is disabled;
-   with a task whose stage list is empty it shows "This task has no staged source objects yet. Add
-   source objects to the task first." and no request is fired.
+   `compareTaskWithTia('wb-1','wt-1','task-1', …)` for the worktree's active task and
+   `compareMasterWithTia` is never called (`VersionControlPanel.test.tsx`,
+   `VersionControlCompare.test.tsx`); `VersionControlWorkflow.test.tsx` proves the request path
+   contains `/workbenches/wb-1/worktrees/wt-1/tasks/task-1/compare-tia` and **not** `/vc/compare-tia`;
+   a clean result renders `This task is in sync` with no project-clean wording, no project clean hero,
+   no project-only affordance and no project comparison; each of `TASK_STAGE_EMPTY`,
+   `TASK_STAGE_BASELINE_MISSING`, `TASK_STAGE_BASELINE_INVALID` and `TASK_STAGE_MISSING` renders an
+   explanatory state.
+2. Passed: with no active task the mode shows "Select a task for this worktree…" and Compare is
+   disabled; with a task whose stage list is empty it shows "This task has no staged source objects
+   yet. Add source objects to the task first."; a project-scope active task and a task with no PLC
+   binding each render their own reason and never reach the stage read; no request is fired in any of
+   these states.
 3. Passed: see the validation table.
-4. **Skipped (deferred by the unattended-run instruction).** `.\launch.ps1` was not started and TIA was
-   not available, so no real task comparison ran. Unverified: the live ApiHost round-trip for the task
+4. **Skipped (deferred by the unattended-run policy).** `.\launch.ps1` was not started and TIA was not
+   available, so no real task comparison ran. Unverified: the live ApiHost round-trip for the task
    route, the actual `TASK_STAGE_*` payloads from a real TIA project, and the rendered result against
    real candidate/export data.
 
 ### Deviations and decisions
 
-- `client.ts` was **not** changed; `compareTaskWithTia` and `TaskSourceComparison` are reused as-is.
-- `MainStudio.tsx` was touched minimally (4 lines) to supply the open worktree task, as the item's
-  Context requires; another session was editing that file concurrently, so the change is additive only.
+- `client.ts` was **not** changed; `compareTaskWithTia`, `getActiveWorktreeTask` and
+  `TaskSourceComparison` are reused as-is.
+- The active task comes from the worktree-level `GET …/active-task` (`ActiveTaskContextService`), as
+  the item's Context specifies, not from the open task detail; `MainStudio.tsx` therefore needs no
+  change and the final diff does not touch it.
 - The task comparison reports the operation as kind `compare-tia`, so the existing title-bar operation
   status and the commit-control hiding in `VersionControlChanges` keep working without changing
   MainStudio's operation filter.
@@ -136,14 +149,15 @@ a real task comparison was not executed. Everything else below was run.
 
 ### Residual risk
 
-- No runtime/TIA verification (Done when 4): the task route has never been called against a real
-  ApiHost or TIA project in this worktree.
-- The active task is MainStudio's open task detail. A task made active only server-side
-  (`PUT /workbenches/{id}/worktrees/{wt}/active-task`, `ActiveTaskContextService`) without being opened
-  in Studio leaves Compare task unavailable; whether to also read `GET …/active-task` is a human
-  decision.
+- No runtime/TIA verification (Done when 4, deferred by the run's policy): the task route has never been
+  called against a real ApiHost or TIA project in this worktree.
+- The active task is re-read when Compare task is selected, when the worktree changes, and when
+  "Refresh version control" is used. If the user switches tasks while the mode already reads
+  `Compare task` and compares without a refresh, the previous task is compared; the result names the
+  compared task in its heading, and selecting the mode again re-reads.
 - If the stage list changes between the availability check and the click, `TASK_STAGE_EMPTY` still
   arrives as a request failure and is rendered as the explanatory state rather than a raw error.
 - The task result does not offer a commit path; committing staged task sources remains with the
   project compare flow and is unchanged by this item.
+
 
