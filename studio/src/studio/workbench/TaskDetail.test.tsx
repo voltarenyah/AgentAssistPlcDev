@@ -12,12 +12,20 @@ vi.mock('@/api/client', async importOriginal => ({
   getDeviceInfo: vi.fn(async () => ({ sourceObjects: [] })),
   stageTaskSourceObject: vi.fn(),
   releaseTaskSourceObject: vi.fn(),
+  // The Commits section reads the worktree history and the commit's own graph entity; both stay
+  // empty here so this test covers the page's composition and not the section's own data.
+  getVersionControlWorktreeLog: vi.fn(async () => ({ repoPath: '', commits: [] })),
+  listDevices: vi.fn(async () => []),
+  getGraphEntityDetail: vi.fn(async () => ({
+    kind: 'gitCommit', id: 'commit-1', workbenchId: 'wb', worktreeId: 'wt', tasks: [], commits: [],
+    sourceObjects: [], unresolvedFiles: [],
+  })),
 }))
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const detail: EngineeringTaskDetail = {
   task: { taskId: 'task-1', workbenchId: 'wb', scope: 'worktree', worktreeId: 'wt', deviceId: 'device-hash', title: 'Motor update', type: 'feature', status: 'todo', priority: 1, intent: 'Improve', expectedResult: 'Safe', description: 'Plan', createdUtc: '', updatedUtc: '' },
-  sessions: [{ id: 'session-1', edgeId: 'edge-session', provenance: 'default', isPrimary: true, title: 'Tune motor startup' }], commits: [{ id: 'commit-1', edgeId: 'edge-commit', provenance: 'evidence', isPrimary: false }], sourceObjects: [], svnRevisions: [{ id: 'r42', edgeId: 'edge-svn', provenance: 'manual', isPrimary: false }],
+  sessions: [{ id: 'session-1', edgeId: 'edge-session', provenance: 'default', isPrimary: true, title: 'Tune motor startup' }], commits: [{ id: 'abcdef1234567890', edgeId: 'edge-commit', provenance: 'evidence', isPrimary: false }], sourceObjects: [], svnRevisions: [{ id: 'r42', edgeId: 'edge-svn', provenance: 'manual', isPrimary: false }],
 }
 const render = async (props: React.ComponentProps<typeof TaskDetail>) => { const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host); await act(async () => root.render(<TaskDetail {...props} />)); await act(async () => {}); return host }
 
@@ -36,8 +44,11 @@ describe('TaskDetail', () => {
     expect(host.querySelector<HTMLInputElement>('#task-device')?.value).toBe('Line 4 conveyor PLC')
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open session Tune motor startup"]')?.click())
     expect(navigate).toHaveBeenCalledWith('session', 'session-1')
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open Commits commit-1"]')?.click())
-    expect(navigate).toHaveBeenCalledWith('commit', 'commit-1')
+    // A commit has no destination on this page, so the Commits section is a disclosure and never a
+    // clickable control that navigates nowhere.
+    expect(host.querySelector('[aria-label="Open Commits abcdef1234567890"]')).toBeNull()
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Show details for commit abcdef1"]')?.click())
+    expect(navigate).not.toHaveBeenCalledWith('commit', expect.anything())
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open SVN revision r42"]')?.click())
     expect(navigate).toHaveBeenCalledWith('svnRevision', 'r42')
   })
