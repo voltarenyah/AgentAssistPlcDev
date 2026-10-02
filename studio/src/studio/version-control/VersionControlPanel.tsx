@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowUpRight, FileCheck2, GitBranch, GitCompare, History, Loader2, RefreshCw } from 'lucide-react'
 import * as api from '@/api/client'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 import VersionControlHistory, { type VcTimelineItem } from './VersionControlHistory'
 
 export type VersionControlPanelProps = {
   workbenchId: string
   worktreeId: string
+  /**
+   * The task the user currently has open for this worktree, when it is a task of this worktree.
+   * Compare task targets it; without one that mode stays unavailable.
+   */
+  activeTask?: { taskId: string; title?: string | null } | null
   /** Starts a title-bar operation and returns its id, so the full TIA compare shows live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
   operationStatus?: api.OperationStatus | null
@@ -16,6 +22,7 @@ export type VersionControlPanelProps = {
 }
 
 type VersionControlTab = 'changes' | 'history'
+type CompareMode = 'full' | 'task'
 
 const panelTabs: Array<{ id: VersionControlTab; label: string; icon: typeof FileCheck2 }> = [
   { id: 'changes', label: 'Changes', icon: FileCheck2 },
@@ -51,16 +58,20 @@ function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSo
   }
 }
 
-export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOperation, operationStatus = null }: VersionControlPanelProps) {
+export default function VersionControlPanel({ workbenchId, worktreeId, activeTask = null, onBeginOperation, operationStatus = null }: VersionControlPanelProps) {
   const [status, setStatus] = useState<api.VcStatusResult | null>(null)
   const [log, setLog] = useState<api.VcCommitEntry[]>([])
   const [timeline, setTimeline] = useState<api.VersionControlTimelineResult | null>(null)
   const [savepoints, setSavepoints] = useState<api.SavepointInfo[]>([])
   const [tab, setTab] = useState<VersionControlTab>('changes')
   const [compareSignal, setCompareSignal] = useState(0)
+  const [compareMode, setCompareMode] = useState<CompareMode>('full')
+  const [taskStageCount, setTaskStageCount] = useState<number | null>(null)
+  const [taskStagesUnreadable, setTaskStagesUnreadable] = useState(false)
   const [verifyHardware, setVerifyHardware] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const activeTaskId = activeTask?.taskId ?? null
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -86,8 +97,38 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
     setCompareSignal(0)
+    setCompareMode('full')
     setVerifyHardware(true)
   }, [workbenchId, worktreeId])
+
+  // Compare task is only offered for a task of this worktree that has staged source objects; the
+  // backend rejects an empty stage list with TASK_STAGE_EMPTY, so the mode explains the state
+  // instead of firing a comparison that cannot answer anything.
+  useEffect(() => {
+    if (!activeTaskId) {
+      setTaskStageCount(null)
+      setTaskStagesUnreadable(false)
+      return
+    }
+    let cancelled = false
+    setTaskStageCount(null)
+    setTaskStagesUnreadable(false)
+    void api.listTaskSourceStages(workbenchId, worktreeId, activeTaskId)
+      .then(stages => { if (!cancelled) setTaskStageCount(stages.length) })
+      .catch(() => { if (!cancelled) setTaskStagesUnreadable(true) })
+    return () => { cancelled = true }
+  }, [workbenchId, worktreeId, activeTaskId])
+
+  const taskCompareReason = !activeTaskId
+    ? 'Open a task of this worktree to compare only its staged source objects.'
+    : taskStagesUnreadable
+      ? 'This task’s staged source objects could not be read.'
+      : taskStageCount === null
+        ? 'Checking this task’s staged source objects...'
+        : taskStageCount === 0
+          ? 'This task has no staged source objects yet. Add source objects to the task first.'
+          : null
+  const taskCompareReady = taskCompareReason === null
 
   const branch = status?.branch ?? ''
   const isMaster = branch.toLowerCase() === 'master'
@@ -179,15 +220,34 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
         })}
       </nav>
 
-      <div className="flex shrink-0 items-center gap-1.5 px-3.5 pb-1.5 pt-2.5">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-3.5 pb-1.5 pt-2.5">
         <button
           type="button"
           data-testid="vc-compare-open"
-          className="flex h-[30px] items-center gap-1.5 rounded-lg bg-primary px-3.5 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
+          className="flex h-[30px] items-center gap-1.5 rounded-lg bg-primary px-3.5 text-[12px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-40"
+          disabled={compareMode === 'task' && !taskCompareReady}
           onClick={() => { setTab('changes'); setCompareSignal(signal => signal + 1) }}
         >
           <GitCompare className="h-3.5 w-3.5" /> Compare
         </button>
+        <ToggleGroup
+          type="single"
+          value={compareMode}
+          variant="outline"
+          size="sm"
+          className="ml-auto"
+          aria-label="Compare scope"
+          data-testid="vc-compare-mode"
+          onValueChange={value => { if (value === 'full' || value === 'task') setCompareMode(value) }}
+        >
+          <ToggleGroupItem value="full" aria-label="Full scan" data-testid="vc-compare-mode-full" className="px-2 text-[10px]">Full scan</ToggleGroupItem>
+          <ToggleGroupItem value="task" aria-label="Compare task" data-testid="vc-compare-mode-task" className="px-2 text-[10px]">Compare task</ToggleGroupItem>
+        </ToggleGroup>
+        <button type="button" className="icon-button" title="Refresh version control" aria-label="Refresh version control" onClick={() => void refresh()} disabled={loading}>
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+        </button>
+      </div>
+      <div className="shrink-0 px-3.5 pb-1.5">
         <label className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[10px] text-muted-foreground">
           <input
             type="checkbox"
@@ -197,10 +257,11 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
           />
           Verify hardware configuration
         </label>
-        <div className="flex-1" />
-        <button type="button" className="icon-button" title="Refresh version control" aria-label="Refresh version control" onClick={() => void refresh()} disabled={loading}>
-          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-        </button>
+        {compareMode === 'task' && taskCompareReason && (
+          <div className="mt-1 text-[10px] text-muted-foreground" data-testid="vc-compare-task-unavailable">
+            {taskCompareReason}
+          </div>
+        )}
       </div>
 
       <div className="shrink-0 border-b px-3.5 pb-2.5 pt-1" style={{ borderColor: 'var(--border)' }}>
@@ -225,6 +286,9 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
             branch={branch}
             entries={entries}
             compareSignal={compareSignal}
+            compareMode={compareMode}
+            activeTaskId={activeTaskId}
+            activeTaskTitle={activeTask?.title ?? null}
             verifyHardware={verifyHardware}
             snapshot={{
               revision: lastSavepoint?.svnRevision ?? null,

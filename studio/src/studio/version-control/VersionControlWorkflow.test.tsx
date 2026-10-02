@@ -53,6 +53,30 @@ describe('version-control workflow API sequence', () => {
     expect(requestPath).toContain('/workbenches/wb-1/worktrees/wt-feature/vc/compare-tia')
   })
 
+  it('compares one task through the task route and never the project-wide scan route', async () => {
+    let requestPath = ''
+    let requestMethod = ''
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestPath = String(input)
+      requestMethod = init?.method ?? ''
+      return new Response(JSON.stringify({
+        taskId: 'task-1',
+        deviceId: 'dev-1',
+        candidates: [],
+        candidateExports: [],
+        problems: [],
+        observedSoftwareChecksum: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+
+    const result = await api.compareTaskWithTia('wb-1', 'wt-1', 'task-1')
+
+    expect(requestPath).toContain('/workbenches/wb-1/worktrees/wt-1/tasks/task-1/compare-tia')
+    expect(requestPath).not.toContain('/vc/compare-tia')
+    expect(requestMethod).toBe('POST')
+    expect(result.taskId).toBe('task-1')
+  })
+
   it('sends the required commit title when accepting TIA synchronization', async () => {
     let requestPath = ''
     let requestBody: { paths?: string[]; message?: string } | undefined
