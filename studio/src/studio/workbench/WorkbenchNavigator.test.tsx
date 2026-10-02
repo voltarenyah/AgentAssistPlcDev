@@ -117,12 +117,12 @@ describe('WorkbenchNavigator tag projection', () => {
 
     expect(host.textContent).toContain('Review motor interlock')
     expect(host.textContent).toContain('PROJECTS')
-    expect(host.querySelector('[data-task-status="inProgress"]')).toBeTruthy()
-    expect(host.querySelector('[data-task-status="inProgress"]')?.className).toContain('bg-emerald-500')
+    // A task row carries its type icon and title, and no status dot: the navigator's rows stay uniform.
     const task = host.querySelector('button[aria-label="Open task Review motor interlock"]')
     expect(task?.getAttribute('aria-current')).toBe('page')
     expect(task?.getAttribute('data-task-selected')).toBe('true')
     expect(task?.getAttribute('data-task-type')).toBe('feature')
+    expect(host.querySelector('[data-task-status]')).toBeNull()
     // The task lives in TASKS, never under its worktree row.
     expect(section(host, 'tasks').contains(task)).toBe(true)
     expect(section(host, 'worktree').contains(task)).toBe(false)
@@ -733,12 +733,54 @@ describe('WorkbenchNavigator sessions section', () => {
     })
     const trigger = section(host, 'sessions')
       .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    // The row menu is visible without hovering, like every other row's menu in the navigator.
+    const conversationTriggerClasses = trigger.className.split(/\s+/)
+    expect(conversationTriggerClasses).not.toContain('opacity-0')
+    expect(conversationTriggerClasses).not.toContain('pointer-events-none')
 
     const items = (await openRowMenu(trigger)).map(item => item.textContent?.trim())
 
     // Re-binding is out of scope for now, so the menu is exactly the operations the repository performs.
     expect(items).toEqual(['Open conversation', 'Rename conversation', 'Delete conversation'])
     await act(async () => root.unmount())
+  })
+
+  it('offers the task row menu without hovering too', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...overrides,
+    })
+    const trigger = section(host, 'tasks')
+      .querySelector('button[aria-label="Task actions Device task"]') as HTMLButtonElement
+    const taskTriggerClasses = trigger.className.split(/\s+/)
+    expect(taskTriggerClasses).not.toContain('opacity-0')
+    expect(taskTriggerClasses).not.toContain('pointer-events-none')
+
+    const items = (await openRowMenu(trigger)).map(item => item.textContent?.trim())
+    expect(items).toEqual(['Change status', 'Change type and icon', 'Rename task'])
+    await act(async () => root.unmount())
+  })
+
+  it('shows the worktree row\'s expand toggle only when that row has an unbound group', async () => {
+    const withUnbound = await renderNavigator(null, false, {
+      selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-1', targetKind: 'device' },
+      devicesByWorktree,
+      tasksByWorktree: targetTasks,
+    })
+    const toggle = () => withUnbound.host
+      .querySelector('[data-worktree-row="wt-descendant"] svg.lucide-plus, [data-worktree-row="wt-descendant"] svg.lucide-minus')
+    expect(toggle()).not.toBeNull()
+    await act(async () => withUnbound.root.unmount())
+
+    // Without a task that resolves to no target there is nothing to expand, so the row shows no toggle.
+    const boundOnly = { 'wb-direct:wt-descendant': targetTasks['wb-direct:wt-descendant'].filter(task => task.deviceId) }
+    const withoutUnbound = await renderNavigator(null, false, {
+      selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-1', targetKind: 'device' },
+      devicesByWorktree,
+      tasksByWorktree: boundOnly,
+    })
+    expect(withoutUnbound.host
+      .querySelector('[data-worktree-row="wt-descendant"] svg.lucide-plus, [data-worktree-row="wt-descendant"] svg.lucide-minus')).toBeNull()
+    await act(async () => withoutUnbound.root.unmount())
   })
 
   it('renames a conversation from its row menu', async () => {

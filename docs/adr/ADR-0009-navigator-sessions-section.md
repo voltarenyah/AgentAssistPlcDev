@@ -35,7 +35,9 @@ Repository evidence that constrains the choice:
   removes the `Session` entity or its `TaskSession` edge, so a task detail keeps listing a conversation
   that can no longer be loaded. [ADR-0010](ADR-0010-deleting-a-task-conversation.md) decides the delete
   itself; this ADR only decides where the conversations are shown and what a row offers.
-- **Every navigator section row owes a 3-dots menu** (UI Spec AC-008), so a session row needs one too.
+- **Every navigator section row owes a 3-dots menu** (UI Spec AC-008), so a session row needs one too —
+  and the menus the navigator's other rows carry are visible without hovering, so a session row's menu
+  has to match them rather than hiding behind a hover the user has to discover.
 - **The deepest section grows into the dock's remaining height** (ADR-0008), so a fifth section becomes
   the one that grows and takes that role from `TASKS`.
 
@@ -50,6 +52,11 @@ switch the whole scope to the worktree-level chat view. Reusing that path for a 
 reading a conversation dropped the selected device and emptied the `TASKS` and `SESSIONS` sections, so
 the list the row came from disappeared as it was opened. The rule below separates the two: a row shows a
 conversation, and the task detail's link still moves the scope it belongs to.
+
+The section also listed a conversation that had been renamed or deleted in another surface, because the
+navigator kept its own copy of the list and only its own rows refreshed it: a renamed conversation kept
+its old name, and a deleted one kept a row that could no longer be opened. The list is therefore read
+from the same device list every surface changes, in one place, rather than owned by the section.
 
 ## Decision Point
 
@@ -78,6 +85,7 @@ under, so the list the user just read stays where it was.
 | **Decision** | A fifth flat section listing the conversations of the selected task, or the selected device's task-less conversations while no task is selected, with a creation action in its header and a per-row menu whose operations ADR-0010 governs. Opening a row is a content action: it does not change what the navigator is showing. |
 | **Header action** | Starts a conversation bound to the selected task. Offered only while a task is selected: with no selected task there is no task to bind the new conversation to, so the section would not be the list it appeared in. |
 | **Row open** | Opens the conversation in the chat view of the scope that is already selected, and leaves the workbench, worktree, device and task selection untouched. A conversation whose device is not the selected one — which the worktree's own task surface can ask for — has no device workspace to open in, so it opens in the worktree-level chat view, the one scope without a device. |
+| **Row contents** | The section is a view of the device's conversation list, not a copy of it: it is re-read wherever that list changes, so a conversation renamed, deleted or re-bound in any surface is reflected in the section without a reload. Its menu is visible without hovering, like the navigator's other row menus. |
 | **Why this** | It keeps the cascade one section per scope level, keeps every list bounded and scrollable on its own, and makes the list say exactly what the row above it says is selected, without reopening the nesting ADR-0006 removed. |
 | **Known unknowns** | Whether a conversation ever needs to be reachable without its task outside the task-less case this rule now covers, and whether the section needs a cap once a task accumulates many conversations. |
 | **Reconsider when** | Users ask to see conversations belonging to several tasks at once, or to reach a conversation from the navigator without selecting the task that owns it. |
@@ -180,6 +188,13 @@ one thing it must clear is the task detail, because the detail renders ahead of 
 would otherwise stay in front of the conversation; the task the navigator treats as selected therefore
 has to outlive the detail it was opened from, which is why the navigator remembers the task it is
 showing rather than deriving it from the detail alone.
+
+The section is not the owner of the conversations it lists. Re-read the device's list in the one place
+every conversation change already goes through — the refresh the chat surfaces call after a create,
+rename, delete or re-binding — and let the section read that, rather than refreshing it only from its own
+rows. Otherwise a rename made in the session dock leaves the old name in the navigator, and a delete made
+there leaves a row that can no longer be opened. Its row menu is visible without hovering, like the
+menus on the navigator's other rows.
 
 ## Related Information
 

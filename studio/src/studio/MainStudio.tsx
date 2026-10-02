@@ -1326,6 +1326,13 @@ export default function MainStudio() {
     )
   }, [selectedChatContext])
 
+  /**
+   * Re-reads one device's conversations, and that is the single point every conversation change goes
+   * through: the navigator lists the same conversations, so a rename, a delete or a re-binding made in
+   * the session dock or the chat panel has to land there too, not only in the dock's own list (AC-015,
+   * AC-018). Only this device's slice of the navigator's per-worktree list is replaced, so the worktree's
+   * other devices keep the entries they were loaded with.
+   */
   const refreshChatSessions = useCallback(async (context = selectedChatContext) => {
     if (!context) return []
     const savedSessions = await api.listDeviceSessions(
@@ -1334,6 +1341,19 @@ export default function MainStudio() {
       context.deviceId,
     )
     replaceDeviceSessions(savedSessions)
+    setSessionsByWorktree(previous => {
+      const key = worktreeKey(context.workbenchId, context.worktreeId)
+      const otherDevices = (previous[key] ?? []).filter(session => session.deviceId !== context.deviceId)
+      return {
+        ...previous,
+        [key]: [...otherDevices, ...savedSessions.map(session => ({
+          ...session,
+          workbenchId: session.workbenchId ?? context.workbenchId,
+          worktreeId: session.worktreeId ?? context.worktreeId,
+          deviceId: session.deviceId ?? context.deviceId,
+        }))],
+      }
+    })
     return savedSessions
   }, [replaceDeviceSessions, selectedChatContext])
 
@@ -1417,18 +1437,6 @@ export default function MainStudio() {
     }
   }
 
-  /** Re-reads a worktree's conversations for the navigator's section. */
-  const refreshNavigatorSessions = async (workbenchId: string, worktreeId: string) =>
-    loadWorktreeSessions(workbenchId, worktreeId, devicesByWorktree[worktreeKey(workbenchId, worktreeId)] ?? [])
-
-  /** Renames a conversation from a navigator row, then re-reads the section's list. */
-  const renameNavigatorSession = async (session: api.ChatSessionInfo, title: string) => {
-    await renameChatSession(session.sessionId, title)
-    if (session.workbenchId && session.worktreeId) {
-      await refreshNavigatorSessions(session.workbenchId, session.worktreeId)
-    }
-  }
-
   /**
    * Deletes a conversation from the navigator. The device that owns it is named by the conversation
    * rather than taken from the current selection, because the delete removes it from the graph as well
@@ -1444,8 +1452,8 @@ export default function MainStudio() {
     try {
       await api.deleteDeviceSession(workbenchId, worktreeId, deviceId, session.sessionId)
       setChatTabs(previous => closeTab(previous, session.sessionId))
-      await refreshChatSessions()
-      await refreshNavigatorSessions(workbenchId, worktreeId)
+      // The refresh is what takes the row out of the section; there is no separate navigator list.
+      await refreshChatSessions({ workbenchId, worktreeId, deviceId })
     } catch (error) {
       showErrorToast(displayError(error))
     } finally {
@@ -1453,10 +1461,9 @@ export default function MainStudio() {
     }
   }
 
-  /** Starts a conversation for one task and re-reads the navigator's list, so the section stays true. */
+  /** Starts a conversation for one task; the create flow's own refresh is what shows it in the section. */
   const startConversationForTask = async (task: api.EngineeringTask) => {
     await createChatSessionForTask(task)
-    if (task.workbenchId && task.worktreeId) await refreshNavigatorSessions(task.workbenchId, task.worktreeId)
   }
 
   const createChatSessionForTask = async (task: api.EngineeringTask | api.WorktreeTask) => {
@@ -2482,7 +2489,7 @@ export default function MainStudio() {
               setMainView({ kind: 'worktree', tab: 'tasks' })
             }}
             onOpenSession={session => void openNavigatorSession(session)}
-            onRenameSession={(session, title) => void renameNavigatorSession(session, title)}
+            onRenameSession={(session, title) => void renameChatSession(session.sessionId, title)}
             onDeleteSession={session => void deleteNavigatorSession(session)}
             onAddSession={task => void startConversationForTask(task)}
             onSelectHardware={selectHardware}

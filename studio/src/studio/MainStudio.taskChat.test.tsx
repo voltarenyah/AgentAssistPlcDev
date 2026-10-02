@@ -24,6 +24,11 @@ const session: api.ChatSessionData = {
   },
   messages: [], roundUsages: [],
 }
+const snapshot: api.DeviceSnapshot = {
+  workbenchId: 'wb1', worktreeId: 'wt1', deviceId: 'dev1', plcName: 'PLC_Demo', engineeringIdentity: 'PLC_Demo',
+  sourceRoot: 'C:/wb/source', knowledgeDbPath: 'C:/wb/plc-knowledge.db', sourceProjectPath: 'D:/proj.ap17',
+  device: null, knowledge: { state: 'missing', updatedAt: null }, blocks: [], sourceObjectCount: 0, diagnostics: [],
+}
 
 vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
@@ -52,7 +57,9 @@ vi.mock('@/api/client', async importOriginal => {
       commits: [], sourceObjects: [], svnRevisions: [],
     } satisfies api.EngineeringTaskDetail)),
     loadDeviceChatSession: vi.fn(async () => session),
-    getDeviceInfo: vi.fn(),
+    renameChatSession: vi.fn(async () => session),
+    deleteChatSession: vi.fn(async () => {}),
+    getDeviceInfo: vi.fn(async () => snapshot),
     newChatSession: vi.fn(async () => session),
     loadChatSession: vi.fn(async () => session),
     sendChatMessage: vi.fn(async () => {}),
@@ -63,7 +70,17 @@ vi.mock('@/api/client', async importOriginal => {
 })
 vi.mock('flexlayout-react', async () => await import('@/test/flexLayoutMock'))
 
-beforeEach(() => vi.clearAllMocks())
+/** The device's conversation list as the server reports it; a test overrides it to simulate a change. */
+const sessionInfo = (title = 'New chat'): api.ChatSessionInfo => ({
+  sessionId: 's1', title, projectName: null, workbenchId: 'wb1', worktreeId: 'wt1', deviceId: 'dev1',
+  createdAt: '2026-08-02T00:00:00Z', updatedAt: '2026-08-02T00:00:00Z', messageCount: 1, turnCount: 1,
+  firstUserMessage: 'Find startup fault', taskId: 'task1', taskProvenance: 'default',
+})
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(api.listDeviceSessions).mockResolvedValue([sessionInfo()])
+})
 afterEach(() => { document.body.innerHTML = '' })
 
 it('starts task chat from its bound device without selecting or snapshotting the device', async () => {
@@ -186,5 +203,67 @@ it('opens a navigator conversation without dropping the selected device or its t
   expect(host.querySelector('[data-task-selected="true"]')?.textContent).toContain('Inspect startup sequence')
   expect(host.querySelector('[data-session="s1"]')).not.toBeNull()
   expect(host.querySelector('[data-session-pane="s1"]')).not.toBeNull()
+  await act(async () => root.unmount())
+})
+
+/** Renders the device workspace with the task's conversation open, and the session dock beside it. */
+const openTaskConversation = async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => root.render(<MainStudio />))
+  const clickText = async (text: string) => {
+    const target = Array.from(host.querySelectorAll<HTMLElement>('div, span, button'))
+      .filter(element => element.textContent?.trim() === text).pop()
+    expect(target).toBeDefined()
+    await act(async () => target!.click())
+  }
+  await clickText('DemoWB')
+  await clickText('master')
+  await clickText('PLC_Demo')
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open task Inspect startup sequence"]')!.click())
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-session-open="s1"]')!.click())
+  return { host, root }
+}
+
+it('follows a conversation renamed in the session dock', async () => {
+  const { host, root } = await openTaskConversation()
+  expect(host.querySelector('[data-session="s1"]')?.textContent).toContain('New chat')
+
+  // The dock renames through the same route and the server then reports the new title.
+  vi.mocked(api.listDeviceSessions).mockResolvedValue([sessionInfo('Valve diagnosis')])
+  const rename = host.querySelector<HTMLButtonElement>('button[aria-label="Rename New chat"]')
+  expect(rename).not.toBeNull()
+  await act(async () => rename!.click())
+  const form = host.querySelector<HTMLFormElement>('form[data-session-rename="s1"]')
+  expect(form).not.toBeNull()
+  const input = form!.querySelector<HTMLInputElement>('input[name="session-title"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'Valve diagnosis')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+
+  expect(api.renameChatSession).toHaveBeenCalledWith('s1', 'Valve diagnosis')
+  // The navigator's row is the same conversation, so it has to show the new name too.
+  expect(host.querySelector('[data-session="s1"]')?.textContent).toContain('Valve diagnosis')
+  await act(async () => root.unmount())
+})
+
+it('drops a conversation deleted in the session dock', async () => {
+  const { host, root } = await openTaskConversation()
+  expect(host.querySelector('[data-session="s1"]')).not.toBeNull()
+
+  // The dock deletes through the same route and the server then reports no conversations.
+  vi.mocked(api.listDeviceSessions).mockResolvedValue([])
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Delete New chat"]')!.click())
+  const confirmRow = Array.from(host.querySelectorAll<HTMLButtonElement>('button'))
+    .filter(button => button.textContent?.trim() === 'Delete')
+  expect(confirmRow).toHaveLength(1)
+  await act(async () => confirmRow[0].click())
+
+  expect(api.deleteChatSession).toHaveBeenCalledWith('s1')
+  // A deleted conversation cannot be opened, so its row must not be left behind in the navigator.
+  expect(host.querySelector('[data-session="s1"]')).toBeNull()
   await act(async () => root.unmount())
 })

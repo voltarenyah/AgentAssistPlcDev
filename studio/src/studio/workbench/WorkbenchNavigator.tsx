@@ -125,10 +125,6 @@ type Props = {
 }
 
 const worktreeKey = (workbenchId: string, worktreeId: string) => `${workbenchId}:${worktreeId}`
-const taskStatusDotClass = (status: string) =>
-  status === 'inProgress' || status === 'active' ? 'bg-emerald-500'
-    : status === 'done' ? 'bg-muted-foreground'
-      : 'bg-muted-foreground'
 const taskTypeIcon = {
   issue: CircleDot,
   improvement: Wrench,
@@ -368,12 +364,11 @@ function TaskRow({ workbench, worktree, task, selected, onSelect, onUpdate, onRe
         data-task-type={task.type}
       >
         <TaskIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span data-task-status={task.status} className={`h-2 w-2 shrink-0 rounded-full ${taskStatusDotClass(task.status)}`} />
         <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-xs" aria-label={`Task actions ${task.title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
+          <Button variant="ghost" size="icon-xs" aria-label={`Task actions ${task.title}`} className="absolute right-1 top-1/2 -translate-y-1/2" onClick={event => event.stopPropagation()}>
             <Ellipsis className="h-3.5 w-3.5" />
           </Button>
         </DropdownMenuTrigger>
@@ -431,7 +426,7 @@ function SessionRow({ session, onOpen, onRename, onDelete }: SessionRowProps) {
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-xs" aria-label={`Conversation actions ${title}`} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100" onClick={event => event.stopPropagation()}>
+          <Button variant="ghost" size="icon-xs" aria-label={`Conversation actions ${title}`} className="absolute right-1 top-1/2 -translate-y-1/2" onClick={event => event.stopPropagation()}>
             <Ellipsis className="h-3.5 w-3.5" />
           </Button>
         </DropdownMenuTrigger>
@@ -1080,19 +1075,24 @@ export default function WorkbenchNavigator({
                               : 'hover:bg-accent/40'
                         }`}
                           aria-current={worktreeSelected ? 'true' : undefined}
+                          data-worktree-row={worktree.worktreeId}
                           onClick={() => {
-                            setExpandedWorktreeIds(current => {
-                              const next = new Set(current)
-                              if (next.has(worktree.worktreeId)) next.delete(worktree.worktreeId)
-                              else next.add(worktree.worktreeId)
-                              return next
-                            })
+                            // Only a row with an unbound group to show toggles anything, and its toggle
+                            // is the only thing that row offers; the selection follows either way.
+                            if (rowUnboundTasks.length > 0) {
+                              setExpandedWorktreeIds(current => {
+                                const next = new Set(current)
+                                if (next.has(worktree.worktreeId)) next.delete(worktree.worktreeId)
+                                else next.add(worktree.worktreeId)
+                                return next
+                              })
+                            }
                             onSelectWorktree(workbench, worktree)
                           }}
                         >
-                          {expandedWorktreeIds.has(worktree.worktreeId)
+                          {rowUnboundTasks.length > 0 && (expandedWorktreeIds.has(worktree.worktreeId)
                             ? <Minus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />
-                            : <Plus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />}
+                            : <Plus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />)}
                           <GitBranch className="h-4 w-4 text-chart-4" />
                           <span className="min-w-0 flex-1 truncate text-xs">{worktree.name}</span>
                           {worktree.branch !== worktree.name && <span className="max-w-[24%] truncate whitespace-nowrap font-mono text-[10px] leading-4 text-muted-foreground">{worktree.branch}</span>}
