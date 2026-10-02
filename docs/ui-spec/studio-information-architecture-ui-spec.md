@@ -9,11 +9,11 @@
   scroll behaviour, how their vertical space is allocated and overridden, and their interaction with
   the existing tag filter.
 - PRD or requirement carrier: `docs/adr/ADR-0006-studio-navigator-ownership-and-shape.md`,
-  `docs/adr/ADR-0009-navigator-sessions-section.md`
+  `docs/adr/ADR-0009-navigator-sessions-section.md`, `docs/adr/ADR-0010-deleting-a-task-conversation.md`
 - Explicit exclusions: main-area view or tab-strip ownership; relocating row action menus; automatic
   cross-section collapse; reordering sections; persisting a dragged height across sessions;
-  conversations that are bound to no task; a session-level scope below a task; deleting a conversation;
-  the contents of any feature page.
+  conversations that are bound to no task; a session-level scope below a task; re-binding a conversation
+  to another task; recovering a deleted conversation; the contents of any feature page.
 
 ## Design Evidence
 
@@ -65,7 +65,7 @@
 | `TASKS` list | Extend existing task rows | selected device's tasks | Selecting a task opens its detail; creation pre-binds the selected device. | AC-005 |
 | `SESSIONS` list | New, reusing `TaskSessionsDisclosure`'s row content and relative time | the selected target's tasks and the conversations bound to them | Lists each task with the conversations it owns, always expanded: the section is already the container, so a disclosure inside it would be a second expander. | AC-015 |
 | `SESSIONS` header action | New | the selected target, the worktree's active task, the target's tasks | Starts a conversation for that target and opens it: the worktree's active task when it belongs to the target, otherwise a task the user picks. Not offered for the hardware target or a target with no task. | AC-016 |
-| Session row menu | New | the conversation, its task, the target's tasks | Offers only what the API performs: open the conversation, rename it, and re-bind it to another task or to no task. No deletion is offered because no delete operation exists. | AC-008, AC-015 |
+| Session row menu | New | the conversation, its task, the target's tasks | Offers opening, renaming and deleting the conversation — the operations the repository performs — and nothing else. Deleting asks for confirmation first. | AC-008, AC-015, AC-017 |
 | Project / worktree / task row menus | Preserved unchanged | existing per-row actions | Existing menus keep their current behaviour and placement. | Preserved behaviour |
 | Device row menu | Restored | selected device, existing device callbacks | The device operations the removed subtree held become reachable again from the `DEVICE` section row menu. | AC-008 |
 | Hardware row | Restored | selected worktree | Adds the hardware target the navigator lost: it opens the shell's hardware pages and lists that target's tasks. | AC-009 |
@@ -89,6 +89,7 @@
 | `SESSIONS` section | The selected target's tasks are still loading | Section absent while the tasks load, then present or absent per its content rule. | The task load settles it; the section never shows a loading placeholder of its own. | AC-015 |
 | `SESSIONS` section | The selected target's tasks have no bound conversation | Section absent, so the navigator does not reserve a row for a list that cannot exist. | Starting a conversation from `TASKS` or the task surface makes the section appear. | AC-015 |
 | Session row | The conversation has no title | Falls back to its first user message, then to an untitled label, as the task surface already does. | Renaming it from the row menu gives it a title. | AC-015 |
+| Session row | Delete is chosen from its menu | A confirmation names the conversation and states that its link to the task is lost. | Confirming removes the conversation from the section and from the task's own conversation list; cancelling changes nothing. | AC-017 |
 | Any reachable section | Section content fails to load | Existing error text for that collection; other sections keep rendering. | Retry through the existing refresh actions. | Preserved behaviour |
 
 ## Visual Constraints (When Applicable)
@@ -132,6 +133,7 @@
 | AC-014 | Sections that do not fit | Every section header stays visible while the section bodies scroll, and the column itself does not scroll. |
 | AC-015 | `SESSIONS` section | A task with bound conversations shows them under its own group, a conversation bound to no task appears nowhere in the navigator, and the section is absent when the target has none — including the hardware target, which cannot own a conversation. |
 | AC-016 | `SESSIONS` header action | The header starts a conversation bound to the worktree's active task when that task belongs to the selected target, and otherwise to a task the user picks, then opens it; the hardware target and a target with no task offer no such action. |
+| AC-017 | Deleting a conversation | Choosing delete on a row asks for confirmation naming the conversation; confirming removes it from the section and from the task's conversation list, and cancelling leaves both unchanged. |
 | Preserved behaviour | Worktree `Tasks` tab | The main-area Tasks view still renders in the worktree tab strip and is unchanged. |
 
 ## Open User Decisions
@@ -149,3 +151,4 @@
 | 2026-10-02 | 1.1 | Sections size to their content and release their height when collapsed (AC-013); they shrink and scroll their own bodies before the column scrolls (AC-014); a separator resizes two adjacent sections (AC-012). Per ADR-0008. |
 | 2026-10-02 | 1.2 | The deepest section on screen takes the dock's remaining height, so its boundary is the dock's boundary and its body does not scroll before its rows fill that room; folding it releases the room. Per ADR-0008. |
 | 2026-10-02 | 1.3 | A fifth `SESSIONS` section below `TASKS` lists the selected target's task-bound conversations under the task that owns each one, with a creation action in its header and a per-row menu; conversations bound to no task are out of scope, and the hardware target has none. Per ADR-0009. |
+| 2026-10-02 | 1.4 | The conversation row menu offers opening, renaming and deleting; deleting confirms first and removes the conversation from the section and the task's list. Re-binding a conversation to another task is out of scope for now. Per ADR-0010. |

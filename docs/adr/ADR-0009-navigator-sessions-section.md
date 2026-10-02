@@ -30,8 +30,11 @@ Repository evidence that constrains the choice:
   two sessions and neither is task-bound, while `testagentcreate` holds three and all three are. So a
   section that lists only task-bound conversations can legitimately be empty in a worktree that has
   conversations.
-- **No delete route exists for a session.** The available operations are load, rename
-  (`renameChatSession`) and re-bind (`setChatSessionTask`), so a row menu cannot offer deletion.
+- **A conversation can already be deleted, but only through the compatibility route, and that route
+  leaves the graph inconsistent.** `POST /api/chat/session/delete` removes the session file and never
+  removes the `Session` entity or its `TaskSession` edge, so a task detail keeps listing a conversation
+  that can no longer be loaded. [ADR-0010](ADR-0010-deleting-a-task-conversation.md) decides the delete
+  itself; this ADR only decides where the conversations are shown and what a row offers.
 - **Every navigator section row owes a 3-dots menu** (UI Spec AC-008), so a session row needs one too.
 - **The deepest section grows into the dock's remaining height** (ADR-0008), so a fifth section becomes
   the one that grows and takes that role from `TASKS`.
@@ -59,7 +62,7 @@ worktree's hardware, which cannot own a conversation, nor for a target that has 
 
 | Item | Content |
 |------|---------|
-| **Decision** | A fifth flat section listing the selected target's task-bound conversations, grouped by task, with a creation action in its header and a per-row menu. |
+| **Decision** | A fifth flat section listing the selected target's task-bound conversations, grouped by task, with a creation action in its header and a per-row menu whose operations ADR-0010 governs. |
 | **Header action** | Starts a conversation for the selected target. It resolves the task the conversation must bind to as the worktree's active task when that task belongs to the target — the same default the create route already applies when no task is named — and otherwise asks the user to choose among the target's tasks. |
 | **Why this** | It keeps the cascade one section per scope level, keeps every list bounded and scrollable on its own, and reaches the conversations from the same place the tasks are reached, without reopening the nesting ADR-0006 removed. |
 | **Known unknowns** | Whether a conversation ever needs to be reachable without its task, and whether the section needs a cap once a device accumulates many conversations. |
@@ -122,15 +125,16 @@ user to guess why a conversation they know about is absent.
 
 ### Neutral Consequences
 
-No route, entity kind, relation kind, or persisted shape changes. The task surface keeps rendering its
+This section itself adds no route, entity kind, relation kind, or persisted shape. The task surface keeps rendering its
 own conversations exactly as it does today, and a conversation is still created and bound through the
 operations that already exist.
 
 ## Architecture Impact
 
-`WorkbenchNavigator` gains a section, and `MainStudio` gains the load and the two callbacks it needs —
-one to open a conversation, one to start one. The session data itself is already available per device,
-so no API, graph, or storage change is involved.
+`WorkbenchNavigator` gains a section, and `MainStudio` gains the load and the callbacks it needs — one to
+open a conversation, one to start one. The session data itself is already available per device, so
+showing the conversations involves no API, graph, or storage change; the delete those rows offer is a
+separate decision with its own architecture impact (ADR-0010).
 
 ## Implementation Guidance
 
@@ -138,11 +142,12 @@ Load the conversations the way the task surface already does: fan out the existi
 the selected worktree's devices and group by `taskId`, rather than adding an endpoint or fetching each
 task's detail. Reuse `TaskSessionsDisclosure`'s row content and its relative-time formatting for the row
 itself, but keep the rows always visible: the section is the container, so a disclosure inside it would
-be a second, redundant expander. A row menu offers only the operations the API has — open, rename, and
-re-bind to a task — and never a deletion the repository cannot perform.
+be a second, redundant expander. A row menu offers only the operations the repository performs — open,
+rename, and delete — and the delete follows ADR-0010 rather than being reimplemented here.
 
 ## Related Information
 
+- `docs/adr/ADR-0010-deleting-a-task-conversation.md` — the delete a conversation row offers
 - `docs/adr/ADR-0006-studio-navigator-ownership-and-shape.md` — the section set this amends
 - `docs/adr/ADR-0008-navigator-section-sizing.md` — the sizing and deepest-section rule this section joins
 - `docs/ui-spec/studio-information-architecture-ui-spec.md` — the surface this extends
