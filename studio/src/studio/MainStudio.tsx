@@ -675,12 +675,6 @@ export default function MainStudio() {
   const taskDetailDeviceName = taskDetail?.task.deviceId && taskDetail.task.worktreeId
     ? devicesByWorktree[worktreeKey(taskDetail.task.workbenchId, taskDetail.task.worktreeId)]?.find(device => device.deviceId === taskDetail.task.deviceId)?.plcName
     : undefined
-  // The Version Control dock's Compare task mode targets the task the user has open for the
-  // selected worktree; a project-scope task is not a task comparison target.
-  const versionControlTask = taskDetail?.task ?? taskDetailTask
-  const versionControlActiveTask = versionControlTask && versionControlTask.worktreeId === selection.worktreeId
-    ? { taskId: versionControlTask.taskId, title: versionControlTask.title }
-    : null
   const deviceMeta = deviceInfo?.device ?? null
   const hardwareSelectedNode = useMemo(
     () => hardwareView && (hardwareInspectedNodeId ?? hardwareSelectedNodeId)
@@ -2804,7 +2798,6 @@ export default function MainStudio() {
                 <VersionControlPanel
                   workbenchId={selection.workbenchId}
                   worktreeId={selection.worktreeId}
-                  activeTask={versionControlActiveTask}
                   onBeginOperation={(kind, label) => beginOperation(kind, label).id}
                   operationStatus={activeOperation && ['compare-tia', 'accept-tia-synchronization', 'vc-commit', 'svn-savepoint'].includes(activeOperation.kind)
                     ? activeOperation.status

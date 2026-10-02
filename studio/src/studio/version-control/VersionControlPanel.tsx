@@ -8,11 +8,6 @@ import VersionControlHistory, { type VcTimelineItem } from './VersionControlHist
 export type VersionControlPanelProps = {
   workbenchId: string
   worktreeId: string
-  /**
-   * The task the user currently has open for this worktree, when it is a task of this worktree.
-   * Compare task targets it; without one that mode stays unavailable.
-   */
-  activeTask?: { taskId: string; title?: string | null } | null
   /** Starts a title-bar operation and returns its id, so the full TIA compare shows live export progress. */
   onBeginOperation?: (kind: string, label: string) => string
   operationStatus?: api.OperationStatus | null
@@ -58,7 +53,7 @@ function sourceEntry(entry: api.VcStatusEntry, branch: string): VersionControlSo
   }
 }
 
-export default function VersionControlPanel({ workbenchId, worktreeId, activeTask = null, onBeginOperation, operationStatus = null }: VersionControlPanelProps) {
+export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOperation, operationStatus = null }: VersionControlPanelProps) {
   const [status, setStatus] = useState<api.VcStatusResult | null>(null)
   const [log, setLog] = useState<api.VcCommitEntry[]>([])
   const [timeline, setTimeline] = useState<api.VersionControlTimelineResult | null>(null)
@@ -66,16 +61,19 @@ export default function VersionControlPanel({ workbenchId, worktreeId, activeTas
   const [tab, setTab] = useState<VersionControlTab>('changes')
   const [compareSignal, setCompareSignal] = useState(0)
   const [compareMode, setCompareMode] = useState<CompareMode>('full')
+  const [activeTask, setActiveTask] = useState<api.EngineeringTask | null>(null)
+  const [activeTaskUnreadable, setActiveTaskUnreadable] = useState(false)
   const [taskStageCount, setTaskStageCount] = useState<number | null>(null)
   const [taskStagesUnreadable, setTaskStagesUnreadable] = useState(false)
+  const [taskCheckSignal, setTaskCheckSignal] = useState(0)
   const [verifyHardware, setVerifyHardware] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const activeTaskId = activeTask?.taskId ?? null
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setTaskCheckSignal(signal => signal + 1)
     try {
       const [nextStatus, nextLog, nextTimeline, nextSavepoints] = await Promise.all([
         api.getWorktreeVcStatus(workbenchId, worktreeId),
@@ -101,34 +99,65 @@ export default function VersionControlPanel({ workbenchId, worktreeId, activeTas
     setVerifyHardware(true)
   }, [workbenchId, worktreeId])
 
-  // Compare task is only offered for a task of this worktree that has staged source objects; the
-  // backend rejects an empty stage list with TASK_STAGE_EMPTY, so the mode explains the state
-  // instead of firing a comparison that cannot answer anything.
+  // Compare task targets the worktree's active task — the task selected for this worktree, which
+  // MainStudio records through setActiveWorktreeTask — and it needs that task's staged source
+  // objects. The backend rejects an empty stage list with TASK_STAGE_EMPTY, so the mode explains the
+  // state instead of firing a comparison that cannot answer anything. The read is scoped to the task
+  // mode, so a full scan never pays for it.
   useEffect(() => {
-    if (!activeTaskId) {
+    if (compareMode !== 'task') {
+      setActiveTask(null)
+      setActiveTaskUnreadable(false)
       setTaskStageCount(null)
       setTaskStagesUnreadable(false)
       return
     }
     let cancelled = false
+    setActiveTask(null)
+    setActiveTaskUnreadable(false)
     setTaskStageCount(null)
     setTaskStagesUnreadable(false)
-    void api.listTaskSourceStages(workbenchId, worktreeId, activeTaskId)
-      .then(stages => { if (!cancelled) setTaskStageCount(stages.length) })
-      .catch(() => { if (!cancelled) setTaskStagesUnreadable(true) })
+    void (async () => {
+      let task: api.EngineeringTask | null
+      try {
+        task = (await api.getActiveWorktreeTask(workbenchId, worktreeId)).activeTask
+      } catch {
+        if (!cancelled) setActiveTaskUnreadable(true)
+        return
+      }
+      if (cancelled) return
+      setActiveTask(task)
+      // A project-scope or hardware task cannot own stages, so it never reaches the stage read.
+      if (!task || task.scope !== 'worktree' || task.worktreeId !== worktreeId || !task.deviceId) return
+      try {
+        const stages = await api.listTaskSourceStages(workbenchId, worktreeId, task.taskId)
+        if (!cancelled) setTaskStageCount(stages.length)
+      } catch {
+        if (!cancelled) setTaskStagesUnreadable(true)
+      }
+    })()
     return () => { cancelled = true }
-  }, [workbenchId, worktreeId, activeTaskId])
+  }, [workbenchId, worktreeId, compareMode, taskCheckSignal])
 
-  const taskCompareReason = !activeTaskId
-    ? 'Open a task of this worktree to compare only its staged source objects.'
-    : taskStagesUnreadable
-      ? 'This task’s staged source objects could not be read.'
-      : taskStageCount === null
-        ? 'Checking this task’s staged source objects...'
-        : taskStageCount === 0
-          ? 'This task has no staged source objects yet. Add source objects to the task first.'
-          : null
+  const taskCompareReason = compareMode !== 'task'
+    ? null
+    : activeTaskUnreadable
+      ? 'The worktree’s active task could not be read.'
+      : !activeTask
+        ? 'Select a task for this worktree to compare only its staged source objects.'
+        : activeTask.scope !== 'worktree' || activeTask.worktreeId !== worktreeId
+          ? 'The active task is not a task of this worktree.'
+          : !activeTask.deviceId
+            ? 'The active task is not bound to a PLC device, so it has no staged source objects to compare.'
+            : taskStagesUnreadable
+              ? 'This task’s staged source objects could not be read.'
+              : taskStageCount === null
+                ? 'Checking this task’s staged source objects...'
+                : taskStageCount === 0
+                  ? 'This task has no staged source objects yet. Add source objects to the task first.'
+                  : null
   const taskCompareReady = taskCompareReason === null
+  const activeTaskId = activeTask?.taskId ?? null
 
   const branch = status?.branch ?? ''
   const isMaster = branch.toLowerCase() === 'master'

@@ -12,6 +12,7 @@ const mockVcState = (overrides: {
   commits?: api.VcCommitEntry[]
   timeline?: api.VersionControlTimelineResult
   savepoints?: api.SavepointInfo[]
+  activeTask?: api.EngineeringTask | null
 } = {}) => {
   vi.spyOn(api, 'getWorktreeVcStatus').mockResolvedValue({
     repoPath: 'C:/repos/demo',
@@ -28,7 +29,27 @@ const mockVcState = (overrides: {
     hasMore: false,
   })
   vi.spyOn(api, 'getWorktreeSavepoints').mockResolvedValue(overrides.savepoints ?? [])
+  const activeTask = vi.spyOn(api, 'getActiveWorktreeTask').mockResolvedValue({ activeTask: overrides.activeTask ?? null })
+  return { activeTask }
 }
+
+const worktreeTask = (overrides: Partial<api.EngineeringTask> = {}): api.EngineeringTask => ({
+  taskId: 'task-1',
+  workbenchId: 'wb-1',
+  scope: 'worktree',
+  worktreeId: 'wt-1',
+  title: 'Fix Main',
+  type: 'feature',
+  status: 'todo',
+  priority: 0,
+  intent: '',
+  expectedResult: '',
+  description: null,
+  createdUtc: '2026-09-30T08:00:00.000Z',
+  updatedUtc: '2026-09-30T08:00:00.000Z',
+  deviceId: 'dev-1',
+  ...overrides,
+})
 
 const render = async (element: React.ReactNode) => {
   const host = document.createElement('div')
@@ -382,17 +403,19 @@ describe('VersionControlPanel (worktree dock)', () => {
   })
 
   it('offers Compare task and Full scan, with the project-wide scan selected by default', async () => {
-    mockVcState()
+    const { activeTask } = mockVcState()
     const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
 
     expect(host.querySelector('[data-testid="vc-compare-mode-full"]')?.textContent).toContain('Full scan')
     expect(host.querySelector('[data-testid="vc-compare-mode-task"]')?.textContent).toContain('Compare task')
     expect(host.querySelector('[data-testid="vc-compare-mode-full"]')?.getAttribute('data-state')).toBe('on')
     expect(host.querySelector('[data-testid="vc-compare-mode-task"]')?.getAttribute('data-state')).toBe('off')
+    // A full scan never reads the active task or its stages.
+    expect(activeTask).not.toHaveBeenCalled()
   })
 
-  it('keeps Compare task unavailable and explained when no task is open', async () => {
-    mockVcState()
+  it('keeps Compare task unavailable and explained when the worktree has no active task', async () => {
+    const { activeTask } = mockVcState()
     const projectCompare = vi.spyOn(api, 'compareMasterWithTia')
     const taskCompare = vi.spyOn(api, 'compareTaskWithTia')
     const stages = vi.spyOn(api, 'listTaskSourceStages')
@@ -400,8 +423,9 @@ describe('VersionControlPanel (worktree dock)', () => {
 
     await click(host.querySelector('button[aria-label="Compare task"]')!)
 
+    expect(activeTask).toHaveBeenCalledWith('wb-1', 'wt-1')
     expect(host.querySelector('[data-testid="vc-compare-task-unavailable"]')?.textContent)
-      .toContain('Open a task of this worktree')
+      .toContain('Select a task for this worktree')
     expect(host.querySelector<HTMLButtonElement>('[data-testid="vc-compare-open"]')!.disabled).toBe(true)
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
     expect(taskCompare).not.toHaveBeenCalled()
@@ -409,12 +433,12 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(stages).not.toHaveBeenCalled()
   })
 
-  it('keeps Compare task unavailable and explained while the task has no staged objects', async () => {
-    mockVcState()
+  it('keeps Compare task unavailable and explained while the active task has no staged objects', async () => {
+    mockVcState({ activeTask: worktreeTask({ title: 'Empty task' }) })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
     vi.spyOn(api, 'listTaskSourceStages').mockResolvedValue([])
     const taskCompare = vi.spyOn(api, 'compareTaskWithTia')
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" activeTask={{ taskId: 'task-1', title: 'Empty task' }} />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
 
     await click(host.querySelector('button[aria-label="Compare task"]')!)
 
@@ -424,13 +448,37 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(taskCompare).not.toHaveBeenCalled()
   })
 
-  it('runs Compare task against the active task route and never the project scan', async () => {
-    mockVcState()
+  it('keeps Compare task unavailable for an active task that cannot own stages', async () => {
+    mockVcState({ activeTask: worktreeTask({ scope: 'project', worktreeId: null, title: 'Project task' }) })
+    const stages = vi.spyOn(api, 'listTaskSourceStages')
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    await click(host.querySelector('button[aria-label="Compare task"]')!)
+
+    expect(host.querySelector('[data-testid="vc-compare-task-unavailable"]')?.textContent)
+      .toContain('The active task is not a task of this worktree')
+    expect(stages).not.toHaveBeenCalled()
+  })
+
+  it('keeps Compare task unavailable for an active task with no PLC binding', async () => {
+    mockVcState({ activeTask: worktreeTask({ deviceId: null, title: 'Hardware task' }) })
+    const stages = vi.spyOn(api, 'listTaskSourceStages')
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    await click(host.querySelector('button[aria-label="Compare task"]')!)
+
+    expect(host.querySelector('[data-testid="vc-compare-task-unavailable"]')?.textContent)
+      .toContain('not bound to a PLC device')
+    expect(stages).not.toHaveBeenCalled()
+  })
+
+  it('runs Compare task against the worktree active task route and never the project scan', async () => {
+    mockVcState({ activeTask: worktreeTask() })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
     vi.spyOn(api, 'listTaskSourceStages').mockResolvedValue([taskStage('dev-1:Main')])
     const projectCompare = vi.spyOn(api, 'compareMasterWithTia')
     const taskCompare = vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskResult())
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" activeTask={{ taskId: 'task-1', title: 'Fix Main' }} />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
 
     await click(host.querySelector('button[aria-label="Compare task"]')!)
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
@@ -444,14 +492,14 @@ describe('VersionControlPanel (worktree dock)', () => {
   })
 
   it('reports task differences with the task result instead of a project-clean state', async () => {
-    mockVcState()
+    mockVcState({ activeTask: worktreeTask() })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
     vi.spyOn(api, 'listTaskSourceStages').mockResolvedValue([taskStage('dev-1:Main')])
     vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskResult({
       candidates: [{ id: 'Main', reason: 'new', requiresXmlExport: true, isSafetyDifference: false }],
       candidateExports: [{ id: 'Main', sourcePath: 'devices/PLC_1/source/Blocks/Main.xml', export: { success: true, path: null } }],
     }))
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" activeTask={{ taskId: 'task-1', title: 'Fix Main' }} />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
 
     await click(host.querySelector('button[aria-label="Compare task"]')!)
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
@@ -459,5 +507,19 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.querySelector('[data-testid="vc-task-candidate"]')?.textContent).toContain('New in TIA')
     expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeNull()
     expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeNull()
+  })
+
+  it('re-reads the worktree active task when the version-control state is refreshed', async () => {
+    const { activeTask } = mockVcState({ activeTask: worktreeTask() })
+    vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
+    vi.spyOn(api, 'listTaskSourceStages').mockResolvedValue([taskStage('dev-1:Main')])
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+
+    await click(host.querySelector('button[aria-label="Compare task"]')!)
+    expect(activeTask).toHaveBeenCalledTimes(1)
+
+    await click(host.querySelector('button[aria-label="Refresh version control"]')!)
+
+    expect(activeTask).toHaveBeenCalledTimes(2)
   })
 })
