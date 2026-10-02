@@ -6,9 +6,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import TaskSourceObjectsSection from './TaskSourceObjectsSection'
 
 export type TraceabilityItem = { id: string; edgeId: string; provenance: string; isPrimary: boolean }
 export type TaskEditPatch = Pick<EngineeringTask, 'title' | 'type' | 'status' | 'priority' | 'intent' | 'expectedResult' | 'description'>
+
+/** One traceability row in the Related records group, carrying the kind it navigates and removes as. */
+type RelatedRecord = TraceabilityItem & { kind: string; kindLabel: string }
 
 type TraceabilitySectionProps = {
   title: string
@@ -53,6 +57,43 @@ export function TraceabilitySection({ title, items, emptyLabel, onNavigate, onRe
   )
 }
 
+/**
+ * The remaining traceability edges — the graph's source-object links and the task's SVN revisions.
+ * They are read-only history: only a manual link can be removed. The editable, stage-backed list is
+ * the separate Source objects section, so no two sections claim the same meaning.
+ */
+function RelatedRecordsSection({ items, onNavigate, onRemove }: {
+  items: RelatedRecord[]
+  onNavigate?: (kind: string, id: string) => void
+  onRemove?: (kind: string, item: TraceabilityItem) => void
+}) {
+  return (
+    <section className="overflow-hidden rounded-lg border bg-card" aria-label="Related records">
+      <header className="flex items-center border-b px-4 py-3">
+        <h3 className="text-sm font-semibold">Related records</h3>
+        <span className="ml-auto rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{items.length}</span>
+      </header>
+      {items.length === 0 ? (
+        <p className="px-4 py-4 text-sm text-muted-foreground">No related records yet.</p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {items.map(item => (
+            <li key={`${item.kind}:${item.id}`} className="flex min-w-0 items-center gap-3 px-4 py-3">
+              <span className="shrink-0 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{item.kindLabel}</span>
+              {onNavigate ? (
+                <button type="button" className="min-w-0 flex-1 truncate text-left font-mono text-sm underline-offset-2 hover:underline focus-visible:underline" aria-label={`Open ${item.kindLabel} ${item.id}`} onClick={() => onNavigate(item.kind, item.id)}>{item.id}</button>
+              ) : <span className="min-w-0 flex-1 truncate font-mono text-sm">{item.id}</span>}
+              {item.isPrimary && <span className="rounded bg-muted px-2 py-1 text-xs">Primary</span>}
+              <span className="shrink-0 text-xs text-muted-foreground">{provenanceLabel(item.provenance)}</span>
+              {onRemove && item.provenance.toLowerCase() === 'manual' && <Button type="button" variant="outline" size="xs" aria-label={`Remove ${item.kindLabel} ${item.id}`} onClick={() => onRemove(item.kind, { id: item.id, edgeId: item.edgeId, provenance: item.provenance, isPrimary: item.isPrimary })}>Remove</Button>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 type TaskDraft = TaskEditPatch
 
 const taskDraftFrom = (task: EngineeringTask): TaskDraft => ({
@@ -75,9 +116,11 @@ type Props = {
   onSave?: (patch: TaskEditPatch) => Promise<void>
   onNavigate?: (kind: string, id: string) => void
   onRemove?: (kind: string, item: TraceabilityItem) => void
+  /** Raised after a stage change, so the page can reload the task's traceability edges. */
+  onStagesChanged?: () => void
 }
 
-export default function TaskDetail({ detail, deviceName, loading = false, error = null, saving = false, onRetry, onSave, onNavigate, onRemove }: Props) {
+export default function TaskDetail({ detail, deviceName, loading = false, error = null, saving = false, onRetry, onSave, onNavigate, onRemove, onStagesChanged }: Props) {
   const [draft, setDraft] = useState<TaskDraft | null>(detail ? taskDraftFrom(detail.task) : null)
   const [saveError, setSaveError] = useState<string | null>(null)
   // A hardware task has no device, so "Not device-bound" would state the opposite of the truth.
@@ -92,10 +135,16 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
   if (error) return <div className="flex items-center gap-3 rounded-lg border p-5 text-sm text-muted-foreground" role="alert"><AlertCircle className="h-4 w-4 shrink-0 text-red-500" /><span className="min-w-0 flex-1">Task details could not be loaded: {error}</span>{onRetry && <Button type="button" variant="outline" size="sm" onClick={onRetry}><RefreshCw className="h-4 w-4" /> Retry</Button>}</div>
   if (!detail || !draft) return null
 
-  const sections: Array<[string, string, EngineeringTaskDetail['commits']]> = [
-    ['Commits', 'commit', detail.commits],
-    ['Source objects', 'sourceObject', detail.sourceObjects],
-    ['SVN revisions', 'svnRevision', detail.svnRevisions],
+  // Only a device-bound worktree task can stage source objects (ADR-0003); everything else states
+  // why instead of offering controls that cannot work.
+  const stageable = detail.task.scope !== 'project' && !hardwareTask
+    && Boolean(detail.task.worktreeId) && Boolean(detail.task.deviceId)
+  const stagingExplanation = detail.task.scope === 'project'
+    ? 'Source objects are staged by a device-bound worktree task, and this is a project-scope task with no device to stage them from.'
+    : 'Source objects are staged by a device-bound worktree task, and this hardware task binds no PLC device.'
+  const relatedRecords: RelatedRecord[] = [
+    ...detail.sourceObjects.map(item => ({ ...item, kind: 'sourceObject', kindLabel: 'Source object' })),
+    ...detail.svnRevisions.map(item => ({ ...item, kind: 'svnRevision', kindLabel: 'SVN revision' })),
   ]
   const dirty = Object.keys(draft).some(key => draft[key as keyof TaskDraft] !== taskDraftFrom(detail.task)[key as keyof TaskDraft])
   const fieldClass = 'mt-1.5 w-full'
@@ -118,7 +167,6 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
   }
 
   const sessions = detail.sessions
-  const otherItems = sections.filter(([, , items]) => items.length > 0)
   const updateDraft = <K extends keyof TaskDraft>(key: K, value: TaskDraft[K]) => setDraft(previous => previous ? { ...previous, [key]: value } : previous)
 
   return <article className="mx-auto w-full max-w-6xl space-y-5" aria-label={`Task detail: ${detail.task.title}`}>
@@ -157,6 +205,17 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
       </dl>
     </section>
 
+    {stageable ? (
+      <TaskSourceObjectsSection
+        workbenchId={detail.task.workbenchId}
+        worktreeId={detail.task.worktreeId!}
+        taskId={detail.task.taskId}
+        deviceId={detail.task.deviceId!}
+        deviceName={deviceName}
+        onChanged={onStagesChanged}
+      />
+    ) : <p className="rounded-lg border bg-card px-4 py-4 text-sm text-muted-foreground">{stagingExplanation}</p>}
+
     <section className="overflow-hidden rounded-xl border bg-card" aria-label="Associated sessions">
       <header className="flex items-center gap-2 border-b px-4 py-3"><MessageSquareText className="h-4 w-4 text-muted-foreground" /><h2 className="text-sm font-semibold">Sessions</h2><span className="ml-auto rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{sessions.length}</span></header>
       {sessions.length === 0 ? <p className="px-4 py-4 text-sm text-muted-foreground">No conversations linked to this task yet.</p> : <ul className="divide-y divide-border">{sessions.map(session => <li key={session.id} className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-4">
@@ -167,6 +226,9 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
       </li>)}</ul>}
     </section>
 
-    {otherItems.length > 0 ? <div className="grid gap-4 md:grid-cols-2">{otherItems.map(([title, kind, items]) => <TraceabilitySection key={kind} title={title} items={items} emptyLabel={`No linked ${title.toLowerCase()} yet.`} onNavigate={onNavigate ? id => onNavigate(kind, id) : undefined} onRemove={onRemove ? item => onRemove(kind, item) : undefined} />)}</div> : <p className="text-sm text-muted-foreground">No commits, source objects, or SVN revisions linked yet.</p>}
+    {detail.commits.length > 0 || relatedRecords.length > 0 ? <div className="grid gap-4 md:grid-cols-2">
+      {detail.commits.length > 0 && <TraceabilitySection title="Commits" items={detail.commits} emptyLabel="No linked commits yet." onNavigate={onNavigate ? id => onNavigate('commit', id) : undefined} onRemove={onRemove ? item => onRemove('commit', item) : undefined} />}
+      {relatedRecords.length > 0 && <RelatedRecordsSection items={relatedRecords} onNavigate={onNavigate} onRemove={onRemove} />}
+    </div> : <p className="text-sm text-muted-foreground">No commits or related records linked yet.</p>}
   </article>
 }
