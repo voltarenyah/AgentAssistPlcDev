@@ -24,7 +24,7 @@ import {
   Trash2,
   Wrench,
 } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DeviceSummary, EngineeringTask, EngineeringTaskTargetKind, TaskTarget, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
 import { taskTargetKind } from '@/api/client'
 import {
@@ -131,8 +131,16 @@ type NavigatorSectionProps = {
   title: string
   /** Optional header control, for example the section's creation action. */
   action?: ReactNode
+  /** The height the user dragged this section to, in pixels; unset means it follows its content. */
+  height?: number | null
   children: ReactNode
 }
+
+/**
+ * A section never shrinks below its header plus one row, so its title and first row stay readable
+ * however the dock is squeezed (ADR-0008).
+ */
+const SECTION_MIN_HEIGHT = 72
 
 /**
  * One collapsible navigator section.
@@ -140,12 +148,24 @@ type NavigatorSectionProps = {
  * The header is a native button that owns this section's collapse state, so activating one header
  * changes only that section. The header sits outside the body's scroll region, so a scrolling
  * section can never carry a header out of view.
+ *
+ * The box is `flex: 0 1 auto`, so its height follows its content instead of taking an equal share of
+ * the dock: a section holding one row is one row tall, and a collapsed section holds its header only,
+ * which lets the sections below it move up. Its body keeps an `auto` flex basis so its own content is
+ * what the box measures; when the dock cannot give it that much, the box shrinks to its floor and the
+ * body scrolls.
  */
-function NavigatorSection({ id, title, action, children }: NavigatorSectionProps) {
+function NavigatorSection({ id, title, action, height = null, children }: NavigatorSectionProps) {
   const [collapsed, setCollapsed] = useState(false)
   const bodyId = `navigator-section-${id}`
   return (
-    <section data-navigator-section={id} className="flex min-h-0 flex-1 flex-col">
+    <section
+      data-navigator-section={id}
+      className="flex min-h-0 flex-initial flex-col"
+      // A collapsed section keeps no height at all, so the sections below it move up. A dragged
+      // height is a number the user chose, so it replaces the content-driven default until then.
+      style={collapsed ? undefined : height === null ? { minHeight: SECTION_MIN_HEIGHT } : { minHeight: SECTION_MIN_HEIGHT, height }}
+    >
       <div className="flex shrink-0 items-center gap-1 px-1 pb-1 pt-1">
         <button
           type="button"
@@ -161,10 +181,133 @@ function NavigatorSection({ id, title, action, children }: NavigatorSectionProps
         </button>
         {action}
       </div>
-      <div id={bodyId} hidden={collapsed} className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-1">
+      <div id={bodyId} hidden={collapsed} className="scrollbar-sleek min-h-0 flex-auto overflow-y-auto p-1">
         {children}
       </div>
     </section>
+  )
+}
+
+type SectionSeparatorProps = {
+  /** The section above the separator: the one whose height the separator grows. */
+  upperId: string
+  lowerId: string
+  /** The upper section's title, so the separator's accessible name says what it resizes. */
+  upperTitle: string
+  /** The pair's dragged heights, or null while a section still follows its content. */
+  upperHeight: number | null
+  lowerHeight: number | null
+  /** Records the pair's new heights. The separator owns the geometry; the navigator only stores it. */
+  onResize: (upperId: string, upperHeight: number, lowerId: string, lowerHeight: number) => void
+}
+
+/** How far one arrow key press moves a separator, matching the task list's column resize. */
+const SECTION_RESIZE_STEP = 8
+
+/**
+ * The draggable rule between two adjacent navigator sections.
+ *
+ * It is a window splitter: dragging it, or focusing it and pressing the arrow keys, moves height
+ * between exactly the two sections it sits between, and neither can be taken below the shared
+ * minimum. It reuses the resize contract the task list's column separators already established —
+ * a pointer drag handled on the window, a fixed keyboard step, and a cleanup that runs on release
+ * and on unmount — so both resize interactions behave the same way.
+ *
+ * The announced value is derived from the heights the navigator already holds rather than measured
+ * again: before any drag a pair has no numbers of its own, so the separator reports the floor it is
+ * known to be at least.
+ */
+function SectionSeparator({ upperId, lowerId, upperTitle, upperHeight, lowerHeight, onResize }: SectionSeparatorProps) {
+  const separatorRef = useRef<HTMLDivElement | null>(null)
+  const activeResizeCleanup = useRef<(() => void) | null>(null)
+  const announcedNow = upperHeight ?? SECTION_MIN_HEIGHT
+  const announcedMax = upperHeight !== null && lowerHeight !== null
+    ? Math.max(SECTION_MIN_HEIGHT, upperHeight + lowerHeight - SECTION_MIN_HEIGHT)
+    : undefined
+
+  const measure = () => {
+    const column = separatorRef.current?.parentElement
+    const upper = column?.querySelector<HTMLElement>(`[data-navigator-section="${upperId}"]`)
+    const lower = column?.querySelector<HTMLElement>(`[data-navigator-section="${lowerId}"]`)
+    if (!upper || !lower) return null
+    return {
+      upper: upper.getBoundingClientRect().height,
+      lower: lower.getBoundingClientRect().height,
+    }
+  }
+
+  const resize = (measured: { upper: number; lower: number }, delta: number) => {
+    const applied = Math.max(
+      SECTION_MIN_HEIGHT - measured.upper,
+      Math.min(measured.lower - SECTION_MIN_HEIGHT, delta),
+    )
+    onResize(upperId, measured.upper + applied, lowerId, measured.lower - applied)
+  }
+
+  const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    activeResizeCleanup.current?.()
+    const measured = measure()
+    if (!measured || measured.upper <= 0 || measured.lower <= 0) return
+
+    const startY = event.clientY
+    const body = document.body
+    const previousCursor = body.style.cursor
+    const previousUserSelect = body.style.userSelect
+    body.style.cursor = 'row-resize'
+    body.style.userSelect = 'none'
+
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerUp)
+      body.style.cursor = previousCursor
+      body.style.userSelect = previousUserSelect
+      if (activeResizeCleanup.current === cleanup) activeResizeCleanup.current = null
+    }
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) return
+      resize(measured, moveEvent.clientY - startY)
+    }
+    const onPointerUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== event.pointerId) return
+      cleanup()
+    }
+    activeResizeCleanup.current = cleanup
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+  }
+
+  const resizeWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    event.preventDefault()
+    const measured = measure()
+    if (!measured || measured.upper <= 0 || measured.lower <= 0) return
+    resize(measured, event.key === 'ArrowDown' ? SECTION_RESIZE_STEP : -SECTION_RESIZE_STEP)
+  }
+
+  useEffect(() => () => activeResizeCleanup.current?.(), [])
+
+  return (
+    <div
+      ref={separatorRef}
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={`Resize ${upperTitle} section`}
+      aria-valuemin={SECTION_MIN_HEIGHT}
+      aria-valuemax={announcedMax}
+      aria-valuenow={announcedNow}
+      tabIndex={0}
+      title={`Drag to resize ${upperTitle}`}
+      className="group relative -my-1 h-3 shrink-0 cursor-row-resize touch-none focus-visible:outline-none"
+      onPointerDown={startResize}
+      onKeyDown={resizeWithKeyboard}
+    >
+      <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
+    </div>
   )
 }
 
@@ -274,6 +417,12 @@ export default function WorkbenchNavigator({
     () => new Set(selection.worktreeId ? [selection.worktreeId] : []),
   )
   const [clickedTaskId, setClickedTaskId] = useState<string | null>(null)
+  /**
+   * The heights the user dragged sections to, in pixels, for as long as the app stays open. A
+   * section with no entry here follows its content, which is what keeps the dock free of reserved
+   * space; only a drag introduces a number.
+   */
+  const [sectionHeights, setSectionHeights] = useState<Record<string, number>>({})
   const [renameTask, setRenameTask] = useState<{ workbench: Workbench; worktree: WorkbenchRegistration; task: EngineeringTask } | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
   const matchingWorkbenchIds = new Set(filteredResults?.workbenches.map(result => result.entityId) ?? [])
@@ -336,6 +485,41 @@ export default function WorkbenchNavigator({
     onSelectTask(workbench, worktree, task)
   }
 
+  const deviceSectionVisible = !filterActive && selectedWorktreeRow !== null
+  const tasksSectionVisible = !filterActive && selectedWorktreeRow !== null && selectedTarget !== null
+  const sectionTitles: Record<string, string> = { projects: 'PROJECTS', worktree: 'WORKTREE', device: 'DEVICE', tasks: 'TASKS' }
+  // Which sections are on screen, in order. The separators go between the pairs that are actually
+  // rendered, so the count follows the selection rather than being fixed.
+  const visibleSectionIds = [
+    'projects',
+    ...(showWorktreeSection ? ['worktree'] : []),
+    ...(deviceSectionVisible ? ['device'] : []),
+    ...(tasksSectionVisible ? ['tasks'] : []),
+  ]
+  const applySectionHeights = (upperId: string, upperHeight: number, lowerId: string, lowerHeight: number) =>
+    setSectionHeights(current => ({
+      ...current,
+      [upperId]: Math.round(upperHeight),
+      [lowerId]: Math.round(lowerHeight),
+    }))
+  /** The separator above a section, or nothing when that section is the first one on screen. */
+  const separatorBefore = (id: string) => {
+    const index = visibleSectionIds.indexOf(id)
+    if (index <= 0) return null
+    const upperId = visibleSectionIds[index - 1]
+    return (
+      <SectionSeparator
+        key={`${upperId}-${id}`}
+        upperId={upperId}
+        lowerId={id}
+        upperTitle={sectionTitles[upperId]}
+        upperHeight={sectionHeights[upperId] ?? null}
+        lowerHeight={sectionHeights[id] ?? null}
+        onResize={applySectionHeights}
+      />
+    )
+  }
+
   /**
    * `DEVICE`: the selected worktree's PLC devices plus its single hardware target. The header action
    * is refresh only, and every operation the removed device subtree used to hold lives in the row's
@@ -349,6 +533,7 @@ export default function WorkbenchNavigator({
       <NavigatorSection
         id="device"
         title="DEVICE"
+        height={sectionHeights.device ?? null}
         action={(
           <Button variant="ghost" size="icon-xs" aria-label="Refresh devices" title="Refresh devices" onClick={onRefresh}>
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -490,6 +675,7 @@ export default function WorkbenchNavigator({
       <NavigatorSection
         id="tasks"
         title="TASKS"
+        height={sectionHeights.tasks ?? null}
         action={(
           <Button
             variant="ghost"
@@ -545,10 +731,11 @@ export default function WorkbenchNavigator({
       </div>
       {filterControl}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
+      <div data-navigator-sections className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
         <NavigatorSection
           id="projects"
           title="PROJECTS"
+          height={sectionHeights.projects ?? null}
           action={(
             <Button variant="ghost" size="icon-xs" aria-label="Create workbench" title="Create workbench" onClick={onCreateWorkbench}>
               <Plus className="h-3.5 w-3.5" />
@@ -660,10 +847,12 @@ export default function WorkbenchNavigator({
           })}
         </NavigatorSection>
 
+        {separatorBefore('worktree')}
         {showWorktreeSection && (
           <NavigatorSection
             id="worktree"
             title="WORKTREE"
+            height={sectionHeights.worktree ?? null}
             action={!filterActive && selectedWorkbench ? (
               <Button
                 variant="ghost"
@@ -844,8 +1033,10 @@ export default function WorkbenchNavigator({
           </NavigatorSection>
         )}
 
+        {separatorBefore('device')}
         {!filterActive && renderDeviceSection()}
 
+        {separatorBefore('tasks')}
         {!filterActive && renderTasksSection()}
       </div>
     </aside>

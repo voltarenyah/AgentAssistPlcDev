@@ -333,6 +333,51 @@ describe('WorkbenchNavigator target cascade', () => {
     await act(async () => root.unmount())
   })
 
+  it('sizes a section to its content and releases its height when collapsed (AC-013)', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection,
+      devicesByWorktree,
+      tasksByWorktree: targetTasks,
+    })
+
+    // Content-sized: a section carries its floor but no height of its own until the user drags one,
+    // so it is exactly as tall as its rows rather than an equal share of the dock.
+    for (const id of ['projects', 'worktree', 'device', 'tasks']) {
+      const node = section(host, id)
+      expect(node.style.height).toBe('')
+      expect(node.style.minHeight).toBe('72px')
+    }
+
+    // Collapsed, a section holds its header only, so the sections below it move up.
+    await act(async () => sectionHeader(host, 'projects').click())
+
+    expect(section(host, 'projects').style.minHeight).toBe('')
+    expect(section(host, 'projects').style.height).toBe('')
+    expect(sectionBody(host, 'projects').hasAttribute('hidden')).toBe(true)
+    expect(sectionHeader(host, 'worktree').getAttribute('aria-expanded')).toBe('true')
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
+
+    await act(async () => root.unmount())
+  })
+
+  it('scrolls each section body instead of the column when the sections do not fit (AC-014)', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection,
+      devicesByWorktree,
+      tasksByWorktree: targetTasks,
+    })
+
+    // The column never scrolls its own headers away; every header stays visible because each
+    // section's body is the scroll container and can be squeezed to its floor.
+    expect((host.querySelector('[data-navigator-sections]') as HTMLElement).className).toContain('overflow-hidden')
+    for (const id of ['projects', 'worktree', 'device', 'tasks']) {
+      expect(sectionBody(host, id).className).toContain('overflow-y-auto')
+      expect(sectionBody(host, id).className).toContain('min-h-0')
+    }
+
+    await act(async () => root.unmount())
+  })
+
   it('offers the removed device subtree operations from the device row menu (AC-008)', async () => {
     const { host, root } = await renderNavigator(null, false, {
       selection: deviceSelection,
@@ -375,6 +420,114 @@ describe('WorkbenchNavigator target cascade', () => {
     ])
 
     await act(async () => root.unmount())
+  })
+})
+
+describe('WorkbenchNavigator section sizing', () => {
+  const deviceSelection = { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-1', targetKind: 'device' as const }
+  const overrides = { devicesByWorktree, tasksByWorktree: targetTasks }
+
+  const separators = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('[role="separator"]')).map(node => node.getAttribute('aria-label'))
+
+  // happy-dom has no layout engine, so a resize supplies the geometry the same way the task list's
+  // column resize test does: by mocking the measured boxes. Once a height has been applied, the mock
+  // reports it, which is what a real layout would do.
+  const mockHeights = (host: HTMLElement, heights: Record<string, number>) => {
+    for (const [id, height] of Object.entries(heights)) {
+      vi.spyOn(section(host, id), 'getBoundingClientRect').mockImplementation(() => {
+        const applied = Number.parseFloat(section(host, id).style.height)
+        return new DOMRect(0, 0, 200, Number.isFinite(applied) ? applied : height)
+      })
+    }
+  }
+
+  const dragSeparator = async (host: HTMLElement, label: string, from: number, to: number) => {
+    const handle = host.querySelector(`[role="separator"][aria-label="${label}"]`) as HTMLElement
+    await act(async () => handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientY: from, pointerId: 7 })))
+    await act(async () => window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientY: to, pointerId: 7 })))
+    await act(async () => window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientY: to, pointerId: 7 })))
+  }
+
+  it('offers a separator between adjacent sections only, and one per pair (AC-012)', async () => {
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    expect(separators(host)).toEqual(['Resize PROJECTS section', 'Resize WORKTREE section', 'Resize DEVICE section'])
+
+    // Reaching the worktree but not a target drops TASKS, and its separator with it.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null, targetKind: null },
+        ...overrides,
+      })} />,
+    ))
+    expect(separators(host)).toEqual(['Resize PROJECTS section', 'Resize WORKTREE section'])
+
+    // Nothing selected: one section, so nothing to resize it against.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: null, worktreeId: null, deviceId: null },
+        ...overrides,
+      })} />,
+    ))
+    expect(separators(host)).toEqual([])
+
+    await act(async () => root.unmount())
+  })
+
+  it('resizes exactly the two sections a separator sits between (AC-012)', async () => {
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    mockHeights(host, { projects: 200, worktree: 400 })
+
+    await dragSeparator(host, 'Resize PROJECTS section', 100, 140)
+
+    expect(section(host, 'projects').style.height).toBe('240px')
+    expect(section(host, 'worktree').style.height).toBe('360px')
+    // The sections below the pair are not part of this separator's negotiation.
+    expect(section(host, 'device').style.height).toBe('')
+    expect(section(host, 'tasks').style.height).toBe('')
+
+    await act(async () => root.unmount())
+  })
+
+  it('clamps a resize at the minimum height and announces the split (AC-012)', async () => {
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    mockHeights(host, { projects: 200, worktree: 400 })
+
+    // Dragging far past the lower section's floor must stop at it, not take the section away.
+    await dragSeparator(host, 'Resize PROJECTS section', 100, 500)
+
+    expect(section(host, 'projects').style.height).toBe('528px')
+    expect(section(host, 'worktree').style.height).toBe('72px')
+
+    const handle = host.querySelector('[role="separator"][aria-label="Resize PROJECTS section"]') as HTMLElement
+    expect(handle.getAttribute('aria-orientation')).toBe('horizontal')
+    expect(handle.getAttribute('aria-valuemin')).toBe('72')
+    expect(handle.getAttribute('aria-valuenow')).toBe('528')
+    expect(handle.getAttribute('aria-valuemax')).toBe('528')
+
+    await act(async () => root.unmount())
+  })
+
+  it('resizes the same pair from the keyboard (AC-012)', async () => {
+    const first = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    mockHeights(first.host, { projects: 200, worktree: 400 })
+    const handle = first.host.querySelector('[role="separator"][aria-label="Resize PROJECTS section"]') as HTMLElement
+
+    await act(async () => handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+    expect(section(first.host, 'projects').style.height).toBe('208px')
+    expect(section(first.host, 'worktree').style.height).toBe('392px')
+    await act(async () => first.root.unmount())
+
+    // A section already near the floor cannot be shrunk past it.
+    const second = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    mockHeights(second.host, { projects: 80, worktree: 400 })
+    const clamped = second.host.querySelector('[role="separator"][aria-label="Resize PROJECTS section"]') as HTMLElement
+
+    await act(async () => clamped.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })))
+    expect(section(second.host, 'projects').style.height).toBe('72px')
+    expect(section(second.host, 'worktree').style.height).toBe('408px')
+
+    await act(async () => second.root.unmount())
   })
 })
 
