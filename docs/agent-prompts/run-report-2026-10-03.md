@@ -391,6 +391,24 @@ flashed the view and dropped the reader's scroll position. `reloadTaskDetail` no
 keeps what is on screen if the refresh fails. A test renders the task page, triggers a refresh whose
 fetch hangs, and asserts the detail is still there and the loading text never appears.
 
+### Instance DBs are no longer offered as a task basis
+
+They were 540 of the maintainer's 1,314 candidates, and not one of them can ever carry a baseline. The
+picker's endpoint now drops them (`ReadSourceObjects(context, comparableOnly: true)` →
+`ComparableSourceObjects`), so the list is 774 objects read in 118 ms, while the device snapshot — the
+source browser, which should show what is on disk — still lists all 1,314. The row explanation stays,
+because a stage taken before this change still shows up in the task's own stage list.
+
+Checking the premise against the repository found it only half implemented. The compare design
+(`docs/design/tia-compare-fingerprint-first-design.md`) says instance DBs are "excluded from evidence
+snapshots, **XML export**, XML comparison, and deletion detection", and its table says "never export or
+diff"; ADR-0001 calls them "deliberately unmanaged native elements". The evidence half is real —
+`SourceEvidencePlanner` filters them and `ValidationTagStore` refuses them in schema v2 source evidence.
+The export half is not: `git ls-files` matches **537 of the 540** instance DBs in the maintainer's
+worktree, so they are exported and committed today. Whether to stop exporting them, and what to do
+about the 537 already tracked, changes what a baseline contains and is therefore a product decision
+rather than a defect fix.
+
 ### The database lock that froze the page
 
 **Symptom, after the six merges.** Adding a source object on the task page froze the page for about a
