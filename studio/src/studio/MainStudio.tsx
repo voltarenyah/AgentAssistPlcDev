@@ -2149,30 +2149,36 @@ export default function MainStudio() {
   // In the desktop shell the header doubles as the window caption: dragging
   // empty header space moves the borderless window, double-click toggles
   // maximize. No-ops in a plain browser (see studio/desktopWindowBridge.ts).
+  /** Fetches one task detail and enriches it; it touches no view state, so callers decide how it lands. */
+  const loadTaskDetail = async (task: api.EngineeringTask) => {
+    const workbenchId = selection.workbenchId!
+    const worktreeId = task.worktreeId ?? selection.worktreeId
+    const knownDevices = worktreeId ? devicesByWorktree[worktreeKey(workbenchId, worktreeId)] : undefined
+    const [detail, sessions, devices] = await Promise.all([
+      api.getEngineeringTaskDetail(workbenchId, task.taskId, worktreeId),
+      task.deviceId && worktreeId
+        ? api.listDeviceSessions(workbenchId, worktreeId, task.deviceId).catch(() => [])
+        : Promise.resolve([]),
+      task.deviceId && worktreeId && !knownDevices
+        ? api.listDevices(workbenchId, worktreeId).catch(() => [])
+        : Promise.resolve(knownDevices ?? []),
+    ])
+    if (task.deviceId && worktreeId && !knownDevices && devices.length > 0) {
+      setDevicesByWorktree(previous => ({ ...previous, [worktreeKey(workbenchId, worktreeId)]: devices }))
+    }
+    const sessionById = new Map(sessions.map(session => [session.sessionId, session]))
+    return { ...detail, sessions: detail.sessions.map(relationship => {
+      const session = sessionById.get(relationship.id)
+      return session ? { ...relationship, title: session.title, firstUserMessage: session.firstUserMessage, updatedAt: session.updatedAt, messageCount: session.messageCount, turnCount: session.turnCount } : relationship
+    }) }
+  }
+
   const openTaskDetail = async (task: api.EngineeringTask) => {
     if (!selection.workbenchId) return
     const requestId = ++taskDetailRequestId.current
     setTaskDetailTask(task); setTaskDetail(null); setTaskDetailError(null); setTaskDetailLoading(true)
     try {
-      const worktreeId = task.worktreeId ?? selection.worktreeId
-      const knownDevices = worktreeId ? devicesByWorktree[worktreeKey(selection.workbenchId, worktreeId)] : undefined
-      const [detail, sessions, devices] = await Promise.all([
-        api.getEngineeringTaskDetail(selection.workbenchId, task.taskId, worktreeId),
-        task.deviceId && worktreeId
-          ? api.listDeviceSessions(selection.workbenchId, worktreeId, task.deviceId).catch(() => [])
-          : Promise.resolve([]),
-        task.deviceId && worktreeId && !knownDevices
-          ? api.listDevices(selection.workbenchId, worktreeId).catch(() => [])
-          : Promise.resolve(knownDevices ?? []),
-      ])
-      if (task.deviceId && worktreeId && !knownDevices && devices.length > 0) {
-        setDevicesByWorktree(previous => ({ ...previous, [worktreeKey(selection.workbenchId!, worktreeId)]: devices }))
-      }
-      const sessionById = new Map(sessions.map(session => [session.sessionId, session]))
-      const enrichedDetail = { ...detail, sessions: detail.sessions.map(relationship => {
-        const session = sessionById.get(relationship.id)
-        return session ? { ...relationship, title: session.title, firstUserMessage: session.firstUserMessage, updatedAt: session.updatedAt, messageCount: session.messageCount, turnCount: session.turnCount } : relationship
-      }) }
+      const enrichedDetail = await loadTaskDetail(task)
       if (taskDetailRequestId.current === requestId) setTaskDetail(enrichedDetail)
     } catch (error) {
       if (taskDetailRequestId.current === requestId) setTaskDetailError(displayError(error))
@@ -2180,7 +2186,23 @@ export default function MainStudio() {
       if (taskDetailRequestId.current === requestId) setTaskDetailLoading(false)
     }
   }
-  const reloadTaskDetail = async () => { if (taskDetailTask) await openTaskDetail(taskDetailTask) }
+
+  /**
+   * Refreshes the open detail in place. It deliberately neither clears the detail nor raises the
+   * loading flag: a stage change, or an approved agent call, must not blank the page — that flashes
+   * the whole view and drops the reader's scroll position.
+   */
+  const reloadTaskDetail = async () => {
+    const task = taskDetailTask
+    if (!task) return
+    const requestId = ++taskDetailRequestId.current
+    try {
+      const enrichedDetail = await loadTaskDetail(task)
+      if (taskDetailRequestId.current === requestId) setTaskDetail(enrichedDetail)
+    } catch {
+      // Keep what is on screen: a failed refresh must not replace a working view with an error.
+    }
+  }
   const saveTaskDetail = async (patch: TaskEditPatch) => {
     if (!taskDetail || !selection.workbenchId) throw new Error('The task is no longer available.')
     setTaskDetailSaving(true)

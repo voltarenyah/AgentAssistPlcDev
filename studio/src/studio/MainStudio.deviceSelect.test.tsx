@@ -65,6 +65,7 @@ vi.mock('@/api/client', async importOriginal => {
     listDeviceSessions: vi.fn(async () => []),
     setActiveWorktreeTask: vi.fn(async () => ({ activeTask: task })),
     getEngineeringTaskDetail: vi.fn(async () => ({ task, sessions: [], commits: [], sourceObjects: [], svnRevisions: [] })),
+    removeTaskRelationship: vi.fn(async () => undefined),
     getKeyStatus: vi.fn(async () => ({ configured: true })),
     getDeepSeekBalance: vi.fn(async () => ({ isAvailable: true, balances: [], fetchedAt: '2026-08-02T00:00:00.000Z' })),
     getSessions: vi.fn(async () => []),
@@ -211,6 +212,48 @@ describe('MainStudio device selection resilience', () => {
 
     expect(host.textContent).toContain('Loading task details...')
     expect(api.getDeviceInfo).not.toHaveBeenCalled()
+  })
+
+  it('refreshes the open task detail in place instead of blanking the page', async () => {
+    // A stage change refreshes the detail; it must not replace the page the reader is looking at.
+    // clearAllMocks keeps implementations, so the previous test's hanging stubs are replaced here.
+    vi.mocked(api.getSessions).mockResolvedValue([])
+    vi.mocked(api.getDeviceInfo).mockResolvedValue(snapshot)
+    vi.mocked(api.listDeviceSessions).mockResolvedValue([])
+    vi.mocked(api.getEngineeringTaskDetail).mockResolvedValue({
+      task, sessions: [], commits: [], sourceObjects: [],
+      svnRevisions: [{ id: 'r42', edgeId: 'edge-svn', provenance: 'manual', isPrimary: false }],
+    } as api.EngineeringTaskDetail)
+
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+    clickText(host, 'DemoWB')
+    await act(async () => {})
+    clickText(host, 'master')
+    await act(async () => {})
+    // TASKS lists the selected target's tasks, so the device entry point has to be selected first.
+    act(() => {
+      host.querySelector<HTMLElement>('[data-device-target="dev1"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    act(() => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Open task Inspect startup sequence"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    expect(host.textContent).toContain('Task fields')
+
+    // The refresh hangs: the detail already on screen has to stay there.
+    vi.mocked(api.getEngineeringTaskDetail).mockImplementation(() => new Promise<api.EngineeringTaskDetail>(() => {}))
+    act(() => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Remove SVN revision r42"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+
+    expect(host.textContent).not.toContain('Loading task details...')
+    expect(host.textContent).toContain('Task fields')
   })
 
   it('fills in the device view when the snapshot arrives', async () => {
