@@ -156,7 +156,9 @@ const clickText = (host: HTMLElement, text: string) => {
 
 const clickAriaLabel = (host: HTMLElement, label: string) => {
   const target = host.querySelector<HTMLElement>(`[aria-label="${label}"]`)
-  expect(target, `clickable element with aria-label "${label}"`).toBeDefined()
+  // not.toBeNull(): null also satisfies toBeDefined(), which turned a missing element into a
+  // dispatchEvent TypeError instead of naming the label that is absent.
+  expect(target, `clickable element with aria-label "${label}"`).not.toBeNull()
   act(() => {
     target!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
@@ -198,7 +200,9 @@ const startStageApproval = async () => {
 
   clickText(host, 'AI chat')
   await act(async () => {})
-  clickAriaLabel(host, 'New session')
+  // The retired AI sessions page used to hold the only "New session" button; the chat surface's own
+  // empty state is the entry point now, exactly as items 001 and 006 left it.
+  clickAriaLabel(host, 'Create new chat session')
   await act(async () => {})
   await act(async () => {})
 
