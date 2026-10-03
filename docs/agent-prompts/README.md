@@ -56,6 +56,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 | [004](004-task-commits-with-involved-source-objects.md) | Task page Commits section: which source objects each commit touched | done | 002 | `studio/src/studio/workbench/TaskCommitsSection.tsx`, `src/ApiHost/WorkbenchApiModels.cs` |
 | [005](005-agent-stages-source-objects-with-approval.md) | Agent stages source objects for the current task through an approval card | done | 002 | `src/ApiHost/TaskSourceStagingTool.cs`, `studio/src/studio/workbench/TaskSourceObjectsSection.tsx` |
 | [006](006-remove-right-dock-ai-sessions-page.md) | Remove the right dock's AI sessions page and move its operations into the navigator's conversations | done | 001 | `studio/src/studio/chat/SessionDock.tsx`, `studio/src/studio/workbench/WorkbenchNavigator.tsx` |
+| [007](007-navigator-shared-row-treatment.md) | Left navigator: one shared row treatment — uniform selection, always-gray icons, aligned geometry | pending | — | `studio/src/studio/workbench/WorkbenchNavigator.tsx`, `docs/ui-spec/studio-information-architecture-ui-spec.md` |
 
 Items 002–005 implement the missing execution layer of an already accepted design: task-scoped
 source evidence (`docs/adr/ADR-0003-task-scoped-source-evidence.md`,
@@ -69,6 +70,12 @@ dock and retire the right dock's AI sessions page. They both touch `MainStudio.t
 regions — 001 changes the two forced-open call sites near the top of the component, 006 changes the
 dock's render block and the `SessionDock` import — so they can be implemented in separate worktrees at
 the same time; only the eventual merge touches both.
+
+Item 007 is presentational and independent of everything above: it gives the navigator's five row kinds
+one row treatment, so the current row is marked by the same background everywhere, an icon never changes
+colour with state, and the rows share one geometry and row rhythm. It is the queue's only item whose
+proof is an equality between rendered class sets rather than a behaviour, and its only other file is the
+information-architecture UI-spec row that currently claims the task surface's row chrome for `SESSIONS`.
 
 ## Known baseline in this environment
 
