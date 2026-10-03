@@ -404,8 +404,16 @@ Checking the premise against the repository found it only half implemented. The 
 snapshots, **XML export**, XML comparison, and deletion detection", and its table says "never export or
 diff"; ADR-0001 calls them "deliberately unmanaged native elements". The evidence half is real —
 `SourceEvidencePlanner` filters them and `ValidationTagStore` refuses them in schema v2 source evidence.
-The export half was not: `git ls-files` matched **537 of the 540** instance DBs in the maintainer's
-worktree, so they were exported and committed.
+The export half was not: the maintainer's worktree had committed **all 540** of its instance DBs (and all
+774 of its other source components), so they were exported and committed like any other object.
+
+> Correction. This section first reported "537 of the 540". That count came from comparing
+> `git ls-files` output against manifest paths as plain strings, and `git ls-files` **quotes** paths that
+> contain unusual characters — 101 of that worktree's paths, including the non-ASCII block names. The
+> quoted entries never matched, so files that were committed looked absent. Recounted with
+> `git ls-files -z` (raw, unquoted), the split is 540/540 and 774/774. The conclusion is unchanged and
+> stronger; the lesson is the one to keep: **read Git paths with `-z`**, or a quoting difference will
+> look exactly like missing history.
 
 The maintainer then decided to close that gap: **remove instance DBs from the export side entirely**
 (the project will be regenerated, so nothing has to migrate). `ManagedSourceScope` is now the single
@@ -456,6 +464,13 @@ know yet registers its anchor on first read, so a project created before this ch
 baseline was never indexed) still reads correctly.
 
 Two follow-ups the maintainer asked for, both now in:
+
+- **Backfill request, answered by measurement rather than a tool.** The maintainer asked to re-index the
+  project created before this fix; by then it had been deleted and replaced by `SWT2-PEI-N`, created
+  *after* it. That project already carries everything, which is the strongest evidence the change works
+  on a real 774-object project: the workbench graph holds **774 source-object anchors, 774
+  `commit→source_object` evidence edges, the baseline commit and its SVN revision**, and Git holds
+  **774 of 774** source XMLs in that baseline commit. Nothing needed backfilling.
 
 - **"No links" is an empty state, not an error.** The panel already rendered `Unassigned legacy source
   object` / `No linked commits yet.` for an object with no edges, but it *also* raised an error toast
