@@ -455,6 +455,20 @@ commit. It now builds one lookup per indexed commit.
 know yet registers its anchor on first read, so a project created before this change (or one whose
 baseline was never indexed) still reads correctly.
 
+Two follow-ups the maintainer asked for, both now in:
+
+- **"No links" is an empty state, not an error.** The panel already rendered `Unassigned legacy source
+  object` / `No linked commits yet.` for an object with no edges, but it *also* raised an error toast
+  for the 404, so a project whose objects simply had no history looked broken. `5abee60` treats
+  `GRAPH_ENTITY_NOT_FOUND`/404 as the answer it is (the two rows now read "No linked tasks yet." /
+  "No linked commits yet.") and keeps toasting a read that genuinely failed; two panel tests pin both
+  halves.
+- **A baseline records every source file, at scale.** `0bfbc03` indexes a 250-file baseline commit and
+  asserts one anchor and one evidence edge per file — the per-call lookup makes it a sub-second test,
+  where the old per-path manifest read would have made it minutes.
+
+Verified: frontend 86 files / 577 tests; `Agent.Tests` 469; `ApiHost.Tests` 184; build 0 errors.
+
 Verified: `ApiHost.Tests` 184 (the bootstrap endpoint test now asserts the baseline's evidence edge on the
 source object through the real routes — and the fixture had to be given the production
 `graphEvidenceIndexer`, without which the write it depends on silently no-ops), `Agent.Tests` 468,
