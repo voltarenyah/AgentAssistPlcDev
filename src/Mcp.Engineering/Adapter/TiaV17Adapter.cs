@@ -919,6 +919,14 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         var blocks = new List<(PlcBlock Block, string? GroupPath)>();
         foreach (var item in BlockEnumerator.Enumerate(plc.BlockGroup))
         {
+            if (ManagedSourceScope.IsExcluded(item.Block.GetType().Name))
+            {
+                // Instance DBs are outside the managed-source domain: TIA generates them from their
+                // FB, which is where the information worth tracking lives (see ManagedSourceScope).
+                // Never export one, so it can never reach Git or become a compare candidate.
+                continue;
+            }
+
             if (FailSafeBlocks.IsFailSafe(item.Block))
             {
                 // F-blocks cannot be exported via Openness; skip them instead of failing the export.
@@ -1119,6 +1127,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
                 case SyncAction.Remove:
                     DeleteComponentFile(dir, item.Record!);
                     removed.Add(ToChange(item.Record!, item.Reason));
+                    break;
+
+                case SyncAction.DropExcluded:
+                    // A record the export policy no longer manages (an instance DB an earlier manifest
+                    // listed): delete the stale file and drop the record. Deliberately not reported —
+                    // an instance DB leaving the export is a policy effect, not a TIA-side deletion.
+                    DeleteComponentFile(dir, item.Record!);
                     break;
 
                 case SyncAction.UpdateRecord:
@@ -1612,6 +1627,13 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         fBlockReadFailed = false;
         foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
         {
+            // Instance DBs are outside the managed-source domain (see ManagedSourceScope): they are
+            // not live candidates, so a diff never nominates or reports one.
+            if (ManagedSourceScope.IsExcluded(block.GetType().Name))
+            {
+                continue;
+            }
+
             // F-blocks cannot be exported via Openness; exclude them from sync planning.
             SafetySignatureProvider? safetyProvider = null;
             var isFailSafe = safetySurface is null
