@@ -351,6 +351,45 @@ and the services were then restarted with `.\launch.ps1 -NoBuild`; both are heal
 and `http://localhost:5239/api/status` return 200) and the dev server serves the new modules
 (`TaskSourceObjectsSection.tsx`, `TaskCommitsSection.tsx`).
 
+## A defect manual acceptance found, and its fix
+
+**Symptom, after the six merges.** Adding a source object on the task page froze the page for about a
+minute and then returned a 500: `Microsoft.Data.Sqlite.SqliteException: SQLite Error 5: 'database is
+locked'` at `EngineeringGraphService.RegisterEntity`, reached from the stage route.
+
+**Root cause, proven by a test rather than inferred.** `EngineeringGraphStore`'s constructor opened the
+schema-migration transaction unconditionally, and `SqliteConnection.BeginTransaction()` issues
+`BEGIN IMMEDIATE` — so **every** graph scope took the writer lock at open, even for a pure read with the
+schema already current. The task page opens several scopes per interaction (its stage listings plus the
+stage write), so concurrent scopes collided, and the driver retried a blocked `BEGIN IMMEDIATE` until
+its command timeout. That is the ~1 minute: the driver's retry window, not a slow query.
+
+**Fix (`4fd75d7`, two files).** The store opens the migration transaction only when the schema is
+actually behind, keeping the "newer than supported" guard as a cheap check instead; and it sets
+`PRAGMA busy_timeout = 5000` so a blocked statement waits briefly instead of failing. WAL was
+considered and deliberately rejected: it would change the workbench's on-disk file set and would make
+`FailedMigrationLeavesPriorSchemaAndDataReadable`'s byte-identity assertion false.
+
+**Regression test.** `OpeningASecondStoreTakesNoWriterLockWhileTheSchemaIsCurrent` holds a write
+transaction on one store and opens a second, which is the shape of the failure. With the old behaviour
+injected it fails after ~34 s with `database is locked` at `EngineeringGraphStore..ctor`; with the fix
+the whole class runs in ~165 ms. `AppliesABusyTimeoutSoABlockedStatementWaitsInsteadOfFailing` pins the
+timeout. Verified after the fix: solution build 0 errors; `Agent.Tests` 467; `ApiHost.Tests` 183;
+`Contracts.Tests` 112.
+
+**Two things worth carrying forward.**
+
+- The stage route still registers the **whole device manifest** on every stage call — one autocommit
+  per source object. It is a performance wart, not the cause, and narrowing it to the requested object
+  was written during diagnosis and then **reverted on purpose**: the loop is also what makes a
+  source-object entity exist for the source panel's traceability read, so removing it changes visible
+  behaviour. The follow-up is to register that manifest in **one** transaction, or to register lazily.
+- The first verification of the fix looked like a failure. It was not: restoring the source file with
+  `Copy-Item` preserves the *backup's* timestamp, so MSBuild judged the restored source older than the
+  assembly built from the patched source and skipped recompiling — the test ran the old binary. Force a
+  rebuild (`--no-incremental`) whenever a file is restored that way, or you will draw the wrong
+  conclusion about your own fix.
+
 ## Recommended review order
 
 1. `codex/001-right-dock-auto-expand` and `codex/006-remove-ai-sessions-dock` — independent, small, and
