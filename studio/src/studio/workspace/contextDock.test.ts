@@ -37,7 +37,7 @@ describe('resolveContextDock', () => {
     expect(state).toEqual({ visible: true, content: { kind: 'hardware' } })
   })
 
-  it('keeps device/session docks out of hardware pages even with stale focus', () => {
+  it('keeps device docks out of hardware pages even with stale focus', () => {
     // A stale workspace focus left over from before the hardware page opened
     // must not stack a device dock on top of the hardware dock.
     const stale = resolve({ deviceId: null, mainViewKind: 'hardware', hardwarePage: 'tree', focusedView: 'chat' })
@@ -60,15 +60,14 @@ describe('resolveContextDock', () => {
       .toEqual({ visible: true, content: { kind: 'none' } })
   })
 
-  it('shows the session dock for chat and source focus', () => {
-    expect(resolve({ focusedView: 'chat' }))
-      .toEqual({ visible: true, content: { kind: 'sessions' } })
-    expect(resolve({ focusedView: 'source' }))
-      .toEqual({ visible: true, content: { kind: 'sessions' } })
-  })
-
-  it('falls back to the session dock for a null focus with a device (current behavior)', () => {
-    expect(resolve({ focusedView: null }))
-      .toEqual({ visible: true, content: { kind: 'sessions' } })
+  it('shows no dock at all for a device on a chat, source or stale focus', () => {
+    // The AI sessions page that used to fill this state is retired; the conversations it listed are
+    // the navigator's SESSIONS section, so neither the dock shell nor its resize handle renders.
+    for (const focusedView of ['chat', 'source', 'inspector', null] as Array<WorkspaceViewKind | null>) {
+      expect(resolve({ focusedView }), `focus ${focusedView}`)
+        .toEqual({ visible: false, content: { kind: 'none' } })
+    }
+    // The device dock itself is unaffected: it still owns an overview focus.
+    expect(resolve({ focusedView: 'overview' })).toEqual({ visible: true, content: { kind: 'device' } })
   })
 })

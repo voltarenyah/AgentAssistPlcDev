@@ -6,7 +6,6 @@ const mainStudio = read('./MainStudio.tsx')
 const worktreeLanding = read('./workbench/WorktreeLandingPage.tsx')
 const deviceDock = read('./DevicePropertiesDock.tsx')
 const knowledgeDock = read('./KnowledgePropertiesDock.tsx')
-const sessionDock = read('./chat/SessionDock.tsx')
 const versionControl = read('./version-control/VersionControlPanel.tsx')
 
 describe('MainStudio dock visual structure', () => {
@@ -16,7 +15,7 @@ describe('MainStudio dock visual structure', () => {
   })
 
   it('uses the same sidebar surface and top line height for every right-dock panel', () => {
-    for (const source of [deviceDock, knowledgeDock, sessionDock]) {
+    for (const source of [deviceDock, knowledgeDock]) {
       expect(source).toContain('flex h-full w-full shrink-0 flex-col border-l bg-sidebar')
       expect(source).toContain('flex h-12 items-center gap-2 border-b px-3')
     }

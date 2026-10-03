@@ -56,7 +56,6 @@ import {
 import * as api from '@/api/client'
 import { resolveSourceObjects, type SourceChatContext } from '@/studio/plcSourceState'
 import AppAssistantPanel from '@/studio/appAssistant/AppAssistantPanel'
-import SessionDock from '@/studio/chat/SessionDock'
 import KnowledgePropertiesDock from '@/studio/KnowledgePropertiesDock'
 import DevicePropertiesDock from '@/studio/DevicePropertiesDock'
 import HardwareConfigurationView from '@/studio/HardwareConfigurationView'
@@ -1325,10 +1324,10 @@ export default function MainStudio() {
 
   /**
    * Re-reads one device's conversations, and that is the single point every conversation change goes
-   * through: the navigator lists the same conversations, so a rename, a delete or a re-binding made in
-   * the session dock or the chat panel has to land there too, not only in the dock's own list (AC-015,
-   * AC-018). Only this device's slice of the navigator's per-worktree list is replaced, so the worktree's
-   * other devices keep the entries they were loaded with.
+   * through: the navigator's `SESSIONS` rows are the same conversations, so a rename, a delete or a
+   * re-binding made there or in the chat panel has to land in the navigator too (AC-015, AC-018).
+   * Only this device's slice of the per-worktree list is replaced, so the worktree's other devices
+   * keep the entries they were loaded with.
    */
   const refreshChatSessions = useCallback(async (context = selectedChatContext) => {
     if (!context) return []
@@ -1354,10 +1353,18 @@ export default function MainStudio() {
     return savedSessions
   }, [replaceDeviceSessions, selectedChatContext])
 
-  const createChatSession = async () => {
+  /**
+   * Starts a conversation in the selected device's context. `taskless` clears the worktree's active
+   * task first, because the create route otherwise falls back to it and would bind a conversation the
+   * caller asked to leave unowned (ADR-0009).
+   */
+  const createChatSession = async (taskless = false) => {
     setChatBusy(true)
     try {
       await ensureChatContext()
+      if (taskless && selectedChatContext) {
+        await api.setActiveWorktreeTask(selectedChatContext.workbenchId, selectedChatContext.worktreeId, null)
+      }
       const session = await api.newChatSession()
       setChatTabs(previous => openTab(previous, session))
       workspaceService.focusView('chat')
@@ -1406,25 +1413,20 @@ export default function MainStudio() {
     }
   }
 
-  const removeChatSession = async (sessionId: string) => {
-    setChatBusy(true)
-    try {
-      await ensureChatContext()
-      await api.deleteChatSession(sessionId)
-      setChatTabs(previous => closeTab(previous, sessionId))
-      await refreshChatSessions()
-    } catch (error) {
-      showErrorToast(displayError(error))
-    } finally {
-      setChatBusy(false)
+  /**
+   * Exports a conversation. The device that owns it is named by the conversation rather than taken
+   * from the current selection, so a navigator row exports the conversation it is showing.
+   */
+  const exportChatSession = async (session: api.ChatSessionInfo) => {
+    const { workbenchId, worktreeId, deviceId } = session
+    if (!workbenchId || !worktreeId || !deviceId) {
+      showErrorToast('This conversation is not available in the device context that owns it.')
+      return
     }
-  }
-
-  const exportChatSession = async (sessionId: string) => {
     setChatBusy(true)
     try {
-      await ensureChatContext()
-      const result = await api.exportChatSession(sessionId)
+      await api.selectDevice(workbenchId, worktreeId, deviceId)
+      const result = await api.exportChatSession(session.sessionId)
       toast.success(`Session exported to ${result.path}`)
     } catch (error) {
       showErrorToast(displayError(error))
@@ -1457,11 +1459,6 @@ export default function MainStudio() {
     }
   }
 
-  /** Starts a conversation for one task; the create flow's own refresh is what shows it in the section. */
-  const startConversationForTask = async (task: api.EngineeringTask) => {
-    await createChatSessionForTask(task)
-  }
-
   const createChatSessionForTask = async (task: api.EngineeringTask | api.WorktreeTask) => {
     setChatBusy(true)
     try {
@@ -1492,13 +1489,31 @@ export default function MainStudio() {
     }
   }
 
-  const setChatSessionTask = async (sessionId: string, taskId: string | null) => {
+  /**
+   * Starts the conversation the `SESSIONS` section's header offers: bound to the task it names, or —
+   * with no task selected — the device's own, owned by no task, which is exactly the list the section
+   * is showing then.
+   */
+  const startConversationFromNavigator = async (task: api.EngineeringTask | null) => {
+    if (task) {
+      await createChatSessionForTask(task)
+      return
+    }
+    await createChatSession(true)
+  }
+
+  const setChatSessionTask = async (session: api.ChatSessionInfo, taskId: string | null) => {
+    const { workbenchId, worktreeId, deviceId } = session
+    if (!workbenchId || !worktreeId || !deviceId) {
+      showErrorToast('This conversation is not available in the device context that owns it.')
+      return
+    }
     setChatBusy(true)
     try {
-      await ensureChatContext()
-      const session = await api.setChatSessionTask(sessionId, taskId)
-      setChatTabs(previous => openTab(previous, session))
-      await refreshChatSessions()
+      await api.selectDevice(workbenchId, worktreeId, deviceId)
+      const updated = await api.setChatSessionTask(session.sessionId, taskId)
+      setChatTabs(previous => openTab(previous, updated))
+      await refreshChatSessions({ workbenchId, worktreeId, deviceId })
     } catch (error) {
       showErrorToast(displayError(error))
     } finally {
@@ -2487,7 +2502,9 @@ export default function MainStudio() {
             onOpenSession={session => void openNavigatorSession(session)}
             onRenameSession={(session, title) => void renameChatSession(session.sessionId, title)}
             onDeleteSession={session => void deleteNavigatorSession(session)}
-            onAddSession={task => void startConversationForTask(task)}
+            onExportSession={session => void exportChatSession(session)}
+            onSetSessionTask={(session, taskId) => void setChatSessionTask(session, taskId)}
+            onAddSession={task => void startConversationFromNavigator(task)}
             onSelectHardware={selectHardware}
             onReloadHardware={(workbench, worktree) => void reloadHardware(workbench, worktree)}
             onCompareHardware={(workbench, worktree) => void compareHardware(workbench, worktree)}
@@ -2801,20 +2818,6 @@ export default function MainStudio() {
                   onNavigateEntity={(kind, id) => setTraceabilityTarget({ kind, id })}
                   selectedTraceabilityTarget={traceabilityTarget}
                   onNavigateTask={taskId => { if (selection.workbenchId) void openTaskDetail({ taskId, workbenchId: selection.workbenchId, scope: 'project', worktreeId: null, title: taskId, type: 'feature', status: 'todo', priority: 0, intent: '', expectedResult: '', description: null, createdUtc: '', updatedUtc: '' }) }}
-                />
-              )}
-              {contextDock.content.kind === 'sessions' && (
-                <SessionDock
-                  sessions={deviceSessions}
-                  activeSessionId={chatTabs.activeId}
-                  busy={chatBusy}
-                  hidden={false}
-                  onCreate={() => void createChatSession()}
-                  onActivate={sessionId => void activateChatSession(sessionId)}
-                  onRename={(sessionId, title) => void renameChatSession(sessionId, title)}
-                  onRemove={sessionId => void removeChatSession(sessionId)}
-                  onExport={sessionId => void exportChatSession(sessionId)}
-                  onSetTask={(sessionId, taskId) => void setChatSessionTask(sessionId, taskId)}
                 />
               )}
             </div>

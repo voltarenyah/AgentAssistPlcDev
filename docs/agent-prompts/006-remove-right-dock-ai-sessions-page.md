@@ -1,6 +1,6 @@
 # 006. Remove the right dock's AI sessions page and move its operations into the navigator's conversations
 
-Status: pending
+Status: done
 Created: 2026-09-30
 Depends on: 001
 
@@ -105,4 +105,112 @@ Facts that keep the migration cheap:
 
 ## Evidence
 
-Not yet executed.
+Executed 2026-10-03 in the isolated worktree `.worktrees/006-remove-ai-sessions-dock`.
+
+**Done-when 7 — the `.\launch.ps1` runtime and browser pass — was not run.** The unattended-run
+instruction defers every runtime/browser/TIA step because the launcher binds the shared ports 5173/5239.
+The six other Done-when checks were verified; see *Checks skipped* for what that leaves unproven and
+*Residual risk* for what it costs.
+
+- **Branch**: `codex/006-remove-ai-sessions-dock` (the branch this item was given).
+- **Start state**: `git status --short` empty, `git log -2 --oneline` = `4e5409d`, `0e95939`. Item 001's
+  changes are absent from this branch, as intended: neither `selectWorktree` nor
+  `createChatSessionFromEmptyState` was touched, and the two items' edits to `MainStudio.tsx` are in
+  disjoint regions.
+- **Commits** (local only; nothing pushed, no PR, no merge):
+  - `b9e56c1` — `refactor: retire the right dock's AI sessions page (006)`
+  - `b6fd78d` — `docs: align the sessions decisions with the retired dock page (006)`
+  - `8dd8fb5` — `test: drive export and task binding through MainStudio (006)`
+  - the item-and-index commit that carries this evidence.
+
+The removal and the operation migration are one commit rather than two: `MainStudio`'s export and
+re-binding handlers change signature with the dock's call sites, and the navigator only receives the two
+new callbacks at the same time, so any split would leave an intermediate commit that either renders an
+empty right dock or wires a menu item to a handler that does nothing.
+
+### Files changed
+
+| File | Purpose |
+|---|---|
+| `studio/src/studio/workspace/contextDock.ts` | Drops the `sessions` content kind; a device on a chat, source, inspector or stale focus resolves to `visible: false` |
+| `studio/src/studio/workspace/contextDock.test.ts` | Replaces the two session-dock cases with the no-dock-at-all case, keeping the device dock's overview case as the contrast |
+| `studio/src/studio/chat/SessionDock.tsx`, `SessionDock.test.tsx` | Deleted |
+| `studio/src/studio/MainStudio.tsx` | Drops the `SessionDock` import and render block and the legacy `removeChatSession`; export and re-binding now act on the device the conversation names; the task-less start clears the worktree's active task; wires the two new navigator callbacks |
+| `studio/src/studio/workbench/WorkbenchNavigator.tsx` | Row menu gains export, attach/reassign (a `CommandDialog` picker over the worktree's device-bound tasks) and remove task; the header action is generalized to the scope the section is showing |
+| `studio/src/studio/chat/ChatWorkspace.tsx` | Empty-state copy no longer tells the user to use a session dock |
+| `studio/src/studio/workbench/WorkbenchNavigator.test.tsx` | Row-menu contents, export, the binding picker, the binding move, and the generalized header action |
+| `studio/src/studio/MainStudio.taskChat.test.tsx` | Rename and delete now driven from the row menu through the ADR-0010 route; a new case drives export and binding; asserts no `[data-dock="right"]` on a device chat |
+| `studio/src/studio/MainStudio.chatConfirm.test.tsx`, `MainStudio.chatFailure.test.tsx` | Start their conversation from the chat surface instead of the retired dock's `New session` button (same behaviour proven) |
+| `studio/src/studio/MainStudio.layout.test.ts` | The retired dock is no longer read for the shared right-dock panel style |
+| `docs/adr/ADR-0009-navigator-sessions-section.md` | Header-action and row-menu decisions, the dock page's retirement, and a new update-history table |
+| `docs/design/studio-navigator-sessions-design.md` | Row menu, header action, contracts, change surface, AC-016, new AC-019, verification rows, risks, update history v1.5 |
+| `docs/ui-spec/studio-information-architecture-ui-spec.md` | Session row-menu and header-action wording, AC-016, new AC-019, state table, update history v1.8 |
+| `docs/agent-prompts/006-remove-right-dock-ai-sessions-page.md`, `docs/agent-prompts/README.md` | This evidence and the queue row's status |
+
+The rest of the navigator is untouched: the other four sections and their menus, the collapse and
+separator contracts, the tag-filter rule, the deepest-section rule, the row content, and ADR-0009
+AC-018's behaviour (an open row leaves the navigator's selection alone, still asserted by
+`MainStudio.taskChat.test.tsx`'s navigator case).
+
+### Commands run and observed results
+
+| # | Command (from `studio/`) | Observed result |
+|---|---|---|
+| 1 | `npx tsc -b` | exit 0, no output; re-run after the final test addition, still exit 0 |
+| 2 | `npm run build` (`tsc -b && vite build`) | exit 0, `✓ built in 571ms`; the only warning is the pre-existing >500 kB chunk notice for `index-*.js` |
+| 3 | `npm test -- --run src/studio/workbench/WorkbenchNavigator.test.tsx src/studio/workspace/contextDock.test.ts` | `Test Files 2 passed`, `Tests 45 passed` |
+| 4 | `npm test -- --run src/studio/MainStudio.taskChat.test.tsx src/studio/MainStudio.layout.test.ts src/studio/MainStudio.deviceSelect.test.tsx` | `Test Files 3 passed`, `Tests 16 passed` |
+| 5 | `npm test -- --run src/studio/MainStudio.chatConfirm.test.tsx src/studio/MainStudio.chatFailure.test.tsx` | `Test Files 2 passed`, `Tests 5 passed` (these two failed on their first full-suite run, because they started their conversation from the retired dock's `New session` button; they now use the chat empty state) |
+| 6 | `npm test -- --run` | `Test Files 82 passed (82)`, `Tests 529 passed (529)`, exit 0. The suite held 531 cases before this item: minus the five retired `SessionDock` cases and one redundant `contextDock` case, plus four navigator cases and one `MainStudio` case |
+| 7 | `npm run lint` | `Found 15 warnings and 0 errors`; all 15 are in untouched files (`src/api/client.tags.test.ts`, five `src/components/ui/*`, `OperationTimingList.tsx`, `TaskSessionsDisclosure.tsx`, `TiaSessionsPanel.tsx`, `WorktreeTasksPanel.tsx`), i.e. no new warning |
+| 8 | `rg -n "SessionDock" studio/src` | no matches (exit 1); `rg -n "session dock" studio/src` matches only the retrofit comments in `contextDock.ts`/`contextDock.test.ts` that record the page's retirement |
+
+### Six-operation checklist
+
+Every operation the removed page offered, and the test that proves it is still reachable:
+
+| # | Operation | Entry point after this change | Test proving reachability |
+|---|---|---|---|
+| 1 | Open conversation | Row click and the row menu's `Open conversation` | `WorkbenchNavigator.test.tsx` — "opens a conversation from its row (AC-015)"; `MainStudio.taskChat.test.tsx` — "opens a navigator conversation without dropping the selected device or its task" (also proves the row click end to end) |
+| 2 | Rename | Row menu `Rename conversation` → dialog | `WorkbenchNavigator.test.tsx` — "renames a conversation from its row menu"; `MainStudio.taskChat.test.tsx` — "follows a conversation renamed from its SESSIONS row menu" |
+| 3 | Delete | Row menu `Delete conversation` → confirmation, on the ADR-0010 device-scoped route (not reimplemented) | `WorkbenchNavigator.test.tsx` — "asks before deleting a conversation, and only deletes when confirmed (AC-017)"; `MainStudio.taskChat.test.tsx` — "drops a conversation deleted from its SESSIONS row menu" (asserts `deleteDeviceSession('wb1','wt1','dev1','s1')`) |
+| 4 | Export | Row menu `Export conversation` | `WorkbenchNavigator.test.tsx` — "exports a conversation from its row menu"; `MainStudio.taskChat.test.tsx` — "exports a conversation and binds a task-less one from the SESSIONS row menu" (asserts `exportChatSession('s1')`) |
+| 5 | Attach / reassign / remove task | Row menu `Attach task` / `Reassign task` → `CommandDialog` picker over the worktree's device-bound tasks, and `Remove task` while bound | `WorkbenchNavigator.test.tsx` — "binds a conversation to one of the worktree's tasks through a picker, and clears it" (asserts the offered tasks, the chosen id and the `null` clear), "offers every operation the repository performs on a conversation row (AC-017)" (asserts the bound/unbound wording) and "moves a conversation between the task list and the task-less list when its binding changes"; `MainStudio.taskChat.test.tsx` — the export/bind case asserts `setChatSessionTask('s1','task1')` and that no `window.prompt` was called |
+| 6 | New session | `SESSIONS` header action, bound to the selected task or device-scoped and task-less when none is selected; the chat empty state also still creates one | `WorkbenchNavigator.test.tsx` — "starts a conversation in the scope the section is showing from its header (AC-016)" (asserts `onAddSession(null)` and `onAddSession(task)`); `MainStudio.chatConfirm.test.tsx` and `MainStudio.chatFailure.test.tsx` start a session from the chat empty state |
+
+Done-when 1's dock half is covered twice: the unit case in `contextDock.test.ts` (a device on chat,
+source, inspector or a stale focus returns `{ visible: false, content: { kind: 'none' } }`, while the
+overview focus still returns the device dock) and the DOM case in `MainStudio.taskChat.test.tsx` (after
+opening a conversation with a device selected, neither `[data-dock="right"]` nor
+`[aria-label="Resize context dock"]` is rendered).
+
+### Checks skipped
+
+- **Done-when 7 (runtime/browser)** — skipped, as the unattended-run instruction directs: `.\launch.ps1`
+  binds the shared ports 5173/5239, which a parallel run cannot own. Everything it would have checked is
+  covered by L1 component tests instead (no right dock for a device chat; export, task binding and the
+  new conversation from the `SESSIONS` section; the console-error check has no L1 equivalent).
+- No ApiHost/`dotnet` lane was run: the change touches no C# code, and this branch does not carry 001's
+  or any other item's backend work.
+
+### Residual risk
+
+- **Unverified in a real browser**: (a) that the dock's absence leaves no layout gap and the workspace
+  reclaims the width (the React tree no longer renders the shell, so the flex row should close, but a
+  screenshot was not taken); (b) the focus handoff from the row's `DropdownMenu` to the `CommandDialog`
+  picker — the component test proves the dialog renders and its item is selectable, not that the browser
+  focuses the search input on open; (c) that no console error accompanies either flow.
+- **`MainStudio`'s export and re-binding handlers** are now covered by one end-to-end component case each;
+  their error branches (`showErrorToast` on a missing device context or a failed call) stay untested, as
+  they were before.
+- **The task-less header action clears the worktree's active task** (`setActiveWorktreeTask(…, null)`)
+  before creating, so the new conversation cannot inherit a binding. That is a server-side selection
+  change, and no test asserts the server's active task afterwards; the component case binds a task-less
+  conversation without exercising the create path, which only the deferred runtime check would.
+- **The picker's task list is the worktree's device-bound tasks.** A binding to a task under another
+  device is therefore offered but lands the conversation in a list the selected device does not show
+  until that device is selected; the design document's risk table records this.
+- Item 001 is not merged into this branch, so the eventual merge must reconcile `MainStudio.tsx`'s
+  `selectWorktree` / `createChatSessionFromEmptyState` region with 001's edit; no conflict is expected
+  because the regions are disjoint, but the merge is a human step this run did not perform.
+

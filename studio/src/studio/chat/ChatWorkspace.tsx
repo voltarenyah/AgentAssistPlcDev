@@ -409,7 +409,7 @@ export default function ChatWorkspace({ tabs, busy, onCreateSession, confirmatio
           <MessageSquare className="mx-auto mb-3 h-7 w-7 text-chart-3" />
           <h2 className="text-sm font-semibold">No chat session open</h2>
           <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-            Use the session dock to start a new chat or resume a saved one.
+            Use the navigator's SESSIONS section to start a new chat or resume a saved one.
           </p>
           <button
             type="button"
