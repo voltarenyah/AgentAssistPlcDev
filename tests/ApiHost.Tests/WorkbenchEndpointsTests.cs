@@ -293,6 +293,40 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task EngineeringGraphSourceObjectApiGivesAnObjectTheManifestListsItsAnchor()
+    {
+        // A freshly created project has put nothing in the graph yet: source objects only entered it as
+        // a side effect of staging or of a commit's evidence, so the source browser's traceability read
+        // answered GRAPH_ENTITY_NOT_FOUND for every object in the project.
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        fixture.WriteManifest();
+
+        var entityId = $"{fixture.DeviceId}:ob-main";
+        var entity = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{wb}/engineering-graph/source_object/{Uri.EscapeDataString(entityId)}");
+
+        Assert.Equal(entityId, entity.GetProperty("id").GetString());
+        Assert.Equal(fixture.Context.WorktreeId, entity.GetProperty("worktreeId").GetString());
+        Assert.Equal(0, entity.GetProperty("tasks").GetArrayLength());
+        Assert.Equal(0, entity.GetProperty("commits").GetArrayLength());
+
+        // The anchor is real now, so a later read repairs nothing.
+        using (var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(
+                store, wb, id => id == fixture.Context.WorktreeId);
+            Assert.NotNull(graph.GetEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, entityId));
+        }
+
+        // An id the device manifest does not list stays not-found: the repair covers listed objects.
+        var missing = await fixture.Client.GetAsync(
+            $"/api/workbenches/{wb}/engineering-graph/source_object/{Uri.EscapeDataString($"{fixture.DeviceId}:not-listed")}");
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
+    [Fact]
     public async Task ActiveTaskApiSelectsSwitchesAndClearsCompatibleTasks()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);

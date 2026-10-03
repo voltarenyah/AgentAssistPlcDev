@@ -741,6 +741,7 @@ public static class WorkbenchEndpoints
             using var scope = graphs.Open(state.Workbench(id));
             var kind = ParseGraphEntityKind(entityKind);
             var entity = scope.Service.GetEntity(kind, entityId)
+                ?? RegisterListedSourceObject(id, kind, entityId, state, scope.Service)
                 ?? throw new KeyNotFoundException("GRAPH_ENTITY_NOT_FOUND");
             var directTasks = scope.Service.GetIncomingEdges(kind, entityId)
                 .Where(edge => edge.FromKind == GraphEntityKind.Task);
@@ -773,6 +774,7 @@ public static class WorkbenchEndpoints
                 JsonNamingPolicy.CamelCase.ConvertName(kind.ToString()), entity.EntityId,
                 entity.WorkbenchId, entity.WorktreeId, tasks, commits, sourceObjectEdges, unresolvedFiles));
         });
+
         app.MapPatch("/api/workbenches/{id}/tasks/{taskId}", (
             string id, string taskId, JsonElement body, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
@@ -2161,6 +2163,53 @@ public static class WorkbenchEndpoints
         edge.EdgeId, edge.FromId, JsonNamingPolicy.CamelCase.ConvertName(edge.ToKind.ToString()), edge.ToId,
         JsonNamingPolicy.CamelCase.ConvertName(edge.RelationKind.ToString()),
         JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary);
+
+    /// <summary>
+    /// Registers the graph anchor of a device source object that the device manifest really lists, and
+    /// returns it, so a read of a legitimate object does not fail just because nothing has put it in the
+    /// graph yet.
+    /// </summary>
+    /// <remarks>
+    /// Source objects only enter the graph as a side effect: a stage call registers the device's whole
+    /// manifest, and a commit's evidence registers the files it touched. A freshly created project has
+    /// done neither, so every source object in it answered <c>GRAPH_ENTITY_NOT_FOUND</c> — which the
+    /// source browser shows as an error on every click. The entity is an anchor for edges rather than
+    /// evidence of its own, so creating it on first read is safe and costs one idempotent insert.
+    /// </remarks>
+    private static GraphEntity? RegisterListedSourceObject(
+        string workbenchId,
+        GraphEntityKind kind,
+        string entityId,
+        WorkbenchApiState state,
+        EngineeringGraphService graph)
+    {
+        if (kind != GraphEntityKind.SourceObject) return null;
+        var separator = entityId.IndexOf(':');
+        if (separator <= 0) return null;
+        var deviceId = entityId[..separator];
+        var sourceObjectId = entityId[(separator + 1)..];
+        // Only the device of the selection the caller is looking at: the entity id carries a device id
+        // but no worktree, and a workbench may register the same device in more than one worktree.
+        var selection = state.Selection;
+        if (selection?.WorkbenchId != workbenchId || selection.WorktreeId is null) return null;
+        (DeviceContext Context, DeviceMetadata Metadata) device;
+        try
+        {
+            device = state.Device(deviceId);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        var listed = DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot)
+            .FirstOrDefault(item => string.Equals(item.Id, sourceObjectId, StringComparison.Ordinal));
+        if (listed is null) return null;
+        var anchor = new GraphEntity(GraphEntityKind.SourceObject, entityId, workbenchId,
+            device.Context.WorktreeId, deviceId, listed.RelativePath);
+        graph.RegisterEntity(anchor);
+        return anchor;
+    }
 
     private static GraphEntityKind ParseGraphEntityKind(string value) => value.Trim().ToLowerInvariant() switch
     {
