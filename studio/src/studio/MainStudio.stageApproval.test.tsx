@@ -104,6 +104,7 @@ vi.mock('@/api/client', async importOriginal => {
     })),
     listDevices: vi.fn(async () => [{ deviceId: 'dev1', plcName: 'PLC_Demo' }]),
     getDeviceInfo: vi.fn(async () => snapshot),
+    listDeviceSourceObjects: vi.fn(async () => snapshot.sourceObjects),
     listDeviceSessions: vi.fn(async () => []),
     getKeyStatus: vi.fn(async () => ({ configured: true })),
     getDeepSeekBalance: vi.fn(async () => ({ isAvailable: true, balances: [], fetchedAt: '2026-08-02T00:00:00.000Z' })),

@@ -3,7 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/api/client'
-import type { DeviceSnapshot, SourceObjectInfo, TaskSourceStage, WorktreeSourceStage } from '@/api/client'
+import type { SourceObjectInfo, TaskSourceStage, WorktreeSourceStage } from '@/api/client'
 import TaskSourceObjectsSection from './TaskSourceObjectsSection'
 
 const toastMock = vi.hoisted(() => ({ error: vi.fn() }))
@@ -12,7 +12,7 @@ vi.mock('sonner', () => ({ toast: toastMock }))
 vi.mock('@/api/client', () => ({
   listTaskSourceStages: vi.fn(),
   listWorktreeSourceStages: vi.fn(),
-  getDeviceInfo: vi.fn(),
+  listDeviceSourceObjects: vi.fn(),
   stageTaskSourceObject: vi.fn(),
   releaseTaskSourceObject: vi.fn(),
 }))
@@ -20,7 +20,13 @@ vi.mock('@/components/ui/toast', () => ({ showErrorToast: toastMock.error }))
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const sourceObject = (id: string, name: string, category: string, relativePath: string): SourceObjectInfo => ({
+const sourceObject = (
+  id: string,
+  name: string,
+  category: string,
+  relativePath: string,
+  evidenceKind: string | null = null,
+): SourceObjectInfo => ({
   id,
   name,
   number: null,
@@ -32,9 +38,8 @@ const sourceObject = (id: string, name: string, category: string, relativePath: 
   isKnowHowProtected: null,
   modifiedDate: null,
   status: null,
+  evidenceKind,
 })
-
-const deviceSnapshot = (sourceObjects: SourceObjectInfo[]) => ({ sourceObjects } as unknown as DeviceSnapshot)
 
 const stage = (sourceObjectId: string, baselineEvidenceJson: string | null = '{ "id": "main" }'): TaskSourceStage => ({
   taskId: 'task-1',
@@ -88,7 +93,7 @@ describe('TaskSourceObjectsSection', () => {
   beforeEach(() => {
     vi.mocked(api.listTaskSourceStages).mockReset()
     vi.mocked(api.listWorktreeSourceStages).mockReset()
-    vi.mocked(api.getDeviceInfo).mockReset()
+    vi.mocked(api.listDeviceSourceObjects).mockReset()
     vi.mocked(api.stageTaskSourceObject).mockReset()
     vi.mocked(api.releaseTaskSourceObject).mockReset()
     toastMock.error.mockReset()
@@ -96,10 +101,10 @@ describe('TaskSourceObjectsSection', () => {
     vi.mocked(api.listWorktreeSourceStages).mockResolvedValue([])
     vi.mocked(api.stageTaskSourceObject).mockResolvedValue(stage('device-1:main'))
     vi.mocked(api.releaseTaskSourceObject).mockResolvedValue(undefined)
-    vi.mocked(api.getDeviceInfo).mockResolvedValue(deviceSnapshot([
+    vi.mocked(api.listDeviceSourceObjects).mockResolvedValue([
       sourceObject('main', 'Main', 'OB', 'Blocks/Main.xml'),
       sourceObject('plant', 'Plant', 'Tags', 'Tags/Plant.xml'),
-    ]))
+    ])
   })
 
   afterEach(() => {
@@ -125,6 +130,21 @@ describe('TaskSourceObjectsSection', () => {
 
     expect(host.querySelector('[data-testid="stage-baseline-missing"]')?.textContent)
       .toContain('No committed Git content yet')
+  })
+
+  it('names the excluded kind when a staged instance DB has no baseline', async () => {
+    // An instance DB is excluded from fingerprint comparison by design, so "commit it once" would be
+    // false advice; the row has to say which of the two cases it is.
+    vi.mocked(api.listTaskSourceStages).mockResolvedValue([stage('device-1:clock', null)])
+    vi.mocked(api.listDeviceSourceObjects).mockResolvedValue([
+      sourceObject('clock', 'PC_Clock', 'DB', 'DB/PC_Clock.xml', 'instance-db'),
+    ])
+
+    const { host } = await render(section())
+
+    const note = host.querySelector('[data-testid="stage-baseline-missing"]')
+    expect(note?.textContent).toContain('excluded from fingerprint comparison')
+    expect(note?.textContent).not.toContain('Commit it once')
   })
 
   it('offers the add action in the empty state and filters the dialog by query and type', async () => {

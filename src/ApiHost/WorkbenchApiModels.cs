@@ -1746,6 +1746,14 @@ public static class WorkbenchEndpoints
             var selected = s.Device(workbenchId, worktreeId, device);
             return Results.Ok(snapshots.Read(selected.Context, selected.Metadata).Blocks);
         });
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source-objects", (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
+        {
+            var selected = s.Device(workbenchId, worktreeId, device);
+            // The task page's picker reads this list and nothing else; the full snapshot also crawls
+            // every block on disk, which costs seconds on an export of more than a thousand objects.
+            return Results.Ok(snapshots.ReadSourceObjects(selected.Context));
+        });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/refresh/stage", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
             WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct,

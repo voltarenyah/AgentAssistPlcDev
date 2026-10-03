@@ -741,6 +741,8 @@ export type SourceObjectInfo = {
   isKnowHowProtected: boolean | null
   modifiedDate: string | null
   status: string | null
+  /** Fingerprint-comparison kind; `instance-db` is excluded from evidence, so it never has a baseline. */
+  evidenceKind?: string | null
 }
 
 export type SourceInspectionMember = { name: string; dataType: string | null; defaultValue: string | null; accessibility: string | null; comment: string | null }
@@ -1235,6 +1237,9 @@ const devicePath = (workbenchId: string, worktreeId: string, deviceId: string) =
   `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}`
 export const getDeviceInfo = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<DeviceSnapshot>(devicePath(workbenchId, worktreeId, deviceId))
+/** The device's exported source objects only: the picker needs this list, not the whole snapshot. */
+export const listDeviceSourceObjects = (workbenchId: string, worktreeId: string, deviceId: string) =>
+  workbenchRequest<SourceObjectInfo[]>(`${devicePath(workbenchId, worktreeId, deviceId)}/source-objects`)
 export const openDeviceProject = (
   workbenchId: string,
   worktreeId: string,

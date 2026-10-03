@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Loader2, Plus } from 'lucide-react'
 import * as api from '@/api/client'
-import type { DeviceSnapshot, SourceObjectInfo, TaskSourceStage, WorktreeSourceStage } from '@/api/client'
+import type { SourceObjectInfo, TaskSourceStage, WorktreeSourceStage } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { showErrorToast } from '@/components/ui/toast'
@@ -45,7 +45,7 @@ const stageIdentity = (deviceId: string, sourceId: string) => `${deviceId}:${sou
 export default function TaskSourceObjectsSection({ workbenchId, worktreeId, taskId, deviceId, deviceName, refreshToken = 0, onChanged }: Props) {
   const [stages, setStages] = useState<TaskSourceStage[]>([])
   const [owners, setOwners] = useState<WorktreeSourceStage[]>([])
-  const [snapshot, setSnapshot] = useState<DeviceSnapshot | null>(null)
+  const [candidates, setCandidates] = useState<SourceObjectInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState<string | null>(null)
@@ -56,14 +56,16 @@ export default function TaskSourceObjectsSection({ workbenchId, worktreeId, task
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [taskStages, worktreeStages, device] = await Promise.all([
+      const [taskStages, worktreeStages, sourceObjects] = await Promise.all([
         api.listTaskSourceStages(workbenchId, worktreeId, taskId),
         api.listWorktreeSourceStages(workbenchId, worktreeId),
-        api.getDeviceInfo(workbenchId, worktreeId, deviceId),
+        // The source objects alone: the full device snapshot also crawls every block on disk, which
+        // costs seconds on a large export and none of it is shown here.
+        api.listDeviceSourceObjects(workbenchId, worktreeId, deviceId),
       ])
       setStages(taskStages)
       setOwners(worktreeStages)
-      setSnapshot(device)
+      setCandidates(sourceObjects)
       setError(null)
     } catch (caught) {
       setError(errorMessage(caught))
@@ -74,7 +76,6 @@ export default function TaskSourceObjectsSection({ workbenchId, worktreeId, task
 
   useEffect(() => { void load() }, [load])
 
-  const candidates = useMemo<SourceObjectInfo[]>(() => snapshot?.sourceObjects ?? [], [snapshot])
   const counts = useMemo(() => countSourceObjectsByType(candidates), [candidates])
   const matching = useMemo(() => filterSourceObjects(candidates, typeFilter, query), [candidates, typeFilter, query])
   const limited = useMemo(() => limitSourceObjects(matching), [matching])
@@ -155,7 +156,7 @@ export default function TaskSourceObjectsSection({ workbenchId, worktreeId, task
       variant="outline"
       size="xs"
       aria-label="Add source object"
-      disabled={loading || pending !== null || !snapshot}
+      disabled={loading || pending !== null || candidates.length === 0}
       onClick={() => setOpen(true)}
     >
       <Plus className="h-3 w-3" /> Add source object
@@ -173,7 +174,11 @@ export default function TaskSourceObjectsSection({ workbenchId, worktreeId, task
         <span className="shrink-0 text-xs text-muted-foreground">{deviceName || deviceId}</span>
         {baselineEvidenceJson === null && (
           <span className="w-full text-xs text-muted-foreground" data-testid="stage-baseline-missing">
-            No committed Git content yet, so this object has no fingerprint baseline. Commit it once; comparison reports it until then.
+            {info?.evidenceKind === 'instance-db'
+              // Instance DBs are excluded from managed-source evidence by design, so no commit can
+              // ever give one a baseline; telling the reader to commit it would be false advice.
+              ? 'Instance DBs are excluded from fingerprint comparison, so this object has no baseline and committing it will not create one.'
+              : 'No committed Git content yet, so this object has no fingerprint baseline. Commit it once; comparison reports it until then.'}
           </span>
         )}
         <Button

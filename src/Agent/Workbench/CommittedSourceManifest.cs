@@ -20,6 +20,20 @@ namespace Agent.Workbench;
 public static class CommittedSourceManifest
 {
     /// <summary>
+    /// The fingerprint-comparison kind of one manifest component, by the evidence model's rules.
+    /// Callers surface it so a reader can be told why an object has no baseline: `instance-db` is
+    /// excluded from managed-source evidence, so it never has one, however often it is committed.
+    /// </summary>
+    public static string EvidenceKindOf(string category, string? siemensTypeName) =>
+        category switch
+        {
+            "Tags" => ManagedSourceEvidenceKind.TagTable,
+            "UDT" => ManagedSourceEvidenceKind.Udt,
+            _ when string.Equals(siemensTypeName, "InstanceDB", StringComparison.Ordinal) => ManagedSourceEvidenceKind.InstanceDb,
+            _ => ManagedSourceEvidenceKind.StandardBlock,
+        };
+
+    /// <summary>
     /// Returns the committed fingerprint evidence for <paramref name="sourceObjectId"/>, or null
     /// when the manifest is absent/unparseable, the object is not listed (it has no committed Git
     /// content yet), or the object carries no comparable evidence (an Instance DB, or a component
@@ -87,13 +101,7 @@ public static class CommittedSourceManifest
         string relativePath)
     {
         var siemensTypeName = ReadString(component, "siemensTypeName");
-        var kind = category switch
-        {
-            "Tags" => ManagedSourceEvidenceKind.TagTable,
-            "UDT" => ManagedSourceEvidenceKind.Udt,
-            _ when string.Equals(siemensTypeName, "InstanceDB", StringComparison.Ordinal) => ManagedSourceEvidenceKind.InstanceDb,
-            _ => ManagedSourceEvidenceKind.StandardBlock,
-        };
+        var kind = EvidenceKindOf(category, siemensTypeName);
         if (string.Equals(kind, ManagedSourceEvidenceKind.InstanceDb, StringComparison.Ordinal))
         {
             // Instance DBs are excluded from managed-source evidence and comparison decisions.

@@ -9,7 +9,7 @@ vi.mock('@/api/client', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api/client')>()),
   listTaskSourceStages: vi.fn(async () => []),
   listWorktreeSourceStages: vi.fn(async () => []),
-  getDeviceInfo: vi.fn(async () => ({ sourceObjects: [] })),
+  listDeviceSourceObjects: vi.fn(async () => []),
   stageTaskSourceObject: vi.fn(),
   releaseTaskSourceObject: vi.fn(),
   // The Commits section reads the worktree history and the commit's own graph entity; both stay

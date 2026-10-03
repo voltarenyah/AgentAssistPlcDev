@@ -51,7 +51,11 @@ public sealed record SourceObjectInfo(
     bool? IsKnowHowProtected,
     DateTimeOffset? ModifiedDate,
     string? Status,
-    FingerprintSet? FingerprintComponents = null);
+    FingerprintSet? FingerprintComponents = null,
+    /// <summary>Fingerprint-comparison kind, as the evidence model classifies it. `instance-db` is
+    /// excluded from managed-source evidence, which is why such an object never acquires a stage
+    /// baseline however often it is committed.</summary>
+    string? EvidenceKind = null);
 
 public sealed record DeviceSnapshot(
     string WorkbenchId,
@@ -75,24 +79,7 @@ public sealed class DeviceSnapshotReader
     {
         var diagnostics = new List<string>();
         var blocks = ReadBlocks(context, diagnostics);
-        var sourceObjects = ReadManifestSourceObjects(context.SourceRoot);
-        if (sourceObjects.Count == 0)
-        {
-            // No (or legacy) manifest: degrade to the block crawl so the source browser still
-            // lists blocks — without manifest-only metadata (hashes, timestamps).
-            sourceObjects = blocks.Select(block => new SourceObjectInfo(
-                block.Id,
-                block.Name,
-                block.Number,
-                block.BlockType,
-                block.ProgrammingLanguage,
-                block.GroupPath,
-                block.RelativePath,
-                null,
-                null,
-                null,
-                null)).ToArray();
-        }
+        var sourceObjects = ResolveSourceObjects(ReadManifestSourceObjects(context.SourceRoot), blocks);
 
         var state = !File.Exists(context.KnowledgeDbPath)
             ? "missing"
@@ -116,6 +103,39 @@ public sealed class DeviceSnapshotReader
             diagnostics,
             ReadDeviceExportMetadata(context));
     }
+
+    /// <summary>
+    /// Just the source objects a device exposes. <see cref="Read"/> also crawls every block on disk,
+    /// which on a large export costs seconds; the task page's picker needs only this list.
+    /// </summary>
+    public IReadOnlyList<SourceObjectInfo> ReadSourceObjects(DeviceContext context)
+    {
+        var manifest = ReadManifestSourceObjects(context.SourceRoot);
+        if (manifest.Count > 0) return manifest;
+        return ResolveSourceObjects(manifest, ReadBlocks(context, new List<string>()));
+    }
+
+    /// <summary>Manifest objects, or the block crawl when the manifest is missing or legacy. The
+    /// fallback carries no manifest-only metadata (hashes, timestamps).</summary>
+    private static IReadOnlyList<SourceObjectInfo> ResolveSourceObjects(
+        IReadOnlyList<SourceObjectInfo> manifest,
+        IReadOnlyList<OfflineBlockInfo> blocks) =>
+        manifest.Count > 0
+            ? manifest
+            : blocks.Select(block => new SourceObjectInfo(
+                block.Id,
+                block.Name,
+                block.Number,
+                block.BlockType,
+                block.ProgrammingLanguage,
+                block.GroupPath,
+                block.RelativePath,
+                null,
+                null,
+                null,
+                null,
+                null,
+                CommittedSourceManifest.EvidenceKindOf(block.BlockType, null))).ToArray();
 
     /// <summary>Manifest "device" section — tolerant read: missing/legacy manifest, missing
     /// property, or unparseable JSON all degrade to null. Source discovery never depends on
@@ -227,7 +247,8 @@ public sealed class DeviceSnapshotReader
                     ReadBool(component, "isKnowHowProtected"),
                     ReadDate(component, "modifiedDate"),
                     ReadString(component, "status"),
-                    fingerprintComponents));
+                    fingerprintComponents,
+                    CommittedSourceManifest.EvidenceKindOf(category, ReadString(component, "siemensTypeName"))));
             }
 
             return objects
