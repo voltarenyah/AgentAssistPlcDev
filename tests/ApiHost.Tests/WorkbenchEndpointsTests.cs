@@ -2592,9 +2592,29 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             stageExport: (outputDir, plcName) =>
             {
                 Assert.Equal("PLC_1", plcName);
+                // The fixture already wrote the device manifest listing "Blocks/Main [OB1].xml", so the
+                // export has to produce that same relative path for the baseline's evidence to resolve
+                // to the source object — and it carries the complete component the reader requires
+                // (name and category), which the comparison-fingerprint helper omits.
                 Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
-                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
-                WriteComparisonManifest(outputDir, "live-fingerprint");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main [OB1].xml"), "<live/>");
+                File.WriteAllText(
+                    Path.Combine(outputDir, "metadata.json"),
+                    """
+                    {
+                      "schemaVersion": "1.0",
+                      "components": [
+                        {
+                          "id": "ob-main",
+                          "name": "Main",
+                          "category": "OB",
+                          "sourcePath": "Program/Main",
+                          "exportedFile": "Blocks/Main [OB1].xml",
+                          "fingerprints": "live-fingerprint"
+                        }
+                      ]
+                    }
+                    """);
             });
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{fixture.DeviceRoute}/bootstrap");
         request.Headers.Add("X-Operation-Id", "bootstrap-1");
@@ -2615,7 +2635,14 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             JsonValueKind.Null,
             body.GetProperty("baseline").GetProperty("error").ValueKind);
         Assert.True(body.TryGetProperty("knowledge", out _));
-        Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
+        Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main [OB1].xml"));
+        // The baseline is what puts a new project's source objects into the workbench graph: the source
+        // browser reads each object's task and commit links from there, and before this the baseline was
+        // never indexed, so every object answered GRAPH_ENTITY_NOT_FOUND.
+        var sourceDetail = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/engineering-graph/source_object/{fixture.DeviceId}:ob-main");
+        Assert.Equal("baseline-1", sourceDetail.GetProperty("commits")[0].GetProperty("id").GetString());
+        Assert.Equal("evidence", sourceDetail.GetProperty("commits")[0].GetProperty("provenance").GetString());
         Assert.Equal(["vc_log", "vc_commit_selected"], fixture.VersionControl.Calls);
         var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/bootstrap-1");
         Assert.Equal("bootstrap-device", operation.GetProperty("operationType").GetString());
@@ -3284,7 +3311,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                         store,
                         sp.GetRequiredService<DeviceReconciler>(),
                         sp.GetRequiredService<DeviceSourceResolver>(),
-                        sp.GetRequiredService<DeviceOperationLock>()));
+                        sp.GetRequiredService<DeviceOperationLock>(),
+                        // Production wires commit-evidence indexing; a fixture that omitted it would
+                        // silently skip the graph writes the endpoints under test depend on.
+                        graphEvidenceIndexer: new Agent.Workbench.EngineeringGraph.EngineeringGraphEvidenceIndexerProvider()));
                 });
             });
             var client = factory.CreateClient();

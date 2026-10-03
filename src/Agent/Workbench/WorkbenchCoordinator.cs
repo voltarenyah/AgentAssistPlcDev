@@ -732,6 +732,17 @@ public sealed class WorkbenchCoordinator
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            // The baseline is what puts a new project's source objects into the workbench graph: the
+            // source browser reads each object's task and commit links from there, so a baseline that
+            // never got indexed left every one of them reporting GRAPH_ENTITY_NOT_FOUND. Best effort,
+            // exactly like the evidence of every other commit.
+            var baselineIndexingWarning = IndexGraphEvidence(
+                workbench, worktreeId, baselineCommit.Sha, baselinePaths, nativeBaseline.Revision);
+            if (baselineIndexingWarning is not null)
+            {
+                progress?.Report(baselineIndexingWarning);
+            }
+
             var baselineStateDevices = baselineChecksums
                 .Where(checksum => checksum.IsCompiled)
                 .Select(checksum =>
@@ -2583,6 +2594,14 @@ public sealed class WorkbenchCoordinator
                     token)
                 .ConfigureAwait(false);
             baseline = baseline with { CommitSha = commit.Sha };
+            // Register the baseline's source objects in the workbench graph, the same way every other
+            // commit's evidence is registered: without it a fresh project's source browser cannot read
+            // any object's task or commit links.
+            var indexingWarning = IndexBaselineEvidence(device, commit.Sha, initialSourcePaths, null);
+            if (indexingWarning is not null)
+            {
+                progress?.Report(indexingWarning);
+            }
         }
 
         var knowledge = await RebuildKnowledgeAsync(device, token, progress).ConfigureAwait(false);
@@ -2658,6 +2677,13 @@ public sealed class WorkbenchCoordinator
                     token)
                 .ConfigureAwait(false);
             commitSha = commit.Sha;
+            // Same reason as the single-device bootstrap: the baseline is what makes a new project's
+            // source objects readable in the workbench graph.
+            var baselineIndexingWarning = IndexBaselineEvidence(selectedDevice, commit.Sha, initialSourcePaths, null);
+            if (baselineIndexingWarning is not null)
+            {
+                progress?.Report(baselineIndexingWarning);
+            }
             baselines = baselines
                 .Select(result => result with { Baseline = result.Baseline with { CommitSha = commitSha } })
                 .ToList();
@@ -4025,6 +4051,23 @@ public sealed class WorkbenchCoordinator
                 new VersionControlTimelineGitCommit(sha, "Automation Workbench", "app-mediated commit",
                     DateTimeOffset.UtcNow.ToString("O"), paths, null, svnRevision, false));
             return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"Commit '{sha}' succeeded, but evidence indexing was not recorded: {exception.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Indexes one baseline commit's evidence for a device's worktree. Best effort: the commit has
+    /// already succeeded, so a workbench or graph that cannot be read is a warning, not a failure.
+    /// </summary>
+    private string? IndexBaselineEvidence(DeviceContext device, string sha, IReadOnlyList<string> paths, long? svnRevision)
+    {
+        try
+        {
+            var workbench = catalog.Load(device.WorkbenchRoot);
+            return IndexGraphEvidence(workbench, device.WorktreeId, sha, paths, svnRevision);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
