@@ -353,6 +353,26 @@ and `http://localhost:5239/api/status` return 200) and the dev server serves the
 
 ## A defect manual acceptance found, and its fix
 
+### A stage row can say the wrong reason for a missing baseline
+
+The task page tells a staged object with no baseline: "No committed Git content yet, so this object has
+no fingerprint baseline. Commit it once; comparison reports it until then." For part of the catalogue
+that advice is wrong. Measured on the maintainer's live workbench (`Fix PEI Import Error`, device
+`Sino_PEI`): the committed manifest lists **1,314** components, of which **540 are instance DBs**, and
+`ManagedSourceEvidenceKind.InstanceDb` is excluded from managed-source evidence and comparison by
+design, so `CommittedSourceManifest` returns no evidence for them and the stage baseline is null by
+construction. Their own `task_source_stages` history agrees: of 10 rows, the only two with a null
+baseline are `PC_Clock` and `G_Automatic_Director_Cav_A` — both `DB/InstanceDB`, while every OB, FB, FC
+and UDT row carries a baseline.
+
+Two consequences worth acting on: the row should say *which* of the two cases it is (no committed
+content yet, or a kind that is excluded from fingerprint comparison), which needs the server to report
+the reason; and instance DBs must stay **stageable** even though they are never compared, because the
+stage list is also the commit whitelist that `TASK_COMMIT_STAGE_MISMATCH` enforces — hiding them from
+the picker would make their changes uncommittable.
+
+### The database lock that froze the page
+
 **Symptom, after the six merges.** Adding a source object on the task page froze the page for about a
 minute and then returned a 500: `Microsoft.Data.Sqlite.SqliteException: SQLite Error 5: 'database is
 locked'` at `EngineeringGraphService.RegisterEntity`, reached from the stage route.
@@ -379,11 +399,16 @@ timeout. Verified after the fix: solution build 0 errors; `Agent.Tests` 467; `Ap
 
 **Two things worth carrying forward.**
 
-- The stage route still registers the **whole device manifest** on every stage call — one autocommit
-  per source object. It is a performance wart, not the cause, and narrowing it to the requested object
-  was written during diagnosis and then **reverted on purpose**: the loop is also what makes a
-  source-object entity exist for the source panel's traceability read, so removing it changes visible
-  behaviour. The follow-up is to register that manifest in **one** transaction, or to register lazily.
+- The stage route registers the **whole device manifest** on every stage call. Narrowing it to the
+  requested object was written during diagnosis and then **reverted on purpose**: the loop is also what
+  makes a source-object entity exist for the source panel's traceability read, so removing it changes
+  visible behaviour. Instead the manifest is now registered in **one transaction**
+  (`EngineeringGraphService.RegisterEntities`, `2e7a696`), which keeps every registration and removes
+  the per-object autocommit. Measured on the live workbench, whose manifest holds **1,314** components:
+  a stage click went from **9.7 s to 0.16 s** (first call 0.53 s), and the .NET lanes stayed green
+  (Agent.Tests 467, ApiHost.Tests 183).
+- The device snapshot the task page loads for its candidate list still costs about **1.9 s** on a
+  manifest of that size; sourcing the picker from a lighter manifest read is the next obvious step.
 - The first verification of the fix looked like a failure. It was not: restoring the source file with
   `Copy-Item` preserves the *backup's* timestamp, so MSBuild judged the restored source older than the
   assembly built from the patched source and skipped recompiling — the test ran the old binary. Force a
