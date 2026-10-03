@@ -72,6 +72,50 @@ public sealed class EngineeringGraphEvidenceIndexerTests : IDisposable
         Assert.Empty(result.UnresolvedFiles);
     }
 
+    [Fact]
+    public void IndexingABaselineCommitRecordsEverySourceFileItCarries()
+    {
+        // A workbench baseline commit is the first record of every exported source file, so the graph
+        // must hold one anchor and one evidence edge per file — not just for the handful a later task
+        // happens to touch.
+        const int files = 250;
+        var registration = new WorkbenchWorktreeRegistration("wt-1", "Worktree", "main", "worktree");
+        var workbench = new WorkbenchMetadata("1.2", "wb-1", "Workbench", DateTimeOffset.UtcNow.ToString("O"),
+            root, root, null, null, [registration]);
+        var worktreeRoot = Path.Combine(root, "worktrees", "worktree");
+        var sourceRoot = Path.Combine(worktreeRoot, "devices", "dev-1", "source");
+        Directory.CreateDirectory(sourceRoot);
+        var metadataStore = new AtomicJsonStore();
+        metadataStore.Write(Path.Combine(worktreeRoot, "worktree.json"),
+            new WorktreeMetadata("1.2", "wt-1", "wb-1", "Worktree", "main",
+                DateTimeOffset.UtcNow.ToString("O"), null, null, null, ["dev-1"], null));
+        metadataStore.Write(Path.Combine(worktreeRoot, "devices", "dev-1", "device.json"),
+            new DeviceMetadata("1.2", "dev-1", "wt-1", "dev-1", "engineering", null, null, null,
+                new KnowledgeState(false, new Dictionary<string, string>(), null), []));
+        var components = Enumerable.Range(0, files).Select(index =>
+            $"{{\"id\":\"block-{index}\",\"name\":\"Block {index}\",\"category\":\"FB\",\"exportedFile\":\"Blocks/Block {index}.xml\"}}");
+        File.WriteAllText(Path.Combine(sourceRoot, "metadata.json"),
+            $"{{\"components\":[{string.Join(',', components)}]}}");
+        var paths = Enumerable.Range(0, files)
+            .Select(index => $"devices/dev-1/source/Blocks/Block {index}.xml")
+            .ToArray();
+
+        using var store = new EngineeringGraphStore(root);
+        var graph = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        var result = new EngineeringGraphEvidenceIndexer(graph, workbench).IndexCommit("wt-1",
+            new VersionControlTimelineGitCommit("baseline-1", "author", "Initial PLC source baseline",
+                "2026-01-01", paths, null, null, false));
+
+        Assert.Equal(files, result.SourceEdges.Count);
+        Assert.Empty(result.UnresolvedFiles);
+        Assert.Equal(files,
+            graph.GetEdges(GraphEntityKind.GitCommit, "baseline-1", GraphEntityKind.SourceObject).Count);
+        foreach (var index in new[] { 0, files / 2, files - 1 })
+        {
+            Assert.NotNull(graph.GetEntity(GraphEntityKind.SourceObject, $"dev-1:block-{index}"));
+        }
+    }
+
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
