@@ -203,14 +203,39 @@ public sealed class EngineeringGraphService
 
     public void RegisterEntity(GraphEntity entity)
     {
+        ValidateEntity(entity);
+        ExecuteNonQuery("INSERT OR REPLACE INTO graph_entities (entity_kind,entity_id,workbench_id,worktree_id,device_id,external_ref) VALUES ($kind,$id,$wb,$wt,$device,$ref)",
+            ("$kind", Kind(entity.Kind)), ("$id", entity.EntityId), ("$wb", entity.WorkbenchId), ("$wt", entity.WorktreeId),
+            ("$device", entity.DeviceId), ("$ref", entity.ExternalRef));
+    }
+
+    /// <summary>
+    /// Registers a whole set of entities in one transaction. A device manifest holds more than a
+    /// thousand objects, and one autocommit per object made registering it against the graph take
+    /// seconds — the dominant cost of staging a single source object.
+    /// </summary>
+    public void RegisterEntities(IEnumerable<GraphEntity> entities)
+    {
+        var pending = entities as IReadOnlyCollection<GraphEntity> ?? entities.ToArray();
+        if (pending.Count == 0) return;
+        foreach (var entity in pending) ValidateEntity(entity);
+        using var transaction = _store.Connection.BeginTransaction();
+        foreach (var entity in pending)
+        {
+            Execute(transaction, "INSERT OR REPLACE INTO graph_entities (entity_kind,entity_id,workbench_id,worktree_id,device_id,external_ref) VALUES ($kind,$id,$wb,$wt,$device,$ref)",
+                ("$kind", Kind(entity.Kind)), ("$id", entity.EntityId), ("$wb", entity.WorkbenchId), ("$wt", entity.WorktreeId),
+                ("$device", entity.DeviceId), ("$ref", entity.ExternalRef));
+        }
+        transaction.Commit();
+    }
+
+    private void ValidateEntity(GraphEntity entity)
+    {
         if (entity.Kind == GraphEntityKind.Task) throw new EngineeringGraphConstraintException("Tasks must be created with CreateTask.");
         if (entity.WorkbenchId != _workbenchId) throw new EngineeringGraphConstraintException("Entity belongs to another Workbench.");
         if (entity.WorktreeId is not null && !_worktreeExists(entity.WorktreeId))
             throw new EngineeringGraphConstraintException($"Worktree '{entity.WorktreeId}' is not registered in the current Workbench.");
         Require(entity.EntityId, nameof(entity.EntityId));
-        ExecuteNonQuery("INSERT OR REPLACE INTO graph_entities (entity_kind,entity_id,workbench_id,worktree_id,device_id,external_ref) VALUES ($kind,$id,$wb,$wt,$device,$ref)",
-            ("$kind", Kind(entity.Kind)), ("$id", entity.EntityId), ("$wb", entity.WorkbenchId), ("$wt", entity.WorktreeId),
-            ("$device", entity.DeviceId), ("$ref", entity.ExternalRef));
     }
 
     public GraphEdge AddEdge(GraphTask task, GraphEntityKind toKind, string toId,

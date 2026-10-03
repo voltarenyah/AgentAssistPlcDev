@@ -170,11 +170,8 @@ internal sealed class TaskSourceStagingTool(
         var deviceId = task.DeviceId;
         var worktreeId = task.WorktreeId!;
         var manifest = DeviceSnapshotReader.ReadManifestSourceObjects(device.SourceRoot);
-        foreach (var source in manifest)
-        {
-            graph.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject,
-                deviceId + ":" + source.Id, workbench.WorkbenchId, worktreeId, deviceId, source.RelativePath));
-        }
+        graph.RegisterEntities(manifest.Select(source => new GraphEntity(GraphEntityKind.SourceObject,
+            deviceId + ":" + source.Id, workbench.WorkbenchId, worktreeId, deviceId, source.RelativePath)));
 
         var owners = graph.ListWorktreeActiveStages(worktreeId)
             .Where(item => item.Stage.TaskId != task.TaskId)

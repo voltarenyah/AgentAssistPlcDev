@@ -954,11 +954,11 @@ public static class WorkbenchEndpoints
                 var task = scope.Service.FindTask(taskId);
                 if (task is null || task.WorktreeId != wt) throw new KeyNotFoundException("TASK_NOT_FOUND");
                 var device = state.Device(id, wt, task.DeviceId!);
-                foreach (var source in DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot))
-                {
-                    scope.Service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject,
-                        $"{task.DeviceId}:{source.Id}", task.WorkbenchId, wt, task.DeviceId, source.RelativePath));
-                }
+                // One transaction for the whole manifest: the per-object autocommit it used to do made
+                // a single stage click wait seconds on more than a thousand writes.
+                scope.Service.RegisterEntities(DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot)
+                    .Select(source => new GraphEntity(GraphEntityKind.SourceObject,
+                        $"{task.DeviceId}:{source.Id}", task.WorkbenchId, wt, task.DeviceId, source.RelativePath)));
             }
             // The stage baseline is always derived from the object's committed Git content, never
             // taken from the request: a client-supplied value could only be a live-TIA shortcut,
