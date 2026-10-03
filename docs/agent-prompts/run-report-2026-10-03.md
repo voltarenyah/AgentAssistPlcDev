@@ -5,8 +5,10 @@ that owns this queue.
 
 This report is written by the orchestrator, not by the item sessions. Every number below was either
 re-run by the orchestrator in the item's own worktree after its session stopped, or is quoted from the
-item's Evidence and explicitly marked as reported. Items are complete on their own branch; nothing was
-pushed and no pull request was opened.
+item's Evidence and explicitly marked as reported. Items were complete on their own branch; nothing was
+pushed and no pull request was opened. At the maintainer's request, items 001 and 006 were then merged
+into master (`ee1036e`, `4d931bf`); that merge surfaced one cross-item test interaction, recorded under
+"Cross-branch composition" below and fixed in `567b633`.
 
 ## How this run was organised
 
@@ -293,6 +295,25 @@ policy and the navigator produce **no code conflict** — the only two conflicts
 index, twice, for the same reason: a branch cut from an older README updates its own row while master
 had already gained the dependency note and the baseline table. Resolution for both: keep master's
 paragraphs and table, and take each branch's own row status (`001`–`006` = `done`).
+
+### The interaction the merge check could not see
+
+The textual merge of 001 and 006 was clean, but running master's suite after merging them found **two
+failing tests** — `MainStudio.rightDock.test.tsx`, the two chat-empty-state cases, with
+`expected undefined to be 'closed' / 'open'`. The cause is a semantic overlap, not a conflict: 001
+asserted the right dock's `data-dock-state`, while 006 (as its item required) makes a device on a chat
+view render **no right dock at all**, so the attribute no longer exists to assert on. Both branches were
+green on their own; only the combined tree was red. A clean `git merge` cannot detect this.
+
+Fix (`567b633`): the two cases now assert the state 001 is actually about — the **persisted
+`shellLayout.rightOpen`** in `plc-studio.shell-layout.v1` — plus the merged design (no
+`[data-dock="right"]` on the chat view). It is stricter, not weaker: re-injecting the forced open into
+`createChatSessionFromEmptyState` turns the collapsed case red with `expected true to be false`, so the
+case still catches exactly the regression item 001 fixed. Master's suite is 83 files / **533 tests
+green** after the fix.
+
+The lesson worth carrying: a per-branch green suite plus a clean merge is not evidence that the merged
+system works. Run the suite on the merged tree before believing the branches compose.
 
 ## Recommended review order
 
