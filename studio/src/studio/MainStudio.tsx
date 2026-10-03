@@ -2473,6 +2473,9 @@ export default function MainStudio() {
             tasksByWorktree={tasksByWorktree}
             sessionsByWorktree={sessionsByWorktree}
             activeTaskId={taskDetail?.task.taskId ?? taskDetailTask?.taskId ?? null}
+            // The open conversation is a marker on its own row: the navigator's workbench, worktree,
+            // device and task selection must not move when a conversation is opened (ADR-0009 AC-018).
+            activeSessionId={chatTabs.activeId}
             selection={selection}
             knowledgeState={navigatorKnowledgeState}
             loading={loading}

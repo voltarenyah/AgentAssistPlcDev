@@ -56,7 +56,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 | [004](004-task-commits-with-involved-source-objects.md) | Task page Commits section: which source objects each commit touched | done | 002 | `studio/src/studio/workbench/TaskCommitsSection.tsx`, `src/ApiHost/WorkbenchApiModels.cs` |
 | [005](005-agent-stages-source-objects-with-approval.md) | Agent stages source objects for the current task through an approval card | done | 002 | `src/ApiHost/TaskSourceStagingTool.cs`, `studio/src/studio/workbench/TaskSourceObjectsSection.tsx` |
 | [006](006-remove-right-dock-ai-sessions-page.md) | Remove the right dock's AI sessions page and move its operations into the navigator's conversations | done | 001 | `studio/src/studio/chat/SessionDock.tsx`, `studio/src/studio/workbench/WorkbenchNavigator.tsx` |
-| [007](007-navigator-shared-row-treatment.md) | Left navigator: one shared row treatment — uniform selection, always-gray icons, aligned geometry | pending | — | `studio/src/studio/workbench/WorkbenchNavigator.tsx`, `docs/ui-spec/studio-information-architecture-ui-spec.md` |
+| [007](007-navigator-shared-row-treatment.md) | Left navigator: one shared row treatment — uniform selection, always-gray icons, aligned geometry | done | — | `studio/src/studio/workbench/WorkbenchNavigator.tsx`, `docs/ui-spec/studio-information-architecture-ui-spec.md` |
 
 Items 002–005 implement the missing execution layer of an already accepted design: task-scoped
 source evidence (`docs/adr/ADR-0003-task-scoped-source-evidence.md`,

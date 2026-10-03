@@ -1,6 +1,6 @@
 # 007. One shared row treatment in the left navigator: uniform selection, always-gray icons, aligned geometry
 
-Status: pending
+Status: done
 Created: 2026-10-03
 Depends on: none
 
@@ -143,4 +143,41 @@ passing it.
 
 ## Evidence
 
-<Filled in by the executing agent: commands run, results, branch, commit, skipped steps and risk.>
+Landed directly on `master` (the maintainer asked for a commit and merge, not a worktree), committed with
+the item's status.
+
+**Commands and results**
+
+- `npm test -- src/studio/workbench/WorkbenchNavigator.test.tsx` → **41 passed** (38 before, 3 added).
+- `npm test` (whole studio suite) → **86 files / 580 tests passed** (577 before).
+- `npm run build` (`tsc -b && vite build`) → succeeded.
+- `npm run lint` → 16 warnings, 0 errors, **none of them in the changed files**
+  (`WorkbenchNavigator.tsx`, `MainStudio.tsx`), so the change adds no warning.
+- Done-when 4: `rg -n "rounded-md border|text-chart-[24]|border-ring" WorkbenchNavigator.tsx` → nothing;
+  `rg -n "bg-accent"` → only the marker helper (`bg-accent/50` / `hover:bg-accent/40`) and the
+  "Create your first workbench" empty-state panel, which is not a row.
+
+**Discrimination check (Done-when 6).** Restoring `TaskRow`'s pre-change card
+(`relative flex min-h-8 w-full items-center gap-2 rounded-md border px-2 py-1 pr-8 …`) fails two cases —
+`gives all five row kinds one class set …` (`tasks row against the reference treatment`: the class sets
+differ) and `keeps the row rhythm …` (`mb-1` missing) — so the equality assertions are not vacuous.
+Restored afterwards: 41/41 pass.
+
+**Decisions taken inside the constraints**
+
+- Every row carries a new additive `data-navigator-row` hook naming its kind
+  (`projects` / `worktree` / `hardware` / `device` / `tasks` / `sessions`). No documented hook changed
+  (`aria-current`, `data-task-*`, `data-worktree-row`, `data-device-target`, `data-session*` are all
+  intact), and it is what lets the required assertion compare the five kinds directly instead of matching
+  class names.
+- The equality assertion normalises exactly two intended things: the current-row marker
+  (`bg-accent/50` versus `hover:bg-accent/40`) and the `relative pr-8` menu gutter — and the gutter is
+  then asserted positively, so it exists on `TASKS`/`SESSIONS` rows only and cannot go missing.
+- Icon comparison ignores lucide's own `lucide*` classes and reads each row's `h-4` identity icon, because
+  a row can also hold a smaller disclosure toggle, the knowledge dot, or the 3-dots trigger.
+
+**Skipped, and what that leaves unproven.** No runtime/browser check was made, per the unattended-run
+rule (`.\launch.ps1` binds the shared ports 5173/5239). The rendered class sets are proven by the
+happy-dom component tests only: that the two visible misalignments are gone — the `TASKS`/`SESSIONS` icon
+box no longer sitting ≈3.5 px right of `PROJECTS`, and `TASKS` rows no longer touching — follows from the
+class sets being equal, not from a screenshot.

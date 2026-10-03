@@ -80,6 +80,12 @@ type Props = {
    */
   sessionsByWorktree?: Record<string, ChatSessionInfo[]>
   activeTaskId?: string | null
+  /**
+   * The conversation that is open in the workspace. It is a *marker*, not a selection: it moves no other
+   * row's `aria-current`, and the workbench/worktree/device/task selection stays where the user put it
+   * (ADR-0009 AC-018). Null — the default — renders every conversation row as before.
+   */
+  activeSessionId?: string | null
   selection: WorkbenchSelection
   knowledgeState: Record<string, 'current' | 'stale' | 'missing' | 'failed'>
   loading: boolean
@@ -141,6 +147,21 @@ const taskTypeIcon = {
   improvement: Wrench,
   feature: Sparkles,
 } satisfies Record<EngineeringTask['type'], typeof FileText>
+/**
+ * The one row treatment every navigator row kind shares — `PROJECTS`, `WORKTREE`, `DEVICE`, `TASKS` and
+ * `SESSIONS` — so the current row is marked the same way everywhere and every row's icon starts at the
+ * same x with the same rhythm. `text-chart-*` never appears on a row icon: icon colour is not row
+ * identity, and the semantic status colours (the knowledge dot, the unavailable badge) are not rows.
+ * Every row also carries `data-navigator-row`, which names its kind and lets a test compare the five
+ * kinds' class sets directly instead of matching class names.
+ * Introduced by item 007 (`docs/agent-prompts/007-navigator-shared-row-treatment.md`).
+ */
+const navigatorRowClass =
+  'group mb-1 flex min-h-8 w-full cursor-pointer items-center gap-2 rounded-sm px-1 py-1 text-left'
+/** `TASKS` and `SESSIONS` rows also reserve room for their absolutely positioned 3-dots menu. */
+const navigatorRowMenuGutter = 'relative pr-8'
+/** The current row: one background, and only the current row has it. */
+const navigatorRowMarker = (current: boolean) => current ? 'bg-accent/50' : 'hover:bg-accent/40'
 const knowledgeDotClass = (state: 'current' | 'stale' | 'missing' | 'failed') =>
   state === 'current' ? 'text-emerald-500'
     : state === 'stale' ? 'text-amber-500'
@@ -364,15 +385,16 @@ type TaskRowProps = {
 function TaskRow({ workbench, worktree, task, selected, onSelect, onUpdate, onRename }: TaskRowProps) {
   const TaskIcon = taskTypeIcon[task.type]
   return (
-    <div className="group relative">
+    <div className="relative">
       <button
         type="button"
         onClick={() => onSelect(workbench, worktree, task)}
-        className={`relative flex min-h-8 w-full items-center gap-2 rounded-md border px-2 py-1 pr-8 text-left hover:bg-accent/40 ${selected ? 'border-ring/70' : 'border-transparent'}`}
+        className={`${navigatorRowClass} ${navigatorRowMenuGutter} ${navigatorRowMarker(selected)}`}
         aria-label={`Open task ${task.title}`}
         aria-current={selected ? 'page' : undefined}
         data-task-selected={selected || undefined}
         data-task-type={task.type}
+        data-navigator-row="tasks"
       >
         <TaskIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-xs">{task.title}</span>
@@ -410,6 +432,8 @@ function TaskRow({ workbench, worktree, task, selected, onSelect, onUpdate, onRe
 
 type SessionRowProps = {
   session: ChatSessionInfo
+  /** The conversation the workspace has open. A marker only; it never moves another row. */
+  current?: boolean
   onOpen: (session: ChatSessionInfo) => void
   onRename: (session: ChatSessionInfo) => void
   onExport: (session: ChatSessionInfo) => void
@@ -426,16 +450,18 @@ type SessionRowProps = {
  * The menu is the conversation's only entry point, so it offers everything the repository performs on
  * one: open, rename, export, bind or clear its task, and delete (ADR-0009, ADR-0010).
  */
-function SessionRow({ session, onOpen, onRename, onExport, onBindTask, onClearTask, onDelete }: SessionRowProps) {
+function SessionRow({ session, current = false, onOpen, onRename, onExport, onBindTask, onClearTask, onDelete }: SessionRowProps) {
   const title = conversationTitle(session)
   return (
-    <div className="group relative" data-session={session.sessionId}>
+    <div className="relative" data-session={session.sessionId}>
       <button
         type="button"
         onClick={() => onOpen(session)}
-        className="relative flex min-h-8 w-full items-center gap-2 rounded-md border border-transparent px-2 py-1 pr-8 text-left hover:bg-accent/40"
+        className={`${navigatorRowClass} ${navigatorRowMenuGutter} ${navigatorRowMarker(current)}`}
         aria-label={`Open conversation ${title}`}
+        aria-current={current ? 'true' : undefined}
         data-session-open={session.sessionId}
+        data-navigator-row="sessions"
       >
         <MessageSquareText className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-xs">{title}</span>
@@ -489,6 +515,7 @@ export default function WorkbenchNavigator({
   tasksByWorktree = {},
   sessionsByWorktree = {},
   activeTaskId = null,
+  activeSessionId = null,
   selection,
   knowledgeState,
   loading,
@@ -736,12 +763,13 @@ export default function WorkbenchNavigator({
         )}
       >
         <div
-          className={`group mb-1 flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${hardwareSelected ? 'bg-accent' : 'hover:bg-accent/40'}`}
+          className={`${navigatorRowClass} ${navigatorRowMarker(hardwareSelected)}`}
           aria-current={hardwareSelected ? 'true' : undefined}
           data-device-target="hardware"
+          data-navigator-row="hardware"
           onClick={() => onSelectHardware(workbench, worktree)}
         >
-          <CircuitBoard className={`h-4 w-4 ${hardwareSelected ? 'text-chart-2' : 'text-muted-foreground'}`} />
+          <CircuitBoard className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-xs">Hardware configuration</span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -781,12 +809,13 @@ export default function WorkbenchNavigator({
           return (
             <div
               key={device.deviceId}
-              className={`group mb-1 flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${selected ? 'bg-accent' : 'hover:bg-accent/40'}`}
+              className={`${navigatorRowClass} ${navigatorRowMarker(selected)}`}
               aria-current={selected ? 'true' : undefined}
               data-device-target={device.deviceId}
+              data-navigator-row="device"
               onClick={() => onSelectDevice(workbench, worktree, device.deviceId)}
             >
-              <Cpu className={`h-4 w-4 ${selected ? 'text-chart-2' : 'text-muted-foreground'}`} />
+              <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate text-xs">{device.plcName}</span>
               <Database className={`h-3 w-3 ${knowledgeDotClass(state)}`} />
               <DropdownMenu>
@@ -935,13 +964,14 @@ export default function WorkbenchNavigator({
         )}
       >
         <div data-session-group={selectedWorktreeTask?.taskId ?? 'unbound'}>
-          <div className="truncate px-2 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={sessionsHeading}>
+          <div className="truncate px-1 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={sessionsHeading}>
             {sessionsHeading}
           </div>
           {sessionRows.map(session => (
             <SessionRow
               key={session.sessionId}
               session={session}
+              current={session.sessionId === activeSessionId}
               onOpen={onOpenSession}
               onRename={openRenameSession}
               onExport={onExportSession}
@@ -1010,11 +1040,12 @@ export default function WorkbenchNavigator({
               <ContextMenu key={workbench.workbenchId}>
                 <ContextMenuTrigger asChild>
                   <div
-                    className={`group mb-1 flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${workbenchSelected ? 'bg-accent/50' : 'hover:bg-accent/40'}`}
+                    className={`${navigatorRowClass} ${navigatorRowMarker(workbenchSelected)}`}
                     aria-current={workbenchSelected ? 'true' : undefined}
+                    data-navigator-row="projects"
                     onClick={() => onSelectWorkbench(workbench)}
                   >
-                    <Factory className="h-4 w-4 text-muted-foreground" />
+                    <Factory className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate text-xs font-medium">{workbench.name}</span>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -1126,15 +1157,10 @@ export default function WorkbenchNavigator({
                   <ContextMenu>
                     <ContextMenuTrigger asChild>
                         <div
-                          className={`group flex min-h-8 cursor-pointer items-center gap-2 rounded-sm px-1 py-1 ${
-                          worktreeSelected && selectedTargetKind === null
-                            ? 'bg-accent'
-                            : worktreeSelected
-                              ? 'bg-accent/70'
-                              : 'hover:bg-accent/40'
-                        }`}
+                          className={`${navigatorRowClass} ${navigatorRowMarker(worktreeSelected)}`}
                           aria-current={worktreeSelected ? 'true' : undefined}
                           data-worktree-row={worktree.worktreeId}
+                          data-navigator-row="worktree"
                           onClick={() => {
                             // Only a row with an unbound group to show toggles anything, and its toggle
                             // is the only thing that row offers; the selection follows either way.
@@ -1152,7 +1178,7 @@ export default function WorkbenchNavigator({
                           {rowUnboundTasks.length > 0 && (expandedWorktreeIds.has(worktree.worktreeId)
                             ? <Minus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />
                             : <Plus aria-hidden="true" className="h-3 w-3 text-muted-foreground" />)}
-                          <GitBranch className="h-4 w-4 text-chart-4" />
+                          <GitBranch className="h-4 w-4 shrink-0 text-muted-foreground" />
                           <span className="min-w-0 flex-1 truncate text-xs">{worktree.name}</span>
                           {worktree.branch !== worktree.name && <span className="max-w-[24%] truncate whitespace-nowrap font-mono text-[10px] leading-4 text-muted-foreground">{worktree.branch}</span>}
                           {!available && (
@@ -1262,7 +1288,7 @@ export default function WorkbenchNavigator({
                       carries no creation action, because a targetless task stays rejected (AC-011). */}
                   {!filterActive && worktreeSelected && expandedWorktreeIds.has(worktree.worktreeId) && rowUnboundTasks.length > 0 && (
                     <div className="ml-4 border-l py-0.5 pl-2" style={{ borderColor: 'var(--border)' }} data-unbound-tasks>
-                      <div className="px-2 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground">NO TARGET</div>
+                      <div className="px-1 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground">NO TARGET</div>
                       {rowUnboundTasks.map(task => (
                         <TaskRow
                           key={task.taskId}
