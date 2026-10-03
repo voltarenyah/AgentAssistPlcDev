@@ -3590,6 +3590,92 @@ public sealed class WorkbenchCoordinator
             && parts[^1].EndsWith(".xml", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Stages one source object for a device-bound worktree task and derives the stage's fingerprint
+    /// baseline from the object's committed Git content: the per-device export manifest
+    /// (devices/&lt;plc&gt;/source/metadata.json) read at Git HEAD through the version-control
+    /// boundary. ADR-0003 binds a stage baseline to committed source content — capturing live TIA
+    /// evidence here would mark an object the user already changed in TIA but never committed as
+    /// "in sync" and hide exactly the change the ADR protects. An object the committed manifest does
+    /// not list (it exists only in TIA) keeps a null baseline, which
+    /// <c>TASK_STAGE_BASELINE_MISSING</c> reports as the real state.
+    /// </summary>
+    public async Task<TaskSourceStage> StageTaskSourceObjectAsync(
+        string workbenchId,
+        string worktreeId,
+        string taskId,
+        string sourceObjectId,
+        CancellationToken token = default)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var registration = workbench.Worktrees.SingleOrDefault(item => item.WorktreeId == worktreeId)
+            ?? throw new WorkbenchCatalogException("WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+        var worktree = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
+        using var graphStore = new EngineeringGraphStore(workbench.RootPath);
+        var graph = new EngineeringGraphService(graphStore, workbench.WorkbenchId,
+            id => workbench.Worktrees.Any(item => item.WorktreeId == id));
+        var task = graph.FindTask(taskId);
+        if (task is null || task.WorktreeId != worktreeId)
+            throw new WorkbenchLifecycleException("TASK_NOT_FOUND", "The selected task is not a worktree task of this worktree.");
+        if (string.IsNullOrWhiteSpace(task.DeviceId))
+            // Staging still requires a device-bound task; the graph service owns the rejection code.
+            throw new EngineeringGraphConstraintException("A task must bind one device before staging source objects.", "TASK_DEVICE_REQUIRED");
+        var device = LoadWorktreeDeviceContexts(workbench, worktree, registration.RelativePath)
+            .SingleOrDefault(item => item.Metadata.DeviceId == task.DeviceId);
+        if (device.Context is null)
+            throw new WorkbenchLifecycleException("TASK_DEVICE_NOT_FOUND", "The task device is no longer registered in this worktree.");
+        var baselineEvidenceJson = await TryReadCommittedStageBaselineAsync(
+                worktreeRoot, device.Context, task.DeviceId, sourceObjectId, token)
+            .ConfigureAwait(false);
+        return graph.StageSourceObject(taskId, sourceObjectId, baselineEvidenceJson);
+    }
+
+    /// <summary>
+    /// Reads the fingerprint evidence for one source object out of the device export manifest <b>at
+    /// Git HEAD</b> (never the working-tree file: an export that has not been committed must not
+    /// become a baseline) and serializes it for task_source_stages.baseline_evidence_json. Returns
+    /// null when the object has no committed manifest content, and degrades to null when the
+    /// manifest cannot be read at all — a stage without a baseline is recoverable and the compare
+    /// reports it, whereas failing the stage would block the whole staging flow.
+    /// </summary>
+    private async Task<string?> TryReadCommittedStageBaselineAsync(
+        string worktreeRoot,
+        DeviceContext device,
+        string deviceId,
+        string sourceObjectId,
+        CancellationToken token)
+    {
+        var prefix = deviceId + ":";
+        if (!sourceObjectId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            // Not this device's object: the graph service reports the device mismatch.
+            return null;
+        }
+
+        try
+        {
+            var file = await versionControl.CallAsync<ShowFileResult>(
+                "vc_show_file",
+                new
+                {
+                    repoPath = worktreeRoot,
+                    filePath = SourceManifestRelativePath(worktreeRoot, device),
+                    // Explicitly HEAD through the blob, so an uncommitted working-tree manifest is
+                    // never read as committed content. null => HEAD, and {content: null} means the
+                    // commit or the path does not exist (a worktree with no commits).
+                    commitSha = (string?)null,
+                },
+                token).ConfigureAwait(false);
+            var evidence = CommittedSourceManifest.TryReadObjectEvidence(file.Content, sourceObjectId[prefix.Length..]);
+            return evidence is null ? null : System.Text.Json.JsonSerializer.Serialize(evidence);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Compares only this task's staged source identities. The returned checksum is an
     /// observation of the capture, never a project-wide clean verdict.</summary>
     public async Task<TaskSourceComparisonResult> CompareTaskWithTiaAsync(
@@ -3614,7 +3700,7 @@ public sealed class WorkbenchCoordinator
         {
             if (string.IsNullOrWhiteSpace(stage.BaselineEvidenceJson))
             {
-                problems.Add(new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_BASELINE_MISSING", "This staged object has no Git-bound fingerprint baseline. Run a full scan and assign it before task comparison."));
+                problems.Add(new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_BASELINE_MISSING", "This staged object has no fingerprint baseline yet because it has no committed Git content. Commit the object once; task comparison reports it until then."));
                 continue;
             }
             var evidence = System.Text.Json.JsonSerializer.Deserialize<ManagedSourceEvidenceObject>(stage.BaselineEvidenceJson);

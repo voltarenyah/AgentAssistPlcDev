@@ -2577,7 +2577,7 @@ export default function MainStudio() {
               </div>
             </div>
           ) : taskDetail || taskDetailLoading || taskDetailError ? (
-            <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} /></div>
+            <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} /></div>
           ) : !selection.deviceId && selection.worktreeId ? (
             mainView.kind === 'task-chat' ? (
               <div className="flex min-h-0 flex-1 flex-col">
@@ -2627,7 +2627,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} /></div> : <WorktreeLandingPage
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} /></div> : <WorktreeLandingPage
                 workbenchId={selection.workbenchId!}
                 worktreeId={selection.worktreeId}
                 tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}

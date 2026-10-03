@@ -1424,6 +1424,11 @@ export const stageTaskSourceObject = (workbenchId: string, worktreeId: string, t
   workbenchRequest<TaskSourceStage>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/stages`, jsonRequest('POST', { sourceObjectId, baselineEvidenceJson }))
 export const releaseTaskSourceObject = (workbenchId: string, worktreeId: string, taskId: string, sourceObjectId: string) =>
   workbenchRequest<void>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/stages/${encodeURIComponent(sourceObjectId)}`, { method: 'DELETE' })
+/** Active stages across a worktree with their owning task, so a picker can show the current owner
+ * of a source object before taking it over (one active owner per object per worktree). */
+export type WorktreeSourceStage = { taskId: string; taskTitle: string; sourceObjectId: string; deviceId: string; baselineEvidenceJson: string | null; stagedUtc: string }
+export const listWorktreeSourceStages = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<WorktreeSourceStage[]>(`${worktreePath(workbenchId, worktreeId)}/source-stages`)
 export type TaskSourceEvidenceCandidate = { id: string; reason: string; requiresXmlExport: boolean; isSafetyDifference: boolean }
 export type TaskSourceEvidenceCandidateExport = { id: string; sourcePath: string; export: { success: boolean; path: string | null } }
 export type TaskSourceComparison = { taskId: string; deviceId: string; candidates: TaskSourceEvidenceCandidate[]; candidateExports: TaskSourceEvidenceCandidateExport[]; problems: { sourceObjectId: string; code: string; message: string }[]; observedSoftwareChecksum: string | null }

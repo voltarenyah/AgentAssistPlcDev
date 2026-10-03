@@ -109,6 +109,19 @@ public sealed class EngineeringGraphService
         return result;
     }
 
+    /// <summary>Active stages across one worktree, with the owning task's title. Callers use it to
+    /// show who owns a source object before taking it over (the unique active-owner index enforces
+    /// one owner per object; this read makes that owner visible instead of only reportable).</summary>
+    public IReadOnlyList<WorktreeSourceStage> ListWorktreeActiveStages(string worktreeId)
+    {
+        using var command = _store.Connection.CreateCommand(); command.CommandText = "SELECT stage.task_id,task.title,stage.source_object_id,stage.device_id,stage.baseline_evidence_json,stage.staged_utc FROM task_source_stages stage JOIN tasks task ON task.task_id=stage.task_id WHERE stage.worktree_id=$worktree AND stage.released_utc IS NULL ORDER BY stage.source_object_id;"; command.Parameters.AddWithValue("$worktree", worktreeId);
+        using var reader = command.ExecuteReader(); var result = new List<WorktreeSourceStage>();
+        while (reader.Read()) result.Add(new WorktreeSourceStage(
+            new TaskSourceStage(reader.GetString(0), worktreeId, reader.GetString(2), reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4), DateTimeOffset.Parse(reader.GetString(5))),
+            reader.GetString(1)));
+        return result;
+    }
+
     public void ReleaseTaskStages(string taskId) => ExecuteNonQuery("UPDATE task_source_stages SET released_utc=$utc WHERE task_id=$task AND released_utc IS NULL;", ("$task", taskId), ("$utc", DateTimeOffset.UtcNow.ToString("O")));
 
     public bool ReleaseSourceStage(string taskId, string sourceObjectId) =>
