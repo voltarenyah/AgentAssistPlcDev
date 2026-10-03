@@ -365,11 +365,31 @@ construction. Their own `task_source_stages` history agrees: of 10 rows, the onl
 baseline are `PC_Clock` and `G_Automatic_Director_Cav_A` — both `DB/InstanceDB`, while every OB, FB, FC
 and UDT row carries a baseline.
 
-Two consequences worth acting on: the row should say *which* of the two cases it is (no committed
-content yet, or a kind that is excluded from fingerprint comparison), which needs the server to report
-the reason; and instance DBs must stay **stageable** even though they are never compared, because the
-stage list is also the commit whitelist that `TASK_COMMIT_STAGE_MISMATCH` enforces — hiding them from
-the picker would make their changes uncommittable.
+Both consequences are now handled (`15f015e`). The server reports the object's fingerprint-comparison
+kind (`SourceObjectInfo.EvidenceKind`, from `CommittedSourceManifest.EvidenceKindOf`), and the row says
+which case it is: an instance DB reads "Instance DBs are excluded from fingerprint comparison, so this
+object has no baseline and committing it will not create one" instead of the false advice to commit it.
+Instance DBs stay stageable, because the stage list is also the commit whitelist that
+`TASK_COMMIT_STAGE_MISMATCH` enforces — hiding them from the picker would make their changes
+uncommittable.
+
+### The picker no longer pays for the whole device snapshot
+
+The section read `GET …/devices/{device}` for its candidate list. That reader also crawls every block on
+disk (`DeviceSnapshotReader.Read` → `ReadBlocks`), which on the maintainer's 1,314-object export cost
+**825–1,869 ms**, while none of that work is shown in the picker. The new
+`GET …/devices/{device}/source-objects` returns the same 1,314 objects from the manifest alone:
+**52–128 ms**, and it carries the `evidenceKind` the row explanation needs. The section calls it instead
+(`listDeviceSourceObjects`), and fails and retries as before when the list cannot be read.
+
+### A stage change no longer blanks the page
+
+`onStagesChanged` — and the approved-agent-call path — went through `openTaskDetail`, which clears the
+detail and raises the loading flag, so every refresh replaced the page with "Loading task details…",
+flashed the view and dropped the reader's scroll position. `reloadTaskDetail` now refreshes **in place**
+(`51700e5`): it fetches through the extracted `loadTaskDetail`, replaces the detail when it arrives, and
+keeps what is on screen if the refresh fails. A test renders the task page, triggers a refresh whose
+fetch hangs, and asserts the detail is still there and the loading text never appears.
 
 ### The database lock that froze the page
 
