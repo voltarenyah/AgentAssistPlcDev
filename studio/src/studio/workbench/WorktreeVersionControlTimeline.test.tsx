@@ -54,7 +54,7 @@ afterEach(() => {
 
 describe('WorktreeVersionControlTimeline', () => {
   const graphDetail = (tasks: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>): api.EngineeringGraphEntityDetail => ({
-    kind: 'gitCommit', id: 'commit-0', workbenchId: 'wb-1', worktreeId: 'wt-1', tasks, commits: [],
+    kind: 'gitCommit', id: 'commit-0', workbenchId: 'wb-1', worktreeId: 'wt-1', tasks, commits: [], sourceObjects: [], unresolvedFiles: [],
   })
 
   it('shows a seven-character Git hash and device-free checksum in the metadata lane', async () => {

@@ -230,6 +230,69 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task EngineeringGraphCommitEntityApiReportsItsSourceObjectsAndUnresolvedFilesAdditively()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var created = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks",
+            new { title = "Commit evidence task", type = "feature", intent = "trace", expectedResult = "linked" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        using (var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id is "wt-1");
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-evidence", wb, "wt-1"));
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:block-main", wb, "wt-1", "dev-1",
+                "devices/plc/source/blocks/Main.xml"));
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:tag-motors", wb, "wt-1", "dev-1",
+                "devices/plc/source/tags/Motors.xml"));
+            graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-evidence",
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:block-main",
+                Agent.Workbench.EngineeringGraph.GraphProvenance.Evidence);
+            graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-evidence",
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:tag-motors",
+                Agent.Workbench.EngineeringGraph.GraphProvenance.Evidence);
+            graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.Task, taskId,
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-evidence",
+                Agent.Workbench.EngineeringGraph.GraphProvenance.Default, isPrimary: true);
+            // A path the manifest did not resolve is stored as raw file evidence, not as a source object.
+            graph.RecordFileEvidence("commit-evidence", "devices/plc/source/blocks/Removed.xml");
+            graph.RecordFileEvidence("commit-evidence", "devices/plc/source/tags/Gone.xml");
+        }
+
+        var commit = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{wb}/engineering-graph/git_commit/commit-evidence");
+        // The pre-existing fields keep their exact meaning: incoming task edges, and the commits that
+        // touched this entity (empty for a commit entity — that is why the new fields exist).
+        Assert.Equal(taskId, commit.GetProperty("tasks")[0].GetProperty("id").GetString());
+        Assert.Equal(0, commit.GetProperty("commits").GetArrayLength());
+
+        var sourceObjects = commit.GetProperty("sourceObjects");
+        Assert.Equal(2, sourceObjects.GetArrayLength());
+        Assert.Equal("dev-1:block-main", sourceObjects[0].GetProperty("id").GetString());
+        Assert.Equal("evidence", sourceObjects[0].GetProperty("provenance").GetString());
+        Assert.Equal("dev-1:tag-motors", sourceObjects[1].GetProperty("id").GetString());
+
+        var unresolved = commit.GetProperty("unresolvedFiles");
+        Assert.Equal(2, unresolved.GetArrayLength());
+        Assert.Equal("devices/plc/source/blocks/Removed.xml", unresolved[0].GetString());
+        Assert.Equal("devices/plc/source/tags/Gone.xml", unresolved[1].GetString());
+
+        // The same route for a source-object entity is untouched, and the new fields stay empty there
+        // so a task's stage edges can never read as commit evidence.
+        var source = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{wb}/engineering-graph/source_object/dev-1:block-main");
+        Assert.Equal(taskId, source.GetProperty("tasks")[0].GetProperty("id").GetString());
+        Assert.Equal("commit-evidence", source.GetProperty("commits")[0].GetProperty("id").GetString());
+        Assert.Equal("evidence", source.GetProperty("commits")[0].GetProperty("provenance").GetString());
+        Assert.Equal(0, source.GetProperty("sourceObjects").GetArrayLength());
+        Assert.Equal(0, source.GetProperty("unresolvedFiles").GetArrayLength());
+    }
+
+    [Fact]
     public async Task ActiveTaskApiSelectsSwitchesAndClearsCompatibleTasks()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);

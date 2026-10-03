@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import TaskCommitsSection from './TaskCommitsSection'
 import TaskSourceObjectsSection from './TaskSourceObjectsSection'
 
 export type TraceabilityItem = { id: string; edgeId: string; provenance: string; isPrimary: boolean }
@@ -14,47 +15,12 @@ export type TaskEditPatch = Pick<EngineeringTask, 'title' | 'type' | 'status' | 
 /** One traceability row in the Related records group, carrying the kind it navigates and removes as. */
 type RelatedRecord = TraceabilityItem & { kind: string; kindLabel: string }
 
-type TraceabilitySectionProps = {
-  title: string
-  items: TraceabilityItem[]
-  emptyLabel: string
-  onNavigate?: (id: string) => void
-  onRemove?: (item: TraceabilityItem) => void
-}
-
 const provenanceLabel = (value: string) => {
   const normalized = value.toLowerCase()
   if (normalized === 'manual') return 'Manual link'
   if (normalized === 'evidence') return 'Evidence-derived'
   if (normalized === 'default') return 'Default link'
   return 'Unassigned'
-}
-
-export function TraceabilitySection({ title, items, emptyLabel, onNavigate, onRemove }: TraceabilitySectionProps) {
-  return (
-    <section className="overflow-hidden rounded-lg border bg-card" aria-label={title}>
-      <header className="flex items-center border-b px-4 py-3">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <span className="ml-auto rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{items.length}</span>
-      </header>
-      {items.length === 0 ? (
-        <p className="px-4 py-4 text-sm text-muted-foreground">{emptyLabel}</p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {items.map(item => (
-            <li key={item.id} className="flex min-w-0 items-center gap-3 px-4 py-3">
-              {onNavigate ? (
-                <button type="button" className="min-w-0 flex-1 truncate text-left font-mono text-sm underline-offset-2 hover:underline focus-visible:underline" aria-label={`Open ${title} ${item.id}`} onClick={() => onNavigate(item.id)}>{item.id}</button>
-              ) : <span className="min-w-0 flex-1 truncate font-mono text-sm">{item.id}</span>}
-              {item.isPrimary && <span className="rounded bg-muted px-2 py-1 text-xs">Primary</span>}
-              <span className="shrink-0 text-xs text-muted-foreground">{provenanceLabel(item.provenance)}</span>
-              {onRemove && item.provenance.toLowerCase() === 'manual' && <Button type="button" variant="outline" size="xs" aria-label={`Remove ${title} ${item.id}`} onClick={() => onRemove(item)}>Remove</Button>}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  )
 }
 
 /**
@@ -227,7 +193,13 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
     </section>
 
     {detail.commits.length > 0 || relatedRecords.length > 0 ? <div className="grid gap-4 md:grid-cols-2">
-      {detail.commits.length > 0 && <TraceabilitySection title="Commits" items={detail.commits} emptyLabel="No linked commits yet." onNavigate={onNavigate ? id => onNavigate('commit', id) : undefined} onRemove={onRemove ? item => onRemove('commit', item) : undefined} />}
+      {detail.commits.length > 0 && <TaskCommitsSection
+        workbenchId={detail.task.workbenchId}
+        worktreeId={detail.task.worktreeId}
+        commits={detail.commits}
+        onNavigate={onNavigate}
+        onRemove={onRemove}
+      />}
       {relatedRecords.length > 0 && <RelatedRecordsSection items={relatedRecords} onNavigate={onNavigate} onRemove={onRemove} />}
     </div> : <p className="text-sm text-muted-foreground">No commits or related records linked yet.</p>}
   </article>

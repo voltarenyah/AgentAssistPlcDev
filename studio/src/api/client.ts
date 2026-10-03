@@ -429,6 +429,10 @@ export type EngineeringGraphEntityDetail = {
   worktreeId: string | null
   tasks: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
   commits: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  /** A `git_commit` entity's outgoing source-object evidence edges; empty for every other kind. */
+  sourceObjects: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  /** Changed files of a `git_commit` that no source object could be resolved for; empty otherwise. */
+  unresolvedFiles: string[]
 }
 
 export type EngineeringTaskRelationshipMutation = {
