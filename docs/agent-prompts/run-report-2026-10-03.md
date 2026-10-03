@@ -404,10 +404,28 @@ Checking the premise against the repository found it only half implemented. The 
 snapshots, **XML export**, XML comparison, and deletion detection", and its table says "never export or
 diff"; ADR-0001 calls them "deliberately unmanaged native elements". The evidence half is real —
 `SourceEvidencePlanner` filters them and `ValidationTagStore` refuses them in schema v2 source evidence.
-The export half is not: `git ls-files` matches **537 of the 540** instance DBs in the maintainer's
-worktree, so they are exported and committed today. Whether to stop exporting them, and what to do
-about the 537 already tracked, changes what a baseline contains and is therefore a product decision
-rather than a defect fix.
+The export half was not: `git ls-files` matched **537 of the 540** instance DBs in the maintainer's
+worktree, so they were exported and committed.
+
+The maintainer then decided to close that gap: **remove instance DBs from the export side entirely**
+(the project will be regenerated, so nothing has to migrate). `ManagedSourceScope` is now the single
+statement of the domain, and `6bc3285` applies it where objects enter the export:
+
+- the full export (`ExportAllBlocksForPlc`) never writes one or records it in the manifest;
+- `CaptureLiveSnapshot` never offers one as a live candidate, so a diff cannot nominate or report one;
+- `SyncPlanner.Plan` drops a record an earlier manifest listed through the new `SyncAction.DropExcluded`,
+  which deletes the stale XML and drops the record **without** reporting a source change — an instance
+  DB leaving the export is a policy effect, not a TIA-side deletion;
+- the old "re-export every instance DB for a hash verdict" rule is gone, as the design's own "Existing
+  Evidence" table told us to delete it (`SyncPlanner.cs:145`); its test was replaced by two that pin the
+  new policy (`InstanceDb_IsOutsideTheManagedSourceDomainInBothDirections`, `NewInstanceDb_IsNotEvenASkip`).
+
+Consequence to accept: the knowledge importer reads instance DB XML from the export, so a regenerated
+project's semantic graph will not carry instance-DB nodes; per the decision the FB is where that
+information belongs, and answers that used an instance DB as retained/interface evidence will say less.
+
+Verified: solution build 0 errors; `Mcp.Engineering.Tests` 118; `Agent.Tests` 468; `ApiHost.Tests` 183;
+`Mcp.Knowledge.Tests` 168; `Mcp.VersionControl.Tests` 158; frontend 86 files / 575 tests.
 
 ### The database lock that froze the page
 
