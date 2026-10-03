@@ -96,13 +96,23 @@ export default function TaskSourceObjectsSection({ workbenchId, worktreeId, task
     onChanged?.()
   }
 
+  /** Shows a just-staged object in the list behind the dialog without waiting for the reload. */
+  const rememberStage = (created: TaskSourceStage) =>
+    setStages(previous => previous.some(stage => stage.sourceObjectId === created.sourceObjectId)
+      ? previous
+      : [...previous, created].sort((left, right) => left.sourceObjectId.localeCompare(right.sourceObjectId)))
+
   const stage = async (sourceObjectId: string) => {
     setPending(sourceObjectId)
     try {
-      await api.stageTaskSourceObject(workbenchId, worktreeId, taskId, sourceObjectId)
+      const created = await api.stageTaskSourceObject(workbenchId, worktreeId, taskId, sourceObjectId)
+      // The response is the server's confirmation of what changed, so the list shows it at once.
+      // Re-reading the whole list here can answer with a pre-click snapshot and leave the list looking
+      // unchanged; the section re-reads on mount, when its context changes, and after a release.
+      rememberStage(created)
       setOpen(false)
       setQuery('')
-      await changed()
+      onChanged?.()
     } catch (caught) {
       showErrorToast(errorMessage(caught))
     } finally {
@@ -115,10 +125,11 @@ export default function TaskSourceObjectsSection({ workbenchId, worktreeId, task
     setPending(sourceObjectId)
     try {
       await api.releaseTaskSourceObject(workbenchId, worktreeId, owner.taskId, sourceObjectId)
-      await api.stageTaskSourceObject(workbenchId, worktreeId, taskId, sourceObjectId)
+      const created = await api.stageTaskSourceObject(workbenchId, worktreeId, taskId, sourceObjectId)
+      rememberStage(created)
       setOpen(false)
       setQuery('')
-      await changed()
+      onChanged?.()
     } catch (caught) {
       showErrorToast(errorMessage(caught))
     } finally {
@@ -248,16 +259,28 @@ export default function TaskSourceObjectsSection({ workbenchId, worktreeId, task
                 key={sourceObjectId}
                 value={sourceObjectId}
                 aria-label={`Stage ${item.category} ${item.name}`}
+                aria-busy={pending === sourceObjectId}
                 className={staged ? 'opacity-50' : undefined}
                 // An object owned by another task never stages implicitly: the take-over control
-                // below is the only path, and it releases the current owner first.
-                onSelect={() => { if (!staged && !owner) void stage(sourceObjectId) }}
+                // below is the only path, and it releases the current owner first. While one request
+                // is in flight the rows stop accepting a second one.
+                onSelect={() => { if (pending === null && !staged && !owner) void stage(sourceObjectId) }}
               >
                 <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{item.category}</span>
                 <span className="min-w-0 flex-1 truncate">{item.name}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">
                   {staged ? 'Staged by this task' : owner ? `Owned by ${owner.taskTitle}` : item.relativePath}
                 </span>
+                {pending === sourceObjectId && (
+                  <span
+                    className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+                    role="status"
+                    data-testid={`stage-pending-${sourceObjectId}`}
+                  >
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {owner ? 'Taking over…' : 'Staging…'}
+                  </span>
+                )}
                 {owner && (
                   <Button
                     type="button"

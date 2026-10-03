@@ -205,4 +205,33 @@ describe('TaskSourceObjectsSection', () => {
     expect(api.listTaskSourceStages).toHaveBeenCalledTimes(2)
     expect(host.querySelector<HTMLElement>('[aria-label="Source objects"]')!.textContent).toContain('Main')
   })
+
+  it('marks the clicked row as busy and shows the staged object even when the reload is stale', async () => {
+    // A pointer click, not cmdk's keyboard navigation: the click path is what a user actually takes,
+    // and the row has to acknowledge it while the request is in flight.
+    let staged: (value: TaskSourceStage) => void = () => {}
+    vi.mocked(api.stageTaskSourceObject).mockReturnValue(
+      new Promise<TaskSourceStage>(resolve => { staged = resolve }))
+
+    const onChanged = vi.fn()
+    const { host } = await render(section({ onChanged }))
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Add source object"]')?.click())
+
+    const item = document.querySelector<HTMLElement>('[aria-label="Stage OB Main"]')!
+    await act(async () => item.click())
+
+    expect(api.stageTaskSourceObject).toHaveBeenCalledWith('wb1', 'wt1', 'task-1', 'device-1:main')
+    // The row itself says it is working; before this fix the click was silent.
+    expect(document.querySelector('[data-testid="stage-pending-device-1:main"]')).not.toBeNull()
+
+    // The click's own response is what puts the object in the list behind the dialog, even though the
+    // list endpoint would still answer with the pre-click snapshot.
+    vi.mocked(api.listTaskSourceStages).mockResolvedValue([])
+    await act(async () => staged(stage('device-1:main')))
+    await act(async () => {})
+
+    expect(document.querySelector('[aria-label="Search source objects"]')).toBeNull()
+    expect(host.querySelector<HTMLElement>('[aria-label="Source objects"]')!.textContent).toContain('Main')
+    expect(onChanged).toHaveBeenCalled()
+  })
 })
