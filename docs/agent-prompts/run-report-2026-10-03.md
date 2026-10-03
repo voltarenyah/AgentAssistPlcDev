@@ -430,20 +430,36 @@ Verified: solution build 0 errors; `Mcp.Engineering.Tests` 118; `Agent.Tests` 46
 ### A fresh project had no graph anchors, so every source-object read failed
 
 Clicking any source object in a newly created project answered `GRAPH_ENTITY_NOT_FOUND`, which the source
-browser shows as an error. Its traceability read is
-`GET …/engineering-graph/source_object/{deviceId}:{manifestId}`, and source objects had only ever entered
-the graph as a **side effect**: a stage call registers the device's whole manifest, and a commit's
-evidence registers the paths it touched. A new project has done neither, so its graph was empty —
-measured on the maintainer's `SWT2-PEI`: **0 rows** in `graph_entities`, while the older project (where
-objects had been staged) held all 1,314. The same new project also confirms the export change: its
-manifest is **774 components with no instance DB at all**.
+browser shows as an error. Two different graphs are involved, and the distinction is the whole answer:
 
-`f5c15f6` makes that read give an object its anchor when the device manifest really lists it
-(`RegisterListedSourceObject`: one idempotent insert, then the normal edge query), and it keeps
-answering `GRAPH_ENTITY_NOT_FOUND` for anything the manifest does not list — verified against the
-running app as a 404 before the change and a 200 after it. The repair is per object and only on a miss,
-so a normal read costs nothing and no bulk write is added to a read path. One endpoint test covers both
-halves.
+| | `engineering.db` — the workbench graph | `plc-knowledge.db` — the device knowledge graph |
+|---|---|---|
+| route / writer | `/engineering-graph/…`, written by staging and by commit evidence | written by `BootstrapDeviceAsync` ("Generating PLC context") |
+| on the maintainer's `SWT2-PEI` | **0** entities before this fix | 29,674 nodes, 108,523 edges, **774** source components |
+
+So "creating a project generates every graph item" is true for the **knowledge** graph and was never true
+for the **workbench** graph: its source objects only ever appeared as a side effect of staging (which
+registers a device's whole manifest) or of a commit's evidence being indexed. The click needs the
+workbench graph — the task and commit links it shows live nowhere else — but the anchor node it hangs
+those links on did not exist.
+
+The root cause is narrower than "nothing creates them": `IndexGraphEvidence` was called by every task
+commit path but **not by the three baseline commit paths** (`CreateWorkbenchAsync`,
+`BootstrapDeviceAsync`, `BootstrapWorktreeAsync`), so a new project's baseline never entered the graph.
+`25e2467` wires those three, and fixes why nobody had noticed the cost of doing so:
+`EngineeringGraphEvidenceIndexer.ResolveSource` re-read `worktree.json`, re-enumerated `device.json`
+files, and re-parsed the whole manifest **per path** — over a thousand manifest parses for one baseline
+commit. It now builds one lookup per indexed commit.
+
+`f5c15f6` remains as a safety net: a read of a source object the manifest lists but the graph does not
+know yet registers its anchor on first read, so a project created before this change (or one whose
+baseline was never indexed) still reads correctly.
+
+Verified: `ApiHost.Tests` 184 (the bootstrap endpoint test now asserts the baseline's evidence edge on the
+source object through the real routes — and the fixture had to be given the production
+`graphEvidenceIndexer`, without which the write it depends on silently no-ops), `Agent.Tests` 468,
+`Mcp.Engineering.Tests` 118, `Mcp.Knowledge.Tests` 168, `Contracts.Tests` 112, build 0 errors. The same
+new project confirms the export change: its manifest is **774 components with no instance DB at all**.
 
 ### The database lock that froze the page
 
