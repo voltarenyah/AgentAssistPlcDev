@@ -191,4 +191,18 @@ describe('TaskSourceObjectsSection', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('button')?.click())
     expect(api.listTaskSourceStages).toHaveBeenCalledTimes(2)
   })
+
+  it('re-reads the stages when another surface reports a stage change', async () => {
+    // The agent's approved stage call happens outside this section; the page bumps the refresh
+    // token, and the section must then show the newly staged object rather than its stale list.
+    const { host, root } = await render(section())
+    expect(host.textContent).toContain('No source objects staged yet.')
+
+    vi.mocked(api.listTaskSourceStages).mockResolvedValue([stage('device-1:main')])
+    await act(async () => root.render(section({ refreshToken: 1 })))
+    await act(async () => {})
+
+    expect(api.listTaskSourceStages).toHaveBeenCalledTimes(2)
+    expect(host.querySelector<HTMLElement>('[aria-label="Source objects"]')!.textContent).toContain('Main')
+  })
 })

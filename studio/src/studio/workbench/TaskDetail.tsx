@@ -84,9 +84,12 @@ type Props = {
   onRemove?: (kind: string, item: TraceabilityItem) => void
   /** Raised after a stage change, so the page can reload the task's traceability edges. */
   onStagesChanged?: () => void
+  /** Bumped when another surface changed the stages (an approved agent stage call), so the Source
+   * objects section re-reads its list. */
+  stagesRefreshToken?: number
 }
 
-export default function TaskDetail({ detail, deviceName, loading = false, error = null, saving = false, onRetry, onSave, onNavigate, onRemove, onStagesChanged }: Props) {
+export default function TaskDetail({ detail, deviceName, loading = false, error = null, saving = false, onRetry, onSave, onNavigate, onRemove, onStagesChanged, stagesRefreshToken = 0 }: Props) {
   const [draft, setDraft] = useState<TaskDraft | null>(detail ? taskDraftFrom(detail.task) : null)
   const [saveError, setSaveError] = useState<string | null>(null)
   // A hardware task has no device, so "Not device-bound" would state the opposite of the truth.
@@ -178,6 +181,7 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
         taskId={detail.task.taskId}
         deviceId={detail.task.deviceId!}
         deviceName={deviceName}
+        refreshToken={stagesRefreshToken}
         onChanged={onStagesChanged}
       />
     ) : <p className="rounded-lg border bg-card px-4 py-4 text-sm text-muted-foreground">{stagingExplanation}</p>}

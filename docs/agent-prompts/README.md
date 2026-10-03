@@ -54,7 +54,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 | [002](002-task-page-source-objects-stages-and-git-bound-baseline.md) | Task page: editable staged source objects with a Git-bound baseline | done | — | `studio/src/studio/workbench/TaskDetail.tsx`, `src/Agent/Workbench/WorkbenchCoordinator.cs` |
 | [003](003-compare-task-mode-in-version-control.md) | Compare task mode in the version-control surface | done | 002 | `studio/src/studio/version-control/VersionControlCompare.tsx` |
 | [004](004-task-commits-with-involved-source-objects.md) | Task page Commits section: which source objects each commit touched | done | 002 | `studio/src/studio/workbench/TaskCommitsSection.tsx`, `src/ApiHost/WorkbenchApiModels.cs` |
-| [005](005-agent-stages-source-objects-with-approval.md) | Agent stages source objects for the current task through an approval card | pending | 002 | `src/Mcp.Engineering/Tools/EngineeringTools.cs` |
+| [005](005-agent-stages-source-objects-with-approval.md) | Agent stages source objects for the current task through an approval card | done | 002 | `src/ApiHost/TaskSourceStagingTool.cs`, `studio/src/studio/workbench/TaskSourceObjectsSection.tsx` |
 | [006](006-remove-right-dock-ai-sessions-page.md) | Remove the right dock's AI sessions page and move its operations into the navigator's conversations | done | 001 | `studio/src/studio/chat/SessionDock.tsx`, `studio/src/studio/workbench/WorkbenchNavigator.tsx` |
 
 Items 002–005 implement the missing execution layer of an already accepted design: task-scoped

@@ -28,6 +28,12 @@ type Props = {
   taskId: string
   deviceId: string
   deviceName?: string
+  /**
+   * Bumped when another surface changed the task's stages — the agent's approved
+   * `stage_task_source_object` call — so the section re-reads the stage list instead of keeping the
+   * pre-approval rows it already has.
+   */
+  refreshToken?: number
   /** Notifies the page that the stage list (and therefore its traceability edges) changed. */
   onChanged?: () => void
 }
@@ -36,7 +42,7 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
 
 const stageIdentity = (deviceId: string, sourceId: string) => `${deviceId}:${sourceId}`
 
-export default function TaskSourceObjectsSection({ workbenchId, worktreeId, taskId, deviceId, deviceName, onChanged }: Props) {
+export default function TaskSourceObjectsSection({ workbenchId, worktreeId, taskId, deviceId, deviceName, refreshToken = 0, onChanged }: Props) {
   const [stages, setStages] = useState<TaskSourceStage[]>([])
   const [owners, setOwners] = useState<WorktreeSourceStage[]>([])
   const [snapshot, setSnapshot] = useState<DeviceSnapshot | null>(null)
@@ -64,7 +70,7 @@ export default function TaskSourceObjectsSection({ workbenchId, worktreeId, task
     } finally {
       setLoading(false)
     }
-  }, [workbenchId, worktreeId, taskId, deviceId])
+  }, [workbenchId, worktreeId, taskId, deviceId, refreshToken])
 
   useEffect(() => { void load() }, [load])
 
