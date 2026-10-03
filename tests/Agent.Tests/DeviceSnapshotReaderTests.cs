@@ -1,4 +1,5 @@
 using Agent.Workbench;
+using Contracts.Engineering;
 using System.Text.Json;
 using Xunit;
 
@@ -467,6 +468,38 @@ public sealed class DeviceSnapshotReaderTests
         var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
 
         Assert.Empty(snapshot.SourceObjects);
+    }
+
+    [Fact]
+    public void ComparableSourceObjectsExcludeInstanceDbsThatCanNeverCarryABaseline()
+    {
+        using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest(
+            new
+            {
+                id = "ob-1", name = "Main", sourcePath = "Area/Main", category = "OB", status = "Exported",
+                exportedFile = "Blocks/Area/Main [OB1].xml", number = 1, programmingLanguage = "LAD",
+                siemensTypeName = "OB",
+            },
+            new
+            {
+                id = "db-1", name = "PC_Clock", sourcePath = "00_Common_Part/PC_Clock", category = "DB",
+                status = "Exported", exportedFile = "DB/00_Common_Part/PC_Clock [DB2].xml", number = 2,
+                programmingLanguage = "DB", siemensTypeName = "InstanceDB",
+            });
+
+        var reader = new DeviceSnapshotReader();
+
+        // The device still lists it: the source browser shows what is on disk.
+        var listed = Assert.Single(reader.ReadSourceObjects(fixture.Context), item => item.Id == "db-1");
+        Assert.Equal(ManagedSourceEvidenceKind.InstanceDb, listed.EvidenceKind);
+
+        // A task's compare basis cannot include it. Instance DBs are generated from their FB — where
+        // the information worth tracking lives — so the evidence domain excludes them and no commit
+        // could ever give one a baseline.
+        var comparable = reader.ReadSourceObjects(fixture.Context, comparableOnly: true);
+        Assert.DoesNotContain(comparable, item => item.Id == "db-1");
+        Assert.Contains(comparable, item => item.Id == "ob-1");
     }
 
     private static object Component(

@@ -108,12 +108,27 @@ public sealed class DeviceSnapshotReader
     /// Just the source objects a device exposes. <see cref="Read"/> also crawls every block on disk,
     /// which on a large export costs seconds; the task page's picker needs only this list.
     /// </summary>
-    public IReadOnlyList<SourceObjectInfo> ReadSourceObjects(DeviceContext context)
+    /// <param name="comparableOnly">Also drop the kinds the managed-source evidence domain excludes.
+    /// A picker for a task's compare basis must not offer them: they can never carry a baseline, so a
+    /// row for one could only ever say that it cannot be compared.</param>
+    public IReadOnlyList<SourceObjectInfo> ReadSourceObjects(DeviceContext context, bool comparableOnly = false)
     {
         var manifest = ReadManifestSourceObjects(context.SourceRoot);
-        if (manifest.Count > 0) return manifest;
-        return ResolveSourceObjects(manifest, ReadBlocks(context, new List<string>()));
+        var resolved = manifest.Count > 0
+            ? manifest
+            : ResolveSourceObjects(manifest, ReadBlocks(context, new List<string>()));
+        return comparableOnly ? ComparableSourceObjects(resolved) : resolved;
     }
+
+    /// <summary>
+    /// The source objects a task can be compared against. Instance DBs are excluded: they are
+    /// generated from their FB, which is where the information worth tracking lives, so the evidence
+    /// domain excludes them (ADR-0001, the fingerprint-first compare design) and no commit can give
+    /// one a baseline.
+    /// </summary>
+    public static IReadOnlyList<SourceObjectInfo> ComparableSourceObjects(IReadOnlyList<SourceObjectInfo> items) =>
+        items.Where(item => !string.Equals(item.EvidenceKind, ManagedSourceEvidenceKind.InstanceDb, StringComparison.Ordinal))
+            .ToArray();
 
     /// <summary>Manifest objects, or the block crawl when the manifest is missing or legacy. The
     /// fallback carries no manifest-only metadata (hashes, timestamps).</summary>

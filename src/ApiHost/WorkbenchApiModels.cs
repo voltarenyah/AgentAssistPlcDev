@@ -1752,7 +1752,9 @@ public static class WorkbenchEndpoints
             var selected = s.Device(workbenchId, worktreeId, device);
             // The task page's picker reads this list and nothing else; the full snapshot also crawls
             // every block on disk, which costs seconds on an export of more than a thousand objects.
-            return Results.Ok(snapshots.ReadSourceObjects(selected.Context));
+            // Instance DBs are dropped: they are outside the evidence domain and can never be
+            // compared, so they are not a task basis and must not be offered as one.
+            return Results.Ok(snapshots.ReadSourceObjects(selected.Context, comparableOnly: true));
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/refresh/stage", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
