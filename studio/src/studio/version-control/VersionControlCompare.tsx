@@ -10,6 +10,15 @@ type Props = {
   branch: string
   /** Increment to trigger a comparison (the panel's Compare with TIA action). */
   signal: number
+  /**
+   * Which comparison the signal runs: the whole project (`full`, the default) or only the active
+   * task's staged source objects (`task`). A task result is never a project-wide verdict.
+   */
+  mode?: 'full' | 'task'
+  /** The active worktree task whose staged objects a `task` comparison reads. */
+  taskId?: string | null
+  /** Names the covered task in the task-compare heading. */
+  taskTitle?: string | null
   /** Whether the user wants the optional project AML/network verification. */
   verifyHardware?: boolean
   /** The changes page commit message — reused as the title for accept actions. */
@@ -38,9 +47,51 @@ const safetyKindLabel = (kind: api.SafetyBlockDifference['kind']) => {
 
 const shortFingerprint = (value: string) => value.slice(0, 7)
 
-export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, verifyHardware = true, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation, operationStatus = null, onComparisonBusyChanged }: Props) {
+/**
+ * Explanations for the backend's task-stage problem codes. These describe only the staged objects
+ * of one task; none of them is a statement about the rest of the project. `TASK_STAGE_EMPTY` and
+ * `TASK_STAGE_INVALID` arrive as request failures, the others as problem entries in a 200 result.
+ */
+const taskStageProblemText: Record<string, { title: string; detail: string }> = {
+  TASK_STAGE_EMPTY: {
+    title: 'No source objects are staged on this task',
+    detail: 'Add source objects to the task before comparing it with TIA.',
+  },
+  TASK_STAGE_BASELINE_MISSING: {
+    title: 'No committed baseline yet',
+    detail: 'This staged object has no fingerprint baseline yet because it has no committed Git content. Commit the object once; task comparison reports it until then.',
+  },
+  TASK_STAGE_BASELINE_INVALID: {
+    title: 'Committed baseline cannot be read',
+    detail: "This staged object's fingerprint baseline cannot be read. Commit the object again to record a fresh baseline.",
+  },
+  TASK_STAGE_MISSING: {
+    title: 'Missing or unreadable in TIA',
+    detail: 'The staged object is gone, renamed, or unreadable in TIA. Recreate or re-export it in TIA, then compare again.',
+  },
+  TASK_STAGE_INVALID: {
+    title: 'Staged object is outside the task device',
+    detail: 'A staged source object does not belong to the task device. Stage an object of the task device instead.',
+  },
+}
+
+const taskCandidateReasonLabel = (reason: string): string => ({
+  'new': 'New in TIA',
+  'removed': 'Removed from TIA',
+  'fingerprint-changed': 'Fingerprint changed',
+  'tag-timestamp-changed': 'Tag timestamp changed',
+  'evidence-unreadable': 'Evidence unreadable in TIA',
+  'f-signature-changed': 'Safety signature changed',
+  'evidence-kind-changed': 'Evidence kind changed',
+}[reason] ?? reason)
+
+type TaskStageProblemState = { code: string; message: string }
+
+export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, mode = 'full', taskId = null, taskTitle = null, verifyHardware = true, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation, operationStatus = null, onComparisonBusyChanged }: Props) {
   const [started, setStarted] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
+  const [taskComparison, setTaskComparison] = useState<api.TaskSourceComparison | null>(null)
+  const [taskProblem, setTaskProblem] = useState<TaskStageProblemState | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectedSafety, setSelectedSafety] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
@@ -82,19 +133,70 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     finally { setBusy(false); onComparisonBusyChanged?.(false) }
   }
 
+  /**
+   * Compares only the active task's staged source objects. The result is scoped to that task, so it
+   * never reports a project-wide verdict, never feeds the project commit selection and never
+   * produces a savepoint: `onSelectionChanged(null, [])` clears any project selection the user made
+   * before, because a task result cannot stand in for one.
+   */
+  const compareActiveTask = async () => {
+    if (!taskId) return
+    setBusy(true); onComparisonBusyChanged?.(true); setError(null); setTaskProblem(null); setNeedsCompileConfirmation(false)
+    const operationId = onBeginOperation?.('compare-tia', 'Comparing this task’s staged source objects with TIA Portal...')
+    try {
+      const nextComparison = await api.compareTaskWithTia(workbenchId, worktreeId, taskId, operationId)
+      setTaskComparison(nextComparison)
+      onSelectionChanged?.(null, [])
+      onComparisonStateChanged?.(nextComparison.problems.length > 0 || nextComparison.candidates.length > 0)
+    } catch (reason) {
+      if (reason instanceof api.WorkbenchApiError && taskStageProblemText[reason.code]) {
+        setTaskProblem({ code: reason.code, message: reason.message })
+      } else {
+        setError(displayError(reason))
+      }
+      onSelectionChanged?.(null, [])
+      onComparisonStateChanged?.(true)
+    } finally { setBusy(false); onComparisonBusyChanged?.(false) }
+  }
+
   useLayoutEffect(() => {
     if (signal === 0 || signal === handledSignal.current) return
     handledSignal.current = signal
     setStarted(true)
-    void compare()
+    if (mode === 'task') void compareActiveTask()
+    else void compare()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signal])
+
+  // Switching scope — or switching the task a task scope covers — must not leave the previous
+  // result on screen as if it described the new one.
+  const previousMode = useRef(mode)
+  const previousTaskId = useRef(taskId)
+  useEffect(() => {
+    const modeChanged = previousMode.current !== mode
+    const taskChanged = mode === 'task' && previousTaskId.current !== taskId
+    if (!modeChanged && !taskChanged) return
+    previousMode.current = mode
+    previousTaskId.current = taskId
+    setComparison(null)
+    setTaskComparison(null)
+    setTaskProblem(null)
+    setStarted(false)
+    setError(null)
+    setNeedsCompileConfirmation(false)
+    onComparisonBusyChanged?.(false)
+    onComparisonStateChanged?.(false)
+    // Only a scope or covered-task change resets, so the parent callbacks stay render-local handlers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, taskId])
 
   useEffect(() => {
     if (selectionResetSignal === 0) return
     setSelected(new Set())
     setSelectedSafety(new Set())
     setComparison(null)
+    setTaskComparison(null)
+    setTaskProblem(null)
     setStarted(false)
     onComparisonBusyChanged?.(false)
     setError(null)
@@ -146,11 +248,20 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
 
   if (!started) return null
 
+  const taskMode = mode === 'task'
   const hardwareDiffers = comparison?.hardware != null && comparison.hardware.state !== 'in-sync'
   const hardwareChecked = comparison?.hardwareChecked !== false
   const safetyChanges = comparison?.safety?.filter(entry => entry.changed) ?? []
   const differences = comparison?.differences ?? []
   const titleMissing = commitMessage.trim().length === 0
+  const taskProblems = taskComparison?.problems ?? []
+  const taskCandidates = taskComparison?.candidates ?? []
+  const taskExports = taskComparison?.candidateExports ?? []
+  const taskProblemGroups = new Map<string, string[]>()
+  for (const problem of taskProblems) {
+    taskProblemGroups.set(problem.code, [...(taskProblemGroups.get(problem.code) ?? []), problem.sourceObjectId])
+  }
+  const taskClean = taskComparison !== null && taskProblems.length === 0 && taskCandidates.length === 0
 
   return (
     <div className="shrink-0" data-testid="vc-compare-result">
@@ -159,7 +270,11 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
           <div className="rounded-lg border border-chart-2/30 bg-chart-2/5 p-2.5 text-[10px] text-muted-foreground" data-testid="vc-compare-progress" role="status" aria-live="polite">
             <div className="flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-chart-2" />
-              <span className="font-medium text-foreground">Comparing {branch.toLowerCase() === 'master' ? 'the connected TIA project with master' : 'master with the selected TIA project'}...</span>
+              <span className="font-medium text-foreground">
+                {taskMode
+                  ? 'Comparing this task’s staged source objects with TIA Portal...'
+                  : `Comparing ${branch.toLowerCase() === 'master' ? 'the connected TIA project with master' : 'master with the selected TIA project'}...`}
+              </span>
             </div>
             <div className="mt-2 h-1 overflow-hidden rounded-full bg-chart-2/15" aria-hidden="true">
               <div className="h-full w-2/5 animate-pulse rounded-full bg-chart-2" />
@@ -184,7 +299,61 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
           </div>
         )}
 
-        {comparison && !busy && (
+        {taskMode && !busy && (taskComparison !== null || taskProblem !== null) && (
+          <div className="space-y-2" data-testid="vc-task-compare-result">
+            <div className="text-[10px] font-medium" data-testid="vc-task-compare-heading">
+              Task compare{taskTitle ? `: ${taskTitle}` : ''}
+            </div>
+            {taskProblem && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600" data-testid="vc-task-problem" data-problem-code={taskProblem.code}>
+                <div className="font-medium">{taskStageProblemText[taskProblem.code]?.title ?? taskProblem.message}</div>
+                {taskStageProblemText[taskProblem.code] && <div className="mt-1 text-[9px]">{taskStageProblemText[taskProblem.code].detail}</div>}
+                <div className="mt-1 break-all font-mono text-[8px] text-muted-foreground">{taskProblem.code}</div>
+              </div>
+            )}
+            {[...taskProblemGroups.entries()].map(([code, sourceObjectIds]) => (
+              <div key={code} className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600" data-testid="vc-task-problem" data-problem-code={code}>
+                <div className="font-medium">{taskStageProblemText[code]?.title ?? 'This staged object could not be compared with TIA'}</div>
+                <div className="mt-1 text-[9px]">{taskStageProblemText[code]?.detail ?? 'The staged object could not be compared with TIA.'}</div>
+                <ul className="mt-1 space-y-0.5 font-mono text-[8px] text-muted-foreground">
+                  {sourceObjectIds.map(sourceObjectId => <li key={sourceObjectId} className="break-all">{sourceObjectId}</li>)}
+                </ul>
+              </div>
+            ))}
+            {taskCandidates.length > 0 && (
+              <div className="space-y-1" data-testid="vc-task-candidates">
+                <div className="text-[10px] font-medium text-foreground">
+                  {taskCandidates.length} staged source object{taskCandidates.length === 1 ? '' : 's'} differ{taskCandidates.length === 1 ? 's' : ''} from the committed baseline
+                </div>
+                {taskCandidates.map(candidate => {
+                  const exported = taskExports.find(item => item.id === candidate.id)
+                  return (
+                    <div key={candidate.id} className="rounded-lg border p-2" style={{ borderColor: 'var(--border)' }} data-testid="vc-task-candidate">
+                      <div className="text-[10px] font-medium">{taskCandidateReasonLabel(candidate.reason)}</div>
+                      <div className="break-all font-mono text-[9px] text-muted-foreground">{exported?.sourcePath || candidate.id}</div>
+                      {candidate.isSafetyDifference && <div className="mt-1 text-[8px] text-amber-500">Safety program difference</div>}
+                      {exported?.export.success === false && <div className="mt-1 text-[8px] text-destructive">The XML export for this object failed.</div>}
+                    </div>
+                  )
+                })}
+                {taskExports.length > 0 && (
+                  <div className="text-[9px] text-muted-foreground" data-testid="vc-task-candidate-exports">
+                    Exported {taskExports.filter(item => item.export.success).length} of {taskExports.length} changed object{taskExports.length === 1 ? '' : 's'} as XML.
+                  </div>
+                )}
+              </div>
+            )}
+            {taskClean && (
+              <div className="px-3.5 py-5 text-center text-[10px] text-muted-foreground" data-testid="vc-task-clean-state">
+                <div className="font-medium text-emerald-600">This task is in sync</div>
+                <div className="mt-1 text-[9px]">Every staged source object matches the baseline recorded in the task.</div>
+                <div className="mt-1 text-[9px]">Only this task’s staged objects were compared; nothing else was checked.</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!taskMode && comparison && !busy && (
           <div className="space-y-2">
             {comparison.timings && comparison.timings.length > 0 && (
               <section className="rounded-lg border border-border/70 bg-muted/25 p-2.5 text-[9px]" data-comparison-timings aria-label="TIA comparison timings">
