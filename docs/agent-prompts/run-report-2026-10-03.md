@@ -291,10 +291,12 @@ A scratch branch was built off master and all six item branches were merged into
 | `codex/005-agent-stage-approval` | clean |
 
 Six branches that all touch `MainStudio.tsx`, `TaskDetail.tsx`, `client.ts`, the graph API, the sandbox
-policy and the navigator produce **no code conflict** — the only two conflicts are the queue's own
-index, twice, for the same reason: a branch cut from an older README updates its own row while master
-had already gained the dependency note and the baseline table. Resolution for both: keep master's
-paragraphs and table, and take each branch's own row status (`001`–`006` = `done`).
+policy and the navigator produce **no code conflict**. In the real sequential merge onto master, every
+one of 002, 003, 004 and 005 conflicted on `docs/agent-prompts/README.md` and on nothing else — a branch
+cut from an older README updates its own row while master had already taken another branch's rows. The
+resolution was identical each time: keep master's paragraphs and table, take the branch's own row, and
+set that row to `done`. 001 and 006 merged with no conflict at all. After all six, the index reads
+`done` for every item.
 
 ### The interaction the merge check could not see
 
@@ -314,6 +316,40 @@ green** after the fix.
 
 The lesson worth carrying: a per-branch green suite plus a clean merge is not evidence that the merged
 system works. Run the suite on the merged tree before believing the branches compose.
+
+### The same interaction class, a second time
+
+Merging 002–005 surfaced one further failure of exactly the same shape, again caused by 006 and again
+**in a test, not in product behaviour**: `MainStudio.stageApproval.test.tsx` (item 005) started its
+conversation by clicking `aria-label="New session"` — the button of the AI sessions page that 006
+retired — so on the merged tree the element no longer existed and the helper crashed on `null` before
+naming what it was looking for. Fixed in `142619b` by starting the conversation from the chat surface's
+own empty state (`aria-label="Create new chat session"`), which is where 006 moved that entry point, and
+by tightening the helper's assertion from `toBeDefined()` to `not.toBeNull()` — `null` satisfies
+`toBeDefined()`, which is what turned "element missing" into a confusing `dispatchEvent` TypeError.
+
+Both interactions were the same kind: **a branch whose tests used a UI surface as a fixture, written
+before another branch deleted that surface.** Neither was a product defect, and neither would have been
+caught by reviewing the diffs — only by running the merged suite. When one item retires a surface,
+expect the other items' tests to be its hidden consumers.
+
+### Merged-tree verification (all six merged)
+
+Run on master after the six merges and the two test fixes above:
+
+| Lane | Result |
+|---|---|
+| `cd studio && npm test` | **86 files / 572 tests green** |
+| `cd studio && npm run build` | `tsc -b` + `vite build` clean |
+| `dotnet build AgentAssistPlcDev.sln -v q` | 0 errors (8 pre-existing analyzer warnings) |
+| `dotnet test tests/ApiHost.Tests` | **183 passed** (177 baseline + 1 from 004 + 5 from 005) |
+| `dotnet test tests/Agent.Tests` | **465 passed** (453 baseline + 12 from 002) |
+| `dotnet test tests/Contracts.Tests` | **112 passed** |
+
+`Agent.dll` is locked while the development ApiHost runs, so the .NET lane was built after stopping it
+and the services were then restarted with `.\launch.ps1 -NoBuild`; both are healthy (`http://localhost:5173/`
+and `http://localhost:5239/api/status` return 200) and the dev server serves the new modules
+(`TaskSourceObjectsSection.tsx`, `TaskCommitsSection.tsx`).
 
 ## Recommended review order
 
