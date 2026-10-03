@@ -38,6 +38,14 @@ import {
 } from './plcSourceState'
 import PlcSourceCompareDialog from './PlcSourceCompareDialog'
 
+/** True when the workbench graph answered "no such entity" — an expected answer for an object that
+ * nothing has staged or committed yet, so the row shows its empty state instead of an error. */
+const isMissingGraphEntity = (error: unknown) => {
+  if (typeof error !== 'object' || error === null) return false
+  const { status, code } = error as { status?: unknown; code?: unknown }
+  return status === 404 || code === 'GRAPH_ENTITY_NOT_FOUND'
+}
+
 type Props = {
   workbenchId: string
   worktreeId: string
@@ -107,6 +115,10 @@ export default function PlcSourcePanel({
       const detail = await api.getGraphEntityDetail(workbenchId, 'sourceObject', item.id)
       setTraceability(previous => ({ ...previous, [item.id]: detail }))
     } catch (error) {
+      // The workbench graph has no record of this object yet — the normal state of a source object that
+      // nothing has staged or committed, and the row already renders its empty state. Only a real
+      // failure is worth an error toast; "no links" is an answer, not a fault.
+      if (isMissingGraphEntity(error)) return
       showErrorToast(errorMessage(error))
     }
   }, [workbenchId])
@@ -334,7 +346,7 @@ export default function PlcSourcePanel({
                       )}
                       <span className="text-muted-foreground">Task links</span>
                       <div className="flex flex-wrap items-center gap-1">
-                        {(traceability[item.id]?.tasks ?? []).length === 0 ? <span className="text-muted-foreground">Unassigned legacy source object</span> : traceability[item.id]!.tasks.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span><button type="button" className="underline font-sans" aria-label={`Reassign task ${link.id} from source object ${item.name}`} onClick={() => void reassignSourceTask(item, link.id)}>Reassign</button>{link.edgeId && <button type="button" className="underline font-sans" aria-label={`Remove task ${link.id} from source object ${item.name}`} onClick={async () => { try { await api.removeTaskRelationship(workbenchId, link.id, link.edgeId); await loadTraceability(item) } catch (error) { showErrorToast(errorMessage(error)) } }}>Remove</button>}</span>)}
+                        {(traceability[item.id]?.tasks ?? []).length === 0 ? <span className="text-muted-foreground">No linked tasks yet.</span> : traceability[item.id]!.tasks.map(link => <span key={link.edgeId || link.id} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono"><button type="button" className="underline" aria-label={`Open task ${link.id}`} onClick={() => onNavigateTask?.(link.id)}>{link.id}</button><span className="font-sans text-muted-foreground">{link.provenance}</span><button type="button" className="underline font-sans" aria-label={`Reassign task ${link.id} from source object ${item.name}`} onClick={() => void reassignSourceTask(item, link.id)}>Reassign</button>{link.edgeId && <button type="button" className="underline font-sans" aria-label={`Remove task ${link.id} from source object ${item.name}`} onClick={async () => { try { await api.removeTaskRelationship(workbenchId, link.id, link.edgeId); await loadTraceability(item) } catch (error) { showErrorToast(errorMessage(error)) } }}>Remove</button>}</span>)}
                         <button type="button" className="secondary-button h-6 px-2" aria-label={`Attach task to source object ${item.name}`} onClick={() => void attachSourceTask(item)}>Attach</button>
                       </div>
                       <span className="text-muted-foreground">Commit links</span>
