@@ -427,6 +427,24 @@ information belongs, and answers that used an instance DB as retained/interface 
 Verified: solution build 0 errors; `Mcp.Engineering.Tests` 118; `Agent.Tests` 468; `ApiHost.Tests` 183;
 `Mcp.Knowledge.Tests` 168; `Mcp.VersionControl.Tests` 158; frontend 86 files / 575 tests.
 
+### A fresh project had no graph anchors, so every source-object read failed
+
+Clicking any source object in a newly created project answered `GRAPH_ENTITY_NOT_FOUND`, which the source
+browser shows as an error. Its traceability read is
+`GET …/engineering-graph/source_object/{deviceId}:{manifestId}`, and source objects had only ever entered
+the graph as a **side effect**: a stage call registers the device's whole manifest, and a commit's
+evidence registers the paths it touched. A new project has done neither, so its graph was empty —
+measured on the maintainer's `SWT2-PEI`: **0 rows** in `graph_entities`, while the older project (where
+objects had been staged) held all 1,314. The same new project also confirms the export change: its
+manifest is **774 components with no instance DB at all**.
+
+`f5c15f6` makes that read give an object its anchor when the device manifest really lists it
+(`RegisterListedSourceObject`: one idempotent insert, then the normal edge query), and it keeps
+answering `GRAPH_ENTITY_NOT_FOUND` for anything the manifest does not list — verified against the
+running app as a 404 before the change and a 200 after it. The repair is per object and only on a miss,
+so a normal read costs nothing and no bulk write is added to a read path. One endpoint test covers both
+halves.
+
 ### The database lock that froze the page
 
 **Symptom, after the six merges.** Adding a source object on the task page froze the page for about a
