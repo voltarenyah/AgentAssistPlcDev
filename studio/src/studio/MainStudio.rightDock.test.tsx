@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/api/client'
 import { clearDeviceMetadataMemory } from './deviceSnapshot'
+import { SHELL_LAYOUT_STORAGE_KEY } from './shellLayout'
 import MainStudio from './MainStudio'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -104,6 +105,15 @@ const toggleRightDock = async (host: HTMLElement) => {
   await act(async () => { toggle!.click() })
 }
 
+/**
+ * The persisted layout — the state this item is actually about. It stays observable on a view that
+ * renders no dock at all, which is what the retired AI sessions page left the device chat view as.
+ */
+const persistedRightOpen = () => {
+  const raw = window.localStorage.getItem(SHELL_LAYOUT_STORAGE_KEY)
+  return raw ? (JSON.parse(raw) as { rightOpen?: boolean }).rightOpen : undefined
+}
+
 /** Selects the device whose workspace hosts the chat empty state. */
 const selectDevice = async (host: HTMLElement) => {
   await clickText(host, 'DemoWB')
@@ -166,32 +176,39 @@ describe('MainStudio right dock is never opened by an action', () => {
     expect(dockState(host)).toBe('open')
   })
 
-  it('leaves a collapsed right dock collapsed when a conversation starts from the chat empty state', async () => {
+  it('keeps a collapsed right dock collapsed when a conversation starts from the chat empty state', async () => {
     const { host } = render(<MainStudio />)
     await act(async () => {})
 
     await selectDevice(host)
     await toggleRightDock(host)
     expect(dockState(host)).toBe('closed')
+    expect(persistedRightOpen()).toBe(false)
 
     await focusChatView(host)
     await startConversationFromEmptyState(host)
 
     expect(api.newChatSession).toHaveBeenCalledTimes(1)
-    expect(dockState(host)).toBe('closed')
+    // The retired AI sessions page leaves a device on the chat view with no right dock at all, so
+    // the state the user chose is asserted where it lives rather than on a rendered attribute: the
+    // conversation started without reopening anything.
+    expect(host.querySelector('[data-dock="right"]')).toBeNull()
+    expect(persistedRightOpen()).toBe(false)
   })
 
-  it('leaves an open right dock open when a conversation starts from the chat empty state', async () => {
+  it('keeps an open right dock open when a conversation starts from the chat empty state', async () => {
     const { host } = render(<MainStudio />)
     await act(async () => {})
 
     await selectDevice(host)
     expect(dockState(host)).toBe('open')
+    expect(persistedRightOpen()).toBe(true)
 
     await focusChatView(host)
     await startConversationFromEmptyState(host)
 
     expect(api.newChatSession).toHaveBeenCalledTimes(1)
-    expect(dockState(host)).toBe('open')
+    expect(host.querySelector('[data-dock="right"]')).toBeNull()
+    expect(persistedRightOpen()).toBe(true)
   })
 })
