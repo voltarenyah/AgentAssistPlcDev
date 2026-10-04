@@ -1,5 +1,6 @@
 using Agent.Mcp;
 using Agent.Workbench;
+using Agent.Workbench.EngineeringGraph;
 using Contracts.Engineering;
 using Contracts.Knowledge;
 using Contracts.Sandbox;
@@ -2596,6 +2597,120 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             File.WriteAllText(dbPath, "knowledge");
             return new IngestResult { DbPath = dbPath };
         });
+
+    [Fact]
+    public async Task MergeWorktreeAsyncRecordsTheMergedCommitInTheGraph()
+    {
+        // AC-006: `vc_merge` writes no evidence of its own, so a worktree merge used to leave no
+        // git_commit node and its commit→source-object read answered 404.
+        var fixture = Fixture.Create(root);
+        var workbench = RegisterMergeWorkbench(fixture);
+        fixture.WriteBaseline("Blocks/Main.xml", "<Document><SW.Blocks.FC /></Document>");
+        fixture.WriteManifests();
+        const string mergeSha = "merge-commit-1";
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_merge", JsonSerializer.SerializeToElement(new
+            {
+                targetWorktreePath = fixture.Context.WorktreeRoot,
+                targetBranch = "master",
+                sourceBranch = "feature",
+                sourceSha = "feature-commit-1",
+                sha = mergeSha,
+                merged = true,
+            }))
+            .Respond("vc_log", new ConsistencyLogResult
+            {
+                Commits =
+                [
+                    new ConsistencyCommit
+                    {
+                        Sha = mergeSha,
+                        Author = "Ansel",
+                        Message = "Merge feature",
+                        Timestamp = "2026-08-10T09:00:00Z",
+                        Files = ["devices/PLC_1/source/Blocks/Main.xml"],
+                    },
+                ],
+            });
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "merge-catalog")),
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }),
+            graphEvidenceIndexer: new EngineeringGraphEvidenceIndexerProvider());
+        coordinator.RegisterWorkbench(workbench);
+
+        var result = await coordinator.MergeWorktreeAsync("wb-1", "wt-2", "wt-1");
+
+        // The merge's own response is returned unchanged.
+        Assert.Equal(mergeSha, Assert.IsType<JsonElement>(result).GetProperty("sha").GetString());
+        using var store = new EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new EngineeringGraphService(store, "wb-1", id => id is "wt-1" or "wt-2");
+        Assert.NotNull(graph.GetEntity(GraphEntityKind.GitCommit, mergeSha));
+        var evidence = Assert.Single(graph.GetEdges(
+            GraphEntityKind.GitCommit, mergeSha, GraphEntityKind.SourceObject));
+        // The fixture's manifest carries no component id, so the reader's own block id form is the
+        // object's identity — the form AC-005 also accepts.
+        Assert.Equal("dev-1:source:Blocks/Main.xml", evidence.ToId);
+        Assert.Equal("wt-1", graph.GetEntity(GraphEntityKind.GitCommit, mergeSha)!.WorktreeId);
+    }
+
+    [Fact]
+    public async Task MergeWorktreeAsyncWithoutAnEvidenceIndexerStillReturnsTheMergeResult()
+    {
+        var fixture = Fixture.Create(root);
+        var workbench = RegisterMergeWorkbench(fixture);
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_merge", JsonSerializer.SerializeToElement(new { sha = "merge-commit-2", merged = true }));
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "merge-catalog")),
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }));
+        coordinator.RegisterWorkbench(workbench);
+
+        var result = await coordinator.MergeWorktreeAsync("wb-1", "wt-2", "wt-1");
+
+        Assert.Equal("merge-commit-2", ((JsonElement)result).GetProperty("sha").GetString());
+        Assert.DoesNotContain("vc_log", versionControl.Calls);
+    }
+
+    private static WorkbenchMetadata RegisterMergeWorkbench(Fixture fixture)
+    {
+        var workbenchRoot = fixture.Context.WorkbenchRoot;
+        Directory.CreateDirectory(Path.Combine(workbenchRoot, "repository.git"));
+        Directory.CreateDirectory(Path.Combine(workbenchRoot, "repository.svn"));
+        var sourceRoot = Path.Combine(workbenchRoot, "worktrees", "feature");
+        Directory.CreateDirectory(sourceRoot);
+        new AtomicJsonStore().Write(
+            Path.Combine(sourceRoot, "worktree.json"),
+            new WorktreeMetadata(
+                WorkbenchSchema.CurrentVersion, "wt-2", "wb-1", "feature", "feature",
+                "2026-08-10T00:00:00Z", null, null, null, new[] { "dev-1" }, null));
+        var workbench = new WorkbenchMetadata(
+            WorkbenchSchema.CurrentVersion,
+            "wb-1",
+            "Merge",
+            "2026-08-10T00:00:00Z",
+            workbenchRoot,
+            Path.Combine(workbenchRoot, "repository.git"),
+            null,
+            null,
+            [
+                // Relative to the workbench's `worktrees/` directory, as the catalog writes them.
+                new WorkbenchWorktreeRegistration("wt-1", "master", "master", "master"),
+                new WorkbenchWorktreeRegistration("wt-2", "feature", "feature", "feature"),
+            ],
+            SvnRepositoryPath: Path.Combine(workbenchRoot, "repository.svn"));
+        new AtomicJsonStore().Write(Path.Combine(workbenchRoot, "workbench.json"), workbench);
+        return workbench;
+    }
 
     private static WorkbenchMetadata RegisterTimelineWorkbench(Fixture fixture)
     {

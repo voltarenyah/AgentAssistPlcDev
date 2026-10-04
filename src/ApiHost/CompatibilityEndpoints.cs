@@ -644,14 +644,38 @@ public static class CompatibilityEndpoints
             await gateway.For("vc_diff").CallAsync<JsonElement>("vc_diff", new { repoPath = Device(state).WorktreeRoot, filePath }, ct));
         app.MapPost("/api/vc/add", async (CompatibilityPathRequest body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_add").CallAsync<JsonElement>("vc_add", new { repoPath = Device(state).WorktreeRoot, paths = body.Paths ?? [] }, ct));
-        app.MapPost("/api/vc/commit", async (CompatibilityPathRequest body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("vc_commit").CallAsync<JsonElement>("vc_commit", new { repoPath = Device(state).WorktreeRoot, message = body.Message }, ct));
+        app.MapPost("/api/vc/commit", async (CompatibilityPathRequest body, WorkbenchApiState state, ApiMcpGateway gateway,
+            EngineeringGraphEvidenceIndexerProvider evidenceIndexer, CancellationToken ct) =>
+        {
+            var workbenchId = Workbench(state);
+            var worktreeId = state.Selection?.WorktreeId
+                ?? throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
+            var commit = await gateway.For("vc_commit").CallAsync<JsonElement>(
+                "vc_commit", new { repoPath = Device(state).WorktreeRoot, message = body.Message }, ct);
+            // A raw gateway commit never reaches the coordinator's evidence indexing (AC-006).
+            RawGatewayCommitEvidence.IndexCommit(evidenceIndexer, state.Workbench(workbenchId), worktreeId, commit);
+            return commit;
+        });
         app.MapPost("/api/vc/restore", async (CompatibilityPathRequest body, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
             await executor.RequestAsync("vc_restore", new Dictionary<string, object?> { ["filePath"] = body.FilePath }, Device(state), "api", ct));
         app.MapGet("/api/vc/branches", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_branches").CallAsync<JsonElement>("vc_branches", new { repoPath = Device(state).WorktreeRoot }, ct));
-        app.MapPost("/api/vc/checkout", async (JsonElement body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("vc_checkout").CallAsync<JsonElement>("vc_checkout", new { repoPath = Device(state).WorktreeRoot, branchName = body.GetProperty("branch").GetString() }, ct));
+        app.MapPost("/api/vc/checkout", async (JsonElement body, WorkbenchApiState state, ApiMcpGateway gateway,
+            EngineeringGraphEvidenceIndexerProvider evidenceIndexer, CancellationToken ct) =>
+        {
+            var workbenchId = Workbench(state);
+            var worktreeId = state.Selection?.WorktreeId
+                ?? throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
+            var root = Device(state).WorktreeRoot;
+            var checkout = await gateway.For("vc_checkout").CallAsync<JsonElement>(
+                "vc_checkout", new { repoPath = root, branchName = body.GetProperty("branch").GetString() }, ct);
+            // A branch switch moves HEAD to a commit this route may be the first in-app path to see
+            // (AC-006): without this the timeline's read of the new HEAD answers 404. Best effort, and
+            // the checkout's own response shape is unchanged.
+            await RawGatewayCommitEvidence.IndexCheckedOutHeadAsync(
+                evidenceIndexer, gateway.For("vc_log"), state.Workbench(workbenchId), worktreeId, root, checkout, ct);
+            return checkout;
+        });
         return app;
 
     }

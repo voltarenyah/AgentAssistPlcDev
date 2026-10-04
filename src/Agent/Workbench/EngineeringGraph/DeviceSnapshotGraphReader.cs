@@ -90,6 +90,34 @@ public sealed class DeviceSnapshotGraphReader
     }
 
     /// <summary>
+    /// The same anchor, addressed by the reader's own block id form — <c>source:{relativePath}</c>,
+    /// which <see cref="DeviceSnapshotReader.ReadManifestSourceObjects"/> falls back to for a legacy
+    /// manifest component without an id and which the block view's <c>OfflineBlockInfo.Id</c> has
+    /// always been. Returns the canonical <c>{deviceId}:{manifestId}</c> entity id the graph stores,
+    /// with the relative path the projection kept, or null when the device does not list the path.
+    /// </summary>
+    public (string EntityId, string RelativePath)? FindListedSourceObjectByPath(
+        DeviceContext context,
+        DeviceMetadata metadata,
+        string relativePath)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(metadata);
+        var wanted = NormalizePath(relativePath);
+        foreach (var pair in Facts(context, metadata))
+        {
+            var stored = PropertyText(pair.Value, SourceObjectPropertyNames.RelativePath);
+            if (stored is null) continue;
+            if (!string.Equals(NormalizePath(stored), wanted, StringComparison.OrdinalIgnoreCase)) continue;
+            return (pair.Key, stored);
+        }
+
+        return null;
+    }
+
+    private static string NormalizePath(string path) => path.Replace('\\', '/').TrimStart('/');
+
+    /// <summary>
     /// One device's fact rows, projecting first when the graph holds no current projection for it. The
     /// check compares only facts the caller already has in hand (the device and worktree metadata plus
     /// whether the knowledge database exists), so it costs no export read; a projection that matches

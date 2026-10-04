@@ -2870,11 +2870,62 @@ public sealed class WorkbenchCoordinator
         var targetRoot = WorkbenchPaths.ResolveWorktree(
             workbench.RootPath,
             targetRegistration.RelativePath);
-        return await versionControl.CallAsync<object>(
+        var merge = await versionControl.CallAsync<object>(
             "vc_merge",
             new { targetWorktreePath = targetRoot, sourceBranch = source.Branch },
             token).ConfigureAwait(false);
+        // A merge is a commit path like any other (AC-006): `vc_merge` writes no evidence of its own,
+        // so the merge commit had no git_commit node and its commit→source-object read answered 404.
+        // The response is returned exactly as the version-control server produced it.
+        if (JsonText(merge, "sha") is { } mergedSha)
+        {
+            var indexingWarning = await IndexMergeCommitAsync(
+                workbench, targetWorktreeId, targetRoot, mergedSha, token).ConfigureAwait(false);
+            if (indexingWarning is not null) progress?.Report(indexingWarning);
+        }
+
+        return merge;
     }
+
+    /// <summary>
+    /// Records the commit a merge produced. The merged commit's own file list is the merged changes,
+    /// so it is read back from the target worktree's log rather than guessed; when the log does not
+    /// name the merge commit the node is still registered, with no object edges.
+    /// </summary>
+    private async Task<string?> IndexMergeCommitAsync(
+        WorkbenchMetadata workbench,
+        string worktreeId,
+        string targetRoot,
+        string sha,
+        CancellationToken token)
+    {
+        if (graphEvidenceIndexer is null) return null;
+        IReadOnlyList<string> files = [];
+        try
+        {
+            var log = await versionControl.CallAsync<ConsistencyLogResult>(
+                "vc_log", new { repoPath = targetRoot, maxCount = 1 }, token).ConfigureAwait(false);
+            var head = log.Commits.FirstOrDefault();
+            if (head is not null && string.Equals(head.Sha, sha, StringComparison.OrdinalIgnoreCase))
+                files = head.Files;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // The merge already succeeded; a log that cannot be read only costs the commit its object
+            // edges, which the indexing call below reports.
+        }
+
+        return IndexGraphEvidence(workbench, worktreeId, sha, files, null);
+    }
+
+    /// <summary>One string property of a version-control result, whichever casing the server used.</summary>
+    private static string? JsonText(object result, string name) =>
+        result is System.Text.Json.JsonElement element
+        && element.ValueKind == System.Text.Json.JsonValueKind.Object
+        && element.EnumerateObject().FirstOrDefault(property =>
+            string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) is { Value.ValueKind: System.Text.Json.JsonValueKind.String } found
+            ? found.Value.GetString()
+            : null;
 
     public async Task<WorkbenchConsistencyResult> CompareMasterWithTiaAsync(
         string workbenchId,
@@ -3029,7 +3080,9 @@ public sealed class WorkbenchCoordinator
     {
         var workbench = LoadRegisteredWorkbench(workbenchId);
         var draft = validatedMerge.ReadDraft(workbench, validationId);
-        var targetRoot = ResolveWorktreeRoot(workbench, workbench.Worktrees.Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
+        var masterWorktreeId = workbench.Worktrees.Single(item =>
+            string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId;
+        var targetRoot = ResolveWorktreeRoot(workbench, masterWorktreeId);
         var evidence = new FeatureMergeEvidenceDto
         {
             SchemaVersion = "1.0",
@@ -3059,6 +3112,16 @@ public sealed class WorkbenchCoordinator
             evidence,
         };
         var result = await versionControl.CallAsync<FeatureMergePublicationResult>("vc_merge_validated", request, token).ConfigureAwait(false);
+        // The guarded feature merge is the other merge path that creates a commit (AC-006): like
+        // `vc_merge` it wrote no evidence of its own, so the merge commit it published had no
+        // git_commit node. The publication result has no warning channel and its shape is part of the
+        // API, so a failed indexing is discarded here rather than reported.
+        if (!string.IsNullOrWhiteSpace(result.Sha))
+        {
+            _ = await IndexMergeCommitAsync(workbench, masterWorktreeId, targetRoot, result.Sha, token)
+                .ConfigureAwait(false);
+        }
+
         var path = Path.Combine(workbench.RootPath, ".automation", "validated-merges", validationId + ".json");
         if (File.Exists(path)) File.Delete(path);
         return result;
@@ -4043,20 +4106,7 @@ public sealed class WorkbenchCoordinator
     private string? IndexGraphEvidence(
         WorkbenchMetadata workbench, string worktreeId, string sha,
         IReadOnlyList<string> paths, long? svnRevision)
-    {
-        if (graphEvidenceIndexer is null) return null;
-        try
-        {
-            graphEvidenceIndexer.Index(workbench, worktreeId,
-                new VersionControlTimelineGitCommit(sha, "Automation Workbench", "app-mediated commit",
-                    DateTimeOffset.UtcNow.ToString("O"), paths, null, svnRevision, false));
-            return null;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            return $"Commit '{sha}' succeeded, but evidence indexing was not recorded: {exception.Message}";
-        }
-    }
+        => graphEvidenceIndexer?.TryIndexCommit(workbench, worktreeId, sha, paths, svnRevision: svnRevision);
 
     /// <summary>
     /// Indexes one baseline commit's evidence for a device's worktree. Best effort: the commit has

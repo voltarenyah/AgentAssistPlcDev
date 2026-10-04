@@ -157,4 +157,35 @@ public sealed class EngineeringGraphEvidenceIndexerProvider
             id => workbench.Worktrees.Any(item => item.WorktreeId == id));
         return new EngineeringGraphEvidenceIndexer(graph, workbench).IndexCommit(worktreeId, commit);
     }
+
+    /// <summary>
+    /// Indexes one commit whose file list the caller already holds, for a path that is not the
+    /// coordinator's commit flow — a merge, or a raw gateway commit route (AC-006). Best effort by
+    /// design: the Git operation has already succeeded by the time this runs, so a graph that cannot
+    /// be written returns a warning rather than failing the commit. Returns null when the evidence was
+    /// recorded.
+    /// </summary>
+    public string? TryIndexCommit(
+        WorkbenchMetadata workbench,
+        string worktreeId,
+        string sha,
+        IReadOnlyList<string> files,
+        string message = "app-mediated commit",
+        long? svnRevision = null)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        if (string.IsNullOrWhiteSpace(sha))
+            throw new ArgumentException("A Git commit id is required.", nameof(sha));
+        try
+        {
+            Index(workbench, worktreeId,
+                new VersionControlTimelineGitCommit(sha, "Automation Workbench", message,
+                    DateTimeOffset.UtcNow.ToString("O"), files, null, svnRevision, false));
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"Commit '{sha}' succeeded, but evidence indexing was not recorded: {exception.Message}";
+        }
+    }
 }
