@@ -10,6 +10,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Data.Sqlite;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Net;
 using Contracts.Engineering;
 using Contracts.Knowledge;
@@ -1640,6 +1641,42 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             }));
     }
 
+    /// <summary>Field-for-field JSON comparison that names the first path that differs. Object
+    /// property order is not part of the contract; array order is.</summary>
+    private static void AssertJsonEqual(JsonNode? expected, JsonNode? actual, string path = "$")
+    {
+        if (expected is null || actual is null)
+        {
+            Assert.True(
+                JsonNode.DeepEquals(expected, actual),
+                $"{path}: expected {expected?.ToJsonString() ?? "null"}, got {actual?.ToJsonString() ?? "null"}");
+            return;
+        }
+
+        if (expected is JsonObject expectedObject && actual is JsonObject actualObject)
+        {
+            foreach (var name in expectedObject.Select(pair => pair.Key)
+                         .Union(actualObject.Select(pair => pair.Key), StringComparer.Ordinal))
+            {
+                AssertJsonEqual(expectedObject[name], actualObject[name], $"{path}.{name}");
+            }
+
+            return;
+        }
+
+        if (expected is JsonArray expectedArray && actual is JsonArray actualArray)
+        {
+            Assert.Equal(expectedArray.Count, actualArray.Count);
+            for (var index = 0; index < expectedArray.Count; index++)
+                AssertJsonEqual(expectedArray[index], actualArray[index], $"{path}[{index}]");
+            return;
+        }
+
+        Assert.True(
+            JsonNode.DeepEquals(expected, actual),
+            $"{path}: expected {expected.ToJsonString()}, got {actual.ToJsonString()}");
+    }
+
     [Theory]
     [InlineData(false, false, false, "missing")]
     [InlineData(true, true, false, "stale")]
@@ -1997,6 +2034,117 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal("Main", block.GetProperty("name").GetString());
         Assert.Equal("OB", block.GetProperty("blockType").GetString());
         Assert.Empty(fixture.Engineering.Calls);
+    }
+
+    /// <summary>
+    /// AC-002 on the same device: the snapshot the graph serves is field for field the snapshot the
+    /// crawl reader produced, including the facts the manifest alone carries
+    /// (<c>isKnowHowProtected</c>, <c>modifiedDate</c>), both counts and the diagnostics.
+    /// </summary>
+    [Fact]
+    public async Task DeviceSnapshotFromTheGraphEqualsTheCrawlSnapshotFieldForField()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+        fixture.WriteGraphManifest();
+
+        var response = await fixture.Client.GetStringAsync(fixture.DeviceRoute);
+        var served = JsonNode.Parse(response)!;
+        var crawl = JsonSerializer.SerializeToNode(
+            new DeviceSnapshotReader().Read(fixture.Context, fixture.ReadDeviceMetadata()),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        AssertJsonEqual(crawl, served);
+
+        // The named fields, so the comparison above cannot pass on two empty payloads.
+        var sourceObjects = served["sourceObjects"]!.AsArray();
+        Assert.Equal(5, sourceObjects.Count);
+        Assert.Equal(3, served["blocks"]!.AsArray().Count);
+        Assert.Equal(3, served["sourceObjectCount"]!.GetValue<int>());
+        var main = sourceObjects.Single(item => item!["id"]!.GetValue<string>() == "ob-main")!;
+        Assert.True(main["isKnowHowProtected"]!.GetValue<bool>());
+        Assert.Equal(
+            new DateTimeOffset(2026, 7, 20, 10, 0, 0, TimeSpan.Zero),
+            main["modifiedDate"]!.GetValue<DateTimeOffset>());
+        Assert.Equal("standard-block", main["evidenceKind"]!.GetValue<string>());
+        Assert.Equal("instance-db", sourceObjects
+            .Single(item => item!["id"]!.GetValue<string>() == "db-instance")!["evidenceKind"]!.GetValue<string>());
+        Assert.Equal("current", served["knowledge"]!["state"]!.GetValue<string>());
+        Assert.Equal("Station_1", served["device"]!["deviceName"]!.GetValue<string>());
+        Assert.True(served["device"]!["isSafetyDevice"]!.GetValue<bool>());
+        Assert.Empty(served["diagnostics"]!.AsArray());
+    }
+
+    /// <summary>
+    /// AC-008: the picker's source-object list excludes the instance DB while the device page keeps
+    /// listing it and keeps counting block-category objects only.
+    /// </summary>
+    [Fact]
+    public async Task DevicePickerExcludesInstanceDbsWhileThePageKeepsListingAndCountingBlockCategories()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+        fixture.WriteGraphManifest();
+
+        var picker = await fixture.Client.GetFromJsonAsync<JsonElement>($"{fixture.DeviceRoute}/source-objects");
+        var snapshot = await fixture.Client.GetFromJsonAsync<JsonElement>(fixture.DeviceRoute);
+
+        var offered = picker.EnumerateArray().Select(item => item.GetProperty("id").GetString()).ToArray();
+        Assert.DoesNotContain("db-instance", offered);
+        Assert.Contains("ob-main", offered);
+        Assert.Contains("db-global", offered);
+        Assert.Equal(4, offered.Length);
+        // The device page lists what is on disk — the instance DB included — and its count is the
+        // block-category count (Blocks/ + DB/), which is a different number from the picker's.
+        Assert.Equal(5, snapshot.GetProperty("sourceObjects").GetArrayLength());
+        Assert.Equal(3, snapshot.GetProperty("sourceObjectCount").GetInt32());
+        Assert.Equal(3, snapshot.GetProperty("blocks").GetArrayLength());
+    }
+
+    /// <summary>
+    /// AC-001's instrument: after the device has been projected once, every route in scope answers the
+    /// same values with the exported XML corrupted and with the manifest unreadable — so no request is
+    /// walking the source directory or parsing block XML.
+    /// </summary>
+    [Fact]
+    public async Task DeviceRoutesServeTheProjectionWhenTheExportedXmlAndManifestAreUnusable()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+        fixture.WriteGraphManifest();
+        var entityId = $"{fixture.DeviceId}:ob-main";
+        var routes = new[]
+        {
+            fixture.DeviceRoute,
+            $"{fixture.DeviceRoute}/blocks",
+            $"{fixture.DeviceRoute}/source-objects",
+            "/api/project/info",
+            "/api/blocks",
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/engineering-graph/source_object/{Uri.EscapeDataString(entityId)}",
+        };
+        var before = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var route in routes) before[route] = await fixture.Client.GetStringAsync(route);
+
+        // The first read projected the device: the graph now holds the facts the routes serve.
+        using (var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(
+                store, fixture.Context.WorkbenchId, id => id == fixture.Context.WorktreeId);
+            Assert.NotNull(graph.GetEntity(Agent.Workbench.EngineeringGraph.GraphEntityKind.Device, fixture.DeviceId));
+        }
+
+        // A crawl would now find nothing to parse; a fallback ingest would find no manifest at all.
+        fixture.CorruptExportedXml();
+        foreach (var route in routes) Assert.Equal(before[route], await fixture.Client.GetStringAsync(route));
+
+        // A non-trivial answer, so "identical" cannot mean "identically empty".
+        var snapshot = JsonNode.Parse(before[fixture.DeviceRoute])!;
+        Assert.Equal(3, snapshot["blocks"]!.AsArray().Count);
+        Assert.Equal(5, snapshot["sourceObjects"]!.AsArray().Count);
+        Assert.Equal(3, snapshot["sourceObjectCount"]!.GetValue<int>());
     }
 
     [Fact]
@@ -3388,6 +3536,143 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                   ]
                 }
                 """);
+        }
+
+        public DeviceMetadata ReadDeviceMetadata() =>
+            new AtomicJsonStore().Read<DeviceMetadata>(Path.Combine(context.DeviceRoot, "device.json"));
+
+        /// <summary>
+        /// The export shape the device page really reads: a manifest with the additive device section,
+        /// the manifest-only facts (<c>isKnowHowProtected</c>, <c>modifiedDate</c>, fingerprints), two
+        /// block categories and an instance DB, plus the exported XML that agrees with it field for
+        /// field — so the crawl-based read and the projection-based read can be compared directly.
+        /// </summary>
+        public void WriteGraphManifest()
+        {
+            WriteBlockXml("Blocks/Main [OB1].xml", "SW.Blocks.OB", "Main", 1, "LAD");
+            WriteBlockXml("DB/Global [DB5].xml", "SW.Blocks.GlobalDB", "Global", 5, "DB");
+            WriteBlockXml("DB/PC_Clock [DB2].xml", "SW.Blocks.InstanceDB", "PC_Clock", 2, "DB");
+            WriteSourceText("Tags/LineA/Inputs.xml", "<Document><SW.Tags.PlcTagTable /></Document>");
+            WriteSourceText("UDT/Models/Motor.xml", "<Document><SW.Types.PlcStruct /></Document>");
+            File.WriteAllText(
+                Path.Combine(context.SourceRoot, "metadata.json"),
+                """
+                {
+                  "schemaVersion": "1.0",
+                  "device": {
+                    "plcName": "PLC_1",
+                    "deviceName": "Station_1",
+                    "typeIdentifier": "OrderNumber:6ES7515-2AM02-0AB0/V2.9",
+                    "projectName": "TestPLCExportDemo",
+                    "projectAuthor": "Ansel",
+                    "projectComment": "demo project",
+                    "projectVersion": "V17",
+                    "projectCopyright": null,
+                    "projectCreationTime": "2026-07-01T08:00:00.0000000+00:00",
+                    "projectLastModified": "2026-07-30T09:30:00.0000000+00:00",
+                    "projectLastModifiedBy": "Ansel",
+                    "isSafetyDevice": true,
+                    "fSignatureReadState": "ok",
+                    "fSignature": "1A2B3C4D"
+                  },
+                  "components": [
+                    {
+                      "id": "ob-main",
+                      "name": "Main",
+                      "sourcePath": "Area/Main",
+                      "category": "OB",
+                      "status": "Exported",
+                      "exportedFile": "Blocks/Main [OB1].xml",
+                      "number": 1,
+                      "programmingLanguage": "LAD",
+                      "contentHash": "HASH-OB",
+                      "siemensTypeName": "OB",
+                      "isKnowHowProtected": true,
+                      "modifiedDate": "2026-07-20T10:00:00.0000000+00:00",
+                      "fingerprints": { "Interface": "BBBB2222", "Code": "AAAA1111" }
+                    },
+                    {
+                      "id": "db-global",
+                      "name": "Global",
+                      "sourcePath": "Global",
+                      "category": "DB",
+                      "status": "Exported",
+                      "exportedFile": "DB/Global [DB5].xml",
+                      "number": 5,
+                      "programmingLanguage": "DB",
+                      "contentHash": "HASH-GDB",
+                      "siemensTypeName": "GlobalDB"
+                    },
+                    {
+                      "id": "db-instance",
+                      "name": "PC_Clock",
+                      "sourcePath": "00_Common_Part/PC_Clock",
+                      "category": "DB",
+                      "status": "Exported",
+                      "exportedFile": "DB/PC_Clock [DB2].xml",
+                      "number": 2,
+                      "programmingLanguage": "DB",
+                      "contentHash": "HASH-IDB",
+                      "siemensTypeName": "InstanceDB"
+                    },
+                    {
+                      "id": "tags-1",
+                      "name": "Inputs",
+                      "sourcePath": "LineA/Inputs",
+                      "category": "Tags",
+                      "status": "Exported",
+                      "exportedFile": "Tags/LineA/Inputs.xml",
+                      "number": null,
+                      "programmingLanguage": null,
+                      "contentHash": "HASH-TAGS"
+                    },
+                    {
+                      "id": "udt-1",
+                      "name": "Motor",
+                      "sourcePath": "Models/Motor",
+                      "category": "UDT",
+                      "status": "Exported",
+                      "exportedFile": "UDT/Models/Motor.xml",
+                      "number": null,
+                      "programmingLanguage": null,
+                      "contentHash": "HASH-UDT"
+                    }
+                  ]
+                }
+                """);
+        }
+
+        /// <summary>Every exported XML file is made unparseable; the manifest stays, so an ingest that
+        /// re-read it would still produce values — the next call in the test deletes it too.</summary>
+        public void CorruptExportedXml()
+        {
+            foreach (var path in Directory.EnumerateFiles(context.SourceRoot, "*.xml", SearchOption.AllDirectories))
+                File.WriteAllText(path, "<not-a-siemens-document/>");
+            File.WriteAllText(Path.Combine(context.SourceRoot, "metadata.json"), "{ broken");
+        }
+
+        private void WriteBlockXml(string relativePath, string elementName, string name, int number, string language) =>
+            WriteSourceText(
+                relativePath,
+                $"""
+                <Document>
+                  <{elementName}>
+                    <AttributeList>
+                      <Name>{name}</Name>
+                      <Number>{number}</Number>
+                      <ProgrammingLanguage>{language}</ProgrammingLanguage>
+                    </AttributeList>
+                  </{elementName}>
+                </Document>
+                """);
+
+        private void WriteSourceText(string relativePath, string contents)
+        {
+            var path = Path.Combine(
+                context.SourceRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, contents);
         }
 
         public string[] PersistentArtifactHashes() =>

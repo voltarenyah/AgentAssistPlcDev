@@ -214,7 +214,11 @@ public sealed class EngineeringGraphProjectionTests : IDisposable
             && message.Contains("crawl", StringComparison.OrdinalIgnoreCase));
 
         var device = Properties(service.GetProperties(GraphEntityKind.Device, "plc-1"));
-        Assert.Contains("unclassified", device[DevicePropertyNames.Diagnostics].Json!);
+        // The device page's diagnostics keep today's meaning: the crawl's own diagnostics, not the
+        // ingest's note about why the crawl ran. The note stays in the projection's report (asserted
+        // above), so AC-002's field-for-field comparison of the page's diagnostics holds.
+        Assert.Equal("[]", device[DevicePropertyNames.Diagnostics].Json);
+        Assert.Empty(result.StoredDiagnostics);
         // A legacy manifest has no device section, so no export field is projected.
         Assert.DoesNotContain(DevicePropertyNames.ExportPlcName, device.Keys);
 

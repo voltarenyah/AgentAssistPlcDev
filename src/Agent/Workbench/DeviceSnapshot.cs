@@ -73,8 +73,18 @@ public sealed record DeviceSnapshot(
     IReadOnlyList<string> Diagnostics,
     DeviceExportMetadata? Device);
 
+/// <summary>
+/// The device snapshot's ingest implementation. Its readers used to be the device page's read path;
+/// since ADR-0011 they are the only place the exported files are parsed — the projection ingests a
+/// device from the manifest (with this class's block crawl as the fallback for a missing or legacy
+/// manifest) and <c>DeviceSnapshotGraphReader</c> serves the routes from the graph. Nothing here runs
+/// on a read request.
+/// </summary>
 public sealed class DeviceSnapshotReader
 {
+    /// <summary>The snapshot as this reader derives it from disk. Public because the projection ingests
+    /// a device from the same readers and the ingest-inside-the-crawl tests exercise them directly; the
+    /// device routes serve the graph (<c>DeviceSnapshotGraphReader</c>), not this method.</summary>
     public DeviceSnapshot Read(DeviceContext context, DeviceMetadata metadata)
     {
         var diagnostics = new List<string>();
@@ -117,8 +127,8 @@ public sealed class DeviceSnapshotReader
     }
 
     /// <summary>
-    /// Just the source objects a device exposes. <see cref="Read"/> also crawls every block on disk,
-    /// which on a large export costs seconds; the task page's picker needs only this list.
+    /// Just the source objects a device exposes, resolved from disk. The task picker's route serves the
+    /// same list from the graph; this manifest-or-crawl resolution is the ingest side of it.
     /// </summary>
     /// <param name="comparableOnly">Also drop the kinds the managed-source evidence domain excludes.
     /// A picker for a task's compare basis must not offer them: they can never carry a baseline, so a

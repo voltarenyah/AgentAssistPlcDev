@@ -1737,26 +1737,33 @@ public static class WorkbenchEndpoints
                 "Saved hardware configuration updated.").ConfigureAwait(false);
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}", (
-            string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
         {
             var selected = s.Device(workbenchId, worktreeId, device);
-            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata));
+            // The device page reads the engineering graph; a device without a projection is projected
+            // before it is served, so no request walks the exported source tree (ADR-0011).
+            using var facts = new DeviceSnapshotGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.Read(selected.Context, selected.Metadata));
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/blocks", (
-            string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
         {
             var selected = s.Device(workbenchId, worktreeId, device);
-            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata).Blocks);
+            using var facts = new DeviceSnapshotGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadBlocks(selected.Context, selected.Metadata));
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source-objects", (
-            string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
         {
             var selected = s.Device(workbenchId, worktreeId, device);
-            // The task page's picker reads this list and nothing else; the full snapshot also crawls
-            // every block on disk, which costs seconds on an export of more than a thousand objects.
-            // Instance DBs are dropped: they are outside the evidence domain and can never be
-            // compared, so they are not a task basis and must not be offered as one.
-            return Results.Ok(snapshots.ReadSourceObjects(selected.Context, comparableOnly: true));
+            // The task page's picker reads this list and nothing else. Instance DBs are dropped: they
+            // are outside the evidence domain and can never be compared, so they are not a task basis
+            // and must not be offered as one.
+            using var facts = new DeviceSnapshotGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadSourceObjects(selected.Context, selected.Metadata, comparableOnly: true));
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/refresh/stage", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
@@ -2165,16 +2172,20 @@ public static class WorkbenchEndpoints
         JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary);
 
     /// <summary>
-    /// Registers the graph anchor of a device source object that the device manifest really lists, and
-    /// returns it, so a read of a legitimate object does not fail just because nothing has put it in the
-    /// graph yet.
+    /// Registers the graph anchor of a device source object the device's projection lists, and returns
+    /// it, so a read of a legitimate object does not fail just because nothing has put it in the graph
+    /// yet.
     /// </summary>
     /// <remarks>
-    /// Source objects only enter the graph as a side effect: a stage call registers the device's whole
-    /// manifest, and a commit's evidence registers the files it touched. A freshly created project has
-    /// done neither, so every source object in it answered <c>GRAPH_ENTITY_NOT_FOUND</c> — which the
-    /// source browser shows as an error on every click. The entity is an anchor for edges rather than
-    /// evidence of its own, so creating it on first read is safe and costs one idempotent insert.
+    /// A source object enters the graph as a side effect of the device projection (and of a commit's
+    /// evidence), and a freshly created project has done neither, so every source object in it answered
+    /// <c>GRAPH_ENTITY_NOT_FOUND</c> — which the source browser shows as an error on every click. The
+    /// object is looked up in the projection — projecting the device first when it has none — so this
+    /// fallback reads no manifest and no XML (ADR-0011). The entity is an anchor for edges rather than
+    /// evidence of its own, so registering it on first read is safe and costs one idempotent insert.
+    /// Only the device of the selection the caller is looking at is consulted: the entity id carries a
+    /// device id but no worktree, and a workbench may register the same device in more than one
+    /// worktree.
     /// </remarks>
     private static GraphEntity? RegisterListedSourceObject(
         string workbenchId,
@@ -2188,8 +2199,6 @@ public static class WorkbenchEndpoints
         if (separator <= 0) return null;
         var deviceId = entityId[..separator];
         var sourceObjectId = entityId[(separator + 1)..];
-        // Only the device of the selection the caller is looking at: the entity id carries a device id
-        // but no worktree, and a workbench may register the same device in more than one worktree.
         var selection = state.Selection;
         if (selection?.WorkbenchId != workbenchId || selection.WorktreeId is null) return null;
         (DeviceContext Context, DeviceMetadata Metadata) device;
@@ -2202,11 +2211,11 @@ public static class WorkbenchEndpoints
             return null;
         }
 
-        var listed = DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot)
-            .FirstOrDefault(item => string.Equals(item.Id, sourceObjectId, StringComparison.Ordinal));
-        if (listed is null) return null;
+        if (!new DeviceSnapshotGraphReader(graph)
+                .TryGetListedSourceObject(device.Context, device.Metadata, sourceObjectId, out var relativePath))
+            return null;
         var anchor = new GraphEntity(GraphEntityKind.SourceObject, entityId, workbenchId,
-            device.Context.WorktreeId, deviceId, listed.RelativePath);
+            device.Context.WorktreeId, deviceId, relativePath);
         graph.RegisterEntity(anchor);
         return anchor;
     }

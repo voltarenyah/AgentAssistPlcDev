@@ -82,6 +82,9 @@ public static class CompatibilityEndpoints
                 ? state.Device(id).Context
                 : throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
 
+        static string Workbench(WorkbenchApiState state) =>
+            state.Selection?.WorkbenchId ?? throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
+
         static DeviceContext ChatDevice(WorkbenchApiState state, EngineeringGraphApiFactory graphs,
             ActiveTaskContextService activeTasks, string? requestedTaskId = null)
         {
@@ -546,10 +549,11 @@ public static class CompatibilityEndpoints
             });
         });
 
-        app.MapGet("/api/project/info", (WorkbenchApiState state, DeviceSnapshotReader snapshots) =>
+        app.MapGet("/api/project/info", (WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
             var selected = state.Device(Device(state).DeviceId);
-            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata));
+            using var facts = new DeviceSnapshotGraphScope(state, graphs, Workbench(state));
+            return Results.Ok(facts.Reader.Read(selected.Context, selected.Metadata));
         });
         app.MapGet("/api/tia/project-info", async (ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("connect").CallAsync<JsonElement>("get_project_info", new { }, ct));
@@ -576,10 +580,11 @@ public static class CompatibilityEndpoints
                 upgrade = request.Upgrade,
                 openMode = request.OpenMode,
             }, ct));
-        app.MapGet("/api/blocks", (WorkbenchApiState state, DeviceSnapshotReader snapshots) =>
+        app.MapGet("/api/blocks", (WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
             var selected = state.Device(Device(state).DeviceId);
-            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata).Blocks);
+            using var facts = new DeviceSnapshotGraphScope(state, graphs, Workbench(state));
+            return Results.Ok(facts.Reader.ReadBlocks(selected.Context, selected.Metadata));
         });
         app.MapGet("/api/blocks/{blockName}/source-code", async (string blockName, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("get_block").CallAsync<JsonElement>("get_block", new { dbPath = Device(state).KnowledgeDbPath, blockName }, ct));

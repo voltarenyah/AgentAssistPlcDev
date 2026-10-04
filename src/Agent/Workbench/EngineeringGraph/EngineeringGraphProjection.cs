@@ -7,7 +7,10 @@ using Contracts.Engineering;
 namespace Agent.Workbench.EngineeringGraph;
 
 /// <summary>What one device projection observed and wrote. <see cref="PropertyRowsWritten"/> is the
-/// number AC-003 reports: it is zero when the second ingest finds nothing changed.</summary>
+/// number AC-003 reports: it is zero when the second ingest finds nothing changed.
+/// <see cref="Diagnostics"/> is the ingest's own report; the device page shows the diagnostics the
+/// source resolution produced (<see cref="StoredDiagnostics"/>), which is what it showed before the
+/// projection existed (AC-002).</summary>
 public sealed record DeviceProjectionResult(
     string DeviceId,
     string ManifestDigest,
@@ -15,7 +18,8 @@ public sealed record DeviceProjectionResult(
     int SourceObjectCount,
     int BlockCount,
     GraphPropertyWriteResult Write,
-    IReadOnlyList<string> Diagnostics)
+    IReadOnlyList<string> Diagnostics,
+    IReadOnlyList<string> StoredDiagnostics)
 {
     public int PropertyRowsWritten => Write.PropertyRowsWritten;
 }
@@ -45,13 +49,17 @@ public sealed class EngineeringGraphProjectionService
         if (!string.Equals(context.DeviceId, metadata.DeviceId, StringComparison.Ordinal))
             throw new EngineeringGraphConstraintException("Device metadata belongs to another device.");
 
+        var report = new List<string>();
+        // The device page's diagnostics are the ones source resolution produced, exactly as the crawl
+        // reader produced them; the ingest's own note about *why* the crawl ran is a report line that
+        // the page never showed and must not start showing (AC-002).
         var diagnostics = new List<string>();
         var manifest = DeviceSnapshotReader.ReadManifestSourceObjects(context.SourceRoot);
         var usedCrawlFallback = manifest.Count == 0;
         IReadOnlyList<SourceObjectInfo> sources;
         if (usedCrawlFallback)
         {
-            diagnostics.Add(
+            report.Add(
                 "The export manifest 'metadata.json' is missing or legacy; source objects were resolved from the block crawl, and an object the crawl cannot classify is left unclassified.");
             sources = DeviceSnapshotReader.ReadCrawledSourceObjects(context, diagnostics);
         }
@@ -65,7 +73,8 @@ public sealed class EngineeringGraphProjectionService
         var nodes = BuildNodes(context, metadata, device, sources, diagnostics, digest);
         var write = _graph.ReplaceDeviceProperties(context.DeviceId, nodes);
         var blockCount = sources.Count(item => DeviceSnapshotReader.IsBlockCategoryPath(item.RelativePath));
-        return new DeviceProjectionResult(context.DeviceId, digest, usedCrawlFallback, sources.Count, blockCount, write, diagnostics);
+        return new DeviceProjectionResult(
+            context.DeviceId, digest, usedCrawlFallback, sources.Count, blockCount, write, report, diagnostics);
     }
 
     /// <summary>The digest the projection stores and a selection boundary compares (ADR-0012): the

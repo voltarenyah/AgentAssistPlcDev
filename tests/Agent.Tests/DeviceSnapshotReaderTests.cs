@@ -203,10 +203,27 @@ public sealed class DeviceSnapshotReaderTests
         Assert.False(Assert.Single(snapshot.Blocks).Modified);
     }
 
+    /// <summary>
+    /// AC-001's instrument at the agent level: the device read is a projection read. The ingest happens
+    /// once (here from the manifest, which parses no XML at all), and the read that follows serves the
+    /// same six hundred blocks after every exported XML file has been made unparseable — so no request
+    /// can be walking the source directory or parsing block XML. The budget is the projection read's,
+    /// not the crawl's; the live 1097-object device is measured for AC-001's ≤100 ms warm target.
+    /// </summary>
     [Fact]
-    public void ReadScalesToLargeSourceTrees()
+    public void ProjectionReadServesSixHundredObjectsAfterTheXmlIsGone()
     {
         using var fixture = SnapshotFixture.Create();
+        fixture.WriteManifest(Enumerable.Range(1, 600)
+            .Select(number => Component(
+                $"block-{number}",
+                $"Block{number}",
+                "FB",
+                $"Blocks/Area/Block{number} [FB{number}].xml",
+                number,
+                "LAD",
+                $"Area/Block{number}"))
+            .ToArray());
         foreach (var number in Enumerable.Range(1, 600))
         {
             fixture.WriteSource(
@@ -214,14 +231,25 @@ public sealed class DeviceSnapshotReaderTests
                 BlockXml("SW.Blocks.FB", $"Block{number}", number, "LAD"));
         }
 
+        using var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Root);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        var reader = new Agent.Workbench.EngineeringGraph.DeviceSnapshotGraphReader(graph);
+        Assert.Equal(600, reader.Read(fixture.Context, fixture.Metadata).Blocks.Count);
+
+        foreach (var path in Directory.EnumerateFiles(fixture.Context.SourceRoot, "*.xml", SearchOption.AllDirectories))
+            File.WriteAllText(path, "<not-a-siemens-document/>");
+
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var snapshot = new DeviceSnapshotReader().Read(fixture.Context, fixture.Metadata);
+        var snapshot = new Agent.Workbench.EngineeringGraph.DeviceSnapshotGraphReader(graph)
+            .Read(fixture.Context, fixture.Metadata);
         var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started);
 
+        Assert.Equal(600, snapshot.Blocks.Count);
         Assert.Equal(600, snapshot.SourceObjectCount);
+        Assert.Empty(snapshot.Diagnostics);
         Assert.True(
-            elapsed < TimeSpan.FromSeconds(2),
-            $"Snapshot read over 600 source objects took {elapsed.TotalMilliseconds:F0} ms; expected under two seconds.");
+            elapsed < TimeSpan.FromSeconds(1),
+            $"Projection read over 600 source objects took {elapsed.TotalMilliseconds:F0} ms; expected under one second.");
     }
 
     [Fact]
