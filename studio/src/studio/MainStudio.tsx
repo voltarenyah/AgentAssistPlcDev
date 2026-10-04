@@ -66,6 +66,7 @@ import ProjectLandingPage from '@/studio/workbench/ProjectLandingPage'
 import WorktreeLandingPage from '@/studio/workbench/WorktreeLandingPage'
 import AllProjectsLandingPage from '@/studio/workbench/AllProjectsLandingPage'
 import TaskDetail, { type TaskEditPatch, type TraceabilityItem } from '@/studio/workbench/TaskDetail'
+import TaskCreateDialog from '@/studio/workbench/TaskCreateDialog'
 import ArchiveProjectDialog from '@/studio/workbench/ArchiveProjectDialog'
 import McpToolsHelper from '@/studio/McpToolsHelper'
 import SettingsPage from '@/studio/settings/SettingsPage'
@@ -2333,6 +2334,41 @@ export default function MainStudio() {
     onClearSourceContext: () => setChatSourceContext(null),
   }
 
+  /**
+   * The worktree's own surface: its overview, and the task tab strip that judges and acts on many
+   * tasks at once. The navigator is a quick-selection aid, so this renders only while the worktree
+   * itself is the selected scope — the task-creation dialog is the shell's own, not this surface's.
+   */
+  const worktreeSurface = selection.workbenchId && selection.worktreeId ? (
+    <WorktreeLandingPage
+      workbenchId={selection.workbenchId}
+      worktreeId={selection.worktreeId}
+      tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}
+      onTabChange={tab => setMainView({ kind: 'worktree', tab })}
+      onSelectDevice={deviceId => {
+        if (activeWorkbench && activeWorktree) void selectDevice(activeWorkbench, activeWorktree, deviceId)
+      }}
+      onOpenTaskDetail={task => void openTaskDetail(task)}
+      onStartTaskChat={task => void createChatSessionForTask(task)}
+      onOpenTaskInTia={task => void openTaskInTia(task)}
+      onOpenTaskSession={(task, sessionId) => void openTaskDetailSession(task, sessionId)}
+      taskViewMode={worktreeTaskViewMode}
+      onTaskViewModeChange={setWorktreeTaskViewMode}
+    />
+  ) : null
+
+  /**
+   * Ends a task-creation request started from the navigator's `TASKS` section: the dialog is the
+   * shell's, so closing it only has to release the request and refresh the list it was created for.
+   */
+  const closeTaskCreate = () => {
+    const workbenchId = selection.workbenchId
+    const worktreeId = taskCreateWorktreeId
+    setTaskCreateWorktreeId(null)
+    setTaskCreateTarget(null)
+    if (workbenchId && worktreeId) void refreshWorktreeTasks(workbenchId, worktreeId)
+  }
+
   return (
     <div className="flex h-screen min-h-[620px] flex-col overflow-hidden bg-background text-foreground">
       <header
@@ -2536,9 +2572,10 @@ export default function MainStudio() {
                 .catch(error => showErrorToast(`Task could not be updated: ${displayError(error)}`))
             }}
             onAddTask={(_workbench, worktree, target) => {
+              // Creation opens the shell's own dialog over whatever the main area is showing, with the
+              // target the action came from already bound: the navigator does not navigate the main view.
               setTaskCreateWorktreeId(worktree.worktreeId)
               setTaskCreateTarget(target)
-              setMainView({ kind: 'worktree', tab: 'tasks' })
             }}
             onOpenSession={session => void openNavigatorSession(session)}
             onRenameSession={(session, title) => void renameChatSession(session.sessionId, title)}
@@ -2668,28 +2705,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div> : <WorktreeLandingPage
-                workbenchId={selection.workbenchId!}
-                worktreeId={selection.worktreeId}
-                tab={mainView.kind === 'worktree' ? mainView.tab : 'overview'}
-                onTabChange={tab => setMainView({ kind: 'worktree', tab })}
-                onSelectDevice={deviceId => {
-                  if (activeWorkbench && activeWorktree) void selectDevice(activeWorkbench, activeWorktree, deviceId)
-                }}
-                onOpenTaskDetail={task => void openTaskDetail(task)}
-                onStartTaskChat={task => void createChatSessionForTask(task)}
-                onOpenTaskInTia={task => void openTaskInTia(task)}
-                onOpenTaskSession={(task, sessionId) => void openTaskDetailSession(task, sessionId)}
-                taskViewMode={worktreeTaskViewMode}
-                onTaskViewModeChange={setWorktreeTaskViewMode}
-                openTaskCreate={taskCreateWorktreeId === selection.worktreeId}
-                taskCreateTarget={taskCreateTarget}
-                onTaskCreateClosed={() => {
-                  setTaskCreateWorktreeId(null)
-                  setTaskCreateTarget(null)
-                  void refreshWorktreeTasks(selection.workbenchId!, selection.worktreeId!)
-                }}
-              />
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div> : worktreeSurface
             )
           ) : !selection.deviceId && selection.workbenchId ? (
             <ProjectLandingPage
@@ -2973,6 +2989,17 @@ export default function MainStudio() {
           onDismissOperation={dismissActiveOperation}
           onClose={() => setCreateWorktreeFor(null)}
           onCreate={createWorktree}
+        />
+      )}
+      {selection.workbenchId && taskCreateWorktreeId && (
+        <TaskCreateDialog
+          workbenchId={selection.workbenchId}
+          worktreeId={taskCreateWorktreeId}
+          open
+          origin={taskCreateTarget}
+          devices={devicesByWorktree[worktreeKey(selection.workbenchId, taskCreateWorktreeId)] ?? []}
+          onClose={closeTaskCreate}
+          onCreated={closeTaskCreate}
         />
       )}
       {deleteWorkbenchFor && (

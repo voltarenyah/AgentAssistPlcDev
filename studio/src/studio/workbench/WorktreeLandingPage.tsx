@@ -23,10 +23,6 @@ type Props = {
   onOpenTaskSession?: (task: api.EngineeringTask, sessionId: string) => void
   taskViewMode: TaskViewMode
   onTaskViewModeChange: (mode: TaskViewMode) => void
-  openTaskCreate?: boolean
-  /** The target the navigator's create action was invoked from, handed to the task dialog. */
-  taskCreateTarget?: api.TaskTarget | null
-  onTaskCreateClosed?: () => void
 }
 
 type ModifiedDevice = {
@@ -48,7 +44,7 @@ const worktreeTabs: Array<{ id: WorktreeLandingTab; label: string; icon: typeof 
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
 ]
 
-export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail, onStartTaskChat, onOpenTaskInTia, onOpenTaskSession, taskViewMode, onTaskViewModeChange, openTaskCreate = false, taskCreateTarget = null, onTaskCreateClosed }: Props) {
+export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail, onStartTaskChat, onOpenTaskInTia, onOpenTaskSession, taskViewMode, onTaskViewModeChange }: Props) {
   const [detail, setDetail] = useState<api.WorktreeDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(true)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -428,9 +424,6 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
               onOpenTaskSession={onOpenTaskSession}
               viewMode={taskViewMode}
               onViewModeChange={onTaskViewModeChange}
-              openCreate={openTaskCreate}
-              taskCreateTarget={taskCreateTarget}
-              onCreateClosed={onTaskCreateClosed}
             />
           )}
         </div>

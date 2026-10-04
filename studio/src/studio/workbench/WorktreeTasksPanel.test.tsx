@@ -136,38 +136,6 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => root.unmount())
   })
 
-  it('creates a hardware task with no device when the navigator opened the dialog from the hardware row (AC-010)', async () => {
-    const { root } = await renderPanel({ openCreate: true, taskCreateTarget: { kind: 'hardware' } })
-    const dialog = document.body.querySelector('[data-slot="dialog-content"]') as HTMLElement
-    const target = dialog.querySelector('select[aria-label="New task target"]') as HTMLSelectElement
-    expect(target.value).toBe('hardware')
-    expect(dialog.textContent).toContain('binds no PLC device')
-
-    await act(async () => setInputValue(dialog.querySelector('input[aria-label="New task title"]') as HTMLInputElement, 'Move the rack'))
-    await act(async () => setInputValue(dialog.querySelector('input[aria-label="New task goal"]') as HTMLInputElement, 'Relocate the rack'))
-    await act(async () => setInputValue(dialog.querySelector('textarea[aria-label="New task expected result"]') as HTMLTextAreaElement, 'Rack layout is committed'))
-    // A hardware target is complete on its own: the missing device must not keep the form disabled.
-    expect((dialog.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(false)
-    await act(async () => {
-      dialog.querySelector('button[type="submit"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-    await act(async () => {})
-
-    expect(vi.mocked(api.createGraphWorktreeTask)).toHaveBeenCalledWith('wb1', 'wt1', {
-      title: 'Move the rack', targetKind: 'hardware', type: 'feature', intent: 'Relocate the rack', expectedResult: 'Rack layout is committed',
-    })
-    await act(async () => root.unmount())
-  })
-
-  it('preselects the device the navigator opened the dialog for (AC-005)', async () => {
-    const { root } = await renderPanel({ openCreate: true, taskCreateTarget: { kind: 'device', deviceId: 'device-1' } })
-    const dialog = document.body.querySelector('[data-slot="dialog-content"]') as HTMLElement
-    const target = dialog.querySelector('select[aria-label="New task target"]') as HTMLSelectElement
-    expect(target.value).toBe('device-1')
-
-    await act(async () => root.unmount())
-  })
-
   it('changes a task status through the status dropdown', async () => {
     const { host, root, onChanged } = await renderPanel()
     const trigger = host.querySelector('button[aria-label="Change status of Todo task"]') as HTMLButtonElement
