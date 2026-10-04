@@ -2359,7 +2359,10 @@ export default function MainStudio() {
         >
           <Settings className="h-3.5 w-3.5" />
         </button>
-        <div className="flex min-w-0 flex-1 justify-center px-3">
+        {/* The composer's positioning context. It spans the header's full height so the composer
+            keeps its 4px inset from the top bar, and it is the space the header's own controls
+            leave: the composer is laid out against it, so those controls bound its width. */}
+        <div data-assistant-slot className="relative flex min-w-0 flex-1 items-center justify-center self-stretch px-3">
           <AppAssistantPanel
             key={selection.workbenchId}
             defaultExpanded={false}
