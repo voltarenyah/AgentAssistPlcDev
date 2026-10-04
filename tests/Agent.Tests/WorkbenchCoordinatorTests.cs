@@ -765,6 +765,101 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task HardwareCommitRecordsTheCommittedShaInTheGraph()
+    {
+        // AC-006: `vc_commit_hardware` is a commit path too — it used to record no git_commit node, so
+        // the commit's evidence read answered 404 for it exactly as a merge used to.
+        var fixture = Fixture.Create(root);
+        var workbench = RegisterTimelineWorkbench(fixture);
+        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(fixture.Context.WorktreeRoot);
+        var stagingRoot = WorkbenchPaths.ResolveHardwareStagingRoot(fixture.Context.WorktreeRoot);
+        Directory.CreateDirectory(hardwareRoot);
+        Directory.CreateDirectory(stagingRoot);
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), "<old />");
+        File.WriteAllText(Path.Combine(stagingRoot, "project.aml"), "<new />");
+
+        // The worktree's hardware facts exist before the commit, so the commit's invalidation has a row
+        // to flag as well as a node to record.
+        using (var store = new EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+            new HardwareGraphReader(graph).ReadConfiguration(fixture.Context.WorktreeRoot, "wt-1");
+            Assert.NotNull(graph.GetEntity(GraphEntityKind.Worktree, "wt-1"));
+        }
+
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_commit_hardware", new CoordinatorGitCommitResult { Sha = "hardware-commit" });
+        var coordinator = new WorkbenchCoordinator(
+            new FakeToolCaller(),
+            new FakeToolCaller(),
+            versionControl,
+            new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "hardware-catalog")),
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }),
+            graphEvidenceIndexer: new EngineeringGraphEvidenceIndexerProvider());
+        coordinator.RegisterWorkbench(workbench);
+
+        var result = await coordinator.OverwriteHardwareFromStagingAsync(
+            fixture.Context,
+            confirmOverwrite: true,
+            CancellationToken.None);
+
+        Assert.Equal("hardware-commit", result.CommitSha);
+        using var after = new EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var committed = new EngineeringGraphService(after, "wb-1", id => id == "wt-1");
+        var node = committed.GetEntity(GraphEntityKind.GitCommit, "hardware-commit");
+        Assert.NotNull(node);
+        Assert.Equal("wt-1", node!.WorktreeId);
+        // The commit is the write point that changed the hardware subtree, so its facts are flagged for
+        // the next hardware route to re-project.
+        Assert.True(committed.GetProperties(GraphEntityKind.Worktree, "wt-1")
+            .Single(property => property.Name == HardwarePropertyNames.Invalidated).Flag);
+    }
+
+    [Fact]
+    public async Task ReloadHardwareCommitRecordsTheCommittedShaInTheGraph()
+    {
+        // The other `vc_commit_hardware` call site: reloading the configuration from TIA is a commit
+        // path as well, and records its own git_commit node (AC-006).
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\ProjectB.ap17");
+        var workbench = RegisterTimelineWorkbench(fixture);
+        // The export's own artifact, so the reload's completeness check has a usable AML to accept.
+        var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(fixture.Context.WorktreeRoot);
+        Directory.CreateDirectory(hardwareRoot);
+        File.WriteAllText(Path.Combine(hardwareRoot, "project.aml"), "<CAEXFile />");
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "ProjectB",
+                Path = @"C:\Projects\ProjectB.ap17",
+            })
+            .Respond("export_hardware_configuration", new[]
+            {
+                new HardwareExportResult { Scope = "project", Success = true, ContentHash = "project-hash" },
+            });
+        var versionControl = new FakeToolCaller()
+            .Respond("vc_commit_hardware", new CoordinatorGitCommitResult { Sha = "reload-commit" });
+        var coordinator = new WorkbenchCoordinator(
+            engineering,
+            new FakeToolCaller(),
+            versionControl,
+            new WorkbenchCatalog(new AtomicJsonStore(), Path.Combine(root, "reload-catalog")),
+            new AtomicJsonStore(),
+            new DeviceReconciler(),
+            new DeviceSourceResolver(_ => { }),
+            graphEvidenceIndexer: new EngineeringGraphEvidenceIndexerProvider());
+        coordinator.RegisterWorkbench(workbench);
+
+        var result = await coordinator.ReloadHardwareAsync(fixture.Context, CancellationToken.None);
+
+        Assert.Equal("reload-commit", result.CommitSha);
+        using var store = new EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        Assert.NotNull(graph.GetEntity(GraphEntityKind.GitCommit, "reload-commit"));
+    }
+
+    [Fact]
     public async Task ReloadHardwareRejectsFailedProjectExportEvenWhenStagedAmlIsUsable()
     {
         var fixture = Fixture.Create(root);
