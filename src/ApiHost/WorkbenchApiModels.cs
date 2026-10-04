@@ -965,6 +965,9 @@ public static class WorkbenchEndpoints
                 scope.Service.RegisterEntities(DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot)
                     .Select(source => new GraphEntity(GraphEntityKind.SourceObject,
                         $"{task.DeviceId}:{source.Id}", task.WorkbenchId, wt, task.DeviceId, source.RelativePath)));
+                // ADR-0012 item 2: staging registers the whole device manifest in the graph, so the
+                // device's projection is flagged for a re-projection before the next read serves it.
+                scope.Service.InvalidateDeviceProjection(task.DeviceId!);
             }
             // The stage baseline is always derived from the object's committed Git content, never
             // taken from the request: a client-supplied value could only be a live-TIA shortcut,
@@ -1128,12 +1131,13 @@ public static class WorkbenchEndpoints
                 s.Select(id);
             return result;
         });
-        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s, WorkbenchCoordinator coordinator, EngineeringGraphApiFactory graphs) =>
         {
             var workbench = s.Workbench(id);
             coordinator.RegisterWorkbench(workbench);
             s.Worktree(id, wt);
             s.Select(id, wt);
+            ReconcileWorktreeSelection(s, graphs, workbench, wt);
             return Results.NoContent();
         });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.ListDevices(id, wt));
@@ -1152,13 +1156,20 @@ public static class WorkbenchEndpoints
             string worktreeId,
             WorkbenchApiState s) =>
             Results.Ok(HardwareListReader.ReadNetwork(s.WorktreeRoot(workbenchId, worktreeId))));
-        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s, WorkbenchCoordinator coordinator, EngineeringGraphApiFactory graphs) =>
         {
             var workbench = s.Workbench(id);
             coordinator.RegisterWorkbench(workbench);
             s.Select(id, wt);
             s.Device(device);
             s.Select(id, wt, device);
+            // The device selection boundary (ADR-0012 item 3, AC-004): the check and the rows it guards
+            // share this one graph scope, and a projection failure is reported as a projection failure
+            // rather than served as stale facts. The selection itself is already recorded above, so a
+            // failing boundary never loses the user's selection.
+            var selected = s.Device(device);
+            using var facts = new DeviceSnapshotGraphScope(s, graphs, id);
+            facts.Reader.EnsureProjectionCurrent(selected.Context, selected.Metadata);
             return Results.NoContent();
         });
 
@@ -2265,6 +2276,33 @@ public static class WorkbenchEndpoints
     /// <summary>The prefix of the reader's own block id form, <c>source:{relativePath}</c>.</summary>
     private const string SourceBlockIdPrefix = "source";
 
+    /// <summary>
+    /// The worktree selection boundary (ADR-0012 items 3-4, AC-004/AC-007), run in one graph scope:
+    /// first the reconciliation pass — a device a write point flagged is re-projected, and the facts of
+    /// worktrees the workbench no longer registers are removed — then the digest check that makes sure
+    /// every device of the selected worktree is projected from the manifest on disk before it is served.
+    /// A projection failure surfaces as a projection failure; the selection itself is already recorded.
+    /// </summary>
+    private static void ReconcileWorktreeSelection(
+        WorkbenchApiState state,
+        EngineeringGraphApiFactory graphs,
+        WorkbenchMetadata workbench,
+        string worktreeId)
+    {
+        using var scope = graphs.Open(workbench);
+        var reconciliation = new EngineeringGraphReconciliation(scope.Service);
+        reconciliation.RemoveDeletedWorktreeFacts();
+        var reader = new DeviceSnapshotGraphReader(scope.Service);
+        foreach (var summary in state.ListDevices(workbench.WorkbenchId, worktreeId))
+        {
+            var device = state.Device(workbench.WorkbenchId, worktreeId, summary.DeviceId);
+            // The repair covers the flagged case without a manifest read; the boundary then compares the
+            // stored digest with the manifest on disk for the changes no event reported.
+            reconciliation.RepairDevice(device.Context, device.Metadata);
+            reader.EnsureProjectionCurrent(device.Context, device.Metadata);
+        }
+    }
+
     /// <summary>The device of the current selection, or false when the workbench, worktree or device it
     /// names is not registered there. Every projection read stays inside that boundary.</summary>
     private static bool TrySelectedDevice(
@@ -2723,6 +2761,13 @@ public sealed class WorkbenchApiExceptionMiddleware(RequestDelegate next)
         {
             context.Response.StatusCode = 409;
             await context.Response.WriteAsJsonAsync(new { error = "METADATA_SCHEMA_UNSUPPORTED", message = exception.Message });
+        }
+        catch (EngineeringGraphProjectionException exception)
+        {
+            // ADR-0012: a projection that runs at a selection boundary and fails is reported as a
+            // projection failure, never as a read failure and never as stale facts served successfully.
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsJsonAsync(new { error = exception.Code, message = exception.Message });
         }
         catch (EngineeringGraphConstraintException exception)
         {

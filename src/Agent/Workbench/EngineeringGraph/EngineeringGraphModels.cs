@@ -128,6 +128,47 @@ public static class DevicePropertyNames
     /// <summary>The manifest digest the projection last wrote (ADR-0012): the export root plus a
     /// digest over every projected manifest field, compared at a selection boundary.</summary>
     public const string ProjectionManifestDigest = "projection.manifestDigest";
+
+    /// <summary>
+    /// Every worktree that registers this device, as a JSON array of worktree ids sorted ordinally
+    /// (AC-007). A device id is registered in more than one worktree — <c>CreateWorktreeAsync</c>
+    /// inherits master's device ids into every linked worktree — so a single
+    /// <c>graph_entities.worktree_id</c> would be "last writer wins" and deleting one worktree would
+    /// remove facts another worktree still owns. The set is the device's ownership; deleting a
+    /// worktree only removes it from this set, and the facts go with the last owner.
+    /// </summary>
+    public const string ProjectionWorktrees = "projection.worktrees";
+}
+
+/// <summary>What one reconciliation repair of one device observed (ADR-0012 item 4).</summary>
+/// <param name="DeviceId">The device whose projection was inspected.</param>
+/// <param name="WasInvalidated">True when a write point had flagged the projection (AC-004's
+/// "the invalidation flag" input).</param>
+/// <param name="DigestMatched">True when the flagged projection's stored digest still agrees with the
+/// manifest on disk (AC-004's "the manifest digest" input); only meaningful when
+/// <paramref name="WasInvalidated"/>.</param>
+/// <param name="Projection">What the repair's re-projection wrote, or null when nothing was
+/// re-projected.</param>
+public sealed record DeviceProjectionRepairResult(
+    string DeviceId,
+    bool WasInvalidated,
+    bool DigestMatched,
+    DeviceProjectionResult? Projection);
+
+/// <summary>What one worktree-deletion cleanup removed (AC-007).</summary>
+/// <param name="RemovedWorktrees">The worktrees the workbench no longer registers and whose facts were
+/// removed.</param>
+/// <param name="DevicesRemoved">Devices whose facts went with the last owning worktree.</param>
+/// <param name="DevicesRetained">Devices another worktree still registers, whose facts were kept.</param>
+public sealed record WorktreeFactCleanupResult(
+    IReadOnlyList<string> RemovedWorktrees,
+    int NodesRemoved,
+    int PropertyRowsRemoved,
+    int EdgeRowsRemoved,
+    IReadOnlyList<string> DevicesRemoved,
+    IReadOnlyList<string> DevicesRetained)
+{
+    public static WorktreeFactCleanupResult Empty { get; } = new([], 0, 0, 0, [], []);
 }
 
 /// <summary>Property names of one <see cref="GraphEntityKind.SourceObject"/> node.</summary>
@@ -160,4 +201,19 @@ public sealed class EngineeringGraphConstraintException : InvalidOperationExcept
 {
     public string Code { get; }
     public EngineeringGraphConstraintException(string message, string code = "GRAPH_RELATIONSHIP_INVALID") : base(message) => Code = code;
+}
+
+/// <summary>
+/// A projection that ran at a selection boundary and failed (ADR-0012, AC-004): the caller must report
+/// a projection failure, never serve the stale facts the failed projection was meant to replace, and
+/// never dress the failure up as a read failure.
+/// </summary>
+public sealed class EngineeringGraphProjectionException : InvalidOperationException
+{
+    public const string FailureCode = "GRAPH_PROJECTION_FAILED";
+
+    public EngineeringGraphProjectionException(string message, Exception? innerException = null)
+        : base(message, innerException) => Code = FailureCode;
+
+    public string Code { get; }
 }

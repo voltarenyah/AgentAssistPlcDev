@@ -1824,6 +1824,16 @@ public sealed class WorkbenchCoordinator
                     relativePath));
             knownWorkbenches[updatedWorkbench.WorkbenchId] = updatedWorkbench;
             knownWorktrees[worktree.WorktreeId] = worktree;
+            // ADR-0012 item 2: the new worktree registers the same device ids as master, and its
+            // exported content comes from another branch. Marking those devices invalidated makes the
+            // worktree's first read re-project instead of serving master's facts for that device.
+            var invalidationWarning = InvalidateProjection(
+                updatedWorkbench, worktree.WorktreeId, inheritedDevices.Select(device => device.DeviceId).ToArray());
+            if (invalidationWarning is not null)
+            {
+                progress?.Report(invalidationWarning);
+            }
+
             return worktree;
         }
         catch (Exception createException)
@@ -1967,6 +1977,35 @@ public sealed class WorkbenchCoordinator
         var updated = catalog.RemoveWorktree(persisted, worktreeId);
         knownWorkbenches[updated.WorkbenchId] = updated;
         knownWorktrees.TryRemove(worktreeId, out _);
+        // AC-007 / ADR-0012 item 4: the deletion is the one event that leaves rows behind, because the
+        // shared per-workbench database outlives the worktree. The cleanup is best effort — the Git and
+        // catalog removal above has already completed — and it keeps the facts of a device another
+        // worktree still registers. The worktree is already gone from the catalog, so the graph sees it
+        // as deleted.
+        try
+        {
+            using var graphStore = new EngineeringGraphStore(updated.RootPath);
+            var graph = new EngineeringGraphService(graphStore, updated.WorkbenchId,
+                id => updated.Worktrees.Any(item => item.WorktreeId == id));
+            var cleanup = new EngineeringGraphReconciliation(graph).RemoveDeletedWorktreeFacts();
+            if (cleanup.NodesRemoved > 0 || cleanup.PropertyRowsRemoved > 0 || cleanup.EdgeRowsRemoved > 0)
+            {
+                progress?.Report(
+                    $"Removed the deleted worktree's engineering-graph facts: {cleanup.NodesRemoved} node(s), "
+                    + $"{cleanup.PropertyRowsRemoved} property row(s), {cleanup.EdgeRowsRemoved} edge(s).");
+            }
+
+            if (cleanup.DevicesRetained.Count > 0)
+            {
+                progress?.Report(
+                    $"Kept the facts of {cleanup.DevicesRetained.Count} device(s) another worktree still registers.");
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            progress?.Report(
+                $"The worktree was removed, but its engineering-graph facts were not: {exception.Message}");
+        }
     }
 
     /// <summary>
@@ -2413,6 +2452,13 @@ public sealed class WorkbenchCoordinator
                             BaselineStale = true,
                         },
                     });
+                // ADR-0012 item 2: the managed XML changed, so the device's projected facts are stale.
+                var projectionWarning = InvalidateProjection(device);
+                if (projectionWarning is not null)
+                {
+                    progress?.Report(projectionWarning);
+                }
+
                 var worktree = store.Read<WorktreeMetadata>(Path.Combine(device.WorktreeRoot, "worktree.json"));
                 string? commitSha = null;
                 if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase)
@@ -2519,6 +2565,13 @@ public sealed class WorkbenchCoordinator
                         BaselineStale: false),
                 };
                 WriteDevice(device, metadata);
+                // ADR-0012 item 2: the knowledge state and its timestamp are projected device facts.
+                var refinementWarning = InvalidateProjection(device);
+                if (refinementWarning is not null)
+                {
+                    progress?.Report(refinementWarning);
+                }
+
                 return result;
             },
             token);
@@ -2546,6 +2599,13 @@ public sealed class WorkbenchCoordinator
                 Knowledge = new KnowledgeState(
                     false, hashes, DateTimeOffset.UtcNow.ToString("O"), BaselineStale: false),
             });
+            // ADR-0012 item 2: the knowledge state and its timestamp are projected device facts.
+            var rebuildWarning = InvalidateProjection(device);
+            if (rebuildWarning is not null)
+            {
+                progress?.Report(rebuildWarning);
+            }
+
             return new KnowledgeUpdateResult(
                 ingest.DbPath, relativePaths, hashes, Array.Empty<string>());
         }, token);
@@ -4106,7 +4166,56 @@ public sealed class WorkbenchCoordinator
     private string? IndexGraphEvidence(
         WorkbenchMetadata workbench, string worktreeId, string sha,
         IReadOnlyList<string> paths, long? svnRevision)
-        => graphEvidenceIndexer?.TryIndexCommit(workbench, worktreeId, sha, paths, svnRevision: svnRevision);
+    {
+        // ADR-0012 item 2: the commit is a write point. Its evidence indexing and the projection
+        // invalidation are recorded together, so a commit path cannot gain one without the other.
+        var invalidationWarning = InvalidateProjection(workbench, worktreeId);
+        var indexingWarning = graphEvidenceIndexer?.TryIndexCommit(workbench, worktreeId, sha, paths, svnRevision: svnRevision);
+        return indexingWarning ?? invalidationWarning;
+    }
+
+    /// <summary>
+    /// ADR-0012 item 2: every write point that changes a device's facts marks that device's projection —
+    /// or every device whose stored facts came from the changed worktree — as needing a re-projection.
+    /// This is the primary freshness mechanism, because the code that changes the facts is the code that
+    /// says so. Best effort by design: the fact change has already completed, so a graph that cannot be
+    /// written returns a warning instead of failing the operation — and the next selection boundary
+    /// still catches a manifest change through the digest. One graph scope per call, no file I/O.
+    /// </summary>
+    private string? InvalidateProjection(
+        WorkbenchMetadata workbench, string? worktreeId, IReadOnlyList<string>? deviceIds = null)
+    {
+        try
+        {
+            using var graphStore = new EngineeringGraphStore(workbench.RootPath);
+            var graph = new EngineeringGraphService(graphStore, workbench.WorkbenchId,
+                id => workbench.Worktrees.Any(item => item.WorktreeId == id));
+            foreach (var deviceId in deviceIds ?? [])
+                graph.InvalidateDeviceProjection(deviceId);
+            if (!string.IsNullOrWhiteSpace(worktreeId))
+                graph.InvalidateWorktreeProjections(worktreeId);
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"The device facts changed, but the projection was not marked for refresh: {exception.Message}";
+        }
+    }
+
+    /// <summary>The same invalidation for the device a caller already holds, with its workbench read
+    /// from the catalog.</summary>
+    private string? InvalidateProjection(DeviceContext device)
+    {
+        try
+        {
+            var workbench = catalog.Load(device.WorkbenchRoot);
+            return InvalidateProjection(workbench, device.WorktreeId, [device.DeviceId]);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"The device facts changed, but the projection was not marked for refresh: {exception.Message}";
+        }
+    }
 
     /// <summary>
     /// Indexes one baseline commit's evidence for a device's worktree. Best effort: the commit has

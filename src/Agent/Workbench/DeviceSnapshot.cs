@@ -7,6 +7,17 @@ namespace Agent.Workbench;
 
 public sealed record DeviceKnowledgeSnapshot(string State, string? UpdatedAt);
 
+/// <summary>
+/// The two sections of an export manifest that the projected device facts come from, read together so
+/// the projection and the selection boundary's digest check parse <c>metadata.json</c> once.
+/// </summary>
+public sealed record ManifestSections(
+    IReadOnlyList<SourceObjectInfo> Sources,
+    DeviceExportMetadata? Device)
+{
+    public static ManifestSections Empty { get; } = new([], null);
+}
+
 /// <summary>Project/device identity captured by mcp-engineering into the export manifest's
 /// additive "device" section (buildnote/plan/export-sync.md §2, 2026-07-31). Null on legacy
 /// manifests (pre-feature exports) — the UI hides the section then.</summary>
@@ -204,7 +215,31 @@ public sealed class DeviceSnapshotReader
     /// this optional export metadata. Public because the projection stores it as device facts.</summary>
     public static DeviceExportMetadata? ReadDeviceExportMetadata(DeviceContext context)
     {
-        var manifestPath = Path.Combine(context.SourceRoot, "metadata.json");
+        ArgumentNullException.ThrowIfNull(context);
+        using var manifest = TryOpenManifest(context.SourceRoot);
+        return manifest is null ? null : ReadDeviceSection(manifest.RootElement);
+    }
+
+    /// <summary>
+    /// Both manifest sections from <b>one</b> parse of <c>metadata.json</c>, for callers that need the
+    /// components and the device section together — the projection and the selection boundary's digest
+    /// check. The two single-section readers above stay for callers that need only one of them; the
+    /// parsing rules are the same code, so they cannot drift apart.
+    /// </summary>
+    public static ManifestSections ReadManifestSections(string sourceRoot)
+    {
+        using var manifest = TryOpenManifest(sourceRoot);
+        return manifest is null
+            ? ManifestSections.Empty
+            : new ManifestSections(ReadComponents(manifest.RootElement), ReadDeviceSection(manifest.RootElement));
+    }
+
+    /// <summary>The manifest file's parsed document, or null when it is absent or unparseable. Parsed
+    /// from the file's UTF-8 bytes rather than from a decoded string: the export manifest is over a
+    /// megabyte for a real device, and the selection boundary parses it on every read it has to check.</summary>
+    private static JsonDocument? TryOpenManifest(string sourceRoot)
+    {
+        var manifestPath = Path.Combine(sourceRoot, "metadata.json");
         if (!File.Exists(manifestPath))
         {
             return null;
@@ -212,34 +247,111 @@ public sealed class DeviceSnapshotReader
 
         try
         {
-            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
-            if (manifest.RootElement.ValueKind != JsonValueKind.Object
-                || !manifest.RootElement.TryGetProperty("device", out var device)
-                || device.ValueKind != JsonValueKind.Object)
-            {
-                return null;
-            }
-
-            return new DeviceExportMetadata(
-                ReadString(device, "plcName"),
-                ReadString(device, "deviceName"),
-                ReadString(device, "typeIdentifier"),
-                ReadString(device, "projectName"),
-                ReadString(device, "projectAuthor"),
-                ReadString(device, "projectComment"),
-                ReadString(device, "projectVersion"),
-                ReadString(device, "projectCopyright"),
-                ReadDate(device, "projectCreationTime"),
-                ReadDate(device, "projectLastModified"),
-                ReadString(device, "projectLastModifiedBy"),
-                ReadBool(device, "isSafetyDevice"),
-                ReadString(device, "fSignatureReadState"),
-                ReadString(device, "fSignature"));
+            var bytes = File.ReadAllBytes(manifestPath);
+            var offset = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0;
+            return JsonDocument.Parse(new ReadOnlyMemory<byte>(bytes, offset, bytes.Length - offset));
         }
         catch (Exception ex) when (ex is JsonException or IOException)
         {
             return null;
         }
+    }
+
+    private static DeviceExportMetadata? ReadDeviceSection(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("device", out var device)
+            || device.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new DeviceExportMetadata(
+            ReadString(device, "plcName"),
+            ReadString(device, "deviceName"),
+            ReadString(device, "typeIdentifier"),
+            ReadString(device, "projectName"),
+            ReadString(device, "projectAuthor"),
+            ReadString(device, "projectComment"),
+            ReadString(device, "projectVersion"),
+            ReadString(device, "projectCopyright"),
+            ReadDate(device, "projectCreationTime"),
+            ReadDate(device, "projectLastModified"),
+            ReadString(device, "projectLastModifiedBy"),
+            ReadBool(device, "isSafetyDevice"),
+            ReadString(device, "fSignatureReadState"),
+            ReadString(device, "fSignature"));
+    }
+
+    private static IReadOnlyList<SourceObjectInfo> ReadComponents(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("components", out var components)
+            || components.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var objects = new List<SourceObjectInfo>();
+        foreach (var component in components.EnumerateArray())
+        {
+            if (component.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var exportedFile = ReadString(component, "exportedFile");
+            var name = ReadString(component, "name");
+            var category = ReadString(component, "category");
+            if (string.IsNullOrWhiteSpace(exportedFile)
+                || string.IsNullOrWhiteSpace(name)
+                || string.IsNullOrWhiteSpace(category))
+            {
+                // Failed exports carry no file and are not openable/comparable objects.
+                continue;
+            }
+
+            var relativePath = exportedFile.Replace('\\', '/');
+            var fingerprintComponents = ReadFingerprintSet(component, "fingerprints");
+            if (fingerprintComponents is null
+                && component.TryGetProperty("fingerprints", out var legacyFingerprints)
+                && legacyFingerprints.ValueKind == JsonValueKind.String)
+            {
+                fingerprintComponents = FingerprintSet.Parse(legacyFingerprints.GetString());
+            }
+            objects.Add(new SourceObjectInfo(
+                ReadString(component, "id") ?? $"source:{relativePath}",
+                name,
+                ReadInt(component, "number"),
+                category,
+                ReadString(component, "programmingLanguage"),
+                SourceGroupPath(relativePath),
+                relativePath,
+                ReadString(component, "contentHash"),
+                ReadBool(component, "isKnowHowProtected"),
+                ReadDate(component, "modifiedDate"),
+                ReadString(component, "status"),
+                fingerprintComponents,
+                CommittedSourceManifest.EvidenceKindOf(category, ReadString(component, "siemensTypeName"))));
+        }
+
+        return objects
+            .OrderBy(item => item.Category, StringComparer.Ordinal)
+            .ThenBy(item => item.Number ?? int.MaxValue)
+            .ThenBy(item => item.Name, StringComparer.Ordinal)
+            .ThenBy(item => item.RelativePath, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Manifest "components" section — tolerant read like the device section: a missing
+    /// or legacy manifest, missing property, or unparseable JSON all degrade to an empty list and
+    /// callers fall back to the block crawl. Public so the workbench coordinator resolves
+    /// source-object identities (name/category per relativePath) from the same data.</summary>
+    public static IReadOnlyList<SourceObjectInfo> ReadManifestSourceObjects(string sourceRoot)
+    {
+        using var manifest = TryOpenManifest(sourceRoot);
+        return manifest is null ? [] : ReadComponents(manifest.RootElement);
     }
 
     private static DateTimeOffset? ReadDate(JsonElement owner, string property) =>
@@ -248,83 +360,6 @@ public sealed class DeviceSnapshotReader
             ? date
             : null;
 
-    /// <summary>Manifest "components" section — tolerant read like the device section: a missing
-    /// or legacy manifest, missing property, or unparseable JSON all degrade to an empty list and
-    /// callers fall back to the block crawl. Public so the workbench coordinator resolves
-    /// source-object identities (name/category per relativePath) from the same data.</summary>
-    public static IReadOnlyList<SourceObjectInfo> ReadManifestSourceObjects(string sourceRoot)
-    {
-        var manifestPath = Path.Combine(sourceRoot, "metadata.json");
-        if (!File.Exists(manifestPath))
-        {
-            return [];
-        }
-
-        try
-        {
-            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
-            if (manifest.RootElement.ValueKind != JsonValueKind.Object
-                || !manifest.RootElement.TryGetProperty("components", out var components)
-                || components.ValueKind != JsonValueKind.Array)
-            {
-                return [];
-            }
-
-            var objects = new List<SourceObjectInfo>();
-            foreach (var component in components.EnumerateArray())
-            {
-                if (component.ValueKind != JsonValueKind.Object)
-                {
-                    continue;
-                }
-
-                var exportedFile = ReadString(component, "exportedFile");
-                var name = ReadString(component, "name");
-                var category = ReadString(component, "category");
-                if (string.IsNullOrWhiteSpace(exportedFile)
-                    || string.IsNullOrWhiteSpace(name)
-                    || string.IsNullOrWhiteSpace(category))
-                {
-                    // Failed exports carry no file and are not openable/comparable objects.
-                    continue;
-                }
-
-                var relativePath = exportedFile.Replace('\\', '/');
-                var fingerprintComponents = ReadFingerprintSet(component, "fingerprints");
-                if (fingerprintComponents is null
-                    && component.TryGetProperty("fingerprints", out var legacyFingerprints)
-                    && legacyFingerprints.ValueKind == JsonValueKind.String)
-                {
-                    fingerprintComponents = FingerprintSet.Parse(legacyFingerprints.GetString());
-                }
-                objects.Add(new SourceObjectInfo(
-                    ReadString(component, "id") ?? $"source:{relativePath}",
-                    name,
-                    ReadInt(component, "number"),
-                    category,
-                    ReadString(component, "programmingLanguage"),
-                    SourceGroupPath(relativePath),
-                    relativePath,
-                    ReadString(component, "contentHash"),
-                    ReadBool(component, "isKnowHowProtected"),
-                    ReadDate(component, "modifiedDate"),
-                    ReadString(component, "status"),
-                    fingerprintComponents,
-                    CommittedSourceManifest.EvidenceKindOf(category, ReadString(component, "siemensTypeName"))));
-            }
-
-            return objects
-                .OrderBy(item => item.Category, StringComparer.Ordinal)
-                .ThenBy(item => item.Number ?? int.MaxValue)
-                .ThenBy(item => item.Name, StringComparer.Ordinal)
-                .ThenBy(item => item.RelativePath, StringComparer.Ordinal)
-                .ToArray();
-        }
-        catch (Exception ex) when (ex is JsonException or IOException)
-        {
-            return [];
-        }
-    }
 
     private static int? ReadInt(JsonElement owner, string property) =>
         owner.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number

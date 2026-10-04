@@ -27,10 +27,36 @@ public static class RawGatewayCommitEvidence
         JsonElement commit)
     {
         ArgumentNullException.ThrowIfNull(indexer);
+        // ADR-0012 item 2: a raw gateway commit is a write point. It invalidates first and
+        // unconditionally, so a result without a readable commit id still marks the worktree's
+        // projected facts stale.
+        InvalidateWorktreeProjection(workbench, worktreeId);
         if (JsonString(commit, "sha") is not { } sha) return;
         // A commit result with no file list still records the node: the commit happened, and an empty
         // object list is the honest evidence for it.
         _ = indexer.TryIndexCommit(workbench, worktreeId, sha, Files(commit, "files"));
+    }
+
+    /// <summary>
+    /// ADR-0012 item 2 for a raw gateway route: a commit or a branch switch changed the worktree's Git
+    /// state, so every device whose stored facts came from that worktree is marked for re-projection.
+    /// Best effort, exactly like the evidence indexing beside it: the Git operation already succeeded.
+    /// </summary>
+    public static void InvalidateWorktreeProjection(WorkbenchMetadata workbench, string worktreeId)
+    {
+        if (string.IsNullOrWhiteSpace(worktreeId)) return;
+        try
+        {
+            using var store = new EngineeringGraphStore(workbench.RootPath);
+            var graph = new EngineeringGraphService(store, workbench.WorkbenchId,
+                id => workbench.Worktrees.Any(item => item.WorktreeId == id));
+            graph.InvalidateWorktreeProjections(worktreeId);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // The route's own operation already succeeded; the selection boundary's digest check is the
+            // second line of defence for the same change.
+        }
     }
 
     /// <summary>
@@ -48,6 +74,9 @@ public static class RawGatewayCommitEvidence
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(indexer);
+        // ADR-0012 item 2: a branch switch moves the whole working tree the projected facts were read
+        // from, and it invalidates whether or not the checkout names a commit.
+        InvalidateWorktreeProjection(workbench, worktreeId);
         if (JsonString(checkout, "sha") is not { } sha) return;
         IReadOnlyList<string> files = [];
         try

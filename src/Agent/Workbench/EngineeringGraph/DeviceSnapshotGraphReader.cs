@@ -3,6 +3,40 @@ using Contracts.Engineering;
 
 namespace Agent.Workbench.EngineeringGraph;
 
+/// <summary>Which input moved the selection boundary into re-projecting a device (AC-004's
+/// "the boundary records which input moved").</summary>
+public enum ProjectionBoundaryReason
+{
+    /// <summary>The stored projection already reflects the manifest on disk.</summary>
+    None,
+
+    /// <summary>The graph holds no projection for the device.</summary>
+    Missing,
+
+    /// <summary>A fact the caller already holds moved: workbench, worktree, device, PLC name,
+    /// engineering identity, source root, or the knowledge state and its timestamp.</summary>
+    Identity,
+
+    /// <summary>A write point flagged the projection as invalidated (ADR-0012 item 2).</summary>
+    Invalidated,
+
+    /// <summary>The stored manifest digest differs from the manifest on disk (ADR-0012 item 3).</summary>
+    Digest,
+
+    /// <summary>The export manifest is missing or legacy, so it carries no comparable digest. The
+    /// stored facts are served; the write points are what refresh such a device, because crawling on
+    /// every read would put the legacy path far outside AC-001's budget.</summary>
+    LegacyManifest,
+}
+
+/// <summary>What one selection/refresh boundary check observed and, on a mismatch, re-projected.</summary>
+public sealed record ProjectionBoundaryResult(
+    ProjectionBoundaryReason Reason,
+    DeviceProjectionResult? Projection)
+{
+    public bool Reprojected => Projection is not null;
+}
+
 /// <summary>
 /// The device read path (ADR-0011): the device page's facts are assembled from the engineering graph
 /// instead of walking the exported source tree. A device whose projection is missing — a fresh or
@@ -118,39 +152,98 @@ public sealed class DeviceSnapshotGraphReader
     private static string NormalizePath(string path) => path.Replace('\\', '/').TrimStart('/');
 
     /// <summary>
-    /// One device's fact rows, projecting first when the graph holds no current projection for it. The
-    /// check compares only facts the caller already has in hand (the device and worktree metadata plus
-    /// whether the knowledge database exists), so it costs no export read; a projection that matches
-    /// serves straight from the graph.
+    /// The selection/refresh boundary (ADR-0012 item 3, AC-004): a projection already flagged as
+    /// invalidated, or one whose stored manifest digest — the export root plus every projected manifest
+    /// field, not <c>contentHash</c> alone — no longer matches the manifest on disk, is re-projected
+    /// before the caller serves. It shares the caller's graph scope with the rows it guards, and only
+    /// facts the caller already has in hand are compared when no export read is needed.
+    /// </summary>
+    public ProjectionBoundaryResult EnsureProjectionCurrent(DeviceContext context, DeviceMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(metadata);
+        var facts = _graph.GetDeviceProperties(context.DeviceId);
+        var reason = MovedInput(facts, context, metadata, out var input);
+        return reason is ProjectionBoundaryReason.None or ProjectionBoundaryReason.LegacyManifest
+            ? new ProjectionBoundaryResult(reason, null)
+            : new ProjectionBoundaryResult(reason, Project(context, metadata, input));
+    }
+
+    /// <summary>
+    /// One device's fact rows, re-projecting first when the boundary found the stored projection
+    /// missing, invalidated, or behind the manifest on disk.
     /// </summary>
     private IReadOnlyDictionary<string, IReadOnlyList<GraphProperty>> Facts(DeviceContext context, DeviceMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(metadata);
         var facts = _graph.GetDeviceProperties(context.DeviceId);
-        if (!NeedsProjection(facts, context, metadata)) return facts;
-        _projection.ProjectDevice(context, metadata);
+        var reason = MovedInput(facts, context, metadata, out var input);
+        if (reason is ProjectionBoundaryReason.None or ProjectionBoundaryReason.LegacyManifest) return facts;
+        Project(context, metadata, input);
         return _graph.GetDeviceProperties(context.DeviceId);
     }
 
-    private static bool NeedsProjection(
+    /// <summary>
+    /// A projection that fails at the boundary is reported as a projection failure — never as a read
+    /// failure and never by serving the stale facts it was meant to replace (ADR-0012, Negative
+    /// Consequences). <see cref="EngineeringGraphProjectionService.ProjectDevice"/> raises that error;
+    /// a rejected input path stays the path error it already was.
+    /// </summary>
+    private DeviceProjectionResult Project(
+        DeviceContext context,
+        DeviceMetadata metadata,
+        DeviceProjectionInput? input) =>
+        _projection.ProjectDevice(context, metadata, input);
+
+    /// <summary>
+    /// Which input moved, or <see cref="ProjectionBoundaryReason.None"/>. When the answer is
+    /// <see cref="ProjectionBoundaryReason.Digest"/>, <paramref name="input"/> carries the manifest
+    /// parse the mismatch already cost, so the re-projection never reads it again.
+    /// </summary>
+    private static ProjectionBoundaryReason MovedInput(
         IReadOnlyDictionary<string, IReadOnlyList<GraphProperty>> facts,
+        DeviceContext context,
+        DeviceMetadata metadata,
+        out DeviceProjectionInput? input)
+    {
+        input = null;
+        if (!facts.TryGetValue(context.DeviceId, out var stored) || stored.Count == 0)
+            return ProjectionBoundaryReason.Missing;
+        if (!IdentityMatches(stored, context, metadata))
+            return ProjectionBoundaryReason.Identity;
+        if (PropertyFlag(stored, DevicePropertyNames.ProjectionInvalidated) == true)
+            return ProjectionBoundaryReason.Invalidated;
+        var digest = PropertyText(stored, DevicePropertyNames.ProjectionManifestDigest);
+        if (string.IsNullOrEmpty(digest))
+            return ProjectionBoundaryReason.Missing;
+
+        // The boundary's one export read: the same single metadata.json parse the ingest performs.
+        var resolved = EngineeringGraphProjectionService.ReadInput(context);
+        if (resolved.UsedCrawlFallback)
+            return ProjectionBoundaryReason.LegacyManifest;
+        if (string.Equals(EngineeringGraphProjectionService.ComputeDigest(context, resolved), digest, StringComparison.Ordinal))
+            return ProjectionBoundaryReason.None;
+        input = resolved;
+        return ProjectionBoundaryReason.Digest;
+    }
+
+    /// <summary>The facts the caller already holds, plus the knowledge state — which follows the
+    /// knowledge database's existence and the persisted staleness flags, never the export.</summary>
+    private static bool IdentityMatches(
+        IReadOnlyList<GraphProperty> stored,
         DeviceContext context,
         DeviceMetadata metadata)
     {
-        if (!facts.TryGetValue(context.DeviceId, out var stored) || stored.Count == 0) return true;
-        if (PropertyText(stored, DevicePropertyNames.WorkbenchId) != context.WorkbenchId) return true;
-        if (PropertyText(stored, DevicePropertyNames.WorktreeId) != context.WorktreeId) return true;
-        if (PropertyText(stored, DevicePropertyNames.DeviceId) != context.DeviceId) return true;
-        if (PropertyText(stored, DevicePropertyNames.PlcName) != metadata.PlcName) return true;
-        if (PropertyText(stored, DevicePropertyNames.EngineeringIdentity) != metadata.EngineeringIdentity) return true;
-        if (PropertyText(stored, DevicePropertyNames.SourceRoot) != context.SourceRoot) return true;
-        // The knowledge state is not an export fact: it follows the knowledge database's existence and
-        // the persisted staleness flags, which change when the device is bootstrapped or refreshed. It
-        // is recomputed from the metadata already loaded for the check, never from the export.
+        if (PropertyText(stored, DevicePropertyNames.WorkbenchId) != context.WorkbenchId) return false;
+        if (PropertyText(stored, DevicePropertyNames.WorktreeId) != context.WorktreeId) return false;
+        if (PropertyText(stored, DevicePropertyNames.DeviceId) != context.DeviceId) return false;
+        if (PropertyText(stored, DevicePropertyNames.PlcName) != metadata.PlcName) return false;
+        if (PropertyText(stored, DevicePropertyNames.EngineeringIdentity) != metadata.EngineeringIdentity) return false;
+        if (PropertyText(stored, DevicePropertyNames.SourceRoot) != context.SourceRoot) return false;
         var knowledge = DeviceSnapshotReader.ReadKnowledgeSnapshot(context, metadata);
-        if (PropertyText(stored, DevicePropertyNames.KnowledgeState) != knowledge.State) return true;
-        return PropertyText(stored, DevicePropertyNames.KnowledgeUpdatedAt) != knowledge.UpdatedAt;
+        if (PropertyText(stored, DevicePropertyNames.KnowledgeState) != knowledge.State) return false;
+        return PropertyText(stored, DevicePropertyNames.KnowledgeUpdatedAt) == knowledge.UpdatedAt;
     }
 
     /// <summary>One projected source object with its property rows, so the block view can read the

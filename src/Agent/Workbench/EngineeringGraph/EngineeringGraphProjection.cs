@@ -25,6 +25,19 @@ public sealed record DeviceProjectionResult(
 }
 
 /// <summary>
+/// Everything one device projection reads from the filesystem, resolved before any graph write so the
+/// write is one short transaction (ADR-0012 item 9). The selection boundary resolves it too, so a
+/// digest mismatch costs the same single manifest parse the projection would have done and the
+/// re-projection reuses it instead of reading the manifest twice.
+/// </summary>
+public sealed record DeviceProjectionInput(
+    IReadOnlyList<SourceObjectInfo> Sources,
+    DeviceExportMetadata? Device,
+    bool UsedCrawlFallback,
+    IReadOnlyList<string> Diagnostics,
+    IReadOnlyList<string> Report);
+
+/// <summary>
 /// Projects one device's exported facts into the engineering graph as node properties (ADR-0011,
 /// ADR-0012). The device manifest is the ingest source; the block crawl runs only when the manifest
 /// is missing or legacy. Everything filesystem-side — the manifest read, the crawl, the digest —
@@ -42,20 +55,62 @@ public sealed class EngineeringGraphProjectionService
     /// row; a component the manifest no longer lists loses its node, its properties and the edges
     /// that referenced it.
     /// </summary>
-    public DeviceProjectionResult ProjectDevice(DeviceContext context, DeviceMetadata metadata)
+    public DeviceProjectionResult ProjectDevice(DeviceContext context, DeviceMetadata metadata) =>
+        ProjectDevice(context, metadata, input: null);
+
+    /// <summary>
+    /// The same ingest with an already-resolved <paramref name="input"/>, so a caller that had to read
+    /// the manifest to compare digests does not read it a second time. A projection that fails is
+    /// reported as a projection failure (AC-004), never left to look like the read that followed it; a
+    /// rejected input path or argument keeps the error it already was.
+    /// </summary>
+    public DeviceProjectionResult ProjectDevice(DeviceContext context, DeviceMetadata metadata, DeviceProjectionInput? input)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(metadata);
         if (!string.Equals(context.DeviceId, metadata.DeviceId, StringComparison.Ordinal))
             throw new EngineeringGraphConstraintException("Device metadata belongs to another device.");
 
+        try
+        {
+            // The device's owning worktrees are read before the transaction and written inside it, so a
+            // device id another worktree also registers never loses that ownership (AC-007).
+            var owners = ProjectionWorktrees(context);
+            var resolved = input ?? ReadInput(context);
+            var digest = ComputeDigest(context, resolved);
+            var nodes = BuildNodes(context, metadata, resolved, owners, digest);
+            var write = _graph.ReplaceDeviceProperties(context.DeviceId, nodes);
+            var blockCount = resolved.Sources.Count(item => DeviceSnapshotReader.IsBlockCategoryPath(item.RelativePath));
+            return new DeviceProjectionResult(
+                context.DeviceId, digest, resolved.UsedCrawlFallback, resolved.Sources.Count, blockCount, write,
+                resolved.Report, resolved.Diagnostics);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException
+            and not ArgumentException
+            and not WorkbenchPathException
+            and not EngineeringGraphProjectionException)
+        {
+            throw new EngineeringGraphProjectionException(
+                $"The projection of device '{context.DeviceId}' failed: {exception.Message}",
+                exception);
+        }
+    }
+
+    /// <summary>
+    /// Resolves everything the projection reads from the filesystem for one device: the manifest (or,
+    /// when it is missing or legacy, the block crawl), the export's device section and the ingest's own
+    /// report. No graph write happens here.
+    /// </summary>
+    public static DeviceProjectionInput ReadInput(DeviceContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
         var report = new List<string>();
         // The device page's diagnostics are the ones source resolution produced, exactly as the crawl
         // reader produced them; the ingest's own note about *why* the crawl ran is a report line that
         // the page never showed and must not start showing (AC-002).
         var diagnostics = new List<string>();
-        var manifest = DeviceSnapshotReader.ReadManifestSourceObjects(context.SourceRoot);
-        var usedCrawlFallback = manifest.Count == 0;
+        var sections = DeviceSnapshotReader.ReadManifestSections(context.SourceRoot);
+        var usedCrawlFallback = sections.Sources.Count == 0;
         IReadOnlyList<SourceObjectInfo> sources;
         if (usedCrawlFallback)
         {
@@ -65,28 +120,24 @@ public sealed class EngineeringGraphProjectionService
         }
         else
         {
-            sources = manifest;
+            sources = sections.Sources;
         }
 
-        var device = DeviceSnapshotReader.ReadDeviceExportMetadata(context);
-        var digest = ManifestDigest(context, sources, device);
-        var nodes = BuildNodes(context, metadata, device, sources, diagnostics, digest);
-        var write = _graph.ReplaceDeviceProperties(context.DeviceId, nodes);
-        var blockCount = sources.Count(item => DeviceSnapshotReader.IsBlockCategoryPath(item.RelativePath));
-        return new DeviceProjectionResult(
-            context.DeviceId, digest, usedCrawlFallback, sources.Count, blockCount, write, report, diagnostics);
+        return new DeviceProjectionInput(sources, sections.Device, usedCrawlFallback, diagnostics, report);
     }
 
     /// <summary>The digest the projection stores and a selection boundary compares (ADR-0012): the
     /// export root plus every manifest field the projection keeps, so a change to any of them moves
-    /// the digest with it.</summary>
-    private static string ManifestDigest(DeviceContext context, IReadOnlyList<SourceObjectInfo> sources, DeviceExportMetadata? device)
+    /// the digest with it. Computed from the already-resolved projection input.</summary>
+    public static string ComputeDigest(DeviceContext context, DeviceProjectionInput input)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(input);
         var payload = JsonSerializer.Serialize(new
         {
             root = context.SourceRoot,
-            device,
-            sources = sources.Select(item => new
+            device = input.Device,
+            sources = input.Sources.Select(item => new
             {
                 item.Id,
                 item.Name,
@@ -106,25 +157,66 @@ public sealed class EngineeringGraphProjectionService
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
     }
 
+    /// <summary>
+    /// Every worktree that registers this device, with <paramref name="context"/>'s worktree added:
+    /// the stored set plus this ingest's owner. Read before the projection's transaction, because
+    /// <c>graph_entities.worktree_id</c> alone would be last-writer-wins for a device id registered in
+    /// more than one worktree (AC-007).
+    /// </summary>
+    private IReadOnlyList<string> ProjectionWorktrees(DeviceContext context)
+    {
+        var owners = new SortedSet<string>(StringComparer.Ordinal);
+        var stored = _graph.GetProperties(GraphEntityKind.Device, context.DeviceId)
+            .FirstOrDefault(property => string.Equals(
+                property.Name, DevicePropertyNames.ProjectionWorktrees, StringComparison.Ordinal));
+        foreach (var worktreeId in ParseWorktrees(stored?.Json)) owners.Add(worktreeId);
+        owners.Add(context.WorktreeId);
+        return owners.ToArray();
+    }
+
+    /// <summary>The worktree ids a stored <c>projection.worktrees</c> property names, tolerating a
+    /// missing or unreadable value (a database migrated from an earlier schema).</summary>
+    internal static IReadOnlyList<string> ParseWorktrees(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            return JsonSerializer.Deserialize<string[]>(json)?
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray() ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>The worktree a projected node's entity row is attributed to: the ordinal-first owner,
+    /// so the row is stable whichever worktree projected last.</summary>
+    internal static string PrimaryWorktree(IReadOnlyList<string> owners, string fallback) =>
+        owners.Count == 0 ? fallback : owners[0];
+
     private static IReadOnlyList<GraphNodePropertySet> BuildNodes(
         DeviceContext context,
         DeviceMetadata metadata,
-        DeviceExportMetadata? device,
-        IReadOnlyList<SourceObjectInfo> sources,
-        IReadOnlyList<string> diagnostics,
+        DeviceProjectionInput input,
+        IReadOnlyList<string> owners,
         string digest)
     {
+        var owner = PrimaryWorktree(owners, context.WorktreeId);
+        var sources = input.Sources;
         var nodes = new List<GraphNodePropertySet>(sources.Count + 1)
         {
             new(
-                new GraphEntity(GraphEntityKind.Device, context.DeviceId, context.WorkbenchId, context.WorktreeId, context.DeviceId),
-                DeviceProperties(context, metadata, device, sources, diagnostics, digest)),
+                new GraphEntity(GraphEntityKind.Device, context.DeviceId, context.WorkbenchId, owner, context.DeviceId),
+                DeviceProperties(context, metadata, input, owners, digest)),
         };
         foreach (var item in sources)
         {
             nodes.Add(new GraphNodePropertySet(
                 new GraphEntity(GraphEntityKind.SourceObject, $"{context.DeviceId}:{item.Id}", context.WorkbenchId,
-                    context.WorktreeId, context.DeviceId, item.RelativePath),
+                    owner, context.DeviceId, item.RelativePath),
                 SourceObjectProperties(item)));
         }
 
@@ -134,12 +226,13 @@ public sealed class EngineeringGraphProjectionService
     private static IReadOnlyList<GraphProperty> DeviceProperties(
         DeviceContext context,
         DeviceMetadata metadata,
-        DeviceExportMetadata? device,
-        IReadOnlyList<SourceObjectInfo> sources,
-        IReadOnlyList<string> diagnostics,
+        DeviceProjectionInput input,
+        IReadOnlyList<string> owners,
         string digest)
     {
         const string source = GraphPropertySource.DeviceProjection;
+        var device = input.Device;
+        var sources = input.Sources;
         var knowledge = DeviceSnapshotReader.ReadKnowledgeSnapshot(context, metadata);
         var properties = new List<GraphProperty>
         {
@@ -155,9 +248,11 @@ public sealed class EngineeringGraphProjectionService
             GraphProperty.NumberValue(DevicePropertyNames.BlockCount, source,
                 sources.Count(item => DeviceSnapshotReader.IsBlockCategoryPath(item.RelativePath))),
             GraphProperty.NumberValue(DevicePropertyNames.SourceObjectCount, source, sources.Count),
-            GraphProperty.JsonValue(DevicePropertyNames.Diagnostics, source, JsonSerializer.Serialize(diagnostics)),
+            GraphProperty.JsonValue(DevicePropertyNames.Diagnostics, source, JsonSerializer.Serialize(input.Diagnostics)),
             GraphProperty.FlagValue(DevicePropertyNames.ProjectionInvalidated, source, false),
             GraphProperty.TextValue(DevicePropertyNames.ProjectionManifestDigest, source, digest),
+            GraphProperty.JsonValue(DevicePropertyNames.ProjectionWorktrees, source,
+                JsonSerializer.Serialize(owners)),
         };
 
         // The manifest's optional "device" section is stored only when the export carries one, so a
