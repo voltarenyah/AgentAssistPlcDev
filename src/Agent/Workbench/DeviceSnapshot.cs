@@ -81,11 +81,7 @@ public sealed class DeviceSnapshotReader
         var blocks = ReadBlocks(context, diagnostics);
         var sourceObjects = ResolveSourceObjects(ReadManifestSourceObjects(context.SourceRoot), blocks);
 
-        var state = !File.Exists(context.KnowledgeDbPath)
-            ? "missing"
-            : metadata.Knowledge.Stale || metadata.Knowledge.BaselineStale
-                ? "stale"
-                : "current";
+        var state = ReadKnowledgeSnapshot(context, metadata);
 
         return new DeviceSnapshot(
             context.WorkbenchId,
@@ -96,12 +92,28 @@ public sealed class DeviceSnapshotReader
             context.SourceRoot,
             context.KnowledgeDbPath,
             ReadSourceProjectPath(context),
-            new DeviceKnowledgeSnapshot(state, metadata.Knowledge.UpdatedAt),
+            state,
             blocks,
             sourceObjects,
             blocks.Count,
             diagnostics,
             ReadDeviceExportMetadata(context));
+    }
+
+    /// <summary>
+    /// The knowledge state and timestamp the device page shows: the database's existence and the
+    /// persisted staleness flags decide it, and the projection stores exactly this value.
+    /// </summary>
+    public static DeviceKnowledgeSnapshot ReadKnowledgeSnapshot(DeviceContext context, DeviceMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(metadata);
+        var state = !File.Exists(context.KnowledgeDbPath)
+            ? "missing"
+            : metadata.Knowledge.Stale || metadata.Knowledge.BaselineStale
+                ? "stale"
+                : "current";
+        return new DeviceKnowledgeSnapshot(state, metadata.Knowledge.UpdatedAt);
     }
 
     /// <summary>
@@ -137,25 +149,50 @@ public sealed class DeviceSnapshotReader
         IReadOnlyList<OfflineBlockInfo> blocks) =>
         manifest.Count > 0
             ? manifest
-            : blocks.Select(block => new SourceObjectInfo(
-                block.Id,
-                block.Name,
-                block.Number,
-                block.BlockType,
-                block.ProgrammingLanguage,
-                block.GroupPath,
-                block.RelativePath,
-                null,
-                null,
-                null,
-                null,
-                null,
-                CommittedSourceManifest.EvidenceKindOf(block.BlockType, null))).ToArray();
+            : CrawledSourceObjects(blocks);
 
-    /// <summary>Manifest "device" section — tolerant read: missing/legacy manifest, missing
+    /// <summary>
+    /// The block crawl as the ingest fallback for a manifest that is missing or legacy: the same
+    /// objects <see cref="ReadBlocks"/> finds, with no manifest-only metadata. The projection uses it
+    /// when it cannot read the manifest (ADR-0011, the crawl becomes the ingest fallback).
+    /// </summary>
+    public static IReadOnlyList<SourceObjectInfo> ReadCrawledSourceObjects(DeviceContext context, List<string> diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        return CrawledSourceObjects(ReadBlocks(context, diagnostics));
+    }
+
+    private static IReadOnlyList<SourceObjectInfo> CrawledSourceObjects(IReadOnlyList<OfflineBlockInfo> blocks) =>
+        blocks.Select(block => new SourceObjectInfo(
+            block.Id,
+            block.Name,
+            block.Number,
+            block.BlockType,
+            block.ProgrammingLanguage,
+            block.GroupPath,
+            block.RelativePath,
+            null,
+            null,
+            null,
+            null,
+            null,
+            CrawledEvidenceKind(block.BlockType))).ToArray();
+
+    /// <summary>
+    /// Classification of a crawl-derived object. The crawl knows only the XML element's generic block
+    /// type — <c>SW.Blocks.InstanceDB</c> maps to the same "DB" as a global DB — and has no
+    /// siemensTypeName to tell them apart, so a DB-category object is left <b>unclassified</b> (a null
+    /// evidence kind) rather than claimed as a standard block: the picker excludes instance DBs by
+    /// kind, and a wrong kind would silently offer an object that can never carry a baseline.
+    /// </summary>
+    private static string? CrawledEvidenceKind(string blockType) =>
+        string.Equals(blockType, "DB", StringComparison.Ordinal) ? null : ManagedSourceEvidenceKind.StandardBlock;
+
+    /// <summary>The manifest's "device" section — tolerant read: missing/legacy manifest, missing
     /// property, or unparseable JSON all degrade to null. Source discovery never depends on
-    /// this optional export metadata.</summary>
-    private static DeviceExportMetadata? ReadDeviceExportMetadata(DeviceContext context)
+    /// this optional export metadata. Public because the projection stores it as device facts.</summary>
+    public static DeviceExportMetadata? ReadDeviceExportMetadata(DeviceContext context)
     {
         var manifestPath = Path.Combine(context.SourceRoot, "metadata.json");
         if (!File.Exists(manifestPath))
@@ -319,7 +356,9 @@ public sealed class DeviceSnapshotReader
         };
     }
 
-    private static string? ReadSourceProjectPath(DeviceContext context)
+    /// <summary>The worktree's source project path, or null when the worktree metadata is absent or
+    /// unreadable. Public because the projection stores it as a device fact.</summary>
+    public static string? ReadSourceProjectPath(DeviceContext context)
     {
         var metadataPath = Path.Combine(context.WorktreeRoot, "worktree.json");
         if (!File.Exists(metadataPath))
@@ -415,9 +454,7 @@ public sealed class DeviceSnapshotReader
                 // Only block categories (Blocks/, DB/) are parsed into block info. Tags/ and
                 // UDT/ exports are valid XML but not blocks — reading them as blocks produced
                 // one spurious "malformed or unsupported" diagnostic per file per snapshot.
-                var slash = relativePath.Replace('\\', '/');
-                if (!slash.StartsWith("Blocks/", StringComparison.Ordinal)
-                    && !slash.StartsWith("DB/", StringComparison.Ordinal))
+                if (!IsBlockCategoryPath(relativePath))
                     continue;
 
                 try
@@ -511,6 +548,17 @@ public sealed class DeviceSnapshotReader
         owner.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    /// <summary>
+    /// True for a block-category exported path: the <c>Blocks/</c> and <c>DB/</c> subtree. It is the
+    /// crawl's own rule, and the device page's block list and count stay that subset.
+    /// </summary>
+    public static bool IsBlockCategoryPath(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        return normalized.StartsWith("Blocks/", StringComparison.Ordinal)
+            || normalized.StartsWith("DB/", StringComparison.Ordinal);
+    }
 
     private static string? SourceGroupPath(string relativePath)
     {

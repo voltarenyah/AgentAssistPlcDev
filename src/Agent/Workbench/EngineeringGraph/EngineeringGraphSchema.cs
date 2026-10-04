@@ -4,7 +4,7 @@ namespace Agent.Workbench.EngineeringGraph;
 
 public static class EngineeringGraphSchema
 {
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     internal static int GetVersion(SqliteConnection connection)
     {
@@ -136,6 +136,34 @@ public static class EngineeringGraphSchema
         {
             Execute(connection, transaction, "ALTER TABLE tasks ADD COLUMN target_kind TEXT NULL;");
             Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (5, $utc);",
+                ("$utc", DateTimeOffset.UtcNow.ToString("O")));
+        }
+        if (version < 6)
+        {
+            failureInjector?.Invoke(6);
+            // Properties are keyed by the node they belong to and deliberately carry no foreign key to
+            // graph_entities. Node registration uses INSERT OR REPLACE, which deletes the replaced row:
+            // with ForeignKeys enabled an ON DELETE CASCADE here would silently drop a device's whole
+            // fact set on the next stage click (ADR-0011, Negative Consequences).
+            Execute(connection, transaction, """
+                CREATE TABLE IF NOT EXISTS graph_entity_properties (
+                    entity_kind TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    value_kind TEXT NOT NULL,
+                    value_text TEXT NULL,
+                    value_number REAL NULL,
+                    value_flag INTEGER NULL CHECK (value_flag IN (0, 1)),
+                    value_timestamp TEXT NULL,
+                    value_json TEXT NULL,
+                    source TEXT NOT NULL,
+                    PRIMARY KEY (entity_kind, entity_id, name)
+                );
+                CREATE INDEX IF NOT EXISTS ix_graph_entity_properties_entity
+                    ON graph_entity_properties (entity_kind, entity_id);
+                """);
+            failureInjector?.Invoke(7);
+            Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (6, $utc);",
                 ("$utc", DateTimeOffset.UtcNow.ToString("O")));
         }
     }
