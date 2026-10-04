@@ -45,6 +45,17 @@ public sealed record DeviceProjectionInput(
 /// </summary>
 public sealed class EngineeringGraphProjectionService
 {
+    /// <summary>
+    /// Which fact set this projection writes. A stored projection that carries a different value was
+    /// written before the per-object inspection facts existed, so the selection boundary re-projects it
+    /// once instead of serving an inspection read that has no facts (ADR-0011 Phase 5).
+    /// </summary>
+    public const string CurrentFactsVersion = "2";
+
+    /// <summary>The ingest's own path resolution: the inspector's resolver only marks knowledge stale
+    /// for an edit, which an ingest never does.</summary>
+    private static readonly DeviceSourceResolver IngestResolver = new(_ => { });
+
     private readonly EngineeringGraphService _graph;
 
     public EngineeringGraphProjectionService(EngineeringGraphService graph) =>
@@ -73,13 +84,33 @@ public sealed class EngineeringGraphProjectionService
 
         try
         {
-            // The device's owning worktrees are read before the transaction and written inside it, so a
-            // device id another worktree also registers never loses that ownership (AC-007).
-            var owners = ProjectionWorktrees(context);
+            // The device's owning worktrees and its stored facts are read before the transaction and
+            // written inside it, so a device id another worktree also registers never loses that
+            // ownership (AC-007), and so the inspection ingest can reuse the parsed content it already
+            // stored for an object whose exported content has not moved.
+            var stored = _graph.GetDeviceProperties(context.DeviceId);
+            var storedInspections = _graph.GetInspectionFacts(context.DeviceId);
+            var owners = ProjectionWorktrees(stored, context);
             var resolved = input ?? ReadInput(context);
             var digest = ComputeDigest(context, resolved);
-            var nodes = BuildNodes(context, metadata, resolved, owners, digest);
-            var write = _graph.ReplaceDeviceProperties(context.DeviceId, nodes);
+            var nodes = BuildNodes(context, metadata, resolved, owners, digest, stored, storedInspections);
+            // The parsed content is a second, disjoint property set on the same nodes: it is written
+            // separately so the device read never loads it, and only for the objects whose content the
+            // projection actually re-derived. It goes first so that a write which fails after it leaves
+            // the older manifest facts — and therefore a content hash the reuse rule rejects — rather
+            // than new manifest facts whose stored content looks unchanged while the payload is stale.
+            var write = new GraphPropertyWriteResult(0, 0, 0, 0);
+            if (nodes.Inspections.Count > 0)
+                write = _graph.ReplaceInspectionProperties(context.DeviceId, nodes.Inspections);
+            var facts = _graph.ReplaceDeviceProperties(context.DeviceId, nodes.Facts);
+            write = write with
+            {
+                Inserted = write.Inserted + facts.Inserted,
+                Updated = write.Updated + facts.Updated,
+                Deleted = write.Deleted + facts.Deleted,
+                NodesRemoved = facts.NodesRemoved,
+            };
+
             var blockCount = resolved.Sources.Count(item => DeviceSnapshotReader.IsBlockCategoryPath(item.RelativePath));
             return new DeviceProjectionResult(
                 context.DeviceId, digest, resolved.UsedCrawlFallback, resolved.Sources.Count, blockCount, write,
@@ -159,17 +190,22 @@ public sealed class EngineeringGraphProjectionService
 
     /// <summary>
     /// Every worktree that registers this device, with <paramref name="context"/>'s worktree added:
-    /// the stored set plus this ingest's owner. Read before the projection's transaction, because
-    /// <c>graph_entities.worktree_id</c> alone would be last-writer-wins for a device id registered in
-    /// more than one worktree (AC-007).
+    /// the stored set plus this ingest's owner. Read from the facts the projection already loaded,
+    /// because <c>graph_entities.worktree_id</c> alone would be last-writer-wins for a device id
+    /// registered in more than one worktree (AC-007).
     /// </summary>
-    private IReadOnlyList<string> ProjectionWorktrees(DeviceContext context)
+    private static IReadOnlyList<string> ProjectionWorktrees(
+        IReadOnlyDictionary<string, IReadOnlyList<GraphProperty>> stored,
+        DeviceContext context)
     {
         var owners = new SortedSet<string>(StringComparer.Ordinal);
-        var stored = _graph.GetProperties(GraphEntityKind.Device, context.DeviceId)
-            .FirstOrDefault(property => string.Equals(
+        if (stored.TryGetValue(context.DeviceId, out var device))
+        {
+            var value = device.FirstOrDefault(property => string.Equals(
                 property.Name, DevicePropertyNames.ProjectionWorktrees, StringComparison.Ordinal));
-        foreach (var worktreeId in ParseWorktrees(stored?.Json)) owners.Add(worktreeId);
+            foreach (var worktreeId in ParseWorktrees(value?.Json)) owners.Add(worktreeId);
+        }
+
         owners.Add(context.WorktreeId);
         return owners.ToArray();
     }
@@ -197,12 +233,20 @@ public sealed class EngineeringGraphProjectionService
     internal static string PrimaryWorktree(IReadOnlyList<string> owners, string fallback) =>
         owners.Count == 0 ? fallback : owners[0];
 
-    private static IReadOnlyList<GraphNodePropertySet> BuildNodes(
+    /// <summary>One projection's two disjoint property writes: the manifest facts of every node, and
+    /// the parsed content of the objects whose exported content the projection re-derived.</summary>
+    private sealed record ProjectedNodes(
+        IReadOnlyList<GraphNodePropertySet> Facts,
+        IReadOnlyList<GraphNodePropertySet> Inspections);
+
+    private static ProjectedNodes BuildNodes(
         DeviceContext context,
         DeviceMetadata metadata,
         DeviceProjectionInput input,
         IReadOnlyList<string> owners,
-        string digest)
+        string digest,
+        IReadOnlyDictionary<string, IReadOnlyList<GraphProperty>> stored,
+        IReadOnlyDictionary<string, IReadOnlyList<GraphProperty>> storedInspections)
     {
         var owner = PrimaryWorktree(owners, context.WorktreeId);
         var sources = input.Sources;
@@ -212,16 +256,28 @@ public sealed class EngineeringGraphProjectionService
                 new GraphEntity(GraphEntityKind.Device, context.DeviceId, context.WorkbenchId, owner, context.DeviceId),
                 DeviceProperties(context, metadata, input, owners, digest)),
         };
+        var inspections = new List<GraphNodePropertySet>();
         foreach (var item in sources)
         {
-            nodes.Add(new GraphNodePropertySet(
-                new GraphEntity(GraphEntityKind.SourceObject, $"{context.DeviceId}:{item.Id}", context.WorkbenchId,
-                    owner, context.DeviceId, item.RelativePath),
-                SourceObjectProperties(item)));
+            var entity = new GraphEntity(GraphEntityKind.SourceObject, $"{context.DeviceId}:{item.Id}", context.WorkbenchId,
+                owner, context.DeviceId, item.RelativePath);
+            nodes.Add(new GraphNodePropertySet(entity, SourceObjectProperties(item)));
+            stored.TryGetValue(entity.EntityId, out var current);
+            storedInspections.TryGetValue(entity.EntityId, out var currentInspection);
+            if (SourceInspectionProjection.CanReuse(
+                    PropertyText(current, SourceObjectPropertyNames.ContentHash),
+                    item.ContentHash,
+                    currentInspection))
+                continue;
+            inspections.Add(new GraphNodePropertySet(
+                entity, SourceInspectionProjection.ReadFacts(context, item.RelativePath, IngestResolver)));
         }
 
-        return nodes;
+        return new ProjectedNodes(nodes, inspections);
     }
+
+    private static string? PropertyText(IReadOnlyList<GraphProperty>? properties, string name) =>
+        properties?.FirstOrDefault(property => string.Equals(property.Name, name, StringComparison.Ordinal))?.Text;
 
     private static IReadOnlyList<GraphProperty> DeviceProperties(
         DeviceContext context,
@@ -251,6 +307,7 @@ public sealed class EngineeringGraphProjectionService
             GraphProperty.JsonValue(DevicePropertyNames.Diagnostics, source, JsonSerializer.Serialize(input.Diagnostics)),
             GraphProperty.FlagValue(DevicePropertyNames.ProjectionInvalidated, source, false),
             GraphProperty.TextValue(DevicePropertyNames.ProjectionManifestDigest, source, digest),
+            GraphProperty.TextValue(DevicePropertyNames.ProjectionFactsVersion, source, CurrentFactsVersion),
             GraphProperty.JsonValue(DevicePropertyNames.ProjectionWorktrees, source,
                 JsonSerializer.Serialize(owners)),
         };

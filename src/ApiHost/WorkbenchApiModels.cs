@@ -1144,18 +1144,32 @@ public static class WorkbenchEndpoints
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware", (
             string workbenchId,
             string worktreeId,
-            WorkbenchApiState s) =>
-            Results.Ok(HardwareConfigurationReader.Read(s.WorktreeRoot(workbenchId, worktreeId))));
+            WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
+        {
+            // The hardware/AML subtree is a different export from the PLC source, and its facts are
+            // projected per worktree (ADR-0011 Phase 5): this route reads the graph and parses no AML.
+            using var facts = new HardwareGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadConfiguration(s.WorktreeRoot(workbenchId, worktreeId), worktreeId));
+        });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware/bom", (
             string workbenchId,
             string worktreeId,
-            WorkbenchApiState s) =>
-            Results.Ok(HardwareListReader.ReadBom(s.WorktreeRoot(workbenchId, worktreeId))));
+            WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
+        {
+            using var facts = new HardwareGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadBom(s.WorktreeRoot(workbenchId, worktreeId), worktreeId));
+        });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware/network", (
             string workbenchId,
             string worktreeId,
-            WorkbenchApiState s) =>
-            Results.Ok(HardwareListReader.ReadNetwork(s.WorktreeRoot(workbenchId, worktreeId))));
+            WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
+        {
+            using var facts = new HardwareGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadNetwork(s.WorktreeRoot(workbenchId, worktreeId), worktreeId));
+        });
         app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s, WorkbenchCoordinator coordinator, EngineeringGraphApiFactory graphs) =>
         {
             var workbench = s.Workbench(id);
@@ -1869,9 +1883,18 @@ public static class WorkbenchEndpoints
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/inspect", (
             string workbenchId, string worktreeId, string device, string relativePath,
-            WorkbenchApiState s, DeviceSourceResolver resolver, SourceObjectInspectorReader inspector) =>
+            WorkbenchApiState s, EngineeringGraphApiFactory graphs) =>
         {
-            try { return Results.Ok(inspector.Read(s.Device(workbenchId, worktreeId, device).Context, relativePath, resolver)); }
+            // The inspected content is projected at ingest (ADR-0011 Phase 5), so this route reads the
+            // graph and never opens the exported XML file: removing or corrupting it after the ingest
+            // changes nothing here. The response shape, and the status each inspection error maps to,
+            // are the ones the inspector produced.
+            try
+            {
+                var selected = s.Device(workbenchId, worktreeId, device);
+                using var facts = new DeviceSnapshotGraphScope(s, graphs, workbenchId);
+                return Results.Ok(facts.Reader.ReadInspection(selected.Context, selected.Metadata, relativePath));
+            }
             catch (SourceInspectionException exception) { return Results.UnprocessableEntity(new { error = exception.Code, message = exception.Message }); }
             catch (FileNotFoundException exception) { return Results.NotFound(new { error = "SOURCE_FILE_NOT_FOUND", message = exception.Message }); }
             catch (ArgumentException exception) { return Results.BadRequest(new { error = "SOURCE_PATH_INVALID", message = exception.Message }); }

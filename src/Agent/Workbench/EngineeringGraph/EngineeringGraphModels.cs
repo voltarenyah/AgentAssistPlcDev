@@ -88,6 +88,13 @@ public sealed record GraphPropertyWriteResult(int Inserted, int Updated, int Del
 public static class GraphPropertySource
 {
     public const string DeviceProjection = "device-projection";
+
+    /// <summary>The per-object parsed content of one exported source XML file, written by the device
+    /// projection's inspection ingest (ADR-0011 Phase 5).</summary>
+    public const string SourceInspection = "source-inspection";
+
+    /// <summary>The worktree's hardware/AML subtree facts, written by the hardware projection.</summary>
+    public const string HardwareProjection = "hardware-projection";
 }
 
 /// <summary>Property names of the <see cref="GraphEntityKind.Device"/> node.</summary>
@@ -138,6 +145,14 @@ public static class DevicePropertyNames
     /// worktree only removes it from this set, and the facts go with the last owner.
     /// </summary>
     public const string ProjectionWorktrees = "projection.worktrees";
+
+    /// <summary>
+    /// Which fact set the stored projection was written from. A database projected before the
+    /// inspection facts existed (Phase 5) has no value here, so the selection boundary re-projects it
+    /// once — the same on-demand rule as a device with no projection at all (ADR-0011) — instead of
+    /// serving an inspection read that has no facts to serve.
+    /// </summary>
+    public const string ProjectionFactsVersion = "projection.factsVersion";
 }
 
 /// <summary>What one reconciliation repair of one device observed (ADR-0012 item 4).</summary>
@@ -195,6 +210,67 @@ public static class SourceObjectPropertyNames
     /// the block crawl has always produced (AC-002). Giving it meaning is a later change; the
     /// manifest's <see cref="Status"/> and <see cref="ModifiedDate"/> are stored alongside it.</summary>
     public const string Modified = "block.modified";
+}
+
+/// <summary>
+/// Property names of the per-object parsed content the source inspector serves (ADR-0011 Phase 5).
+/// Every name carries the shared <see cref="Prefix"/>, so the projection's two writers own disjoint
+/// name spaces on one node: the device projection writes the object's manifest facts, this ingest
+/// writes the object's parsed XML content, and neither replaces the other's rows. The device read
+/// never selects these names, because the parsed content is large and no device route reads it.
+/// </summary>
+public static class SourceObjectInspectionPropertyNames
+{
+    public const string Prefix = "inspection.";
+
+    /// <summary>The shape version of the stored payload, so a future change to the parsed content
+    /// re-ingests instead of serving a payload the reader can no longer produce.</summary>
+    public const string Format = "inspection.format";
+
+    /// <summary><c>available</c> when the payload holds the object's parsed content, <c>error</c> when
+    /// the object's XML could not be inspected — the read then answers exactly as the inspector's own
+    /// exception did (AC-002).</summary>
+    public const string State = "inspection.state";
+
+    public const string ErrorCode = "inspection.errorCode";
+    public const string ErrorMessage = "inspection.errorMessage";
+
+    /// <summary>The serialized <c>SourceInspection</c> the route returns, field for field.</summary>
+    public const string Payload = "inspection.payload";
+}
+
+/// <summary>
+/// Property names of the <see cref="GraphEntityKind.Worktree"/> node the hardware projection writes.
+/// The hardware/AML export is a different subtree from the PLC source (`hardware/manifest.json` and
+/// `project.aml`), so it is projected per worktree and keeps its own layout: one node per worktree,
+/// one property per hardware view, and a digest over the files the views were derived from.
+/// </summary>
+public static class HardwarePropertyNames
+{
+    /// <summary>The hardware manifest's own state: <c>available</c>, <c>missing</c> or <c>invalid</c>,
+    /// exactly as the readers resolve it.</summary>
+    public const string State = "hardware.state";
+
+    public const string ExportedAt = "hardware.exportedAt";
+    public const string ProjectAmlPath = "hardware.projectAmlPath";
+
+    /// <summary>The digest of the files the three views were derived from, compared at the hardware
+    /// routes' boundary so an out-of-app change re-projects before it is served (ADR-0012).</summary>
+    public const string Digest = "hardware.digest";
+
+    /// <summary>Set by a write point that changed the hardware subtree; cleared by the projection.</summary>
+    public const string Invalidated = "hardware.invalidated";
+
+    public const string Format = "hardware.format";
+
+    /// <summary>The serialized <c>HardwareConfigurationView</c> the route returns.</summary>
+    public const string Configuration = "hardware.configuration";
+
+    /// <summary>The serialized <c>HardwareBomView</c> the route returns.</summary>
+    public const string Bom = "hardware.bom";
+
+    /// <summary>The serialized <c>HardwareNetworkView</c> the route returns.</summary>
+    public const string Network = "hardware.network";
 }
 
 public sealed class EngineeringGraphConstraintException : InvalidOperationException

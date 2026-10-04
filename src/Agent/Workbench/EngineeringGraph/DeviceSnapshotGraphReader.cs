@@ -13,6 +13,10 @@ public enum ProjectionBoundaryReason
     /// <summary>The graph holds no projection for the device.</summary>
     Missing,
 
+    /// <summary>The stored projection predates the current fact set — a database projected before the
+    /// per-object inspection facts existed — so it is re-projected once before it is served.</summary>
+    Outdated,
+
     /// <summary>A fact the caller already holds moved: workbench, worktree, device, PLC name,
     /// engineering identity, source root, or the knowledge state and its timestamp.</summary>
     Identity,
@@ -149,6 +153,69 @@ public sealed class DeviceSnapshotGraphReader
         return null;
     }
 
+    /// <summary>
+    /// The source inspector's payload, assembled from the graph (ADR-0011 Phase 5): the projection
+    /// ingests each object's parsed XML content as properties of its source-object node, and this read
+    /// returns exactly the shape <see cref="SourceObjectInspectorReader.Read"/> produced — with no
+    /// exported file touched, so removing or corrupting the XML after the ingest changes nothing. The
+    /// object's own inspection error is served as the exception the inspector raised, so the route's
+    /// existing status mapping (404 missing file, 422 malformed or unsupported XML) is preserved.
+    /// </summary>
+    /// <remarks>
+    /// The requested path is validated the same way the resolver validated it — which reads no file —
+    /// and the caller's 400 mapping for a rejected path is unchanged. A path the projection does not
+    /// list is reported as a missing source object rather than a silent empty payload.
+    /// </remarks>
+    public SourceInspection ReadInspection(DeviceContext context, DeviceMetadata metadata, string relativePath)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(metadata);
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        var resolved = WorkbenchPaths.ResolveRelative(context.SourceRoot, relativePath);
+        var listed = FindListedSourceObjectByPath(context, metadata, relativePath);
+        if (listed is null)
+            throw new FileNotFoundException(
+                $"The device's projection does not list a source object at '{relativePath}'.",
+                resolved);
+
+        var facts = _graph.GetProperties(GraphEntityKind.SourceObject, listed.Value.EntityId);
+        if (PropertyText(facts, SourceObjectInspectionPropertyNames.State) is not "available")
+            throw InspectionFailure(facts, relativePath);
+        var payload = PropertyJson(facts, SourceObjectInspectionPropertyNames.Payload)
+            ?? throw InspectionFailure(facts, relativePath);
+        try
+        {
+            return JsonSerializer.Deserialize<SourceInspection>(payload, InspectionJson)
+                ?? throw InspectionFailure(facts, relativePath);
+        }
+        catch (JsonException)
+        {
+            throw InspectionFailure(facts, relativePath);
+        }
+    }
+
+    /// <summary>The stored inspection outcome re-raised as the inspector's own exception, so the
+    /// route's existing catch blocks and status codes decide the response.</summary>
+    private static Exception InspectionFailure(IReadOnlyList<GraphProperty> facts, string relativePath)
+    {
+        var code = PropertyText(facts, SourceObjectInspectionPropertyNames.ErrorCode);
+        var message = PropertyText(facts, SourceObjectInspectionPropertyNames.ErrorMessage)
+            ?? $"The source object '{relativePath}' has no projected inspection content.";
+        return code switch
+        {
+            "SOURCE_FILE_NOT_FOUND" => new FileNotFoundException(message, relativePath),
+            "SOURCE_PATH_INVALID" => new WorkbenchPathException(message),
+            "SOURCE_INSPECTION_UNSUPPORTED" or "SOURCE_INSPECTION_XML_INVALID" => new SourceInspectionException(code, message),
+            // An unreadable XML file was an unhandled read failure before the projection existed, and
+            // it stays one: the graph records it, and the route does not invent a status for it.
+            _ => new IOException(message),
+        };
+    }
+
+    /// <summary>The same JSON options the projection serialized the payload with; the response body is
+    /// then produced from the same record type the reader used to return.</summary>
+    private static readonly JsonSerializerOptions InspectionJson = new(JsonSerializerDefaults.Web);
+
     private static string NormalizePath(string path) => path.Replace('\\', '/').TrimStart('/');
 
     /// <summary>
@@ -214,6 +281,13 @@ public sealed class DeviceSnapshotGraphReader
             return ProjectionBoundaryReason.Identity;
         if (PropertyFlag(stored, DevicePropertyNames.ProjectionInvalidated) == true)
             return ProjectionBoundaryReason.Invalidated;
+        // A projection written before the inspection facts existed carries no fact-set version, so it
+        // is re-projected once — before the digest read, because it needs no export read to decide.
+        if (!string.Equals(
+                PropertyText(stored, DevicePropertyNames.ProjectionFactsVersion),
+                EngineeringGraphProjectionService.CurrentFactsVersion,
+                StringComparison.Ordinal))
+            return ProjectionBoundaryReason.Outdated;
         var digest = PropertyText(stored, DevicePropertyNames.ProjectionManifestDigest);
         if (string.IsNullOrEmpty(digest))
             return ProjectionBoundaryReason.Missing;

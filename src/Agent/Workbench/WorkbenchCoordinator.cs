@@ -2109,12 +2109,18 @@ public sealed class WorkbenchCoordinator
                         new { repoPath = device.WorktreeRoot, paths, message = "hardware: reload configuration" },
                         cancellationToken).ConfigureAwait(false);
 
+                    // A hardware commit is a commit path too (AC-006): it records a git_commit node and
+                    // invalidates the facts it changed, exactly like every other commit path.
+                    var indexingWarning = IndexHardwareCommit(device, commit.Sha, paths);
                     return new HardwareConfigurationReloadResult(
                         root,
                         results.Count(result => result.Success),
                         results.Count(result => result.Success && result.Scope == "device"),
                         commit.Sha,
-                        warnings);
+                        warnings)
+                    {
+                        EvidenceWarnings = indexingWarning is null ? null : new[] { indexingWarning },
+                    };
                 },
                 token).ConfigureAwait(false);
         }
@@ -2126,9 +2132,7 @@ public sealed class WorkbenchCoordinator
         var evidenceWarning = await TryRecordManagedSourceEvidenceForDeviceCommitAsync(
                 device, result.CommitSha, token)
             .ConfigureAwait(false);
-        return evidenceWarning is null
-            ? result
-            : result with { EvidenceWarnings = new[] { evidenceWarning } };
+        return result with { EvidenceWarnings = MergeWarnings(result.EvidenceWarnings, evidenceWarning) };
     }
 
     public async Task<HardwareConfigurationCompareResult> CompareHardwareAsync(
@@ -2250,10 +2254,11 @@ public sealed class WorkbenchCoordinator
                 var evidenceWarning = await TryRecordManagedSourceEvidenceForDeviceCommitAsync(
                         device, commit.Sha, cancellationToken)
                     .ConfigureAwait(false);
-                return evidenceWarning is null
-                    ? new HardwareConfigurationOverwriteResult(root, stagedFiles.Length, commit.Sha)
-                    : new HardwareConfigurationOverwriteResult(
-                        root, stagedFiles.Length, commit.Sha, new[] { evidenceWarning });
+                // The same commit evidence every other commit path records (AC-006).
+                var indexingWarning = IndexHardwareCommit(device, commit.Sha, paths);
+                var warnings = MergeWarnings(
+                    indexingWarning is null ? null : new[] { indexingWarning }, evidenceWarning);
+                return new HardwareConfigurationOverwriteResult(root, stagedFiles.Length, commit.Sha, warnings);
             },
             token);
 
@@ -4232,6 +4237,25 @@ public sealed class WorkbenchCoordinator
         {
             return $"Commit '{sha}' succeeded, but evidence indexing was not recorded: {exception.Message}";
         }
+    }
+
+    /// <summary>
+    /// A hardware commit is a commit path like any other (AC-006): its <c>git_commit</c> node and its
+    /// commit evidence are recorded with the same best-effort policy as every other commit, and the
+    /// worktree-level invalidation that comes with it also marks the hardware subtree for re-projection
+    /// (the commit is exactly the write point that changed it). Returns a warning, or null.
+    /// </summary>
+    private string? IndexHardwareCommit(DeviceContext device, string sha, IReadOnlyList<string> paths) =>
+        IndexBaselineEvidence(device, sha, paths, svnRevision: null);
+
+    /// <summary>The evidence warnings of one operation, in the order they were observed, or null when
+    /// there is none — the response shape carries no empty list.</summary>
+    private static IReadOnlyList<string>? MergeWarnings(IReadOnlyList<string>? first, string? second)
+    {
+        var warnings = new List<string>();
+        if (first is not null) warnings.AddRange(first);
+        if (second is not null) warnings.Add(second);
+        return warnings.Count == 0 ? null : warnings;
     }
 
     /// <summary>
