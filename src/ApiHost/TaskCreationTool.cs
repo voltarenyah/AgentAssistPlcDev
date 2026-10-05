@@ -46,8 +46,9 @@ internal sealed class TaskCreationTool(
         + "networks, tags and tool results that show the problem) and proposedSolutions (the candidate "
         + "fixes you can defend). Never invent evidence: state what a tool result or the source showed, "
         + "and name the block and network ids you used. Omit a section the conversation has nothing for. "
-        + "Do not ask the user to restate facts the conversation already established. intent is the goal "
-        + "and expectedResult is the completion criterion; both are required.";
+        + "Do not ask the user to restate facts the conversation already established. type must be "
+        + "exactly Issue (a defect in the code), Improvement, or Feature — not bug, defect or fix. "
+        + "intent is the goal and expectedResult is the completion criterion; both are required.";
 
     public static JsonElement InputSchema { get; } = JsonSerializer.SerializeToElement(new
     {
@@ -55,7 +56,11 @@ internal sealed class TaskCreationTool(
         properties = new
         {
             title = new { type = "string" },
-            type = new { type = "string" },
+            // The allowed values travel in the schema, not only in this class's parser: the agent loop
+            // validates every call against the schema *before* dispatching it, so a synonym the model
+            // reaches for naturally (a live turn sent "bug") is refused with a correctable argument
+            // error instead of parking the turn on an approval card and failing after the user approves.
+            type = new { type = "string", @enum = new[] { "Issue", "Improvement", "Feature" } },
             intent = new { type = "string" },
             expectedResult = new { type = "string" },
             background = new { type = "string" },

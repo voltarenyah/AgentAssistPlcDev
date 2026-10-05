@@ -79,6 +79,20 @@ public sealed class TaskCreationToolTests : IDisposable
     }
 
     [Fact]
+    public void TheSchemaDeclaresTheAllowedTaskTypesSoASynonymIsRefusedBeforeTheApprovalCard()
+    {
+        var declared = TaskCreationTool.InputSchema
+            .GetProperty("properties").GetProperty("type").GetProperty("enum")
+            .EnumerateArray().Select(value => value.GetString()).ToArray();
+
+        // A live turn sent type "bug": the tool then refused it only after the user had approved the
+        // card, so the turn reported a failure on a card the user had just accepted. The agent loop
+        // validates every call against this schema before it dispatches it, so the allowed values have
+        // to be declared here and not only in this class's parser.
+        Assert.Equal(new[] { "Issue", "Improvement", "Feature" }, declared);
+    }
+
+    [Fact]
     public async Task AnUnknownTaskTypeIsRefusedBeforeAnythingIsCreated()
     {
         var fixture = TaskCreationFixture.Create(root);
