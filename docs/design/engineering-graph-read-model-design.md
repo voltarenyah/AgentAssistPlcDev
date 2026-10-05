@@ -36,6 +36,11 @@
   - **The block `modified` flag is not changed either.** The projection stores the manifest's `status`
     and `modifiedDate` accurately as properties, while the value the page shows stays exactly what it is
     today (AC-002); giving the "modified blocks" summary meaning is a later, separate change.
+  - **The eager per-object inspection ingest stays** (user-decided, 2026-10-04): every object's parsed
+    payload is stored in the graph so the source inspector's read path parses no XML at all. The
+    one-time cost is accepted — about 4 s and +27.7 MB for a 1,314-object device at the first
+    projection, and again after a full re-export. A lazy ingest (which would leave a first open reading
+    XML) and a compressed payload are deliberately not taken.
   - Git, SVN and TIA live-session reads keep their current sources; they are not facts about the exported
     source tree.
   - No filesystem watcher and no timer (the only hosted service in the codebase starts the MCP child
