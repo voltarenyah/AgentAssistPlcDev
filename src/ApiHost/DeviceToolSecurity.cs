@@ -250,8 +250,10 @@ public sealed class PendingToolActions
         pending[id] = entry;
         expiry.Token.Register(() =>
         {
+            // Expired, not Deny: the agent and the user must be able to tell "you did not answer in
+            // time" from "you rejected this", because the two produce the same blocked call otherwise.
             if (pending.TryRemove(new(id, entry)))
-                _ = entry.Action(ToolConfirmation.Deny, CancellationToken.None);
+                _ = entry.Action(ToolConfirmation.Expired, CancellationToken.None);
         });
         return id;
     }
@@ -301,7 +303,9 @@ public sealed class SandboxedToolExecutor(
         {
             var id = pending.Add(DeviceContextIdentity.Key(device), requester, async (decision, executionToken) =>
             {
+                // Fail closed on every outcome that is not an approval, including an expired card.
                 if (decision == ToolConfirmation.Deny) return new { status = "denied" };
+                if (decision == ToolConfirmation.Expired) return new { status = "expired" };
                 return await gateway.For(tool).CallAsync<JsonElement>(tool, args, executionToken);
             });
             return new { _requiresConfirmation = true, _confirmationId = id, _toolName = tool };

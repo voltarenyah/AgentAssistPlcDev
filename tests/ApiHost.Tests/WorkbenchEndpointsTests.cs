@@ -2401,6 +2401,28 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task AnExpiredConfirmationNeverRunsTheDestructiveTool()
+    {
+        var caller = new RecordingToolCaller();
+        var gateway = new ApiMcpGateway(caller, caller, caller, caller);
+        var pending = new PendingToolActions();
+        var executor = new SandboxedToolExecutor(
+            new SandboxPolicy(),
+            new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { })),
+            gateway,
+            pending);
+        var requested = await executor.RequestAsync("vc_restore", new Dictionary<string, object?>(), Context(), "requester", CancellationToken.None);
+        var id = requested!.GetType().GetProperty("_confirmationId")!.GetValue(requested)!.ToString()!;
+
+        // Expired is what the pending action receives when the card's deadline passes: it must fail
+        // closed like a refusal, and it must not be reported as one.
+        var expired = await pending.ResolveAsync(id, ToolConfirmation.Expired, DeviceContextIdentity.Key(Context()), "requester");
+
+        Assert.Equal("expired", expired!.GetType().GetProperty("status")!.GetValue(expired)!.ToString());
+        Assert.Empty(caller.Calls);
+    }
+
+    [Fact]
     public void ChatIdentitySeparatesSameDeviceIdAcrossWorktrees()
     {
         var first = Context();
@@ -2641,17 +2663,22 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task ExpiryActivelyDeniesWaitingConfirmation()
+    public async Task ExpiryActivelyReleasesTheWaitingConfirmationAsExpired()
     {
         var pending = new PendingToolActions(TimeProvider.System, TimeSpan.FromMilliseconds(30));
         var released = new TaskCompletionSource<ToolConfirmation>(TaskCreationOptions.RunContinuationsAsynchronously);
-        pending.Add("context", "requester", (decision, _) =>
+        var id = pending.Add("context", "requester", (decision, _) =>
         {
             released.TrySetResult(decision);
             return Task.FromResult<object?>(null);
         });
 
-        Assert.Equal(ToolConfirmation.Deny, await released.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        // The waiting caller is released, and with the reason it actually has: a deadline, not a
+        // refusal. Reporting a timeout as "the user denied it" once sent an investigation after a
+        // denial nobody made, and it tells the model to stop asking about a call nobody rejected.
+        Assert.Equal(ToolConfirmation.Expired, await released.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            pending.ResolveAsync(id, ToolConfirmation.AllowOnce, "context", "requester"));
     }
 
     [Fact]

@@ -6,6 +6,10 @@ public enum ToolConfirmation
     Deny,
     AllowOnce,
     AllowSession,
+
+    /// <summary>The card was never answered and its deadline passed. It is a distinct outcome from
+    /// <see cref="Deny"/> so a timeout is never reported as the user having rejected the call.</summary>
+    Expired,
 }
 
 /// <summary>What the user is asked to approve before a destructive tool runs.</summary>
