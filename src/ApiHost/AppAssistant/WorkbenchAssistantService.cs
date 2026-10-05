@@ -209,6 +209,26 @@ internal sealed class WorkbenchAssistantService(
             properties = required.Concat(optional).ToDictionary(name => name, _ => new { type = "string" }, StringComparer.Ordinal),
             required,
         });
+        // The allowed task types travel in the schema: the agent loop validates every call against it
+        // before dispatch, so a synonym is refused as a correctable argument error instead of parking
+        // the turn on an approval card and failing after the user has approved it (the device chat's
+        // sibling tool failed exactly that way with a live "bug").
+        static JsonElement TaskCreationSchema() => JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new
+            {
+                workbenchId = new { type = "string" },
+                worktreeId = new { type = "string" },
+                deviceId = new { type = "string" },
+                title = new { type = "string" },
+                type = new { type = "string", @enum = new[] { "Issue", "Improvement", "Feature" } },
+                intent = new { type = "string" },
+                expectedResult = new { type = "string" },
+                description = new { type = "string" },
+            },
+            required = new[] { "workbenchId", "worktreeId", "deviceId", "title", "type", "intent", "expectedResult" },
+        });
         return
         [
             new("assistant_list_workbenches", "List available workbench projects and their IDs.", Schema(), caller, "workbench"),
@@ -222,7 +242,7 @@ internal sealed class WorkbenchAssistantService(
             new("assistant_present_choices", "Show the user selectable answer options for one necessary question. Use option values from real tool results where applicable.", JsonSerializer.SerializeToElement(new { type = "object", properties = new { question = new { type = "string" }, options = new { type = "array", items = new { type = "object", properties = new { value = new { type = "string" }, label = new { type = "string" }, description = new { type = "string" } }, required = new[] { "value", "label" } } } }, required = new[] { "question", "options" } }), caller, "workbench"),
             new("assistant_create_workbench", "Create a managed workbench with its initial master worktree from exactly one open TIA session or existing .ap17 file. Requires user approval.", Fields(["name"], "rootPath", "engineeringSessionId", "engineeringProjectPath"), caller, "workbench"),
             new("assistant_create_worktree", "Create a managed linked worktree from an eligible native savepoint or Git start point. Requires user approval.", Fields(["workbenchId", "name", "branch"], "startPoint", "sourceWorktreeId", "sourceGitSha"), caller, "workbench"),
-            new("assistant_create_task", "Create a device-bound worktree task with a goal and expected result. Requires user approval.", Fields(["workbenchId", "worktreeId", "deviceId", "title", "type", "intent", "expectedResult"], "description"), caller, "workbench"),
+            new("assistant_create_task", "Create a device-bound worktree task with a goal and expected result. Requires user approval. type must be exactly Issue (a defect in the code), Improvement, or Feature.", TaskCreationSchema(), caller, "workbench"),
         ];
     }
 

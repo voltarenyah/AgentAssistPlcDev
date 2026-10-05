@@ -55,14 +55,16 @@ internal sealed class TaskCreationTool(
         type = "object",
         properties = new
         {
-            title = new { type = "string" },
+            title = new { type = "string", minLength = 1 },
             // The allowed values travel in the schema, not only in this class's parser: the agent loop
             // validates every call against the schema *before* dispatching it, so a synonym the model
             // reaches for naturally (a live turn sent "bug") is refused with a correctable argument
             // error instead of parking the turn on an approval card and failing after the user approves.
             type = new { type = "string", @enum = new[] { "Issue", "Improvement", "Feature" } },
-            intent = new { type = "string" },
-            expectedResult = new { type = "string" },
+            // minLength keeps the empty case on the same side of the approval card as the enum: an
+            // empty goal would otherwise be approved and then refused by this class.
+            intent = new { type = "string", minLength = 1 },
+            expectedResult = new { type = "string", minLength = 1 },
             background = new { type = "string" },
             evidence = new { type = "string" },
             proposedSolutions = new { type = "string" },

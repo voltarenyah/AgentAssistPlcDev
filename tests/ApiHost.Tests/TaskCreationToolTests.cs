@@ -79,10 +79,11 @@ public sealed class TaskCreationToolTests : IDisposable
     }
 
     [Fact]
-    public void TheSchemaDeclaresTheAllowedTaskTypesSoASynonymIsRefusedBeforeTheApprovalCard()
+    public void TheSchemaRefusesInvalidTaskTypesAndEmptyRequiredFieldsBeforeTheApprovalCard()
     {
-        var declared = TaskCreationTool.InputSchema
-            .GetProperty("properties").GetProperty("type").GetProperty("enum")
+        var schema = TaskCreationTool.InputSchema;
+        var properties = schema.GetProperty("properties");
+        var declared = properties.GetProperty("type").GetProperty("enum")
             .EnumerateArray().Select(value => value.GetString()).ToArray();
 
         // A live turn sent type "bug": the tool then refused it only after the user had approved the
@@ -90,6 +91,56 @@ public sealed class TaskCreationToolTests : IDisposable
         // validates every call against this schema before it dispatches it, so the allowed values have
         // to be declared here and not only in this class's parser.
         Assert.Equal(new[] { "Issue", "Improvement", "Feature" }, declared);
+
+        // The same applies to an empty required value, which the parser's non-blank check would
+        // otherwise refuse on the far side of the card.
+        foreach (var name in new[] { "title", "intent", "expectedResult" })
+        {
+            Assert.Equal(1, properties.GetProperty(name).GetProperty("minLength").GetInt32());
+        }
+    }
+
+    [Fact]
+    public async Task ARetryAfterAnApprovedCallFailedRaisesItsOwnCardInsteadOfInheritingTheDecision()
+    {
+        var fixture = TaskCreationFixture.Create(root);
+        var pending = new PendingToolActions();
+        var cards = new List<string>();
+        var sandbox = new AgentSandbox(new SandboxPolicy(), 20, _ =>
+        {
+            var completion = new TaskCompletionSource<ToolConfirmation>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var id = pending.Add("ctx", "requester", (decision, _) =>
+            {
+                completion.TrySetResult(decision);
+                return Task.FromResult<object?>(null);
+            });
+            cards.Add(id);
+            return completion.Task;
+        });
+        // A whitespace-only goal passes the schema's presence check, so the tool is what refuses it —
+        // the live sequence that raised the question of whether the agent's retry could be auto-denied.
+        const string blank = """{"title":"Something","type":"Issue","intent":"   ","expectedResult":"result"}""";
+        const string corrected = """{"title":"Add a guard","type":"Issue","intent":"goal","expectedResult":"result"}""";
+
+        var first = sandbox.CheckAsync(new ChatToolCall("call-1", TaskCreationTool.ToolName, blank));
+        Assert.Single(cards);
+        await pending.ResolveAsync(cards[0], ToolConfirmation.AllowOnce, "ctx", "requester");
+        Assert.Null(await first);
+        var error = await Assert.ThrowsAsync<ToolCallException>(() => fixture.InvokeAsync(blank));
+        Assert.Equal("TOOL_ARGUMENT_INVALID", error.Code);
+
+        var retry = sandbox.CheckAsync(new ChatToolCall("call-2", TaskCreationTool.ToolName, corrected));
+        // The retry raises its own card and waits for it: the spent decision is not inherited, and
+        // nothing auto-denies it.
+        Assert.Equal(2, cards.Count);
+        Assert.False(retry.IsCompleted);
+        await pending.ResolveAsync(cards[1], ToolConfirmation.AllowOnce, "ctx", "requester");
+        Assert.Null(await retry);
+
+        await fixture.InvokeAsync(corrected);
+        var tasks = fixture.ReadTasks();
+        Assert.Equal(2, tasks.Count); // the fixture's own task plus the corrected creation
+        Assert.Contains(tasks, task => task.Title == "Add a guard");
     }
 
     [Fact]

@@ -258,6 +258,28 @@ public sealed class AppAssistantChatEndpointTests
     }
 
     [Fact]
+    public async Task AssistantDeclaresTheAllowedTaskTypesInTheCreateTaskSchema()
+    {
+        var model = new AssistantModelHandler();
+        await using var factory = FactoryWithModel(model);
+        using var client = factory.CreateClient();
+
+        await client.PostAsJsonAsync("/api/app-assistant/chat", new { message = "hello" });
+
+        // The loop validates a tool call against the schema that call was advertised with, so an
+        // invalid type is refused before the approval card rather than after the user approves it —
+        // which is exactly how the device chat's sibling tool failed a live turn with type "bug".
+        using var request = JsonDocument.Parse(Assert.Single(model.RequestBodies));
+        var createTask = request.RootElement.GetProperty("tools").EnumerateArray()
+            .Select(tool => tool.GetProperty("function"))
+            .Single(function => function.GetProperty("name").GetString() == "assistant_create_task");
+        var declared = createTask.GetProperty("parameters").GetProperty("properties").GetProperty("type")
+            .GetProperty("enum").EnumerateArray().Select(value => value.GetString()).ToArray();
+
+        Assert.Equal(new[] { "Issue", "Improvement", "Feature" }, declared);
+    }
+
+    [Fact]
     public async Task AssistantCreatesADeviceTaskOnlyAfterApproval()
     {
         const string worktreeId = "wt-1";
