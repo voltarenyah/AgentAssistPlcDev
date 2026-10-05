@@ -57,6 +57,8 @@ stays lighter than `docs/plans/` and `docs/design/`.
 | [005](005-agent-stages-source-objects-with-approval.md) | Agent stages source objects for the current task through an approval card | done | 002 | `src/ApiHost/TaskSourceStagingTool.cs`, `studio/src/studio/workbench/TaskSourceObjectsSection.tsx` |
 | [006](006-remove-right-dock-ai-sessions-page.md) | Remove the right dock's AI sessions page and move its operations into the navigator's conversations | done | 001 | `studio/src/studio/chat/SessionDock.tsx`, `studio/src/studio/workbench/WorkbenchNavigator.tsx` |
 | [007](007-navigator-shared-row-treatment.md) | Left navigator: one shared row treatment — uniform selection, always-gray icons, aligned geometry | done | — | `studio/src/studio/workbench/WorkbenchNavigator.tsx`, `docs/ui-spec/studio-information-architecture-ui-spec.md` |
+| [008](008-agent-finds-the-source-object-id-it-stages.md) | The agent can find the source object id it stages, and a wrong id names the candidates | done | 005 | `src/ApiHost/TaskSourceStagingTool.cs`, `src/ApiHost/TaskSourceObjectListTool.cs` |
+| [009](009-tool-result-compaction-keeps-shape.md) | An oversized tool result keeps its shape instead of collapsing to field names | pending | — | `src/Agent/Chat/ToolResultCompactor.cs` |
 
 Items 002–005 implement the missing execution layer of an already accepted design: task-scoped
 source evidence (`docs/adr/ADR-0003-task-scoped-source-evidence.md`,
@@ -76,6 +78,17 @@ one row treatment, so the current row is marked by the same background everywher
 colour with state, and the rows share one geometry and row rhythm. It is the queue's only item whose
 proof is an equality between rendered class sets rather than a behaviour, and its only other file is the
 information-architecture UI-spec row that currently claims the task surface's row chrome for `SESSIONS`.
+
+Item 008 closes 005's recorded residual risk: a live conversation showed the model could not obtain a
+`sourceObjectId` at all (it guessed a knowledge-graph node id, then the pre-fixed form the error
+suggested), because the only tool that exposes a stable id needs a live TIA session and a whole-project
+snapshot. It adds the missing read path and makes the staging tool's own id resolution report its
+candidates instead of letting the graph's constraint exception lose its code.
+
+Item 009 is the other half of that same conversation's failure, and is independent of it: the one
+snapshot that could have shown the id was compressed to a list of field names, which is what the
+compactor does to any result whose bulk is nested rather than a top-level string or array. 008 removes
+the need for that particular call; 009 fixes the compactor for every tool.
 
 ## Known baseline in this environment
 
