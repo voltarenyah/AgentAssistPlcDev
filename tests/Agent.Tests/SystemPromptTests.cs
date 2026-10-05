@@ -129,6 +129,19 @@ public sealed class SystemPromptTests
     }
 
     [Fact]
+    public void PromptMakesTheCurrentToolListBeatAStaleClaimFromAnEarlierTurn()
+    {
+        var prompt = SystemPrompt.Build();
+
+        // A live conversation with the assistant's own older "I have no task-creation tool" answer in
+        // its history refused to call create_task after the tool had shipped: the earlier statement won
+        // over both the tool list and this prompt's create_task rule, so the rule has to say which of
+        // the two is authoritative.
+        Assert.Contains("Your tool list arrives with every request and is authoritative", prompt);
+        Assert.Contains("Check the current tool list again before reporting a tool as unavailable", prompt);
+    }
+
+    [Fact]
     public void ContextMessageCarriesMarkerAndBody()
     {
         var message = ChatMessage.User(SystemPrompt.ContextMessage("Knowledge DB: C:\\db\\k.db"));
