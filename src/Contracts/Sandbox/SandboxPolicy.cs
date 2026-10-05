@@ -117,6 +117,9 @@ public sealed class SandboxPolicy
             // Workbench — the agent proposes a task stage mutation; the write itself is the
             // coordinator's guarded stage path, so it is destructive (never a silent write).
             ["stage_task_source_object"] = SandboxTier.Destructive,
+            // Workbench — the device chat's agent records a finding as a new worktree task. It creates
+            // engineering state the user did not create by hand, so it needs explicit approval.
+            ["create_task"] = SandboxTier.Destructive,
         };
 
     public IReadOnlyDictionary<string, SandboxTier> Tiers => tiers;

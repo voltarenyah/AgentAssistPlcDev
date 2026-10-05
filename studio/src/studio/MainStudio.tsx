@@ -1558,6 +1558,15 @@ export default function MainStudio() {
       const session = await api.loadChatSession(sessionId)
       setChatTabs(previous => openTab(previous, session))
       await refreshChatSessions()
+      // The knowledge agent can record a finding it established in the conversation as a new worktree
+      // task (create_task). Re-reading the list the navigator's TASKS section shows is what makes an
+      // approved task appear without the user re-selecting the worktree; the conversation names the
+      // worktree that task belongs to, which is not necessarily the one currently selected. A failed
+      // auxiliary read must not fail the turn.
+      const { workbenchId, worktreeId } = session.header
+      if (workbenchId && worktreeId) {
+        await refreshWorktreeTasks(workbenchId, worktreeId).catch(() => undefined)
+      }
     } catch (error) {
       // Aborting the fetch also cancels the server-side generation via the request token;
       // keep whatever partial text streamed in and mark the turn as stopped.

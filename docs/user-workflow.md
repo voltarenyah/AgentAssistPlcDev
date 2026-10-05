@@ -69,9 +69,10 @@ The imported origin is bootstrap-only thereafter; later operations use the manag
 
 1. The user selects a device and reads its identity, source counts, and knowledge state.
 2. The user browses source objects, networks, tags, or cross-references and asks grounded PLC questions against that device graph.
-3. After an edit batch, the user chooses **Update knowledge** before relying on graph context. The state clears from `stale` only after validated applied hashes. A full rebuild is for a full source-tree rebuild.
+3. When those questions establish a defect, a risk, or an improvement, the user can ask the agent to record it as a task. The agent proposes a task bound to the conversation's worktree and device, carrying what the conversation established — background, evidence (the blocks, networks, and tags it used), and the solutions under consideration — and records it only after the user approves the card. The brief is the task's description; the created task appears in the navigator's `TASKS` section without re-selecting the worktree. The agent does not send the user to the task dialog.
+4. After an edit batch, the user chooses **Update knowledge** before relying on graph context. The state clears from `stale` only after validated applied hashes. A full rebuild is for a full source-tree rebuild.
 
-**Design acceptance:** knowledge status and last-update time are visible. The UI directs one update after an edit batch, not one per edit. Knowledge is never shared across devices or worktrees.
+**Design acceptance:** knowledge status and last-update time are visible. A finding recorded from the device chat creates a device-bound worktree task whose brief carries the conversation's background, evidence, and proposed solutions, and nothing is created when the user rejects the card. The UI directs one update after an edit batch, not one per edit. Knowledge is never shared across devices or worktrees.
 
 ### 5. Compare with live TIA
 
@@ -116,6 +117,7 @@ Use `./launch.ps1`, wait for health checks, then verify `http://localhost:5173/`
 | Catalog orientation | Load app; select workbench/worktree/target | Navigator reveals one level at a time and preserves Workbench → worktree → target context, including the hardware row and its own task list; selected surface renders. |
 | Assistant read-only | Open assistant with no worktree; wait for orientation; ask for history/todos | No error boundary or worktree-id error; worktrees listed; answer matches request. |
 | Assistant mutation gate | Request worktree creation; choose base if prompted | Current **Approve**/**Reject** card renders; smoke test does not approve it. |
+| Task from a device conversation | Ask the device chat to record a finding it established as a task; review the brief on the card | The card names `create_task` with the full brief; approving creates a device-bound worktree task whose description carries the sections, and the `TASKS` section lists it without re-selection; rejecting creates nothing. |
 | Knowledge freshness | Open stale/missing/current device fixtures and update through supported path | State/timestamp and stale guidance visible; success clears stale only after API success. |
 | TIA comparison | Trigger source, hardware, safety, and clean fixtures | Inline categories are clear; only supported rows selectable; nothing applies before selection and approval. |
 | Commit/savepoint boundary | Use fixtures for commits, accepted TIA paths, savepoints | Ordinary commit does not claim native creation; savepoint requires description and exposes result. |

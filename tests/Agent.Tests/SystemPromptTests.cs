@@ -100,6 +100,20 @@ public sealed class SystemPromptTests
     }
 
     [Fact]
+    public void PromptExplainsRecordingAFindingAsATaskAndItsApproval()
+    {
+        var prompt = SystemPrompt.Build();
+
+        Assert.Contains("create_task", prompt);
+        Assert.Contains("bound to the selected device", prompt);
+        Assert.Contains("proposedSolutions", prompt);
+        Assert.Contains("the approval card shows the whole brief", prompt);
+        // An approved card is the only proof the task exists; a denial must not be reported as a task.
+        Assert.Contains("do not say the task exists until the tool result names its id", prompt);
+        Assert.DoesNotContain("create a task without approval", prompt);
+    }
+
+    [Fact]
     public void ContextMessageCarriesMarkerAndBody()
     {
         var message = ChatMessage.User(SystemPrompt.ContextMessage("Knowledge DB: C:\\db\\k.db"));

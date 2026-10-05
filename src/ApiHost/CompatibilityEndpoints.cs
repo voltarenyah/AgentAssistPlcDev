@@ -759,7 +759,8 @@ internal sealed class ApiChatService(
     EngineeringGraphApiFactory graphs,
     WorkbenchApiState workbenches,
     ActiveTaskContextService activeTasks,
-    WorkbenchCoordinator coordinator)
+    WorkbenchCoordinator coordinator,
+    WorktreeTaskStore tasks)
 {
     public const int DefaultContextWindow = 128_000;
 
@@ -942,13 +943,17 @@ internal sealed class ApiChatService(
                 ? restored
                 : SessionManager.CreateNewSession(device, Settings(configuration, state), null);
             var discovered = await McpToolCatalog.BuildAsync(runtime.Host, token);
-            // The staged-source-object tool is in-process (it needs the workbench graph and the
-            // guarded stage path), so it is added to the discovered MCP tools rather than discovered.
+            // The staged-source-object and task-creation tools are in-process (they need the workbench
+            // graph, the guarded stage path and the managed task write), so they are added to the
+            // discovered MCP tools rather than discovered.
             var catalog = new McpToolCatalog(discovered.Tools.Select(spec => spec with
             {
                 Caller = new BoundMcpCaller(spec.Caller, binder, device),
             }).Append(TaskSourceStagingTool.CreateSpec(
                 new TaskSourceStagingTool(workbenches, graphs, activeTasks, coordinator),
+                () => device))
+              .Append(TaskCreationTool.CreateSpec(
+                new TaskCreationTool(workbenches, graphs, tasks),
                 () => device)));
             var sandbox = new AgentSandbox(policy, 20, request =>
             {

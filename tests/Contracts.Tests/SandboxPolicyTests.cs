@@ -60,6 +60,7 @@ public sealed class SandboxPolicyTests
     [InlineData("import_hardware_configuration")]
     [InlineData("delete_block")]
     [InlineData("vc_restore")]
+    [InlineData("create_task")]
     public void DestructiveToolsClassifyAsDestructive(string tool)
     {
         Assert.Equal(SandboxTier.Destructive, new SandboxPolicy().Classify(tool));
