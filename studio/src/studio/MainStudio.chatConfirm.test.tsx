@@ -164,6 +164,25 @@ describe('MainStudio chat destructive-tool confirmation', () => {
     expect(host.querySelector('[data-app-assistant-panel]')?.getAttribute('data-expanded')).toBe('true')
   })
 
+  it('lays the compact Assistant composer out against the header slot, not the viewport', async () => {
+    // The composer is centred in the window, so a viewport-width formula (100vw - Npx) let it sit on
+    // top of the header's own controls on narrow windows. It is laid out against the header's centre
+    // slot instead, so those controls bound its width. That requires the slot to be the composer's
+    // positioning context and the composer to stop being viewport-fixed; the overlap itself is only
+    // observable in a browser with a layout engine, which is where it was measured.
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    const composer = host.querySelector<HTMLElement>('[data-app-assistant]')!
+    const slot = composer.closest<HTMLElement>('[data-assistant-slot]')
+    expect(slot).not.toBeNull()
+    expect(slot!.className).toContain('relative')
+
+    const panel = host.querySelector<HTMLElement>('[data-app-assistant-panel]')!
+    expect(panel.className).toContain('absolute')
+    expect(panel.className).not.toContain('fixed')
+  })
+
   it('opens the Workbench Assistant from home before a project is selected', async () => {
     vi.mocked(api.bootstrapAppAssistant).mockResolvedValueOnce([
       { kind: 'state', data: { runtimeSnapshot: null, sessionId: 'assistant-session' } },
@@ -236,7 +255,8 @@ describe('MainStudio chat destructive-tool confirmation', () => {
 
     clickText(host, 'AI chat')
     await act(async () => {})
-    clickAriaLabel(host, 'New session')
+    // The conversation is started from the chat surface: the right dock's sessions page is retired.
+    clickAriaLabel(host, 'Create new chat session')
     await act(async () => {})
     await act(async () => {})
 

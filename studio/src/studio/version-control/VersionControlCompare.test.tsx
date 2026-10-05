@@ -26,7 +26,7 @@ const comparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): ap
   ...overrides,
 })
 
-const render = async (props: { signal?: number; verifyHardware?: boolean; commitMessage?: string; branch?: string; selectionResetSignal?: number; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string; onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void; operationStatus?: api.OperationStatus | null; onComparisonBusyChanged?: (busy: boolean) => void } = {}) => {
+const render = async (props: { signal?: number; mode?: 'full' | 'task'; taskId?: string | null; taskTitle?: string | null; verifyHardware?: boolean; commitMessage?: string; branch?: string; selectionResetSignal?: number; onCommitted?: () => void; onBeginOperation?: (kind: string, label: string) => string; onSelectionChanged?: (comparisonId: string | null, paths: string[]) => void; operationStatus?: api.OperationStatus | null; onComparisonBusyChanged?: (busy: boolean) => void } = {}) => {
   vi.spyOn(api, 'getWorktreeEngineeringState').mockResolvedValue({
     revision: {
       schemaVersion: 1,
@@ -50,6 +50,9 @@ const render = async (props: { signal?: number; verifyHardware?: boolean; commit
       worktreeId="wt-1"
       branch={props.branch ?? 'master'}
       signal={props.signal ?? 1}
+      mode={props.mode}
+      taskId={props.taskId}
+      taskTitle={props.taskTitle}
       verifyHardware={props.verifyHardware}
       commitMessage={props.commitMessage ?? ''}
       selectionResetSignal={props.selectionResetSignal}
@@ -418,4 +421,170 @@ describe('VersionControlCompare (inline)', () => {
       .toContain('Block-level detail unavailable')
   })
 
+})
+
+const taskComparison = (overrides: Partial<api.TaskSourceComparison> = {}): api.TaskSourceComparison => ({
+  taskId: 'task-1',
+  deviceId: 'dev-1',
+  candidates: [],
+  candidateExports: [],
+  problems: [],
+  observedSoftwareChecksum: null,
+  ...overrides,
+})
+
+describe('VersionControlCompare (task scope)', () => {
+  it('compares only the active task through the task route and never the project scan', async () => {
+    const projectCompare = vi.spyOn(api, 'compareMasterWithTia')
+    const taskCompare = vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison())
+    const onSelectionChanged = vi.fn()
+    const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1', taskTitle: 'Fix Main', onSelectionChanged })
+
+    expect(taskCompare).toHaveBeenCalledWith('wb-1', 'wt-1', 'task-1', undefined)
+    expect(projectCompare).not.toHaveBeenCalled()
+    expect(host.querySelector('[data-testid="vc-task-compare-heading"]')?.textContent).toContain('Task compare: Fix Main')
+    // A task-clean result clears the project selection instead of standing in for a project verdict.
+    expect(onSelectionChanged).toHaveBeenLastCalledWith(null, [])
+  })
+
+  it('labels a clean task result task-clean without any project-clean wording', async () => {
+    vi.spyOn(api, 'compareMasterWithTia')
+    vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison())
+    const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
+
+    const taskResult = host.querySelector('[data-testid="vc-task-compare-result"]')!
+    expect(taskResult.textContent).toContain('This task is in sync')
+    expect(taskResult.textContent?.toLowerCase()).not.toContain('project')
+    expect(taskResult.textContent?.toLowerCase()).not.toContain('master')
+    expect(taskResult.textContent?.toLowerCase()).not.toContain('savepoint')
+    expect(taskResult.textContent).not.toContain('All files committed')
+    // Neither the project clean hero nor a project-only affordance can appear for a task result.
+    expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeNull()
+    expect(taskResult.textContent).not.toContain('Untrackable change')
+    expect(host.textContent).not.toContain('Prepare feature import')
+    expect(api.compareMasterWithTia).not.toHaveBeenCalled()
+  })
+
+  it('explains a staged object with no committed baseline', async () => {
+    vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({
+      problems: [{
+        sourceObjectId: 'dev-1:Main',
+        code: 'TASK_STAGE_BASELINE_MISSING',
+        message: 'This staged object has no fingerprint baseline yet because it has no committed Git content.',
+      }],
+    }))
+    const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
+
+    const problem = host.querySelector('[data-testid="vc-task-problem"][data-problem-code="TASK_STAGE_BASELINE_MISSING"]')
+    expect(problem?.textContent).toContain('No committed baseline yet')
+    expect(problem?.textContent).toContain('Commit the object once')
+    expect(problem?.textContent).toContain('dev-1:Main')
+    expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeNull()
+  })
+
+  it('explains an unreadable committed baseline', async () => {
+    vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({
+      problems: [{ sourceObjectId: 'dev-1:Main', code: 'TASK_STAGE_BASELINE_INVALID', message: 'baseline invalid' }],
+    }))
+    const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
+
+    expect(host.querySelector('[data-testid="vc-task-problem"][data-problem-code="TASK_STAGE_BASELINE_INVALID"]')?.textContent)
+      .toContain('Committed baseline cannot be read')
+    expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeNull()
+  })
+
+  it('explains an object that is gone or unreadable in TIA', async () => {
+    vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({
+      problems: [{ sourceObjectId: 'dev-1:Main', code: 'TASK_STAGE_MISSING', message: 'missing' }],
+    }))
+    const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
+
+    const problem = host.querySelector('[data-testid="vc-task-problem"][data-problem-code="TASK_STAGE_MISSING"]')
+    expect(problem?.textContent).toContain('Missing or unreadable in TIA')
+    expect(problem?.textContent).toContain('gone, renamed, or unreadable in TIA')
+    expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeNull()
+  })
+
+  it('points at adding source objects when the task has no staged objects', async () => {
+    vi.spyOn(api, 'compareTaskWithTia').mockRejectedValue(new api.WorkbenchApiError(
+      400,
+      'TASK_STAGE_EMPTY',
+      'Add at least one source object to the task before comparing it with TIA.',
+    ))
+    const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
+
+    const problem = host.querySelector('[data-testid="vc-task-problem"][data-problem-code="TASK_STAGE_EMPTY"]')
+    expect(problem?.textContent).toContain('No source objects are staged on this task')
+    expect(problem?.textContent).toContain('Add source objects to the task before comparing it with TIA.')
+    expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeNull()
+  })
+
+  it('lists only the staged candidates and their XML exports', async () => {
+    vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({
+      candidates: [{ id: 'Main', reason: 'fingerprint-changed', requiresXmlExport: true, isSafetyDifference: false }],
+      candidateExports: [{
+        id: 'Main',
+        sourcePath: 'devices/PLC_1/source/Blocks/Main.xml',
+        export: { success: true, path: 'C:/staging/Main.xml' },
+      }],
+    }))
+    const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
+
+    expect(host.querySelector('[data-testid="vc-task-candidate"]')?.textContent).toContain('Fingerprint changed')
+    expect(host.querySelector('[data-testid="vc-task-candidate"]')?.textContent).toContain('devices/PLC_1/source/Blocks/Main.xml')
+    expect(host.querySelector('[data-testid="vc-task-candidate-exports"]')?.textContent).toContain('Exported 1 of 1')
+    expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeNull()
+  })
+
+  it('runs no comparison when a task scope has no task to compare', async () => {
+    const projectCompare = vi.spyOn(api, 'compareMasterWithTia')
+    const taskCompare = vi.spyOn(api, 'compareTaskWithTia')
+    const { host } = await render({ signal: 1, mode: 'task', taskId: null })
+
+    expect(taskCompare).not.toHaveBeenCalled()
+    expect(projectCompare).not.toHaveBeenCalled()
+    expect(host.querySelector('[data-testid="vc-task-compare-result"]')).toBeNull()
+  })
+
+  it('drops a task result when the covered task changes', async () => {
+    const taskCompare = vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison())
+    const { host, root } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
+    expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeTruthy()
+
+    await act(async () => root.render(
+      <VersionControlCompare
+        workbenchId="wb-1"
+        worktreeId="wt-1"
+        branch="master"
+        signal={1}
+        mode="task"
+        taskId="task-2"
+        commitMessage=""
+      />,
+    ))
+
+    expect(taskCompare).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('[data-testid="vc-task-compare-result"]')).toBeNull()
+  })
+
+  it('keeps a full-scan result when a task is opened in the same worktree', async () => {
+    const projectCompare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue(comparison({ differences: [], state: 'Consistent' }))
+    const { host, root } = await render({ signal: 1 })
+
+    expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeTruthy()
+
+    await act(async () => root.render(
+      <VersionControlCompare
+        workbenchId="wb-1"
+        worktreeId="wt-1"
+        branch="master"
+        signal={1}
+        taskId="task-1"
+        commitMessage=""
+      />,
+    ))
+
+    expect(projectCompare).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('[data-testid="vc-clean-state"]')?.textContent).toContain('TIA matches master')
+  })
 })

@@ -3,10 +3,14 @@
 // selected tab of the ACTIVE FlexLayout tabset (WorkspaceService), so after
 // splits this mapping just re-runs with the new focused kind. When landing or
 // hardware pages are shown the workspace is not visible and focusedView may be
-// stale — the rules below keep device/session docks out of those states.
+// stale — the rules below keep the device dock out of those states.
 //
 // Version control is a worktree-level concept: on the worktree landing page
 // (no device selected) the right dock hosts the version control panel.
+//
+// A device on a chat or source view has no dock at all: the AI sessions page
+// that used to fill it is gone, and the conversations it listed live in the
+// navigator's SESSIONS section.
 
 import type { WorkspaceViewKind } from './workspaceTypes'
 
@@ -16,7 +20,6 @@ export type ContextDockContent =
   | { kind: 'device' }
   | { kind: 'knowledge' }
   | { kind: 'version-control' }
-  | { kind: 'sessions' }
 
 export type ContextDockState = {
   /** Whether the dock shell (resize handle + panel) renders at all. */
@@ -53,12 +56,14 @@ export const resolveContextDock = (inputs: ContextDockInputs): ContextDockState 
   if (deviceId !== null && focusedView === 'overview') {
     return { visible, content: { kind: 'device' } }
   }
-  if (deviceId !== null && focusedView === 'knowledge' && hasKnowledgeContext) {
-    return { visible, content: { kind: 'knowledge' } }
+  if (deviceId !== null && focusedView === 'knowledge') {
+    return hasKnowledgeContext
+      ? { visible, content: { kind: 'knowledge' } }
+      : { visible, content: none }
   }
-  // Sessions fallback covers chat/source and a (normally impossible) null focus.
-  if (deviceId !== null && focusedView !== 'overview' && focusedView !== 'knowledge') {
-    return { visible, content: { kind: 'sessions' } }
-  }
+  // A device on a chat, source, inspector or stale focus resolves to no dock at all, so neither the
+  // dock shell nor its resize handle renders: an empty one would reserve room for a list that is not
+  // there, because the AI sessions page that used to fill this state is gone.
+  if (deviceId !== null) return { visible: false, content: none }
   return { visible, content: none }
 }

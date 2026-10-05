@@ -251,7 +251,7 @@ export default function AppAssistantPanel({
       >
         <aside
           id="workbench-assistant-conversation"
-          className="assistant-conversation fixed left-1/2 z-50 flex -translate-x-1/2 flex-col overflow-hidden border border-input bg-card text-foreground select-text"
+          className="assistant-conversation absolute z-50 flex flex-col overflow-hidden border border-input bg-card text-foreground select-text"
           data-app-assistant-panel
           data-expanded={expanded}
           data-resizing={resizing}

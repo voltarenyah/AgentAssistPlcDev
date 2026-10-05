@@ -30,6 +30,12 @@ export type VersionControlChangesProps = {
   branch: string
   entries: VersionControlSourceEntry[]
   compareSignal: number
+  /** Which comparison the compare signal runs: the whole project (default) or the active task. */
+  compareMode?: 'full' | 'task'
+  /** The active worktree task whose staged objects a task comparison reads. */
+  activeTaskId?: string | null
+  /** Names the covered task in the task-compare result heading. */
+  activeTaskTitle?: string | null
   verifyHardware?: boolean
   snapshot: VersionControlSnapshotInfo
   /** True when an untrackable-change commit exists that no SVN savepoint covers yet. */
@@ -64,7 +70,7 @@ const groupLabel = (entry: VersionControlSourceEntry) =>
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
 
-export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, verifyHardware = true, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation, operationStatus = null }: VersionControlChangesProps) {
+export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, compareMode = 'full', activeTaskId = null, activeTaskTitle = null, verifyHardware = true, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation, operationStatus = null }: VersionControlChangesProps) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [tiaSelection, setTiaSelection] = useState<{ comparisonId: string; paths: string[]; safetyPaths: string[] } | null>(null)
   const [tiaHasDifferences, setTiaHasDifferences] = useState<boolean | null>(null)
@@ -301,6 +307,9 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
               worktreeId={worktreeId}
               branch={branch}
               signal={compareSignal}
+              mode={compareMode}
+              taskId={activeTaskId}
+              taskTitle={activeTaskTitle}
               verifyHardware={verifyHardware}
               commitMessage={message}
               onSelectionChanged={(comparisonId, paths, safetyPaths = []) => {

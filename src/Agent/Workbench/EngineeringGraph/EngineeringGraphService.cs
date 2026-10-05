@@ -9,6 +9,7 @@ public sealed class EngineeringGraphService
     private readonly EngineeringGraphStore _store;
     private readonly string _workbenchId;
     private readonly Func<string, bool> _worktreeExists;
+    private readonly bool _worktreeRegistryKnown;
 
     private static readonly IReadOnlyDictionary<(GraphEntityKind, GraphEntityKind), GraphRelationKind> Relations =
         new Dictionary<(GraphEntityKind, GraphEntityKind), GraphRelationKind>
@@ -21,11 +22,17 @@ public sealed class EngineeringGraphService
             [(GraphEntityKind.GitCommit, GraphEntityKind.SvnRevision)] = GraphRelationKind.CommitSvnRevision,
         };
 
+    /// <summary>The property names the inspection ingest owns on a source-object node, as a SQL LIKE
+    /// pattern. One constant, so the writer that excludes them and the writer that owns them cannot
+    /// drift apart.</summary>
+    private const string InspectionPrefixPattern = SourceObjectInspectionPropertyNames.Prefix + "%";
+
     public EngineeringGraphService(EngineeringGraphStore store, string workbenchId,
         Func<string, bool>? worktreeExists = null)
     {
         _store = store;
         _workbenchId = Require(workbenchId, nameof(workbenchId));
+        _worktreeRegistryKnown = worktreeExists is not null;
         _worktreeExists = worktreeExists ?? (_ => false);
     }
     public string WorkbenchId() => _workbenchId;
@@ -106,6 +113,19 @@ public sealed class EngineeringGraphService
         using var command = _store.Connection.CreateCommand(); command.CommandText = "SELECT worktree_id,source_object_id,device_id,baseline_evidence_json,staged_utc FROM task_source_stages WHERE task_id=$task AND released_utc IS NULL ORDER BY source_object_id;"; command.Parameters.AddWithValue("$task", taskId);
         using var reader = command.ExecuteReader(); var result = new List<TaskSourceStage>();
         while (reader.Read()) result.Add(new TaskSourceStage(taskId, reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3), DateTimeOffset.Parse(reader.GetString(4))));
+        return result;
+    }
+
+    /// <summary>Active stages across one worktree, with the owning task's title. Callers use it to
+    /// show who owns a source object before taking it over (the unique active-owner index enforces
+    /// one owner per object; this read makes that owner visible instead of only reportable).</summary>
+    public IReadOnlyList<WorktreeSourceStage> ListWorktreeActiveStages(string worktreeId)
+    {
+        using var command = _store.Connection.CreateCommand(); command.CommandText = "SELECT stage.task_id,task.title,stage.source_object_id,stage.device_id,stage.baseline_evidence_json,stage.staged_utc FROM task_source_stages stage JOIN tasks task ON task.task_id=stage.task_id WHERE stage.worktree_id=$worktree AND stage.released_utc IS NULL ORDER BY stage.source_object_id;"; command.Parameters.AddWithValue("$worktree", worktreeId);
+        using var reader = command.ExecuteReader(); var result = new List<WorktreeSourceStage>();
+        while (reader.Read()) result.Add(new WorktreeSourceStage(
+            new TaskSourceStage(reader.GetString(0), worktreeId, reader.GetString(2), reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4), DateTimeOffset.Parse(reader.GetString(5))),
+            reader.GetString(1)));
         return result;
     }
 
@@ -190,14 +210,39 @@ public sealed class EngineeringGraphService
 
     public void RegisterEntity(GraphEntity entity)
     {
+        ValidateEntity(entity);
+        ExecuteNonQuery("INSERT OR REPLACE INTO graph_entities (entity_kind,entity_id,workbench_id,worktree_id,device_id,external_ref) VALUES ($kind,$id,$wb,$wt,$device,$ref)",
+            ("$kind", Kind(entity.Kind)), ("$id", entity.EntityId), ("$wb", entity.WorkbenchId), ("$wt", entity.WorktreeId),
+            ("$device", entity.DeviceId), ("$ref", entity.ExternalRef));
+    }
+
+    /// <summary>
+    /// Registers a whole set of entities in one transaction. A device manifest holds more than a
+    /// thousand objects, and one autocommit per object made registering it against the graph take
+    /// seconds — the dominant cost of staging a single source object.
+    /// </summary>
+    public void RegisterEntities(IEnumerable<GraphEntity> entities)
+    {
+        var pending = entities as IReadOnlyCollection<GraphEntity> ?? entities.ToArray();
+        if (pending.Count == 0) return;
+        foreach (var entity in pending) ValidateEntity(entity);
+        using var transaction = _store.Connection.BeginTransaction();
+        foreach (var entity in pending)
+        {
+            Execute(transaction, "INSERT OR REPLACE INTO graph_entities (entity_kind,entity_id,workbench_id,worktree_id,device_id,external_ref) VALUES ($kind,$id,$wb,$wt,$device,$ref)",
+                ("$kind", Kind(entity.Kind)), ("$id", entity.EntityId), ("$wb", entity.WorkbenchId), ("$wt", entity.WorktreeId),
+                ("$device", entity.DeviceId), ("$ref", entity.ExternalRef));
+        }
+        transaction.Commit();
+    }
+
+    private void ValidateEntity(GraphEntity entity)
+    {
         if (entity.Kind == GraphEntityKind.Task) throw new EngineeringGraphConstraintException("Tasks must be created with CreateTask.");
         if (entity.WorkbenchId != _workbenchId) throw new EngineeringGraphConstraintException("Entity belongs to another Workbench.");
         if (entity.WorktreeId is not null && !_worktreeExists(entity.WorktreeId))
             throw new EngineeringGraphConstraintException($"Worktree '{entity.WorktreeId}' is not registered in the current Workbench.");
         Require(entity.EntityId, nameof(entity.EntityId));
-        ExecuteNonQuery("INSERT OR REPLACE INTO graph_entities (entity_kind,entity_id,workbench_id,worktree_id,device_id,external_ref) VALUES ($kind,$id,$wb,$wt,$device,$ref)",
-            ("$kind", Kind(entity.Kind)), ("$id", entity.EntityId), ("$wb", entity.WorkbenchId), ("$wt", entity.WorktreeId),
-            ("$device", entity.DeviceId), ("$ref", entity.ExternalRef));
     }
 
     public GraphEdge AddEdge(GraphTask task, GraphEntityKind toKind, string toId,
@@ -302,10 +347,685 @@ public sealed class EngineeringGraphService
         tx.Commit();
         return edge;
     }
-    public void RemoveEntity(GraphEntityKind kind, string entityId)
+    /// <summary>
+    /// Removes a node, its property rows and every edge that references it, in one transaction. The
+    /// graph has no foreign key on <c>graph_edges</c>, and the property table deliberately carries no
+    /// cascading delete, so both are removed here. Returns the number of property rows removed.
+    /// </summary>
+    public int RemoveEntity(GraphEntityKind kind, string entityId)
     {
-        ExecuteNonQuery("DELETE FROM graph_edges WHERE from_kind=$kind AND from_id=$id OR to_kind=$kind AND to_id=$id", ("$kind", Kind(kind)), ("$id", entityId));
-        ExecuteNonQuery("DELETE FROM graph_entities WHERE entity_kind=$kind AND entity_id=$id", ("$kind", Kind(kind)), ("$id", entityId));
+        if (string.IsNullOrWhiteSpace(entityId)) return 0;
+        using var transaction = _store.Connection.BeginTransaction();
+        var properties = RemoveEntityWithin(transaction, Kind(kind), entityId);
+        transaction.Commit();
+        return properties;
+    }
+
+    private int RemoveEntityWithin(SqliteTransaction transaction, string kind, string entityId)
+    {
+        var properties = Execute(transaction, "DELETE FROM graph_entity_properties WHERE entity_kind=$kind AND entity_id=$id", ("$kind", kind), ("$id", entityId));
+        Execute(transaction, "DELETE FROM graph_edges WHERE from_kind=$kind AND from_id=$id OR to_kind=$kind AND to_id=$id", ("$kind", kind), ("$id", entityId));
+        Execute(transaction, "DELETE FROM graph_entities WHERE entity_kind=$kind AND entity_id=$id", ("$kind", kind), ("$id", entityId));
+        return properties;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Node properties (schema v6). Facts are read without a join and replaced as a set per node, so a
+    // fact the new ingest no longer produces disappears instead of surviving as a stale row.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>One node's property rows, ordered by name.</summary>
+    public IReadOnlyList<GraphProperty> GetProperties(GraphEntityKind kind, string entityId)
+    {
+        Require(entityId, nameof(entityId));
+        using var command = _store.Connection.CreateCommand();
+        command.CommandText = "SELECT name,value_kind,value_text,value_number,value_flag,value_timestamp,value_json,source FROM graph_entity_properties WHERE entity_kind=$kind AND entity_id=$id ORDER BY name;";
+        command.Parameters.AddWithValue("$kind", Kind(kind));
+        command.Parameters.AddWithValue("$id", entityId);
+        var result = new List<GraphProperty>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) result.Add(ReadProperty(reader, 0));
+        return result;
+    }
+
+    /// <summary>
+    /// Every property of every node one device owns — the device node and its source objects — in a
+    /// single statement, keyed by entity id. The join walks graph_entities by <c>device_id</c> and the
+    /// property side is served by the covering index on (entity_kind, entity_id), so a device page
+    /// never reads its ~14k rows one node at a time.
+    /// </summary>
+    /// <remarks>
+    /// The per-object parsed inspection content is deliberately excluded: it is large (tens of
+    /// megabytes for a real device) and no device route reads it, so a device read would pay for it
+    /// without using it. <see cref="GetInspectionFacts"/> and
+    /// <see cref="GetProperties(GraphEntityKind, string)"/> are the readers for it.
+    /// </remarks>
+    public IReadOnlyDictionary<string, IReadOnlyList<GraphProperty>> GetDeviceProperties(string deviceId)
+    {
+        Require(deviceId, nameof(deviceId));
+        using var command = _store.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT entity.entity_id, property.name, property.value_kind, property.value_text, property.value_number,
+                   property.value_flag, property.value_timestamp, property.value_json, property.source
+            FROM graph_entities entity
+            JOIN graph_entity_properties property
+              ON property.entity_kind = entity.entity_kind AND property.entity_id = entity.entity_id
+            WHERE entity.workbench_id = $wb AND entity.device_id = $device
+              AND property.name NOT LIKE $inspection
+            ORDER BY entity.entity_id, property.name;
+            """;
+        command.Parameters.AddWithValue("$wb", _workbenchId);
+        command.Parameters.AddWithValue("$device", deviceId);
+        command.Parameters.AddWithValue("$inspection", InspectionPrefixPattern);
+        var result = new Dictionary<string, List<GraphProperty>>(StringComparer.Ordinal);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var id = reader.GetString(0);
+            if (!result.TryGetValue(id, out var properties))
+                result[id] = properties = new List<GraphProperty>();
+            properties.Add(ReadProperty(reader, 1));
+        }
+        return result.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<GraphProperty>)pair.Value, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// What the projection already knows about each object's parsed content, for its reuse decision:
+    /// the stored inspection facts of every node one device owns, without the payload. An object whose
+    /// exported content has not moved is not parsed again, so a re-projection that runs for an
+    /// unrelated reason costs no XML read (ADR-0011 Phase 5).
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<GraphProperty>> GetInspectionFacts(string deviceId)
+    {
+        Require(deviceId, nameof(deviceId));
+        using var command = _store.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT entity.entity_id, property.name, property.value_kind, property.value_text, property.value_number,
+                   property.value_flag, property.value_timestamp, property.value_json, property.source
+            FROM graph_entities entity
+            JOIN graph_entity_properties property
+              ON property.entity_kind = entity.entity_kind AND property.entity_id = entity.entity_id
+            WHERE entity.workbench_id = $wb AND entity.device_id = $device
+              AND property.name LIKE $inspection AND property.name <> $payload
+            ORDER BY entity.entity_id, property.name;
+            """;
+        command.Parameters.AddWithValue("$wb", _workbenchId);
+        command.Parameters.AddWithValue("$device", deviceId);
+        command.Parameters.AddWithValue("$inspection", InspectionPrefixPattern);
+        command.Parameters.AddWithValue("$payload", SourceObjectInspectionPropertyNames.Payload);
+        var result = new Dictionary<string, List<GraphProperty>>(StringComparer.Ordinal);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var id = reader.GetString(0);
+            if (!result.TryGetValue(id, out var properties))
+                result[id] = properties = new List<GraphProperty>();
+            properties.Add(ReadProperty(reader, 1));
+        }
+        return result.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<GraphProperty>)pair.Value, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Writes the parsed content of the objects a projection re-derived, in one transaction, as a set
+    /// that replaces only those nodes' inspection facts: a fact the new set no longer produces is
+    /// deleted, and the objects whose stored content the projection reused are not touched at all.
+    /// The manifest facts on the same nodes belong to <see cref="ReplaceDeviceProperties"/> and are
+    /// never read or written here.
+    /// </summary>
+    public GraphPropertyWriteResult ReplaceInspectionProperties(
+        string deviceId,
+        IReadOnlyList<GraphNodePropertySet> nodes)
+    {
+        Require(deviceId, nameof(deviceId));
+        ArgumentNullException.ThrowIfNull(nodes);
+        if (nodes.Count == 0) return new GraphPropertyWriteResult(0, 0, 0, 0);
+        foreach (var node in nodes)
+            ValidateProjectedNode(deviceId, node.Entity);
+
+        using var transaction = _store.Connection.BeginTransaction();
+        var inserted = 0;
+        var updated = 0;
+        var deleted = 0;
+        foreach (var node in nodes)
+        {
+            var kind = Kind(node.Entity.Kind);
+            var stored = ReadPropertySetWithin(transaction, kind, node.Entity.EntityId, InspectionPrefixPattern);
+            var write = ReplacePropertySet(transaction, kind, node.Entity.EntityId, node.Properties, stored);
+            inserted += write.Inserted;
+            updated += write.Updated;
+            deleted += write.Deleted;
+        }
+
+        transaction.Commit();
+        return new GraphPropertyWriteResult(inserted, updated, deleted, 0);
+    }
+
+    /// <summary>
+    /// Replaces one node's property set with <paramref name="properties"/> in one transaction: a
+    /// property the new set omits is deleted. Returns how many rows changed (inserted, updated or
+    /// deleted). The node's own row is not written here — the caller registers the node — and a set
+    /// that names one property twice is rejected, rolling the whole set back.
+    /// </summary>
+    public int ReplaceProperties(GraphEntityKind kind, string entityId, IReadOnlyList<GraphProperty> properties)
+    {
+        Require(entityId, nameof(entityId));
+        ArgumentNullException.ThrowIfNull(properties);
+        using var transaction = _store.Connection.BeginTransaction();
+        var write = ReplacePropertySet(transaction, Kind(kind), entityId, properties, ReadPropertySet(transaction, Kind(kind), entityId));
+        transaction.Commit();
+        return write.Total;
+    }
+
+    /// <summary>
+    /// Writes one device's projected facts — its own node plus its source objects — in a single
+    /// transaction, and returns how many property rows changed. Each node's set replaces what the node
+    /// held; a source object the new set no longer names loses its node, its properties and every edge
+    /// that referenced it. Nothing is read from the filesystem here: the caller resolves the manifest
+    /// first, so the transaction stays short (ADR-0012).
+    /// </summary>
+    public GraphPropertyWriteResult ReplaceDeviceProperties(string deviceId, IReadOnlyList<GraphNodePropertySet> nodes)
+    {
+        Require(deviceId, nameof(deviceId));
+        ArgumentNullException.ThrowIfNull(nodes);
+        foreach (var node in nodes)
+            ValidateProjectedNode(deviceId, node.Entity);
+
+        using var transaction = _store.Connection.BeginTransaction();
+        var stored = ReadDevicePropertySets(transaction, deviceId);
+        var existingSourceObjects = ReadDeviceSourceObjectIds(transaction, deviceId);
+        var inserted = 0;
+        var updated = 0;
+        var deleted = 0;
+        var kept = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var node in nodes)
+        {
+            var kind = Kind(node.Entity.Kind);
+            UpsertEntityWithin(transaction, kind, node.Entity);
+            if (node.Entity.Kind == GraphEntityKind.SourceObject)
+                kept.Add(node.Entity.EntityId);
+            stored.TryGetValue((kind, node.Entity.EntityId), out var current);
+            var write = ReplacePropertySet(transaction, kind, node.Entity.EntityId, node.Properties, current);
+            inserted += write.Inserted;
+            updated += write.Updated;
+            deleted += write.Deleted;
+        }
+
+        var removed = 0;
+        foreach (var entityId in existingSourceObjects.Where(id => !kept.Contains(id)))
+        {
+            deleted += RemoveEntityWithin(transaction, Kind(GraphEntityKind.SourceObject), entityId);
+            removed++;
+        }
+
+        transaction.Commit();
+        return new GraphPropertyWriteResult(inserted, updated, deleted, removed);
+    }
+
+    private sealed record PropertySetWrite(int Inserted, int Updated, int Deleted)
+    {
+        public int Total => Inserted + Updated + Deleted;
+    }
+
+    /// <summary>Replaces one node's set against what is already stored. Duplicate names are detected
+    /// while rows are written, so a rejected set rolls the transaction back whole.</summary>
+    private PropertySetWrite ReplacePropertySet(SqliteTransaction transaction, string kind, string entityId,
+        IReadOnlyList<GraphProperty> desired, Dictionary<string, GraphProperty>? stored)
+    {
+        var inserted = 0;
+        var updated = 0;
+        var deleted = 0;
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in desired)
+        {
+            if (!names.Add(property.Name))
+                throw new EngineeringGraphConstraintException($"Property '{property.Name}' is set twice for one node; a property set holds one value per name.");
+            if (stored is not null && stored.TryGetValue(property.Name, out var existing))
+            {
+                if (existing.Equals(property)) continue;
+                UpsertProperty(transaction, kind, entityId, property);
+                updated++;
+                continue;
+            }
+            UpsertProperty(transaction, kind, entityId, property);
+            inserted++;
+        }
+
+        if (stored is not null)
+        {
+            foreach (var name in stored.Keys)
+            {
+                if (names.Contains(name)) continue;
+                Execute(transaction, "DELETE FROM graph_entity_properties WHERE entity_kind=$kind AND entity_id=$id AND name=$name",
+                    ("$kind", kind), ("$id", entityId), ("$name", name));
+                deleted++;
+            }
+        }
+
+        return new PropertySetWrite(inserted, updated, deleted);
+    }
+
+    private void UpsertProperty(SqliteTransaction transaction, string kind, string entityId, GraphProperty property) =>
+        Execute(transaction, """
+            INSERT INTO graph_entity_properties (entity_kind, entity_id, name, value_kind, value_text, value_number, value_flag, value_timestamp, value_json, source)
+            VALUES ($kind,$id,$name,$valueKind,$text,$number,$flag,$timestamp,$json,$source)
+            ON CONFLICT(entity_kind, entity_id, name) DO UPDATE SET
+                value_kind=excluded.value_kind, value_text=excluded.value_text, value_number=excluded.value_number,
+                value_flag=excluded.value_flag, value_timestamp=excluded.value_timestamp, value_json=excluded.value_json,
+                source=excluded.source;
+            """,
+            ("$kind", kind), ("$id", entityId), ("$name", property.Name), ("$valueKind", ValueKind(property.Kind)),
+            ("$text", property.Text), ("$number", property.Number),
+            ("$flag", property.Flag is null ? null : property.Flag.Value ? 1 : 0),
+            ("$timestamp", property.Timestamp?.ToString("O")), ("$json", property.Json), ("$source", property.Source));
+
+    /// <summary>Registers a node without replacing its row: INSERT OR REPLACE deletes the replaced row,
+    /// and the property table's survival must not depend on nothing cascading from it (ADR-0011).</summary>
+    private void UpsertEntityWithin(SqliteTransaction transaction, string kind, GraphEntity entity) =>
+        Execute(transaction, """
+            INSERT INTO graph_entities (entity_kind, entity_id, workbench_id, worktree_id, device_id, external_ref)
+            VALUES ($kind,$id,$wb,$wt,$device,$ref)
+            ON CONFLICT(entity_kind, entity_id) DO UPDATE SET
+                workbench_id=excluded.workbench_id, worktree_id=excluded.worktree_id,
+                device_id=excluded.device_id, external_ref=excluded.external_ref;
+            """,
+            ("$kind", kind), ("$id", entity.EntityId), ("$wb", entity.WorkbenchId), ("$wt", entity.WorktreeId),
+            ("$device", entity.DeviceId), ("$ref", entity.ExternalRef));
+
+    private void ValidateProjectedNode(string deviceId, GraphEntity entity)
+    {
+        if (entity.Kind == GraphEntityKind.Task)
+            throw new EngineeringGraphConstraintException("Tasks must be created with CreateTask.");
+        if (entity.Kind is not (GraphEntityKind.Device or GraphEntityKind.SourceObject))
+            throw new EngineeringGraphConstraintException("A device projection writes device and source_object nodes only.");
+        if (entity.WorkbenchId != _workbenchId)
+            throw new EngineeringGraphConstraintException("Entity belongs to another Workbench.");
+        if (!string.Equals(entity.DeviceId, deviceId, StringComparison.Ordinal))
+            throw new EngineeringGraphConstraintException("A projected node must belong to the device being projected.");
+        Require(entity.EntityId, nameof(entity.EntityId));
+    }
+
+    /// <summary>
+    /// The manifest facts of one device's nodes, for the write path's replace-as-a-set diff. The
+    /// per-object inspection facts are excluded on purpose: they are a second, disjoint property set
+    /// on the same nodes, written by <see cref="ReplaceInspectionProperties"/>, so this write must
+    /// neither load them (tens of megabytes) nor treat them as facts it no longer produces.
+    /// </summary>
+    private Dictionary<(string Kind, string Id), Dictionary<string, GraphProperty>> ReadDevicePropertySets(SqliteTransaction transaction, string deviceId)
+    {
+        using var command = _store.Connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT entity.entity_kind, entity.entity_id, property.name, property.value_kind, property.value_text,
+                   property.value_number, property.value_flag, property.value_timestamp, property.value_json, property.source
+            FROM graph_entities entity
+            JOIN graph_entity_properties property
+              ON property.entity_kind = entity.entity_kind AND property.entity_id = entity.entity_id
+            WHERE entity.workbench_id = $wb AND entity.device_id = $device
+              AND property.name NOT LIKE $inspection;
+            """;
+        command.Parameters.AddWithValue("$wb", _workbenchId);
+        command.Parameters.AddWithValue("$device", deviceId);
+        command.Parameters.AddWithValue("$inspection", InspectionPrefixPattern);
+        var result = new Dictionary<(string, string), Dictionary<string, GraphProperty>>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var key = (reader.GetString(0), reader.GetString(1));
+            if (!result.TryGetValue(key, out var properties))
+                result[key] = properties = new Dictionary<string, GraphProperty>(StringComparer.Ordinal);
+            var property = ReadProperty(reader, 2);
+            properties[property.Name] = property;
+        }
+        return result;
+    }
+
+    /// <summary>The stored property set of one node, restricted to the names a pattern selects, so a
+    /// writer can own a name space on a node another writer also writes.</summary>
+    private Dictionary<string, GraphProperty>? ReadPropertySetWithin(
+        SqliteTransaction transaction, string kind, string entityId, string namePattern)
+    {
+        using var command = _store.Connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT name,value_kind,value_text,value_number,value_flag,value_timestamp,value_json,source FROM graph_entity_properties WHERE entity_kind=$kind AND entity_id=$id AND name LIKE $pattern;";
+        command.Parameters.AddWithValue("$kind", kind);
+        command.Parameters.AddWithValue("$id", entityId);
+        command.Parameters.AddWithValue("$pattern", namePattern);
+        Dictionary<string, GraphProperty>? result = null;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result ??= new Dictionary<string, GraphProperty>(StringComparer.Ordinal);
+            var property = ReadProperty(reader, 0);
+            result[property.Name] = property;
+        }
+        return result;
+    }
+
+    private Dictionary<string, GraphProperty>? ReadPropertySet(SqliteTransaction transaction, string kind, string entityId)
+    {
+        using var command = _store.Connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT name,value_kind,value_text,value_number,value_flag,value_timestamp,value_json,source FROM graph_entity_properties WHERE entity_kind=$kind AND entity_id=$id;";
+        command.Parameters.AddWithValue("$kind", kind);
+        command.Parameters.AddWithValue("$id", entityId);
+        Dictionary<string, GraphProperty>? result = null;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result ??= new Dictionary<string, GraphProperty>(StringComparer.Ordinal);
+            var property = ReadProperty(reader, 0);
+            result[property.Name] = property;
+        }
+        return result;
+    }
+
+    private List<string> ReadDeviceSourceObjectIds(SqliteTransaction transaction, string deviceId)
+    {
+        using var command = _store.Connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT entity_id FROM graph_entities WHERE entity_kind='source_object' AND workbench_id=$wb AND device_id=$device;";
+        command.Parameters.AddWithValue("$wb", _workbenchId);
+        command.Parameters.AddWithValue("$device", deviceId);
+        var result = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) result.Add(reader.GetString(0));
+        return result;
+    }
+
+    /// <summary>Reads the nine property columns starting at <paramref name="offset"/> (name, kind,
+    /// text, number, flag, timestamp, json, source).</summary>
+    private static GraphProperty ReadProperty(SqliteDataReader reader, int offset) => new(
+        reader.GetString(offset),
+        ParseValueKind(reader.GetString(offset + 1)),
+        reader.GetString(offset + 7),
+        Text: reader.IsDBNull(offset + 2) ? null : reader.GetString(offset + 2),
+        Number: reader.IsDBNull(offset + 3) ? null : reader.GetDouble(offset + 3),
+        Flag: reader.IsDBNull(offset + 4) ? null : reader.GetInt32(offset + 4) != 0,
+        Timestamp: reader.IsDBNull(offset + 5) ? null : DateTimeOffset.Parse(reader.GetString(offset + 5)),
+        Json: reader.IsDBNull(offset + 6) ? null : reader.GetString(offset + 6));
+
+    private static string ValueKind(GraphPropertyValueKind kind) => kind switch
+    {
+        GraphPropertyValueKind.Number => "number",
+        GraphPropertyValueKind.Flag => "flag",
+        GraphPropertyValueKind.Timestamp => "timestamp",
+        GraphPropertyValueKind.Json => "json",
+        _ => "text",
+    };
+
+    private static GraphPropertyValueKind ParseValueKind(string value) => value switch
+    {
+        "number" => GraphPropertyValueKind.Number,
+        "flag" => GraphPropertyValueKind.Flag,
+        "timestamp" => GraphPropertyValueKind.Timestamp,
+        "json" => GraphPropertyValueKind.Json,
+        _ => GraphPropertyValueKind.Text,
+    };
+
+    // ---------------------------------------------------------------------------------------------
+    // Projection freshness and reconciliation (schema v6, ADR-0012). Invalidation is one statement per
+    // write point and no file I/O; the worktree cleanup is one transaction that removes a deleted
+    // worktree's nodes, their property rows and every edge referencing them, while keeping the facts a
+    // worktree that still exists owns. Both stay inside the store's existing concurrency model: no
+    // statement here reads a file.
+    // ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Marks one device's projection as needing a re-projection (ADR-0012 item 2). One statement, so a
+    /// write point may call it inline; a device that was never projected has no flag to set and is
+    /// projected on demand by the next read. Returns whether a projected device was flagged.
+    /// </summary>
+    public bool InvalidateDeviceProjection(string deviceId)
+    {
+        Require(deviceId, nameof(deviceId));
+        return ExecuteNonQuery(
+            "UPDATE graph_entity_properties SET value_flag = 1 WHERE entity_kind = 'device' AND entity_id = $id AND name = $name;",
+            ("$id", deviceId), ("$name", DevicePropertyNames.ProjectionInvalidated)) > 0;
+    }
+
+    /// <summary>
+    /// The same for every device whose stored facts came from one worktree: a source apply, a commit or
+    /// a branch switch in that worktree invalidates exactly the facts it produced, and leaves the facts
+    /// of another worktree alone.
+    /// </summary>
+    /// <remarks>
+    /// The worktree's hardware facts are flagged too: a branch switch, a checkout or a raw gateway
+    /// commit moves the whole worktree — the <c>hardware/</c> subtree included — so the hardware routes
+    /// re-project before serving. The return value stays the number of device projections flagged.
+    /// </remarks>
+    public int InvalidateWorktreeProjections(string worktreeId)
+    {
+        Require(worktreeId, nameof(worktreeId));
+        var devices = ExecuteNonQuery("""
+            UPDATE graph_entity_properties SET value_flag = 1
+            WHERE entity_kind = 'device' AND name = $invalidated
+              AND entity_id IN (
+                  SELECT entity.entity_id
+                  FROM graph_entities entity
+                  JOIN graph_entity_properties origin
+                    ON origin.entity_kind = entity.entity_kind AND origin.entity_id = entity.entity_id
+                  WHERE entity.workbench_id = $wb AND entity.entity_kind = 'device'
+                    AND origin.name = $origin AND origin.value_text = $wt);
+            """,
+            ("$invalidated", DevicePropertyNames.ProjectionInvalidated),
+            ("$wb", _workbenchId),
+            ("$origin", DevicePropertyNames.WorktreeId),
+            ("$wt", worktreeId));
+        InvalidateHardwareProjection(worktreeId);
+        return devices;
+    }
+
+    /// <summary>
+    /// Marks one worktree's hardware facts as needing a re-projection. One statement, and a worktree
+    /// whose hardware subtree was never projected has no flag to set — the next hardware route projects
+    /// it on demand. Returns whether a projected hardware subtree was flagged.
+    /// </summary>
+    public bool InvalidateHardwareProjection(string worktreeId)
+    {
+        Require(worktreeId, nameof(worktreeId));
+        return ExecuteNonQuery(
+            "UPDATE graph_entity_properties SET value_flag = 1 WHERE entity_kind = 'worktree' AND entity_id = $id AND name = $name;",
+            ("$id", worktreeId), ("$name", HardwarePropertyNames.Invalidated)) > 0;
+    }
+
+    /// <summary>
+    /// Writes one worktree's hardware facts — its <see cref="GraphEntityKind.Worktree"/> node and the
+    /// property set that describes the hardware/AML subtree — in one transaction. The node is
+    /// registered without replacing an existing row, and the set replaces what the node held, so a
+    /// fact the new ingest no longer produces disappears. Nothing is read from the filesystem here.
+    /// </summary>
+    public int ReplaceHardwareFacts(string worktreeId, IReadOnlyList<GraphProperty> properties)
+    {
+        Require(worktreeId, nameof(worktreeId));
+        ArgumentNullException.ThrowIfNull(properties);
+        if (!_worktreeExists(worktreeId))
+            throw new EngineeringGraphConstraintException($"Worktree '{worktreeId}' is not registered in the current Workbench.");
+        foreach (var property in properties)
+        {
+            if (!property.Name.StartsWith("hardware.", StringComparison.Ordinal))
+                throw new EngineeringGraphConstraintException(
+                    $"Property '{property.Name}' is not a hardware fact; the worktree node holds the hardware projection only.");
+        }
+
+        using var transaction = _store.Connection.BeginTransaction();
+        Execute(transaction, """
+            INSERT INTO graph_entities (entity_kind, entity_id, workbench_id, worktree_id, device_id, external_ref)
+            VALUES ('worktree',$id,$wb,$wt,NULL,NULL)
+            ON CONFLICT(entity_kind, entity_id) DO UPDATE SET
+                workbench_id=excluded.workbench_id, worktree_id=excluded.worktree_id;
+            """,
+            ("$id", worktreeId), ("$wb", _workbenchId), ("$wt", worktreeId));
+        var write = ReplacePropertySet(transaction, Kind(GraphEntityKind.Worktree), worktreeId, properties,
+            ReadPropertySet(transaction, Kind(GraphEntityKind.Worktree), worktreeId));
+        transaction.Commit();
+        return write.Total;
+    }
+
+    /// <summary>
+    /// Removes the facts of every worktree the current Workbench no longer registers (ADR-0012 item 4,
+    /// AC-007): its nodes, their property rows and every edge that references them, in one transaction.
+    /// A device id another worktree still owns keeps its facts — the deleted worktree is only removed
+    /// from the device's owning set (<see cref="DevicePropertyNames.ProjectionWorktrees"/>) and the
+    /// facts go with the last owner, so a shared device id is never "last writer wins".
+    /// </summary>
+    /// <remarks>
+    /// Rows in <c>tasks</c> and <c>task_source_stages</c> are deliberately untouched: AC-007 scopes the
+    /// removal to nodes, their properties and the edges that reference them. A projected device whose
+    /// stored facts predate the owning-set property has no set to preserve, so its node is removed with
+    /// its worktree and re-projected from its next selection.
+    /// </remarks>
+    public WorktreeFactCleanupResult RemoveUnregisteredWorktreeFacts()
+    {
+        if (!_worktreeRegistryKnown)
+            throw new EngineeringGraphConstraintException(
+                "Removing a deleted worktree's facts requires the Workbench's registered worktrees.",
+                "GRAPH_WORKTREE_REGISTRY_REQUIRED");
+
+        var deleted = ReadWorktreeIds().Where(id => !_worktreeExists(id)).ToArray();
+        if (deleted.Length == 0) return WorktreeFactCleanupResult.Empty;
+        var deletedSet = deleted.ToHashSet(StringComparer.Ordinal);
+
+        using var transaction = _store.Connection.BeginTransaction();
+        var nodesBefore = CountRowsWithin(transaction, "graph_entities");
+        var propertiesBefore = CountRowsWithin(transaction, "graph_entity_properties");
+        var edgesBefore = CountRowsWithin(transaction, "graph_edges");
+
+        var devicesRemoved = new List<string>();
+        var devicesRetained = new List<string>();
+        foreach (var (deviceId, worktrees) in ReadProjectionWorktrees(transaction))
+        {
+            if (!worktrees.Any(deletedSet.Contains)) continue;
+            var remaining = worktrees.Where(id => !deletedSet.Contains(id)).ToArray();
+            if (remaining.Length == 0)
+            {
+                devicesRemoved.Add(deviceId);
+                RemoveDeviceWithin(transaction, deviceId);
+                continue;
+            }
+
+            devicesRetained.Add(deviceId);
+            RetainDeviceWithin(transaction, deviceId, remaining, deletedSet);
+        }
+
+        // Everything still attributed to a deleted worktree: its commit, SVN revision, session and task
+        // nodes, plus any source-object anchor a projection did not own. The devices kept above were
+        // re-attributed to a worktree that still exists, so they are not selected here.
+        foreach (var (kind, entityId) in ReadEntitiesOfWorktrees(transaction, deleted))
+            RemoveEntityWithin(transaction, kind, entityId);
+
+        var result = new WorktreeFactCleanupResult(
+            deleted,
+            nodesBefore - CountRowsWithin(transaction, "graph_entities"),
+            propertiesBefore - CountRowsWithin(transaction, "graph_entity_properties"),
+            edgesBefore - CountRowsWithin(transaction, "graph_edges"),
+            devicesRemoved,
+            devicesRetained);
+        transaction.Commit();
+        return result;
+    }
+
+    /// <summary>The device node and its source objects, with their properties and edges, in the
+    /// caller's transaction.</summary>
+    private void RemoveDeviceWithin(SqliteTransaction transaction, string deviceId)
+    {
+        foreach (var entityId in ReadDeviceSourceObjectIds(transaction, deviceId))
+            RemoveEntityWithin(transaction, Kind(GraphEntityKind.SourceObject), entityId);
+        RemoveEntityWithin(transaction, Kind(GraphEntityKind.Device), deviceId);
+    }
+
+    /// <summary>
+    /// Keeps a device another worktree still owns: rewrites its owning set without the deleted
+    /// worktrees, and moves the device's own nodes — its device node and its projected source objects —
+    /// onto a worktree that exists. Only those nodes move: a task, conversation or commit of the deleted
+    /// worktree carries the same device id but belongs to the worktree, so it is removed with it rather
+    /// than re-attributed to a worktree that never owned it. The device's <c>identity.worktreeId</c>
+    /// property is left alone on purpose — it names whose exported content the stored facts are, so a
+    /// read for the surviving worktree re-projects instead of serving content from the deleted one.
+    /// </summary>
+    private void RetainDeviceWithin(
+        SqliteTransaction transaction,
+        string deviceId,
+        IReadOnlyList<string> remaining,
+        IReadOnlySet<string> deleted)
+    {
+        Execute(transaction,
+            "UPDATE graph_entity_properties SET value_json = $json WHERE entity_kind = 'device' AND entity_id = $id AND name = $name;",
+            ("$json", JsonSerializer.Serialize(remaining)), ("$id", deviceId),
+            ("$name", DevicePropertyNames.ProjectionWorktrees));
+        ExecuteAll(transaction, $"""
+            UPDATE graph_entities SET worktree_id = $wt
+            WHERE workbench_id = $wb AND worktree_id IN ({Placeholders(deleted.ToArray(), "$dead")})
+              AND ((entity_kind = 'device' AND entity_id = $id)
+                   OR (entity_kind = 'source_object' AND device_id = $id));
+            """,
+            [("$wt", remaining[0]), ("$wb", _workbenchId), ("$id", deviceId),
+                .. deleted.Select((id, index) => ("$dead" + index, (object?)id))]);
+    }
+
+    /// <summary>Every worktree id the graph holds a node for in this workbench.</summary>
+    private IReadOnlyList<string> ReadWorktreeIds()
+    {
+        using var command = _store.Connection.CreateCommand();
+        command.CommandText = "SELECT DISTINCT worktree_id FROM graph_entities WHERE workbench_id = $wb AND worktree_id IS NOT NULL ORDER BY worktree_id;";
+        command.Parameters.AddWithValue("$wb", _workbenchId);
+        var result = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) result.Add(reader.GetString(0));
+        return result;
+    }
+
+    /// <summary>Each projected device's owning worktrees, from the <c>projection.worktrees</c> property
+    /// the projection writes.</summary>
+    private Dictionary<string, IReadOnlyList<string>> ReadProjectionWorktrees(SqliteTransaction transaction)
+    {
+        using var command = _store.Connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT property.entity_id, property.value_json
+            FROM graph_entity_properties property
+            JOIN graph_entities entity
+              ON entity.entity_kind = property.entity_kind AND entity.entity_id = property.entity_id
+            WHERE entity.workbench_id = $wb AND entity.entity_kind = 'device' AND property.name = $name;
+            """;
+        command.Parameters.AddWithValue("$wb", _workbenchId);
+        command.Parameters.AddWithValue("$name", DevicePropertyNames.ProjectionWorktrees);
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            result[reader.GetString(0)] = reader.IsDBNull(1)
+                ? []
+                : EngineeringGraphProjectionService.ParseWorktrees(reader.GetString(1));
+        return result;
+    }
+
+    /// <summary>Every node the graph attributes to one of <paramref name="worktreeIds"/>, read after the
+    /// retained devices have been re-attributed.</summary>
+    private IReadOnlyList<(string Kind, string EntityId)> ReadEntitiesOfWorktrees(
+        SqliteTransaction transaction,
+        IReadOnlyList<string> worktreeIds)
+    {
+        using var command = _store.Connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            $"SELECT entity_kind, entity_id FROM graph_entities WHERE workbench_id = $wb AND worktree_id IN ({Placeholders(worktreeIds, "$wt")}) ORDER BY entity_kind, entity_id;";
+        command.Parameters.AddWithValue("$wb", _workbenchId);
+        for (var index = 0; index < worktreeIds.Count; index++)
+            command.Parameters.AddWithValue("$wt" + index, worktreeIds[index]);
+        var result = new List<(string, string)>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) result.Add((reader.GetString(0), reader.GetString(1)));
+        return result;
+    }
+
+    private static string Placeholders(IReadOnlyList<string> values, string prefix) =>
+        values.Count == 0 ? "NULL" : string.Join(',', values.Select((_, index) => prefix + index));
+
+    private int CountRowsWithin(SqliteTransaction transaction, string table)
+    {
+        using var command = _store.Connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"SELECT COUNT(*) FROM {table};";
+        return Convert.ToInt32(command.ExecuteScalar());
     }
 
     public GraphEdge? ReplaceSessionTask(string sessionId, string? taskId, GraphProvenance provenance)
@@ -413,9 +1133,10 @@ public sealed class EngineeringGraphService
     }
     private long Scalar(string sql, params (string Name, object? Value)[] ps) { using var c=_store.Connection.CreateCommand(); c.CommandText=sql; foreach(var p in ps)c.Parameters.AddWithValue(p.Name,p.Value??DBNull.Value); return Convert.ToInt64(c.ExecuteScalar()); }
     private int ExecuteNonQuery(string sql, params (string Name, object? Value)[] ps) { using var c=_store.Connection.CreateCommand(); c.CommandText=sql; foreach(var p in ps)c.Parameters.AddWithValue(p.Name,p.Value??DBNull.Value); return c.ExecuteNonQuery(); }
-    private void Execute(SqliteTransaction tx,string sql, params (string Name, object? Value)[] ps) { using var c=_store.Connection.CreateCommand(); c.Transaction=tx;c.CommandText=sql;foreach(var p in ps)c.Parameters.AddWithValue(p.Name,p.Value??DBNull.Value);c.ExecuteNonQuery(); }
-    private static string Kind(GraphEntityKind k)=>k switch { GraphEntityKind.GitCommit=>"git_commit",GraphEntityKind.SourceObject=>"source_object",GraphEntityKind.SvnRevision=>"svn_revision",GraphEntityKind.Session=>"session", _=>"task" };
-    private static GraphEntityKind ParseKind(string value)=>value switch { "git_commit"=>GraphEntityKind.GitCommit,"source_object"=>GraphEntityKind.SourceObject,"svn_revision"=>GraphEntityKind.SvnRevision,"session"=>GraphEntityKind.Session,_=>GraphEntityKind.Task };
+    private int Execute(SqliteTransaction tx,string sql, params (string Name, object? Value)[] ps) { using var c=_store.Connection.CreateCommand(); c.Transaction=tx;c.CommandText=sql;foreach(var p in ps)c.Parameters.AddWithValue(p.Name,p.Value??DBNull.Value);return c.ExecuteNonQuery(); }
+    private int ExecuteAll(SqliteTransaction tx, string sql, IEnumerable<(string Name, object? Value)> ps) { using var c = _store.Connection.CreateCommand(); c.Transaction = tx; c.CommandText = sql; foreach (var p in ps) c.Parameters.AddWithValue(p.Name, p.Value ?? DBNull.Value); return c.ExecuteNonQuery(); }
+    private static string Kind(GraphEntityKind k)=>k switch { GraphEntityKind.GitCommit=>"git_commit",GraphEntityKind.SourceObject=>"source_object",GraphEntityKind.SvnRevision=>"svn_revision",GraphEntityKind.Session=>"session",GraphEntityKind.Device=>"device",GraphEntityKind.Worktree=>"worktree", _=>"task" };
+    private static GraphEntityKind ParseKind(string value)=>value switch { "git_commit"=>GraphEntityKind.GitCommit,"source_object"=>GraphEntityKind.SourceObject,"svn_revision"=>GraphEntityKind.SvnRevision,"session"=>GraphEntityKind.Session,"device"=>GraphEntityKind.Device,"worktree"=>GraphEntityKind.Worktree,_=>GraphEntityKind.Task };
     private static string Relation(GraphRelationKind k)=>k switch { GraphRelationKind.TaskSession=>"task_session",GraphRelationKind.TaskCommit=>"task_commit",GraphRelationKind.TaskSourceObject=>"task_source_object",GraphRelationKind.TaskSvnRevision=>"task_svn_revision",GraphRelationKind.CommitSourceObject=>"commit_source_object", _=>"commit_svn_revision" };
     private static GraphRelationKind ParseRelation(string value)=>value switch { "task_session"=>GraphRelationKind.TaskSession,"task_commit"=>GraphRelationKind.TaskCommit,"task_source_object"=>GraphRelationKind.TaskSourceObject,"task_svn_revision"=>GraphRelationKind.TaskSvnRevision,"commit_source_object"=>GraphRelationKind.CommitSourceObject,_=>GraphRelationKind.CommitSvnRevision };
     private static GraphProvenance ParseProvenance(string value)=>value switch { "default"=>GraphProvenance.Default,"evidence"=>GraphProvenance.Evidence,_=>GraphProvenance.Manual };

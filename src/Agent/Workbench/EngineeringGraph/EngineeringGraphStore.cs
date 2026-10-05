@@ -26,12 +26,26 @@ public sealed class EngineeringGraphStore : IDisposable
         try
         {
             _connection.Open();
+            ConfigureConcurrency(_connection);
             var currentVersion = EngineeringGraphSchema.GetVersion(_connection);
+            if (currentVersion > EngineeringGraphSchema.CurrentVersion)
+            {
+                throw new InvalidOperationException(
+                    $"Engineering graph schema version '{currentVersion}' is newer than supported version '{EngineeringGraphSchema.CurrentVersion}'.");
+            }
+
             if (currentVersion < EngineeringGraphSchema.CurrentVersion)
+            {
                 BackupBeforeMigration(_connection, DatabasePath);
-            using var transaction = _connection.BeginTransaction();
-            EngineeringGraphSchema.Apply(_connection, transaction, migrationFailureInjector);
-            transaction.Commit();
+                // The migration transaction is opened only when the ladder has to run. BeginTransaction
+                // issues BEGIN IMMEDIATE, so opening it unconditionally made every graph scope take the
+                // writer lock at construction — and the task page opens several scopes per interaction,
+                // so a concurrent one waited out the driver's retry window and failed with "database is
+                // locked". A current schema needs no write here at all.
+                using var transaction = _connection.BeginTransaction();
+                EngineeringGraphSchema.Apply(_connection, transaction, migrationFailureInjector);
+                transaction.Commit();
+            }
         }
         catch
         {
@@ -51,6 +65,22 @@ public sealed class EngineeringGraphStore : IDisposable
         if (_disposed) return;
         _disposed = true;
         _connection.Dispose();
+    }
+
+    /// <summary>
+    /// Every request opens its own connection, so two are open at once whenever the task page's
+    /// parallel reads — its stage lists and the device snapshot — overlap a stage write. SQLite raises
+    /// SQLITE_BUSY for the second writer, and with no busy handler installed a blocked statement is
+    /// only retried by the driver until its command timeout, which the user sees as a frozen page
+    /// followed by "database is locked". Waiting briefly lets the other statement finish instead. The
+    /// journal mode is deliberately left alone: switching to WAL would change the workbench's on-disk
+    /// file set and would make "a failed migration leaves the database byte-identical" false.
+    /// </summary>
+    private static void ConfigureConcurrency(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA busy_timeout = 5000;";
+        command.ExecuteNonQuery();
     }
 
     private static void BackupBeforeMigration(SqliteConnection connection, string databasePath)

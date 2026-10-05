@@ -10,9 +10,10 @@ namespace Mcp.Engineering.Export;
 /// verifies the exported file on disk is untouched since the last export (fingerprint-verified —
 /// compile ripples and timestamp drift no longer nominate). The post-export content hash is always
 /// the verdict (fingerprint- or hash-proven changes land in "changed", compile ripples degrade to
-/// "touched"). Tag tables have no FingerprintProvider and run the timestamp+hash path by default;
-/// instance DBs may get no moved signal at all in the propagation window (system-side
-/// regeneration) and are re-exported on every diff for a hash verdict. No Siemens types — the
+/// "touched"). Tag tables have no FingerprintProvider and run the timestamp+hash path by default.
+/// Instance DBs never reach the planner: they are outside the managed-source domain (see
+/// <see cref="ManagedSourceScope"/>), and a manifest record they left behind is dropped instead of
+/// diffed. No Siemens types — the
 /// adapter flattens blocks/tag tables/UDTs into <see cref="SyncLiveComponent"/> first, which makes
 /// this the unit-test seam.
 /// </summary>
@@ -30,6 +31,11 @@ internal enum SyncAction
 
     /// <summary>No live item for this record — delete the XML file and drop the record.</summary>
     Remove,
+
+    /// <summary>The record is outside the managed-source domain (an instance DB exported by an earlier
+    /// policy): delete its XML file and drop the record, and report no change. An instance DB leaving
+    /// the export is a policy effect, not a TIA-side deletion.</summary>
+    DropExcluded,
 }
 
 /// <summary>A live TIA object flattened to plain values (id formula shared with the manifest).</summary>
@@ -102,6 +108,13 @@ internal static class SyncPlanner
 
         foreach (var item in live)
         {
+            // Instance DBs are outside the managed-source domain (see ManagedSourceScope): never a
+            // candidate, so no plan item at all — not even a skip.
+            if (ManagedSourceScope.IsExcluded(item.SiemensTypeName))
+            {
+                continue;
+            }
+
             liveIds.Add(item.Id);
             if (!recordsById.TryGetValue(item.Id, out var record))
             {
@@ -120,6 +133,12 @@ internal static class SyncPlanner
 
         foreach (var record in records)
         {
+            if (ManagedSourceScope.IsExcluded(record.SiemensTypeName))
+            {
+                result.Add(new SyncPlanItem { Action = SyncAction.DropExcluded, Record = record });
+                continue;
+            }
+
             if (!liveIds.Contains(record.Id))
             {
                 result.Add(new SyncPlanItem { Action = SyncAction.Remove, Reason = ReasonRemovedFromTia, Record = record });
@@ -142,15 +161,8 @@ internal static class SyncPlanner
             return SyncAction.ReExport;
         }
 
-        // Instance DBs can change without any moved per-object signal (verified 2026-07-21):
-        // when the parent FB's static area changes, TIA regenerates them system-side and — until
-        // the change propagates — neither fingerprints nor modified dates move. Re-export on
-        // every diff; the content hash decides changed vs touched.
-        if (string.Equals(item.SiemensTypeName, "InstanceDB", StringComparison.Ordinal))
-        {
-            reason = ReasonInstanceDbVerify;
-            return SyncAction.ReExport;
-        }
+        // Instance DBs never reach this point: Plan filters them out of both sides because they are
+        // outside the managed-source domain (see ManagedSourceScope).
 
         if (item.Fingerprints is not null)
         {

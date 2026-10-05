@@ -732,6 +732,17 @@ public sealed class WorkbenchCoordinator
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            // The baseline is what puts a new project's source objects into the workbench graph: the
+            // source browser reads each object's task and commit links from there, so a baseline that
+            // never got indexed left every one of them reporting GRAPH_ENTITY_NOT_FOUND. Best effort,
+            // exactly like the evidence of every other commit.
+            var baselineIndexingWarning = IndexGraphEvidence(
+                workbench, worktreeId, baselineCommit.Sha, baselinePaths, nativeBaseline.Revision);
+            if (baselineIndexingWarning is not null)
+            {
+                progress?.Report(baselineIndexingWarning);
+            }
+
             var baselineStateDevices = baselineChecksums
                 .Where(checksum => checksum.IsCompiled)
                 .Select(checksum =>
@@ -1813,6 +1824,16 @@ public sealed class WorkbenchCoordinator
                     relativePath));
             knownWorkbenches[updatedWorkbench.WorkbenchId] = updatedWorkbench;
             knownWorktrees[worktree.WorktreeId] = worktree;
+            // ADR-0012 item 2: the new worktree registers the same device ids as master, and its
+            // exported content comes from another branch. Marking those devices invalidated makes the
+            // worktree's first read re-project instead of serving master's facts for that device.
+            var invalidationWarning = InvalidateProjection(
+                updatedWorkbench, worktree.WorktreeId, inheritedDevices.Select(device => device.DeviceId).ToArray());
+            if (invalidationWarning is not null)
+            {
+                progress?.Report(invalidationWarning);
+            }
+
             return worktree;
         }
         catch (Exception createException)
@@ -1956,6 +1977,35 @@ public sealed class WorkbenchCoordinator
         var updated = catalog.RemoveWorktree(persisted, worktreeId);
         knownWorkbenches[updated.WorkbenchId] = updated;
         knownWorktrees.TryRemove(worktreeId, out _);
+        // AC-007 / ADR-0012 item 4: the deletion is the one event that leaves rows behind, because the
+        // shared per-workbench database outlives the worktree. The cleanup is best effort — the Git and
+        // catalog removal above has already completed — and it keeps the facts of a device another
+        // worktree still registers. The worktree is already gone from the catalog, so the graph sees it
+        // as deleted.
+        try
+        {
+            using var graphStore = new EngineeringGraphStore(updated.RootPath);
+            var graph = new EngineeringGraphService(graphStore, updated.WorkbenchId,
+                id => updated.Worktrees.Any(item => item.WorktreeId == id));
+            var cleanup = new EngineeringGraphReconciliation(graph).RemoveDeletedWorktreeFacts();
+            if (cleanup.NodesRemoved > 0 || cleanup.PropertyRowsRemoved > 0 || cleanup.EdgeRowsRemoved > 0)
+            {
+                progress?.Report(
+                    $"Removed the deleted worktree's engineering-graph facts: {cleanup.NodesRemoved} node(s), "
+                    + $"{cleanup.PropertyRowsRemoved} property row(s), {cleanup.EdgeRowsRemoved} edge(s).");
+            }
+
+            if (cleanup.DevicesRetained.Count > 0)
+            {
+                progress?.Report(
+                    $"Kept the facts of {cleanup.DevicesRetained.Count} device(s) another worktree still registers.");
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            progress?.Report(
+                $"The worktree was removed, but its engineering-graph facts were not: {exception.Message}");
+        }
     }
 
     /// <summary>
@@ -2059,12 +2109,18 @@ public sealed class WorkbenchCoordinator
                         new { repoPath = device.WorktreeRoot, paths, message = "hardware: reload configuration" },
                         cancellationToken).ConfigureAwait(false);
 
+                    // A hardware commit is a commit path too (AC-006): it records a git_commit node and
+                    // invalidates the facts it changed, exactly like every other commit path.
+                    var indexingWarning = IndexHardwareCommit(device, commit.Sha, paths);
                     return new HardwareConfigurationReloadResult(
                         root,
                         results.Count(result => result.Success),
                         results.Count(result => result.Success && result.Scope == "device"),
                         commit.Sha,
-                        warnings);
+                        warnings)
+                    {
+                        EvidenceWarnings = indexingWarning is null ? null : new[] { indexingWarning },
+                    };
                 },
                 token).ConfigureAwait(false);
         }
@@ -2076,9 +2132,7 @@ public sealed class WorkbenchCoordinator
         var evidenceWarning = await TryRecordManagedSourceEvidenceForDeviceCommitAsync(
                 device, result.CommitSha, token)
             .ConfigureAwait(false);
-        return evidenceWarning is null
-            ? result
-            : result with { EvidenceWarnings = new[] { evidenceWarning } };
+        return result with { EvidenceWarnings = MergeWarnings(result.EvidenceWarnings, evidenceWarning) };
     }
 
     public async Task<HardwareConfigurationCompareResult> CompareHardwareAsync(
@@ -2200,10 +2254,11 @@ public sealed class WorkbenchCoordinator
                 var evidenceWarning = await TryRecordManagedSourceEvidenceForDeviceCommitAsync(
                         device, commit.Sha, cancellationToken)
                     .ConfigureAwait(false);
-                return evidenceWarning is null
-                    ? new HardwareConfigurationOverwriteResult(root, stagedFiles.Length, commit.Sha)
-                    : new HardwareConfigurationOverwriteResult(
-                        root, stagedFiles.Length, commit.Sha, new[] { evidenceWarning });
+                // The same commit evidence every other commit path records (AC-006).
+                var indexingWarning = IndexHardwareCommit(device, commit.Sha, paths);
+                var warnings = MergeWarnings(
+                    indexingWarning is null ? null : new[] { indexingWarning }, evidenceWarning);
+                return new HardwareConfigurationOverwriteResult(root, stagedFiles.Length, commit.Sha, warnings);
             },
             token);
 
@@ -2402,6 +2457,13 @@ public sealed class WorkbenchCoordinator
                             BaselineStale = true,
                         },
                     });
+                // ADR-0012 item 2: the managed XML changed, so the device's projected facts are stale.
+                var projectionWarning = InvalidateProjection(device);
+                if (projectionWarning is not null)
+                {
+                    progress?.Report(projectionWarning);
+                }
+
                 var worktree = store.Read<WorktreeMetadata>(Path.Combine(device.WorktreeRoot, "worktree.json"));
                 string? commitSha = null;
                 if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase)
@@ -2508,6 +2570,13 @@ public sealed class WorkbenchCoordinator
                         BaselineStale: false),
                 };
                 WriteDevice(device, metadata);
+                // ADR-0012 item 2: the knowledge state and its timestamp are projected device facts.
+                var refinementWarning = InvalidateProjection(device);
+                if (refinementWarning is not null)
+                {
+                    progress?.Report(refinementWarning);
+                }
+
                 return result;
             },
             token);
@@ -2535,6 +2604,13 @@ public sealed class WorkbenchCoordinator
                 Knowledge = new KnowledgeState(
                     false, hashes, DateTimeOffset.UtcNow.ToString("O"), BaselineStale: false),
             });
+            // ADR-0012 item 2: the knowledge state and its timestamp are projected device facts.
+            var rebuildWarning = InvalidateProjection(device);
+            if (rebuildWarning is not null)
+            {
+                progress?.Report(rebuildWarning);
+            }
+
             return new KnowledgeUpdateResult(
                 ingest.DbPath, relativePaths, hashes, Array.Empty<string>());
         }, token);
@@ -2583,6 +2659,14 @@ public sealed class WorkbenchCoordinator
                     token)
                 .ConfigureAwait(false);
             baseline = baseline with { CommitSha = commit.Sha };
+            // Register the baseline's source objects in the workbench graph, the same way every other
+            // commit's evidence is registered: without it a fresh project's source browser cannot read
+            // any object's task or commit links.
+            var indexingWarning = IndexBaselineEvidence(device, commit.Sha, initialSourcePaths, null);
+            if (indexingWarning is not null)
+            {
+                progress?.Report(indexingWarning);
+            }
         }
 
         var knowledge = await RebuildKnowledgeAsync(device, token, progress).ConfigureAwait(false);
@@ -2658,6 +2742,13 @@ public sealed class WorkbenchCoordinator
                     token)
                 .ConfigureAwait(false);
             commitSha = commit.Sha;
+            // Same reason as the single-device bootstrap: the baseline is what makes a new project's
+            // source objects readable in the workbench graph.
+            var baselineIndexingWarning = IndexBaselineEvidence(selectedDevice, commit.Sha, initialSourcePaths, null);
+            if (baselineIndexingWarning is not null)
+            {
+                progress?.Report(baselineIndexingWarning);
+            }
             baselines = baselines
                 .Select(result => result with { Baseline = result.Baseline with { CommitSha = commitSha } })
                 .ToList();
@@ -2844,11 +2935,62 @@ public sealed class WorkbenchCoordinator
         var targetRoot = WorkbenchPaths.ResolveWorktree(
             workbench.RootPath,
             targetRegistration.RelativePath);
-        return await versionControl.CallAsync<object>(
+        var merge = await versionControl.CallAsync<object>(
             "vc_merge",
             new { targetWorktreePath = targetRoot, sourceBranch = source.Branch },
             token).ConfigureAwait(false);
+        // A merge is a commit path like any other (AC-006): `vc_merge` writes no evidence of its own,
+        // so the merge commit had no git_commit node and its commit→source-object read answered 404.
+        // The response is returned exactly as the version-control server produced it.
+        if (JsonText(merge, "sha") is { } mergedSha)
+        {
+            var indexingWarning = await IndexMergeCommitAsync(
+                workbench, targetWorktreeId, targetRoot, mergedSha, token).ConfigureAwait(false);
+            if (indexingWarning is not null) progress?.Report(indexingWarning);
+        }
+
+        return merge;
     }
+
+    /// <summary>
+    /// Records the commit a merge produced. The merged commit's own file list is the merged changes,
+    /// so it is read back from the target worktree's log rather than guessed; when the log does not
+    /// name the merge commit the node is still registered, with no object edges.
+    /// </summary>
+    private async Task<string?> IndexMergeCommitAsync(
+        WorkbenchMetadata workbench,
+        string worktreeId,
+        string targetRoot,
+        string sha,
+        CancellationToken token)
+    {
+        if (graphEvidenceIndexer is null) return null;
+        IReadOnlyList<string> files = [];
+        try
+        {
+            var log = await versionControl.CallAsync<ConsistencyLogResult>(
+                "vc_log", new { repoPath = targetRoot, maxCount = 1 }, token).ConfigureAwait(false);
+            var head = log.Commits.FirstOrDefault();
+            if (head is not null && string.Equals(head.Sha, sha, StringComparison.OrdinalIgnoreCase))
+                files = head.Files;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // The merge already succeeded; a log that cannot be read only costs the commit its object
+            // edges, which the indexing call below reports.
+        }
+
+        return IndexGraphEvidence(workbench, worktreeId, sha, files, null);
+    }
+
+    /// <summary>One string property of a version-control result, whichever casing the server used.</summary>
+    private static string? JsonText(object result, string name) =>
+        result is System.Text.Json.JsonElement element
+        && element.ValueKind == System.Text.Json.JsonValueKind.Object
+        && element.EnumerateObject().FirstOrDefault(property =>
+            string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) is { Value.ValueKind: System.Text.Json.JsonValueKind.String } found
+            ? found.Value.GetString()
+            : null;
 
     public async Task<WorkbenchConsistencyResult> CompareMasterWithTiaAsync(
         string workbenchId,
@@ -3003,7 +3145,9 @@ public sealed class WorkbenchCoordinator
     {
         var workbench = LoadRegisteredWorkbench(workbenchId);
         var draft = validatedMerge.ReadDraft(workbench, validationId);
-        var targetRoot = ResolveWorktreeRoot(workbench, workbench.Worktrees.Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
+        var masterWorktreeId = workbench.Worktrees.Single(item =>
+            string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId;
+        var targetRoot = ResolveWorktreeRoot(workbench, masterWorktreeId);
         var evidence = new FeatureMergeEvidenceDto
         {
             SchemaVersion = "1.0",
@@ -3033,6 +3177,16 @@ public sealed class WorkbenchCoordinator
             evidence,
         };
         var result = await versionControl.CallAsync<FeatureMergePublicationResult>("vc_merge_validated", request, token).ConfigureAwait(false);
+        // The guarded feature merge is the other merge path that creates a commit (AC-006): like
+        // `vc_merge` it wrote no evidence of its own, so the merge commit it published had no
+        // git_commit node. The publication result has no warning channel and its shape is part of the
+        // API, so a failed indexing is discarded here rather than reported.
+        if (!string.IsNullOrWhiteSpace(result.Sha))
+        {
+            _ = await IndexMergeCommitAsync(workbench, masterWorktreeId, targetRoot, result.Sha, token)
+                .ConfigureAwait(false);
+        }
+
         var path = Path.Combine(workbench.RootPath, ".automation", "validated-merges", validationId + ".json");
         if (File.Exists(path)) File.Delete(path);
         return result;
@@ -3590,6 +3744,92 @@ public sealed class WorkbenchCoordinator
             && parts[^1].EndsWith(".xml", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Stages one source object for a device-bound worktree task and derives the stage's fingerprint
+    /// baseline from the object's committed Git content: the per-device export manifest
+    /// (devices/&lt;plc&gt;/source/metadata.json) read at Git HEAD through the version-control
+    /// boundary. ADR-0003 binds a stage baseline to committed source content — capturing live TIA
+    /// evidence here would mark an object the user already changed in TIA but never committed as
+    /// "in sync" and hide exactly the change the ADR protects. An object the committed manifest does
+    /// not list (it exists only in TIA) keeps a null baseline, which
+    /// <c>TASK_STAGE_BASELINE_MISSING</c> reports as the real state.
+    /// </summary>
+    public async Task<TaskSourceStage> StageTaskSourceObjectAsync(
+        string workbenchId,
+        string worktreeId,
+        string taskId,
+        string sourceObjectId,
+        CancellationToken token = default)
+    {
+        var workbench = LoadRegisteredWorkbench(workbenchId);
+        var registration = workbench.Worktrees.SingleOrDefault(item => item.WorktreeId == worktreeId)
+            ?? throw new WorkbenchCatalogException("WORKTREE_NOT_FOUND", $"Worktree '{worktreeId}' was not found.");
+        var worktreeRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
+        var worktree = store.Read<WorktreeMetadata>(Path.Combine(worktreeRoot, "worktree.json"));
+        using var graphStore = new EngineeringGraphStore(workbench.RootPath);
+        var graph = new EngineeringGraphService(graphStore, workbench.WorkbenchId,
+            id => workbench.Worktrees.Any(item => item.WorktreeId == id));
+        var task = graph.FindTask(taskId);
+        if (task is null || task.WorktreeId != worktreeId)
+            throw new WorkbenchLifecycleException("TASK_NOT_FOUND", "The selected task is not a worktree task of this worktree.");
+        if (string.IsNullOrWhiteSpace(task.DeviceId))
+            // Staging still requires a device-bound task; the graph service owns the rejection code.
+            throw new EngineeringGraphConstraintException("A task must bind one device before staging source objects.", "TASK_DEVICE_REQUIRED");
+        var device = LoadWorktreeDeviceContexts(workbench, worktree, registration.RelativePath)
+            .SingleOrDefault(item => item.Metadata.DeviceId == task.DeviceId);
+        if (device.Context is null)
+            throw new WorkbenchLifecycleException("TASK_DEVICE_NOT_FOUND", "The task device is no longer registered in this worktree.");
+        var baselineEvidenceJson = await TryReadCommittedStageBaselineAsync(
+                worktreeRoot, device.Context, task.DeviceId, sourceObjectId, token)
+            .ConfigureAwait(false);
+        return graph.StageSourceObject(taskId, sourceObjectId, baselineEvidenceJson);
+    }
+
+    /// <summary>
+    /// Reads the fingerprint evidence for one source object out of the device export manifest <b>at
+    /// Git HEAD</b> (never the working-tree file: an export that has not been committed must not
+    /// become a baseline) and serializes it for task_source_stages.baseline_evidence_json. Returns
+    /// null when the object has no committed manifest content, and degrades to null when the
+    /// manifest cannot be read at all — a stage without a baseline is recoverable and the compare
+    /// reports it, whereas failing the stage would block the whole staging flow.
+    /// </summary>
+    private async Task<string?> TryReadCommittedStageBaselineAsync(
+        string worktreeRoot,
+        DeviceContext device,
+        string deviceId,
+        string sourceObjectId,
+        CancellationToken token)
+    {
+        var prefix = deviceId + ":";
+        if (!sourceObjectId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            // Not this device's object: the graph service reports the device mismatch.
+            return null;
+        }
+
+        try
+        {
+            var file = await versionControl.CallAsync<ShowFileResult>(
+                "vc_show_file",
+                new
+                {
+                    repoPath = worktreeRoot,
+                    filePath = SourceManifestRelativePath(worktreeRoot, device),
+                    // Explicitly HEAD through the blob, so an uncommitted working-tree manifest is
+                    // never read as committed content. null => HEAD, and {content: null} means the
+                    // commit or the path does not exist (a worktree with no commits).
+                    commitSha = (string?)null,
+                },
+                token).ConfigureAwait(false);
+            var evidence = CommittedSourceManifest.TryReadObjectEvidence(file.Content, sourceObjectId[prefix.Length..]);
+            return evidence is null ? null : System.Text.Json.JsonSerializer.Serialize(evidence);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Compares only this task's staged source identities. The returned checksum is an
     /// observation of the capture, never a project-wide clean verdict.</summary>
     public async Task<TaskSourceComparisonResult> CompareTaskWithTiaAsync(
@@ -3614,7 +3854,7 @@ public sealed class WorkbenchCoordinator
         {
             if (string.IsNullOrWhiteSpace(stage.BaselineEvidenceJson))
             {
-                problems.Add(new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_BASELINE_MISSING", "This staged object has no Git-bound fingerprint baseline. Run a full scan and assign it before task comparison."));
+                problems.Add(new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_BASELINE_MISSING", "This staged object has no fingerprint baseline yet because it has no committed Git content. Commit the object once; task comparison reports it until then."));
                 continue;
             }
             var evidence = System.Text.Json.JsonSerializer.Deserialize<ManagedSourceEvidenceObject>(stage.BaselineEvidenceJson);
@@ -3932,18 +4172,90 @@ public sealed class WorkbenchCoordinator
         WorkbenchMetadata workbench, string worktreeId, string sha,
         IReadOnlyList<string> paths, long? svnRevision)
     {
-        if (graphEvidenceIndexer is null) return null;
+        // ADR-0012 item 2: the commit is a write point. Its evidence indexing and the projection
+        // invalidation are recorded together, so a commit path cannot gain one without the other.
+        var invalidationWarning = InvalidateProjection(workbench, worktreeId);
+        var indexingWarning = graphEvidenceIndexer?.TryIndexCommit(workbench, worktreeId, sha, paths, svnRevision: svnRevision);
+        return indexingWarning ?? invalidationWarning;
+    }
+
+    /// <summary>
+    /// ADR-0012 item 2: every write point that changes a device's facts marks that device's projection —
+    /// or every device whose stored facts came from the changed worktree — as needing a re-projection.
+    /// This is the primary freshness mechanism, because the code that changes the facts is the code that
+    /// says so. Best effort by design: the fact change has already completed, so a graph that cannot be
+    /// written returns a warning instead of failing the operation — and the next selection boundary
+    /// still catches a manifest change through the digest. One graph scope per call, no file I/O.
+    /// </summary>
+    private string? InvalidateProjection(
+        WorkbenchMetadata workbench, string? worktreeId, IReadOnlyList<string>? deviceIds = null)
+    {
         try
         {
-            graphEvidenceIndexer.Index(workbench, worktreeId,
-                new VersionControlTimelineGitCommit(sha, "Automation Workbench", "app-mediated commit",
-                    DateTimeOffset.UtcNow.ToString("O"), paths, null, svnRevision, false));
+            using var graphStore = new EngineeringGraphStore(workbench.RootPath);
+            var graph = new EngineeringGraphService(graphStore, workbench.WorkbenchId,
+                id => workbench.Worktrees.Any(item => item.WorktreeId == id));
+            foreach (var deviceId in deviceIds ?? [])
+                graph.InvalidateDeviceProjection(deviceId);
+            if (!string.IsNullOrWhiteSpace(worktreeId))
+                graph.InvalidateWorktreeProjections(worktreeId);
             return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"The device facts changed, but the projection was not marked for refresh: {exception.Message}";
+        }
+    }
+
+    /// <summary>The same invalidation for the device a caller already holds, with its workbench read
+    /// from the catalog.</summary>
+    private string? InvalidateProjection(DeviceContext device)
+    {
+        try
+        {
+            var workbench = catalog.Load(device.WorkbenchRoot);
+            return InvalidateProjection(workbench, device.WorktreeId, [device.DeviceId]);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"The device facts changed, but the projection was not marked for refresh: {exception.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Indexes one baseline commit's evidence for a device's worktree. Best effort: the commit has
+    /// already succeeded, so a workbench or graph that cannot be read is a warning, not a failure.
+    /// </summary>
+    private string? IndexBaselineEvidence(DeviceContext device, string sha, IReadOnlyList<string> paths, long? svnRevision)
+    {
+        try
+        {
+            var workbench = catalog.Load(device.WorkbenchRoot);
+            return IndexGraphEvidence(workbench, device.WorktreeId, sha, paths, svnRevision);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return $"Commit '{sha}' succeeded, but evidence indexing was not recorded: {exception.Message}";
         }
+    }
+
+    /// <summary>
+    /// A hardware commit is a commit path like any other (AC-006): its <c>git_commit</c> node and its
+    /// commit evidence are recorded with the same best-effort policy as every other commit, and the
+    /// worktree-level invalidation that comes with it also marks the hardware subtree for re-projection
+    /// (the commit is exactly the write point that changed it). Returns a warning, or null.
+    /// </summary>
+    private string? IndexHardwareCommit(DeviceContext device, string sha, IReadOnlyList<string> paths) =>
+        IndexBaselineEvidence(device, sha, paths, svnRevision: null);
+
+    /// <summary>The evidence warnings of one operation, in the order they were observed, or null when
+    /// there is none — the response shape carries no empty list.</summary>
+    private static IReadOnlyList<string>? MergeWarnings(IReadOnlyList<string>? first, string? second)
+    {
+        var warnings = new List<string>();
+        if (first is not null) warnings.AddRange(first);
+        if (second is not null) warnings.Add(second);
+        return warnings.Count == 0 ? null : warnings;
     }
 
     /// <summary>

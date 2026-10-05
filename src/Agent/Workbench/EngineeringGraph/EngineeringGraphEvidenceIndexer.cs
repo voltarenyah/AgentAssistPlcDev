@@ -38,11 +38,15 @@ public sealed class EngineeringGraphEvidenceIndexer
 
         graph.RegisterEntity(new GraphEntity(GraphEntityKind.GitCommit, commit.Sha,
             workbench.WorkbenchId, worktreeId));
+        // One lookup for the whole commit. A baseline commit lists every exported file — over a
+        // thousand for a real project — and resolving each path against a freshly parsed manifest
+        // would read that manifest once per file.
+        var sourceIndex = BuildSourceIndex(registration);
         var edges = new List<GraphEdge>();
         var unresolved = new List<UnresolvedGitFileEvidence>();
         foreach (var path in commit.Files ?? Array.Empty<string>())
         {
-            var source = ResolveSource(registration, path);
+            var source = ResolveSource(sourceIndex, path);
             if (source is null)
             {
                 if (!string.Equals(path, EngineeringStateWriter.RelativePath, StringComparison.OrdinalIgnoreCase))
@@ -90,38 +94,56 @@ public sealed class EngineeringGraphEvidenceIndexer
         return new EngineeringGraphEvidenceIndexResult(edges, svnEdges, unresolved);
     }
 
-    private (string DeviceId, SourceObjectInfo Info)? ResolveSource(
-        WorkbenchWorktreeRegistration registration, string path)
+    /// <summary>Every source object the worktree's registered devices have exported, keyed by the Git
+    /// path that carries it and built once per indexed commit.</summary>
+    private sealed class WorktreeSourceIndex
     {
-        var normalized = path.Replace('\\', '/').TrimStart('/');
+        public Dictionary<string, (string DeviceId, SourceObjectInfo Info)> ByPath { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private WorktreeSourceIndex BuildSourceIndex(WorkbenchWorktreeRegistration registration)
+    {
+        var index = new WorktreeSourceIndex();
         var contextRoot = WorkbenchPaths.ResolveWorktree(workbench.RootPath, registration.RelativePath);
         var metadataPath = Path.Combine(contextRoot, "worktree.json");
-        if (!File.Exists(metadataPath)) return null;
+        if (!File.Exists(metadataPath)) return index;
         var metadata = new AtomicJsonStore().Read<WorktreeMetadata>(metadataPath);
-        foreach (var deviceId in metadata.DeviceIds)
+        var devicesRoot = Path.Combine(contextRoot, "devices");
+        if (!Directory.Exists(devicesRoot)) return index;
+        foreach (var deviceMetadataPath in Directory.EnumerateFiles(devicesRoot, "device.json", SearchOption.AllDirectories))
         {
-            var deviceMetadataPath = Directory.EnumerateFiles(
-                    Path.Combine(contextRoot, "devices"), "device.json", SearchOption.AllDirectories)
-                .FirstOrDefault(candidate =>
-                {
-                    try { return new AtomicJsonStore().Read<DeviceMetadata>(candidate).DeviceId == deviceId; }
-                    catch (Exception) { return false; }
-                });
-            if (deviceMetadataPath is null) continue;
-            var deviceMetadata = new AtomicJsonStore().Read<DeviceMetadata>(deviceMetadataPath);
+            DeviceMetadata device;
+            try
+            {
+                device = new AtomicJsonStore().Read<DeviceMetadata>(deviceMetadataPath);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            if (!metadata.DeviceIds.Contains(device.DeviceId, StringComparer.Ordinal)) continue;
             var deviceDirectory = Path.GetFileName(Path.GetDirectoryName(deviceMetadataPath)!);
-            if (deviceMetadata.DeviceId != deviceId) continue;
             var marker = $"devices/{deviceDirectory}/source/";
-            var markerIndex = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            if (markerIndex < 0) continue;
-            var sourcePath = normalized[(markerIndex + marker.Length)..];
-            var deviceRoot = Path.GetDirectoryName(deviceMetadataPath)!;
-            var info = DeviceSnapshotReader.ReadManifestSourceObjects(Path.Combine(deviceRoot, "source"))
-                .FirstOrDefault(item =>
-                    string.Equals(item.RelativePath, sourcePath, StringComparison.OrdinalIgnoreCase));
-            if (info is not null) return (deviceMetadata.DeviceId, info);
+            foreach (var info in DeviceSnapshotReader.ReadManifestSourceObjects(
+                         Path.Combine(Path.GetDirectoryName(deviceMetadataPath)!, "source")))
+            {
+                // First device listed for the worktree wins, as the per-path walk did.
+                index.ByPath.TryAdd($"{marker}{info.RelativePath}", (device.DeviceId, info));
+            }
         }
-        return null;
+
+        return index;
+    }
+
+    private static (string DeviceId, SourceObjectInfo Info)? ResolveSource(WorktreeSourceIndex index, string path)
+    {
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        var markerIndex = normalized.IndexOf("devices/", StringComparison.OrdinalIgnoreCase);
+        return markerIndex >= 0 && index.ByPath.TryGetValue(normalized[markerIndex..], out var found)
+            ? found
+            : null;
     }
 }
 
@@ -134,5 +156,36 @@ public sealed class EngineeringGraphEvidenceIndexerProvider
         var graph = new EngineeringGraphService(store, workbench.WorkbenchId,
             id => workbench.Worktrees.Any(item => item.WorktreeId == id));
         return new EngineeringGraphEvidenceIndexer(graph, workbench).IndexCommit(worktreeId, commit);
+    }
+
+    /// <summary>
+    /// Indexes one commit whose file list the caller already holds, for a path that is not the
+    /// coordinator's commit flow — a merge, or a raw gateway commit route (AC-006). Best effort by
+    /// design: the Git operation has already succeeded by the time this runs, so a graph that cannot
+    /// be written returns a warning rather than failing the commit. Returns null when the evidence was
+    /// recorded.
+    /// </summary>
+    public string? TryIndexCommit(
+        WorkbenchMetadata workbench,
+        string worktreeId,
+        string sha,
+        IReadOnlyList<string> files,
+        string message = "app-mediated commit",
+        long? svnRevision = null)
+    {
+        ArgumentNullException.ThrowIfNull(workbench);
+        if (string.IsNullOrWhiteSpace(sha))
+            throw new ArgumentException("A Git commit id is required.", nameof(sha));
+        try
+        {
+            Index(workbench, worktreeId,
+                new VersionControlTimelineGitCommit(sha, "Automation Workbench", message,
+                    DateTimeOffset.UtcNow.ToString("O"), files, null, svnRevision, false));
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return $"Commit '{sha}' succeeded, but evidence indexing was not recorded: {exception.Message}";
+        }
     }
 }

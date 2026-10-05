@@ -1,29 +1,55 @@
 // @vitest-environment happy-dom
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EngineeringTaskDetail } from '@/api/client'
 import TaskDetail from './TaskDetail'
+
+vi.mock('@/api/client', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/api/client')>()),
+  listTaskSourceStages: vi.fn(async () => []),
+  listWorktreeSourceStages: vi.fn(async () => []),
+  listDeviceSourceObjects: vi.fn(async () => []),
+  stageTaskSourceObject: vi.fn(),
+  releaseTaskSourceObject: vi.fn(),
+  // The Commits section reads the worktree history and the commit's own graph entity; both stay
+  // empty here so this test covers the page's composition and not the section's own data.
+  getVersionControlWorktreeLog: vi.fn(async () => ({ repoPath: '', commits: [] })),
+  listDevices: vi.fn(async () => []),
+  getGraphEntityDetail: vi.fn(async () => ({
+    kind: 'gitCommit', id: 'commit-1', workbenchId: 'wb', worktreeId: 'wt', tasks: [], commits: [],
+    sourceObjects: [], unresolvedFiles: [],
+  })),
+}))
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const detail: EngineeringTaskDetail = {
   task: { taskId: 'task-1', workbenchId: 'wb', scope: 'worktree', worktreeId: 'wt', deviceId: 'device-hash', title: 'Motor update', type: 'feature', status: 'todo', priority: 1, intent: 'Improve', expectedResult: 'Safe', description: 'Plan', createdUtc: '', updatedUtc: '' },
-  sessions: [{ id: 'session-1', edgeId: 'edge-session', provenance: 'default', isPrimary: true, title: 'Tune motor startup' }], commits: [{ id: 'commit-1', edgeId: 'edge-commit', provenance: 'evidence', isPrimary: false }], sourceObjects: [], svnRevisions: [{ id: 'r42', edgeId: 'edge-svn', provenance: 'manual', isPrimary: false }],
+  sessions: [{ id: 'session-1', edgeId: 'edge-session', provenance: 'default', isPrimary: true, title: 'Tune motor startup' }], commits: [{ id: 'abcdef1234567890', edgeId: 'edge-commit', provenance: 'evidence', isPrimary: false }], sourceObjects: [], svnRevisions: [{ id: 'r42', edgeId: 'edge-svn', provenance: 'manual', isPrimary: false }],
 }
-const render = async (props: React.ComponentProps<typeof TaskDetail>) => { const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host); await act(async () => root.render(<TaskDetail {...props} />)); return host }
+const render = async (props: React.ComponentProps<typeof TaskDetail>) => { const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host); await act(async () => root.render(<TaskDetail {...props} />)); await act(async () => {}); return host }
 
 describe('TaskDetail', () => {
+  beforeEach(() => { document.body.innerHTML = '' })
+  afterEach(() => { document.body.innerHTML = '' })
+
   it('shows the conversation name and navigates to linked records', async () => {
     const navigate = vi.fn(); const host = await render({ detail, deviceName: 'Line 4 conveyor PLC', onNavigate: navigate })
-    expect(host.textContent).toContain('Task detail'); expect(host.textContent).toContain('Task fields'); expect(host.textContent).toContain('Sessions'); expect(host.textContent).toContain('Commits'); expect(host.textContent).toContain('SVN revisions')
-    expect(host.textContent).toContain('Tune motor startup'); expect(host.textContent).toContain('Default link'); expect(host.textContent).toContain('Evidence-derived'); expect(host.textContent).toContain('Manual link'); expect(host.textContent).not.toContain('No linked source objects yet.')
+    expect(host.textContent).toContain('Task detail'); expect(host.textContent).toContain('Task fields'); expect(host.textContent).toContain('Sessions'); expect(host.textContent).toContain('Commits'); expect(host.textContent).toContain('Related records')
+    // The remaining traceability edges are one group, so no section is named after them twice.
+    expect(host.textContent).not.toContain('SVN revisions')
+    expect(host.textContent).toContain('SVN revision')
+    expect(host.textContent).toContain('Tune motor startup'); expect(host.textContent).toContain('Default link'); expect(host.textContent).toContain('Evidence-derived'); expect(host.textContent).toContain('Manual link')
     expect(host.querySelector<HTMLInputElement>('#task-device')?.readOnly).toBe(true)
     expect(host.querySelector<HTMLInputElement>('#task-device')?.value).toBe('Line 4 conveyor PLC')
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open session Tune motor startup"]')?.click())
     expect(navigate).toHaveBeenCalledWith('session', 'session-1')
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open Commits commit-1"]')?.click())
-    expect(navigate).toHaveBeenCalledWith('commit', 'commit-1')
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open SVN revisions r42"]')?.click())
+    // A commit has no destination on this page, so the Commits section is a disclosure and never a
+    // clickable control that navigates nowhere.
+    expect(host.querySelector('[aria-label="Open Commits abcdef1234567890"]')).toBeNull()
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Show details for commit abcdef1"]')?.click())
+    expect(navigate).not.toHaveBeenCalledWith('commit', expect.anything())
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open SVN revision r42"]')?.click())
     expect(navigate).toHaveBeenCalledWith('svnRevision', 'r42')
   })
   it('states the hardware target instead of calling a hardware task unbound', async () => {
@@ -34,10 +60,22 @@ describe('TaskDetail', () => {
     // Its device is genuinely absent, but "not device-bound" would state the wrong reason.
     expect(host.textContent).not.toContain('Not device-bound')
   })
+  it('offers the editable Source objects section for a device-bound worktree task', async () => {
+    const host = await render({ detail, deviceName: 'Line 4 conveyor PLC' })
+    const section = host.querySelector<HTMLElement>('[aria-label="Source objects"]')
+    expect(section).not.toBeNull()
+    expect(section?.textContent).toContain('No source objects staged yet.')
+    expect(section?.querySelector('[aria-label="Add source object"]')).not.toBeNull()
+  })
+  it('explains why a project-scope task has no Source objects section instead of disabling controls', async () => {
+    const host = await render({ detail: { ...detail, task: { ...detail.task, scope: 'project', worktreeId: null, deviceId: null } } })
+    expect(host.querySelector('[aria-label="Source objects"]')).toBeNull()
+    expect(host.textContent).toContain('Source objects are staged by a device-bound worktree task, and this is a project-scope task with no device to stage them from.')
+  })
   it('carries the exact source-object identifier through navigation', async () => {
     const navigate = vi.fn()
     const host = await render({ detail: { ...detail, sourceObjects: [{ id: 'device-7/Blocks/Main', edgeId: 'edge-source', provenance: 'manual', isPrimary: false }] }, onNavigate: navigate })
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open Source objects device-7/Blocks/Main"]')?.click())
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open Source object device-7/Blocks/Main"]')?.click())
     expect(navigate).toHaveBeenCalledWith('sourceObject', 'device-7/Blocks/Main')
   })
   it('saves editable task fields while keeping device binding read-only', async () => {
@@ -59,6 +97,6 @@ describe('TaskDetail', () => {
     document.body.innerHTML = ''; const failed = await render({ detail: null, error: 'network unavailable', onRetry: retry }); expect(failed.textContent).toContain('network unavailable'); await act(async () => failed.querySelector('button')?.click()); expect(retry).toHaveBeenCalledOnce()
   })
   it('labels manual relationships with an accessible remove action', async () => {
-    const remove = vi.fn(); const host = await render({ detail, onRemove: remove }); const button = host.querySelector<HTMLButtonElement>('[aria-label="Remove SVN revisions r42"]'); expect(button).not.toBeNull(); await act(async () => button?.click()); expect(remove).toHaveBeenCalledWith('svnRevision', detail.svnRevisions[0])
+    const remove = vi.fn(); const host = await render({ detail, onRemove: remove }); const button = host.querySelector<HTMLButtonElement>('[aria-label="Remove SVN revision r42"]'); expect(button).not.toBeNull(); await act(async () => button?.click()); expect(remove).toHaveBeenCalledWith('svnRevision', detail.svnRevisions[0])
   })
 })

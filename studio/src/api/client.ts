@@ -429,6 +429,10 @@ export type EngineeringGraphEntityDetail = {
   worktreeId: string | null
   tasks: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
   commits: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  /** A `git_commit` entity's outgoing source-object evidence edges; empty for every other kind. */
+  sourceObjects: Array<{ id: string; edgeId: string; provenance: string; isPrimary: boolean }>
+  /** Changed files of a `git_commit` that no source object could be resolved for; empty otherwise. */
+  unresolvedFiles: string[]
 }
 
 export type EngineeringTaskRelationshipMutation = {
@@ -737,6 +741,8 @@ export type SourceObjectInfo = {
   isKnowHowProtected: boolean | null
   modifiedDate: string | null
   status: string | null
+  /** Fingerprint-comparison kind; `instance-db` is excluded from evidence, so it never has a baseline. */
+  evidenceKind?: string | null
 }
 
 export type SourceInspectionMember = { name: string; dataType: string | null; defaultValue: string | null; accessibility: string | null; comment: string | null }
@@ -1231,6 +1237,9 @@ const devicePath = (workbenchId: string, worktreeId: string, deviceId: string) =
   `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/devices/${encodeURIComponent(deviceId)}`
 export const getDeviceInfo = (workbenchId: string, worktreeId: string, deviceId: string) =>
   workbenchRequest<DeviceSnapshot>(devicePath(workbenchId, worktreeId, deviceId))
+/** The device's exported source objects only: the picker needs this list, not the whole snapshot. */
+export const listDeviceSourceObjects = (workbenchId: string, worktreeId: string, deviceId: string) =>
+  workbenchRequest<SourceObjectInfo[]>(`${devicePath(workbenchId, worktreeId, deviceId)}/source-objects`)
 export const openDeviceProject = (
   workbenchId: string,
   worktreeId: string,
@@ -1424,6 +1433,11 @@ export const stageTaskSourceObject = (workbenchId: string, worktreeId: string, t
   workbenchRequest<TaskSourceStage>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/stages`, jsonRequest('POST', { sourceObjectId, baselineEvidenceJson }))
 export const releaseTaskSourceObject = (workbenchId: string, worktreeId: string, taskId: string, sourceObjectId: string) =>
   workbenchRequest<void>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/stages/${encodeURIComponent(sourceObjectId)}`, { method: 'DELETE' })
+/** Active stages across a worktree with their owning task, so a picker can show the current owner
+ * of a source object before taking it over (one active owner per object per worktree). */
+export type WorktreeSourceStage = { taskId: string; taskTitle: string; sourceObjectId: string; deviceId: string; baselineEvidenceJson: string | null; stagedUtc: string }
+export const listWorktreeSourceStages = (workbenchId: string, worktreeId: string) =>
+  workbenchRequest<WorktreeSourceStage[]>(`${worktreePath(workbenchId, worktreeId)}/source-stages`)
 export type TaskSourceEvidenceCandidate = { id: string; reason: string; requiresXmlExport: boolean; isSafetyDifference: boolean }
 export type TaskSourceEvidenceCandidateExport = { id: string; sourcePath: string; export: { success: boolean; path: string | null } }
 export type TaskSourceComparison = { taskId: string; deviceId: string; candidates: TaskSourceEvidenceCandidate[]; candidateExports: TaskSourceEvidenceCandidateExport[]; problems: { sourceObjectId: string; code: string; message: string }[]; observedSoftwareChecksum: string | null }

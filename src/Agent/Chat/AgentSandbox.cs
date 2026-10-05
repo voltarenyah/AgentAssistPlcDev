@@ -86,9 +86,15 @@ public sealed class AgentSandbox
                 "Run it from the App chat, where the user can approve it.");
         }
 
-        // Managed assistant creations need every supplied field visible before approval. The
-        // ordinary audit summary remains bounded; only the confirmation card gets full arguments.
-        var approvalArguments = call.Name is "assistant_create_workbench" or "assistant_create_worktree" or "assistant_create_task"
+        // Managed assistant creations need every supplied field visible before approval. A task
+        // stage proposal is the same: the user approves specific source objects, so the card must
+        // list each one and the current owner a take-over would release — a 160-character summary
+        // could hide part of exactly what is being approved. A create_task call is the same again:
+        // its brief (background, evidence, proposed solutions) becomes the task's record, so the user
+        // has to read it on the card before it is written. The ordinary audit summary remains
+        // bounded; only the confirmation card gets full arguments.
+        var approvalArguments = call.Name is "assistant_create_workbench" or "assistant_create_worktree"
+            or "assistant_create_task" or "stage_task_source_object" or "create_task"
             ? call.ArgumentsJson
             : Summarize(call.ArgumentsJson);
         var decision = await confirm(new ToolConfirmationRequest(

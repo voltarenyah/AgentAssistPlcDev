@@ -87,18 +87,28 @@ public sealed class SyncPlannerTests
     }
 
     [Fact]
-    public void InstanceDB_AlwaysReExportedForHashVerdict()
+    public void InstanceDb_IsOutsideTheManagedSourceDomainInBothDirections()
     {
-        // Instance DBs can change system-side (parent FB static-area edit) with neither
-        // fingerprints nor timestamps moving — the hash check on every diff is the only
-        // reliable signal.
+        // Instance DBs are generated from their FB, which is where the information worth tracking
+        // lives, so they are never exported or compared. A live one is not a candidate, and a record
+        // an earlier manifest listed is dropped rather than diffed or reported as a removal.
         var plan = SyncPlanner.Plan(
-            new[] { Record(fingerprints: "fp1") },
+            new[] { Record(siemensTypeName: "InstanceDB") },
             new[] { Live(fingerprints: "fp1", siemensTypeName: "InstanceDB") });
 
         var item = Assert.Single(plan);
-        Assert.Equal(SyncAction.ReExport, item.Action);
-        Assert.Equal(SyncPlanner.ReasonInstanceDbVerify, item.Reason);
+        Assert.Equal(SyncAction.DropExcluded, item.Action);
+        Assert.Equal("id1", item.Record!.Id);
+    }
+
+    [Fact]
+    public void NewInstanceDb_IsNotEvenASkip()
+    {
+        var plan = SyncPlanner.Plan(
+            Array.Empty<ExportMetadataRecord>(),
+            new[] { Live(fingerprints: "fp1", siemensTypeName: "InstanceDB") });
+
+        Assert.Empty(plan);
     }
 
     [Fact]
@@ -253,12 +263,14 @@ public sealed class SyncPlannerTests
         string? fingerprints = "fp1",
         DateTimeOffset? modified = null,
         DateTimeOffset? codeModified = null,
-        DateTimeOffset? interfaceModified = null) => new()
+        DateTimeOffset? interfaceModified = null,
+        string? siemensTypeName = null) => new()
         {
             Id = id,
             Name = "A",
             SourcePath = "A",
             Category = "FB",
+            SiemensTypeName = siemensTypeName ?? string.Empty,
             Status = status,
             ExportedFile = exportedFile,
             ContentHash = contentHash,

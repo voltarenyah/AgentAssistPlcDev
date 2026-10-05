@@ -69,8 +69,15 @@ public sealed record EngineeringTaskUpdateApiRequest(
     string? ExpectedResult = null,
     string? Description = null);
 
+/// <summary>Stage request. <c>BaselineEvidenceJson</c> is accepted for wire compatibility and
+/// deliberately ignored: the stage baseline is always derived from the object's committed Git
+/// content, so a caller-supplied (live-TIA) baseline can never become task evidence (ADR-0003).</summary>
 public sealed record TaskSourceStageApiRequest(string SourceObjectId, string? BaselineEvidenceJson = null);
 public sealed record TaskSourceStageApiResponse(string TaskId, string SourceObjectId, string DeviceId, string? BaselineEvidenceJson, DateTimeOffset StagedUtc);
+
+/// <summary>One active stage in a worktree with its owning task, for pickers that must show the
+/// current owner before taking a source object over.</summary>
+public sealed record WorktreeSourceStageApiResponse(string TaskId, string TaskTitle, string SourceObjectId, string DeviceId, string? BaselineEvidenceJson, DateTimeOffset StagedUtc);
 
 public sealed record EngineeringTaskRelationshipApiResponse(
     string Id,
@@ -89,10 +96,19 @@ public sealed record EngineeringTaskRelationshipMutationApiResponse(
     string EdgeId, string TaskId, string TargetKind, string TargetId, string Relation,
     string Provenance, bool IsPrimary);
 
+/// <summary>One graph entity as the traceability surfaces read it. <c>Tasks</c> and <c>Commits</c>
+/// keep their existing meaning (incoming task edges, and the commits that touched this entity).
+/// <c>SourceObjects</c> and <c>UnresolvedFiles</c> are additive and are filled for a
+/// <c>git_commit</c> entity only: the source objects that commit touched (its outgoing
+/// <c>CommitSourceObject</c> evidence edges) and the changed files the evidence indexer could not
+/// resolve to a source object. Both are empty for every other entity kind, so no reader can mistake
+/// a task's own stage edges for commit evidence.</summary>
 public sealed record EngineeringGraphEntityDetailApiResponse(
     string Kind, string Id, string WorkbenchId, string? WorktreeId,
     IReadOnlyList<EngineeringTaskRelationshipApiResponse> Tasks,
-    IReadOnlyList<EngineeringTaskRelationshipApiResponse> Commits);
+    IReadOnlyList<EngineeringTaskRelationshipApiResponse> Commits,
+    IReadOnlyList<EngineeringTaskRelationshipApiResponse> SourceObjects,
+    IReadOnlyList<string> UnresolvedFiles);
 
 public sealed record EngineeringTaskDetailApiResponse(
     EngineeringTaskApiResponse Task,

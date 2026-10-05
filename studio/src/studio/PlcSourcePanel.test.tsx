@@ -9,6 +9,7 @@ import type { DeviceViewState } from './deviceSnapshot'
 
 const toastMock = vi.hoisted(() => ({
   success: vi.fn(),
+  error: vi.fn(),
 }))
 
 vi.mock('sonner', () => ({ toast: toastMock }))
@@ -51,6 +52,7 @@ const deviceView = {
 describe('PlcSourcePanel', () => {
   beforeEach(() => {
     toastMock.success.mockReset()
+    toastMock.error.mockReset()
     vi.mocked(api.getGraphEntityDetail).mockReset()
   })
 
@@ -128,5 +130,51 @@ describe('PlcSourcePanel', () => {
     await act(async () => openCommit?.click())
     expect(onNavigateEntity).toHaveBeenCalledWith('gitCommit', 'commit-200')
     expect(api.getGraphEntityDetail).toHaveBeenCalledWith('wb1', 'sourceObject', 'source-200')
+  })
+
+  it('shows the empty link state, not an error, when the graph has no record of the object', async () => {
+    // Nothing has staged or committed this object yet, so the workbench graph legitimately has no
+    // entity for it. That is an answer — the row says so — not a fault to report.
+    vi.mocked(api.getGraphEntityDetail).mockRejectedValue(
+      Object.assign(new Error('GRAPH_ENTITY_NOT_FOUND'), { status: 404, code: 'GRAPH_ENTITY_NOT_FOUND' }))
+
+    const { host } = await render(
+      <PlcSourcePanel
+        workbenchId="wb1"
+        worktreeId="wt1"
+        deviceId="dev1"
+        deviceView={deviceView}
+        onChatWithAgent={vi.fn()}
+        onSnapshotReload={vi.fn()}
+        selectedTraceabilityTarget={{ kind: 'sourceObject', id: 'source-200' }}
+      />,
+    )
+    await act(async () => {})
+
+    const selectedRow = Array.from(host.querySelectorAll<HTMLElement>('[data-testid="plc-source-row"]'))
+      .find(row => row.textContent?.includes('Block 200'))
+    expect(selectedRow?.textContent).toContain('No linked tasks yet.')
+    expect(selectedRow?.textContent).toContain('No linked commits yet.')
+    expect(toastMock.error).not.toHaveBeenCalled()
+  })
+
+  it('still reports a link read that actually failed', async () => {
+    vi.mocked(api.getGraphEntityDetail).mockRejectedValue(
+      Object.assign(new Error('graph unavailable'), { status: 500, code: 'HTTP_500' }))
+
+    await render(
+      <PlcSourcePanel
+        workbenchId="wb1"
+        worktreeId="wt1"
+        deviceId="dev1"
+        deviceView={deviceView}
+        onChatWithAgent={vi.fn()}
+        onSnapshotReload={vi.fn()}
+        selectedTraceabilityTarget={{ kind: 'sourceObject', id: 'source-200' }}
+      />,
+    )
+    await act(async () => {})
+
+    expect(toastMock.error).toHaveBeenCalled()
   })
 })

@@ -1,0 +1,267 @@
+using Agent.Chat;
+using Agent.Mcp;
+using Agent.Workbench;
+using Agent.Workbench.EngineeringGraph;
+using Contracts.Sandbox;
+using System.Text.Json;
+using Xunit;
+
+/// <summary>
+/// The device chat's task-creation tool: the PLC/knowledge agent records a finding it established in
+/// the conversation as a device-bound worktree task. The task always targets the conversation's own
+/// worktree and device (never arguments the model supplies), the brief sections the user asked for
+/// (background, evidence, proposed solutions) land in the task's own description, and the call is
+/// refused until the user approves it on the shared <see cref="AgentSandbox"/> card.
+/// </summary>
+public sealed class TaskCreationToolTests : IDisposable
+{
+    private readonly string root = Path.Combine(Path.GetTempPath(), $"task-create-tool-{Guid.NewGuid():N}");
+
+    [Fact]
+    public async Task CreatingATaskRecordsTheBriefAndBindsItToTheConversationDevice()
+    {
+        var fixture = TaskCreationFixture.Create(root);
+
+        var result = await fixture.InvokeAsync("""
+            {
+              "title": "Door 202 opens without the safety gate closed",
+              "type": "Issue",
+              "intent": "Prevent the door from opening while the gate is open",
+              "expectedResult": "Door 202 only opens when the safety gate reports closed",
+              "background": "Operator reported an intermittent door opening at line start.",
+              "evidence": "FB 202 \"VocDoorGeneral\" network 3 sets DoorOpen from StartButton alone; the SafetyGateClosed contact is not in that network.",
+              "proposedSolutions": "Add the SafetyGateClosed contact to the network 3 rung, or interlock the output in a separate safety network."
+            }
+            """);
+
+        var task = fixture.ReadTask(ResultTaskId(result));
+        Assert.Equal("Door 202 opens without the safety gate closed", task.Title);
+        Assert.Equal(GraphTaskType.Issue, task.Type);
+        Assert.Equal(GraphTaskScopeKind.Worktree, task.ScopeKind);
+        Assert.Equal(TaskCreationFixture.WorktreeId, task.WorktreeId);
+        Assert.Equal(TaskCreationFixture.DeviceId, task.DeviceId); // the conversation's device, not an argument
+        Assert.Equal(GraphTaskStatus.Todo, task.Status);
+        Assert.Equal("Prevent the door from opening while the gate is open", task.Intent);
+        Assert.Equal("Door 202 only opens when the safety gate reports closed", task.ExpectedResult);
+
+        var description = task.Description ?? string.Empty;
+        Assert.Contains("## Background", description, StringComparison.Ordinal);
+        Assert.Contains("Operator reported an intermittent door opening at line start.", description, StringComparison.Ordinal);
+        Assert.Contains("## Evidence", description, StringComparison.Ordinal);
+        Assert.Contains("SafetyGateClosed contact is not in that network", description, StringComparison.Ordinal);
+        Assert.Contains("## Proposed solutions", description, StringComparison.Ordinal);
+        Assert.Contains("interlock the output in a separate safety network", description, StringComparison.Ordinal);
+        // Section order is the brief's reading order, so the recorded task can be read top to bottom.
+        Assert.True(
+            description.IndexOf("## Background", StringComparison.Ordinal)
+                < description.IndexOf("## Evidence", StringComparison.Ordinal)
+            && description.IndexOf("## Evidence", StringComparison.Ordinal)
+                < description.IndexOf("## Proposed solutions", StringComparison.Ordinal));
+
+        // The result names the task it created so the agent reports the real identity, not a guessed one.
+        Assert.Equal(task.Title, result.GetProperty("title").GetString());
+    }
+
+    [Fact]
+    public async Task ATaskWithoutABriefSectionKeepsItsDescriptionEmpty()
+    {
+        var fixture = TaskCreationFixture.Create(root);
+
+        var result = await fixture.InvokeAsync("""
+            {"title": "Rename the grayscale block", "type": "Improvement",
+             "intent": "Match the naming convention", "expectedResult": "Block renamed and validated"}
+            """);
+
+        var task = fixture.ReadTask(ResultTaskId(result));
+        // No "## " scaffolding for sections the conversation had nothing for: the task page must not
+        // show empty headings a reader would read as missing evidence.
+        Assert.True(string.IsNullOrEmpty(task.Description));
+    }
+
+    [Fact]
+    public async Task AnUnknownTaskTypeIsRefusedBeforeAnythingIsCreated()
+    {
+        var fixture = TaskCreationFixture.Create(root);
+
+        var error = await Assert.ThrowsAsync<ToolCallException>(() => fixture.InvokeAsync("""
+            {"title": "Something", "type": "Bug", "intent": "goal", "expectedResult": "result"}
+            """));
+
+        Assert.Equal("TASK_TYPE_INVALID", error.Code);
+        Assert.Contains("Issue", error.Message, StringComparison.Ordinal);
+        Assert.Single(fixture.ReadTasks()); // only the fixture's own pre-existing task
+    }
+
+    [Fact]
+    public async Task AWhitespaceOnlyRequiredFieldIsRefusedBeforeAnythingIsCreated()
+    {
+        var fixture = TaskCreationFixture.Create(root);
+
+        // The loop's schema check only requires presence, so the tool itself refuses an empty brief
+        // rather than persisting a task whose goal is blank.
+        var error = await Assert.ThrowsAsync<ToolCallException>(() => fixture.InvokeAsync("""
+            {"title": "Something", "type": "Issue", "intent": "   ", "expectedResult": "result"}
+            """));
+
+        Assert.Equal("TOOL_ARGUMENT_INVALID", error.Code);
+        Assert.Contains("intent", error.Message, StringComparison.Ordinal);
+        Assert.Single(fixture.ReadTasks());
+    }
+
+    [Fact]
+    public async Task RejectingTheCallOnTheApprovalCardCreatesNoTask()
+    {
+        var fixture = TaskCreationFixture.Create(root);
+        var arguments = """
+            {"title": "Add a guard", "type": "Issue", "intent": "goal", "expectedResult": "result",
+             "evidence": "Network 3 has no interlock."}
+            """;
+        var sandbox = new AgentSandbox(new SandboxPolicy(), 20, _ => Task.FromResult(ToolConfirmation.Deny));
+
+        var verdict = await sandbox.CheckAsync(new ChatToolCall("call-task", TaskCreationTool.ToolName, arguments));
+
+        Assert.NotNull(verdict);
+        Assert.Contains("SANDBOX_USER_DENIED", verdict!.ErrorJson, StringComparison.Ordinal);
+        // The loop never dispatches a refused call, so the worktree still holds only its own task.
+        Assert.Single(fixture.ReadTasks());
+    }
+
+    [Fact]
+    public async Task TheApprovalCardCarriesTheFullBriefSoTheUserApprovesWhatIsRecorded()
+    {
+        var arguments = """
+            {"title": "Add a guard", "type": "Issue", "intent": "goal", "expectedResult": "result",
+             "background": "A long background the auditor needs to read before approving.",
+             "evidence": "Network 3 has no interlock.", "proposedSolutions": "Interlock the output."}
+            """;
+        ToolConfirmationRequest? shown = null;
+        var sandbox = new AgentSandbox(new SandboxPolicy(), 20, request =>
+        {
+            shown = request;
+            return Task.FromResult(ToolConfirmation.Deny);
+        });
+
+        // The tool is classified destructive, which is what routes it into the confirmation path.
+        Assert.Equal(SandboxTier.Destructive, new SandboxPolicy().Classify(TaskCreationTool.ToolName));
+        await sandbox.CheckAsync(new ChatToolCall("call-card", TaskCreationTool.ToolName, arguments));
+
+        Assert.NotNull(shown);
+        // Full arguments, not the 160-character audit summary: the card is where the user reads the
+        // brief that becomes the task.
+        Assert.Equal(arguments.Trim(), shown!.ArgumentsSummary);
+    }
+
+    [Fact]
+    public async Task WithoutADeviceTheToolReportsTheMissingContext()
+    {
+        var fixture = TaskCreationFixture.Create(root);
+
+        var error = await Assert.ThrowsAsync<ToolCallException>(() => fixture.InvokeWithoutDeviceAsync("""
+            {"title": "Something", "type": "Issue", "intent": "goal", "expectedResult": "result"}
+            """));
+
+        Assert.Equal("DEVICE_SELECTION_REQUIRED", error.Code);
+        Assert.Single(fixture.ReadTasks());
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string ResultTaskId(JsonElement result) => result.GetProperty("taskId").GetString()!;
+
+    /// <summary>One workbench worktree with a registered device and one pre-existing task, wired to the
+    /// real tool, graph factory and worktree task store.</summary>
+    private sealed class TaskCreationFixture
+    {
+        public const string WorktreeId = "master-1";
+        public const string DeviceId = "device-1";
+        private const string ExistingTaskId = "task-existing";
+
+        private readonly string workbenchRoot;
+        private readonly string workbenchId;
+        private readonly AtomicJsonStore store;
+        private readonly WorkbenchApiState state;
+
+        private TaskCreationFixture(
+            string workbenchRoot, string workbenchId, AtomicJsonStore store, WorkbenchApiState state,
+            DeviceContext device, AgentToolSpec spec)
+        {
+            this.workbenchRoot = workbenchRoot;
+            this.workbenchId = workbenchId;
+            this.store = store;
+            this.state = state;
+            Device = device;
+            Spec = spec;
+        }
+
+        public DeviceContext Device { get; }
+        public AgentToolSpec Spec { get; }
+
+        public static TaskCreationFixture Create(string parent)
+        {
+            var fixtureRoot = Path.Combine(parent, Guid.NewGuid().ToString("N"));
+            var store = new AtomicJsonStore();
+            var catalog = new WorkbenchCatalog(store, fixtureRoot);
+            var workbench = catalog.RegisterWorktree(
+                catalog.Create("Line", null),
+                new WorkbenchWorktreeRegistration(WorktreeId, "master", "master", "master"));
+            var device = WorkbenchPaths.ResolveDevice(
+                workbench.WorkbenchId, workbench.RootPath, WorktreeId, "master", DeviceId, "PLC_1");
+            Directory.CreateDirectory(device.SourceRoot);
+            store.Write(Path.Combine(device.WorktreeRoot, "worktree.json"), new WorktreeMetadata(
+                "1.2", WorktreeId, workbench.WorkbenchId, "master", "master",
+                DateTimeOffset.UtcNow.ToString("O"), "head-1", "project-1", null, new[] { DeviceId }, null));
+            store.Write(Path.Combine(device.DeviceRoot, "device.json"), new DeviceMetadata(
+                "1.2", DeviceId, WorktreeId, "PLC_1", "project-1", null, null, null,
+                new KnowledgeState(false, new Dictionary<string, string>(), null), Array.Empty<DeviceImportRecord>()));
+
+            using (var graphStore = new EngineeringGraphStore(workbench.RootPath))
+            {
+                var graph = new EngineeringGraphService(graphStore, workbench.WorkbenchId, id => id == WorktreeId);
+                graph.CreateTask(ExistingTaskId, GraphTaskScopeKind.Worktree, WorktreeId, "Existing work",
+                    GraphTaskType.Feature, intent: "intent", expectedResult: "result", deviceId: DeviceId);
+            }
+
+            var state = new WorkbenchApiState(catalog, store);
+            state.Add(workbench);
+            var tool = new TaskCreationTool(state, new EngineeringGraphApiFactory(), new WorktreeTaskStore(store));
+            return new TaskCreationFixture(
+                workbench.RootPath, workbench.WorkbenchId, store, state, device,
+                TaskCreationTool.CreateSpec(tool, () => device));
+        }
+
+        public async Task<JsonElement> InvokeAsync(string argumentsJson)
+        {
+            using var arguments = JsonDocument.Parse(argumentsJson);
+            return await Spec.Caller.CallAsync<JsonElement>(
+                TaskCreationTool.ToolName, arguments.RootElement, CancellationToken.None);
+        }
+
+        /// <summary>The same call with no selected device, which is the chat's own precondition.</summary>
+        public async Task<JsonElement> InvokeWithoutDeviceAsync(string argumentsJson)
+        {
+            var tool = new TaskCreationTool(state, new EngineeringGraphApiFactory(), new WorktreeTaskStore(store));
+            var spec = TaskCreationTool.CreateSpec(tool, () => null);
+            using var arguments = JsonDocument.Parse(argumentsJson);
+            return await spec.Caller.CallAsync<JsonElement>(
+                TaskCreationTool.ToolName, arguments.RootElement, CancellationToken.None);
+        }
+
+        public IReadOnlyList<GraphTask> ReadTasks()
+        {
+            using var graphStore = new EngineeringGraphStore(workbenchRoot);
+            return new EngineeringGraphService(graphStore, workbenchId, id => id == WorktreeId).ListTasks(WorktreeId);
+        }
+
+        public GraphTask ReadTask(string taskId)
+        {
+            using var graphStore = new EngineeringGraphStore(workbenchRoot);
+            return new EngineeringGraphService(graphStore, workbenchId, id => id == WorktreeId).FindTask(taskId)!;
+        }
+    }
+}

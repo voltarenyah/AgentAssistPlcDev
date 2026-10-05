@@ -29,6 +29,7 @@ public sealed class SandboxPolicyTests
     [InlineData("src_parse_block")]
     [InlineData("src_diff")]
     [InlineData("src_validate")]
+    [InlineData("list_source_objects")]
     public void KnownReadToolsClassifyAsRead(string tool)
     {
         Assert.Equal(SandboxTier.Read, new SandboxPolicy().Classify(tool));
@@ -60,6 +61,8 @@ public sealed class SandboxPolicyTests
     [InlineData("import_hardware_configuration")]
     [InlineData("delete_block")]
     [InlineData("vc_restore")]
+    [InlineData("create_task")]
+    [InlineData("stage_task_source_object")]
     public void DestructiveToolsClassifyAsDestructive(string tool)
     {
         Assert.Equal(SandboxTier.Destructive, new SandboxPolicy().Classify(tool));
@@ -89,6 +92,7 @@ public sealed class SandboxPolicyTests
             "vc_diff", "vc_snapshot", "vc_restore", "vc_branches", "vc_config",
             "vc_init_shared", "vc_add_worktree", "vc_worktrees", "vc_merge",
             "src_parse_block", "src_apply_edits", "src_diff", "src_validate",
+            "list_source_objects", "stage_task_source_object", "create_task",
         };
         var policy = new SandboxPolicy();
         foreach (var tool in currentTools)

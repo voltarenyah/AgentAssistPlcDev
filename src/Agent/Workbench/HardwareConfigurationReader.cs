@@ -296,9 +296,55 @@ internal sealed record HardwareAmlSource(
     XDocument? Document,
     string? Message);
 
+/// <summary>
+/// Where the hardware subtree is, without loading the AML: the manifest root the readers agreed on,
+/// the manifest itself and the AML file it names. The projection's digest is computed from this
+/// layout plus the two files' size and timestamp, so a boundary check reads no XML at all.
+/// </summary>
+internal sealed record HardwareAmlLayout(
+    string State,
+    string ManifestRoot,
+    string? ManifestPath,
+    string? ProjectAmlPath,
+    string? ExportedAt,
+    string? Message);
+
 internal static class HardwareAml
 {
     public static HardwareAmlSource Resolve(string worktreeRoot)
+    {
+        var layout = ResolveLayout(worktreeRoot);
+        if (layout.State != "available" || layout.ProjectAmlPath is null)
+        {
+            return new HardwareAmlSource(layout.State, layout.ProjectAmlPath, layout.ExportedAt, null, layout.Message);
+        }
+
+        try
+        {
+            var document = XDocument.Load(layout.ProjectAmlPath, LoadOptions.PreserveWhitespace);
+            return new HardwareAmlSource("available", layout.ProjectAmlPath, layout.ExportedAt, document, null);
+        }
+        catch (Exception exception) when (
+            exception is JsonException
+            or InvalidDataException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Xml.XmlException)
+        {
+            return new HardwareAmlSource(
+                "invalid",
+                null,
+                null,
+                null,
+                $"The saved project AML could not be read: {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The subtree's layout and state without parsing the AML: the same root selection and the same
+    /// missing/invalid states <see cref="Resolve"/> reports, derived from the manifest alone.
+    /// </summary>
+    public static HardwareAmlLayout ResolveLayout(string worktreeRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreeRoot);
         var hardwareRoot = WorkbenchPaths.ResolveHardwareRoot(worktreeRoot);
@@ -311,8 +357,9 @@ internal static class HardwareAml
         var manifestPath = Path.Combine(manifestRoot, "manifest.json");
         if (!File.Exists(manifestPath))
         {
-            return new HardwareAmlSource(
+            return new HardwareAmlLayout(
                 "missing",
+                manifestRoot,
                 null,
                 null,
                 null,
@@ -328,16 +375,16 @@ internal static class HardwareAml
             var exportedAt = OptionalString(json, "exportedAt");
             if (!File.Exists(projectAmlPath))
             {
-                return new HardwareAmlSource(
+                return new HardwareAmlLayout(
                     "invalid",
+                    manifestRoot,
+                    manifestPath,
                     projectAmlPath,
                     exportedAt,
-                    null,
                     $"The saved hardware manifest references a missing AML file: {projectAmlRelative}.");
             }
 
-            var document = XDocument.Load(projectAmlPath, LoadOptions.PreserveWhitespace);
-            return new HardwareAmlSource("available", projectAmlPath, exportedAt, document, null);
+            return new HardwareAmlLayout("available", manifestRoot, manifestPath, projectAmlPath, exportedAt, null);
         }
         catch (Exception exception) when (
             exception is JsonException
@@ -346,9 +393,10 @@ internal static class HardwareAml
             or UnauthorizedAccessException
             or System.Xml.XmlException)
         {
-            return new HardwareAmlSource(
+            return new HardwareAmlLayout(
                 "invalid",
-                null,
+                manifestRoot,
+                manifestPath,
                 null,
                 null,
                 $"The saved project AML could not be read: {exception.Message}");

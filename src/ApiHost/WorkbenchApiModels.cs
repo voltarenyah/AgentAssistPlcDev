@@ -740,11 +740,16 @@ public static class WorkbenchEndpoints
         {
             using var scope = graphs.Open(state.Workbench(id));
             var kind = ParseGraphEntityKind(entityKind);
+            // An exact entity id wins (AC-005); otherwise the id is resolved to the one source-object
+            // identity the graph stores, so the bare manifest id the source panel sends and the
+            // reader's own `source:{relativePath}` form reach the object the graph holds links for.
             var entity = scope.Service.GetEntity(kind, entityId)
+                ?? ResolveGraphEntityAnchor(id, kind, entityId, state, scope.Service)
                 ?? throw new KeyNotFoundException("GRAPH_ENTITY_NOT_FOUND");
-            var directTasks = scope.Service.GetIncomingEdges(kind, entityId)
+            var resolvedId = entity.EntityId;
+            var directTasks = scope.Service.GetIncomingEdges(kind, resolvedId)
                 .Where(edge => edge.FromKind == GraphEntityKind.Task);
-            var evidenceCommits = scope.Service.GetIncomingEdges(kind, entityId)
+            var evidenceCommits = scope.Service.GetIncomingEdges(kind, resolvedId)
                 .Where(edge => edge.FromKind == GraphEntityKind.GitCommit)
                 .ToArray();
             var traversedTasks = evidenceCommits.SelectMany(commit => scope.Service.GetIncomingEdges(GraphEntityKind.GitCommit, commit.FromId)
@@ -757,10 +762,23 @@ public static class WorkbenchEndpoints
             var commits = evidenceCommits.OrderBy(edge => edge.FromId, StringComparer.Ordinal)
                 .Select(edge => new EngineeringTaskRelationshipApiResponse(edge.FromId, edge.EdgeId,
                     JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary)).ToArray();
+            // A commit's own evidence is the direction the response above cannot express: the source
+            // objects it touched and the changed files no source object could be resolved for. Both
+            // are filled for a commit entity only, so `tasks`/`commits` keep their exact meaning.
+            var sourceObjectEdges = kind == GraphEntityKind.GitCommit
+                ? scope.Service.GetEdges(GraphEntityKind.GitCommit, resolvedId, GraphEntityKind.SourceObject)
+                    .OrderBy(edge => edge.ToId, StringComparer.Ordinal)
+                    .Select(edge => new EngineeringTaskRelationshipApiResponse(edge.ToId, edge.EdgeId,
+                        JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary)).ToArray()
+                : Array.Empty<EngineeringTaskRelationshipApiResponse>();
+            var unresolvedFiles = kind == GraphEntityKind.GitCommit
+                ? scope.Service.GetFileEvidence(resolvedId).Select(item => item.RelativePath).ToArray()
+                : Array.Empty<string>();
             return Results.Ok(new EngineeringGraphEntityDetailApiResponse(
                 JsonNamingPolicy.CamelCase.ConvertName(kind.ToString()), entity.EntityId,
-                entity.WorkbenchId, entity.WorktreeId, tasks, commits));
+                entity.WorkbenchId, entity.WorktreeId, tasks, commits, sourceObjectEdges, unresolvedFiles));
         });
+
         app.MapPatch("/api/workbenches/{id}/tasks/{taskId}", (
             string id, string taskId, JsonElement body, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
@@ -923,19 +941,40 @@ public static class WorkbenchEndpoints
                 progress => coordinator.CompareTaskWithTiaAsync(id, wt, taskId, ct, progress),
                 "Task source comparison completed.").ConfigureAwait(false));
         });
-        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages", (
-            string id, string wt, string taskId, TaskSourceStageApiRequest request, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
+        app.MapGet("/api/workbenches/{id}/worktrees/{wt}/source-stages", (
+            string id, string wt, WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
             using var scope = graphs.Open(state.Workbench(id));
-            var task = scope.Service.FindTask(taskId);
-            if (task is null || task.WorktreeId != wt) throw new KeyNotFoundException("TASK_NOT_FOUND");
-            var device = state.Device(id, wt, task.DeviceId!);
-            foreach (var source in DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot))
+            return Results.Ok(scope.Service.ListWorktreeActiveStages(wt)
+                .Select(item => new WorktreeSourceStageApiResponse(
+                    item.Stage.TaskId, item.TaskTitle, item.Stage.SourceObjectId, item.Stage.DeviceId,
+                    item.Stage.BaselineEvidenceJson, item.Stage.StagedUtc)));
+        });
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages", async (
+            string id, string wt, string taskId, TaskSourceStageApiRequest request, WorkbenchApiState state,
+            EngineeringGraphApiFactory graphs, WorkbenchCoordinator coordinator, CancellationToken ct) =>
+        {
+            var workbench = state.Workbench(id);
+            using (var scope = graphs.Open(workbench))
             {
-                scope.Service.RegisterEntity(new GraphEntity(GraphEntityKind.SourceObject,
-                    $"{task.DeviceId}:{source.Id}", task.WorkbenchId, wt, task.DeviceId, source.RelativePath));
+                var task = scope.Service.FindTask(taskId);
+                if (task is null || task.WorktreeId != wt) throw new KeyNotFoundException("TASK_NOT_FOUND");
+                var device = state.Device(id, wt, task.DeviceId!);
+                // One transaction for the whole manifest: the per-object autocommit it used to do made
+                // a single stage click wait seconds on more than a thousand writes.
+                scope.Service.RegisterEntities(DeviceSnapshotReader.ReadManifestSourceObjects(device.Context.SourceRoot)
+                    .Select(source => new GraphEntity(GraphEntityKind.SourceObject,
+                        $"{task.DeviceId}:{source.Id}", task.WorkbenchId, wt, task.DeviceId, source.RelativePath)));
+                // ADR-0012 item 2: staging registers the whole device manifest in the graph, so the
+                // device's projection is flagged for a re-projection before the next read serves it.
+                scope.Service.InvalidateDeviceProjection(task.DeviceId!);
             }
-            var stage = scope.Service.StageSourceObject(taskId, request.SourceObjectId, request.BaselineEvidenceJson);
+            // The stage baseline is always derived from the object's committed Git content, never
+            // taken from the request: a client-supplied value could only be a live-TIA shortcut,
+            // which ADR-0003 rejects as a baseline.
+            coordinator.RegisterWorkbench(workbench);
+            var stage = await coordinator.StageTaskSourceObjectAsync(id, wt, taskId, request.SourceObjectId, ct)
+                .ConfigureAwait(false);
             return Results.Created($"/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages/{Uri.EscapeDataString(stage.SourceObjectId)}", new TaskSourceStageApiResponse(stage.TaskId, stage.SourceObjectId, stage.DeviceId, stage.BaselineEvidenceJson, stage.StagedUtc));
         });
         app.MapDelete("/api/workbenches/{id}/worktrees/{wt}/tasks/{taskId}/stages/{sourceObjectId}", (
@@ -1092,37 +1131,59 @@ public static class WorkbenchEndpoints
                 s.Select(id);
             return result;
         });
-        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/select", (string id, string wt, WorkbenchApiState s, WorkbenchCoordinator coordinator, EngineeringGraphApiFactory graphs) =>
         {
             var workbench = s.Workbench(id);
             coordinator.RegisterWorkbench(workbench);
             s.Worktree(id, wt);
             s.Select(id, wt);
+            ReconcileWorktreeSelection(s, graphs, workbench, wt);
             return Results.NoContent();
         });
         app.MapGet("/api/workbenches/{id}/worktrees/{wt}/devices", (string id, string wt, WorkbenchApiState s) => s.ListDevices(id, wt));
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware", (
             string workbenchId,
             string worktreeId,
-            WorkbenchApiState s) =>
-            Results.Ok(HardwareConfigurationReader.Read(s.WorktreeRoot(workbenchId, worktreeId))));
+            WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
+        {
+            // The hardware/AML subtree is a different export from the PLC source, and its facts are
+            // projected per worktree (ADR-0011 Phase 5): this route reads the graph and parses no AML.
+            using var facts = new HardwareGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadConfiguration(s.WorktreeRoot(workbenchId, worktreeId), worktreeId));
+        });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware/bom", (
             string workbenchId,
             string worktreeId,
-            WorkbenchApiState s) =>
-            Results.Ok(HardwareListReader.ReadBom(s.WorktreeRoot(workbenchId, worktreeId))));
+            WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
+        {
+            using var facts = new HardwareGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadBom(s.WorktreeRoot(workbenchId, worktreeId), worktreeId));
+        });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/hardware/network", (
             string workbenchId,
             string worktreeId,
-            WorkbenchApiState s) =>
-            Results.Ok(HardwareListReader.ReadNetwork(s.WorktreeRoot(workbenchId, worktreeId))));
-        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s, WorkbenchCoordinator coordinator) =>
+            WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
+        {
+            using var facts = new HardwareGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadNetwork(s.WorktreeRoot(workbenchId, worktreeId), worktreeId));
+        });
+        app.MapPost("/api/workbenches/{id}/worktrees/{wt}/devices/{device}/select", (string id, string wt, string device, WorkbenchApiState s, WorkbenchCoordinator coordinator, EngineeringGraphApiFactory graphs) =>
         {
             var workbench = s.Workbench(id);
             coordinator.RegisterWorkbench(workbench);
             s.Select(id, wt);
             s.Device(device);
             s.Select(id, wt, device);
+            // The device selection boundary (ADR-0012 item 3, AC-004): the check and the rows it guards
+            // share this one graph scope, and a projection failure is reported as a projection failure
+            // rather than served as stale facts. The selection itself is already recorded above, so a
+            // failing boundary never loses the user's selection.
+            var selected = s.Device(device);
+            using var facts = new DeviceSnapshotGraphScope(s, graphs, id);
+            facts.Reader.EnsureProjectionCurrent(selected.Context, selected.Metadata);
             return Results.NoContent();
         });
 
@@ -1161,6 +1222,7 @@ public static class WorkbenchEndpoints
             string workbenchId, string worktreeId, CommitSourceApiRequest body,
             WorkbenchApiState s, WorkbenchCoordinator coordinator, ApiMcpGateway gateway,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks,
+            EngineeringGraphEvidenceIndexerProvider evidenceIndexer,
             OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
         {
             var root = s.WorktreeRoot(workbenchId, worktreeId);
@@ -1234,8 +1296,13 @@ public static class WorkbenchEndpoints
 
             // Compatibility for an empty/legacy worktree: the version-control server still
             // validates the selected source paths. Real master XML files use the protected path above.
-            return Results.Ok(await gateway.For("vc_commit_selected").CallAsync<System.Text.Json.JsonElement>(
-                "vc_commit_selected", new { repoPath = root, paths = body.Paths, message = body.Message }, ct));
+            var compatibilityCommit = await gateway.For("vc_commit_selected").CallAsync<System.Text.Json.JsonElement>(
+                "vc_commit_selected", new { repoPath = root, paths = body.Paths, message = body.Message }, ct);
+            // This fallback also bypasses the coordinator's commit flow, so it records the evidence
+            // itself (AC-006).
+            RawGatewayCommitEvidence.IndexCommit(
+                evidenceIndexer, s.Workbench(workbenchId), worktreeId, compatibilityCommit);
+            return Results.Ok(compatibilityCommit);
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/vc/validation/{sha}", async (
             string workbenchId, string worktreeId, string sha,
@@ -1705,16 +1772,33 @@ public static class WorkbenchEndpoints
                 "Saved hardware configuration updated.").ConfigureAwait(false);
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}", (
-            string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
         {
             var selected = s.Device(workbenchId, worktreeId, device);
-            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata));
+            // The device page reads the engineering graph; a device without a projection is projected
+            // before it is served, so no request walks the exported source tree (ADR-0011).
+            using var facts = new DeviceSnapshotGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.Read(selected.Context, selected.Metadata));
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/blocks", (
-            string workbenchId, string worktreeId, string device, WorkbenchApiState s, DeviceSnapshotReader snapshots) =>
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
         {
             var selected = s.Device(workbenchId, worktreeId, device);
-            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata).Blocks);
+            using var facts = new DeviceSnapshotGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadBlocks(selected.Context, selected.Metadata));
+        });
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source-objects", (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs) =>
+        {
+            var selected = s.Device(workbenchId, worktreeId, device);
+            // The task page's picker reads this list and nothing else. Instance DBs are dropped: they
+            // are outside the evidence domain and can never be compared, so they are not a task basis
+            // and must not be offered as one.
+            using var facts = new DeviceSnapshotGraphScope(s, graphs, workbenchId);
+            return Results.Ok(facts.Reader.ReadSourceObjects(selected.Context, selected.Metadata, comparableOnly: true));
         });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/refresh/stage", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
@@ -1799,9 +1883,18 @@ public static class WorkbenchEndpoints
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/source/inspect", (
             string workbenchId, string worktreeId, string device, string relativePath,
-            WorkbenchApiState s, DeviceSourceResolver resolver, SourceObjectInspectorReader inspector) =>
+            WorkbenchApiState s, EngineeringGraphApiFactory graphs) =>
         {
-            try { return Results.Ok(inspector.Read(s.Device(workbenchId, worktreeId, device).Context, relativePath, resolver)); }
+            // The inspected content is projected at ingest (ADR-0011 Phase 5), so this route reads the
+            // graph and never opens the exported XML file: removing or corrupting it after the ingest
+            // changes nothing here. The response shape, and the status each inspection error maps to,
+            // are the ones the inspector produced.
+            try
+            {
+                var selected = s.Device(workbenchId, worktreeId, device);
+                using var facts = new DeviceSnapshotGraphScope(s, graphs, workbenchId);
+                return Results.Ok(facts.Reader.ReadInspection(selected.Context, selected.Metadata, relativePath));
+            }
             catch (SourceInspectionException exception) { return Results.UnprocessableEntity(new { error = exception.Code, message = exception.Message }); }
             catch (FileNotFoundException exception) { return Results.NotFound(new { error = "SOURCE_FILE_NOT_FOUND", message = exception.Message }); }
             catch (ArgumentException exception) { return Results.BadRequest(new { error = "SOURCE_PATH_INVALID", message = exception.Message }); }
@@ -1929,9 +2022,16 @@ public static class WorkbenchEndpoints
                 "vc_add", new { repoPath = s.Device(workbenchId, worktreeId, device).Context.WorktreeRoot, paths = body.Paths ?? [] }, ct));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/commit", async (
             string workbenchId, string worktreeId, string device, CompatibilityPathRequest body,
-            WorkbenchApiState s, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("vc_commit").CallAsync<System.Text.Json.JsonElement>(
-                "vc_commit", new { repoPath = s.Device(workbenchId, worktreeId, device).Context.WorktreeRoot, message = body.Message }, ct));
+            WorkbenchApiState s, ApiMcpGateway gateway, EngineeringGraphEvidenceIndexerProvider evidenceIndexer,
+            CancellationToken ct) =>
+        {
+            var commit = await gateway.For("vc_commit").CallAsync<System.Text.Json.JsonElement>(
+                "vc_commit", new { repoPath = s.Device(workbenchId, worktreeId, device).Context.WorktreeRoot, message = body.Message }, ct);
+            // A raw gateway commit never reaches the coordinator's evidence indexing (AC-006).
+            RawGatewayCommitEvidence.IndexCommit(
+                evidenceIndexer, s.Workbench(workbenchId), worktreeId, commit);
+            return commit;
+        });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/restore", async (
             string workbenchId, string worktreeId, string device, CompatibilityPathRequest body,
             WorkbenchApiState s, SandboxedToolExecutor executor, CancellationToken ct) =>
@@ -2122,6 +2222,201 @@ public static class WorkbenchEndpoints
         JsonNamingPolicy.CamelCase.ConvertName(edge.RelationKind.ToString()),
         JsonNamingPolicy.CamelCase.ConvertName(edge.Provenance.ToString()), edge.IsPrimary);
 
+    /// <summary>
+    /// Resolves a source-object id the graph holds no exact entity for, and registers its anchor
+    /// (AC-005). Three forms are accepted, all naming the one identity the graph stores
+    /// (<c>{deviceId}:{manifestId}</c>):
+    /// <list type="bullet">
+    /// <item>the exact <c>{deviceId}:{manifestId}</c> id, when nothing has put the object in the graph
+    /// yet;</item>
+    /// <item>the bare <c>{manifestId}</c> the source panel sends
+    /// (<c>PlcSourcePanel.tsx</c>), resolved against the selected device;</item>
+    /// <item>the reader's own <c>source:{relativePath}</c> block id
+    /// (<see cref="DeviceSnapshotReader.ReadManifestSourceObjects"/> falls back to it for a manifest
+    /// component without an id, and the block view's <c>OfflineBlockInfo.Id</c> has always been it),
+    /// resolved against the selected device by path.</item>
+    /// </list>
+    /// A prefix is treated as a device id only when it names a device registered in the current
+    /// selection, so a caller cannot name a device outside it; an id that is none of the three forms
+    /// is refused with <c>GRAPH_ENTITY_ID_UNRESOLVED</c>, because "this id names something I cannot
+    /// attribute" is not the answer "no such entity exists".
+    /// </summary>
+    private static GraphEntity? ResolveGraphEntityAnchor(
+        string workbenchId,
+        GraphEntityKind kind,
+        string entityId,
+        WorkbenchApiState state,
+        EngineeringGraphService graph)
+    {
+        if (kind != GraphEntityKind.SourceObject) return null;
+        var selection = state.Selection;
+        if (selection?.WorkbenchId != workbenchId || selection.WorktreeId is null) return null;
+        var separator = entityId.IndexOf(':');
+        if (separator > 0)
+        {
+            var prefix = entityId[..separator];
+            var suffix = DecodeId(entityId[(separator + 1)..]);
+            if (TrySelectedDevice(state, prefix, out var prefixed))
+                return RegisterListedSourceObject(graph, workbenchId, prefixed, suffix);
+            if (!string.Equals(prefix, SourceBlockIdPrefix, StringComparison.OrdinalIgnoreCase)
+                || !TrySelectedDevice(state, selection.DeviceId, out var byPath))
+            {
+                throw new EngineeringGraphConstraintException(
+                    $"Source object id '{entityId}' names the device or prefix '{prefix}', which is not a device of the current selection.",
+                    "GRAPH_ENTITY_ID_UNRESOLVED");
+            }
+
+            return RegisterListedSourceObjectByPath(graph, workbenchId, byPath, suffix);
+        }
+
+        return TrySelectedDevice(state, selection.DeviceId, out var selected)
+            ? RegisterListedSourceObject(graph, workbenchId, selected, DecodeId(entityId))
+            : throw new EngineeringGraphConstraintException(
+                $"Source object id '{entityId}' is a bare manifest id, which can only be resolved against a selected device.",
+                "GRAPH_ENTITY_ID_UNRESOLVED");
+    }
+
+    /// <summary>
+    /// The id as the Studio's URL encoding delivers it: a client encodes the whole id
+    /// (<c>encodeURIComponent</c> in <c>client.ts</c>), and a slash inside a route value survives as
+    /// <c>%2F</c> — route values are decoded, but never into a path separator — so the relative path of
+    /// the reader's block id form arrives percent-encoded. Decoding is lenient: a value that is not a
+    /// valid escape sequence is returned as it came.
+    /// </summary>
+    private static string DecodeId(string value)
+    {
+        if (!value.Contains('%')) return value;
+        try
+        {
+            return Uri.UnescapeDataString(value);
+        }
+        catch (UriFormatException)
+        {
+            return value;
+        }
+    }
+
+    /// <summary>The prefix of the reader's own block id form, <c>source:{relativePath}</c>.</summary>
+    private const string SourceBlockIdPrefix = "source";
+
+    /// <summary>
+    /// The worktree selection boundary (ADR-0012 items 3-4, AC-004/AC-007), run in one graph scope:
+    /// first the reconciliation pass — a device a write point flagged is re-projected, and the facts of
+    /// worktrees the workbench no longer registers are removed — then the digest check that makes sure
+    /// every device of the selected worktree is projected from the manifest on disk before it is served.
+    /// A projection failure surfaces as a projection failure; the selection itself is already recorded.
+    /// </summary>
+    private static void ReconcileWorktreeSelection(
+        WorkbenchApiState state,
+        EngineeringGraphApiFactory graphs,
+        WorkbenchMetadata workbench,
+        string worktreeId)
+    {
+        using var scope = graphs.Open(workbench);
+        var reconciliation = new EngineeringGraphReconciliation(scope.Service);
+        reconciliation.RemoveDeletedWorktreeFacts();
+        var reader = new DeviceSnapshotGraphReader(scope.Service);
+        foreach (var summary in state.ListDevices(workbench.WorkbenchId, worktreeId))
+        {
+            var device = state.Device(workbench.WorkbenchId, worktreeId, summary.DeviceId);
+            // The repair covers the flagged case without a manifest read; the boundary then compares the
+            // stored digest with the manifest on disk for the changes no event reported.
+            reconciliation.RepairDevice(device.Context, device.Metadata);
+            reader.EnsureProjectionCurrent(device.Context, device.Metadata);
+        }
+    }
+
+    /// <summary>The device of the current selection, or false when the workbench, worktree or device it
+    /// names is not registered there. Every projection read stays inside that boundary.</summary>
+    private static bool TrySelectedDevice(
+        WorkbenchApiState state,
+        string? deviceId,
+        out (DeviceContext Context, DeviceMetadata Metadata) device)
+    {
+        device = default;
+        if (string.IsNullOrWhiteSpace(deviceId)) return false;
+        try
+        {
+            device = state.Device(deviceId);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Registers the graph anchor of a device source object the device's projection lists, and returns
+    /// it, so a read of a legitimate object does not fail just because nothing has put it in the graph
+    /// yet.
+    /// </summary>
+    /// <remarks>
+    /// A source object enters the graph as a side effect of the device projection (and of a commit's
+    /// evidence), and a freshly created project has done neither, so every source object in it answered
+    /// <c>GRAPH_ENTITY_NOT_FOUND</c> — which the source browser shows as an error on every click. The
+    /// object is looked up in the projection — projecting the device first when it has none — so this
+    /// fallback reads no manifest and no XML (ADR-0011). The entity is an anchor for edges rather than
+    /// evidence of its own, so registering it on first read is safe and costs one idempotent insert.
+    /// Only the device of the selection the caller is looking at is consulted: the entity id carries a
+    /// device id but no worktree, and a workbench may register the same device in more than one
+    /// worktree.
+    /// </remarks>
+    private static GraphEntity? RegisterListedSourceObject(
+        EngineeringGraphService graph,
+        string workbenchId,
+        (DeviceContext Context, DeviceMetadata Metadata) device,
+        string manifestId)
+    {
+        var entityId = $"{device.Context.DeviceId}:{manifestId}";
+        // The projection registers every object it lists, so the identity the caller named is usually
+        // already an entity: returning it costs one read instead of a projection-validity check.
+        if (graph.GetEntity(GraphEntityKind.SourceObject, entityId) is { } existing) return existing;
+        if (!new DeviceSnapshotGraphReader(graph)
+                .TryGetListedSourceObject(device.Context, device.Metadata, manifestId, out var relativePath))
+            return null;
+        return RegisterSourceObjectAnchor(graph, workbenchId, device, entityId, relativePath);
+    }
+
+    /// <summary>The same anchor, addressed by the reader's own block id form's relative path.</summary>
+    private static GraphEntity? RegisterListedSourceObjectByPath(
+        EngineeringGraphService graph,
+        string workbenchId,
+        (DeviceContext Context, DeviceMetadata Metadata) device,
+        string relativePath)
+    {
+        var listed = new DeviceSnapshotGraphReader(graph)
+            .FindListedSourceObjectByPath(device.Context, device.Metadata, relativePath);
+        return listed is { } found
+            ? RegisterSourceObjectAnchor(graph, workbenchId, device, found.EntityId, found.RelativePath)
+            : null;
+    }
+
+    private static GraphEntity RegisterSourceObjectAnchor(
+        EngineeringGraphService graph,
+        string workbenchId,
+        (DeviceContext Context, DeviceMetadata Metadata) device,
+        string entityId,
+        string relativePath)
+    {
+        var anchor = new GraphEntity(GraphEntityKind.SourceObject, entityId, workbenchId,
+            device.Context.WorktreeId, device.Context.DeviceId, relativePath);
+        graph.RegisterEntity(anchor);
+        return anchor;
+    }
+
+    /// <summary>
+    /// The entity kinds the graph-entity route serves. <c>task</c>, <c>device</c> and <c>worktree</c>
+    /// are deliberately absent (AC-005's "add the task kind or document its absence"): this parser is
+    /// also the relationship routes' <c>targetKind</c> parser, so accepting <c>task</c> would let a
+    /// relationship target a task node, and the route's response can only express relationships that
+    /// point <em>into</em> the entity — a task's associations are outgoing and are already served by
+    /// <c>GET /api/workbenches/{id}/tasks/{taskId}</c>, whose response has the same fields. A
+    /// <c>device</c> or <c>worktree</c> node has no inbound edge kind at all (a task binds a device
+    /// through the task row, not through an edge), so mapping them would answer with an entity whose
+    /// three relationship arrays are structurally always empty. No client asks for either kind: the
+    /// Studio's two graph-entity call sites send <c>sourceObject</c> and <c>git_commit</c>.
+    /// </summary>
     private static GraphEntityKind ParseGraphEntityKind(string value) => value.Trim().ToLowerInvariant() switch
     {
         "session" => GraphEntityKind.Session,
@@ -2489,6 +2784,13 @@ public sealed class WorkbenchApiExceptionMiddleware(RequestDelegate next)
         {
             context.Response.StatusCode = 409;
             await context.Response.WriteAsJsonAsync(new { error = "METADATA_SCHEMA_UNSUPPORTED", message = exception.Message });
+        }
+        catch (EngineeringGraphProjectionException exception)
+        {
+            // ADR-0012: a projection that runs at a selection boundary and fails is reported as a
+            // projection failure, never as a read failure and never as stale facts served successfully.
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsJsonAsync(new { error = exception.Code, message = exception.Message });
         }
         catch (EngineeringGraphConstraintException exception)
         {

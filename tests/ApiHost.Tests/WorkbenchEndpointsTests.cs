@@ -10,6 +10,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Data.Sqlite;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Net;
 using Contracts.Engineering;
 using Contracts.Knowledge;
@@ -227,6 +228,315 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, invalidPrimary.StatusCode);
         var edgeId = edge.GetProperty("edgeId").GetString()!;
         Assert.Equal(HttpStatusCode.NoContent, (await fixture.Client.DeleteAsync($"/api/workbenches/{wb}/tasks/{taskId}/relationships/{edgeId}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task EngineeringGraphCommitEntityApiReportsItsSourceObjectsAndUnresolvedFilesAdditively()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var created = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks",
+            new { title = "Commit evidence task", type = "feature", intent = "trace", expectedResult = "linked" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        using (var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id is "wt-1");
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-evidence", wb, "wt-1"));
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:block-main", wb, "wt-1", "dev-1",
+                "devices/plc/source/blocks/Main.xml"));
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:tag-motors", wb, "wt-1", "dev-1",
+                "devices/plc/source/tags/Motors.xml"));
+            graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-evidence",
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:block-main",
+                Agent.Workbench.EngineeringGraph.GraphProvenance.Evidence);
+            graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-evidence",
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:tag-motors",
+                Agent.Workbench.EngineeringGraph.GraphProvenance.Evidence);
+            graph.AddEdge(Agent.Workbench.EngineeringGraph.GraphEntityKind.Task, taskId,
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.GitCommit, "commit-evidence",
+                Agent.Workbench.EngineeringGraph.GraphProvenance.Default, isPrimary: true);
+            // A path the manifest did not resolve is stored as raw file evidence, not as a source object.
+            graph.RecordFileEvidence("commit-evidence", "devices/plc/source/blocks/Removed.xml");
+            graph.RecordFileEvidence("commit-evidence", "devices/plc/source/tags/Gone.xml");
+        }
+
+        var commit = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{wb}/engineering-graph/git_commit/commit-evidence");
+        // The pre-existing fields keep their exact meaning: incoming task edges, and the commits that
+        // touched this entity (empty for a commit entity — that is why the new fields exist).
+        Assert.Equal(taskId, commit.GetProperty("tasks")[0].GetProperty("id").GetString());
+        Assert.Equal(0, commit.GetProperty("commits").GetArrayLength());
+
+        var sourceObjects = commit.GetProperty("sourceObjects");
+        Assert.Equal(2, sourceObjects.GetArrayLength());
+        Assert.Equal("dev-1:block-main", sourceObjects[0].GetProperty("id").GetString());
+        Assert.Equal("evidence", sourceObjects[0].GetProperty("provenance").GetString());
+        Assert.Equal("dev-1:tag-motors", sourceObjects[1].GetProperty("id").GetString());
+
+        var unresolved = commit.GetProperty("unresolvedFiles");
+        Assert.Equal(2, unresolved.GetArrayLength());
+        Assert.Equal("devices/plc/source/blocks/Removed.xml", unresolved[0].GetString());
+        Assert.Equal("devices/plc/source/tags/Gone.xml", unresolved[1].GetString());
+
+        // The same route for a source-object entity is untouched, and the new fields stay empty there
+        // so a task's stage edges can never read as commit evidence.
+        var source = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{wb}/engineering-graph/source_object/dev-1:block-main");
+        Assert.Equal(taskId, source.GetProperty("tasks")[0].GetProperty("id").GetString());
+        Assert.Equal("commit-evidence", source.GetProperty("commits")[0].GetProperty("id").GetString());
+        Assert.Equal("evidence", source.GetProperty("commits")[0].GetProperty("provenance").GetString());
+        Assert.Equal(0, source.GetProperty("sourceObjects").GetArrayLength());
+        Assert.Equal(0, source.GetProperty("unresolvedFiles").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task EngineeringGraphSourceObjectApiGivesAnObjectTheManifestListsItsAnchor()
+    {
+        // A freshly created project has put nothing in the graph yet: source objects only entered it as
+        // a side effect of staging or of a commit's evidence, so the source browser's traceability read
+        // answered GRAPH_ENTITY_NOT_FOUND for every object in the project.
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        fixture.WriteManifest();
+
+        var entityId = $"{fixture.DeviceId}:ob-main";
+        var entity = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{wb}/engineering-graph/source_object/{Uri.EscapeDataString(entityId)}");
+
+        Assert.Equal(entityId, entity.GetProperty("id").GetString());
+        Assert.Equal(fixture.Context.WorktreeId, entity.GetProperty("worktreeId").GetString());
+        Assert.Equal(0, entity.GetProperty("tasks").GetArrayLength());
+        Assert.Equal(0, entity.GetProperty("commits").GetArrayLength());
+
+        // The anchor is real now, so a later read repairs nothing.
+        using (var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(
+                store, wb, id => id == fixture.Context.WorktreeId);
+            Assert.NotNull(graph.GetEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, entityId));
+        }
+
+        // An id the device manifest does not list stays not-found: the repair covers listed objects.
+        var missing = await fixture.Client.GetAsync(
+            $"/api/workbenches/{wb}/engineering-graph/source_object/{Uri.EscapeDataString($"{fixture.DeviceId}:not-listed")}");
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
+    [Fact]
+    public async Task EngineeringGraphSourceObjectApiResolvesEveryIdFormTheClientSends()
+    {
+        // AC-005: the source panel sends the manifest id it holds (`PlcSourcePanel.tsx`), not the
+        // `{deviceId}:{manifestId}` id the graph stores, and a legacy manifest or the block fallback
+        // sends the reader's own `source:{relativePath}` form. Both named an object the graph had
+        // links for and both answered GRAPH_ENTITY_NOT_FOUND, which the panel renders as "no links".
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        fixture.WriteGraphManifest();
+        var canonical = $"{fixture.DeviceId}:ob-main";
+        var route = $"/api/workbenches/{wb}/engineering-graph/source_object";
+
+        // The exact id projects the device and anchors the object, so the link below has a target.
+        var anchor = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{Uri.EscapeDataString(canonical)}");
+        Assert.Equal(canonical, anchor.GetProperty("id").GetString());
+
+        // One link the graph holds for the object, of the kind the panel shows.
+        var created = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks",
+            new { title = "Trace the block", type = "feature", intent = "trace", expectedResult = "linked" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var attached = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks/{taskId}/relationships",
+            new { targetKind = "source_object", targetId = canonical, isPrimary = false });
+        Assert.Equal(HttpStatusCode.Created, attached.StatusCode);
+
+        // The exact id, the bare manifest id the panel sends, and the reader's own path form all
+        // answer the same object with the same link.
+        foreach (var id in new[]
+                 {
+                     canonical,
+                     "ob-main",
+                     "source:Blocks/Main [OB1].xml",
+                 })
+        {
+            var response = await fixture.Client.GetAsync($"{route}/{Uri.EscapeDataString(id)}");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var entity = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(canonical, entity.GetProperty("id").GetString());
+            Assert.Equal(fixture.Context.WorktreeId, entity.GetProperty("worktreeId").GetString());
+            Assert.Equal(taskId, entity.GetProperty("tasks")[0].GetProperty("id").GetString());
+        }
+
+        // A path the device does not list is a genuinely missing entity: the status code stays 404.
+        var missingPath = await fixture.Client.GetAsync($"{route}/{Uri.EscapeDataString("source:Blocks/Missing.xml")}");
+        Assert.Equal(HttpStatusCode.NotFound, missingPath.StatusCode);
+        Assert.Equal("GRAPH_ENTITY_NOT_FOUND",
+            (await missingPath.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
+
+        // An id that names a device outside the current selection is not a missing entity: it is an id
+        // this route cannot attribute, and it is refused by name.
+        var otherDevice = await fixture.Client.GetAsync(
+            $"{route}/{Uri.EscapeDataString("some-other-device:ob-main")}");
+        Assert.Equal(HttpStatusCode.BadRequest, otherDevice.StatusCode);
+        Assert.Equal("GRAPH_ENTITY_ID_UNRESOLVED",
+            (await otherDevice.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task EngineeringGraphSourceObjectApiResolvesTheReadersOwnBlockIdForm()
+    {
+        // The reader falls back to `source:{relativePath}` for a manifest component without an id
+        // (`DeviceSnapshotReader.ReadManifestSourceObjects`), and that is the id the panel then sends.
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        Directory.CreateDirectory(Path.Combine(fixture.Context.SourceRoot, "Blocks"));
+        File.WriteAllText(
+            Path.Combine(fixture.Context.SourceRoot, "Blocks", "Main [OB1].xml"),
+            "<Document><SW.Blocks.OB><AttributeList><Name>Main</Name></AttributeList></SW.Blocks.OB></Document>");
+        File.WriteAllText(
+            Path.Combine(fixture.Context.SourceRoot, "metadata.json"),
+            """
+            {
+              "schemaVersion": "1.0",
+              "components": [
+                {
+                  "name": "Main",
+                  "category": "OB",
+                  "status": "Exported",
+                  "exportedFile": "Blocks/Main [OB1].xml",
+                  "number": 1,
+                  "programmingLanguage": "LAD"
+                }
+              ]
+            }
+            """);
+
+        // The client URL-encodes the whole id, so the path form arrives with `%2F` in place of its
+        // slashes; both the reader's own form and the `{deviceId}:{manifestId}` form of a manifest
+        // without ids resolve to the same object.
+        foreach (var id in new[] { "source:Blocks/Main [OB1].xml", $"{fixture.DeviceId}:source:Blocks/Main [OB1].xml" })
+        {
+            var entity = await fixture.Client.GetFromJsonAsync<JsonElement>(
+                $"/api/workbenches/{wb}/engineering-graph/source_object/{Uri.EscapeDataString(id)}");
+            Assert.Equal($"{fixture.DeviceId}:source:Blocks/Main [OB1].xml", entity.GetProperty("id").GetString());
+            Assert.Equal(fixture.Context.WorktreeId, entity.GetProperty("worktreeId").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task RawGatewayCommitRouteRecordsTheCommitEvidenceInTheGraph()
+    {
+        // AC-006: this route calls the version-control tool directly, so it never reached the
+        // coordinator's evidence indexing and the commit it made had no git_commit node.
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false,
+            versionControlJson: """
+                {
+                  "Sha": "raw-commit-1",
+                  "Message": "compat commit",
+                  "Files": ["devices/PLC_1/source/Blocks/Main [OB1].xml"]
+                }
+                """);
+        fixture.WriteGraphManifest();
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"{fixture.DeviceRoute}/vc/commit", new { message = "compat commit" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        // The response is the version-control server's own payload, unchanged.
+        Assert.Equal("raw-commit-1",
+            (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("Sha").GetString());
+
+        var commit = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/engineering-graph/git_commit/raw-commit-1");
+        var sourceObject = Assert.Single(commit.GetProperty("sourceObjects").EnumerateArray());
+        Assert.Equal($"{fixture.DeviceId}:ob-main", sourceObject.GetProperty("id").GetString());
+        Assert.Equal("evidence", sourceObject.GetProperty("provenance").GetString());
+    }
+
+    [Fact]
+    public async Task CompatibilityCommitRouteRecordsTheCommitEvidenceInTheGraph()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false,
+            versionControlJson: """
+                {
+                  "Sha": "compat-commit-1",
+                  "Message": "compat commit",
+                  "Files": ["devices/PLC_1/source/Blocks/Main [OB1].xml"]
+                }
+                """);
+        fixture.WriteGraphManifest();
+
+        var response = await fixture.Client.PostAsJsonAsync("/api/vc/commit", new { message = "compat commit" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var commit = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/engineering-graph/git_commit/compat-commit-1");
+        var sourceObject = Assert.Single(commit.GetProperty("sourceObjects").EnumerateArray());
+        Assert.Equal($"{fixture.DeviceId}:ob-main", sourceObject.GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task CompatibilityCommitSelectedFallbackRecordsTheCommitEvidenceInTheGraph()
+    {
+        // The empty/legacy-worktree fallback of the worktree commit route also calls the version-control
+        // tool directly, and it records the evidence itself (AC-006).
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false,
+            versionControlJson: """
+                {
+                  "Sha": "fallback-commit-1",
+                  "Message": "compat commit",
+                  "Files": ["devices/PLC_1/source/Blocks/Main [OB1].xml"]
+                }
+                """);
+        fixture.WriteGraphManifest();
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/worktrees/{fixture.Context.WorktreeId}/vc/commit",
+            new { paths = Array.Empty<string>(), message = "compat commit" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("vc_commit_selected", fixture.VersionControl.Calls);
+        var commit = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/engineering-graph/git_commit/fallback-commit-1");
+        var sourceObject = Assert.Single(commit.GetProperty("sourceObjects").EnumerateArray());
+        Assert.Equal($"{fixture.DeviceId}:ob-main", sourceObject.GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task CompatibilityCheckoutRouteRecordsTheCommitHeadItMovedTo()
+    {
+        // A branch switch moves HEAD to a commit this route may be the first in-app path to see; the
+        // checkout names the commit but not its files, so they come from the log.
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false,
+            versionControlJsonByTool: new Dictionary<string, string>
+            {
+                ["vc_checkout"] = """{"Branch":"feature","Sha":"checked-out-head"}""",
+                ["vc_log"] = """
+                    {
+                      "Commits": [
+                        {
+                          "Sha": "checked-out-head",
+                          "Author": "Ansel",
+                          "Message": "edit from the feature branch",
+                          "Timestamp": "2026-08-10T09:00:00Z",
+                          "Files": ["devices/PLC_1/source/Blocks/Main [OB1].xml"]
+                        }
+                      ]
+                    }
+                    """,
+            });
+        fixture.WriteGraphManifest();
+
+        var response = await fixture.Client.PostAsJsonAsync("/api/vc/checkout", new { branch = "feature" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var commit = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/engineering-graph/git_commit/checked-out-head");
+        var sourceObject = Assert.Single(commit.GetProperty("sourceObjects").EnumerateArray());
+        Assert.Equal($"{fixture.DeviceId}:ob-main", sourceObject.GetProperty("id").GetString());
     }
 
     [Fact]
@@ -1543,6 +1853,42 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             }));
     }
 
+    /// <summary>Field-for-field JSON comparison that names the first path that differs. Object
+    /// property order is not part of the contract; array order is.</summary>
+    private static void AssertJsonEqual(JsonNode? expected, JsonNode? actual, string path = "$")
+    {
+        if (expected is null || actual is null)
+        {
+            Assert.True(
+                JsonNode.DeepEquals(expected, actual),
+                $"{path}: expected {expected?.ToJsonString() ?? "null"}, got {actual?.ToJsonString() ?? "null"}");
+            return;
+        }
+
+        if (expected is JsonObject expectedObject && actual is JsonObject actualObject)
+        {
+            foreach (var name in expectedObject.Select(pair => pair.Key)
+                         .Union(actualObject.Select(pair => pair.Key), StringComparer.Ordinal))
+            {
+                AssertJsonEqual(expectedObject[name], actualObject[name], $"{path}.{name}");
+            }
+
+            return;
+        }
+
+        if (expected is JsonArray expectedArray && actual is JsonArray actualArray)
+        {
+            Assert.Equal(expectedArray.Count, actualArray.Count);
+            for (var index = 0; index < expectedArray.Count; index++)
+                AssertJsonEqual(expectedArray[index], actualArray[index], $"{path}[{index}]");
+            return;
+        }
+
+        Assert.True(
+            JsonNode.DeepEquals(expected, actual),
+            $"{path}: expected {expected.ToJsonString()}, got {actual.ToJsonString()}");
+    }
+
     [Theory]
     [InlineData(false, false, false, "missing")]
     [InlineData(true, true, false, "stale")]
@@ -1900,6 +2246,117 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal("Main", block.GetProperty("name").GetString());
         Assert.Equal("OB", block.GetProperty("blockType").GetString());
         Assert.Empty(fixture.Engineering.Calls);
+    }
+
+    /// <summary>
+    /// AC-002 on the same device: the snapshot the graph serves is field for field the snapshot the
+    /// crawl reader produced, including the facts the manifest alone carries
+    /// (<c>isKnowHowProtected</c>, <c>modifiedDate</c>), both counts and the diagnostics.
+    /// </summary>
+    [Fact]
+    public async Task DeviceSnapshotFromTheGraphEqualsTheCrawlSnapshotFieldForField()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+        fixture.WriteGraphManifest();
+
+        var response = await fixture.Client.GetStringAsync(fixture.DeviceRoute);
+        var served = JsonNode.Parse(response)!;
+        var crawl = JsonSerializer.SerializeToNode(
+            new DeviceSnapshotReader().Read(fixture.Context, fixture.ReadDeviceMetadata()),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        AssertJsonEqual(crawl, served);
+
+        // The named fields, so the comparison above cannot pass on two empty payloads.
+        var sourceObjects = served["sourceObjects"]!.AsArray();
+        Assert.Equal(5, sourceObjects.Count);
+        Assert.Equal(3, served["blocks"]!.AsArray().Count);
+        Assert.Equal(3, served["sourceObjectCount"]!.GetValue<int>());
+        var main = sourceObjects.Single(item => item!["id"]!.GetValue<string>() == "ob-main")!;
+        Assert.True(main["isKnowHowProtected"]!.GetValue<bool>());
+        Assert.Equal(
+            new DateTimeOffset(2026, 7, 20, 10, 0, 0, TimeSpan.Zero),
+            main["modifiedDate"]!.GetValue<DateTimeOffset>());
+        Assert.Equal("standard-block", main["evidenceKind"]!.GetValue<string>());
+        Assert.Equal("instance-db", sourceObjects
+            .Single(item => item!["id"]!.GetValue<string>() == "db-instance")!["evidenceKind"]!.GetValue<string>());
+        Assert.Equal("current", served["knowledge"]!["state"]!.GetValue<string>());
+        Assert.Equal("Station_1", served["device"]!["deviceName"]!.GetValue<string>());
+        Assert.True(served["device"]!["isSafetyDevice"]!.GetValue<bool>());
+        Assert.Empty(served["diagnostics"]!.AsArray());
+    }
+
+    /// <summary>
+    /// AC-008: the picker's source-object list excludes the instance DB while the device page keeps
+    /// listing it and keeps counting block-category objects only.
+    /// </summary>
+    [Fact]
+    public async Task DevicePickerExcludesInstanceDbsWhileThePageKeepsListingAndCountingBlockCategories()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+        fixture.WriteGraphManifest();
+
+        var picker = await fixture.Client.GetFromJsonAsync<JsonElement>($"{fixture.DeviceRoute}/source-objects");
+        var snapshot = await fixture.Client.GetFromJsonAsync<JsonElement>(fixture.DeviceRoute);
+
+        var offered = picker.EnumerateArray().Select(item => item.GetProperty("id").GetString()).ToArray();
+        Assert.DoesNotContain("db-instance", offered);
+        Assert.Contains("ob-main", offered);
+        Assert.Contains("db-global", offered);
+        Assert.Equal(4, offered.Length);
+        // The device page lists what is on disk — the instance DB included — and its count is the
+        // block-category count (Blocks/ + DB/), which is a different number from the picker's.
+        Assert.Equal(5, snapshot.GetProperty("sourceObjects").GetArrayLength());
+        Assert.Equal(3, snapshot.GetProperty("sourceObjectCount").GetInt32());
+        Assert.Equal(3, snapshot.GetProperty("blocks").GetArrayLength());
+    }
+
+    /// <summary>
+    /// AC-001's instrument: after the device has been projected once, every route in scope answers the
+    /// same values with the exported XML corrupted and with the manifest unreadable — so no request is
+    /// walking the source directory or parsing block XML.
+    /// </summary>
+    [Fact]
+    public async Task DeviceRoutesServeTheProjectionWhenTheExportedXmlAndManifestAreUnusable()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true);
+        fixture.WriteGraphManifest();
+        var entityId = $"{fixture.DeviceId}:ob-main";
+        var routes = new[]
+        {
+            fixture.DeviceRoute,
+            $"{fixture.DeviceRoute}/blocks",
+            $"{fixture.DeviceRoute}/source-objects",
+            "/api/project/info",
+            "/api/blocks",
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/engineering-graph/source_object/{Uri.EscapeDataString(entityId)}",
+        };
+        var before = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var route in routes) before[route] = await fixture.Client.GetStringAsync(route);
+
+        // The first read projected the device: the graph now holds the facts the routes serve.
+        using (var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(
+                store, fixture.Context.WorkbenchId, id => id == fixture.Context.WorktreeId);
+            Assert.NotNull(graph.GetEntity(Agent.Workbench.EngineeringGraph.GraphEntityKind.Device, fixture.DeviceId));
+        }
+
+        // A crawl would now find nothing to parse; a fallback ingest would find no manifest at all.
+        fixture.CorruptExportedXml();
+        foreach (var route in routes) Assert.Equal(before[route], await fixture.Client.GetStringAsync(route));
+
+        // A non-trivial answer, so "identical" cannot mean "identically empty".
+        var snapshot = JsonNode.Parse(before[fixture.DeviceRoute])!;
+        Assert.Equal(3, snapshot["blocks"]!.AsArray().Count);
+        Assert.Equal(5, snapshot["sourceObjects"]!.AsArray().Count);
+        Assert.Equal(3, snapshot["sourceObjectCount"]!.GetValue<int>());
     }
 
     [Fact]
@@ -2495,9 +2952,29 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             stageExport: (outputDir, plcName) =>
             {
                 Assert.Equal("PLC_1", plcName);
+                // The fixture already wrote the device manifest listing "Blocks/Main [OB1].xml", so the
+                // export has to produce that same relative path for the baseline's evidence to resolve
+                // to the source object — and it carries the complete component the reader requires
+                // (name and category), which the comparison-fingerprint helper omits.
                 Directory.CreateDirectory(Path.Combine(outputDir, "Blocks"));
-                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main.xml"), "<live/>");
-                WriteComparisonManifest(outputDir, "live-fingerprint");
+                File.WriteAllText(Path.Combine(outputDir, "Blocks", "Main [OB1].xml"), "<live/>");
+                File.WriteAllText(
+                    Path.Combine(outputDir, "metadata.json"),
+                    """
+                    {
+                      "schemaVersion": "1.0",
+                      "components": [
+                        {
+                          "id": "ob-main",
+                          "name": "Main",
+                          "category": "OB",
+                          "sourcePath": "Program/Main",
+                          "exportedFile": "Blocks/Main [OB1].xml",
+                          "fingerprints": "live-fingerprint"
+                        }
+                      ]
+                    }
+                    """);
             });
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{fixture.DeviceRoute}/bootstrap");
         request.Headers.Add("X-Operation-Id", "bootstrap-1");
@@ -2518,7 +2995,14 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             JsonValueKind.Null,
             body.GetProperty("baseline").GetProperty("error").ValueKind);
         Assert.True(body.TryGetProperty("knowledge", out _));
-        Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main.xml"));
+        Assert.Equal("<live/>", fixture.ReadBaseline("Blocks/Main [OB1].xml"));
+        // The baseline is what puts a new project's source objects into the workbench graph: the source
+        // browser reads each object's task and commit links from there, and before this the baseline was
+        // never indexed, so every object answered GRAPH_ENTITY_NOT_FOUND.
+        var sourceDetail = await fixture.Client.GetFromJsonAsync<JsonElement>(
+            $"/api/workbenches/{fixture.Context.WorkbenchId}/engineering-graph/source_object/{fixture.DeviceId}:ob-main");
+        Assert.Equal("baseline-1", sourceDetail.GetProperty("commits")[0].GetProperty("id").GetString());
+        Assert.Equal("evidence", sourceDetail.GetProperty("commits")[0].GetProperty("provenance").GetString());
         Assert.Equal(["vc_log", "vc_commit_selected"], fixture.VersionControl.Calls);
         var operation = await fixture.Client.GetFromJsonAsync<JsonElement>("/api/operations/bootstrap-1");
         Assert.Equal("bootstrap-device", operation.GetProperty("operationType").GetString());
@@ -2901,7 +3385,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         SqliteConnection.ClearAllPools();
     }
 
-    private sealed class RecordingToolCaller(string json = "{}", Exception? failure = null) : IMcpToolCaller
+    private sealed class RecordingToolCaller(
+        string json = "{}",
+        Exception? failure = null,
+        IReadOnlyDictionary<string, string>? jsonByTool = null) : IMcpToolCaller
     {
         public List<string> Calls { get; } = [];
         public List<JsonElement> Arguments { get; } = [];
@@ -2911,13 +3398,16 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             Arguments.Add(JsonSerializer.SerializeToElement(args));
             if (failure is not null)
                 throw failure;
+            var payload = jsonByTool is not null && jsonByTool.TryGetValue(tool, out var specific)
+                ? specific
+                : json;
             if (typeof(T) == typeof(JsonElement))
             {
-                if (string.Equals(json.Trim(), "null", StringComparison.Ordinal))
+                if (string.Equals(payload.Trim(), "null", StringComparison.Ordinal))
                     return Task.FromResult((T)(object)default(JsonElement));
 
                 return Task.FromResult(
-                    (T)(object)JsonDocument.Parse(json).RootElement.Clone());
+                    (T)(object)JsonDocument.Parse(payload).RootElement.Clone());
             }
 
             if (tool == "ingest_source")
@@ -2928,7 +3418,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 return Task.FromResult((T)(object)new IngestResult { DbPath = dbPath });
             }
 
-            return Task.FromResult(JsonSerializer.Deserialize<T>(json)!);
+            return Task.FromResult(JsonSerializer.Deserialize<T>(payload)!);
         }
     }
 
@@ -3096,6 +3586,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             string? sourceProjectPath = null,
             Action<string, string>? stageExport = null,
             string? versionControlJson = null,
+            IReadOnlyDictionary<string, string>? versionControlJsonByTool = null,
             Exception? versionControlFailure = null,
             bool includeSecondWorktree = false)
         {
@@ -3157,7 +3648,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             var engineering = new ThrowingToolCaller(engineeringOffline, stageExport, sourceProjectPath);
             var versionControl = new RecordingToolCaller(versionControlJson ?? """
                 {"Sha":"baseline-1","Message":"Initial PLC source baseline","Files":["devices/PLC_1/source/Blocks/Main.xml"]}
-                """, versionControlFailure);
+                """, versionControlFailure, versionControlJsonByTool);
             var tagFile = Path.Combine(fixtureRoot, "tags", Guid.NewGuid().ToString("N"), "tags.json");
             var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
             {
@@ -3187,7 +3678,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                         store,
                         sp.GetRequiredService<DeviceReconciler>(),
                         sp.GetRequiredService<DeviceSourceResolver>(),
-                        sp.GetRequiredService<DeviceOperationLock>()));
+                        sp.GetRequiredService<DeviceOperationLock>(),
+                        // Production wires commit-evidence indexing; a fixture that omitted it would
+                        // silently skip the graph writes the endpoints under test depend on.
+                        graphEvidenceIndexer: new Agent.Workbench.EngineeringGraph.EngineeringGraphEvidenceIndexerProvider()));
                 });
             });
             var client = factory.CreateClient();
@@ -3261,6 +3755,143 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                   ]
                 }
                 """);
+        }
+
+        public DeviceMetadata ReadDeviceMetadata() =>
+            new AtomicJsonStore().Read<DeviceMetadata>(Path.Combine(context.DeviceRoot, "device.json"));
+
+        /// <summary>
+        /// The export shape the device page really reads: a manifest with the additive device section,
+        /// the manifest-only facts (<c>isKnowHowProtected</c>, <c>modifiedDate</c>, fingerprints), two
+        /// block categories and an instance DB, plus the exported XML that agrees with it field for
+        /// field — so the crawl-based read and the projection-based read can be compared directly.
+        /// </summary>
+        public void WriteGraphManifest()
+        {
+            WriteBlockXml("Blocks/Main [OB1].xml", "SW.Blocks.OB", "Main", 1, "LAD");
+            WriteBlockXml("DB/Global [DB5].xml", "SW.Blocks.GlobalDB", "Global", 5, "DB");
+            WriteBlockXml("DB/PC_Clock [DB2].xml", "SW.Blocks.InstanceDB", "PC_Clock", 2, "DB");
+            WriteSourceText("Tags/LineA/Inputs.xml", "<Document><SW.Tags.PlcTagTable /></Document>");
+            WriteSourceText("UDT/Models/Motor.xml", "<Document><SW.Types.PlcStruct /></Document>");
+            File.WriteAllText(
+                Path.Combine(context.SourceRoot, "metadata.json"),
+                """
+                {
+                  "schemaVersion": "1.0",
+                  "device": {
+                    "plcName": "PLC_1",
+                    "deviceName": "Station_1",
+                    "typeIdentifier": "OrderNumber:6ES7515-2AM02-0AB0/V2.9",
+                    "projectName": "TestPLCExportDemo",
+                    "projectAuthor": "Ansel",
+                    "projectComment": "demo project",
+                    "projectVersion": "V17",
+                    "projectCopyright": null,
+                    "projectCreationTime": "2026-07-01T08:00:00.0000000+00:00",
+                    "projectLastModified": "2026-07-30T09:30:00.0000000+00:00",
+                    "projectLastModifiedBy": "Ansel",
+                    "isSafetyDevice": true,
+                    "fSignatureReadState": "ok",
+                    "fSignature": "1A2B3C4D"
+                  },
+                  "components": [
+                    {
+                      "id": "ob-main",
+                      "name": "Main",
+                      "sourcePath": "Area/Main",
+                      "category": "OB",
+                      "status": "Exported",
+                      "exportedFile": "Blocks/Main [OB1].xml",
+                      "number": 1,
+                      "programmingLanguage": "LAD",
+                      "contentHash": "HASH-OB",
+                      "siemensTypeName": "OB",
+                      "isKnowHowProtected": true,
+                      "modifiedDate": "2026-07-20T10:00:00.0000000+00:00",
+                      "fingerprints": { "Interface": "BBBB2222", "Code": "AAAA1111" }
+                    },
+                    {
+                      "id": "db-global",
+                      "name": "Global",
+                      "sourcePath": "Global",
+                      "category": "DB",
+                      "status": "Exported",
+                      "exportedFile": "DB/Global [DB5].xml",
+                      "number": 5,
+                      "programmingLanguage": "DB",
+                      "contentHash": "HASH-GDB",
+                      "siemensTypeName": "GlobalDB"
+                    },
+                    {
+                      "id": "db-instance",
+                      "name": "PC_Clock",
+                      "sourcePath": "00_Common_Part/PC_Clock",
+                      "category": "DB",
+                      "status": "Exported",
+                      "exportedFile": "DB/PC_Clock [DB2].xml",
+                      "number": 2,
+                      "programmingLanguage": "DB",
+                      "contentHash": "HASH-IDB",
+                      "siemensTypeName": "InstanceDB"
+                    },
+                    {
+                      "id": "tags-1",
+                      "name": "Inputs",
+                      "sourcePath": "LineA/Inputs",
+                      "category": "Tags",
+                      "status": "Exported",
+                      "exportedFile": "Tags/LineA/Inputs.xml",
+                      "number": null,
+                      "programmingLanguage": null,
+                      "contentHash": "HASH-TAGS"
+                    },
+                    {
+                      "id": "udt-1",
+                      "name": "Motor",
+                      "sourcePath": "Models/Motor",
+                      "category": "UDT",
+                      "status": "Exported",
+                      "exportedFile": "UDT/Models/Motor.xml",
+                      "number": null,
+                      "programmingLanguage": null,
+                      "contentHash": "HASH-UDT"
+                    }
+                  ]
+                }
+                """);
+        }
+
+        /// <summary>Every exported XML file is made unparseable; the manifest stays, so an ingest that
+        /// re-read it would still produce values — the next call in the test deletes it too.</summary>
+        public void CorruptExportedXml()
+        {
+            foreach (var path in Directory.EnumerateFiles(context.SourceRoot, "*.xml", SearchOption.AllDirectories))
+                File.WriteAllText(path, "<not-a-siemens-document/>");
+            File.WriteAllText(Path.Combine(context.SourceRoot, "metadata.json"), "{ broken");
+        }
+
+        private void WriteBlockXml(string relativePath, string elementName, string name, int number, string language) =>
+            WriteSourceText(
+                relativePath,
+                $"""
+                <Document>
+                  <{elementName}>
+                    <AttributeList>
+                      <Name>{name}</Name>
+                      <Number>{number}</Number>
+                      <ProgrammingLanguage>{language}</ProgrammingLanguage>
+                    </AttributeList>
+                  </{elementName}>
+                </Document>
+                """);
+
+        private void WriteSourceText(string relativePath, string contents)
+        {
+            var path = Path.Combine(
+                context.SourceRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, contents);
         }
 
         public string[] PersistentArtifactHashes() =>

@@ -82,6 +82,9 @@ public static class CompatibilityEndpoints
                 ? state.Device(id).Context
                 : throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
 
+        static string Workbench(WorkbenchApiState state) =>
+            state.Selection?.WorkbenchId ?? throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
+
         static DeviceContext ChatDevice(WorkbenchApiState state, EngineeringGraphApiFactory graphs,
             ActiveTaskContextService activeTasks, string? requestedTaskId = null)
         {
@@ -546,10 +549,11 @@ public static class CompatibilityEndpoints
             });
         });
 
-        app.MapGet("/api/project/info", (WorkbenchApiState state, DeviceSnapshotReader snapshots) =>
+        app.MapGet("/api/project/info", (WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
             var selected = state.Device(Device(state).DeviceId);
-            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata));
+            using var facts = new DeviceSnapshotGraphScope(state, graphs, Workbench(state));
+            return Results.Ok(facts.Reader.Read(selected.Context, selected.Metadata));
         });
         app.MapGet("/api/tia/project-info", async (ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("connect").CallAsync<JsonElement>("get_project_info", new { }, ct));
@@ -576,10 +580,11 @@ public static class CompatibilityEndpoints
                 upgrade = request.Upgrade,
                 openMode = request.OpenMode,
             }, ct));
-        app.MapGet("/api/blocks", (WorkbenchApiState state, DeviceSnapshotReader snapshots) =>
+        app.MapGet("/api/blocks", (WorkbenchApiState state, EngineeringGraphApiFactory graphs) =>
         {
             var selected = state.Device(Device(state).DeviceId);
-            return Results.Ok(snapshots.Read(selected.Context, selected.Metadata).Blocks);
+            using var facts = new DeviceSnapshotGraphScope(state, graphs, Workbench(state));
+            return Results.Ok(facts.Reader.ReadBlocks(selected.Context, selected.Metadata));
         });
         app.MapGet("/api/blocks/{blockName}/source-code", async (string blockName, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("get_block").CallAsync<JsonElement>("get_block", new { dbPath = Device(state).KnowledgeDbPath, blockName }, ct));
@@ -639,14 +644,38 @@ public static class CompatibilityEndpoints
             await gateway.For("vc_diff").CallAsync<JsonElement>("vc_diff", new { repoPath = Device(state).WorktreeRoot, filePath }, ct));
         app.MapPost("/api/vc/add", async (CompatibilityPathRequest body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_add").CallAsync<JsonElement>("vc_add", new { repoPath = Device(state).WorktreeRoot, paths = body.Paths ?? [] }, ct));
-        app.MapPost("/api/vc/commit", async (CompatibilityPathRequest body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("vc_commit").CallAsync<JsonElement>("vc_commit", new { repoPath = Device(state).WorktreeRoot, message = body.Message }, ct));
+        app.MapPost("/api/vc/commit", async (CompatibilityPathRequest body, WorkbenchApiState state, ApiMcpGateway gateway,
+            EngineeringGraphEvidenceIndexerProvider evidenceIndexer, CancellationToken ct) =>
+        {
+            var workbenchId = Workbench(state);
+            var worktreeId = state.Selection?.WorktreeId
+                ?? throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
+            var commit = await gateway.For("vc_commit").CallAsync<JsonElement>(
+                "vc_commit", new { repoPath = Device(state).WorktreeRoot, message = body.Message }, ct);
+            // A raw gateway commit never reaches the coordinator's evidence indexing (AC-006).
+            RawGatewayCommitEvidence.IndexCommit(evidenceIndexer, state.Workbench(workbenchId), worktreeId, commit);
+            return commit;
+        });
         app.MapPost("/api/vc/restore", async (CompatibilityPathRequest body, WorkbenchApiState state, SandboxedToolExecutor executor, CancellationToken ct) =>
             await executor.RequestAsync("vc_restore", new Dictionary<string, object?> { ["filePath"] = body.FilePath }, Device(state), "api", ct));
         app.MapGet("/api/vc/branches", async (WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
             await gateway.For("vc_branches").CallAsync<JsonElement>("vc_branches", new { repoPath = Device(state).WorktreeRoot }, ct));
-        app.MapPost("/api/vc/checkout", async (JsonElement body, WorkbenchApiState state, ApiMcpGateway gateway, CancellationToken ct) =>
-            await gateway.For("vc_checkout").CallAsync<JsonElement>("vc_checkout", new { repoPath = Device(state).WorktreeRoot, branchName = body.GetProperty("branch").GetString() }, ct));
+        app.MapPost("/api/vc/checkout", async (JsonElement body, WorkbenchApiState state, ApiMcpGateway gateway,
+            EngineeringGraphEvidenceIndexerProvider evidenceIndexer, CancellationToken ct) =>
+        {
+            var workbenchId = Workbench(state);
+            var worktreeId = state.Selection?.WorktreeId
+                ?? throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
+            var root = Device(state).WorktreeRoot;
+            var checkout = await gateway.For("vc_checkout").CallAsync<JsonElement>(
+                "vc_checkout", new { repoPath = root, branchName = body.GetProperty("branch").GetString() }, ct);
+            // A branch switch moves HEAD to a commit this route may be the first in-app path to see
+            // (AC-006): without this the timeline's read of the new HEAD answers 404. Best effort, and
+            // the checkout's own response shape is unchanged.
+            await RawGatewayCommitEvidence.IndexCheckedOutHeadAsync(
+                evidenceIndexer, gateway.For("vc_log"), state.Workbench(workbenchId), worktreeId, root, checkout, ct);
+            return checkout;
+        });
         return app;
 
     }
@@ -728,7 +757,10 @@ internal sealed class ApiChatService(
     PendingToolActions pending,
     SandboxPolicy policy,
     EngineeringGraphApiFactory graphs,
-    WorkbenchApiState workbenches)
+    WorkbenchApiState workbenches,
+    ActiveTaskContextService activeTasks,
+    WorkbenchCoordinator coordinator,
+    WorktreeTaskStore tasks)
 {
     public const int DefaultContextWindow = 128_000;
 
@@ -911,10 +943,21 @@ internal sealed class ApiChatService(
                 ? restored
                 : SessionManager.CreateNewSession(device, Settings(configuration, state), null);
             var discovered = await McpToolCatalog.BuildAsync(runtime.Host, token);
+            // The source-object listing, the staged-source-object and task-creation tools are
+            // in-process (they need the workbench graph, the guarded stage path and the managed task
+            // write), so they are added to the discovered MCP tools rather than discovered.
             var catalog = new McpToolCatalog(discovered.Tools.Select(spec => spec with
             {
                 Caller = new BoundMcpCaller(spec.Caller, binder, device),
-            }));
+            }).Append(TaskSourceObjectListTool.CreateSpec(
+                new TaskSourceObjectListTool(workbenches, graphs, activeTasks),
+                () => device))
+              .Append(TaskSourceStagingTool.CreateSpec(
+                new TaskSourceStagingTool(workbenches, graphs, activeTasks, coordinator),
+                () => device))
+              .Append(TaskCreationTool.CreateSpec(
+                new TaskCreationTool(workbenches, graphs, tasks),
+                () => device)));
             var sandbox = new AgentSandbox(policy, 20, request =>
             {
                 var completion = new TaskCompletionSource<ToolConfirmation>(

@@ -684,16 +684,21 @@ describe('WorkbenchNavigator sessions section', () => {
     await act(async () => root.unmount())
   })
 
-  it('starts a conversation bound to the selected task from the header (AC-016)', async () => {
+  it('starts a conversation in the scope the section is showing from its header (AC-016)', async () => {
     const onAddSession = vi.fn()
-    // With no task selected there is nothing to bind a new conversation to, so the action is not offered.
+    // With no task selected the section is the device's task-less list, so its header starts a
+    // device-scoped conversation that no task owns — exactly the list it is showing.
     const { host, root } = await renderNavigator(null, false, {
       selection: deviceSelection, ...overrides, onAddSession,
     })
     expect(section(host, 'sessions')).toBeTruthy()
-    expect(host.querySelector('button[aria-label^="Start a conversation"]')).toBeNull()
+    const startDevice = section(host, 'sessions')
+      .querySelector('button[aria-label="Start a conversation for this device"]') as HTMLButtonElement
+    expect(startDevice).toBeTruthy()
+    await act(async () => startDevice.click())
+    expect(onAddSession).toHaveBeenCalledWith(null)
 
-    // Selecting the task that owns the conversations offers the action, named for that task.
+    // Selecting the task that owns the conversations binds the new one to that task, named for it.
     await act(async () => root.render(
       <WorkbenchNavigator {...navigatorProps({
         selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onAddSession,
@@ -727,22 +732,128 @@ describe('WorkbenchNavigator sessions section', () => {
     await act(async () => root.unmount())
   })
 
-  it('offers open, rename and delete on a conversation row (AC-017)', async () => {
+  it('offers every operation the repository performs on a conversation row (AC-017)', async () => {
     const { host, root } = await renderNavigator(null, false, {
-      selection: deviceSelection, activeTaskId: 'task-device', ...overrides,
+      selection: deviceSelection, ...overrides,
     })
-    const trigger = section(host, 'sessions')
-      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    // A conversation that no task owns can be opened, renamed, exported, attached to a task or
+    // deleted, but it has no task link to remove. The row menu is its only entry point, so it has to
+    // carry all of them.
+    const unbound = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Ad-hoc question"]') as HTMLButtonElement
     // The row menu is visible without hovering, like every other row's menu in the navigator.
-    const conversationTriggerClasses = trigger.className.split(/\s+/)
+    const conversationTriggerClasses = unbound.className.split(/\s+/)
     expect(conversationTriggerClasses).not.toContain('opacity-0')
     expect(conversationTriggerClasses).not.toContain('pointer-events-none')
 
-    const items = (await openRowMenu(trigger)).map(item => item.textContent?.trim())
+    expect((await openRowMenu(unbound)).map(item => item.textContent?.trim())).toEqual([
+      'Open conversation',
+      'Rename conversation',
+      'Export conversation',
+      'Attach task',
+      'Delete conversation',
+    ])
 
-    // Re-binding is out of scope for now, so the menu is exactly the operations the repository performs.
-    expect(items).toEqual(['Open conversation', 'Rename conversation', 'Delete conversation'])
+    // A bound conversation names the binding operations for what they do to it.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: deviceSelection, activeTaskId: 'task-device', ...overrides,
+      })} />,
+    ))
+    const bound = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    expect((await openRowMenu(bound)).map(item => item.textContent?.trim())).toEqual([
+      'Open conversation',
+      'Rename conversation',
+      'Export conversation',
+      'Reassign task',
+      'Remove task',
+      'Delete conversation',
+    ])
     await act(async () => root.unmount())
+  })
+
+  it('exports a conversation from its row menu', async () => {
+    const onExportSession = vi.fn()
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, ...overrides, onExportSession,
+    })
+    const trigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Ad-hoc question"]') as HTMLButtonElement
+    const item = (await openRowMenu(trigger)).find(entry => entry.textContent?.trim() === 'Export conversation')!
+
+    await act(async () => item.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(onExportSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-unbound', deviceId: 'plc-1' }))
+    await act(async () => root.unmount())
+  })
+
+  it('binds a conversation to one of the worktree\'s tasks through a picker, and clears it', async () => {
+    const onSetSessionTask = vi.fn()
+    // The task-less row offers the attach operation, and the picker lists the worktree's tasks.
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, ...overrides, onSetSessionTask,
+    })
+    const trigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Ad-hoc question"]') as HTMLButtonElement
+    const attach = (await openRowMenu(trigger)).find(entry => entry.textContent?.trim() === 'Attach task')!
+    await act(async () => attach.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    // A task that cannot own a conversation is not a valid binding, so it is not offered.
+    const offered = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
+      .map(option => option.textContent?.trim())
+    expect(offered).toEqual(['Device task'])
+    expect(offered).not.toContain('Hardware task')
+    expect(offered).not.toContain('Unbound task')
+
+    const search = document.body.querySelector<HTMLInputElement>('input[aria-label="Search this worktree\'s tasks"]')!
+    expect(search).toBeTruthy()
+    await act(async () => {
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(onSetSessionTask).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-unbound' }), 'task-device')
+
+    // Clearing uses the same menu: a bound conversation can be left owned by no task again.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onSetSessionTask,
+      })} />,
+    ))
+    const boundTrigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    const clear = (await openRowMenu(boundTrigger)).find(entry => entry.textContent?.trim() === 'Remove task')!
+    await act(async () => clear.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(onSetSessionTask).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-bound' }), null)
+    await act(async () => root.unmount())
+  })
+
+  it('moves a conversation between the task list and the task-less list when its binding changes', async () => {
+    // Bound: the conversation is in the list of the task it names, under that task's heading.
+    const rebound = {
+      'wb-direct:wt-descendant': [
+        sessionsByWorktree['wb-direct:wt-descendant'][0],
+        { ...sessionsByWorktree['wb-direct:wt-descendant'][1], taskId: 'task-device' },
+      ],
+    }
+    const bound = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device',
+      devicesByWorktree, tasksByWorktree: targetTasks, sessionsByWorktree: rebound,
+    })
+    expect(section(bound.host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('task-device')
+    expect(section(bound.host, 'sessions').textContent).toContain('Ad-hoc question')
+    await act(async () => bound.root.unmount())
+
+    // Cleared: the same conversation is out of that task's list and back in the device's task-less one.
+    const cleared = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    expect(section(cleared.host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('unbound')
+    expect(section(cleared.host, 'sessions').textContent).toContain('Ad-hoc question')
+    expect(section(cleared.host, 'sessions').textContent).not.toContain('Interlock review')
+    await act(async () => cleared.root.unmount())
   })
 
   it('offers the task row menu without hovering too', async () => {
@@ -953,6 +1064,153 @@ describe('WorkbenchNavigator section cascade', () => {
     expect(projectsHeader.getAttribute('aria-expanded')).toBe('true')
     expect(projectsBody.hasAttribute('hidden')).toBe(false)
     expect(worktreeHeader.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => root.unmount())
+  })
+})
+
+/**
+ * Item 007: the navigator renders one row treatment across all five row kinds. These cases assert the
+ * *equality of the class sets* between kinds, never the presence of an individual class, so a kind that
+ * drifts away from the shared treatment fails here even if it still carries the classes someone expects.
+ */
+describe('WorkbenchNavigator shared row treatment', () => {
+  const selection = { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-1', targetKind: 'device' as const }
+  /** Two rows of every kind, so each kind has one current and one non-current row to compare. */
+  const rowTasks: Record<string, api.EngineeringTask[]> = {
+    'wb-direct:wt-descendant': [
+      graphTask({ taskId: 'task-current', title: 'Current task', deviceId: 'plc-1', targetKind: 'device' }),
+      graphTask({ taskId: 'task-other', title: 'Other task', deviceId: 'plc-1', targetKind: 'device' }),
+    ],
+  }
+  const rowSessions: Record<string, api.ChatSessionInfo[]> = {
+    'wb-direct:wt-descendant': [
+      conversation({ sessionId: 'session-current', title: 'Open conversation', taskId: 'task-current', deviceId: 'plc-1' }),
+      conversation({ sessionId: 'session-other', title: 'Other conversation', taskId: 'task-current', deviceId: 'plc-1' }),
+    ],
+  }
+  const shared = {
+    selection,
+    devicesByWorktree,
+    tasksByWorktree: rowTasks,
+    sessionsByWorktree: rowSessions,
+  }
+  const renderAllKinds = (overrides: Partial<NavigatorProps> = {}) => renderNavigator(null, false, {
+    ...shared,
+    activeTaskId: 'task-current',
+    activeSessionId: 'session-current',
+    ...overrides,
+  })
+
+  /** `DEVICE` is one kind with two row types: the hardware row and the device rows. */
+  const kindSelectors: Record<string, string> = {
+    projects: '[data-navigator-row="projects"]',
+    worktree: '[data-navigator-row="worktree"]',
+    device: '[data-navigator-row="hardware"], [data-navigator-row="device"]',
+    tasks: '[data-navigator-row="tasks"]',
+    sessions: '[data-navigator-row="sessions"]',
+  }
+  const classSet = (element: Element) => new Set(element.className.split(/\s+/).filter(Boolean))
+  /** The current-row marker is the one state difference; the geometry around it is what must be equal. */
+  const markers = new Set(['bg-accent/50', 'hover:bg-accent/40'])
+  /** The only allowed geometry difference: the menu gutter `TASKS`/`SESSIONS` rows add for their menu. */
+  const menuGutter = new Set(['relative', 'pr-8'])
+  const geometry = (element: Element) =>
+    new Set([...classSet(element)].filter(className => !markers.has(className) && !menuGutter.has(className)))
+  /** lucide stamps its own `lucide`/`lucide-<name>` classes on every icon; the treatment is the rest. */
+  const iconTreatment = (element: Element) =>
+    new Set([...classSet(element)].filter(className => !className.startsWith('lucide')))
+  const rowsFor = (host: HTMLElement, selector: string) => Array.from(host.querySelectorAll<HTMLElement>(selector))
+  const currentRow = (host: HTMLElement, selector: string) =>
+    rowsFor(host, selector).find(row => row.hasAttribute('aria-current'))
+  const otherRow = (host: HTMLElement, selector: string) =>
+    rowsFor(host, selector).find(row => !row.hasAttribute('aria-current'))
+
+  it('gives all five row kinds one class set, one current marker and always-gray icons', async () => {
+    const { host, root } = await renderAllKinds()
+
+    const reference = geometry(currentRow(host, kindSelectors.projects)!)
+    for (const [kind, selector] of Object.entries(kindSelectors)) {
+      const current = currentRow(host, selector)
+      const other = otherRow(host, selector)
+      expect(current, `${kind} current row`).toBeTruthy()
+      expect(other, `${kind} non-current row`).toBeTruthy()
+
+      const rows = rowsFor(host, selector)
+      const needsMenuGutter = kind === 'tasks' || kind === 'sessions'
+      for (const row of rows) {
+        // The row geometry is one set across kinds. `TASKS` and `SESSIONS` rows additionally reserve the
+        // gutter their absolutely positioned 3-dots menu sits in; that is the only allowed difference,
+        // and it is pinned here so it can neither spread to another kind nor go missing from these two.
+        expect(geometry(row), `${kind} row against the reference treatment`).toEqual(reference)
+        expect(classSet(row).has('relative'), `${kind} row menu gutter`).toBe(needsMenuGutter)
+        expect(classSet(row).has('pr-8'), `${kind} row menu gutter`).toBe(needsMenuGutter)
+      }
+
+      // One current-row marker: `bg-accent/50` on the current row, its sibling left unmarked.
+      expect(current!.className).toContain('bg-accent/50')
+      expect(other!.className).not.toContain('bg-accent/50')
+
+      for (const row of rows) {
+        // The row's identity icon is the `h-4` one; a row may also hold a smaller disclosure toggle, the
+        // knowledge dot, or the 3-dots trigger, none of which is the row icon.
+        const icon = Array.from(row.querySelectorAll('svg')).find(node => node.classList.contains('h-4'))
+        expect(icon, `${kind} row icon`).toBeTruthy()
+        expect(iconTreatment(icon!), `${kind} row icon treatment`).toEqual(
+          new Set(['h-4', 'w-4', 'shrink-0', 'text-muted-foreground']))
+        expect(row.className).not.toMatch(/text-chart-\d/)
+        expect(row.className).not.toMatch(/\brounded-md\b/)
+        expect(row.className).not.toMatch(/border-ring/)
+        expect(row.className).not.toMatch(/(^|\s)border(\s|$)/)
+      }
+    }
+
+    await act(async () => root.unmount())
+  })
+
+  it('keeps the row rhythm and the headings that align with the icon column', async () => {
+    const { host, root } = await renderAllKinds()
+
+    // `mb-1` is the row rhythm: `TASKS` and `SESSIONS` rows used to sit flush against each other.
+    for (const selector of Object.values(kindSelectors)) {
+      for (const row of host.querySelectorAll<HTMLElement>(selector)) {
+        expect(row.className.split(/\s+/)).toContain('mb-1')
+      }
+    }
+
+    // The group headings sit in the row icon column, so they move with it (px-2 -> px-1).
+    const heading = host.querySelector<HTMLElement>('#navigator-section-sessions [data-session-group] > div')
+    expect(heading?.textContent).toContain('Current task')
+    expect(heading?.className.split(/\s+/)).toContain('px-1')
+
+    await act(async () => root.unmount())
+  })
+
+  it('marks the open conversation without moving any other row\'s current marker (AC-018)', async () => {
+    const { host, root } = await renderAllKinds()
+
+    const sessions = rowsFor(host, kindSelectors.sessions)
+    const open = sessions.find(row => row.getAttribute('data-session-open') === 'session-current')!
+    const other = sessions.find(row => row.getAttribute('data-session-open') === 'session-other')!
+    expect(open.getAttribute('aria-current')).toBe('true')
+    expect(open.className).toContain('bg-accent/50')
+    expect(other.hasAttribute('aria-current')).toBe(false)
+    expect(other.className).not.toContain('bg-accent/50')
+
+    // The marker is not a selection: the device row and the task row keep their own current markers.
+    expect(currentRow(host, '[data-navigator-row="device"]')?.getAttribute('aria-current')).toBe('true')
+    expect(currentRow(host, '[data-navigator-row="tasks"]')?.getAttribute('aria-current')).toBe('page')
+
+    // With the prop omitted the navigator renders exactly as before: no conversation is marked.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({ ...shared, activeTaskId: 'task-current' })} />,
+    ))
+    const unmarked = rowsFor(host, kindSelectors.sessions)
+    expect(unmarked).toHaveLength(2)
+    for (const row of unmarked) {
+      expect(row.hasAttribute('aria-current')).toBe(false)
+      expect(row.className).not.toContain('bg-accent/50')
+    }
+
     await act(async () => root.unmount())
   })
 })
