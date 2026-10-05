@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, Loader2, MessageSquareText, RefreshCw, Save, X } from 'lucide-react'
+import { AlertCircle, Loader2, MessageSquareText, Plus, RefreshCw, Save, X } from 'lucide-react'
 import type { EngineeringTask, EngineeringTaskDetail, WorktreeTaskStatus } from '@/api/client'
 import { taskTargetKind } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -82,6 +82,11 @@ type Props = {
   onSave?: (patch: TaskEditPatch) => Promise<void>
   onNavigate?: (kind: string, id: string) => void
   onRemove?: (kind: string, item: TraceabilityItem) => void
+  /**
+   * Starts a conversation bound to this task and opens it. Offered only for a task that can own one —
+   * a device-bound worktree task — because a conversation resolves through a device.
+   */
+  onStartSession?: (task: EngineeringTask) => void
   /** Raised after a stage change, so the page can reload the task's traceability edges. */
   onStagesChanged?: () => void
   /** Bumped when another surface changed the stages (an approved agent stage call), so the Source
@@ -89,7 +94,7 @@ type Props = {
   stagesRefreshToken?: number
 }
 
-export default function TaskDetail({ detail, deviceName, loading = false, error = null, saving = false, onRetry, onSave, onNavigate, onRemove, onStagesChanged, stagesRefreshToken = 0 }: Props) {
+export default function TaskDetail({ detail, deviceName, loading = false, error = null, saving = false, onRetry, onSave, onNavigate, onRemove, onStartSession, onStagesChanged, stagesRefreshToken = 0 }: Props) {
   const [draft, setDraft] = useState<TaskDraft | null>(detail ? taskDraftFrom(detail.task) : null)
   const [saveError, setSaveError] = useState<string | null>(null)
   // A hardware task has no device, so "Not device-bound" would state the opposite of the truth.
@@ -136,6 +141,14 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
   }
 
   const sessions = detail.sessions
+  // A conversation resolves through a device, so only a device-bound worktree task can own one. That is
+  // the condition staging needs too, but it is asked here for its own reason: a project-scope or
+  // hardware task offers no creation control rather than one that cannot work.
+  const conversationCapable = detail.task.scope !== 'project' && !hardwareTask
+    && Boolean(detail.task.worktreeId) && Boolean(detail.task.deviceId)
+  const startSessionAction = onStartSession && conversationCapable
+    ? <Button type="button" variant="outline" size="xs" aria-label={`New chat for ${detail.task.title}`} onClick={() => onStartSession(detail.task)}><Plus className="h-3 w-3" /> New chat</Button>
+    : null
   const updateDraft = <K extends keyof TaskDraft>(key: K, value: TaskDraft[K]) => setDraft(previous => previous ? { ...previous, [key]: value } : previous)
 
   return <article className="mx-auto w-full max-w-6xl space-y-5" aria-label={`Task detail: ${detail.task.title}`}>
@@ -187,8 +200,8 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
     ) : <p className="rounded-lg border bg-card px-4 py-4 text-sm text-muted-foreground">{stagingExplanation}</p>}
 
     <section className="overflow-hidden rounded-xl border bg-card" aria-label="Associated sessions">
-      <header className="flex items-center gap-2 border-b px-4 py-3"><MessageSquareText className="h-4 w-4 text-muted-foreground" /><h2 className="text-sm font-semibold">Sessions</h2><span className="ml-auto rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{sessions.length}</span></header>
-      {sessions.length === 0 ? <p className="px-4 py-4 text-sm text-muted-foreground">No conversations linked to this task yet.</p> : <ul className="divide-y divide-border">{sessions.map(session => <li key={session.id} className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-4">
+      <header className="flex items-center gap-2 border-b px-4 py-3"><MessageSquareText className="h-4 w-4 text-muted-foreground" /><h2 className="text-sm font-semibold">Sessions</h2><span className="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{sessions.length}</span>{startSessionAction && <span className="ml-auto">{startSessionAction}</span>}</header>
+      {sessions.length === 0 ? <p className="px-4 py-4 text-sm text-muted-foreground">No conversations linked to this task yet.{startSessionAction ? ' Start one with New chat.' : ''}</p> : <ul className="divide-y divide-border">{sessions.map(session => <li key={session.id} className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-4">
         <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{session.title?.trim() || session.firstUserMessage?.trim() || 'Untitled conversation'}</p><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{session.id}</p>{session.firstUserMessage && session.title?.trim() && <p className="mt-1 truncate text-xs text-muted-foreground">{session.firstUserMessage}</p>}</div>
         <span className="text-xs text-muted-foreground">{session.turnCount ?? 0} turns · {provenanceLabel(session.provenance)}{session.isPrimary ? ' · Primary' : ''}</span>
         {onNavigate && <Button type="button" variant="outline" size="sm" aria-label={`Open session ${session.title?.trim() || session.id}`} onClick={() => onNavigate('session', session.id)}>Open conversation</Button>}

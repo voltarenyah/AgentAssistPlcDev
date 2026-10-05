@@ -72,6 +72,32 @@ describe('TaskDetail', () => {
     expect(host.querySelector('[aria-label="Source objects"]')).toBeNull()
     expect(host.textContent).toContain('Source objects are staged by a device-bound worktree task, and this is a project-scope task with no device to stage them from.')
   })
+  it('starts a conversation for the task from the Sessions header', async () => {
+    const start = vi.fn()
+    const host = await render({ detail, deviceName: 'Line 4 conveyor PLC', onStartSession: start })
+    const action = host.querySelector<HTMLButtonElement>('[aria-label="New chat for Motor update"]')
+    expect(action).not.toBeNull()
+    await act(async () => action?.click())
+    expect(start).toHaveBeenCalledWith(detail.task)
+
+    // A task that owns no conversation says how to start its first one, since the control lives here.
+    document.body.innerHTML = ''
+    const empty = await render({ detail: { ...detail, sessions: [] }, onStartSession: vi.fn() })
+    expect(empty.textContent).toContain('Start one with New chat.')
+  })
+  it('offers no conversation to start for a task that cannot own one', async () => {
+    const project = await render({
+      detail: { ...detail, task: { ...detail.task, scope: 'project', worktreeId: null, deviceId: null } },
+      onStartSession: vi.fn(),
+    })
+    expect(project.querySelector('[aria-label="New chat for Motor update"]')).toBeNull()
+    document.body.innerHTML = ''
+    const hardware = await render({
+      detail: { ...detail, task: { ...detail.task, deviceId: null, targetKind: 'hardware' } },
+      onStartSession: vi.fn(),
+    })
+    expect(hardware.querySelector('[aria-label="New chat for Motor update"]')).toBeNull()
+  })
   it('carries the exact source-object identifier through navigation', async () => {
     const navigate = vi.fn()
     const host = await render({ detail: { ...detail, sourceObjects: [{ id: 'device-7/Blocks/Main', edgeId: 'edge-source', provenance: 'manual', isPrimary: false }] }, onNavigate: navigate })

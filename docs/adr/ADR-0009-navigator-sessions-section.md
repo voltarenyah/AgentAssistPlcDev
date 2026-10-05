@@ -89,12 +89,20 @@ ADR-0010 — because the row, not the removed dock page, is now their only entry
 shows that conversation and changes nothing else: the navigator keeps the selection the row was listed
 under, so the list the user just read stays where it was.
 
+Selecting a device, the hardware row, a worktree or a workbench names no task, so it clears the task
+selection: that state is the selected device's task-less list, which is what the section shows until a
+task row is picked. The open task detail yields with it, because the detail renders ahead of every other
+view and would otherwise show nothing of the scope the user picked while keeping the task it names as the
+selection. That reset is what keeps a conversation no task owns reachable once any task has been opened,
+and a task that owns no conversation therefore no longer takes the whole section off screen behind it.
+
 ### Decision Details
 
 | Item | Content |
 |------|---------|
 | **Decision** | A fifth flat section listing the conversations of the selected task, or the selected device's task-less conversations while no task is selected, with a creation action in its header and a per-row menu carrying every operation the repository performs on a conversation. Opening a row is a content action: it does not change what the navigator is showing. |
-| **Header action** | Starts a conversation in the scope the section is showing: bound to the selected task, or the selected device's own and owned by no task while none is selected. Never offered for the hardware target, which cannot own a conversation. |
+| **Header action** | Starts a conversation in the scope the section is showing: bound to the selected task, or the selected device's own and owned by no task while none is selected. Never offered for the hardware target, which cannot own a conversation. A task that owns no conversation starts its first one from its own detail page, whose `Sessions` header carries the same action. |
+| **Target selection** | Selecting a device, the hardware row, a worktree or a workbench clears the task selection, so the section returns to the selected device's task-less conversations. Activating the target that is already selected clears it too, because it is the same statement about the scope. The open task detail closes with the selection, so the scope the user picked is what the main area shows. |
 | **Row menu** | The conversation's only entry point, so it holds open, rename, export, bind to a task or clear that binding, and delete. Binding chooses from the worktree's tasks that can own a conversation — a searchable picker, never a prompt for a raw task id — and clearing it is a separate item rather than an empty choice. |
 | **Row open** | Opens the conversation in the chat view of the scope that is already selected, and leaves the workbench, worktree, device and task selection untouched. A conversation whose device is not the selected one — which the worktree's own task surface can ask for — has no device workspace to open in, so it opens in the worktree-level chat view, the one scope without a device. |
 | **Row contents** | The section is a view of the device's conversation list, not a copy of it: it is re-read wherever that list changes, so a conversation renamed, deleted or re-bound in any surface is reflected in the section without a reload. Its menu is visible without hovering, like the navigator's other row menus. |
@@ -148,6 +156,9 @@ guessed at.
   sections can never disagree about which task the user is working in.
 - A conversation that belongs to no task is reachable from the navigator, which is the only state the
   live `master` worktree's conversations are in.
+- It stays reachable after a task has been opened: selecting a target names no task, so the device's
+  task-less list is one selection away, and a task that owns no conversation can no longer hide the
+  section behind an empty list of its own.
 - Reading a conversation leaves the navigator where it was, so the list a row was read from is still
   there when the user comes back to it, and the task selection is not lost with the task detail.
 - Retiring the right dock's "AI sessions" page loses no capability: export and task binding, which only
@@ -168,9 +179,10 @@ guessed at.
   loading"; the heading the section shows when it is present is what tells the first two apart.
 - The header action lives in the section, so a state whose list is empty shows no section and therefore
   no action: a selected task that owns no conversation cannot start its first one from here, and neither
-  can a device that has no task-less conversation. The task's own surface offers creation for the first
-  case and the chat surface's empty state for the second. Rendering the section whenever a device is
-  selected would contradict the content rule above, which is why the gap is stated rather than closed.
+  can a device that has no task-less conversation. The task's own page offers creation for the first case
+  — its `Sessions` header starts the conversation and then yields the main area to it — and the chat
+  surface's empty state covers the second. Rendering the section whenever a device is selected would
+  contradict the content rule above, which is why the second gap is stated rather than closed.
 
 ### Neutral Consequences
 
@@ -214,6 +226,15 @@ would otherwise stay in front of the conversation; the task the navigator treats
 has to outlive the detail it was opened from, which is why the navigator remembers the task it is
 showing rather than deriving it from the detail alone.
 
+The task selection is not sticky. The navigator remembers the task the user picked, or the one the open
+detail is showing, and that memory is cleared whenever the selected target changes — including when the
+target that is already selected is activated again, which is the same statement about the scope the user
+is working in. The open detail closes with it, because the detail renders ahead of every other view:
+leaving it up showed nothing of the scope the user had picked and kept the task it names as the
+selection. A task that owns no conversation starts its first one from its own page, whose `Sessions`
+header carries the section's creation action and then yields the main area to the conversation it
+started, exactly as that page's own session rows do.
+
 The section is not the owner of the conversations it lists. Re-read the device's list in the one place
 every conversation change already goes through — the refresh every chat surface and every row operation
 calls after a create, rename, export, re-binding or delete — and let the section read that, rather than
@@ -227,6 +248,7 @@ without hovering, like the menus on the navigator's other rows.
 |---|---|---|
 | 2026-10-02 | 1.0 | The fifth `SESSIONS` section, its content rule, the header action bound to the selected task, and the row menu with open, rename and delete. The earlier revisions of those decisions are recorded in `docs/design/studio-navigator-sessions-design.md`. |
 | 2026-10-03 | 1.1 | The right dock's "AI sessions" page is retired, so this section becomes the only surface listing a device's conversations. Its row menu gains the export and task binding operations that page alone offered — binding from a picker over the worktree's tasks rather than an id prompt — and its header action starts a conversation in the scope the section is showing, including the device-scoped, task-less state, instead of only while a task is selected. |
+| 2026-10-05 | 1.2 | The task selection is cleared whenever the selected target changes, and activating the target that is already selected clears it too: a target selection names no task, so the section returns to the selected device's task-less conversations and a conversation no task owns stays reachable after a task has been opened. The open task detail closes with that selection, so the picked scope is what the main area shows. A task that owns no conversation starts its first one from its own detail page, whose `Sessions` header carries the section's creation action — closing the first of the two gaps the negative consequences recorded. |
 
 ## Related Information
 

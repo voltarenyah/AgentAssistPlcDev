@@ -668,6 +668,76 @@ describe('WorkbenchNavigator sessions section', () => {
     await act(async () => root.unmount())
   })
 
+  it('drops the selected task when the target changes, so the device\'s task-less list is what it shows again (AC-015)', async () => {
+    // A second device with its own task and one conversation no task owns. It is local to this case so
+    // the shared fixtures keep describing the one-device worktree the other cases read.
+    const key = 'wb-direct:wt-descendant'
+    const twoDevices = { [key]: [...devicesByWorktree[key], { deviceId: 'plc-2', plcName: 'Second PLC' }] }
+    const twoTasks = { [key]: [...targetTasks[key], graphTask({ taskId: 'task-second', title: 'Second task', deviceId: 'plc-2', targetKind: 'device' })] }
+    const twoSessions = { [key]: [...sessionsByWorktree[key], conversation({ sessionId: 'session-second', title: 'Second device question', taskId: null, deviceId: 'plc-2' })] }
+    const props = { devicesByWorktree: twoDevices, tasksByWorktree: twoTasks, sessionsByWorktree: twoSessions }
+
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...props })
+    // Picking the task makes its own conversation the section's list.
+    await act(async () => (host.querySelector('button[aria-label="Open task Device task"]') as HTMLButtonElement).click())
+    expect(host.querySelector('[data-task-selected="true"]')?.textContent).toContain('Device task')
+    expect(section(host, 'sessions').textContent).toContain('Interlock review')
+
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({ selection: { ...deviceSelection, deviceId: 'plc-2' }, ...props })} />,
+    ))
+    const other = section(host, 'sessions')
+    expect(other.textContent).toContain('No task')
+    expect(other.textContent).toContain('Second device question')
+    expect(other.textContent).not.toContain('Interlock review')
+
+    // Coming back to the first device is a target selection like any other, so it names no task: the
+    // task the user picked before must not come back with it, or that task's list would be what the
+    // device's task-less conversations are hidden behind.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({ selection: deviceSelection, ...props })} />,
+    ))
+    expect(host.querySelector('[data-task-selected="true"]')).toBeNull()
+    const back = section(host, 'sessions')
+    expect(back.textContent).toContain('No task')
+    expect(back.textContent).toContain('Ad-hoc question')
+    expect(back.textContent).not.toContain('Interlock review')
+    expect(back.querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('unbound')
+
+    await act(async () => root.unmount())
+  })
+
+  it('clears the selected task when its own device row is selected again (AC-015)', async () => {
+    const onSelectDevice = vi.fn()
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, ...overrides, onSelectDevice,
+    })
+
+    // Picking the task makes its own conversation the section's list.
+    await act(async () => (host.querySelector('button[aria-label="Open task Device task"]') as HTMLButtonElement).click())
+    expect(host.querySelector('[data-task-selected="true"]')?.textContent).toContain('Device task')
+    expect(section(host, 'sessions').textContent).toContain('Interlock review')
+    expect(section(host, 'sessions').textContent).not.toContain('Ad-hoc question')
+
+    // Choosing the device again is the way back: it names no task, and re-activating the device that is
+    // already selected changes no value the reset effect could see, so the row clears it itself.
+    await act(async () => (host.querySelector('[data-device-target="plc-1"]') as HTMLElement)
+      .dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(onSelectDevice).toHaveBeenCalledWith(
+      expect.objectContaining({ workbenchId: 'wb-direct' }),
+      expect.objectContaining({ worktreeId: 'wt-descendant' }),
+      'plc-1',
+    )
+    expect(host.querySelector('[data-task-selected="true"]')).toBeNull()
+    const sessions = section(host, 'sessions')
+    expect(sessions.textContent).toContain('No task')
+    expect(sessions.textContent).toContain('Ad-hoc question')
+    expect(sessions.textContent).not.toContain('Interlock review')
+
+    await act(async () => root.unmount())
+  })
+
   it('opens a conversation from its row (AC-015)', async () => {
     const onOpenSession = vi.fn()
     const { host, root } = await renderNavigator(null, false, {

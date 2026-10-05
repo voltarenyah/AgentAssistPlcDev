@@ -75,8 +75,9 @@ type Props = {
   devicesByWorktree: Record<string, DeviceSummary[]>
   tasksByWorktree?: Record<string, EngineeringTask[]>
   /**
-   * The selected worktree's conversations, fanned out over its devices. The `SESSIONS` section groups
-   * them by the task each is bound to; a conversation bound to no task is not shown.
+   * The selected worktree's conversations, fanned out over its devices. The `SESSIONS` section lists
+   * the selected task's, or — while no task is selected — the selected device's conversations that no
+   * task owns, which is the state selecting that device puts the section in.
    */
   sessionsByWorktree?: Record<string, ChatSessionInfo[]>
   activeTaskId?: string | null
@@ -562,6 +563,20 @@ export default function WorkbenchNavigator({
   )
   const [clickedTaskId, setClickedTaskId] = useState<string | null>(null)
   /**
+   * Which target the remembered task was picked under. Selecting a device, the hardware row, a worktree
+   * or a workbench is the navigator's "no task in particular" state, so the task selection is dropped:
+   * the `SESSIONS` section then falls back to the selected device's conversations that no task owns,
+   * which is the only way back to one. Without that reset the selection was sticky — it had no way out
+   * at all — and a task that owns no conversation took the whole section off screen with it (AC-015).
+   */
+  const selectionKey = `${selection.workbenchId ?? ''}:${selection.worktreeId ?? ''}:${selection.deviceId ?? selection.targetKind ?? ''}`
+  const lastSelectionKey = useRef(selectionKey)
+  useEffect(() => {
+    if (lastSelectionKey.current === selectionKey) return
+    lastSelectionKey.current = selectionKey
+    setClickedTaskId(null)
+  }, [selectionKey])
+  /**
    * A task detail opened from the worktree's own task surface is adopted as the navigator's selection,
    * so the highlighted row and the `SESSIONS` section follow the detail that is open. Adopting it also
    * keeps that selection after the detail yields the main area to a conversation.
@@ -660,7 +675,9 @@ export default function WorkbenchNavigator({
    * The task the navigator treats as selected: the row the user picked, which also outlives the task
    * detail yielding the main area to a conversation, or the task a detail opened from the worktree's own
    * task surface is showing. The row highlight and the `SESSIONS` section both read it, so the two can
-   * never disagree about which task is current (AC-015).
+   * never disagree about which task is current (AC-015). Both of its inputs belong to the target the
+   * user selected: the reset above drops the row side when that target changes, and the detail's task is
+   * in `targetTasks` only while its device is the selected one.
    */
   const selectedTaskId = clickedTaskId ?? activeTaskId
   /**
@@ -701,6 +718,21 @@ export default function WorkbenchNavigator({
   const selectRowTask = (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => {
     setClickedTaskId(task.taskId)
     onSelectTask(workbench, worktree, task)
+  }
+
+  /**
+   * Selecting a target — a PLC device, or the worktree's hardware — names no task, so it clears the
+   * remembered one. The reset above only sees a *changed* selection, and activating the target that is
+   * already selected is a value it cannot observe, so these two clear it directly. That is also the way
+   * back to the selected device's task-less conversations while a task is selected (AC-015).
+   */
+  const selectDeviceRow = (workbench: Workbench, worktree: WorkbenchRegistration, deviceId: string) => {
+    setClickedTaskId(null)
+    onSelectDevice(workbench, worktree, deviceId)
+  }
+  const selectHardwareRow = (workbench: Workbench, worktree: WorkbenchRegistration) => {
+    setClickedTaskId(null)
+    onSelectHardware(workbench, worktree)
   }
 
   const deviceSectionVisible = !filterActive && selectedWorktreeRow !== null
@@ -767,7 +799,7 @@ export default function WorkbenchNavigator({
           aria-current={hardwareSelected ? 'true' : undefined}
           data-device-target="hardware"
           data-navigator-row="hardware"
-          onClick={() => onSelectHardware(workbench, worktree)}
+          onClick={() => selectHardwareRow(workbench, worktree)}
         >
           <CircuitBoard className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-xs">Hardware configuration</span>
@@ -784,7 +816,7 @@ export default function WorkbenchNavigator({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Hardware configuration</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => onSelectHardware(workbench, worktree)}>
+              <DropdownMenuItem onSelect={() => selectHardwareRow(workbench, worktree)}>
                 <CircuitBoard className="h-3.5 w-3.5" />
                 Select hardware configuration
               </DropdownMenuItem>
@@ -813,7 +845,7 @@ export default function WorkbenchNavigator({
               aria-current={selected ? 'true' : undefined}
               data-device-target={device.deviceId}
               data-navigator-row="device"
-              onClick={() => onSelectDevice(workbench, worktree, device.deviceId)}
+              onClick={() => selectDeviceRow(workbench, worktree, device.deviceId)}
             >
               <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate text-xs">{device.plcName}</span>
@@ -831,7 +863,7 @@ export default function WorkbenchNavigator({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuLabel>{device.plcName}</DropdownMenuLabel>
-                  <DropdownMenuItem onSelect={() => onSelectDevice(workbench, worktree, device.deviceId)}>
+                  <DropdownMenuItem onSelect={() => selectDeviceRow(workbench, worktree, device.deviceId)}>
                     <Cpu className="h-3.5 w-3.5" />
                     Select device
                   </DropdownMenuItem>
@@ -936,10 +968,10 @@ export default function WorkbenchNavigator({
 
   /**
    * `SESSIONS`: the conversations of the task the user has selected, or — while no task is selected —
-   * the selected device's conversations that no task owns. Its header starts a conversation in the
-   * scope the list itself is showing: bound to the selected task, or the device's own and owned by no
-   * task while none is selected. The hardware target never reaches this section: it cannot own a
-   * conversation at all.
+   * the selected device's conversations that no task owns, which is what selecting a device shows.
+   * Its header starts a conversation in the scope the list itself is showing: bound to the selected
+   * task, or the device's own and owned by no task while none is selected. The hardware target never
+   * reaches this section: it cannot own a conversation at all.
    */
   const renderSessionsSection = () => {
     if (!selectedWorktreeRow || sessionRows.length === 0) return null

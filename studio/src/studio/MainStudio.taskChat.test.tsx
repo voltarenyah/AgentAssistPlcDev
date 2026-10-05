@@ -289,6 +289,37 @@ it('drops a conversation deleted from its SESSIONS row menu', async () => {
   await act(async () => root.unmount())
 })
 
+it('starts a conversation for the open task from its detail page', async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => root.render(<MainStudio />))
+  const clickText = async (text: string) => {
+    const target = Array.from(host.querySelectorAll<HTMLElement>('div, span, button'))
+      .filter(element => element.textContent?.trim() === text).pop()
+    expect(target).toBeDefined()
+    await act(async () => target!.click())
+  }
+  await clickText('DemoWB')
+  await clickText('master')
+  await clickText('Tasks')
+  await act(async () => host
+    .querySelector<HTMLButtonElement>('[aria-label="Open task detail Inspect startup sequence"]')!.click())
+  expect(host.textContent).toContain('Task fields')
+
+  // The task's own page starts the conversation, so the task is not carried by a selection at all.
+  const start = host.querySelector<HTMLButtonElement>('[aria-label="New chat for Inspect startup sequence"]')!
+  expect(start).not.toBeNull()
+  await act(async () => start.click())
+
+  expect(api.newChatSession).toHaveBeenCalledWith(undefined, 'task1')
+  // The detail renders ahead of every other view, so it yields the main area to the conversation.
+  expect(host.textContent).not.toContain('Task fields')
+  expect(host.querySelector('[data-session-pane="s1"] textarea')).not.toBeNull()
+
+  await act(async () => root.unmount())
+})
+
 it('exports a conversation and binds a task-less one from the SESSIONS row menu', async () => {
   // The only conversation belongs to no task, so the section lists the device's task-less one.
   vi.mocked(api.listDeviceSessions).mockResolvedValue([{ ...sessionInfo(), taskId: null }])
