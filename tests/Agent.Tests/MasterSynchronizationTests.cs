@@ -83,6 +83,8 @@ public sealed class MasterSynchronizationTests : IDisposable
             new KnowledgeState(false, new Dictionary<string, string>(), null), Array.Empty<DeviceImportRecord>()));
         var comparisonPath = System.IO.Path.Combine(fixture.Root, ".automation", "comparisons", "comparison-1.json");
         fixture.Store.Write(comparisonPath, fixture.Store.Read<WorkbenchConsistencyResult>(comparisonPath) with { ComparedWorktreeId = "feature-1" });
+        // TIA holds the content this scenario's exporter hands back.
+        fixture.SetLiveDifferenceFingerprint("Blocks/A.xml", "feature fresh A");
         var engineering = new FakeToolCaller()
             .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
             {
@@ -123,6 +125,7 @@ public sealed class MasterSynchronizationTests : IDisposable
         // the persistent staging file still matches master, refresh it from TIA before copying;
         // otherwise the selected block produces an empty Git commit.
         File.WriteAllText(fixture.StagingSource("Blocks/A.xml"), "old A");
+        fixture.SetLiveDifferenceFingerprint("Blocks/A.xml", "fresh A");
         File.WriteAllText(fixture.MasterSource("metadata.json"), """
             { "components": [
                 { "id": "a", "name": "A", "category": "FC", "exportedFile": "Blocks/A.xml" }
@@ -155,6 +158,95 @@ public sealed class MasterSynchronizationTests : IDisposable
 
         Assert.Equal("fresh A", File.ReadAllText(fixture.MasterSource("Blocks/A.xml")));
         Assert.Contains("export_source_object", engineering.Calls);
+    }
+
+    [Fact]
+    public async Task ApplyReExportsFromTiaWhenTheCanonicalStagingCopyIsAStaleExport()
+    {
+        // Issue #111: staging holds an older export of the same logic. Its file bytes differ from
+        // master only by the export timestamp, so a byte comparison against master reads it as
+        // this comparison's candidate and commits pre-edit content. The accept path must instead
+        // materialize the content the comparison observed in TIA.
+        const string baselineExport = """
+            <Document>
+              <Created>2026-10-03T11:22:59Z</Created>
+              <Logic>old A</Logic>
+            </Document>
+            """;
+        const string staleExport = """
+            <Document>
+              <Created>2026-10-05T02:54:23Z</Created>
+              <Logic>old A</Logic>
+            </Document>
+            """;
+        const string comparedExport = """
+            <Document>
+              <Created>2026-10-06T00:00:00Z</Created>
+              <Logic>new A</Logic>
+            </Document>
+            """;
+        File.WriteAllText(fixture.MasterSource("Blocks/A.xml"), baselineExport);
+        File.WriteAllText(fixture.StagingSource("Blocks/A.xml"), staleExport);
+        fixture.SetLiveDifferenceFingerprint("Blocks/A.xml", comparedExport);
+        SeedSourceManifest();
+        var engineering = ExportEngineering(comparedExport);
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        await coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Accept the compared block",
+            CancellationToken.None);
+
+        Assert.Contains("export_source_object", engineering.Calls);
+        Assert.Equal(comparedExport, File.ReadAllText(fixture.MasterSource("Blocks/A.xml")));
+    }
+
+    [Fact]
+    public async Task ApplyRefusesWhenTiaNoLongerMatchesTheComparison()
+    {
+        // A re-export that still does not match the compared content means TIA moved on (or the
+        // comparison carries no live evidence for this object). Fail closed: never commit content
+        // the user did not see as accepted.
+        File.WriteAllText(fixture.MasterSource("Blocks/A.xml"), "old A");
+        File.WriteAllText(fixture.StagingSource("Blocks/A.xml"), "even older A");
+        fixture.SetLiveDifferenceFingerprint("Blocks/A.xml", "compared A");
+        SeedSourceManifest();
+        var engineering = ExportEngineering("changed again A");
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        var exception = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() => coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Accept a stale comparison",
+            CancellationToken.None));
+
+        Assert.Equal("TIA_SOURCE_CHANGED_AFTER_COMPARISON", exception.Code);
+        Assert.Equal("old A", File.ReadAllText(fixture.MasterSource("Blocks/A.xml")));
+        Assert.DoesNotContain("vc_commit_selected", fixture.VersionControl.Calls);
+    }
+
+    [Fact]
+    public async Task ApplyReusesACanonicalStagingCopyThatAlreadyIsTheComparedContent()
+    {
+        var engineering = ExportEngineering("should not be exported");
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        var result = await coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Accept the staged block",
+            CancellationToken.None);
+
+        Assert.Equal("head-2", result.CommitSha);
+        Assert.DoesNotContain("export_source_object", engineering.Calls);
+        Assert.Equal("new A", File.ReadAllText(fixture.MasterSource("Blocks/A.xml")));
     }
 
     [Fact]
@@ -426,6 +518,39 @@ public sealed class MasterSynchronizationTests : IDisposable
         Assert.False(File.Exists(WorkbenchPaths.ResolveRevisionState(masterRoot)));
     }
 
+    /// <summary>
+    /// The tracked export manifest that lets the coordinator resolve one object's TIA identity for
+    /// the re-export (a plain "Blocks/A.xml" path carries no category on its own).
+    /// </summary>
+    private void SeedSourceManifest() =>
+        File.WriteAllText(fixture.MasterSource("metadata.json"), """
+            { "components": [
+                { "id": "a", "name": "A", "category": "FC", "exportedFile": "Blocks/A.xml" },
+                { "id": "b", "name": "B", "category": "FC", "exportedFile": "Blocks/B.xml" }
+            ] }
+            """);
+
+    /// <summary>
+    /// A TIA session whose <c>export_source_object</c> writes <paramref name="content"/> into the
+    /// device staging root — the way the real exporter materializes one selected object.
+    /// </summary>
+    private static FakeToolCaller ExportEngineering(string content) =>
+        new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("export_source_object", args =>
+            {
+                var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
+                var exported = System.IO.Path.Combine(outputDir, "Blocks", "A.xml");
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(exported)!);
+                File.WriteAllText(exported, content);
+                return new Contracts.Engineering.ExportResult { Success = true, Path = exported };
+            });
+
     private static FakeToolCaller SafetyEngineering() =>
         new FakeToolCaller()
             .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
@@ -596,15 +721,63 @@ public sealed class MasterSynchronizationTests : IDisposable
                 new Dictionary<string, string?> { ["device-1"] = "checksum-1" },
                 new[]
                 {
-                    new SourceDifference("device-1", "PLC_1", "devices/PLC_1/source/Blocks/A.xml", "Blocks:A", SourceDifferenceKind.Changed, "old", "new", true),
-                    new SourceDifference("device-1", "PLC_1", "devices/PLC_1/source/Blocks/B.xml", "Blocks:B", SourceDifferenceKind.Changed, "old", "new", true),
+                    // Real managed-source identities, not placeholders: the accept path verifies
+                    // that the staging copy is the content the comparison observed, so a fixture
+                    // whose fingerprints do not describe the staged bytes would prove nothing
+                    // (issue #111).
+                    new SourceDifference("device-1", "PLC_1", "devices/PLC_1/source/Blocks/A.xml", "Blocks:A", SourceDifferenceKind.Changed, FingerprintOf("old A"), FingerprintOf("new A"), true),
+                    new SourceDifference("device-1", "PLC_1", "devices/PLC_1/source/Blocks/B.xml", "Blocks:B", SourceDifferenceKind.Changed, FingerprintOf("old B"), FingerprintOf("new B"), true),
                 },
                 ComparedWorktreeId: "master-1");
-            store.Write(System.IO.Path.Combine(root, ".automation", "comparisons", "comparison-1.json"), comparison);
+            store.Write(ComparisonPathFor(root), comparison);
             return new SyncFixture(root, workbench, master, store, new SyncVersionControlCaller());
         }
 
+        public static string ComparisonPathFor(string root) =>
+            System.IO.Path.Combine(root, ".automation", "comparisons", "comparison-1.json");
+
+        /// <summary>
+        /// The managed-source identity of arbitrary XML content, resolved through the same reader
+        /// the comparison uses (normalized XML: export timestamps are stripped). Deriving it by
+        /// hand would let a stale export pass for the compared candidate.
+        /// </summary>
+        public static string FingerprintOf(string content)
+        {
+            var probeRoot = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(), "master-sync-fingerprint", Guid.NewGuid().ToString("N"));
+            var probeFile = System.IO.Path.Combine(probeRoot, "Blocks", "probe.xml");
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(probeFile)!);
+            File.WriteAllText(probeFile, content);
+            try
+            {
+                return new SourceTreeReader().TryReadRelative(probeRoot, "Blocks/probe.xml")!.Sha256;
+            }
+            finally
+            {
+                Directory.Delete(probeRoot, recursive: true);
+            }
+        }
+
         public string Path(string relative) => $"devices/PLC_1/source/{relative}";
+
+        public string ComparisonPath => ComparisonPathFor(Root);
+
+        /// <summary>
+        /// Restates what TIA holds for one compared object, the way a later export would: the
+        /// comparison's live fingerprint must always describe the content TIA hands back.
+        /// </summary>
+        public void SetLiveDifferenceFingerprint(string relativePath, string liveContent)
+        {
+            var comparison = Store.Read<WorkbenchConsistencyResult>(ComparisonPath);
+            Store.Write(ComparisonPath, comparison with
+            {
+                Differences = comparison.Differences
+                    .Select(difference => difference.RelativePath.EndsWith(relativePath, StringComparison.Ordinal)
+                        ? difference with { TiaFingerprint = FingerprintOf(liveContent) }
+                        : difference)
+                    .ToArray(),
+            });
+        }
 
         public string StagingSource(string relative) =>
             System.IO.Path.Combine(Root, "worktrees", "master", "devices", "PLC_1", "staging", relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
