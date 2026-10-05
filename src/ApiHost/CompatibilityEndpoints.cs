@@ -943,13 +943,16 @@ internal sealed class ApiChatService(
                 ? restored
                 : SessionManager.CreateNewSession(device, Settings(configuration, state), null);
             var discovered = await McpToolCatalog.BuildAsync(runtime.Host, token);
-            // The staged-source-object and task-creation tools are in-process (they need the workbench
-            // graph, the guarded stage path and the managed task write), so they are added to the
-            // discovered MCP tools rather than discovered.
+            // The source-object listing, the staged-source-object and task-creation tools are
+            // in-process (they need the workbench graph, the guarded stage path and the managed task
+            // write), so they are added to the discovered MCP tools rather than discovered.
             var catalog = new McpToolCatalog(discovered.Tools.Select(spec => spec with
             {
                 Caller = new BoundMcpCaller(spec.Caller, binder, device),
-            }).Append(TaskSourceStagingTool.CreateSpec(
+            }).Append(TaskSourceObjectListTool.CreateSpec(
+                new TaskSourceObjectListTool(workbenches, graphs, activeTasks),
+                () => device))
+              .Append(TaskSourceStagingTool.CreateSpec(
                 new TaskSourceStagingTool(workbenches, graphs, activeTasks, coordinator),
                 () => device))
               .Append(TaskCreationTool.CreateSpec(

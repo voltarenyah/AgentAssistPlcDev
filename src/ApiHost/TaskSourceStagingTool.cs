@@ -42,9 +42,13 @@ internal sealed class TaskSourceStagingTool(
         "Stage PLC source objects for the active task of the selected worktree, so they become the "
         + "task's TIA compare basis. Requires user approval: the call is refused until the user "
         + "approves it on the approval card. Each object must belong to the active task's device. "
-        + "Name takeOverFromTaskId when the object is already staged by another active task; that "
-        + "task's stage is released first and the owner is shown on the approval card. Staging the "
-        + "same object for this task again is harmless.";
+        + "Name each object with the sourceObjectId that " + TaskSourceObjectListTool.ToolName
+        + " reports — \"<deviceId>:<sourceId>\" — or with a name that id list shows: a bare sourceId, "
+        + "the block name, or the manifest-relative path (Blocks/Area/Main [OB1].xml). A knowledge-base "
+        + "node id such as block:Main is understood as the name Main. Never invent an id and never build "
+        + "one from a knowledge-graph node id. Name takeOverFromTaskId when the object is already staged "
+        + "by another active task; that task's stage is released first and the owner is shown on the "
+        + "approval card. Staging the same object for this task again is harmless.";
 
     /// <summary>Object entries, not a bare id list: a take-over must name the owner it releases, and
     /// the approval card shows the tool arguments verbatim.</summary>
@@ -113,8 +117,7 @@ internal sealed class TaskSourceStagingTool(
         var staged = new List<TaskSourceStage>();
         foreach (var sourceObjectId in prepared.Targets)
         {
-            staged.Add(await coordinator
-                .StageTaskSourceObjectAsync(device.WorkbenchId, device.WorktreeId, prepared.TaskId, sourceObjectId, token)
+            staged.Add(await StageGuardedAsync(device, prepared.TaskId, sourceObjectId, token)
                 .ConfigureAwait(false));
         }
 
@@ -136,6 +139,33 @@ internal sealed class TaskSourceStagingTool(
                 release.TaskTitle,
             }).ToArray(),
         };
+    }
+
+    /// <summary>
+    /// The stage itself, through the one guarded path that derives the baseline (ADR-0003).
+    /// </summary>
+    private Task<TaskSourceStage> StageGuardedAsync(
+        DeviceContext device, string taskId, string sourceObjectId, CancellationToken token) =>
+        TranslateGraphFailure(() => coordinator
+            .StageTaskSourceObjectAsync(device.WorkbenchId, device.WorktreeId, taskId, sourceObjectId, token));
+
+    /// <summary>
+    /// The graph reports its own constraint codes, and they are not <see cref="ToolCallException"/>s:
+    /// without this translation the agent loop collapses them into a code-less <c>AGENT_TOOL_ERROR</c>
+    /// and the caller loses both the reason and the way back — the exact dead end a live conversation hit
+    /// on "Source object was not registered.".
+    /// </summary>
+    internal static async Task<TaskSourceStage> TranslateGraphFailure(Func<Task<TaskSourceStage>> stage)
+    {
+        try
+        {
+            return await stage().ConfigureAwait(false);
+        }
+        catch (EngineeringGraphConstraintException ex)
+        {
+            throw new ToolCallException(ex.Code, ex.Message,
+                $"Read the device's source objects with {TaskSourceObjectListTool.ToolName} and pass an id it reports.");
+        }
     }
 
     /// <summary>Everything the call will do, computed before the first write: the active task, the
@@ -215,50 +245,145 @@ internal sealed class TaskSourceStagingTool(
     }
 
     /// <summary>
-    /// Resolves one requested object to its stable <c>{deviceId}:{sourceId}</c> identity. A canonical
-    /// id is kept as it is; a bare id, name, or relative path is resolved against the device's own
-    /// manifest, so the agent can act on the names a user actually says. An id that names another
-    /// device is refused as a device mismatch before anything is written, and an unresolvable or
+    /// Node-kind prefixes of the knowledge base's semantic graph that name the <b>same</b> PLC objects
+    /// this tool stages (<c>Mcp.Knowledge.Graph.SemanticPlcGraph.BlockId/DbId/UdtId/TypeId</c>). Their
+    /// colon is a kind separator, not a device separator, which is why a value the model copied out of
+    /// the knowledge base used to be refused as another device's object. Declared here rather than
+    /// referenced: ApiHost does not link the knowledge server, and the vocabulary is four words wide.
+    /// </summary>
+    private static readonly string[] KnowledgeObjectPrefixes = ["block", "db", "udt", "type"];
+
+    /// <summary>The knowledge base's element prefixes. These never name a storable source object, so a
+    /// value carrying one is reported as the element id it is instead of being read as a device name.</summary>
+    private static readonly string[] KnowledgeElementPrefixes =
+        ["symbol", "io", "udt-member", "db-member", "edge"];
+
+    /// <summary>
+    /// Resolves one requested object to its stable <c>{deviceId}:{sourceId}</c> identity, then proves it
+    /// exists: a canonical id, a bare id, a name, or a manifest-relative path all resolve against the
+    /// device's own manifest, so the agent can act on the names a user actually says. An id that names
+    /// another device is refused as a device mismatch before anything is written, and an unresolvable or
     /// ambiguous value lists the candidates instead of guessing.
     /// </summary>
+    /// <remarks>
+    /// A value that already carries this device's prefix is resolved like a bare one instead of being
+    /// trusted: returning it unvalidated used to defer every such failure to the graph's own
+    /// "Source object was not registered.", which arrives without this tool's candidate advice.
+    /// </remarks>
     private static string CanonicalId(string requested, string deviceId, IReadOnlyList<SourceObjectInfo> manifest)
     {
-        var prefix = deviceId + ":";
-        if (requested.StartsWith(prefix, StringComparison.Ordinal))
+        var value = StripDevicePrefix(requested.Trim(), deviceId);
+
+        // A rooted path is a caller mistake, not a device-qualified id. Without this the drive letter
+        // would be read as the claiming device ("belongs to device 'C'").
+        if (Path.IsPathRooted(value))
         {
-            if (requested.Length == prefix.Length)
-            {
-                throw new ToolCallException("GRAPH_TARGET_NOT_FOUND",
-                    $"'{requested}' names no source object.", "Provide a source object id, name, or relative path.");
-            }
-            return requested;
+            throw new ToolCallException("GRAPH_TARGET_NOT_FOUND",
+                $"'{requested}' is an absolute path, but source objects are named relative to the device's source root.",
+                $"Pass the relative path the manifest lists, the object's name, or the id {TaskSourceObjectListTool.ToolName} reports.");
         }
 
-        var separator = requested.IndexOf(':');
+        var separator = value.IndexOf(':');
         if (separator > 0)
         {
-            var claimedDevice = requested[..separator];
-            throw new ToolCallException("TASK_SOURCE_DEVICE_MISMATCH",
-                $"Source object '{requested}' belongs to device '{claimedDevice}', but the active task is bound to device '{deviceId}'.",
-                $"Only source objects of the active task's device can be staged. Use an object id starting with '{prefix}'.");
+            var head = value[..separator];
+            if (KnowledgeObjectPrefixes.Contains(head, StringComparer.OrdinalIgnoreCase))
+            {
+                // The knowledge base's name half is the manifest's name, so it resolves below.
+                value = value[(separator + 1)..];
+            }
+            else if (KnowledgeElementPrefixes.Contains(head, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new ToolCallException("GRAPH_TARGET_NOT_FOUND",
+                    $"'{requested}' is a knowledge-graph element id ('{head}:'), not a PLC source object id, so there is nothing to stage.",
+                    $"Call {TaskSourceObjectListTool.ToolName} to read this device's source object ids, then pass an id it reports.");
+            }
+            else
+            {
+                throw new ToolCallException("TASK_SOURCE_DEVICE_MISMATCH",
+                    $"Source object '{requested}' belongs to device '{head}', but the active task is bound to device '{deviceId}'.",
+                    $"Only source objects of the active task's device can be staged. Call {TaskSourceObjectListTool.ToolName} "
+                    + $"for this device's objects: the id it reports starts with '{deviceId}:'.");
+            }
         }
 
-        var normalized = requested.Replace('\\', '/');
+        if (value.Length == 0)
+        {
+            throw new ToolCallException("GRAPH_TARGET_NOT_FOUND",
+                $"'{requested}' names no source object.",
+                $"Call {TaskSourceObjectListTool.ToolName} for this device's source object ids.");
+        }
+
+        var prefix = deviceId + ":";
+        var normalized = value.Replace('\\', '/');
         var matches = manifest.Where(item =>
-            string.Equals(item.Id, requested, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(item.Name, requested, StringComparison.OrdinalIgnoreCase)
+            string.Equals(item.Id, value, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(item.Name, value, StringComparison.OrdinalIgnoreCase)
             || string.Equals(item.RelativePath, normalized, StringComparison.OrdinalIgnoreCase)).ToArray();
         return matches.Length switch
         {
             1 => prefix + matches[0].Id,
             0 => throw new ToolCallException("GRAPH_TARGET_NOT_FOUND",
-                $"No source object of device '{deviceId}' matches '{requested}'.",
-                "Use the source object id or the block name the device's registered objects report."),
+                $"No source object of device '{deviceId}' matches '{requested}'." + DidYouMean(value, manifest),
+                $"Call {TaskSourceObjectListTool.ToolName} to read this device's source object ids, or pass the block name or the manifest-relative path."),
             _ => throw new ToolCallException("GRAPH_TARGET_NOT_FOUND",
                 $"'{requested}' matches {matches.Length} source objects of device '{deviceId}': "
                 + string.Join(", ", matches.Select(item => item.Id)) + ".",
                 "Use the exact source object id."),
         };
+    }
+
+    /// <summary>Drops a leading <c>{deviceId}:</c>, so the remainder is resolved exactly like a bare
+    /// value. Any other prefix stays in place for the caller to report on.</summary>
+    private static string StripDevicePrefix(string requested, string deviceId)
+    {
+        var prefix = deviceId + ":";
+        return requested.StartsWith(prefix, StringComparison.Ordinal) ? requested[prefix.Length..] : requested;
+    }
+
+    /// <summary>Bounded "did you mean" for a value that resolved to nothing: the ids whose name, id or
+    /// path contains or nearly starts with what was asked for, so a shortened, mistyped or
+    /// path-shaped value comes back with the candidate to use.</summary>
+    private static string DidYouMean(string value, IReadOnlyList<SourceObjectInfo> manifest)
+    {
+        var needles = new[] { value, Path.GetFileNameWithoutExtension(value.Replace('\\', '/')) }
+            .Where(needle => !string.IsNullOrWhiteSpace(needle))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (needles.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var close = manifest
+            .Where(item => needles.Any(needle => IsClose(item, needle)))
+            .Select(item => $"{item.Id} ({item.Name})")
+            .Distinct(StringComparer.Ordinal)
+            .Take(5)
+            .ToArray();
+        return close.Length == 0 ? string.Empty : " Closest: " + string.Join(", ", close) + ".";
+    }
+
+    /// <summary>Containment, or a shared leading run long enough that a mistyped id still names its
+    /// object (a `<c>block-mian</c>` finds `<c>block-main</c>`).</summary>
+    private static bool IsClose(SourceObjectInfo item, string needle) =>
+        item.Name.Contains(needle, StringComparison.OrdinalIgnoreCase)
+        || item.Id.Contains(needle, StringComparison.OrdinalIgnoreCase)
+        || item.RelativePath.Contains(needle, StringComparison.OrdinalIgnoreCase)
+        || SharedPrefix(item.Id, needle) >= 3
+        || SharedPrefix(item.Name, needle) >= 3;
+
+    private static int SharedPrefix(string left, string right)
+    {
+        var length = Math.Min(left.Length, right.Length);
+        var index = 0;
+        while (index < length
+            && char.ToUpperInvariant(left[index]) == char.ToUpperInvariant(right[index]))
+        {
+            index++;
+        }
+
+        return index;
     }
 
     private static bool Matches(string declared, string taskId, string taskTitle) =>

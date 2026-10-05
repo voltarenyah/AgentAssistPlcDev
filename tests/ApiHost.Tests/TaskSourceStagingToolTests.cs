@@ -146,6 +146,114 @@ public sealed class TaskSourceStagingToolTests : IDisposable
         Assert.Equal(arguments.Trim(), shown!.ArgumentsSummary);
     }
 
+    /// <summary>
+    /// Item 008. A live conversation named the block the way the knowledge base names it, and the colon
+    /// in `block:Main` was read as a claiming device id. The knowledge vocabulary names the same PLC
+    /// objects, so it resolves instead of being refused — with or without the device prefix the old
+    /// remediation told the caller to add.
+    /// </summary>
+    [Theory]
+    [InlineData("block:Main")]
+    [InlineData("device-1:block:Main")]
+    [InlineData("BLOCK:Main")]
+    public async Task AKnowledgeNodeIdResolvesToTheSourceObjectItNames(string requested)
+    {
+        var fixture = StageToolFixture.Create(root);
+
+        await fixture.InvokeAsync($$"""{"objects":[{"sourceObjectId":"{{requested}}"}]}""");
+
+        var stage = Assert.Single(fixture.ReadStages(StageToolFixture.TaskId));
+        Assert.Equal("device-1:block-main", stage.SourceObjectId);
+    }
+
+    /// <summary>A knowledge-graph element that is not a storable source object says so, and says where
+    /// the real ids are, instead of blaming a device called `symbol`.</summary>
+    [Theory]
+    [InlineData("symbol:Motor", "symbol")]
+    [InlineData("db-member:Motors:Speed", "db-member")]
+    [InlineData("udt-member:Motor:Speed", "udt-member")]
+    public async Task AKnowledgeElementIdIsReportedAsSuchInsteadOfAsAForeignDevice(string requested, string head)
+    {
+        var fixture = StageToolFixture.Create(root);
+
+        var error = await Assert.ThrowsAsync<ToolCallException>(() =>
+            fixture.InvokeAsync($$"""{"objects":[{"sourceObjectId":"{{requested}}"}]}"""));
+
+        Assert.Equal("GRAPH_TARGET_NOT_FOUND", error.Code);
+        Assert.Contains($"knowledge-graph element id ('{head}:')", error.Message, StringComparison.Ordinal);
+        Assert.Contains(TaskSourceObjectListTool.ToolName, error.Remediation!, StringComparison.Ordinal);
+        Assert.Empty(fixture.ReadStages(StageToolFixture.TaskId));
+    }
+
+    /// <summary>
+    /// The regression the live conversation stalled on: a value carrying the correct device prefix was
+    /// returned unvalidated, so the graph's own "Source object was not registered." surfaced through the
+    /// agent loop as a code-less AGENT_TOOL_ERROR with no remediation. The tool now resolves — or
+    /// refuses with its own code and the candidates.
+    /// </summary>
+    [Fact]
+    public async Task AnUnresolvableIdKeepsItsCodeAndNamesTheCandidates()
+    {
+        var fixture = StageToolFixture.Create(root);
+
+        var error = await Assert.ThrowsAsync<ToolCallException>(() => fixture.InvokeAsync("""
+            {"objects":[{"sourceObjectId":"device-1:block-mian"}]}
+            """));
+
+        Assert.Equal("GRAPH_TARGET_NOT_FOUND", error.Code);
+        Assert.Contains("block-mian", error.Message, StringComparison.Ordinal);
+        // The bounded "did you mean": the id that nearly matched, and the tool that lists them all.
+        Assert.Contains("block-main", error.Message, StringComparison.Ordinal);
+        Assert.Contains(TaskSourceObjectListTool.ToolName, error.Remediation!, StringComparison.Ordinal);
+        Assert.Empty(fixture.ReadStages(StageToolFixture.TaskId));
+    }
+
+    /// <summary>A shortened name is the likeliest wrong value a model produces; it comes back with the
+    /// candidates rather than a bare failure.</summary>
+    [Fact]
+    public async Task AShortenedNameComesBackWithTheCandidates()
+    {
+        var fixture = StageToolFixture.Create(root);
+
+        var error = await Assert.ThrowsAsync<ToolCallException>(() => fixture.InvokeAsync("""
+            {"objects":[{"sourceObjectId":"Mai"}]}
+            """));
+
+        Assert.Equal("GRAPH_TARGET_NOT_FOUND", error.Code);
+        Assert.Contains("block-main (Main)", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A rooted path is a caller mistake, not a device-qualified id: reading the drive letter
+    /// as a device name would report "belongs to device 'C'".</summary>
+    [Fact]
+    public async Task AnAbsolutePathIsRefusedAsAPathNotAsAForeignDevice()
+    {
+        var fixture = StageToolFixture.Create(root);
+
+        var error = await Assert.ThrowsAsync<ToolCallException>(() => fixture.InvokeAsync("""
+            {"objects":[{"sourceObjectId":"C:\\exports\\Blocks\\Main.xml"}]}
+            """));
+
+        Assert.Equal("GRAPH_TARGET_NOT_FOUND", error.Code);
+        Assert.Contains("absolute path", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The graph's constraint exception is not a ToolCallException, so an untranslated one reaches the
+    /// agent loop as AGENT_TOOL_ERROR with no code and no remediation.
+    /// </summary>
+    [Fact]
+    public async Task AGraphConstraintFailureKeepsItsCodeAndPointsAtTheListing()
+    {
+        var error = await Assert.ThrowsAsync<ToolCallException>(() =>
+            TaskSourceStagingTool.TranslateGraphFailure(() =>
+                throw new EngineeringGraphConstraintException("Source object was not registered.", "GRAPH_TARGET_NOT_FOUND")));
+
+        Assert.Equal("GRAPH_TARGET_NOT_FOUND", error.Code);
+        Assert.Equal("Source object was not registered.", error.Message);
+        Assert.Contains(TaskSourceObjectListTool.ToolName, error.Remediation!, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(root))

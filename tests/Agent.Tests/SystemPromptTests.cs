@@ -114,6 +114,21 @@ public sealed class SystemPromptTests
     }
 
     [Fact]
+    public void PromptExplainsStagingASourceObjectAndWhereItsIdComesFrom()
+    {
+        var prompt = SystemPrompt.Build();
+
+        Assert.Contains("stage_task_source_object", prompt);
+        Assert.Contains("list_source_objects", prompt);
+        // A live conversation stalled because the model built an id out of a knowledge-base node id;
+        // the rule has to say that the two id spaces are not the same one.
+        Assert.Contains("never build one out of a knowledge-base node id", prompt);
+        Assert.Contains("`block:Main` is a knowledge-base id, not a source object id", prompt);
+        Assert.Contains("the tool cannot stage without it", prompt);
+        Assert.Contains("takeOverFromTaskId", prompt);
+    }
+
+    [Fact]
     public void ContextMessageCarriesMarkerAndBody()
     {
         var message = ChatMessage.User(SystemPrompt.ContextMessage("Knowledge DB: C:\\db\\k.db"));
