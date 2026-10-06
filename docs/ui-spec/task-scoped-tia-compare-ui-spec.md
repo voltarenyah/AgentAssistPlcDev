@@ -14,6 +14,7 @@
 | Task stage | User opens a task | Shows staged objects and their current stage status; removing an item releases active ownership only. |
 | Compare task with TIA | Active task has staged objects | Shows only task differences — the same selectable, committable rows a full scan produces — and labels a clean result `This task is in sync`. |
 | Commit a task-scoped difference | User ticks a task-scoped difference and submits a message | Only the selected objects are accepted into the worktree and committed; the commit is attributed to that task. Hardware is never checked in this scope. |
+| Commit target | The commit controls on Changes | Names the task the commit will be linked to — the worktree's active task — and lets it be changed. Choosing another makes it this worktree's active task, which also sets what `Task only` compares. An object staged on another task is refused, and the refusal names that task. |
 | Full scan | User selects full project scan | Shows every changed unassigned source object and lets the user assign each to an eligible task. |
 | Create SVN savepoint | User requests a native savepoint | Shows the unresolved source objects and directs the user to full scan/assignment instead of creating a savepoint. |
 
