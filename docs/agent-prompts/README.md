@@ -61,6 +61,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 | [009](009-tool-result-compaction-keeps-shape.md) | An oversized tool result keeps its shape instead of collapsing to field names | pending | — | `src/Agent/Chat/ToolResultCompactor.cs` |
 | [010](010-task-only-compare-is-committable.md) | Task-only compare produces committable differences | done | 002, 003 | `src/Agent/Workbench/WorkbenchConsistencyService.cs`, `studio/src/studio/version-control/VersionControlCompare.tsx` |
 | [011](011-commit-names-its-task.md) | The commit says which task it belongs to | done | 010 | `studio/src/studio/version-control/VersionControlChanges.tsx`, `src/ApiHost/WorkbenchApiModels.cs` |
+| [012](012-task-commit-advances-only-what-it-contained.md) | A task commit advances only what it contained | done | 010, 011 | `src/Agent/Workbench/WorkbenchCoordinator.cs` |
 
 Items 002–005 implement the missing execution layer of an already accepted design: task-scoped
 source evidence (`docs/adr/ADR-0003-task-scoped-source-evidence.md`,
