@@ -775,7 +775,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == wt);
             graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
                 Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:Unstaged", wb, wt,
-                fixture.DeviceId, "devices/PLC_1/source/Unstaged.xml"));
+                fixture.DeviceId, "Unstaged.xml"));
             graph.StageSourceObject(otherTaskId!, "dev-1:Unstaged", null);
         }
         var owned = await fixture.Client.PostAsJsonAsync(
@@ -783,6 +783,54 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             new { paths = new[] { "devices/PLC_1/source/Unstaged.xml" }, message = "owned elsewhere", untrackableChange = false });
         Assert.Equal(HttpStatusCode.BadRequest, owned.StatusCode);
         Assert.Contains("staged on 'Other task'", await owned.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task ActiveTaskCommitAcceptsAStagedObjectInItsRegisteredPathForm()
+    {
+        // The graph records a source object relative to the device's source root ("Blocks/Main [OB1].xml")
+        // while a commit selects paths relative to the worktree. The guard has to resolve both forms, or
+        // it rejects every legitimate task commit (015).
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        fixture.WriteGraphManifest();
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var created = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Registered path form", type = "issue", status = "inProgress", deviceId = fixture.DeviceId,
+                intent = "Commit a staged object", expectedResult = "One commit" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        (await fixture.Client.PutAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/active-task", new { taskId })).EnsureSuccessStatusCode();
+        using (var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == wt);
+            // Registered the way the staging route does: the object path relative to the device's source
+            // root, while the commit below selects the worktree-relative path.
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject,
+                $"{fixture.DeviceId}:ob-main", wb, wt, fixture.DeviceId, "Blocks/Main [OB1].xml"));
+            graph.StageSourceObject(taskId!, $"{fixture.DeviceId}:ob-main", null);
+        }
+
+        // A staged object with content to commit, so the route reaches the guarded commit itself.
+        File.WriteAllText(
+            Path.Combine(fixture.Context.SourceRoot, "Blocks", "Main [OB1].xml"),
+            "<Document><SW.Blocks.OB ID=\"1\" /></Document>");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
+            new { paths = new[] { "devices/PLC_1/source/Blocks/Main [OB1].xml" }, message = "staged in its own form",
+                untrackableChange = false });
+
+        var body = await response.Content.ReadAsStringAsync();
+
+        // The task guard resolved both path forms and let the commit through; whatever it reports next
+        // is the commit's own verdict, not a stage mismatch. Before 015 this returned
+        // TASK_COMMIT_STAGE_MISMATCH / "Not staged on this task" for every legitimate task commit.
+        Assert.DoesNotContain("TASK_COMMIT_STAGE_MISMATCH", body);
+        Assert.DoesNotContain("Not staged on this task", body);
     }
 
     [Fact]

@@ -1243,21 +1243,28 @@ public static class WorkbenchEndpoints
                     var task = graphScope.Service.FindTask(taskId);
                     if (task is null || task.WorktreeId != worktreeId)
                         throw new EngineeringGraphConstraintException("The requested task is not in this worktree.", "TASK_NOT_FOUND");
-                    var stagedPaths = graphScope.Service.ListActiveStages(task.TaskId)
+                    var stagedObjects = graphScope.Service.ListActiveStages(task.TaskId)
                         .Select(stage => graphScope.Service.GetEntity(GraphEntityKind.SourceObject, stage.SourceObjectId)?.ExternalRef)
                         .Where(path => !string.IsNullOrWhiteSpace(path))
-                        .Select(path => path!.Replace('\\', '/'))
-                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        .Select(path => path!)
+                        .ToArray();
+                    // A stage records its object relative to the device's source root while a commit
+                    // selects paths relative to the worktree; comparing one form against the other
+                    // rejected every legitimate task commit (015).
+                    var sourceRoot = Path.GetRelativePath(
+                        root, s.Device(workbenchId, worktreeId, task.DeviceId!).Context.SourceRoot);
                     var requestedPaths = body.Paths.Select(path => path.Replace('\\', '/')).ToArray();
                     // A message-only commit (an untrackable or safety change) carries no paths and still
                     // belongs to its task, so only a requested path outside the task's active stages is a
                     // mismatch. The refusal names those paths and the task that currently owns them, so
                     // the selection can be corrected instead of guessed at.
-                    var outsideStages = requestedPaths.Where(path => !stagedPaths.Contains(path)).ToArray();
+                    var outsideStages = requestedPaths
+                        .Where(path => !stagedObjects.Any(objectPath => SourcePathForms.Matches(sourceRoot, objectPath, path)))
+                        .ToArray();
                     if (outsideStages.Length > 0)
                         throw new EngineeringGraphConstraintException(
                             "A task commit may contain only active staged source objects. Not staged on this task: "
-                            + DescribeUnstagedPaths(outsideStages, worktreeId, graphScope.Service),
+                            + DescribeUnstagedPaths(outsideStages, worktreeId, sourceRoot, graphScope.Service),
                             "TASK_COMMIT_STAGE_MISMATCH");
                 }
             }
@@ -2472,24 +2479,28 @@ public static class WorkbenchEndpoints
     /// <summary>
     /// Names the selected source paths that are not staged on the committing task — and, for each one
     /// another task of this worktree owns, that task — so a refused task commit says what to release
-    /// instead of only that something was wrong.
+    /// instead of only that something was wrong. Both recorded path forms are resolved (015).
     /// </summary>
     private static string DescribeUnstagedPaths(
         IReadOnlyList<string> paths,
         string worktreeId,
+        string sourceRoot,
         EngineeringGraphService graph)
     {
-        var ownerByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var item in graph.ListWorktreeActiveStages(worktreeId))
-        {
-            var path = graph.GetEntity(GraphEntityKind.SourceObject, item.Stage.SourceObjectId)
-                ?.ExternalRef?.Replace('\\', '/');
-            if (!string.IsNullOrWhiteSpace(path) && !string.IsNullOrWhiteSpace(item.TaskTitle))
-                ownerByPath[path] = item.TaskTitle;
-        }
+        var owners = graph.ListWorktreeActiveStages(worktreeId)
+            .Select(item => new
+            {
+                item.TaskTitle,
+                ObjectPath = graph.GetEntity(GraphEntityKind.SourceObject, item.Stage.SourceObjectId)?.ExternalRef,
+            })
+            .Where(item => !string.IsNullOrWhiteSpace(item.ObjectPath) && !string.IsNullOrWhiteSpace(item.TaskTitle))
+            .ToArray();
 
         return string.Join(", ", paths.Select(path =>
-            ownerByPath.TryGetValue(path, out var owner) ? $"{path} (staged on '{owner}')" : path));
+        {
+            var owner = owners.FirstOrDefault(item => SourcePathForms.Matches(sourceRoot, item.ObjectPath!, path));
+            return owner is null ? path : $"{path} (staged on '{owner.TaskTitle}')";
+        }));
     }
 
     private static IResult ToEngineeringTaskDetailResult(EngineeringGraphService graph, string taskId)

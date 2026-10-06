@@ -806,8 +806,10 @@ public sealed class MasterSynchronizationTests : IDisposable
             intent: "Commit one object",
             expectedResult: "Scoped baseline",
             deviceId: SyncFixture.DeviceId);
-        RegisterStagedObject(graph, "device-1:a", fixture.Path("Blocks/A.xml"));
-        RegisterStagedObject(graph, "device-1:b", fixture.Path("Blocks/B.xml"));
+        // Registered exactly as the staging route does: relative to the device's source root, while the
+        // commit below selects the worktree-relative path (015).
+        RegisterStagedObject(graph, "device-1:a", "Blocks/A.xml");
+        RegisterStagedObject(graph, "device-1:b", "Blocks/B.xml");
         var baselineA = BaselineJson("a");
         var baselineB = BaselineJson("b");
         graph.StageSourceObject(task.TaskId, "device-1:a", baselineA);

@@ -4595,20 +4595,24 @@ public sealed class WorkbenchCoordinator
             var task = graph.FindTask(taskId);
             if (task is null || task.WorktreeId != worktree.WorktreeId || string.IsNullOrWhiteSpace(task.DeviceId))
                 throw new WorkbenchLifecycleException("TASK_NOT_FOUND", "The source task is no longer available for evidence recording.");
+            var device = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath)
+                .SingleOrDefault(item => item.Metadata.DeviceId == task.DeviceId);
+            if (device.Context is null)
+                throw new WorkbenchLifecycleException("TASK_DEVICE_NOT_FOUND", "The task device is no longer registered in this worktree.");
+            // A stage records its object relative to the device's source root while a commit selects
+            // paths relative to the worktree. Matching one form against the other matched nothing at all
+            // and advanced no baseline (015), so both are resolved into the commit's form.
+            var sourceRoot = Path.GetRelativePath(worktreeRoot, device.Context.SourceRoot);
             var committed = committedPaths
                 .Select(path => path.Replace('\\', '/'))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var stages = graph.ListActiveStages(taskId)
                 .Where(stage => graph.GetEntity(GraphEntityKind.SourceObject, stage.SourceObjectId)?.ExternalRef
-                    is { } path && committed.Contains(path.Replace('\\', '/')))
+                    is { } path && committed.Any(commitPath => SourcePathForms.Matches(sourceRoot, path, commitPath)))
                 .ToArray();
             if (stages.Length == 0)
                 return null;
 
-            var device = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath)
-                .SingleOrDefault(item => item.Metadata.DeviceId == task.DeviceId);
-            if (device.Context is null)
-                throw new WorkbenchLifecycleException("TASK_DEVICE_NOT_FOUND", "The task device is no longer registered in this worktree.");
             var prefix = task.DeviceId + ":";
             var ids = stages.Select(stage => stage.SourceObjectId.StartsWith(prefix, StringComparison.Ordinal)
                     ? stage.SourceObjectId[prefix.Length..]
