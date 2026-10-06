@@ -260,6 +260,23 @@ describe('VersionControlChanges', () => {
     expect(host.querySelector('[data-testid="vc-hardware-differs"]')?.textContent).toContain('hardware different')
   })
 
+  it('directs a refused savepoint at the Full scan it needs', async () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '')
+    vi.spyOn(api, 'createSvnSavepoint').mockRejectedValue(new api.WorkbenchApiError(
+      400,
+      'SVN_SAVEPOINT_SCAN_REQUIRED',
+      'A native savepoint must record a TIA state that a Full scan compared against this commit. '
+        + 'Run Compare with TIA as a Full scan, commit or resolve every source difference it reports, then compare again.',
+    ))
+    const { host } = await render([entry()])
+
+    await type(host.querySelector('input[aria-label="Description for TIA snapshot"]')!, 'before IP change')
+    await click(host.querySelector('[data-testid="vc-create-snapshot"]')!)
+
+    expect(error).toHaveBeenCalled()
+    expect(String(error.mock.calls[0][0])).toContain('Full scan')
+  })
+
   it('creates a TIA snapshot only with a description', async () => {
     const create = vi.spyOn(api, 'createSvnSavepoint').mockResolvedValue({ sha: 'deadbeefcafe', message: 'before IP change', files: [] })
     const { host } = await render([], { revision: null, commitsSince: null, hardwareDiffers: false })

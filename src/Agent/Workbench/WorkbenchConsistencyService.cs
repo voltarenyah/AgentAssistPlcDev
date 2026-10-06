@@ -887,6 +887,40 @@ public sealed class WorkbenchConsistencyService
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// A persisted project-wide comparison that found nothing unresolved against
+    /// <paramref name="masterSha"/> and covered the worktree whose TIA project it read, or null when
+    /// none exists. A task-scoped comparison never qualifies: it covers one task's staged objects and
+    /// cannot speak for the rest of the project, which is what a native savepoint has to record
+    /// (design AC-004).
+    /// </summary>
+    public WorkbenchConsistencyResult? FindCleanProjectWideComparison(
+        WorkbenchMetadata workbench,
+        string comparedWorktreeId,
+        string masterSha)
+    {
+        var directory = Path.Combine(workbench.RootPath, ".automation", "comparisons");
+        if (!Directory.Exists(directory))
+            return null;
+
+        foreach (var file in Directory.EnumerateFiles(directory, "*.json"))
+        {
+            var comparison = store.TryRead<WorkbenchConsistencyResult>(file);
+            if (comparison is null
+                || comparison.ComparedTaskId is not null
+                || !string.Equals(comparison.ComparedWorktreeId, comparedWorktreeId, StringComparison.Ordinal)
+                || !string.Equals(comparison.MasterSha, masterSha, StringComparison.OrdinalIgnoreCase)
+                || comparison.State != ConsistencyState.Consistent)
+            {
+                continue;
+            }
+
+            return comparison;
+        }
+
+        return null;
+    }
+
     public WorkbenchConsistencyResult GetComparison(WorkbenchMetadata workbench, string comparisonId)
     {
         if (string.IsNullOrWhiteSpace(comparisonId)

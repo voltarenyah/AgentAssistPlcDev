@@ -314,6 +314,52 @@ public sealed class CombinedCommitTests : IDisposable
     }
 
     [Fact]
+    public async Task NativeSavepointRequiresAFullScanAtThisCommit()
+    {
+        // Design AC-004: the savepoint is the complete restore point, so a TIA-only change outside
+        // every task's stages — invisible to Git — must be caught by a project-wide comparison first.
+        var fixture = CombinedFixture.Create(root);
+        fixture.RemoveCleanComparison();
+        var engineering = fixture.ScriptEngineering(new FakeToolCaller());
+        var versionControl = fixture.ScriptVersionControl(new FakeToolCaller());
+        var coordinator = fixture.CreateCoordinator(engineering, versionControl);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.CreateNativeSavepointAsync(
+                CombinedFixture.WorkbenchId,
+                CombinedFixture.WorktreeId,
+                "savepoint without a full scan",
+                CancellationToken.None));
+
+        Assert.Equal("SVN_SAVEPOINT_SCAN_REQUIRED", error.Code);
+        Assert.Contains("Full scan", error.Message);
+        Assert.DoesNotContain("svn_commit", versionControl.Calls);
+        Assert.Equal(1, fixture.ReadRevisionState().Svn.Revision);
+    }
+
+    [Fact]
+    public async Task NativeSavepointRejectsATaskScopedComparisonAsItsGate()
+    {
+        // A task-scoped comparison covers one task's staged objects only, so it can never stand in for
+        // the project-wide check a savepoint needs, however clean it is.
+        var fixture = CombinedFixture.Create(root);
+        fixture.ReplaceCleanComparisonWithTaskScoped();
+        var engineering = fixture.ScriptEngineering(new FakeToolCaller());
+        var versionControl = fixture.ScriptVersionControl(new FakeToolCaller());
+        var coordinator = fixture.CreateCoordinator(engineering, versionControl);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(() =>
+            coordinator.CreateNativeSavepointAsync(
+                CombinedFixture.WorkbenchId,
+                CombinedFixture.WorktreeId,
+                "savepoint on a task scan",
+                CancellationToken.None));
+
+        Assert.Equal("SVN_SAVEPOINT_SCAN_REQUIRED", error.Code);
+        Assert.DoesNotContain("svn_commit", versionControl.Calls);
+    }
+
+    [Fact]
     public async Task MasterRefreshAutoCommitIsGitOnly()
     {
         var fixture = CombinedFixture.Create(root);
@@ -388,6 +434,25 @@ public sealed class CombinedCommitTests : IDisposable
         public DeviceContext Context { get; }
         public string MasterRoot => Path.Combine(Root, "worktrees", "master");
 
+        private string CleanComparisonPath =>
+            Path.Combine(Root, ".automation", "comparisons", "comparison-clean.json");
+
+        /// <summary>Drops the fixture's project-wide clean comparison, so the savepoint gate finds none.</summary>
+        public void RemoveCleanComparison() => File.Delete(CleanComparisonPath);
+
+        /// <summary>Replaces it with an equally clean but task-scoped comparison.</summary>
+        public void ReplaceCleanComparisonWithTaskScoped() =>
+            store.Write(CleanComparisonPath, new WorkbenchConsistencyResult(
+                "comparison-clean",
+                "head-1",
+                true,
+                ConsistencyState.Consistent,
+                new Dictionary<string, string?>(),
+                Array.Empty<SourceDifference>(),
+                HardwareChecked: true,
+                ComparedWorktreeId: WorktreeId,
+                ComparedTaskId: "task-1"));
+
         public static CombinedFixture Create(string parent, string checksum = "PLC_1:old-checksum")
         {
             var root = Path.Combine(parent, Guid.NewGuid().ToString("N"));
@@ -436,6 +501,21 @@ public sealed class CombinedCommitTests : IDisposable
                 {
                     new PendingMasterSource(SourcePath, "comparison-1", "head-1", fingerprint, fingerprint),
                 }));
+
+            // The savepoint gate (design AC-004) requires a project-wide comparison at this commit that
+            // found nothing unresolved. This record stands in for the Full scan a user runs before
+            // creating a native savepoint; the tests that exercise the gate write their own.
+            store.Write(
+                Path.Combine(root, ".automation", "comparisons", "comparison-clean.json"),
+                new WorkbenchConsistencyResult(
+                    "comparison-clean",
+                    "head-1",
+                    true,
+                    ConsistencyState.Consistent,
+                    new Dictionary<string, string?>(),
+                    Array.Empty<SourceDifference>(),
+                    HardwareChecked: true,
+                    ComparedWorktreeId: WorktreeId));
             return new CombinedFixture(root, managedPath, context);
         }
 
@@ -524,6 +604,12 @@ public sealed class CombinedCommitTests : IDisposable
             bool timelineAfterSavepoint = false)
         {
             caller
+                .Respond("vc_log", new ConsistencyLogResult
+                {
+                    Commits = new[] { new ConsistencyCommit { Sha = "head-1" } },
+                })
+                // The savepoint gate (design AC-004) reads HEAD before the combined transaction reads
+                // it again for its own checksum-evidence check.
                 .Respond("vc_log", new ConsistencyLogResult
                 {
                     Commits = new[] { new ConsistencyCommit { Sha = "head-1" } },

@@ -3762,6 +3762,22 @@ public sealed class WorkbenchCoordinator
                 "SVN_SAVEPOINT_SOURCE_UNCOMMITTED",
                 "Commit or resolve every changed PLC source object before creating a project SVN savepoint.");
 
+        // Design AC-004: the savepoint is the complete restore point, so it requires a project-wide
+        // TIA comparison against this commit that found nothing unresolved. A TIA-only change outside
+        // every task's stages leaves no Git trace for the check above, and a task-scoped comparison
+        // never looked at it; only a Full scan can certify that nothing was missed. Feature worktrees
+        // are excluded because a project-wide comparison is baselined on master's source tree, so no
+        // existing comparison certifies a feature worktree's own commit.
+        if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase))
+        {
+            var masterHead = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
+            if (consistency.FindCleanProjectWideComparison(workbench, worktree.WorktreeId, masterHead) is null)
+                throw new WorkbenchLifecycleException(
+                    "SVN_SAVEPOINT_SCAN_REQUIRED",
+                    "A native savepoint must record a TIA state that a Full scan compared against this commit. "
+                    + "Run Compare with TIA as a Full scan, commit or resolve every source difference it reports, then compare again.");
+        }
+
         return await CommitCombinedAsync(
                 workbench, worktree, worktreeRoot, registration.RelativePath,
                 Array.Empty<string>(), message.Trim(), token, author, progress, additionalTaskIds)
