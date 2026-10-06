@@ -64,6 +64,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 | [012](012-task-commit-advances-only-what-it-contained.md) | A task commit advances only what it contained | done | 010, 011 | `src/Agent/Workbench/WorkbenchCoordinator.cs` |
 | [013](013-savepoint-needs-a-clean-full-scan.md) | A native savepoint needs a clean Full scan at that commit | done | 010 | `src/Agent/Workbench/WorkbenchCoordinator.cs` |
 | [014](014-scoped-evidence-read-touches-only-staged-objects.md) | A scoped evidence read touches only the staged objects | done | 010 | `src/Mcp.Engineering/Adapter/TiaV17Adapter.cs` |
+| [015](015-one-source-path-form-for-task-bookkeeping.md) | One source path form for task bookkeeping | done | 012 | `src/Agent/Workbench/SourcePathForms.cs`, `src/ApiHost/WorkbenchApiModels.cs` |
 
 Items 002–005 implement the missing execution layer of an already accepted design: task-scoped
 source evidence (`docs/adr/ADR-0003-task-scoped-source-evidence.md`,
