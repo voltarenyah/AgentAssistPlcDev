@@ -562,8 +562,10 @@ describe('VersionControlCompare (task scope)', () => {
 
   it('drops a task result when the covered task changes', async () => {
     const taskCompare = vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({ differences: [], state: 'Consistent' }))
-    const { host, root } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
+    const onSelectionChanged = vi.fn()
+    const { host, root } = await render({ signal: 1, mode: 'task', taskId: 'task-1', onSelectionChanged })
     expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeTruthy()
+    expect(onSelectionChanged).toHaveBeenLastCalledWith('comparison-1', [])
 
     await act(async () => root.render(
       <VersionControlCompare
@@ -574,11 +576,15 @@ describe('VersionControlCompare (task scope)', () => {
         mode="task"
         taskId="task-2"
         commitMessage=""
+        onSelectionChanged={onSelectionChanged}
       />,
     ))
 
     expect(taskCompare).toHaveBeenCalledTimes(1)
     expect(host.querySelector('[data-testid="vc-compare-differences"]')).toBeNull()
+    // The comparison belonged to the task it covered, so its selection is withdrawn: the commit
+    // controls must not offer another task's comparison.
+    expect(onSelectionChanged).toHaveBeenLastCalledWith(null, [])
   })
 
   it('keeps a full-scan result when a task is opened in the same worktree', async () => {

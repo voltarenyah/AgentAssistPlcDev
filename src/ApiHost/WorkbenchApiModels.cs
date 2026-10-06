@@ -1249,8 +1249,16 @@ public static class WorkbenchEndpoints
                         .Select(path => path!.Replace('\\', '/'))
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
                     var requestedPaths = body.Paths.Select(path => path.Replace('\\', '/')).ToArray();
-                    if (requestedPaths.Length == 0 || requestedPaths.Any(path => !stagedPaths.Contains(path)))
-                        throw new EngineeringGraphConstraintException("A task commit may contain only active staged source objects.", "TASK_COMMIT_STAGE_MISMATCH");
+                    // A message-only commit (an untrackable or safety change) carries no paths and still
+                    // belongs to its task, so only a requested path outside the task's active stages is a
+                    // mismatch. The refusal names those paths and the task that currently owns them, so
+                    // the selection can be corrected instead of guessed at.
+                    var outsideStages = requestedPaths.Where(path => !stagedPaths.Contains(path)).ToArray();
+                    if (outsideStages.Length > 0)
+                        throw new EngineeringGraphConstraintException(
+                            "A task commit may contain only active staged source objects. Not staged on this task: "
+                            + DescribeUnstagedPaths(outsideStages, worktreeId, graphScope.Service),
+                            "TASK_COMMIT_STAGE_MISMATCH");
                 }
             }
             var hasExistingSource = body.Paths.Any(path =>
@@ -2444,6 +2452,29 @@ public static class WorkbenchEndpoints
             throw new EngineeringGraphConstraintException(
                 "The selected task is not compatible with the current project or Workbench context.");
         return task.TaskId;
+    }
+
+    /// <summary>
+    /// Names the selected source paths that are not staged on the committing task — and, for each one
+    /// another task of this worktree owns, that task — so a refused task commit says what to release
+    /// instead of only that something was wrong.
+    /// </summary>
+    private static string DescribeUnstagedPaths(
+        IReadOnlyList<string> paths,
+        string worktreeId,
+        EngineeringGraphService graph)
+    {
+        var ownerByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in graph.ListWorktreeActiveStages(worktreeId))
+        {
+            var path = graph.GetEntity(GraphEntityKind.SourceObject, item.Stage.SourceObjectId)
+                ?.ExternalRef?.Replace('\\', '/');
+            if (!string.IsNullOrWhiteSpace(path) && !string.IsNullOrWhiteSpace(item.TaskTitle))
+                ownerByPath[path] = item.TaskTitle;
+        }
+
+        return string.Join(", ", paths.Select(path =>
+            ownerByPath.TryGetValue(path, out var owner) ? $"{path} (staged on '{owner}')" : path));
     }
 
     private static IResult ToEngineeringTaskDetailResult(EngineeringGraphService graph, string taskId)

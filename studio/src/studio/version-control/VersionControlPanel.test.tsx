@@ -13,6 +13,7 @@ const mockVcState = (overrides: {
   timeline?: api.VersionControlTimelineResult
   savepoints?: api.SavepointInfo[]
   activeTask?: api.EngineeringTask | null
+  commitTasks?: api.EngineeringTask[]
 } = {}) => {
   vi.spyOn(api, 'getWorktreeVcStatus').mockResolvedValue({
     repoPath: 'C:/repos/demo',
@@ -30,6 +31,8 @@ const mockVcState = (overrides: {
   })
   vi.spyOn(api, 'getWorktreeSavepoints').mockResolvedValue(overrides.savepoints ?? [])
   const activeTask = vi.spyOn(api, 'getActiveWorktreeTask').mockResolvedValue({ activeTask: overrides.activeTask ?? null })
+  vi.spyOn(api, 'listGraphWorktreeTasks').mockResolvedValue(overrides.commitTasks ?? [])
+  vi.spyOn(api, 'setActiveWorktreeTask').mockResolvedValue({ activeTask: null })
   return { activeTask }
 }
 
@@ -534,6 +537,44 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.querySelector<HTMLInputElement>('[data-testid="vc-compare-differences"] input[type="checkbox"]')).toBeTruthy()
     expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeNull()
     expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeNull()
+  })
+
+  const vcEntry = (filePath: string): api.VcStatusEntry => ({ filePath, state: 'Modified', staged: false })
+
+  it('offers the worktree’s device-bound tasks as commit targets, defaulting to the active task', async () => {
+    mockVcState({
+      entries: [vcEntry('devices/PLC_1/source/Blocks/Main.xml')],
+      activeTask: worktreeTask(),
+      commitTasks: [worktreeTask(), worktreeTask({ taskId: 'task-2', title: 'Tune drive' })],
+    })
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    await act(async () => {})
+
+    const select = host.querySelector<HTMLSelectElement>('[data-testid="vc-commit-task"]')
+    expect(select).not.toBeNull()
+    expect(select!.value).toBe('task-1')
+    expect(Array.from(select!.options).map(option => option.textContent)).toEqual(['Fix Main', 'Tune drive'])
+  })
+
+  it('makes the chosen commit target the worktree’s active task and re-reads the task context', async () => {
+    const { activeTask } = mockVcState({
+      entries: [vcEntry('devices/PLC_1/source/Blocks/Main.xml')],
+      activeTask: worktreeTask(),
+      commitTasks: [worktreeTask(), worktreeTask({ taskId: 'task-2', title: 'Tune drive' })],
+    })
+    const setActive = vi.spyOn(api, 'setActiveWorktreeTask')
+      .mockResolvedValue({ activeTask: worktreeTask({ taskId: 'task-2', title: 'Tune drive' }) })
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    await act(async () => {})
+
+    const select = host.querySelector<HTMLSelectElement>('[data-testid="vc-commit-task"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!.call(select, 'task-2')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    expect(setActive).toHaveBeenCalledWith('wb-1', 'wt-1', 'task-2')
+    expect(activeTask).toHaveBeenCalledTimes(2)
   })
 
   it('reads the worktree active task on mount and re-reads it when the state is refreshed', async () => {

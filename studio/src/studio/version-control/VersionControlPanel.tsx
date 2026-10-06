@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUpRight, FileCheck2, GitBranch, GitCompare, History, Loader2, RefreshCw } from 'lucide-react'
 import * as api from '@/api/client'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { showErrorToast } from '@/components/ui/toast'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 import VersionControlHistory, { type VcTimelineItem } from './VersionControlHistory'
 
@@ -68,6 +69,9 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
   const [taskStageCount, setTaskStageCount] = useState<number | null>(null)
   const [taskStagesUnreadable, setTaskStagesUnreadable] = useState(false)
   const [taskScopeChecked, setTaskScopeChecked] = useState(false)
+  /** Device-bound worktree tasks: the only tasks that can own a source stage, and so take a commit. */
+  const [commitTasks, setCommitTasks] = useState<api.EngineeringTask[]>([])
+  const [switchingTask, setSwitchingTask] = useState(false)
   const [taskCheckSignal, setTaskCheckSignal] = useState(0)
   const [verifyHardware, setVerifyHardware] = useState(true)
   // A scope the user picked by hand is never overridden by the default.
@@ -127,6 +131,16 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
       }
       if (cancelled) return
       setActiveTask(task)
+      // The commit-target picker lists the same worktree's device-bound tasks. A failure here only
+      // means there is nothing to choose from, never that the scope is unusable.
+      void api.listGraphWorktreeTasks(workbenchId, worktreeId)
+        .then(items => {
+          if (!cancelled) {
+            setCommitTasks(items.filter(item =>
+              item.scope === 'worktree' && item.worktreeId === worktreeId && Boolean(item.deviceId)))
+          }
+        })
+        .catch(() => { if (!cancelled) setCommitTasks([]) })
       // A project-scope or hardware task cannot own stages, so it never reaches the stage read.
       if (!task || task.scope !== 'worktree' || task.worktreeId !== worktreeId || !task.deviceId) {
         setTaskScopeChecked(true)
@@ -161,6 +175,24 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
                   : null
   const taskCompareReady = taskCompareReason === null
   const activeTaskId = activeTask?.taskId ?? null
+
+  /**
+   * The commit's task *is* the worktree's active task: attribution, the Task only compare scope, and
+   * the agent's task context all follow it. So choosing a different target means making it active,
+   * and the panel re-reads the task context afterwards.
+   */
+  const switchCommitTask = async (nextTaskId: string) => {
+    if (!nextTaskId || nextTaskId === activeTaskId) return
+    setSwitchingTask(true)
+    try {
+      await api.setActiveWorktreeTask(workbenchId, worktreeId, nextTaskId)
+      setTaskCheckSignal(signal => signal + 1)
+    } catch (reason) {
+      showErrorToast(reason instanceof Error ? reason.message : 'Failed to switch the worktree task')
+    } finally {
+      setSwitchingTask(false)
+    }
+  }
 
   // Task-only is the default scope: a task's staged objects are the quick, in-scope comparison. A
   // worktree whose task cannot scope one falls back to the project-wide scan, and a scope the user
@@ -342,6 +374,10 @@ export default function VersionControlPanel({ workbenchId, worktreeId, onBeginOp
             compareMode={compareMode}
             activeTaskId={activeTaskId}
             activeTaskTitle={activeTask?.title ?? null}
+            commitTasks={commitTasks}
+            commitTaskId={activeTaskId}
+            switchingCommitTask={switchingTask}
+            onCommitTaskChanged={taskId => void switchCommitTask(taskId)}
             verifyHardware={verifyHardware}
             snapshot={{
               revision: lastSavepoint?.svnRevision ?? null,

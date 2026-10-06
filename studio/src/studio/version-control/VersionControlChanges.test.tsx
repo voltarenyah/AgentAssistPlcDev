@@ -20,7 +20,24 @@ const entry = (overrides: Partial<VersionControlSourceEntry> = {}): VersionContr
 
 const snapshot = { revision: 3, commitsSince: 2, hardwareDiffers: false }
 
-const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false, onBeginOperation?: (kind: string, label: string) => string, operationStatus?: api.OperationStatus | null, branch = 'master') => {
+const commitTask = (taskId: string, title: string): api.EngineeringTask => ({
+  taskId,
+  workbenchId: 'wb-1',
+  scope: 'worktree',
+  worktreeId: 'wt-1',
+  title,
+  type: 'issue',
+  status: 'todo',
+  priority: 0,
+  intent: '',
+  expectedResult: '',
+  description: null,
+  createdUtc: '2026-10-06T00:00:00.000Z',
+  updatedUtc: '2026-10-06T00:00:00.000Z',
+  deviceId: 'dev-1',
+})
+
+const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false, onBeginOperation?: (kind: string, label: string) => string, operationStatus?: api.OperationStatus | null, branch = 'master', commitTarget?: { tasks: api.EngineeringTask[]; taskId: string | null; switching?: boolean; onChanged?: (taskId: string) => void }) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -36,10 +53,21 @@ const render = async (entries: VersionControlSourceEntry[], snapshotOverride = s
         untrackablePendingSavepoint={untrackablePendingSavepoint}
         onBeginOperation={onBeginOperation}
         operationStatus={operationStatus}
+        commitTasks={commitTarget?.tasks ?? []}
+        commitTaskId={commitTarget?.taskId ?? null}
+        switchingCommitTask={commitTarget?.switching ?? false}
+        onCommitTaskChanged={commitTarget?.onChanged}
       />,
     )
   })
   return { host, root }
+}
+
+const selectValue = async (select: HTMLSelectElement, value: string) => {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!.call(select, value)
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
 }
 
 const click = async (element: Element) => {
@@ -88,6 +116,42 @@ describe('VersionControlChanges', () => {
     const { host } = await render([entry()], snapshot, 0, false, undefined, status)
 
     expect(host.querySelector('[data-testid="vc-commit-controls"]')).toBeNull()
+  })
+
+  it('shows which task the commit is linked to and lets it be changed', async () => {
+    const onChanged = vi.fn()
+    const { host } = await render([entry()], snapshot, 0, false, undefined, null, 'master', {
+      tasks: [commitTask('task-1', 'Fix Main'), commitTask('task-2', 'Tune drive')],
+      taskId: 'task-1',
+      onChanged,
+    })
+
+    const select = host.querySelector<HTMLSelectElement>('[data-testid="vc-commit-task"]')!
+    expect(select.value).toBe('task-1')
+    expect(Array.from(select.options).map(option => option.textContent)).toEqual(['Fix Main', 'Tune drive'])
+    expect(host.querySelector('[data-testid="vc-commit-task-note"]')?.textContent).toContain('linked to this task')
+
+    await selectValue(select, 'task-2')
+
+    expect(onChanged).toHaveBeenCalledWith('task-2')
+  })
+
+  it('reports a task-target change in flight instead of accepting another commit', async () => {
+    const { host } = await render([entry()], snapshot, 0, false, undefined, null, 'master', {
+      tasks: [commitTask('task-1', 'Fix Main'), commitTask('task-2', 'Tune drive')],
+      taskId: 'task-1',
+      switching: true,
+    })
+
+    expect(host.querySelector<HTMLSelectElement>('[data-testid="vc-commit-task"]')!.disabled).toBe(true)
+    expect(host.querySelector('[data-testid="vc-commit-task-note"]')?.textContent).toContain('Switching the worktree task')
+  })
+
+  it('shows no task target when no worktree task can take the commit', async () => {
+    const { host } = await render([entry()])
+
+    expect(host.querySelector('[data-testid="vc-commit-controls"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="vc-commit-task"]')).toBeNull()
   })
 
   it('groups PLC objects into collapsible folders and selects rows on click', async () => {

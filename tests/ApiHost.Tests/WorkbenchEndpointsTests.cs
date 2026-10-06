@@ -749,7 +749,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
             new { paths = new[] { "devices/PLC_1/source/Unstaged.xml" }, message = "wrong file", untrackableChange = false });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("TASK_COMMIT_STAGE_MISMATCH", await response.Content.ReadAsStringAsync());
+        var refusal = await response.Content.ReadAsStringAsync();
+        Assert.Contains("TASK_COMMIT_STAGE_MISMATCH", refusal);
+        // The refusal names the path, so the selection can be corrected instead of guessed at.
+        Assert.Contains("devices/PLC_1/source/Unstaged.xml", refusal);
         Assert.DoesNotContain("vc_commit_selected", fixture.VersionControl.Calls);
 
         var other = await fixture.Client.PostAsJsonAsync(
@@ -764,6 +767,56 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 untrackableChange = false, taskId = otherTaskId });
         Assert.Equal(HttpStatusCode.BadRequest, mismatch.StatusCode);
         Assert.Contains("TASK_COMMIT_TASK_MISMATCH", await mismatch.Content.ReadAsStringAsync());
+
+        // The same object staged on the other task: the refusal names its current owner, which is the
+        // task a take-over would have to release first.
+        using (var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == wt);
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:Unstaged", wb, wt,
+                fixture.DeviceId, "devices/PLC_1/source/Unstaged.xml"));
+            graph.StageSourceObject(otherTaskId!, "dev-1:Unstaged", null);
+        }
+        var owned = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
+            new { paths = new[] { "devices/PLC_1/source/Unstaged.xml" }, message = "owned elsewhere", untrackableChange = false });
+        Assert.Equal(HttpStatusCode.BadRequest, owned.StatusCode);
+        Assert.Contains("staged on 'Other task'", await owned.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task MessageOnlyCommitStillBelongsToTheActiveTask()
+    {
+        // A commit that carries no paths — an untrackable TIA change — is still a task commit: the task
+        // guard rejects only a requested path outside the task's stages, never an empty selection.
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            versionControlJson: """
+                {"Sha":"commit-1","Message":"TIA change git cannot track","Files":[],"Commits":[{"Sha":"head-1"}]}
+                """);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var created = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Untrackable under a task", type = "issue", status = "inProgress", deviceId = fixture.DeviceId,
+                intent = "Record a native-only change", expectedResult = "One attributed commit" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        (await fixture.Client.PutAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/active-task", new { taskId })).EnsureSuccessStatusCode();
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
+            new { paths = Array.Empty<string>(), message = "TIA change git cannot track", untrackableChange = true });
+        response.EnsureSuccessStatusCode();
+
+        var commitIndex = fixture.VersionControl.Calls.IndexOf("vc_commit_selected");
+        Assert.True(commitIndex >= 0);
+        var args = fixture.VersionControl.Arguments[commitIndex];
+        Assert.Empty(args.GetProperty("paths").EnumerateArray());
+        Assert.True(args.GetProperty("untrackableChange").GetBoolean());
     }
 
     [Fact]

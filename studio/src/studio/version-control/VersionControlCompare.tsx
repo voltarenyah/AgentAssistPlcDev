@@ -176,6 +176,11 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     setStarted(false)
     setError(null)
     setNeedsCompileConfirmation(false)
+    // A comparison belongs to the task it covered: the parent must not keep offering its selection
+    // for a commit once the worktree moved to another task.
+    setSelected(new Set())
+    setSelectedSafety(new Set())
+    onSelectionChanged?.(null, [])
     onComparisonBusyChanged?.(false)
     onComparisonStateChanged?.(false)
     // Only a scope or covered-task change resets, so the parent callbacks stay render-local handlers.
