@@ -3333,7 +3333,6 @@ public sealed class WorkbenchCoordinator
         var contexts = LoadWorktreeContexts(workbench, target)
             .ToDictionary(item => item.Metadata.DeviceId, item => item.Context, StringComparer.Ordinal);
         var pending = writePolicy.ReadPending(targetRoot, target.WorktreeId).Sources.ToList();
-        var isMasterTarget = string.Equals(target.Branch, "master", StringComparison.OrdinalIgnoreCase);
 
         foreach (var path in selected)
         {
@@ -3355,31 +3354,27 @@ public sealed class WorkbenchCoordinator
             var sourceRelativePath = ExtractSourceRelativePath(path);
             var staged = WorkbenchPaths.ResolveRelative(context.StagingRoot, sourceRelativePath);
             var destination = WorkbenchPaths.ResolveRelative(targetRoot, path);
-            if (!isMasterTarget)
+            // The canonical staging file may only be copied when it holds the exact content this
+            // comparison observed in TIA. A project-level comparison exports its nominated
+            // candidate into a temporary directory (deleted afterwards, see
+            // WorkbenchConsistencyService), so staging/<path> can still hold an older export of the
+            // same object: one that differs from master by nothing but its stripped export
+            // timestamp while its logic predates the change the user just approved. Comparing the
+            // bytes against master cannot tell that apart, so verify the compared identity instead.
+            if (!StagingMatchesComparison(difference, context, sourceRelativePath))
             {
-                // A feature comparison uses the master source tree as its baseline, so refresh
-                // the selected object into the feature worktree before committing it there.
                 await RefreshStagedSourceForSynchronizationAsync(context, sourceRelativePath, token, progress)
                     .ConfigureAwait(false);
+                if (!StagingMatchesComparison(difference, context, sourceRelativePath))
+                {
+                    // TIA moved on since the comparison (or the object carries no live evidence):
+                    // refuse rather than commit content the user never saw as accepted.
+                    throw new WorkbenchLifecycleException(
+                        "TIA_SOURCE_CHANGED_AFTER_COMPARISON",
+                        $"TIA source '{sourceRelativePath}' no longer matches comparison '{comparisonId}'. "
+                        + "Run Compare with TIA again before accepting it.");
+                }
             }
-            else if (!File.Exists(staged))
-            {
-                // Project-level comparisons export nominated candidates into a temporary
-                // directory, so a missing canonical staging copy must be materialized now.
-                await RefreshStagedSourceForSynchronizationAsync(context, sourceRelativePath, token, progress)
-                    .ConfigureAwait(false);
-            }
-            else if (!File.Exists(destination) || string.Equals(HashFile(staged), HashFile(destination), StringComparison.Ordinal))
-            {
-                // If staging is byte-identical to master (or the source is newly added), it
-                // cannot be the nominated candidate produced by the current comparison. Refresh
-                // it from TIA before copying, otherwise Git receives no diff and reports
-                // "nothing to commit".
-                await RefreshStagedSourceForSynchronizationAsync(context, sourceRelativePath, token, progress)
-                    .ConfigureAwait(false);
-            }
-            if (!File.Exists(staged))
-                throw new WorkbenchLifecycleException("TIA_SOURCE_MISSING", $"The staged source '{sourceRelativePath}' is missing.");
 
             CopyFileAtomically(staged, destination);
             var copiedFingerprint = HashFile(destination);
@@ -3460,6 +3455,42 @@ public sealed class WorkbenchCoordinator
             comparisonId,
             remaining.Select(item => item.RelativePath).ToArray(),
             commit.Sha);
+    }
+
+    /// <summary>
+    /// True when the canonical staging copy of one object is the content the comparison observed in
+    /// TIA — the only state that may be copied into a worktree source tree.
+    /// The comparison records normalized XML hashes (export timestamps are stripped by
+    /// <see cref="Contracts.Engineering.XmlCompare.Normalize"/>), so a leftover export of older
+    /// logic can never pass as this comparison's candidate merely because its file bytes differ
+    /// from master's. Tag tables compare by their content hash, blocks and UDTs by the normalized
+    /// XML hash; a difference without live evidence is never trusted.
+    /// </summary>
+    private static bool StagingMatchesComparison(
+        SourceDifference difference,
+        DeviceContext context,
+        string sourceRelativePath)
+    {
+        var expected = difference.TiaFingerprint;
+        if (string.IsNullOrWhiteSpace(expected))
+        {
+            return false;
+        }
+
+        var snapshot = new SourceTreeReader().TryReadRelative(context.StagingRoot, sourceRelativePath);
+        if (snapshot is null)
+        {
+            return false;
+        }
+
+        var actual = string.Equals(
+            difference.EvidenceKind,
+            Contracts.Engineering.ManagedSourceEvidenceKind.TagTable,
+            StringComparison.Ordinal)
+            ? snapshot.ContentHash
+            : snapshot.Sha256;
+        return actual is not null
+            && string.Equals(actual, expected, StringComparison.Ordinal);
     }
 
     private async Task RefreshStagedSourceForSynchronizationAsync(
