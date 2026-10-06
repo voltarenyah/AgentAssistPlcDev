@@ -59,6 +59,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 | [007](007-navigator-shared-row-treatment.md) | Left navigator: one shared row treatment — uniform selection, always-gray icons, aligned geometry | done | — | `studio/src/studio/workbench/WorkbenchNavigator.tsx`, `docs/ui-spec/studio-information-architecture-ui-spec.md` |
 | [008](008-agent-finds-the-source-object-id-it-stages.md) | The agent can find the source object id it stages, and a wrong id names the candidates | done | 005 | `src/ApiHost/TaskSourceStagingTool.cs`, `src/ApiHost/TaskSourceObjectListTool.cs` |
 | [009](009-tool-result-compaction-keeps-shape.md) | An oversized tool result keeps its shape instead of collapsing to field names | pending | — | `src/Agent/Chat/ToolResultCompactor.cs` |
+| [010](010-task-only-compare-is-committable.md) | Task-only compare produces committable differences | done | 002, 003 | `src/Agent/Workbench/WorkbenchConsistencyService.cs`, `studio/src/studio/version-control/VersionControlCompare.tsx` |
 
 Items 002–005 implement the missing execution layer of an already accepted design: task-scoped
 source evidence (`docs/adr/ADR-0003-task-scoped-source-evidence.md`,

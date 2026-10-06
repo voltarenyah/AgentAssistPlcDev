@@ -87,7 +87,7 @@ The imported origin is bootstrap-only thereafter; later operations use the manag
 
 | Goal | User interaction | Required outcome |
 | --- | --- | --- |
-| Accept TIA changes into source history | Select staged rows, enter a message, approve/apply | Only selected paths enter the current worktree; ordinary commit is Git-only. |
+| Accept TIA changes into source history | Compare with TIA at the scope you need — **Task only** (the active task's staged objects, the default) or **Full scan** — then select rows, enter a message, approve/apply | Only selected paths enter the current worktree; ordinary commit is Git-only, and a task-scoped comparison never claims the project is clean. |
 | Commit local source work | Stage source objects on the active task, select files, and submit a message | A task commit contains only that task's staged source objects; the Git commit is linked to the task in the engineering graph and remains Git-only. |
 | Import local source to TIA | Select eligible objects; on a feature review **Prepare feature import** and resolve conflicts | Only selected eligible objects import. The app compiles all devices and records validation before publishing a no-fast-forward feature merge. |
 | Record native state | Enter a description and choose **Create SVN savepoint** | Managed TIA project saves, compiles successfully, freezes, commits to SVN, then writes linked `revision.json` in Git. |
