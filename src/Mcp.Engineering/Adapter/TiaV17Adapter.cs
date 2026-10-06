@@ -619,7 +619,16 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             var selectedIds = sourceObjectIds is { Count: > 0 }
                 ? new HashSet<string>(sourceObjectIds, StringComparer.Ordinal)
                 : null;
-            var liveCapture = CaptureManagedSourceEvidence(project, plc, selectedIds);
+            // A scoped request names its objects: hand the capture the source paths the baseline
+            // recorded for them, so it reads exactly those objects instead of walking the whole
+            // project. An id with no baseline record cannot be located by path, so that request keeps
+            // the complete walk.
+            var scopedObjects = selectedIds is null
+                ? null
+                : baseline.Objects.Where(item => selectedIds.Contains(item.Id)).ToArray();
+            if (scopedObjects is not null && scopedObjects.Length != selectedIds!.Count)
+                scopedObjects = null;
+            var liveCapture = CaptureManagedSourceEvidence(project, plc, selectedIds, scopedObjects);
             var live = liveCapture.Snapshot;
             var checksumChanged = !string.Equals(
                 baseline.Checksum?.SoftwareChecksum,
@@ -642,7 +651,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
     }
 
     private static ManagedSourceCapture CaptureManagedSourceEvidence(Project project, PlcSoftware plc,
-        ISet<string>? selectedIds = null)
+        ISet<string>? selectedIds = null,
+        IReadOnlyList<ManagedSourceEvidenceObject>? scopedObjects = null)
     {
         var safetySurface = ReadSafetySurface(plc);
         var source = CaptureLiveSnapshot(
@@ -650,7 +660,8 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
             safetySurface,
             out var fBlockSignatures,
             out var fBlockReadFailed,
-            selectedIds);
+            selectedIds,
+            scopedObjects);
         var safety = CompleteSafety(
             safetySurface,
             fBlockSignatures,
@@ -1599,6 +1610,153 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         public bool ReadBlockSignatures { get; }
     }
 
+    /// <summary>
+    /// Reads only the requested managed-source objects, locating each one through the manifest source
+    /// path the baseline recorded for it — the id is sha256("category|sourcePath"), so the path is the
+    /// only handle a request carries — instead of walking every object of the PLC.
+    /// Returns null as soon as anything cannot be located and verified: an unknown path, a mismatched
+    /// id, an excluded object, or a kind this fast path does not speak for (an instance DB keeps the
+    /// complete walk's meaning). The caller then takes the complete walk, so the fast path can cost
+    /// time but never correctness.
+    /// </summary>
+    private static LiveSnapshot? TryCaptureRequestedComponents(
+        PlcSoftware plc,
+        IReadOnlyList<ManagedSourceEvidenceObject> requested,
+        ref List<FBlockSignatureInfo>? fBlockSignatures,
+        ref bool fBlockReadFailed)
+    {
+        var snapshot = new LiveSnapshot();
+        // Buffered: a scoped read that gives up part-way must leave nothing behind, because the caller
+        // then repeats the read through the complete walk.
+        var pendingSignatures = new List<FBlockSignatureInfo>();
+        foreach (var item in requested)
+        {
+            if (!ScopedSourceRequest.TrySplit(item.SourcePath, out var groupPath, out var name))
+                return null;
+
+            switch (item.Kind)
+            {
+                case ManagedSourceEvidenceKind.TagTable:
+                {
+                    if (!TagTableEnumerator.TryFindBySourcePath(plc.TagTableGroup, groupPath, name, out var table, out var tablePath))
+                        return null;
+                    var sourcePath = ExportManifest.SourcePathOf(table.Name, tablePath);
+                    if (!MatchesRequestedId(item, "Tags", sourcePath))
+                        return null;
+                    snapshot.Live.Add(new SyncLiveComponent
+                    {
+                        Id = item.Id,
+                        Name = table.Name,
+                        Category = "Tags",
+                        SourcePath = sourcePath,
+                        ModifiedDate = ReadTagTableModified(table),
+                    });
+                    snapshot.TablesById[item.Id] = (table, tablePath);
+                    break;
+                }
+
+                case ManagedSourceEvidenceKind.Udt:
+                {
+                    if (!PlcTypeEnumerator.TryFindBySourcePath(plc.TypeGroup, groupPath, name, out var type, out var typePath))
+                        return null;
+                    var sourcePath = ExportManifest.SourcePathOf(type.Name, typePath);
+                    if (!MatchesRequestedId(item, "UDT", sourcePath))
+                        return null;
+                    var (_, _, modified, interfaceModified) = ReadTypeMetadata(type);
+                    var fingerprints = FingerprintReader.TryRead(type);
+                    snapshot.Live.Add(new SyncLiveComponent
+                    {
+                        Id = item.Id,
+                        Name = type.Name,
+                        Category = "UDT",
+                        SourcePath = sourcePath,
+                        Fingerprints = fingerprints,
+                        FingerprintComponents = FingerprintSet.Parse(fingerprints),
+                        ModifiedDate = modified,
+                        InterfaceModifiedDate = interfaceModified,
+                    });
+                    snapshot.TypesById[item.Id] = (type, typePath);
+                    break;
+                }
+
+                case ManagedSourceEvidenceKind.StandardBlock:
+                case ManagedSourceEvidenceKind.FBlock:
+                {
+                    if (!BlockEnumerator.TryFindBySourcePath(plc.BlockGroup, groupPath, name, out var block, out var blockPath))
+                        return null;
+                    var sourcePath = ExportManifest.SourcePathOf(block.Name, blockPath);
+                    if (ManagedSourceScope.IsExcluded(block.GetType().Name))
+                        return null;
+                    if (item.Kind == ManagedSourceEvidenceKind.FBlock)
+                    {
+                        if (!MatchesRequestedId(item, "F", sourcePath))
+                            return null;
+                        // Only a staged F-block pays for the signature probe, and its signature is
+                        // reported through the safety evidence — never as a live object.
+                        if (!TryGetSafetySignatureProvider(block, out var provider, ref fBlockReadFailed) || provider is null)
+                            return null;
+                        if (fBlockSignatures is not null)
+                        {
+                            try
+                            {
+                                var signature = provider.Signatures?.Find(SafetySignatureType.BlockOfflineSignature);
+                                if (signature is not null)
+                                {
+                                    pendingSignatures.Add(new FBlockSignatureInfo
+                                    {
+                                        Path = sourcePath,
+                                        Signature = signature.Value.ToString("X8"),
+                                    });
+                                }
+                            }
+                            catch
+                            {
+                                fBlockReadFailed = true;
+                            }
+                        }
+
+                        break;
+                    }
+
+                    var category = ExportManifest.CategoryOf(block);
+                    if (!MatchesRequestedId(item, category, sourcePath))
+                        return null;
+                    var (modified, codeModified, interfaceModified) = ReadBlockTimestamps(block);
+                    var fingerprints = FingerprintReader.TryRead(block);
+                    snapshot.Live.Add(new SyncLiveComponent
+                    {
+                        Id = item.Id,
+                        Name = block.Name,
+                        Category = category,
+                        SourcePath = sourcePath,
+                        SiemensTypeName = block.GetType().Name,
+                        Fingerprints = fingerprints,
+                        FingerprintComponents = FingerprintSet.Parse(fingerprints),
+                        ModifiedDate = modified,
+                        CodeModifiedDate = codeModified,
+                        InterfaceModifiedDate = interfaceModified,
+                    });
+                    snapshot.BlocksById[item.Id] = (block, blockPath);
+                    break;
+                }
+
+                default:
+                    // An object kind this path does not speak for keeps the complete walk's meaning.
+                    return null;
+            }
+        }
+
+        if (fBlockSignatures is not null && pendingSignatures.Count > 0)
+            fBlockSignatures.AddRange(pendingSignatures);
+        return snapshot;
+    }
+
+    private static bool MatchesRequestedId(
+        ManagedSourceEvidenceObject requested,
+        string category,
+        string sourcePath) =>
+        ScopedSourceRequest.MatchesRequestedId(requested.Id, category, sourcePath);
+
     private static LiveSnapshot CaptureLiveSnapshot(PlcSoftware plc)
     {
         return CaptureLiveSnapshot(
@@ -1618,13 +1776,24 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
         SafetySurface? safetySurface,
         out List<FBlockSignatureInfo>? fBlockSignatures,
         out bool fBlockReadFailed,
-        ISet<string>? selectedIds = null)
+        ISet<string>? selectedIds = null,
+        IReadOnlyList<ManagedSourceEvidenceObject>? scopedObjects = null)
     {
-        var snapshot = new LiveSnapshot();
         fBlockSignatures = safetySurface?.ReadBlockSignatures == true
             ? new List<FBlockSignatureInfo>()
             : null;
         fBlockReadFailed = false;
+        // A scoped request reads only its own objects. Anything the targeted read cannot locate and
+        // verify returns null, and this method then walks the project exactly as it always has: the
+        // fast path can cost time, never correctness.
+        if (scopedObjects is not null
+            && TryCaptureRequestedComponents(plc, scopedObjects, ref fBlockSignatures, ref fBlockReadFailed)
+                is { } scoped)
+        {
+            return scoped;
+        }
+
+        var snapshot = new LiveSnapshot();
         foreach (var (block, groupPath) in BlockEnumerator.Enumerate(plc.BlockGroup))
         {
             // Instance DBs are outside the managed-source domain (see ManagedSourceScope): they are
