@@ -143,6 +143,9 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
       let committedFiles: string[] = []
       let tiaCommitSha: string | null = null
       let localCommitSha: string | null = null
+      // The commit landed; a follow-up evidence write may not have. Those warnings are the only place
+      // the difference is visible, so they are shown rather than dropped.
+      const evidenceWarnings: string[] = []
       const committedTiaPaths = tiaPaths.length > 0
       const committedLocalChanges = localPaths.length > 0 || untrackable || safetyPaths.length > 0
       const operationId = onBeginOperation?.('vc-commit', 'Committing selected changes...')
@@ -152,6 +155,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
           : await api.acceptTiaSynchronization(workbenchId, worktreeId, tiaSelection.comparisonId, tiaPaths, message.trim())
         committedFiles = [...committedFiles, ...tiaPaths]
         tiaCommitSha = result.commitSha ?? null
+        evidenceWarnings.push(...(result.evidenceWarnings ?? []))
         setTiaSelection(null)
       }
       if (localPaths.length > 0 || untrackable || safetyPaths.length > 0) {
@@ -164,6 +168,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
             : await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable)
         committedFiles = [...committedFiles, ...result.files]
         localCommitSha = result.sha
+        evidenceWarnings.push(...(result.evidenceWarnings ?? []))
       }
       const committed = new Set(committedFiles)
       setAllCommitted((committedFiles.length > 0 || untrackable || safetyPaths.length > 0) && entries.every(entry => committed.has(entry.filePath)))
@@ -179,6 +184,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
       } else if (localCommitSha) {
         toast.success(`Committed to ${branch || 'this worktree'} (${localCommitSha.slice(0, 8)})`)
       }
+      for (const warning of evidenceWarnings) toast.warning(warning)
       await onCommitted?.()
     } catch (cause) {
       showErrorToast(`Commit failed: ${displayError(cause)}`)

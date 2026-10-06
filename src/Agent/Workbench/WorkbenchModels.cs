@@ -141,7 +141,8 @@ public sealed record DeviceImportRecord(
 public sealed record TiaSynchronizationResult(
     string ComparisonId,
     IReadOnlyList<string> PendingPaths,
-    string? CommitSha = null);
+    string? CommitSha = null,
+    IReadOnlyList<string>? EvidenceWarnings = null);
 
 public sealed record WorkbenchCommitResult(
     string Sha,

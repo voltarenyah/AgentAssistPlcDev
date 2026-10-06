@@ -1422,17 +1422,32 @@ public static class WorkbenchEndpoints
             string worktreeId,
             string comparisonId,
             TiaSynchronizationAcceptApiRequest body,
+            WorkbenchApiState s,
             WorkbenchCoordinator coordinator,
+            EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks,
             OperationStatusRegistry operations,
             HttpContext http,
             CancellationToken ct) =>
-            await RunOperationAsync(
+        {
+            // The accepted objects become the worktree's active task's new stage baseline, exactly as
+            // they would for a /vc/commit (ADR-0003), so the commit has to name that task.
+            string? commitTaskId;
+            using (var graphScope = graphs.Open(s.Workbench(workbenchId)))
+            {
+                var activeTask = activeTasks.Get(graphScope.Service, worktreeId);
+                commitTaskId = activeTask is { ScopeKind: GraphTaskScopeKind.Worktree } ? activeTask.TaskId : null;
+            }
+
+            return await RunOperationAsync(
                 http,
                 operations,
                 "accept-tia-synchronization",
                 "Applying selected TIA source to the active worktree...",
-                progress => coordinator.ApplyTiaSynchronizationAsync(workbenchId, worktreeId, comparisonId, body.Paths, body.Message, ct, progress),
-                "Selected TIA source committed to the active worktree.").ConfigureAwait(false));
+                progress => coordinator.ApplyTiaSynchronizationAsync(
+                    workbenchId, worktreeId, comparisonId, body.Paths, body.Message, ct, progress, commitTaskId),
+                "Selected TIA source committed to the active worktree.").ConfigureAwait(false);
+        });
         app.MapPost("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}/push-to-tia", async (
             string workbenchId,
             string comparisonId,

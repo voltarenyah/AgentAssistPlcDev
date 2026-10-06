@@ -3,6 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/api/client'
+import { toast } from 'sonner'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -152,6 +153,25 @@ describe('VersionControlChanges', () => {
 
     expect(host.querySelector('[data-testid="vc-commit-controls"]')).not.toBeNull()
     expect(host.querySelector('[data-testid="vc-commit-task"]')).toBeNull()
+  })
+
+  it('surfaces an evidence warning the commit result carried', async () => {
+    // The commit landed but a follow-up evidence write did not: the warning is the only place the
+    // user learns the task's baseline did not advance.
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => '')
+    vi.spyOn(api, 'commitVcPaths').mockResolvedValue({
+      sha: 'abc',
+      message: 'change A',
+      files: ['devices/PLC_1/source/Blocks/A.xml'],
+      evidenceWarnings: ['Commit succeeded, but staged task evidence was not recorded: TIA is busy'],
+    })
+    const { host } = await render([entry({ filePath: 'devices/PLC_1/source/Blocks/A.xml', objectName: 'A' })])
+
+    await click(host.querySelectorAll('[data-testid="plc-source-row"]')[0])
+    await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'change A')
+    await click(host.querySelector('[data-testid="vc-commit-selected"]')!)
+
+    expect(warning).toHaveBeenCalledWith('Commit succeeded, but staged task evidence was not recorded: TIA is busy')
   })
 
   it('groups PLC objects into collapsible folders and selects rows on click', async () => {

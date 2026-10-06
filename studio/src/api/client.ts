@@ -666,6 +666,8 @@ export type PendingSynchronizationResult = {
   comparisonId: string
   pendingPaths: string[]
   commitSha?: string | null
+  /** The commit landed, but a follow-up evidence write did not; each entry says what was not recorded. */
+  evidenceWarnings?: string[] | null
 }
 
 export type RollbackFeatureResult = {
@@ -2220,7 +2222,7 @@ export const getWorktreeVcDiff = (workbenchId: string, worktreeId: string, fileP
   return workbenchRequest<VcDiffResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/diff?${params}`)
 }
 export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string, untrackableChange = false, safetyChange = false, operationId?: string) =>
-  workbenchRequest<{ sha: string; message: string; files: string[] }>(
+  workbenchRequest<{ sha: string; message: string; files: string[]; evidenceWarnings?: string[] | null }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/commit`,
     withOperation(jsonRequest('POST', { paths, message, untrackableChange, safetyChange }), operationId),
   )

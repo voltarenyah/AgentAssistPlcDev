@@ -3295,7 +3295,8 @@ public sealed class WorkbenchCoordinator
         IReadOnlyList<string> paths,
         string message,
         CancellationToken token = default,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        string? commitTaskId = null)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A commit title is required.", nameof(message));
@@ -3446,10 +3447,22 @@ public sealed class WorkbenchCoordinator
         }
 
         var remaining = writePolicy.ReadPending(targetRoot, target.WorktreeId).Sources;
+        // ADR-0003: the objects this commit contained become their task's new stage baseline, so the
+        // next task compare measures against what was committed instead of the pre-change content.
+        // This is deliberately separate from the commit-bound validation tag CommitSourceAsync records
+        // above: whether a task commit should also replace that whole-project snapshot with sparse
+        // per-object evidence is a genuine ADR-0001-versus-ADR-0003 question, not decided here.
+        var stageWarning = commitTaskId is null
+            ? null
+            : await TryRecordCommittedStageEvidenceAsync(
+                    workbench, target, targetRoot, targetRegistration.RelativePath,
+                    commitTaskId, selected, token, progress)
+                .ConfigureAwait(false);
         return new TiaSynchronizationResult(
             comparisonId,
             remaining.Select(item => item.RelativePath).ToArray(),
-            commit.Sha);
+            commit.Sha,
+            stageWarning is null ? null : new[] { stageWarning });
     }
 
     /// <summary>
@@ -3685,9 +3698,9 @@ public sealed class WorkbenchCoordinator
                     workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha,
                     managedSourceConsistent, captured: null, token, progress)
                 .ConfigureAwait(false)
-            : await TryRecordTaskStageEvidenceAsync(
-                    workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha,
-                    taskEvidenceTaskId, token, progress)
+            : await TryRecordCommittedStageEvidenceAsync(
+                    workbench, worktree, worktreeRoot, registration.RelativePath,
+                    taskEvidenceTaskId, selected, token, progress)
                 .ConfigureAwait(false);
         if (managedSourceWarning is not null)
             evidenceWarnings.Add(managedSourceWarning);
@@ -4541,13 +4554,20 @@ public sealed class WorkbenchCoordinator
     /// write a new whole-project validation snapshot: another task may have live, uncommitted
     /// edits whose fingerprints must remain compared with its previous Git baseline.
     /// </summary>
-    private async Task<string?> TryRecordTaskStageEvidenceAsync(
+    /// <summary>
+    /// Records the live TIA evidence of the source objects one commit actually contained — and only
+    /// those. ADR-0003 binds a task's stage baseline to the object's committed Git content, so
+    /// advancing the baseline of a staged object the commit did not contain would mark uncommitted
+    /// live work as clean. A commit that contained none of this task's staged objects reads nothing
+    /// from TIA and records nothing.
+    /// </summary>
+    private async Task<string?> TryRecordCommittedStageEvidenceAsync(
         WorkbenchMetadata workbench,
         WorktreeMetadata worktree,
         string worktreeRoot,
         string worktreeRelativePath,
-        string commitSha,
         string taskId,
+        IReadOnlyCollection<string> committedPaths,
         CancellationToken token,
         IOperationProgress? progress)
     {
@@ -4559,9 +4579,15 @@ public sealed class WorkbenchCoordinator
             var task = graph.FindTask(taskId);
             if (task is null || task.WorktreeId != worktree.WorktreeId || string.IsNullOrWhiteSpace(task.DeviceId))
                 throw new WorkbenchLifecycleException("TASK_NOT_FOUND", "The source task is no longer available for evidence recording.");
-            var stages = graph.ListActiveStages(taskId);
-            if (stages.Count == 0)
-                throw new WorkbenchLifecycleException("TASK_STAGE_EMPTY", "The task has no active staged source objects.");
+            var committed = committedPaths
+                .Select(path => path.Replace('\\', '/'))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var stages = graph.ListActiveStages(taskId)
+                .Where(stage => graph.GetEntity(GraphEntityKind.SourceObject, stage.SourceObjectId)?.ExternalRef
+                    is { } path && committed.Contains(path.Replace('\\', '/')))
+                .ToArray();
+            if (stages.Length == 0)
+                return null;
 
             var device = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath)
                 .SingleOrDefault(item => item.Metadata.DeviceId == task.DeviceId);
@@ -4573,7 +4599,7 @@ public sealed class WorkbenchCoordinator
                     : throw new WorkbenchLifecycleException("TASK_STAGE_INVALID", "A staged source object does not belong to the task device."))
                 .ToArray();
 
-            progress?.Report("Capturing staged source evidence from TIA...");
+            progress?.Report("Capturing committed staged source evidence from TIA...");
             await engineeringSession.WaitAsync(token).ConfigureAwait(false);
             try
             {
@@ -4585,7 +4611,7 @@ public sealed class WorkbenchCoordinator
                     var rawId = stage.SourceObjectId[prefix.Length..];
                     var evidence = capture.Snapshot.Objects.SingleOrDefault(item => item.Id == rawId);
                     if (evidence is null)
-                        throw new WorkbenchLifecycleException("TASK_STAGE_MISSING", $"Staged source '{stage.SourceObjectId}' is missing or unreadable in TIA.");
+                        throw new WorkbenchLifecycleException("TASK_STAGE_MISSING", $"Committed source '{stage.SourceObjectId}' is missing or unreadable in TIA.");
                     graph.UpdateStageEvidence(taskId, stage.SourceObjectId, System.Text.Json.JsonSerializer.Serialize(evidence));
                 }
             }
