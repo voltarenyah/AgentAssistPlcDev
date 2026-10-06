@@ -44,15 +44,6 @@ public sealed record CreateWorktreeRequest(
 
 public sealed record SourceSavepointSelection(string WorktreeId, string GitSha);
 
-public sealed record TaskStageProblem(string SourceObjectId, string Code, string Message);
-public sealed record TaskSourceComparisonResult(
-    string TaskId,
-    string DeviceId,
-    IReadOnlyList<Contracts.Engineering.SourceEvidenceCandidate> Candidates,
-    IReadOnlyList<Contracts.Engineering.SourceEvidenceCandidateExport> CandidateExports,
-    IReadOnlyList<TaskStageProblem> Problems,
-    string? ObservedSoftwareChecksum);
-
 public sealed record BranchStartPoint(
     string WorktreeId, string WorktreeName, string Branch, string GitSha, string Message,
     string? SvnUrl, long? SvnRevision, string? ProjectChecksum, string? CompileStatus,
@@ -3408,9 +3399,13 @@ public sealed class WorkbenchCoordinator
                 message.Trim(),
                 token,
                 recordTiaState: false,
-                managedSourceConsistent: CoversAllManagedSourceDifferences(
-                    comparison,
-                    selected.ToHashSet(StringComparer.Ordinal)),
+                // A task-scoped comparison covers one device's staged objects, so accepting every
+                // difference it reports is not evidence that the whole managed source matches Git.
+                // Only a project-wide comparison can certify that baseline (ADR-0003).
+                managedSourceConsistent: comparison.ComparedTaskId is null
+                    && CoversAllManagedSourceDifferences(
+                        comparison,
+                        selected.ToHashSet(StringComparer.Ordinal)),
                 progress: progress)
             .ConfigureAwait(false);
 
@@ -3861,9 +3856,14 @@ public sealed class WorkbenchCoordinator
         }
     }
 
-    /// <summary>Compares only this task's staged source identities. The returned checksum is an
-    /// observation of the capture, never a project-wide clean verdict.</summary>
-    public async Task<TaskSourceComparisonResult> CompareTaskWithTiaAsync(
+    /// <summary>
+    /// Compares only this task's staged source objects and persists the outcome as a task-scoped
+    /// comparison, so the version-control surface renders the same selectable, commit-ready
+    /// difference rows a project-wide scan produces. The result is never a project-wide verdict: it
+    /// covers one device's staged objects, checks no hardware, and cannot certify the managed-source
+    /// baseline (ADR-0003).
+    /// </summary>
+    public async Task<WorkbenchConsistencyResult> CompareTaskWithTiaAsync(
         string workbenchId, string worktreeId, string taskId, CancellationToken token = default,
         IOperationProgress? progress = null)
     {
@@ -3879,6 +3879,8 @@ public sealed class WorkbenchCoordinator
         if (stages.Count == 0)
             throw new WorkbenchLifecycleException("TASK_STAGE_EMPTY", "Add at least one source object to the task before comparing it with TIA.");
 
+        var master = LoadRegisteredWorktree(workbench, workbench.Worktrees
+            .Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
         var problems = new List<TaskStageProblem>();
         var baselineObjects = new List<ManagedSourceEvidenceObject>();
         foreach (var stage in stages)
@@ -3893,35 +3895,31 @@ public sealed class WorkbenchCoordinator
                 problems.Add(new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_BASELINE_INVALID", "This staged object's fingerprint baseline cannot be read."));
             else baselineObjects.Add(evidence);
         }
+        // No staged object carries a comparable baseline, so nothing is read from TIA. The
+        // comparison still records which objects it could not include, which is its whole verdict.
         if (problems.Count > 0)
-            return new TaskSourceComparisonResult(taskId, task.DeviceId, [], [], problems, null);
+            return await consistency.CompareTaskScopeAsync(
+                    workbench, master, worktreeId, taskId, device: null,
+                    baselineObjects: [], stagedObjects: [], problems: problems, cancellationToken: token)
+                .ConfigureAwait(false);
 
         var device = LoadWorktreeDeviceContexts(workbench, worktree,
                 workbench.Worktrees.Single(item => item.WorktreeId == worktreeId).RelativePath)
             .Single(item => item.Metadata.DeviceId == task.DeviceId);
         var prefix = task.DeviceId + ":";
-        var ids = stages.Select(stage => stage.SourceObjectId.StartsWith(prefix, StringComparison.Ordinal)
-                ? stage.SourceObjectId[prefix.Length..]
+        var stagedObjects = stages.Select(stage => stage.SourceObjectId.StartsWith(prefix, StringComparison.Ordinal)
+                ? (SourceObjectId: stage.SourceObjectId, LiveId: stage.SourceObjectId[prefix.Length..])
                 : throw new WorkbenchLifecycleException("TASK_STAGE_INVALID", "A staged source object is outside the task device."))
             .ToArray();
-        var candidateRoot = Path.Combine(device.Context.StagingRoot, ".task-candidates-" + Guid.NewGuid().ToString("N")[..8]);
         progress?.Report("Comparing staged source fingerprints with TIA...");
         await engineeringSession.WaitAsync(token).ConfigureAwait(false);
         try
         {
             await EnsureActiveProjectMatchesWorktreeAsync(device.Context, token, progress).ConfigureAwait(false);
-            var capture = await engineering.CallAsync<SourceEvidenceCaptureResult>("compare_source_evidence", new
-            {
-                baseline = new SourceEvidenceSnapshot { PlcName = device.Metadata.PlcName, Objects = baselineObjects },
-                outputDir = candidateRoot,
-                plcName = device.Metadata.PlcName,
-                sourceObjectIds = ids,
-            }, token).ConfigureAwait(false);
-            var liveIds = capture.Snapshot.Objects.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
-            problems.AddRange(stages.Where(stage => !liveIds.Contains(stage.SourceObjectId[prefix.Length..]))
-                .Select(stage => new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_MISSING", "The staged object is missing, renamed, or unreadable in TIA.")));
-            return new TaskSourceComparisonResult(taskId, task.DeviceId, capture.Candidates, capture.CandidateExports,
-                problems, capture.Snapshot.Checksum.SoftwareChecksum);
+            return await consistency.CompareTaskScopeAsync(
+                    workbench, master, worktreeId, taskId, (device.Metadata, device.Context),
+                    baselineObjects, stagedObjects, problems, token)
+                .ConfigureAwait(false);
         }
         finally { engineeringSession.Release(); }
     }

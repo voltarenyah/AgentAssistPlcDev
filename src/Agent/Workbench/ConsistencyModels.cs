@@ -89,6 +89,10 @@ public sealed record DeviceSafetyEvidence(
     IReadOnlyList<string>? ChangedBlocks = null,
     IReadOnlyList<SafetyBlockDifference>? BlockDifferences = null);
 
+/// <summary>One staged source object a task-scoped comparison could not include, with the reason
+/// code the version-control surface explains to the user.</summary>
+public sealed record TaskStageProblem(string SourceObjectId, string Code, string Message);
+
 public sealed record WorkbenchConsistencyResult(
     string ComparisonId,
     string MasterSha,
@@ -103,4 +107,11 @@ public sealed record WorkbenchConsistencyResult(
     bool UntrackableChange = false,
     bool HardwareChecked = true,
     /// <summary>The worktree whose registered TIA project supplied the live comparison.</summary>
-    string? ComparedWorktreeId = null);
+    string? ComparedWorktreeId = null,
+    /// <summary>The device-bound task whose staged source objects this comparison covered. A
+    /// task-scoped comparison is never a project-wide verdict: it checks no hardware, covers one
+    /// device's staged objects only, and cannot certify the managed-source baseline (ADR-0003).</summary>
+    string? ComparedTaskId = null,
+    /// <summary>Staged objects that could not be compared. Only a task-scoped comparison carries
+    /// them; the surface explains each code instead of reporting a clean result.</summary>
+    IReadOnlyList<TaskStageProblem>? StageProblems = null);

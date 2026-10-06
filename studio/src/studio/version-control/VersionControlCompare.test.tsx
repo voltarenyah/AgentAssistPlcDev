@@ -423,15 +423,8 @@ describe('VersionControlCompare (inline)', () => {
 
 })
 
-const taskComparison = (overrides: Partial<api.TaskSourceComparison> = {}): api.TaskSourceComparison => ({
-  taskId: 'task-1',
-  deviceId: 'dev-1',
-  candidates: [],
-  candidateExports: [],
-  problems: [],
-  observedSoftwareChecksum: null,
-  ...overrides,
-})
+const taskComparison = (overrides: Partial<api.WorkbenchConsistencyResult> = {}): api.WorkbenchConsistencyResult =>
+  comparison({ comparedTaskId: 'task-1', hardwareChecked: false, stageProblems: [], ...overrides })
 
 describe('VersionControlCompare (task scope)', () => {
   it('compares only the active task through the task route and never the project scan', async () => {
@@ -443,31 +436,57 @@ describe('VersionControlCompare (task scope)', () => {
     expect(taskCompare).toHaveBeenCalledWith('wb-1', 'wt-1', 'task-1', undefined)
     expect(projectCompare).not.toHaveBeenCalled()
     expect(host.querySelector('[data-testid="vc-task-compare-heading"]')?.textContent).toContain('Task compare: Fix Main')
-    // A task-clean result clears the project selection instead of standing in for a project verdict.
-    expect(onSelectionChanged).toHaveBeenLastCalledWith(null, [])
+    // The scoped result names itself, so the selection and accept path that commits a project
+    // change commit what this task comparison found.
+    expect(onSelectionChanged).toHaveBeenLastCalledWith('comparison-1', [])
+  })
+
+  it('renders a task-scoped difference as a selectable row showing which component changed', async () => {
+    const onSelectionChanged = vi.fn()
+    vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({
+      differences: [{
+        deviceId: 'dev-1',
+        plcName: 'PLC_1',
+        relativePath: 'devices/PLC_1/source/Blocks/Main.xml',
+        identity: 'Main',
+        kind: 'Changed',
+        masterFingerprint: 'old',
+        tiaFingerprint: 'new',
+        supported: true,
+        fingerprintComponents: {
+          Code: { stored: 'old', live: 'new', matches: false },
+          Interface: { stored: 'same', live: 'same', matches: true },
+        },
+      }],
+    }))
+    const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1', onSelectionChanged })
+
+    expect(host.querySelector('[data-testid="vc-compare-differences"]')?.textContent).toContain('Changed: Code')
+    expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeNull()
+    await click(host.querySelector('input[type="checkbox"]')!)
+
+    expect(onSelectionChanged).toHaveBeenLastCalledWith('comparison-1', ['devices/PLC_1/source/Blocks/Main.xml'])
   })
 
   it('labels a clean task result task-clean without any project-clean wording', async () => {
     vi.spyOn(api, 'compareMasterWithTia')
-    vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison())
+    vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({ differences: [], state: 'Consistent' }))
     const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
 
-    const taskResult = host.querySelector('[data-testid="vc-task-compare-result"]')!
-    expect(taskResult.textContent).toContain('This task is in sync')
-    expect(taskResult.textContent?.toLowerCase()).not.toContain('project')
-    expect(taskResult.textContent?.toLowerCase()).not.toContain('master')
-    expect(taskResult.textContent?.toLowerCase()).not.toContain('savepoint')
-    expect(taskResult.textContent).not.toContain('All files committed')
-    // Neither the project clean hero nor a project-only affordance can appear for a task result.
+    const clean = host.querySelector('[data-testid="vc-task-clean-state"]')!
+    expect(clean.textContent).toContain('This task is in sync')
+    expect(clean.textContent?.toLowerCase()).not.toContain('project')
+    expect(clean.textContent?.toLowerCase()).not.toContain('master')
+    // The project clean hero and a project-only affordance cannot stand in for the task verdict.
     expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeNull()
-    expect(taskResult.textContent).not.toContain('Untrackable change')
     expect(host.textContent).not.toContain('Prepare feature import')
     expect(api.compareMasterWithTia).not.toHaveBeenCalled()
   })
 
   it('explains a staged object with no committed baseline', async () => {
     vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({
-      problems: [{
+      stageProblems: [{
         sourceObjectId: 'dev-1:Main',
         code: 'TASK_STAGE_BASELINE_MISSING',
         message: 'This staged object has no fingerprint baseline yet because it has no committed Git content.',
@@ -484,7 +503,7 @@ describe('VersionControlCompare (task scope)', () => {
 
   it('explains an unreadable committed baseline', async () => {
     vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({
-      problems: [{ sourceObjectId: 'dev-1:Main', code: 'TASK_STAGE_BASELINE_INVALID', message: 'baseline invalid' }],
+      stageProblems: [{ sourceObjectId: 'dev-1:Main', code: 'TASK_STAGE_BASELINE_INVALID', message: 'baseline invalid' }],
     }))
     const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
 
@@ -495,7 +514,7 @@ describe('VersionControlCompare (task scope)', () => {
 
   it('explains an object that is gone or unreadable in TIA', async () => {
     vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({
-      problems: [{ sourceObjectId: 'dev-1:Main', code: 'TASK_STAGE_MISSING', message: 'missing' }],
+      stageProblems: [{ sourceObjectId: 'dev-1:Main', code: 'TASK_STAGE_MISSING', message: 'missing' }],
     }))
     const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
 
@@ -519,21 +538,16 @@ describe('VersionControlCompare (task scope)', () => {
     expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeNull()
   })
 
-  it('lists only the staged candidates and their XML exports', async () => {
+  it('never claims a task is in sync while a stage problem is on screen', async () => {
     vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({
-      candidates: [{ id: 'Main', reason: 'fingerprint-changed', requiresXmlExport: true, isSafetyDifference: false }],
-      candidateExports: [{
-        id: 'Main',
-        sourcePath: 'devices/PLC_1/source/Blocks/Main.xml',
-        export: { success: true, path: 'C:/staging/Main.xml' },
-      }],
+      differences: [],
+      state: 'Unavailable',
+      stageProblems: [{ sourceObjectId: 'dev-1:Main', code: 'TASK_STAGE_MISSING', message: 'missing' }],
     }))
     const { host } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
 
-    expect(host.querySelector('[data-testid="vc-task-candidate"]')?.textContent).toContain('Fingerprint changed')
-    expect(host.querySelector('[data-testid="vc-task-candidate"]')?.textContent).toContain('devices/PLC_1/source/Blocks/Main.xml')
-    expect(host.querySelector('[data-testid="vc-task-candidate-exports"]')?.textContent).toContain('Exported 1 of 1')
-    expect(host.querySelector('[data-testid="vc-clean-state"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeNull()
+    expect(host.textContent).not.toContain('This task is in sync')
   })
 
   it('runs no comparison when a task scope has no task to compare', async () => {
@@ -543,11 +557,11 @@ describe('VersionControlCompare (task scope)', () => {
 
     expect(taskCompare).not.toHaveBeenCalled()
     expect(projectCompare).not.toHaveBeenCalled()
-    expect(host.querySelector('[data-testid="vc-task-compare-result"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-compare-differences"]')).toBeNull()
   })
 
   it('drops a task result when the covered task changes', async () => {
-    const taskCompare = vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison())
+    const taskCompare = vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskComparison({ differences: [], state: 'Consistent' }))
     const { host, root } = await render({ signal: 1, mode: 'task', taskId: 'task-1' })
     expect(host.querySelector('[data-testid="vc-task-clean-state"]')).toBeTruthy()
 
@@ -564,7 +578,7 @@ describe('VersionControlCompare (task scope)', () => {
     ))
 
     expect(taskCompare).toHaveBeenCalledTimes(1)
-    expect(host.querySelector('[data-testid="vc-task-compare-result"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-compare-differences"]')).toBeNull()
   })
 
   it('keeps a full-scan result when a task is opened in the same worktree', async () => {

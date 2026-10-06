@@ -304,6 +304,59 @@ public sealed class MasterSynchronizationTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyNeverCertifiesTheManagedSourceBaselineFromATaskScopedComparison()
+    {
+        // A task-scoped comparison covers only the objects staged on that task, so accepting every
+        // difference it reports says nothing about the rest of the project. Only a project-wide
+        // comparison may record the managed-source baseline as consistent (ADR-0003).
+        var comparisonPath = SyncFixture.ComparisonPathFor(fixture.Root);
+        var comparison = fixture.Store.Read<WorkbenchConsistencyResult>(comparisonPath);
+        fixture.Store.Write(comparisonPath, comparison with
+        {
+            ComparedTaskId = "task-1",
+            // Every difference this comparison reports is accepted by the call below, which is the
+            // state a project-wide comparison would certify.
+            Differences = [comparison.Differences[0]],
+        });
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("export_source_object", new Contracts.Engineering.ExportResult { Success = true })
+            .Respond("capture_source_evidence", new Contracts.Engineering.SourceEvidenceCaptureResult
+            {
+                Snapshot = new Contracts.Engineering.SourceEvidenceSnapshot
+                {
+                    PlcName = "PLC_1",
+                    Checksum = new Contracts.Engineering.PlcChecksumInfo
+                    {
+                        PlcName = "PLC_1",
+                        ProjectIdentity = "project-1",
+                        SoftwareChecksum = "checksum-1",
+                    },
+                    Objects = Array.Empty<Contracts.Engineering.ManagedSourceEvidenceObject>(),
+                },
+            });
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        await coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Accept one staged task object",
+            CancellationToken.None);
+
+        var evidence = fixture.VersionControl.ValidationEvidence;
+        Assert.NotNull(evidence);
+        // The commit is recorded, but never as covering the managed source it did not compare.
+        Assert.False(evidence!.ManagedSourceConsistent ?? false);
+    }
+
+    [Fact]
     public async Task MasterCommitAllowsADirectLocalEdit()
     {
         var coordinator = fixture.CreateCoordinator();

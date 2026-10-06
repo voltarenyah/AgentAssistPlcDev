@@ -647,6 +647,11 @@ export type WorkbenchConsistencyResult = {
   timings?: ComparisonTiming[] | null
   untrackableChange?: boolean
   comparedWorktreeId?: string | null
+  /** Set when the comparison covered only that device-bound task's staged source objects. */
+  comparedTaskId?: string | null
+  /** Staged objects a task-scoped comparison could not include; each code is explained in place,
+   * and a result carrying one is never a clean verdict. */
+  stageProblems?: TaskStageProblem[] | null
 }
 
 export type ComparisonTiming = {
@@ -1438,11 +1443,11 @@ export const releaseTaskSourceObject = (workbenchId: string, worktreeId: string,
 export type WorktreeSourceStage = { taskId: string; taskTitle: string; sourceObjectId: string; deviceId: string; baselineEvidenceJson: string | null; stagedUtc: string }
 export const listWorktreeSourceStages = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<WorktreeSourceStage[]>(`${worktreePath(workbenchId, worktreeId)}/source-stages`)
-export type TaskSourceEvidenceCandidate = { id: string; reason: string; requiresXmlExport: boolean; isSafetyDifference: boolean }
-export type TaskSourceEvidenceCandidateExport = { id: string; sourcePath: string; export: { success: boolean; path: string | null } }
-export type TaskSourceComparison = { taskId: string; deviceId: string; candidates: TaskSourceEvidenceCandidate[]; candidateExports: TaskSourceEvidenceCandidateExport[]; problems: { sourceObjectId: string; code: string; message: string }[]; observedSoftwareChecksum: string | null }
+export type TaskStageProblem = { sourceObjectId: string; code: string; message: string }
+/** Compares only the active task's staged source objects. The result is a normal comparison — the
+ * same selectable difference rows a project-wide scan produces — scoped to that one task. */
 export const compareTaskWithTia = (workbenchId: string, worktreeId: string, taskId: string, operationId?: string) =>
-  workbenchRequest<TaskSourceComparison>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/compare-tia`, withOperation(jsonRequest('POST'), operationId))
+  workbenchRequest<WorkbenchConsistencyResult>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/compare-tia`, withOperation(jsonRequest('POST'), operationId))
 export const getWorktreeTaskDetail = (workbenchId: string, worktreeId: string, taskId: string) =>
   workbenchRequest<EngineeringTaskDetail>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`)
 export const getEngineeringTaskDetail = async (workbenchId: string, taskId: string, worktreeId?: string | null) => {

@@ -88,11 +88,12 @@ public sealed class TaskStageBaselineTests : IDisposable
     }
 
     [Fact]
-    public async Task CompareReadsOnlyTheStagedIdsAndNoLongerReportsAMissingBaseline()
+    public async Task CompareReportsTheStagedObjectsDifferenceAsACommitReadyRow()
     {
         var fixture = TaskStageFixture.Create(root);
         var versionControl = new FakeToolCaller()
-            .Respond("vc_show_file", new ShowFileResult { Content = TaskStageFixture.ManifestJson });
+            .Respond("vc_show_file", new ShowFileResult { Content = TaskStageFixture.ManifestJson })
+            .Respond("vc_log", new ConsistencyLogResult { Commits = [new ConsistencyCommit { Sha = "head-1" }] });
         var engineering = fixture.ScriptCompareEvidence();
         var coordinator = fixture.CreateCoordinator(versionControl, engineering);
         await coordinator.StageTaskSourceObjectAsync(
@@ -103,9 +104,23 @@ public sealed class TaskStageBaselineTests : IDisposable
         var comparison = await coordinator.CompareTaskWithTiaAsync(
             TaskStageFixture.WorkbenchId, TaskStageFixture.WorktreeId, fixture.TaskId);
 
-        Assert.Empty(comparison.Problems);
-        Assert.Equal("PLC_1:checksum-1", comparison.ObservedSoftwareChecksum);
-        Assert.Equal("block-main", Assert.Single(comparison.Candidates).Id);
+        // A scoped result is a normal selectable difference row — the shape a project-wide scan
+        // produces — so one difference list, one selection, and one accept path serve both.
+        var difference = Assert.Single(comparison.Differences);
+        Assert.Equal("devices/PLC_1/source/Blocks/Main.xml", difference.RelativePath);
+        Assert.Equal(SourceDifferenceKind.Changed, difference.Kind);
+        Assert.True(difference.Supported);
+        // "Which part of the block changed" is the per-component evidence, not a summary count.
+        Assert.False(difference.FingerprintComponents!["Code"].Matches);
+        Assert.True(difference.FingerprintComponents["Interface"].Matches);
+        // The row carries the compared identity the accept path verifies before it copies (#111).
+        Assert.False(string.IsNullOrWhiteSpace(difference.TiaFingerprint));
+        Assert.Empty(comparison.StageProblems!);
+        Assert.Equal(fixture.TaskId, comparison.ComparedTaskId);
+        Assert.Equal("head-1", comparison.MasterSha);
+        // A task-scoped comparison is not a project-wide verdict: it checks no hardware.
+        Assert.False(comparison.HardwareChecked);
+        Assert.Null(comparison.Hardware);
         var request = Assert.Single(engineering.CallArgs["compare_source_evidence"]);
         Assert.Equal(new[] { "block-main" }, Property<string[]>(request, "sourceObjectIds"));
         // The comparison baseline handed to TIA is the committed manifest evidence.
@@ -120,7 +135,8 @@ public sealed class TaskStageBaselineTests : IDisposable
     {
         var fixture = TaskStageFixture.Create(root);
         var versionControl = new FakeToolCaller()
-            .Respond("vc_show_file", new ShowFileResult { Content = null });
+            .Respond("vc_show_file", new ShowFileResult { Content = null })
+            .Respond("vc_log", new ConsistencyLogResult { Commits = [new ConsistencyCommit { Sha = "head-1" }] });
         var engineering = new FakeToolCaller();
         var coordinator = fixture.CreateCoordinator(versionControl, engineering);
         await coordinator.StageTaskSourceObjectAsync(
@@ -129,9 +145,12 @@ public sealed class TaskStageBaselineTests : IDisposable
         var comparison = await coordinator.CompareTaskWithTiaAsync(
             TaskStageFixture.WorkbenchId, TaskStageFixture.WorktreeId, fixture.TaskId);
 
-        var problem = Assert.Single(comparison.Problems);
+        var problem = Assert.Single(comparison.StageProblems!);
         Assert.Equal("TASK_STAGE_BASELINE_MISSING", problem.Code);
         Assert.Equal("device-1:block-main", problem.SourceObjectId);
+        // The problem is readable and nothing is selectable or certified in its place.
+        Assert.Empty(comparison.Differences);
+        Assert.NotEqual(ConsistencyState.Consistent, comparison.State);
         // Nothing is read from TIA for a stage that has no baseline to compare against.
         Assert.DoesNotContain("compare_source_evidence", engineering.Calls);
     }
@@ -285,7 +304,8 @@ public sealed class TaskStageBaselineTests : IDisposable
 
         /// <summary>Scripts the engineering side of a task comparison: the registered project is
         /// already active, and the scoped capture echoes the baseline back with one changed
-        /// candidate — the existing fake-engineering pattern, no TIA required.</summary>
+        /// candidate, exporting the candidate XML the surface compares and later commits — the same
+        /// temporary candidate export a project-wide scan produces.</summary>
         public FakeToolCaller ScriptCompareEvidence()
         {
             var engineering = new FakeToolCaller();
@@ -299,6 +319,7 @@ public sealed class TaskStageBaselineTests : IDisposable
                 .Respond("compare_source_evidence", args =>
                 {
                     var baseline = (SourceEvidenceSnapshot)args.GetType().GetProperty("baseline")!.GetValue(args)!;
+                    var outputDir = (string)args.GetType().GetProperty("outputDir")!.GetValue(args)!;
                     var changed = baseline.Objects.Select(item => new ManagedSourceEvidenceObject
                     {
                         Id = item.Id,
@@ -309,6 +330,10 @@ public sealed class TaskStageBaselineTests : IDisposable
                         ReadState = item.ReadState,
                         Fingerprints = new FingerprintSet { ["Code"] = "changed", ["Interface"] = "BBBB2222", ["Comments"] = "CCCC3333" },
                     }).ToArray();
+                    // The candidate export mirrors the source tree layout, as the TIA adapter's does.
+                    var exportPath = Path.Combine(outputDir, "Blocks", "Main.xml");
+                    Directory.CreateDirectory(Path.GetDirectoryName(exportPath)!);
+                    File.WriteAllText(exportPath, "<Document><SW.Blocks.OB ID=\"1\"><Edited>changed</Edited></SW.Blocks.OB></Document>");
                     return new SourceEvidenceCaptureResult
                     {
                         Snapshot = new SourceEvidenceSnapshot
@@ -321,9 +346,15 @@ public sealed class TaskStageBaselineTests : IDisposable
                         {
                             Id = item.Id,
                             Reason = SourceEvidenceCandidateReason.FingerprintChanged,
-                            RequiresXmlExport = false,
+                            RequiresXmlExport = true,
                             Baseline = baseline.Objects.Single(baselineObject => baselineObject.Id == item.Id),
                             Live = item,
+                        }).ToArray(),
+                        CandidateExports = changed.Select(item => new SourceEvidenceCandidateExport
+                        {
+                            Id = item.Id,
+                            SourcePath = item.SourcePath,
+                            Export = new ExportResult { Success = true, Path = exportPath, BlockName = item.Name },
                         }).ToArray(),
                     };
                 });
