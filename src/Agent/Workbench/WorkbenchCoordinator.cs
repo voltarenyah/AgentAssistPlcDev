@@ -2478,6 +2478,82 @@ public sealed class WorkbenchCoordinator
             },
             token);
 
+    /// <summary>
+    /// The freshness of one device's knowledge database: the database's existence, the persisted
+    /// staleness flags, and a hash comparison of every managed source XML against the hashes the last
+    /// successful update applied. Reads only; it never writes the database or the device metadata.
+    ///
+    /// It answers the question the knowledge tools cannot: whether the graph they read still describes
+    /// the current PLC source. The hash comparison is the load-bearing half — a TIA accept sets
+    /// BaselineStale, but an edit made outside the app sets no flag at all (ADR-0012), and only the
+    /// applied hashes show that the database is behind.
+    /// </summary>
+    public DeviceKnowledgeStatus ReadKnowledgeStatus(DeviceContext device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var metadata = ReadDevice(device);
+        var applied = metadata.Knowledge.AppliedOverlayHashes;
+        var databaseExists = File.Exists(device.KnowledgeDbPath);
+        var changed = new List<string>();
+        var added = new List<string>();
+        IReadOnlyList<string> removed = Array.Empty<string>();
+        if (databaseExists)
+        {
+            var relativePaths = sourceResolver.EnumerateSource(device);
+            foreach (var path in relativePaths)
+            {
+                var hash = HashFile(WorkbenchPaths.ResolveRelative(device.SourceRoot, path));
+                if (!applied.TryGetValue(path, out var appliedHash))
+                {
+                    added.Add(path);
+                }
+                else if (!string.Equals(hash, appliedHash, StringComparison.Ordinal))
+                {
+                    changed.Add(path);
+                }
+            }
+
+            var present = relativePaths.ToHashSet(StringComparer.Ordinal);
+            removed = applied.Keys
+                .Where(path => !present.Contains(path))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        // The states the partial update cannot repair, so the answer is a full rebuild: a source file
+        // the database has no component for (update_components refuses an identity it does not hold —
+        // this covers a brand-new block and a database with no applied hashes at all), and a component
+        // whose source file is gone (update_components only replaces the components a live file names,
+        // so the orphan would keep the device stale forever). A missing database and a stale baseline
+        // are the ingest cases UpdateKnowledgeAsync already knew.
+        var requiresRebuild = !databaseExists
+            || metadata.Knowledge.BaselineStale
+            || removed.Count > 0
+            || added.Count > 0;
+        var state = !databaseExists
+            ? DeviceKnowledgeStatus.MissingState
+            : metadata.Knowledge.Stale || requiresRebuild || changed.Count > 0
+                ? DeviceKnowledgeStatus.StaleState
+                : DeviceKnowledgeStatus.CurrentState;
+        return new DeviceKnowledgeStatus(
+            state,
+            device.KnowledgeDbPath,
+            metadata.Knowledge.UpdatedAt,
+            metadata.Knowledge.Stale,
+            metadata.Knowledge.BaselineStale,
+            requiresRebuild,
+            changed,
+            added,
+            removed);
+    }
+
+    /// <summary>
+    /// Brings one device's knowledge database up to date with its PLC source: a full rebuild when
+    /// <see cref="DeviceKnowledgeStatus.RequiresRebuild"/> says the partial update cannot repair the
+    /// difference, and a transactional component replacement for plain content changes. Either way the
+    /// applied hashes, the staleness flags and the projected device facts are written together, which
+    /// is what lets <see cref="ReadKnowledgeStatus"/> report <c>current</c> afterwards.
+    /// </summary>
     public Task<KnowledgeUpdateResult> UpdateKnowledgeAsync(
         DeviceContext device,
         CancellationToken token,
@@ -2487,12 +2563,17 @@ public sealed class WorkbenchCoordinator
             async cancellationToken =>
             {
                 progress?.Report("Checking PLC source changes...");
-                var relativePaths = sourceResolver.EnumerateSource(device).ToArray();
+                // One freshness rule: the status decides what is behind and how it can be repaired, and
+                // this method repairs exactly that. A second copy of the rule here is how an added
+                // component used to be sent to a partial update that refuses an identity the database
+                // does not hold.
+                var status = ReadKnowledgeStatus(device);
                 var before = ReadDevice(device);
                 KnowledgeUpdateResult result;
                 IReadOnlyDictionary<string, string> hashesToPersist;
-                if (!File.Exists(device.KnowledgeDbPath) || before.Knowledge.BaselineStale)
+                if (status.RequiresRebuild)
                 {
+                    var relativePaths = sourceResolver.EnumerateSource(device).ToArray();
                     progress?.Report("Ingesting device source into knowledge...");
                     var ingest = await knowledge.CallAsync<IngestResult>(
                         "ingest_source",
@@ -2509,49 +2590,47 @@ public sealed class WorkbenchCoordinator
                         Array.Empty<string>());
                     hashesToPersist = result.AppliedHashes;
                 }
+                else if (status.ChangedPaths.Count == 0)
+                {
+                    // Nothing to replace: the state was flagged stale without a content difference, and
+                    // the write below clears the flag.
+                    progress?.Report("Device knowledge is already current.");
+                    result = new KnowledgeUpdateResult(
+                        device.KnowledgeDbPath,
+                        Array.Empty<string>(),
+                        before.Knowledge.AppliedOverlayHashes,
+                        Array.Empty<string>());
+                    hashesToPersist = new Dictionary<string, string>(StringComparer.Ordinal);
+                }
                 else
                 {
-                    var stalePaths = relativePaths.Where(path =>
-                    {
-                        var hash = HashFile(WorkbenchPaths.ResolveRelative(
-                            device.SourceRoot,
-                            path));
-                        return !before.Knowledge.AppliedOverlayHashes.TryGetValue(path, out var applied)
-                            || !string.Equals(hash, applied, StringComparison.Ordinal);
-                    }).ToArray();
-                    if (stalePaths.Length == 0)
-                    {
-                        progress?.Report("Device knowledge is already current.");
-                        result = new KnowledgeUpdateResult(
-                            device.KnowledgeDbPath,
-                            Array.Empty<string>(),
-                            before.Knowledge.AppliedOverlayHashes,
-                            Array.Empty<string>());
-                        hashesToPersist = new Dictionary<string, string>(StringComparer.Ordinal);
-                    }
-                    else
-                    {
-                        progress?.Report("Updating changed knowledge components...");
-                        result = await knowledge.CallAsync<KnowledgeUpdateResult>(
-                            "update_components",
-                            new
-                            {
-                                sourceRoot = device.SourceRoot,
-                                dbPath = device.KnowledgeDbPath,
-                                relativePaths = stalePaths,
-                            },
-                            cancellationToken).ConfigureAwait(false);
-                        hashesToPersist = HashOverlays(device, stalePaths);
-                    }
-                }
-                var appliedHashes = new Dictionary<string, string>(
-                    before.Knowledge.AppliedOverlayHashes,
-                    StringComparer.Ordinal);
-                foreach (var applied in hashesToPersist)
-                {
-                    appliedHashes[applied.Key] = applied.Value;
+                    progress?.Report("Updating changed knowledge components...");
+                    result = await knowledge.CallAsync<KnowledgeUpdateResult>(
+                        "update_components",
+                        new
+                        {
+                            sourceRoot = device.SourceRoot,
+                            dbPath = device.KnowledgeDbPath,
+                            relativePaths = status.ChangedPaths.ToArray(),
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                    hashesToPersist = HashOverlays(device, status.ChangedPaths);
                 }
 
+                // A full rebuild read the whole source tree, so the applied set is exactly that tree:
+                // carrying a hash forward for a component the source no longer has would leave the
+                // device permanently stale. A partial update replaces only the components it sent, so
+                // its hashes merge into the set the database still holds.
+                var appliedHashes = new Dictionary<string, string>(
+                    status.RequiresRebuild ? hashesToPersist : before.Knowledge.AppliedOverlayHashes,
+                    StringComparer.Ordinal);
+                if (!status.RequiresRebuild)
+                {
+                    foreach (var applied in hashesToPersist)
+                    {
+                        appliedHashes[applied.Key] = applied.Value;
+                    }
+                }
                 var metadata = ReadDevice(device) with
                 {
                     Knowledge = new KnowledgeState(

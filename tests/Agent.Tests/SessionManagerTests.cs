@@ -400,7 +400,7 @@ public sealed class SessionManagerTests : IDisposable
                 $"Device: PLC_1 ({device.DeviceId})",
                 $"PLC source: {device.SourceRoot}",
                 $"Knowledge DB: {device.KnowledgeDbPath}",
-                "Knowledge state: stale; run update_components before reuse"),
+                "Knowledge state: stale; call knowledge_status, then refresh_knowledge, before reuse"),
             runtimeContext);
     }
 

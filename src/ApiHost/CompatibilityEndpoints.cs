@@ -943,9 +943,10 @@ internal sealed class ApiChatService(
                 ? restored
                 : SessionManager.CreateNewSession(device, Settings(configuration, state), null);
             var discovered = await McpToolCatalog.BuildAsync(runtime.Host, token);
-            // The source-object listing, the staged-source-object and task-creation tools are
-            // in-process (they need the workbench graph, the guarded stage path and the managed task
-            // write), so they are added to the discovered MCP tools rather than discovered.
+            // The source-object listing, the staged-source-object, task-creation and knowledge
+            // freshness tools are in-process (they need the workbench graph, the guarded stage path,
+            // the managed task write, and the coordinator's knowledge bookkeeping), so they are added
+            // to the discovered MCP tools rather than discovered.
             var catalog = new McpToolCatalog(discovered.Tools.Select(spec => spec with
             {
                 Caller = new BoundMcpCaller(spec.Caller, binder, device),
@@ -957,6 +958,12 @@ internal sealed class ApiChatService(
                 () => device))
               .Append(TaskCreationTool.CreateSpec(
                 new TaskCreationTool(workbenches, graphs, tasks),
+                () => device))
+              .Append(KnowledgeStatusTool.CreateSpec(
+                new KnowledgeStatusTool(coordinator),
+                () => device))
+              .Append(KnowledgeRefreshTool.CreateSpec(
+                new KnowledgeRefreshTool(coordinator),
                 () => device)));
             var sandbox = new AgentSandbox(policy, 20, request =>
             {
@@ -987,6 +994,7 @@ internal sealed class ApiChatService(
                     $"Device: {device.DeviceId}",
                     $"PLC source: {device.SourceRoot}",
                     $"Knowledge DB: {device.KnowledgeDbPath}",
+                    KnowledgeContext(device),
                     TaskContext(device, chats.TryGetValue(contextKey, out var current)
                         ? current.Session.Header.TaskId : session.Header.TaskId)),
                 Settings(configuration, state),
@@ -997,6 +1005,46 @@ internal sealed class ApiChatService(
             chats[contextKey] = active;
         }
         return active;
+    }
+
+    /// <summary>
+    /// One knowledge-state line for the runtime context. It re-reads the persisted device facts on
+    /// every turn, so a stale or missing database reaches the model in the same message as the paths it
+    /// would otherwise query: the turn that has to refresh is told so before it answers, instead of
+    /// discovering it after reporting from the old content.
+    ///
+    /// This is the cheap signal — database existence and the flags a write already set. The
+    /// authoritative, hash-based answer that also catches an edit made outside the app is
+    /// <c>knowledge_status</c>, which the system prompt requires before answering about a change.
+    /// </summary>
+    private string KnowledgeContext(DeviceContext device)
+    {
+        try
+        {
+            if (!File.Exists(device.KnowledgeDbPath))
+            {
+                return "Knowledge state: missing — no knowledge database exists for this device yet; "
+                    + "call refresh_knowledge before any knowledge query";
+            }
+
+            var metadata = workbenches
+                .Device(device.WorkbenchId, device.WorktreeId, device.DeviceId)
+                .Metadata;
+            return metadata.Knowledge.Stale || metadata.Knowledge.BaselineStale
+                ? "Knowledge state: stale — the PLC source changed after the last knowledge update; "
+                    + "call knowledge_status, then refresh_knowledge, before any knowledge query"
+                : "Knowledge state: current as of the last knowledge update — call knowledge_status "
+                    + "before answering whether a program change is present, because only it compares "
+                    + "the source hashes";
+        }
+        catch (Exception exception) when (exception is IOException or JsonException
+            or WorkbenchCatalogException or WorkbenchPathException or KeyNotFoundException)
+        {
+            // The conversation outlived the device it belongs to, or its metadata is unreadable: say
+            // so instead of failing the whole turn on a context line.
+            return "Knowledge state: unknown — the device metadata could not be read; call "
+                + "knowledge_status for the authoritative answer";
+        }
     }
 
     private string? TaskContext(DeviceContext device, string? taskId)

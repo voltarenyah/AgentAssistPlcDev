@@ -278,8 +278,11 @@ public static class SessionManager
         ArgumentException.ThrowIfNullOrWhiteSpace(branch);
         ArgumentException.ThrowIfNullOrWhiteSpace(plcName);
 
+        // The stale wording names the device chat's own tools: a raw update_components call from the
+        // chat would change the database without recording the applied hashes, which is what keeps the
+        // device reporting stale knowledge afterwards.
         var knowledgeState = knowledgeStale
-            ? "stale; run update_components before reuse"
+            ? "stale; call knowledge_status, then refresh_knowledge, before reuse"
             : "current";
         return string.Join(
             Environment.NewLine,
