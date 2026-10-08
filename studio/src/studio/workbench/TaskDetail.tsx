@@ -15,13 +15,27 @@ export type TaskEditPatch = Pick<EngineeringTask, 'title' | 'type' | 'status' | 
 /** One traceability row in the Related records group, carrying the kind it navigates and removes as. */
 type RelatedRecord = TraceabilityItem & { kind: string; kindLabel: string }
 
+/**
+ * The provenance a relation carries, said the way the graph stores it. `auto` is the relation a
+ * conversation established by creating the task itself, so it names the conversation rather than
+ * reading as an unclassified link (ADR-0014).
+ */
 const provenanceLabel = (value: string) => {
   const normalized = value.toLowerCase()
   if (normalized === 'manual') return 'Manual link'
+  if (normalized === 'auto') return 'Created by this conversation'
   if (normalized === 'evidence') return 'Evidence-derived'
   if (normalized === 'default') return 'Default link'
   return 'Unassigned'
 }
+
+/**
+ * Whether the relation can be cleared from the page. A manual link and one the conversation created
+ * itself are both removable — an automatic relation that could not be cleared would leave the user
+ * with a link the conversation made and no way back (ADR-0014, AC-019) — while a default link is
+ * cleared from the conversation's own picker instead.
+ */
+const removableProvenance = (value: string) => ['manual', 'auto'].includes(value.toLowerCase())
 
 /**
  * The remaining traceability edges — the graph's source-object links and the task's SVN revisions.
@@ -205,7 +219,7 @@ export default function TaskDetail({ detail, deviceName, loading = false, error 
         <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{session.title?.trim() || session.firstUserMessage?.trim() || 'Untitled conversation'}</p><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{session.id}</p>{session.firstUserMessage && session.title?.trim() && <p className="mt-1 truncate text-xs text-muted-foreground">{session.firstUserMessage}</p>}</div>
         <span className="text-xs text-muted-foreground">{session.turnCount ?? 0} turns · {provenanceLabel(session.provenance)}{session.isPrimary ? ' · Primary' : ''}</span>
         {onNavigate && <Button type="button" variant="outline" size="sm" aria-label={`Open session ${session.title?.trim() || session.id}`} onClick={() => onNavigate('session', session.id)}>Open conversation</Button>}
-        {onRemove && session.provenance.toLowerCase() === 'manual' && <Button type="button" variant="outline" size="xs" aria-label={`Remove Sessions ${session.id}`} onClick={() => onRemove('session', session)}>Remove</Button>}
+        {onRemove && removableProvenance(session.provenance) && <Button type="button" variant="outline" size="xs" aria-label={`Remove Sessions ${session.id}`} onClick={() => onRemove('session', session)}>Remove</Button>}
       </li>)}</ul>}
     </section>
 

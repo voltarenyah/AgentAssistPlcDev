@@ -58,7 +58,7 @@ vi.mock('@/api/client', async importOriginal => {
     } satisfies api.EngineeringTaskDetail)),
     loadDeviceChatSession: vi.fn(async () => session),
     renameChatSession: vi.fn(async () => session),
-    setChatSessionTask: vi.fn(async () => session),
+    setChatSessionTasks: vi.fn(async () => session),
     exportChatSession: vi.fn(async () => ({ path: 'C:/wb/s1.md' })),
     deleteChatSession: vi.fn(async () => {}),
     deleteDeviceSession: vi.fn(async () => {}),
@@ -346,17 +346,25 @@ it('exports a conversation and binds a task-less one from the SESSIONS row menu'
   await act(async () => exportItem.dispatchEvent(new MouseEvent('click', { bubbles: true })))
   expect(api.exportChatSession).toHaveBeenCalledWith('s1')
 
-  // Binding picks from the worktree's tasks rather than asking for a task id.
-  const attachItem = await rowMenuItem(host, 'New chat', 'Attach task')
-  await act(async () => attachItem.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+  // Relating the conversation to a task is one checked set, applied in one operation (AC-019): the
+  // keyboard checks the task, and the apply is what writes the set.
+  const relateItem = await rowMenuItem(host, 'New chat', 'Tasks…')
+  await act(async () => relateItem.dispatchEvent(new MouseEvent('click', { bubbles: true })))
   const search = document.body.querySelector<HTMLInputElement>('input[aria-label="Search this worktree\'s tasks"]')
   expect(search).not.toBeNull()
   await act(async () => {
     search!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
     search!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   })
+  const apply = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Apply')!
+  await act(async () => apply.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
-  expect(api.setChatSessionTask).toHaveBeenCalledWith('s1', 'task1')
+  expect(api.setChatSessionTasks).toHaveBeenCalledTimes(1)
+  const [relateSessionId, relateTaskIds, relatePrimary] = vi.mocked(api.setChatSessionTasks).mock.calls[0]!
+  expect(relateSessionId).toBe('s1')
+  expect(relateTaskIds).toEqual(['task1'])
+  // The conversation had no primary to keep, so the set's own resolution decides it.
+  expect(relatePrimary).toBeUndefined()
   expect(prompt).not.toHaveBeenCalled()
   vi.unstubAllGlobals()
   await act(async () => root.unmount())

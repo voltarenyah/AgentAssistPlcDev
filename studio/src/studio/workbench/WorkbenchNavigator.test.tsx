@@ -54,10 +54,18 @@ const conversation = (overrides: Partial<api.ChatSessionInfo> & { sessionId: str
   ...overrides,
 })
 
-/** One conversation bound to the device task, one bound to nothing, as the live data has both. */
+/** One relation of a conversation's set, as the server projects it onto a session list row. */
+const relation = (taskId: string, overrides: Partial<api.SessionTaskRelation> = {}): api.SessionTaskRelation => ({
+  taskId, edgeId: `edge-${taskId}`, provenance: 'manual', isPrimary: false, ...overrides,
+})
+
+/** One conversation related to the device task, one related to nothing, as the live data has both. */
 const sessionsByWorktree: Record<string, api.ChatSessionInfo[]> = {
   'wb-direct:wt-descendant': [
-    conversation({ sessionId: 'session-bound', title: 'Interlock review', taskId: 'task-device', deviceId: 'plc-1' }),
+    conversation({
+      sessionId: 'session-bound', title: 'Interlock review', taskId: 'task-device', deviceId: 'plc-1',
+      taskProvenance: 'manual', taskRelations: [relation('task-device', { isPrimary: true })],
+    }),
     conversation({ sessionId: 'session-unbound', title: 'Ad-hoc question', taskId: null, deviceId: 'plc-1' }),
   ],
 }
@@ -806,9 +814,9 @@ describe('WorkbenchNavigator sessions section', () => {
     const { host, root } = await renderNavigator(null, false, {
       selection: deviceSelection, ...overrides,
     })
-    // A conversation that no task owns can be opened, renamed, exported, attached to a task or
-    // deleted, but it has no task link to remove. The row menu is its only entry point, so it has to
-    // carry all of them.
+    // A conversation that no task is related to can be opened, renamed, exported, related to the
+    // worktree's tasks or deleted. The row menu is its only entry point, so it has to carry all of
+    // them — binding and clearing are the one picker entry, because a second click clears a check.
     const unbound = section(host, 'sessions')
       .querySelector('button[aria-label="Conversation actions Ad-hoc question"]') as HTMLButtonElement
     // The row menu is visible without hovering, like every other row's menu in the navigator.
@@ -820,11 +828,11 @@ describe('WorkbenchNavigator sessions section', () => {
       'Open conversation',
       'Rename conversation',
       'Export conversation',
-      'Attach task',
+      'Tasks…',
       'Delete conversation',
     ])
 
-    // A bound conversation names the binding operations for what they do to it.
+    // A related conversation offers the same single binding entry, never a second one to remove it.
     await act(async () => root.render(
       <WorkbenchNavigator {...navigatorProps({
         selection: deviceSelection, activeTaskId: 'task-device', ...overrides,
@@ -836,8 +844,7 @@ describe('WorkbenchNavigator sessions section', () => {
       'Open conversation',
       'Rename conversation',
       'Export conversation',
-      'Reassign task',
-      'Remove task',
+      'Tasks…',
       'Delete conversation',
     ])
     await act(async () => root.unmount())
@@ -859,18 +866,71 @@ describe('WorkbenchNavigator sessions section', () => {
     await act(async () => root.unmount())
   })
 
-  it('binds a conversation to one of the worktree\'s tasks through a picker, and clears it', async () => {
-    const onSetSessionTask = vi.fn()
-    // The task-less row offers the attach operation, and the picker lists the worktree's tasks.
+  it('applies a conversation\'s whole relation set from a checked picker (AC-019)', async () => {
+    const onSetSessionTasks = vi.fn()
+    // Two device tasks that can own a conversation, and a conversation already related to both.
+    const key = 'wb-direct:wt-descendant'
+    const twoTasks = {
+      [key]: [...targetTasks[key], graphTask({ taskId: 'task-alarm', title: 'Alarm task', deviceId: 'plc-1', targetKind: 'device' })],
+    }
+    const twoRelations = {
+      [key]: [
+        conversation({
+          sessionId: 'session-bound', title: 'Interlock review', taskId: 'task-device', deviceId: 'plc-1',
+          taskProvenance: 'manual',
+          taskRelations: [relation('task-device', { isPrimary: true }), relation('task-alarm', { provenance: 'auto' })],
+        }),
+      ],
+    }
     const { host, root } = await renderNavigator(null, false, {
-      selection: deviceSelection, ...overrides, onSetSessionTask,
+      selection: deviceSelection, activeTaskId: 'task-device',
+      devicesByWorktree, tasksByWorktree: twoTasks, sessionsByWorktree: twoRelations, onSetSessionTasks,
+    })
+
+    const trigger = section(host, 'sessions')
+      .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
+    const entry = (await openRowMenu(trigger)).find(item => item.textContent?.trim() === 'Tasks…')!
+    await act(async () => entry.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    // One check per task that can own a conversation, reflecting the relations it already has. A task
+    // with no device is not offered at all, because it could not own a conversation.
+    const options = () => Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
+    expect(options().map(option => [option.textContent?.trim(), option.getAttribute('aria-checked')])).toEqual([
+      ['Device task', 'true'],
+      ['Alarm task', 'true'],
+    ])
+    expect(options().map(option => option.textContent?.trim())).not.toContain('Unbound task')
+
+    // A second click on a checked task clears that check and writes nothing yet: the set is one
+    // operation, so the conversation is never left half-linked while the user is still choosing.
+    const alarm = options().find(option => option.textContent?.trim() === 'Alarm task')!
+    await act(async () => alarm.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(options().find(option => option.textContent?.trim() === 'Alarm task')?.getAttribute('aria-checked')).toBe('false')
+    expect(options().find(option => option.textContent?.trim() === 'Device task')?.getAttribute('aria-checked')).toBe('true')
+    expect(onSetSessionTasks).not.toHaveBeenCalled()
+
+    // One apply carries the whole set, naming the primary it read while that task is still checked.
+    const apply = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Apply')!
+    await act(async () => apply.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onSetSessionTasks).toHaveBeenCalledTimes(1)
+    expect(onSetSessionTasks).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-bound' }), ['task-device'], 'task-device')
+
+    await act(async () => root.unmount())
+  })
+
+  it('relates a task-less conversation to one of the worktree\'s tasks, and clears a relation (AC-019)', async () => {
+    const onSetSessionTasks = vi.fn()
+    // The task-less row offers the same binding entry, and the picker lists the worktree's tasks.
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, ...overrides, onSetSessionTasks,
     })
     const trigger = section(host, 'sessions')
       .querySelector('button[aria-label="Conversation actions Ad-hoc question"]') as HTMLButtonElement
-    const attach = (await openRowMenu(trigger)).find(entry => entry.textContent?.trim() === 'Attach task')!
-    await act(async () => attach.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const bind = (await openRowMenu(trigger)).find(entry => entry.textContent?.trim() === 'Tasks…')!
+    await act(async () => bind.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
-    // A task that cannot own a conversation is not a valid binding, so it is not offered.
+    // A task that cannot own a conversation is not a valid relation, so it is not offered.
     const offered = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
       .map(option => option.textContent?.trim())
     expect(offered).toEqual(['Device task'])
@@ -879,27 +939,89 @@ describe('WorkbenchNavigator sessions section', () => {
 
     const search = document.body.querySelector<HTMLInputElement>('input[aria-label="Search this worktree\'s tasks"]')!
     expect(search).toBeTruthy()
+    // The keyboard checks a task exactly as a click does, and the apply is still one operation.
     await act(async () => {
       search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
       search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
-    expect(onSetSessionTask).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'session-unbound' }), 'task-device')
+    expect(onSetSessionTasks).not.toHaveBeenCalled()
+    const apply = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Apply')!
+    await act(async () => apply.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    // The conversation had no primary to keep, so the primary is left to the set's own resolution.
+    expect(onSetSessionTasks).toHaveBeenCalledTimes(1)
+    const [session, taskIds, primary] = onSetSessionTasks.mock.calls[0]!
+    expect(session).toMatchObject({ sessionId: 'session-unbound' })
+    expect(taskIds).toEqual(['task-device'])
+    expect(primary).toBeUndefined()
 
-    // Clearing uses the same menu: a bound conversation can be left owned by no task again.
+    // Clearing every check is one apply too: the set it writes is empty.
     await act(async () => root.render(
       <WorkbenchNavigator {...navigatorProps({
-        selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onSetSessionTask,
+        selection: deviceSelection, activeTaskId: 'task-device', ...overrides, onSetSessionTasks,
       })} />,
     ))
     const boundTrigger = section(host, 'sessions')
       .querySelector('button[aria-label="Conversation actions Interlock review"]') as HTMLButtonElement
-    const clear = (await openRowMenu(boundTrigger)).find(entry => entry.textContent?.trim() === 'Remove task')!
-    await act(async () => clear.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const rebind = (await openRowMenu(boundTrigger)).find(entry => entry.textContent?.trim() === 'Tasks…')!
+    await act(async () => rebind.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const checked = Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
+      .find(option => option.getAttribute('aria-checked') === 'true')!
+    await act(async () => checked.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const clearApply = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Apply')!
+    await act(async () => clearApply.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
-    expect(onSetSessionTask).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'session-bound' }), null)
+    // The whole set is written as itself, so clearing every check clears every relation.
+    expect(onSetSessionTasks).toHaveBeenCalledTimes(2)
+    const [clearedSession, clearedIds, clearedPrimary] = onSetSessionTasks.mock.calls[1]!
+    expect(clearedSession).toMatchObject({ sessionId: 'session-bound' })
+    expect(clearedIds).toEqual([])
+    expect(clearedPrimary).toBeUndefined()
     await act(async () => root.unmount())
+  })
+
+  it('lists a conversation related to several tasks under each of them, and never as task-less (AC-015)', async () => {
+    const key = 'wb-direct:wt-descendant'
+    // The same conversation is related to two device tasks; a second one is related to nothing.
+    const twoTasks = {
+      [key]: [...targetTasks[key], graphTask({ taskId: 'task-alarm', title: 'Alarm task', deviceId: 'plc-1', targetKind: 'device' })],
+    }
+    const shared = {
+      [key]: [
+        conversation({
+          sessionId: 'session-shared', title: 'Shared finding', taskId: 'task-device', deviceId: 'plc-1',
+          taskProvenance: 'manual',
+          taskRelations: [relation('task-device', { isPrimary: true }), relation('task-alarm')],
+        }),
+        conversation({ sessionId: 'session-unbound', title: 'Ad-hoc question', taskId: null, deviceId: 'plc-1' }),
+      ],
+    }
+    const props = { devicesByWorktree, tasksByWorktree: twoTasks, sessionsByWorktree: shared }
+
+    // The first task's list holds it, under that task's heading.
+    const { host, root } = await renderNavigator(null, false, {
+      selection: deviceSelection, activeTaskId: 'task-device', ...props,
+    })
+    expect(section(host, 'sessions').textContent).toContain('Shared finding')
+    expect(section(host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('task-device')
+    expect(section(host, 'sessions').textContent).not.toContain('Ad-hoc question')
+
+    // The second task lists the same conversation, because membership is a set and not one field.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({ selection: deviceSelection, activeTaskId: 'task-alarm', ...props })} />,
+    ))
+    expect(section(host, 'sessions').textContent).toContain('Alarm task')
+    expect(section(host, 'sessions').textContent).toContain('Shared finding')
+    expect(section(host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('task-alarm')
+
+    // With no task selected the task-less list is the conversation with no relation at all, so the
+    // shared one is not in it — it is related, even though it is not the task on screen.
+    await act(async () => root.unmount())
+    const taskless = await renderNavigator(null, false, { selection: deviceSelection, ...props })
+    expect(section(taskless.host, 'sessions').textContent).toContain('No task')
+    expect(section(taskless.host, 'sessions').textContent).toContain('Ad-hoc question')
+    expect(section(taskless.host, 'sessions').textContent).not.toContain('Shared finding')
+
+    await act(async () => taskless.root.unmount())
   })
 
   it('moves a conversation between the task list and the task-less list when its binding changes', async () => {
@@ -1004,10 +1126,11 @@ describe('WorkbenchNavigator sessions section', () => {
       await act(async () => item.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     }
 
-    // A conversation that no task owns has no task link to lose, so its confirmation does not claim one.
+    // A conversation that no task is related to has no such link to lose, so its confirmation does not
+    // claim one (AC-017).
     await deleteRow('Ad-hoc question')
     expect(confirm).toHaveBeenCalled()
-    expect(confirm.mock.calls[0]?.[0]).not.toContain('link to this task is lost')
+    expect(confirm.mock.calls[0]?.[0]).not.toContain('links to the tasks it is related to are lost')
     expect(onDeleteSession).not.toHaveBeenCalled()
 
     // Selecting the task that owns the other conversation switches the list to it, and that
@@ -1019,7 +1142,7 @@ describe('WorkbenchNavigator sessions section', () => {
       })} />,
     ))
     await deleteRow('Interlock review')
-    expect(confirm.mock.calls[0]?.[0]).toContain('link to this task is lost')
+    expect(confirm.mock.calls[0]?.[0]).toContain('links to the tasks it is related to are lost')
     expect(onDeleteSession).not.toHaveBeenCalled()
 
     confirm.mockReturnValue(true)

@@ -346,8 +346,10 @@ export default function WorktreeTasksPanel({ workbenchId, worktreeId, tasks, loa
         }}><Trash2 /></Button></>}
     </> : undefined
 
+    // A task's conversations are the device's conversations related to it, and a relation is a set:
+    // a conversation several tasks share is listed by each of them (ADR-0014).
     const taskSessions = !legacy && task.deviceId
-      ? (sessionsByDevice[task.deviceId] ?? []).filter(session => session.taskId === task.taskId)
+      ? (sessionsByDevice[task.deviceId] ?? []).filter(session => api.sessionTaskIds(session).includes(task.taskId))
       : []
 
     return viewMode === 'cards'
