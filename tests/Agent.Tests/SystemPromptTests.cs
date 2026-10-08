@@ -156,6 +156,28 @@ public sealed class SystemPromptTests
     }
 
     [Fact]
+    public void PromptRequiresTheKnowledgeFreshnessCheckBeforeAnsweringAboutAChange()
+    {
+        var prompt = SystemPrompt.Build();
+
+        // A live conversation edited and committed a program, asked the knowledge agent about it, and
+        // was told the change was not there — the knowledge database was stale and nothing said so. The
+        // rule has to name the trigger (the user reporting a change), the check, the repair, and the
+        // forbidden conclusion.
+        Assert.Contains("Knowledge freshness comes before knowledge answers", prompt);
+        Assert.Contains("knowledge_status", prompt);
+        Assert.Contains("refresh_knowledge", prompt);
+        Assert.Contains("changed, edited, imported, or committed a program block", prompt);
+        Assert.Contains("before the first knowledge-DB query of the turn", prompt);
+        Assert.Contains("Never conclude that a program change is missing, unchanged, or ineffective", prompt);
+        // The raw knowledge tools stay off-limits from the chat: they update the graph without recording
+        // the applied hashes, so the device keeps reporting stale knowledge afterwards.
+        Assert.Contains("Do not call ingest_source or update_components directly", prompt);
+        Assert.DoesNotContain("run update_components before reuse", prompt);
+        Assert.DoesNotContain("Suggest update_components afterwards", prompt);
+    }
+
+    [Fact]
     public void ContextMessageCarriesMarkerAndBody()
     {
         var message = ChatMessage.User(SystemPrompt.ContextMessage("Knowledge DB: C:\\db\\k.db"));

@@ -390,7 +390,7 @@ public sealed class SessionManagerTests : IDisposable
             "Valve tuning",
             "feature/valves",
             "PLC_1",
-            knowledgeStale: true);
+            "stale; call knowledge_status, then refresh_knowledge, before reuse");
 
         Assert.Equal(
             string.Join(
@@ -400,7 +400,7 @@ public sealed class SessionManagerTests : IDisposable
                 $"Device: PLC_1 ({device.DeviceId})",
                 $"PLC source: {device.SourceRoot}",
                 $"Knowledge DB: {device.KnowledgeDbPath}",
-                "Knowledge state: stale; run update_components before reuse"),
+                "Knowledge state: stale; call knowledge_status, then refresh_knowledge, before reuse"),
             runtimeContext);
     }
 
@@ -418,7 +418,7 @@ public sealed class SessionManagerTests : IDisposable
             "Valve tuning",
             "feature/valves",
             "PLC_1",
-            knowledgeStale: false);
+            "current");
 
         Assert.Contains($"PLC source: {device.SourceRoot}", runtimeContext);
         Assert.DoesNotContain("Exported source:", runtimeContext);

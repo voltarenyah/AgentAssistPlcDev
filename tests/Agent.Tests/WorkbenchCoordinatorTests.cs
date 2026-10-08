@@ -2305,6 +2305,9 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         var fixture = Fixture.Create(root, knowledgeStale: true);
         File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
+        fixture.WriteModified("Blocks/A.xml", "<original />");
+        // The database holds this component already, so the edited content is a plain replacement.
+        fixture.MarkAppliedHashes("Blocks/A.xml");
         fixture.WriteModified("Blocks/A.xml", "<modified />");
         var calls = new List<string>();
         var knowledge = Caller(calls).Respond(
@@ -2339,6 +2342,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         var fixture = Fixture.Create(root, knowledgeStale: true);
         File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
+        fixture.WriteModified("Blocks/A.xml", "<original />");
+        fixture.MarkAppliedHashes("Blocks/A.xml");
         fixture.WriteModified("Blocks/A.xml", "<modified />");
         var update = new KnowledgeUpdateResult(
             fixture.Context.KnowledgeDbPath,
@@ -3929,6 +3934,28 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             Write(Context.StagingRoot, relative, content);
         public void WriteModified(string relative, string content) =>
             Write(Context.SourceRoot, relative, content);
+
+        /// <summary>Record the applied hashes for the named source files — the bookkeeping a successful
+        /// update leaves behind. A database whose device.json carries no hash for a source file has no
+        /// component to replace, so the coordinator rebuilds it instead of updating it in place.</summary>
+        public void MarkAppliedHashes(params string[] relativePaths)
+        {
+            var path = Path.Combine(Context.DeviceRoot, "device.json");
+            var metadata = store.Read<DeviceMetadata>(path);
+            var hashes = new Dictionary<string, string>(
+                metadata.Knowledge.AppliedOverlayHashes,
+                StringComparer.Ordinal);
+            foreach (var relative in relativePaths)
+            {
+                hashes[relative] = Convert.ToHexString(SHA256.HashData(
+                    File.ReadAllBytes(Path.Combine(Context.SourceRoot, relative)))).ToLowerInvariant();
+            }
+
+            store.Write(path, metadata with
+            {
+                Knowledge = metadata.Knowledge with { AppliedOverlayHashes = hashes },
+            });
+        }
 
         public DeviceContext AddDevice(string deviceId, string plcName)
         {

@@ -132,6 +132,7 @@ public sealed class ChatTurnEndpointsTests
     public void DeviceRuntimeContextNamesTheDeviceByItsPlcName()
     {
         var device = Context();
+        const string knowledgeState = "stale — the PLC source changed after the last knowledge update";
         var context = ApiChatService.DeviceRuntimeContext(
             device,
             new WorkbenchMetadata(
@@ -146,14 +147,16 @@ public sealed class ChatTurnEndpointsTests
                 WorkbenchSchema.CurrentVersion, device.DeviceId, device.WorktreeId, "PLC_1", "PLC_1",
                 null, null, null,
                 new KnowledgeState(true, new Dictionary<string, string>(), null, false),
-                []));
+                []),
+            knowledgeState);
 
         Assert.Contains($"Device: PLC_1 ({device.DeviceId})", context);
         Assert.Contains($"Workbench: Packaging Line ({device.WorkbenchId})", context);
         Assert.Contains("Worktree: Valve tuning [feature/valves]", context);
         Assert.Contains($"PLC source: {device.SourceRoot}", context);
         Assert.Contains($"Knowledge DB: {device.KnowledgeDbPath}", context);
-        Assert.Contains("Knowledge state: stale", context);
+        // One formatter, one knowledge line: the caller's state text is what the model sees.
+        Assert.Contains($"Knowledge state: {knowledgeState}", context);
         // The id alone is what the model used to get, and it could do nothing with it.
         Assert.DoesNotContain($"Device: {device.DeviceId} (", context);
     }
@@ -164,11 +167,49 @@ public sealed class ChatTurnEndpointsTests
     {
         var device = Context();
 
-        var context = ApiChatService.DeviceRuntimeContext(device, null, null, null);
+        var context = ApiChatService.DeviceRuntimeContext(device, null, null, null, "current");
 
         Assert.Contains($"Device: {device.DeviceId} ({device.DeviceId})", context);
         Assert.Contains($"Worktree: {device.WorktreeId} [-]", context);
         Assert.Contains("Knowledge state: current", context);
+    }
+
+    /// <summary>
+    /// The knowledge line's four states, with the action each one implies. The authoritative
+    /// hash-based answer stays with <c>knowledge_status</c>; this is the cheap per-turn signal.
+    /// </summary>
+    [Fact]
+    public void KnowledgeStateTextNamesTheStateAndTheActionItImplies()
+    {
+        var device = Context();
+        var fresh = new DeviceMetadata(
+            WorkbenchSchema.CurrentVersion, device.DeviceId, device.WorktreeId, "PLC_1", "PLC_1",
+            null, null, null,
+            new KnowledgeState(false, new Dictionary<string, string>(), null, false),
+            []);
+        var stale = fresh with
+        {
+            Knowledge = new KnowledgeState(true, new Dictionary<string, string>(), null, false),
+        };
+        var baselineStale = fresh with
+        {
+            Knowledge = new KnowledgeState(false, new Dictionary<string, string>(), null, true),
+        };
+
+        var missing = ApiChatService.KnowledgeStateText(dbExists: false, metadata: null);
+        Assert.StartsWith("missing —", missing);
+        Assert.Contains("refresh_knowledge", missing);
+
+        var unknown = ApiChatService.KnowledgeStateText(dbExists: true, metadata: null);
+        Assert.StartsWith("unknown —", unknown);
+        Assert.Contains("knowledge_status", unknown);
+
+        var current = ApiChatService.KnowledgeStateText(dbExists: true, metadata: fresh);
+        Assert.StartsWith("current", current);
+
+        Assert.StartsWith("stale —", ApiChatService.KnowledgeStateText(dbExists: true, metadata: stale));
+        // The baseline flag is part of the same answer: the knowledge predates the source either way.
+        Assert.StartsWith("stale —", ApiChatService.KnowledgeStateText(dbExists: true, metadata: baselineStale));
     }
 
     private static DeviceContext Context()

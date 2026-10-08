@@ -138,6 +138,42 @@ public sealed record DeviceImportRecord(
     IReadOnlyList<string> Warnings,
     string? Error);
 
+/// <summary>
+/// The freshness of one device's knowledge database, as the device chat and the device routes report
+/// it. Every knowledge tool answers from this database, so a caller has to know whether those answers
+/// still describe the current PLC source before it relies on them.
+///
+/// <see cref="State"/> is derived from the database's existence, the persisted staleness flags, and a
+/// hash comparison of every managed source XML against the hashes the last successful update applied.
+/// The hash half is what makes an edit the app did not perform detectable: such an edit sets no flag
+/// (ADR-0012), and only the applied hashes show that the database is behind.
+/// </summary>
+public sealed record DeviceKnowledgeStatus(
+    string State,
+    string DbPath,
+    string? UpdatedAt,
+    bool FlaggedStale,
+    bool BaselineStale,
+    bool RequiresRebuild,
+    IReadOnlyList<string> ChangedPaths,
+    IReadOnlyList<string> AddedPaths,
+    IReadOnlyList<string> RemovedPaths)
+{
+    /// <summary>No database exists for this device yet.</summary>
+    public const string MissingState = "missing";
+
+    /// <summary>The database exists but does not describe the current PLC source.</summary>
+    public const string StaleState = "stale";
+
+    /// <summary>The database exists and describes the current PLC source.</summary>
+    public const string CurrentState = "current";
+
+    public bool IsCurrent => string.Equals(State, CurrentState, StringComparison.Ordinal);
+
+    /// <summary>Source components the database is behind by: changed, added, or no longer present.</summary>
+    public int PendingComponentCount => ChangedPaths.Count + AddedPaths.Count + RemovedPaths.Count;
+}
+
 public sealed record TiaSynchronizationResult(
     string ComparisonId,
     IReadOnlyList<string> PendingPaths,

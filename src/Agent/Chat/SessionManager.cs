@@ -263,24 +263,30 @@ public static class SessionManager
         return File.Exists(filePath) ? filePath : null;
     }
 
-    /// <summary>Build the runtime context shown to the model for a selected device.</summary>
+    /// <summary>
+    /// Build the runtime context shown to the model for a selected device. This is the one formatter:
+    /// callers supply the device's TIA PLC name and the already-worded knowledge state, so the chat's
+    /// context cannot drift from what the device chat and the App Assistant report.
+    /// </summary>
+    /// <param name="knowledgeState">The knowledge database's state and the action it implies, without
+    /// the <c>Knowledge state:</c> label — for example <c>current as of the last knowledge update …</c>
+    /// or <c>stale — … call refresh_knowledge …</c>. The device chat computes it (database existence,
+    /// persisted flags); <c>knowledge_status</c> remains the authoritative hash-based answer.</param>
     public static string BuildRuntimeContext(
         DeviceContext device,
         string workbenchName,
         string worktreeName,
         string branch,
         string plcName,
-        bool knowledgeStale)
+        string knowledgeState)
     {
         ArgumentNullException.ThrowIfNull(device);
         ArgumentException.ThrowIfNullOrWhiteSpace(workbenchName);
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreeName);
         ArgumentException.ThrowIfNullOrWhiteSpace(branch);
         ArgumentException.ThrowIfNullOrWhiteSpace(plcName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(knowledgeState);
 
-        var knowledgeState = knowledgeStale
-            ? "stale; run update_components before reuse"
-            : "current";
         return string.Join(
             Environment.NewLine,
             $"Workbench: {workbenchName} ({device.WorkbenchId})",

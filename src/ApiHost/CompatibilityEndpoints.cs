@@ -985,7 +985,8 @@ internal sealed class ApiChatService(
     /// <summary>
     /// The device chat's tool surface: every discovered MCP tool bound to this conversation's device,
     /// plus the in-process actions that need this process's own state — the source-object listing,
-    /// the guarded stage path, the managed task write, and the worktree's registered TIA project.
+    /// the guarded stage path, the managed task write, the worktree's registered TIA project, and the
+    /// knowledge freshness check and refresh.
     /// </summary>
     internal static McpToolCatalog BuildToolCatalog(
         McpToolCatalog discovered,
@@ -1010,6 +1011,12 @@ internal sealed class ApiChatService(
             () => device))
           .Append(OpenTiaProjectTool.CreateSpec(
             new OpenTiaProjectTool(workbenches, coordinator),
+            () => device))
+          .Append(KnowledgeStatusTool.CreateSpec(
+            new KnowledgeStatusTool(coordinator),
+            () => device))
+          .Append(KnowledgeRefreshTool.CreateSpec(
+            new KnowledgeRefreshTool(coordinator),
             () => device)));
 
     /// <summary>
@@ -1029,19 +1036,21 @@ internal sealed class ApiChatService(
 
     private string DeviceRuntimeContext(DeviceContext device)
     {
+        var knowledgeState = KnowledgeState(device);
         try
         {
             return DeviceRuntimeContext(
                 device,
                 workbenches.Workbench(device.WorkbenchId),
                 workbenches.Worktree(device.WorkbenchId, device.WorktreeId),
-                workbenches.Device(device.WorkbenchId, device.WorktreeId, device.DeviceId).Metadata);
+                workbenches.Device(device.WorkbenchId, device.WorktreeId, device.DeviceId).Metadata,
+                knowledgeState);
         }
         catch (Exception exception) when (exception is KeyNotFoundException or IOException
             or JsonException or MetadataSchemaException or WorkbenchCatalogException
             or WorkbenchPathException)
         {
-            return DeviceRuntimeContext(device, null, null, null);
+            return DeviceRuntimeContext(device, null, null, null, knowledgeState);
         }
     }
 
@@ -1055,19 +1064,67 @@ internal sealed class ApiChatService(
         DeviceContext device,
         WorkbenchMetadata? workbench,
         WorktreeMetadata? worktree,
-        DeviceMetadata? metadata)
+        DeviceMetadata? metadata,
+        string knowledgeState)
     {
         var plcName = string.IsNullOrWhiteSpace(metadata?.PlcName) ? device.DeviceId : metadata!.PlcName;
-        var knowledgeStale = metadata is not null
-            && (metadata.Knowledge.Stale || metadata.Knowledge.BaselineStale);
         return SessionManager.BuildRuntimeContext(
             device,
             workbench?.Name ?? device.WorkbenchId,
             worktree?.Name ?? device.WorktreeId,
             worktree?.Branch ?? "-",
             plcName,
-            knowledgeStale);
+            knowledgeState);
     }
+
+    /// <summary>
+    /// The knowledge-state text of the runtime context's one <c>Knowledge state:</c> line: the state
+    /// plus the action it implies. It re-reads the persisted device facts on every turn, so a stale or
+    /// missing database reaches the model in the same message as the paths it would otherwise query:
+    /// the turn that has to refresh is told so before it answers, instead of discovering it after
+    /// reporting from the old content.
+    ///
+    /// This is the cheap signal — database existence and the flags a write already set. The
+    /// authoritative, hash-based answer that also catches an edit made outside the app is
+    /// <c>knowledge_status</c>, which the system prompt requires before answering about a change.
+    /// </summary>
+    private string KnowledgeState(DeviceContext device)
+    {
+        try
+        {
+            if (!File.Exists(device.KnowledgeDbPath))
+            {
+                return KnowledgeStateText(dbExists: false, metadata: null);
+            }
+
+            var metadata = workbenches
+                .Device(device.WorkbenchId, device.WorktreeId, device.DeviceId)
+                .Metadata;
+            return KnowledgeStateText(dbExists: true, metadata);
+        }
+        catch (Exception exception) when (exception is IOException or JsonException
+            or WorkbenchCatalogException or WorkbenchPathException or KeyNotFoundException)
+        {
+            // The conversation outlived the device it belongs to, or its metadata is unreadable: say
+            // so instead of failing the whole turn on a context line.
+            return KnowledgeStateText(dbExists: true, metadata: null);
+        }
+    }
+
+    /// <summary>The state text for one knowledge database, without the <c>Knowledge state:</c> label.</summary>
+    internal static string KnowledgeStateText(bool dbExists, DeviceMetadata? metadata) =>
+        !dbExists
+            ? "missing — no knowledge database exists for this device yet; "
+                + "call refresh_knowledge before any knowledge query"
+            : metadata is null
+                ? "unknown — the device metadata could not be read; call "
+                    + "knowledge_status for the authoritative answer"
+                : metadata.Knowledge.Stale || metadata.Knowledge.BaselineStale
+                    ? "stale — the PLC source changed after the last knowledge update; "
+                        + "call knowledge_status, then refresh_knowledge, before any knowledge query"
+                    : "current as of the last knowledge update — call knowledge_status "
+                        + "before answering whether a program change is present, because only it "
+                        + "compares the source hashes";
 
     private string? TaskContext(DeviceContext device, string? taskId)
     {

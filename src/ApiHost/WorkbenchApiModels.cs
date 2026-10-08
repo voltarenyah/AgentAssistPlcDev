@@ -1891,6 +1891,9 @@ public static class WorkbenchEndpoints
                     allowCompile,
                     body?.CommitMessage),
                 "All PLC contexts generated.").ConfigureAwait(false));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/status", (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s, WorkbenchCoordinator c) =>
+            c.ReadKnowledgeStatus(s.Device(workbenchId, worktreeId, device).Context));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/update", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
             WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
@@ -2123,6 +2126,9 @@ public static class WorkbenchEndpoints
                     "Refresh applied.")
                 .ConfigureAwait(false);
         });
+        app.MapGet("/api/devices/{device}/knowledge/status", (
+            string device, WorkbenchApiState s, WorkbenchCoordinator c) =>
+            c.ReadKnowledgeStatus(s.Device(device).Context));
         app.MapPost("/api/devices/{device}/knowledge/update", async (
             string device,
             WorkbenchApiState s,
