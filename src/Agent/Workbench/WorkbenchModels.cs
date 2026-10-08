@@ -241,6 +241,18 @@ public sealed record DeviceContext(
     string StagingRoot,
     string KnowledgeDbPath);
 
+/// <summary>Outcome of showing a worktree's registered TIA project in TIA Portal.</summary>
+/// <param name="ProjectName">Project name TIA reported, when it reported one.</param>
+/// <param name="ProjectPath">Project file path TIA reported as the active project.</param>
+/// <param name="ReusedRunningSession">True when an already-running TIA Portal that shows this project
+/// was attached instead of a new TIA Portal instance being started.</param>
+/// <param name="WithUI">Always true today: the action's purpose is a visible TIA Portal.</param>
+public sealed record OpenTiaProjectResult(
+    string? ProjectName,
+    string ProjectPath,
+    bool ReusedRunningSession,
+    bool WithUI);
+
 public sealed record HardwareConfigurationReloadResult(
     string RootPath,
     int ArtifactCount,

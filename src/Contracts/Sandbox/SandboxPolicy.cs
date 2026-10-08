@@ -122,6 +122,9 @@ public sealed class SandboxPolicy
             // Workbench — the device chat's agent records a finding as a new worktree task. It creates
             // engineering state the user did not create by hand, so it needs explicit approval.
             ["create_task"] = SandboxTier.Destructive,
+            // Workbench — the device chat's agent shows the worktree's registered TIA project in TIA
+            // Portal. It opens a visible session and never persists or overwrites user work.
+            ["open_tia_project"] = SandboxTier.Write,
         };
 
     public IReadOnlyDictionary<string, SandboxTier> Tiers => tiers;

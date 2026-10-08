@@ -50,6 +50,7 @@ public sealed class SandboxPolicyTests
     [InlineData("vc_merge")]
     [InlineData("src_apply_edits")]
     [InlineData("update_components")]
+    [InlineData("open_tia_project")]
     public void StateChangingToolsClassifyAsWrite(string tool)
     {
         Assert.Equal(SandboxTier.Write, new SandboxPolicy().Classify(tool));
@@ -92,7 +93,7 @@ public sealed class SandboxPolicyTests
             "vc_diff", "vc_snapshot", "vc_restore", "vc_branches", "vc_config",
             "vc_init_shared", "vc_add_worktree", "vc_worktrees", "vc_merge",
             "src_parse_block", "src_apply_edits", "src_diff", "src_validate",
-            "list_source_objects", "stage_task_source_object", "create_task",
+            "list_source_objects", "stage_task_source_object", "create_task", "open_tia_project",
         };
         var policy = new SandboxPolicy();
         foreach (var tool in currentTools)

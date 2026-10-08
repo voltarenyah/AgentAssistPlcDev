@@ -414,6 +414,140 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task ShowWorktreeProjectInTiaReusesTheRunningUiSessionThatAlreadyShowsIt()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Other",
+                Path = @"C:\Projects\Other.ap17",
+            })
+            .Respond("list_sessions", new[]
+            {
+                new SessionInfo
+                {
+                    Id = 4242,
+                    Mode = "WithUserInterface",
+                    ProjectPath = @"C:\Projects\Line.ap17",
+                },
+            })
+            .Respond("disconnect", new object())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var result = await coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None);
+
+        Assert.True(result.ReusedRunningSession);
+        Assert.True(result.WithUI);
+        Assert.Equal("Line", result.ProjectName);
+        Assert.Equal(@"C:\Projects\Line.ap17", result.ProjectPath);
+        // Attached by session id: TIA must not start a second instance for a project a running UI already shows.
+        var connect = Assert.Single(engineering.CallArgs["connect"]);
+        Assert.Equal(4242, Property<int>(connect, "sessionId"));
+        Assert.Equal(
+            ["get_project_info", "list_sessions", "disconnect", "connect", "get_project_info"],
+            engineering.Calls);
+    }
+
+    [Fact]
+    public async Task ShowWorktreeProjectInTiaStartsTiaWhenNoRunningSessionShowsTheProject()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller()
+            .Fail("get_project_info", "NOT_CONNECTED", "No project connected. Call connect first.")
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var result = await coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None);
+
+        Assert.False(result.ReusedRunningSession);
+        var connect = Assert.Single(engineering.CallArgs["connect"]);
+        Assert.Equal(@"C:\Projects\Line.ap17", Property<string>(connect, "projectPath"));
+        Assert.True(Property<bool>(connect, "withUI"));
+        Assert.Equal(["get_project_info", "list_sessions", "connect", "get_project_info"], engineering.Calls);
+    }
+
+    [Fact]
+    public async Task ShowWorktreeProjectInTiaDoesNotReconnectWhenTheProjectIsAlreadyVisible()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+            })
+            .Respond("list_sessions", new[]
+            {
+                new SessionInfo
+                {
+                    Id = 4242,
+                    Mode = "WithUserInterface",
+                    ProjectPath = @"C:\Projects\Line.ap17",
+                },
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var result = await coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None);
+
+        Assert.True(result.ReusedRunningSession);
+        Assert.Equal(["get_project_info", "list_sessions"], engineering.Calls);
+    }
+
+    [Fact]
+    public async Task ShowWorktreeProjectInTiaReportsTheProjectTiaActuallyOpenedWhenItDiffers()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller()
+            .Fail("get_project_info", "NOT_CONNECTED", "No project connected. Call connect first.")
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Other",
+                Path = @"C:\Projects\Other.ap17",
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(
+            () => coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("ENGINEERING_PROJECT_MISMATCH", error.Code);
+        Assert.Contains("Line.ap17", error.Message);
+        Assert.Contains("Other.ap17", error.Message);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task ShowWorktreeProjectInTiaRejectsMissingRegisteredProjectBeforeEngineeringCall(
+        string? sourceProjectPath)
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: sourceProjectPath);
+        var engineering = new FakeToolCaller();
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var error = await Assert.ThrowsAsync<WorkbenchCatalogException>(
+            () => coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("ENGINEERING_PROJECT_PATH_MISSING", error.Code);
+        Assert.Empty(engineering.CallArgs);
+    }
+
+    [Fact]
     public async Task ReloadHardwareRejectsWhenAttachedTiaProjectDoesNotMatchSelectedWorktree()
     {
         var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\ProjectB.ap17");

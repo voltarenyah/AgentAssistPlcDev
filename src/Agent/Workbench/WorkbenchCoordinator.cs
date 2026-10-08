@@ -243,6 +243,116 @@ public sealed class WorkbenchCoordinator
             authenticationMode);
     }
 
+    /// <summary>
+    /// Shows a worktree's registered TIA project in TIA Portal. This is the device chat's
+    /// <c>open_tia_project</c> action and the Workbench Assistant's sibling tool: unlike
+    /// <see cref="OpenProjectInTiaAsync"/>, it first looks for a running TIA Portal that already shows
+    /// the project and attaches to it by session id, so a project the user can already see is never
+    /// opened a second time in a second TIA instance.
+    /// </summary>
+    public async Task<OpenTiaProjectResult> ShowWorktreeProjectInTiaAsync(
+        DeviceContext device,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var worktree = store.Read<WorktreeMetadata>(
+            Path.Combine(device.WorktreeRoot, "worktree.json"));
+        return await ShowWorktreeProjectInTiaAsync(worktree, cancellationToken, progress)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>The registration flavor, for callers that hold the worktree metadata rather than a
+    /// device context (the Workbench Assistant's selected scope).</summary>
+    public async Task<OpenTiaProjectResult> ShowWorktreeProjectInTiaAsync(
+        WorktreeMetadata worktree,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(worktree);
+        var projectPath = OperationalProjectPath(worktree);
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            throw new WorkbenchCatalogException(
+                "ENGINEERING_PROJECT_PATH_MISSING",
+                $"No engineering project path is registered for worktree '{worktree.WorktreeId}'.");
+        }
+
+        await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var activeProject = await ReadActiveProjectAsync(cancellationToken).ConfigureAwait(false);
+            var sessions = await engineering.CallAsync<SessionInfo[]>(
+                "list_sessions", new { }, cancellationToken).ConfigureAwait(false);
+            // Only a session with a user interface can serve a "show me the project" request; a
+            // headless portal that holds the project is released and replaced below.
+            var visibleSession = sessions.FirstOrDefault(session =>
+                !string.IsNullOrWhiteSpace(session.ProjectPath)
+                && ProjectPathsEqual(session.ProjectPath, projectPath)
+                && IsUserInterfaceSession(session));
+            var alreadyVisible = visibleSession is not null
+                && activeProject?.Path is not null
+                && ProjectPathsEqual(activeProject.Path, projectPath);
+
+            if (!alreadyVisible)
+            {
+                // Release the current handle (never the project or the user's TIA instance) before
+                // attaching or opening, exactly as the other project-switch paths do.
+                if (activeProject?.Path is not null)
+                {
+                    await engineering.CallAsync<object>("disconnect", new { }, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                if (visibleSession is not null)
+                {
+                    progress?.Report($"Attaching to the running TIA Portal session {visibleSession.Id}...");
+                    await engineering.CallAsync<object>(
+                        "connect", new { sessionId = visibleSession.Id }, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    progress?.Report("Opening the registered project in TIA Portal...");
+                    await engineering.CallAsync<object>(
+                        "connect", new { projectPath, withUI = true }, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                activeProject = await ReadActiveProjectAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (string.IsNullOrWhiteSpace(activeProject?.Path))
+            {
+                throw new WorkbenchLifecycleException(
+                    "ENGINEERING_PROJECT_NOT_ACTIVE",
+                    "TIA did not report an active project after opening the selected project.");
+            }
+
+            if (!ProjectPathsEqual(projectPath, activeProject.Path))
+            {
+                throw new WorkbenchLifecycleException(
+                    "ENGINEERING_PROJECT_MISMATCH",
+                    $"TIA did not switch to the selected project '{projectPath}'. "
+                    + $"The active project is still '{activeProject.Path}'.");
+            }
+
+            progress?.Report($"TIA Portal shows '{activeProject.Name ?? activeProject.Path}'.");
+            return new OpenTiaProjectResult(
+                activeProject.Name,
+                activeProject.Path,
+                visibleSession is not null,
+                true);
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+    }
+
+    private static bool IsUserInterfaceSession(SessionInfo session) =>
+        session.Mode.Contains("WithUserInterface", StringComparison.OrdinalIgnoreCase);
+
     private async Task OpenProjectPathInTiaAsync(
         string projectPath,
         CancellationToken cancellationToken,

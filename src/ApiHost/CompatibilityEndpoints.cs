@@ -943,21 +943,8 @@ internal sealed class ApiChatService(
                 ? restored
                 : SessionManager.CreateNewSession(device, Settings(configuration, state), null);
             var discovered = await McpToolCatalog.BuildAsync(runtime.Host, token);
-            // The source-object listing, the staged-source-object and task-creation tools are
-            // in-process (they need the workbench graph, the guarded stage path and the managed task
-            // write), so they are added to the discovered MCP tools rather than discovered.
-            var catalog = new McpToolCatalog(discovered.Tools.Select(spec => spec with
-            {
-                Caller = new BoundMcpCaller(spec.Caller, binder, device),
-            }).Append(TaskSourceObjectListTool.CreateSpec(
-                new TaskSourceObjectListTool(workbenches, graphs, activeTasks),
-                () => device))
-              .Append(TaskSourceStagingTool.CreateSpec(
-                new TaskSourceStagingTool(workbenches, graphs, activeTasks, coordinator),
-                () => device))
-              .Append(TaskCreationTool.CreateSpec(
-                new TaskCreationTool(workbenches, graphs, tasks),
-                () => device)));
+            var catalog = BuildToolCatalog(
+                discovered, binder, device, workbenches, graphs, activeTasks, tasks, coordinator);
             var sandbox = new AgentSandbox(policy, 20, request =>
             {
                 var completion = new TaskCompletionSource<ToolConfirmation>(
@@ -998,6 +985,36 @@ internal sealed class ApiChatService(
         }
         return active;
     }
+
+    /// <summary>
+    /// The device chat's tool surface: every discovered MCP tool bound to this conversation's device,
+    /// plus the in-process actions that need this process's own state — the source-object listing,
+    /// the guarded stage path, the managed task write, and the worktree's registered TIA project.
+    /// </summary>
+    internal static McpToolCatalog BuildToolCatalog(
+        McpToolCatalog discovered,
+        DeviceToolArgumentBinder binder,
+        DeviceContext device,
+        WorkbenchApiState workbenches,
+        EngineeringGraphApiFactory graphs,
+        ActiveTaskContextService activeTasks,
+        WorktreeTaskStore tasks,
+        WorkbenchCoordinator coordinator) =>
+        new(discovered.Tools.Select(spec => spec with
+        {
+            Caller = new BoundMcpCaller(spec.Caller, binder, device),
+        }).Append(TaskSourceObjectListTool.CreateSpec(
+            new TaskSourceObjectListTool(workbenches, graphs, activeTasks),
+            () => device))
+          .Append(TaskSourceStagingTool.CreateSpec(
+            new TaskSourceStagingTool(workbenches, graphs, activeTasks, coordinator),
+            () => device))
+          .Append(TaskCreationTool.CreateSpec(
+            new TaskCreationTool(workbenches, graphs, tasks),
+            () => device))
+          .Append(OpenTiaProjectTool.CreateSpec(
+            new OpenTiaProjectTool(workbenches, coordinator),
+            () => device)));
 
     private string? TaskContext(DeviceContext device, string? taskId)
     {
