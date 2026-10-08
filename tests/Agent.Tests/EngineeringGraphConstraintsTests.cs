@@ -211,6 +211,152 @@ public sealed class EngineeringGraphConstraintsTests : IDisposable
         Assert.Null(service.GetTask("task-1"));
     }
 
+    [Fact]
+    public void AConversationHoldsSeveralRelationsWithAtMostOnePrimary()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "First", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.CreateTask("task-2", GraphTaskScopeKind.Worktree, "wt-1", "Second", GraphTaskType.Improvement,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.Session, "session-1", "wb-1", "wt-1", "device-1"));
+
+        // The first relation of a conversation becomes its primary; the second one never moves it, which
+        // is what the automatic association in create_task relies on (ADR-0014, decision 2).
+        var first = service.AddSessionTask("session-1", "task-1", GraphProvenance.Default, makePrimaryIfNone: true);
+        var second = service.AddSessionTask("session-1", "task-2", GraphProvenance.Auto, makePrimaryIfNone: true);
+        Assert.True(first.IsPrimary);
+        Assert.False(second.IsPrimary);
+
+        var relations = service.ListSessionTaskRelations(["session-1"]);
+        Assert.Equal(2, relations.Count);
+        // Primary first, then by creation.
+        Assert.Equal("task-1", relations[0].TaskId);
+        Assert.True(relations[0].IsPrimary);
+        Assert.Equal(GraphProvenance.Default, relations[0].Provenance);
+        Assert.Equal("task-2", relations[1].TaskId);
+        Assert.False(relations[1].IsPrimary);
+        Assert.Equal(GraphProvenance.Auto, relations[1].Provenance);
+
+        // Relating an existing pair again returns that edge unchanged, so its provenance and creation
+        // time survive instead of being replaced.
+        var repeated = service.AddSessionTask("session-1", "task-1", GraphProvenance.Auto, makePrimaryIfNone: true);
+        Assert.Equal(first.EdgeId, repeated.EdgeId);
+        Assert.Equal(GraphProvenance.Default, repeated.Provenance);
+
+        // A conversation that loses its primary keeps its other relation and gains none: the primary is
+        // established when a conversation gains its first relation, not when it loses one.
+        Assert.True(service.RemoveSessionTask("session-1", "task-1"));
+        var remaining = Assert.Single(service.ListSessionTaskRelations(["session-1"]));
+        Assert.Equal("task-2", remaining.TaskId);
+        Assert.False(remaining.IsPrimary);
+        Assert.False(service.RemoveSessionTask("session-1", "task-1"));
+    }
+
+    [Fact]
+    public void SetSessionTasksReplacesTheSetAndKeepsTheEdgesItKeeps()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "First", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.CreateTask("task-2", GraphTaskScopeKind.Worktree, "wt-1", "Second", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.CreateTask("task-3", GraphTaskScopeKind.Worktree, "wt-1", "Third", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.Session, "session-1", "wb-1", "wt-1", "device-1"));
+        var keptEdge = service.AddSessionTask("session-1", "task-2", GraphProvenance.Manual);
+        service.AddSessionTask("session-1", "task-1", GraphProvenance.Default, makePrimaryIfNone: true);
+
+        // The set drops task-1, keeps task-2 and adds task-3. The primary resolves to the first requested
+        // id, because the conversation's current primary is no longer in the set.
+        var after = service.SetSessionTasks("session-1", ["task-2", "task-3"]);
+        Assert.Equal(new[] { "task-2", "task-3" }, after.Select(edge => edge.FromId).ToArray());
+        Assert.Equal(keptEdge.EdgeId, after.Single(edge => edge.FromId == "task-2").EdgeId);
+        Assert.True(after.Single(edge => edge.FromId == "task-2").IsPrimary);
+        Assert.False(after.Single(edge => edge.FromId == "task-3").IsPrimary);
+        Assert.Equal(2, service.CountEdges());
+
+        // An explicit primary moves it, demoting the one the rule had picked.
+        var moved = service.SetSessionTasks("session-1", ["task-2", "task-3"], primaryTaskId: "task-3");
+        Assert.True(moved.Single(edge => edge.FromId == "task-3").IsPrimary);
+        Assert.False(moved.Single(edge => edge.FromId == "task-2").IsPrimary);
+
+        // An empty set clears every relation, and a rejected id writes nothing.
+        Assert.Empty(service.SetSessionTasks("session-1", []));
+        Assert.Equal(0, service.CountEdges());
+        service.SetSessionTasks("session-1", ["task-1"]);
+        Assert.Equal("TASK_NOT_FOUND", Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.SetSessionTasks("session-1", ["task-1", "task-unknown"])).Code);
+        Assert.Equal(1, service.CountEdges());
+    }
+
+    [Fact]
+    public void AConversationRelationKeepsThePerLinkValidationAndTheGenericRouteKeepsSiblings()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id is "wt-1" or "wt-2");
+        service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "First", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.CreateTask("task-2", GraphTaskScopeKind.Worktree, "wt-1", "Second", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.CreateTask("task-other-worktree", GraphTaskScopeKind.Worktree, "wt-2", "Elsewhere", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.CreateTask("task-other-device", GraphTaskScopeKind.Worktree, "wt-1", "Other PLC", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-2");
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.Session, "session-1", "wb-1", "wt-1", "device-1"));
+
+        // The three refusals the single-relation path enforced are unchanged.
+        Assert.Equal("TASK_DEVICE_MISMATCH", Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.AddSessionTask("session-1", "task-other-device")).Code);
+        Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.AddSessionTask("session-1", "task-other-worktree"));
+        Assert.Equal("TASK_NOT_FOUND", Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.AddSessionTask("session-1", "task-unknown")).Code);
+        Assert.Throws<EngineeringGraphConstraintException>(() =>
+            service.AddSessionTask("session-unknown", "task-1"));
+        Assert.Equal(0, service.CountEdges());
+
+        // The generic relationship route adds to a conversation instead of replacing its relations, and
+        // keeps its "this is the primary now" meaning.
+        service.AddSessionTask("session-1", "task-1", GraphProvenance.Manual);
+        var promoted = service.ReplaceTaskRelationship("task-2", GraphEntityKind.Session, "session-1",
+            GraphProvenance.Manual, isPrimary: true);
+        Assert.Equal("task-2", promoted!.FromId);
+        Assert.True(promoted.IsPrimary);
+        var relations = service.ListSessionTaskRelations(["session-1"]);
+        Assert.Equal(2, relations.Count);
+        Assert.Equal("task-2", relations[0].TaskId);
+        Assert.False(relations.Single(item => item.TaskId == "task-1").IsPrimary);
+    }
+
+    [Fact]
+    public void DeletingATaskRemovesItsRelationsAndEveryEdgeThatNamesIt()
+    {
+        using var store = new EngineeringGraphStore(_root);
+        var service = new EngineeringGraphService(store, "wb-1", id => id == "wt-1");
+        service.CreateTask("task-1", GraphTaskScopeKind.Worktree, "wt-1", "First", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.CreateTask("task-2", GraphTaskScopeKind.Worktree, "wt-1", "Second", GraphTaskType.Issue,
+            intent: "A", expectedResult: "B", deviceId: "device-1");
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.Session, "session-1", "wb-1", "wt-1", "device-1"));
+        service.RegisterEntity(new GraphEntity(GraphEntityKind.GitCommit, "commit-1", "wb-1", "wt-1"));
+        service.AddSessionTask("session-1", "task-1", GraphProvenance.Auto, makePrimaryIfNone: true);
+        service.AddSessionTask("session-1", "task-2", GraphProvenance.Auto);
+        service.AddEdge(GraphEntityKind.Task, "task-1", GraphEntityKind.GitCommit, "commit-1");
+
+        Assert.True(service.DeleteTask("task-1"));
+
+        Assert.Equal(0, Convert.ToInt32(Scalar(store,
+            "SELECT COUNT(*) FROM graph_edges WHERE from_id='task-1' OR to_id='task-1';")));
+        Assert.Equal(0, Convert.ToInt32(Scalar(store,
+            "SELECT COUNT(*) FROM graph_entities WHERE entity_kind='task' AND entity_id='task-1';")));
+        var remaining = Assert.Single(service.ListSessionTaskRelations(["session-1"]));
+        Assert.Equal("task-2", remaining.TaskId);
+        Assert.Null(service.GetTask("task-1"));
+    }
+
     public void Dispose()
     {
         SqliteCleanup();

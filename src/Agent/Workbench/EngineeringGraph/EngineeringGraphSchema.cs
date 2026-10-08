@@ -4,7 +4,7 @@ namespace Agent.Workbench.EngineeringGraph;
 
 public static class EngineeringGraphSchema
 {
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
 
     internal static int GetVersion(SqliteConnection connection)
     {
@@ -164,6 +164,34 @@ public static class EngineeringGraphSchema
                 """);
             failureInjector?.Invoke(7);
             Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (6, $utc);",
+                ("$utc", DateTimeOffset.UtcNow.ToString("O")));
+        }
+        if (version < 7)
+        {
+            failureInjector?.Invoke(8);
+            // A conversation's relation to a task was one edge before this version, so the relation of a
+            // conversation that has exactly one and no primary yet becomes its primary. The
+            // SUM(is_primary) = 0 half of the group condition is required: filtering the group on
+            // is_primary = 0 alone would make a conversation that already has two relations and a primary
+            // look like a one-relation conversation, promote its other edge, and fail at index creation.
+            Execute(connection, transaction, """
+                UPDATE graph_edges SET is_primary = 1, updated_utc = $utc
+                 WHERE relation_kind = 'task_session' AND from_kind = 'task' AND to_kind = 'session'
+                   AND is_primary = 0
+                   AND to_id IN (
+                       SELECT to_id FROM graph_edges
+                        WHERE relation_kind = 'task_session' AND from_kind = 'task' AND to_kind = 'session'
+                        GROUP BY to_id
+                       HAVING COUNT(*) = 1 AND SUM(is_primary) = 0);
+                """, ("$utc", DateTimeOffset.UtcNow.ToString("O")));
+            Execute(connection, transaction, """
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_graph_edges_primary_task_session
+                    ON graph_edges (to_kind, to_id)
+                    WHERE relation_kind = 'task_session' AND is_primary = 1
+                      AND from_kind = 'task' AND to_kind = 'session';
+                """);
+            failureInjector?.Invoke(9);
+            Execute(connection, transaction, "INSERT INTO graph_schema (version, applied_utc) VALUES (7, $utc);",
                 ("$utc", DateTimeOffset.UtcNow.ToString("O")));
         }
     }

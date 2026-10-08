@@ -50,7 +50,8 @@ public sealed class OpenTiaProjectToolTests : IDisposable
             new EngineeringGraphApiFactory(),
             new ActiveTaskContextService(),
             new WorktreeTaskStore(fixture.Store),
-            fixture.Coordinator);
+            fixture.Coordinator,
+            () => null);
 
         var spec = catalog.Resolve(OpenTiaProjectTool.ToolName);
 

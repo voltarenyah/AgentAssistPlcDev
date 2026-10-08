@@ -6,7 +6,7 @@ public enum GraphTaskTargetKind { Device, Hardware }
 public enum GraphTaskType { Issue, Improvement, Feature }
 public enum GraphTaskStatus { Todo, InProgress, Done }
 public enum GraphRelationKind { TaskSession, TaskCommit, TaskSourceObject, TaskSvnRevision, CommitSourceObject, CommitSvnRevision }
-public enum GraphProvenance { Manual, Default, Evidence }
+public enum GraphProvenance { Manual, Default, Auto, Evidence }
 
 public sealed record GraphTask(
     string TaskId, string WorkbenchId, GraphTaskScopeKind ScopeKind, string? WorktreeId,
@@ -36,6 +36,16 @@ public sealed record GraphEdge(
     GraphRelationKind RelationKind, GraphProvenance Provenance, bool IsPrimary,
     DateTimeOffset CreatedUtc, DateTimeOffset UpdatedUtc);
 public sealed record GraphFileEvidence(string CommitSha, string RelativePath, DateTimeOffset RecordedUtc);
+
+/// <summary>
+/// One conversation's relation to one task, as the graph holds it: a <c>task_session</c> edge from the
+/// task to the conversation, at most one of which is primary per conversation (ADR-0014,
+/// <c>ux_graph_edges_primary_task_session</c>). This is the graph-side read row and keeps the graph's
+/// own provenance type; the wire shape is <c>ChatSessionRelation</c> in <c>Agent.Chat</c>, so the
+/// session store never depends on this namespace.
+/// </summary>
+public sealed record SessionTaskRelation(
+    string SessionId, string TaskId, string EdgeId, GraphProvenance Provenance, bool IsPrimary);
 
 /// <summary>Which typed column of <c>graph_entity_properties</c> carries a property's value. The kind
 /// is stored alongside the value because a null value (a manifest fact with no value, such as an

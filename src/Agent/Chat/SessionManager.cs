@@ -97,13 +97,14 @@ public static class SessionManager
         return data is not null && IsLegacyHeader(data.Header) ? data : null;
     }
 
-    /// <summary>Create a new empty session for the selected device.</summary>
+    /// <summary>
+    /// Create a new empty session for the selected device. The conversation's relation to a task is
+    /// established in the engineering graph by the caller, never in the session file (ADR-0014).
+    /// </summary>
     public static ChatSessionData CreateNewSession(
         DeviceContext device,
         ChatRequestSettings settings,
-        string? runtimeContext,
-        string? taskId = null,
-        string? taskProvenance = null) =>
+        string? runtimeContext) =>
         CreateNewSession(
             device?.WorkbenchId ?? throw new ArgumentNullException(nameof(device)),
             device.WorktreeId,
@@ -111,8 +112,7 @@ public static class SessionManager
             device.WorktreeRoot,
             device.KnowledgeDbPath,
             settings,
-            runtimeContext,
-            taskId, taskProvenance);
+            runtimeContext);
 
     /// <summary>Create a new empty session using explicit stable identities and paths.</summary>
     public static ChatSessionData CreateNewSession(
@@ -122,9 +122,7 @@ public static class SessionManager
         string worktreeRoot,
         string knowledgeDbPath,
         ChatRequestSettings settings,
-        string? runtimeContext,
-        string? taskId = null,
-        string? taskProvenance = null)
+        string? runtimeContext)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workbenchId);
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreeId);
@@ -146,8 +144,7 @@ public static class SessionManager
             now,
             settings,
             runtimeContext,
-            "New chat",
-            taskId, taskProvenance);
+            "New chat");
         var data = new ChatSessionData(
             header,
             new List<ChatMessage>(),
@@ -215,6 +212,13 @@ public static class SessionManager
         return Truncate(singleLine, 60) ?? "New chat";
     }
 
+    /// <summary>
+    /// The one writer of a session file, and the one place the legacy relation fields stop being
+    /// persisted: the header written here never carries <c>taskId</c> or <c>taskProvenance</c>, so a
+    /// conversation whose file still held one has it imported once by the caller before this write and
+    /// cleared by it (ADR-0014, AC-008/AC-009). The caller's object is left as it was; the values are
+    /// only dropped from what is serialized.
+    /// </summary>
     private static void WriteSession(string trustedWorktreeRoot, ChatSessionData data)
     {
         var directory = SessionsDirectory(trustedWorktreeRoot);
@@ -222,7 +226,10 @@ public static class SessionManager
         if (!TrySessionFilePath(directory, data.Header.SessionId, out var filePath))
             throw new ArgumentException("Session ID contains unsafe path characters.", nameof(data));
 
-        File.WriteAllText(filePath, JsonSerializer.Serialize(data, Json));
+        var persisted = data.Header.TaskId is null && data.Header.TaskProvenance is null
+            ? data
+            : data with { Header = data.Header with { TaskId = null, TaskProvenance = null } };
+        File.WriteAllText(filePath, JsonSerializer.Serialize(persisted, Json));
     }
 
     /// <summary>Delete a session file. Idempotent if the file is absent.</summary>
@@ -333,6 +340,10 @@ public static class SessionManager
                 }
             }
 
+            // taskId/taskProvenance are deliberately not read here: the list answer's relation fields
+            // are projected by ApiHost from the graph, which is the relation's only authority. A file
+            // that still carries the legacy field keeps it for SessionGraphOperations.ImportLegacy,
+            // which reads the loaded ChatSessionData, not this listing (ADR-0014, AC-008).
             return new ChatSessionInfo(
                 sessionId,
                 IsDefaultTitle(GetString(header, "title"))
@@ -345,9 +356,7 @@ public static class SessionManager
                 updatedAt,
                 messageCount,
                 turnCount,
-                firstUserMessage,
-                GetString(header, "taskId"),
-                GetString(header, "taskProvenance"));
+                firstUserMessage);
         }
         catch (Exception exception) when (exception is JsonException or IOException)
         {

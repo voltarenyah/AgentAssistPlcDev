@@ -95,18 +95,80 @@ public sealed class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public void TaskId_roundtrips_in_session_header_and_listing()
+    public void A_legacy_header_task_id_still_loads_but_is_never_listed_as_a_relation()
     {
+        // ADR-0014: the session file stops carrying the relation, so the list must report none even
+        // for a file that still has the field — while LoadSession keeps the value, because the legacy
+        // import path is the field's only reader and it reads the loaded conversation.
         var device = CreateDeviceContext();
-        var created = SessionManager.CreateNewSession(
-            device, new ChatRequestSettings { Model = "task" }, null, "task-123");
+        var sessionId = SessionManager.NewSessionId();
+        var directory = SessionManager.SessionsDirectory(device);
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, $"{sessionId}.json"), LegacyHeader(device, sessionId, "task-123", "manual"));
 
-        var loaded = SessionManager.LoadSession(device, created.Header.SessionId);
+        var loaded = SessionManager.LoadSession(device, sessionId);
         var listed = Assert.Single(SessionManager.ListSessions(device));
 
         Assert.Equal("task-123", loaded!.Header.TaskId);
-        Assert.Equal("task-123", listed.TaskId);
+        Assert.Equal("manual", loaded.Header.TaskProvenance);
+        Assert.Null(listed.TaskId);
+        Assert.Null(listed.TaskProvenance);
     }
+
+    [Fact]
+    public void Writing_a_session_clears_the_legacy_header_task_id()
+    {
+        // AC-008/AC-009: the write path is what retires the legacy field, so the persisted header
+        // afterwards carries neither it nor a provenance — and nothing can re-import it.
+        var device = CreateDeviceContext();
+        var sessionId = SessionManager.NewSessionId();
+        var directory = SessionManager.SessionsDirectory(device);
+        Directory.CreateDirectory(directory);
+        var filePath = Path.Combine(directory, $"{sessionId}.json");
+        File.WriteAllText(filePath, LegacyHeader(device, sessionId, "task-123", "manual"));
+
+        var loaded = SessionManager.LoadSession(device, sessionId)!;
+        SessionManager.SaveSession(device, loaded);
+
+        var written = File.ReadAllText(filePath);
+        Assert.DoesNotContain("taskId", written, StringComparison.Ordinal);
+        Assert.DoesNotContain("taskProvenance", written, StringComparison.Ordinal);
+        Assert.Null(SessionManager.LoadSession(device, sessionId)!.Header.TaskId);
+    }
+
+    [Fact]
+    public void A_new_session_carries_no_task_relation_in_its_file()
+    {
+        var device = CreateDeviceContext();
+        var created = SessionManager.CreateNewSession(device, new ChatRequestSettings { Model = "task" }, null);
+
+        var written = File.ReadAllText(
+            Path.Combine(SessionManager.SessionsDirectory(device), $"{created.Header.SessionId}.json"));
+
+        Assert.Null(created.Header.TaskId);
+        Assert.DoesNotContain("taskId", written, StringComparison.Ordinal);
+        Assert.Null(Assert.Single(SessionManager.ListSessions(device)).TaskId);
+    }
+
+    private static string LegacyHeader(DeviceContext device, string sessionId, string? taskId, string? taskProvenance) => $$"""
+        {
+          "header": {
+            "sessionId": "{{sessionId}}",
+            "workbenchId": "{{device.WorkbenchId}}",
+            "worktreeId": "{{device.WorktreeId}}",
+            "deviceId": "{{device.DeviceId}}",
+            "worktreeRoot": "{{device.WorktreeRoot.Replace("\\", "\\\\")}}",
+            "knowledgeDbPath": "{{device.KnowledgeDbPath.Replace("\\", "\\\\")}}",
+            "createdAt": "2026-01-01T00:00:00.0000000+00:00",
+            "updatedAt": "2026-01-01T00:00:00.0000000+00:00",
+            "settings": { "model": "legacy" },
+            "taskId": {{(taskId is null ? "null" : $"\"{taskId}\"")}},
+            "taskProvenance": {{(taskProvenance is null ? "null" : $"\"{taskProvenance}\"")}}
+          },
+          "messages": [],
+          "roundUsages": []
+        }
+        """;
 
     [Fact]
     public void Legacy_session_without_task_id_loads_unassigned()
