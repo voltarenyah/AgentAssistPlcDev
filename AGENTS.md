@@ -220,13 +220,13 @@ multiple concurrent issues or make changes in another agent's worktree.
 
 Use one branch for one logical issue, following this naming convention:
 
-    codex/<issue-number>-<short-description>
+    dsh/<issue-number>-<short-description>
 
 Examples:
 
-    codex/143-fix-layout-persistence
-    codex/218-add-device-context
-    codex/305-handle-import-error
+    dsh/143-fix-layout-persistence
+    dsh/218-add-device-context
+    dsh/305-handle-import-error
 
 Before modifying shared or architectural code, inspect active work. Pay
 particular attention to application architecture, shared state,
@@ -441,8 +441,10 @@ unless explicitly instructed.
 ### Unattended local Codex automation
 
 Unattended issue, revision, cleanup, and deployment runs follow the same issue
-scope, isolated `codex/<issue>-<slug>` worktree, focused/broad validation,
-reviewed draft-PR, and no-merge rules above. They must preserve the primary
+scope, focused/broad validation, reviewed draft-PR, and no-merge rules above.
+Each run gets an isolated worktree named with the worker's own
+`codex/<issue>-<slug>` branch prefix; work started by an interactive agent
+follows the `dsh/` convention above. Those runs must preserve the primary
 checkout and unrelated user changes; the wrapper owns commits, pushes, labels,
 comments, and PR publication while Codex edits only the active issue worktree.
 See [docs/local-codex-worker.md](docs/local-codex-worker.md) for the operational
