@@ -3332,11 +3332,11 @@ public sealed class TiaV17Adapter : IEngineeringPlatform
 
     public void Dispose() => Disconnect();
 
-    public void OpenBlockInEditor(string blockName)
+    public void OpenBlockInEditor(string blockName, string? plcName = null)
     {
         lock (_gate)
         {
-            var plc = PlcSoftwareResolver.Resolve(RequireProject(), null);
+            var plc = PlcSoftwareResolver.Resolve(RequireProject(), plcName);
             var block = BlockEnumerator.Find(plc.BlockGroup, blockName);
             try
             {

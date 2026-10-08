@@ -968,12 +968,8 @@ internal sealed class ApiChatService(
             var loop = new AgentLoop(
                 new DeepSeekClient(apiKey, configuration["DeepSeek:BaseUrl"] ?? "https://api.deepseek.com"),
                 catalog,
-                () => string.Join('\n',
-                    $"Workbench: {device.WorkbenchId}",
-                    $"Worktree: {device.WorktreeId}",
-                    $"Device: {device.DeviceId}",
-                    $"PLC source: {device.SourceRoot}",
-                    $"Knowledge DB: {device.KnowledgeDbPath}",
+                () => RuntimeContext(
+                    device,
                     TaskContext(device, chats.TryGetValue(contextKey, out var current)
                         ? current.Session.Header.TaskId : session.Header.TaskId)),
                 Settings(configuration, state),
@@ -1015,6 +1011,63 @@ internal sealed class ApiChatService(
           .Append(OpenTiaProjectTool.CreateSpec(
             new OpenTiaProjectTool(workbenches, coordinator),
             () => device)));
+
+    /// <summary>
+    /// The conversation's device as the model must see it. <see cref="SessionManager.BuildRuntimeContext"/>
+    /// is the one formatter; this method supplies what it needs and names the device by TIA's own PLC
+    /// name rather than by the internal device id, which is a GUID the model can do nothing with — a
+    /// single-device engineering tool takes a PLC name, and the model could not know it.
+    /// Metadata this process can no longer read degrades to the id form instead of failing the turn.
+    /// </summary>
+    private string RuntimeContext(DeviceContext device, string? taskContext)
+    {
+        var context = DeviceRuntimeContext(device);
+        return string.IsNullOrWhiteSpace(taskContext)
+            ? context
+            : context + Environment.NewLine + taskContext;
+    }
+
+    private string DeviceRuntimeContext(DeviceContext device)
+    {
+        try
+        {
+            return DeviceRuntimeContext(
+                device,
+                workbenches.Workbench(device.WorkbenchId),
+                workbenches.Worktree(device.WorkbenchId, device.WorktreeId),
+                workbenches.Device(device.WorkbenchId, device.WorktreeId, device.DeviceId).Metadata);
+        }
+        catch (Exception exception) when (exception is KeyNotFoundException or IOException
+            or JsonException or MetadataSchemaException or WorkbenchCatalogException
+            or WorkbenchPathException)
+        {
+            return DeviceRuntimeContext(device, null, null, null);
+        }
+    }
+
+    /// <summary>
+    /// The context body itself. The device is named by TIA's own PLC name, never by the internal device
+    /// id alone: that id is a GUID, and a single-device engineering tool (open_block_in_editor among
+    /// them) takes a PLC name the model could not otherwise know. Metadata this process cannot read
+    /// degrades to the id form rather than failing the turn.
+    /// </summary>
+    internal static string DeviceRuntimeContext(
+        DeviceContext device,
+        WorkbenchMetadata? workbench,
+        WorktreeMetadata? worktree,
+        DeviceMetadata? metadata)
+    {
+        var plcName = string.IsNullOrWhiteSpace(metadata?.PlcName) ? device.DeviceId : metadata!.PlcName;
+        var knowledgeStale = metadata is not null
+            && (metadata.Knowledge.Stale || metadata.Knowledge.BaselineStale);
+        return SessionManager.BuildRuntimeContext(
+            device,
+            workbench?.Name ?? device.WorkbenchId,
+            worktree?.Name ?? device.WorktreeId,
+            worktree?.Branch ?? "-",
+            plcName,
+            knowledgeStale);
+    }
 
     private string? TaskContext(DeviceContext device, string? taskId)
     {

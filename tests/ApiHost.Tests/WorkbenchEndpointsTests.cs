@@ -2614,6 +2614,139 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             "src_validate", new Dictionary<string, object?> { ["xmlFilePath"] = Path.Combine(root, "foreign.xml") }, context));
     }
 
+    /// <summary>
+    /// The conversation's own device answers <c>plcName</c> for the engineering tools that act on
+    /// exactly one PLC. Without it a multi-PLC project fails every one of them with
+    /// <c>AMBIGUOUS_PLC</c> and the model has no argument that changes the outcome: the runtime context
+    /// carries the conversation's device id, never TIA's own name for the device.
+    /// </summary>
+    [Theory]
+    [InlineData("list_blocks")]
+    [InlineData("capture_source_evidence")]
+    [InlineData("compare_source_evidence")]
+    [InlineData("export_source_object")]
+    [InlineData("create_block")]
+    [InlineData("delete_block")]
+    [InlineData("compile_block")]
+    [InlineData("compile_plc")]
+    [InlineData("open_block_in_editor")]
+    [InlineData("open_source_object_in_editor")]
+    public void SingleDeviceToolsTakeTheSelectedDevicesPlcName(string tool)
+    {
+        var context = Context();
+        SeedDeviceMetadata(context, "PLC_1");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var bound = binder.Bind(tool, new Dictionary<string, object?>(), context);
+
+        Assert.Equal("PLC_1", bound["plcName"]);
+    }
+
+    /// <summary>
+    /// The import tools need an existing source path as well; the PLC name arrives with it.
+    /// </summary>
+    [Fact]
+    public void ImportToolsTakeTheSelectedDevicesPlcNameWithTheirBoundPath()
+    {
+        var context = Context();
+        SeedDeviceMetadata(context, "PLC_1");
+        var source = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "<a/>");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var import = binder.Bind(
+            "import_block",
+            new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
+            context);
+        Assert.Equal("PLC_1", import["plcName"]);
+        Assert.Equal(source, import["xmlFilePath"]);
+
+        var sourceObject = binder.Bind(
+            "import_source_object",
+            new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
+            context);
+        Assert.Equal("PLC_1", sourceObject["plcName"]);
+        Assert.Equal("Blocks/A.xml", sourceObject["relativePath"]);
+    }
+
+    /// <summary>
+    /// Tools that read <c>plcName == null</c> as "every PLC" keep their project-wide meaning: one
+    /// conversation's device must not silently narrow them to itself. <c>export_tag_tables</c> and
+    /// <c>export_udts</c> belong to this group too, but the binder refuses them outright
+    /// (STAGED_REFRESH_REQUIRED), so they are covered by the staged-refresh tests instead.
+    /// </summary>
+    [Theory]
+    [InlineData("get_plc_checksums")]
+    [InlineData("sync_export")]
+    [InlineData("rebuild_export")]
+    [InlineData("get_context_status")]
+    [InlineData("compare_context")]
+    public void ProjectWideToolsAreNotBoundToTheSelectedDevicesPlcName(string tool)
+    {
+        var context = Context();
+        SeedDeviceMetadata(context, "PLC_1");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var bound = binder.Bind(tool, new Dictionary<string, object?>(), context);
+
+        Assert.False(bound.ContainsKey("plcName"));
+    }
+
+    /// <summary>
+    /// Naming another device is a conflict, not an override: the conversation is bound to one device,
+    /// so aiming a call elsewhere is a model-fixable argument error. The name matches the way
+    /// <c>PlcSoftwareResolver</c> matches it.
+    /// </summary>
+    [Fact]
+    public void PlcNameBindingAcceptsTheSelectedDeviceAndRejectsAnotherDevice()
+    {
+        var context = Context();
+        SeedDeviceMetadata(context, "PLC_1");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var same = binder.Bind(
+            "open_block_in_editor",
+            new Dictionary<string, object?> { ["blockName"] = "Main", ["plcName"] = "plc_1" },
+            context);
+        Assert.Equal("PLC_1", same["plcName"]);
+
+        Assert.Throws<ArgumentException>(() => binder.Bind(
+            "open_block_in_editor",
+            new Dictionary<string, object?> { ["blockName"] = "Main", ["plcName"] = "PLC_2" },
+            context));
+    }
+
+    /// <summary>
+    /// A device whose metadata cannot be read degrades to the caller's own argument — including the
+    /// argument's absence — instead of failing every single-device tool.
+    /// </summary>
+    [Fact]
+    public void UnreadableDeviceMetadataLeavesPlcNameToTheCaller()
+    {
+        var context = Context();
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var bound = binder.Bind("open_block_in_editor", new Dictionary<string, object?>(), context);
+
+        Assert.False(bound.ContainsKey("plcName"));
+    }
+
+    private static void SeedDeviceMetadata(DeviceContext context, string plcName) =>
+        new AtomicJsonStore().Write(
+            Path.Combine(context.DeviceRoot, "device.json"),
+            new DeviceMetadata(
+                WorkbenchSchema.CurrentVersion,
+                context.DeviceId,
+                context.WorktreeId,
+                plcName,
+                plcName,
+                null,
+                null,
+                null,
+                new KnowledgeState(false, new Dictionary<string, string>(), null, false),
+                []));
+
     [Fact]
     public void ImportBlockBindsToExistingModifiedSourceOnly()
     {

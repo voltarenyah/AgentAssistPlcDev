@@ -66,6 +66,31 @@ public sealed class SourceObjectToolsContractTests
     }
 
     [Fact]
+    public void EngineeringSurfaceExposesBlockOpenInEditor()
+    {
+        var method = typeof(EngineeringTools).GetMethod(nameof(EngineeringTools.OpenBlockInEditor));
+
+        Assert.NotNull(method);
+        Assert.Equal(
+            "open_block_in_editor",
+            Assert.Single(method!.GetCustomAttributes<McpServerToolAttribute>()).Name);
+        // The PLC name is part of the surface, not an adapter-only concern: without it a multi-PLC
+        // project cannot name the device to open, and the model has no argument that changes the
+        // AMBIGUOUS_PLC outcome.
+        Assert.Equal(
+            new[] { "blockName", "plcName" },
+            method.GetParameters().Select(parameter => parameter.Name));
+        Assert.True(method.GetParameters()[1].HasDefaultValue);
+
+        var platform = typeof(IEngineeringPlatform).GetMethod(nameof(IEngineeringPlatform.OpenBlockInEditor));
+        Assert.NotNull(platform);
+        Assert.Equal(
+            new[] { "blockName", "plcName" },
+            platform!.GetParameters().Select(parameter => parameter.Name));
+        Assert.True(platform.GetParameters()[1].HasDefaultValue);
+    }
+
+    [Fact]
     public void PlatformSurfaceExposesBothSourceObjectOperations()
     {
         var export = typeof(IEngineeringPlatform).GetMethod(nameof(IEngineeringPlatform.ExportSourceObject));

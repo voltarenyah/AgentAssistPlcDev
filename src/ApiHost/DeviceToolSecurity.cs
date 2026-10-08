@@ -18,6 +18,35 @@ public sealed class DeviceToolArgumentBinder(
     DeviceSourceResolver resolver,
     WorkbenchWritePolicy? writePolicy = null)
 {
+    /// <summary>
+    /// Engineering tools whose <c>plcName</c> names <b>the one device</b> they read or write. The
+    /// conversation's selected device is the authority for that name, so the host supplies it: the
+    /// model is never told the TIA PLC name — the runtime context carries the conversation's device id,
+    /// not TIA's own name for the device — and <c>PlcSoftwareResolver.Resolve(project, null)</c> fails a
+    /// multi-PLC project with <c>AMBIGUOUS_PLC</c> and no argument the model can change.
+    ///
+    /// Tools that read <c>plcName == null</c> as <b>"every PLC"</b> are deliberately absent
+    /// (<c>get_plc_checksums</c>, <c>export_tag_tables</c>, <c>export_udts</c>, <c>sync_export</c>,
+    /// <c>rebuild_export</c>, <c>get_context_status</c>, <c>compare_context</c>): binding them would
+    /// silently narrow a project-wide read or write to one device. The two tag/UDT exports are
+    /// additionally refused by the staged-refresh guard below, so they never reach this binding.
+    /// </summary>
+    private static readonly HashSet<string> SingleDeviceTools = new(StringComparer.Ordinal)
+    {
+        "list_blocks",
+        "capture_source_evidence",
+        "compare_source_evidence",
+        "export_source_object",
+        "import_block",
+        "import_source_object",
+        "create_block",
+        "delete_block",
+        "compile_block",
+        "compile_plc",
+        "open_block_in_editor",
+        "open_source_object_in_editor",
+    };
+
     public Dictionary<string, object?> Bind(string tool, IDictionary<string, object?> supplied, DeviceContext device)
     {
         if (tool is "export_block" or "export_all_blocks" or "export_tag_tables" or "export_udts")
@@ -25,6 +54,8 @@ public sealed class DeviceToolArgumentBinder(
                 "STAGED_REFRESH_REQUIRED",
                 $"'{tool}' is unavailable through generic tools; use the device refresh/stage lifecycle.");
         var args = new Dictionary<string, object?>(supplied, StringComparer.Ordinal);
+        if (SingleDeviceTools.Contains(tool))
+            BindPlcName(args, device);
         if (tool is "sync_export" or "rebuild_export")
             Force(args, "outputDir", device.StagingRoot);
         if (tool is "get_context_status" or "compare_context")
@@ -100,6 +131,45 @@ public sealed class DeviceToolArgumentBinder(
         }
         return args;
     }
+    /// <summary>
+    /// Fills <c>plcName</c> with the selected device's PLC name. An argument that names another device
+    /// is a conflict, not an override: the conversation is bound to one device, so a call that aims
+    /// elsewhere is a model-fixable argument error rather than a silent cross-device operation.
+    /// When the device's metadata is unreadable, the argument is left as supplied — degrading to the
+    /// caller's behaviour instead of inventing a name that could target the wrong device.
+    /// </summary>
+    private static void BindPlcName(IDictionary<string, object?> args, DeviceContext device)
+    {
+        var trusted = ReadPlcName(device);
+        if (trusted is null)
+            return;
+
+        if (StringValue(args, "plcName") is { } supplied
+            && !string.Equals(supplied, trusted, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"plcName '{supplied}' conflicts with the selected device '{trusted}'.");
+        }
+
+        args["plcName"] = trusted;
+    }
+
+    /// <summary>The TIA PLC name recorded for a device context; null when it cannot be read.</summary>
+    private static string? ReadPlcName(DeviceContext device)
+    {
+        try
+        {
+            var metadata = new AtomicJsonStore().TryRead<DeviceMetadata>(
+                Path.Combine(device.DeviceRoot, "device.json"));
+            return string.IsNullOrWhiteSpace(metadata?.PlcName) ? null : metadata!.PlcName;
+        }
+        catch (Exception exception) when (
+            exception is IOException or JsonException or MetadataSchemaException)
+        {
+            return null;
+        }
+    }
+
     private static void BindReadable(
         IDictionary<string, object?> args,
         string key,

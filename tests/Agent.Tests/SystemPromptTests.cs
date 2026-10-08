@@ -142,6 +142,20 @@ public sealed class SystemPromptTests
     }
 
     [Fact]
+    public void PromptSaysTheSelectedDevicesPlcNameIsHostBound()
+    {
+        var prompt = SystemPrompt.Build();
+
+        // A live conversation stalled on open_block_in_editor: the tool had no plcName argument at all,
+        // the two-PLC project failed with AMBIGUOUS_PLC, and the runtime context named the device by its
+        // internal id — so neither the model nor the tool could name the PLC to open.
+        Assert.Contains("PLC identity is host-bound", prompt);
+        Assert.Contains("open_block_in_editor", prompt);
+        Assert.Contains("Never ask the user which PLC to use", prompt);
+        Assert.Contains("a plcName that names a different device is refused", prompt);
+    }
+
+    [Fact]
     public void ContextMessageCarriesMarkerAndBody()
     {
         var message = ChatMessage.User(SystemPrompt.ContextMessage("Knowledge DB: C:\\db\\k.db"));
