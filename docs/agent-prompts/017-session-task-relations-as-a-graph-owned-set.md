@@ -1,6 +1,6 @@
 # 017. A conversation is related to every task it creates, and the row menu edits the relation set
 
-Status: in-progress
+Status: done
 Created: 2026-10-08
 Depends on: `docs/adr/ADR-0014-session-task-relations-belong-to-the-graph.md` (accepted)
 
@@ -100,5 +100,65 @@ list conversations read the same set.
 
 ## Evidence
 
-Filled in by the executing agent: branch, commits, commands run with their results, the runtime
-scenario's steps and screenshot, skipped steps and remaining risk.
+Executed 2026-10-08/09 in the issue worktree
+`.worktrees/issue-115-session-task-relations` on branch `dsh/115-session-task-relations`, based on the
+local `master` `4ecd3d2`.
+
+**Commits** — `6d53b95` (the governing documents: ADR-0014, the ADR-0009 v1.3 amendment, the UI Spec
+v1.11 amendments, the design document, this plan and this item), `ed5aa7f` (the server side: schema v7,
+the set-shaped graph API, the projection, the legacy import, `create_task`'s automatic relation and the
+graph-sourced model context), `c7eb7bc` (the Studio side: set membership, the checked picker, the task
+page's `auto` label and Remove), and the documentation-evidence commit this section ships in.
+
+**Commands actually run, with results** (from the worktree):
+
+| Command | Result |
+|---|---|
+| `dotnet build AgentAssistPlcDev.sln -v q` | 0 errors |
+| `dotnet test tests/Agent.Tests/Agent.Tests.csproj --no-build -v q` | 546 passed, 0 failed |
+| `dotnet test tests/ApiHost.Tests/ApiHost.Tests.csproj --no-build -v q` | 281 passed, 0 failed |
+| `cd studio && npm test -- --run` | 89 files, 609 tests passed (baseline 604; +5) |
+| `cd studio && npm run lint` | 0 errors, 16 warnings, all at pre-existing locations |
+| `cd studio && npm run build` | clean (`tsc -b` + `vite build`) |
+
+**Runtime scenario** — `.\launch.ps1 -NoBuild` from this worktree (both services health-checked on
+`http://localhost:5173/` and `http://localhost:5239/api/status`), driven with Playwright against the
+real workbench `TestTEst` (worktree `master`, device `PLC_1`), whose database v7 then migrated in place:
+its three conversations each had exactly one relation, and each was promoted to primary. The
+conversation `help me review the plc code…` had produced three tasks and was related to one of them —
+the defect this item fixes, on the user's own data. 13 of 14 scripted assertions passed:
+
+- on a fresh page each task's `SESSIONS` list carried only its own conversation, and the task related to
+  nothing showed no section;
+- the row menu's picker opened with that one relation checked, a click set a second and a third check
+  without closing the dialog, and one apply wrote all three relations (`GET …/sessions` then reported
+  all three, one primary);
+- each of the three task pages listed the conversation afterwards;
+- a second click cleared one check, one apply removed exactly that relation, and the other two survived;
+- the task detail still read its relations from the graph.
+
+Screenshots: `tmp/issue-115-runtime/dsh-115-final-*.png` (git-ignored, on this machine). Two console
+errors were observed and neither comes from this change: the duplicate-`sessionId` key error is issue
+113 (every device's list returns the whole worktree, so the fan-out renders each conversation once per
+device), and the 404 is `getEngineeringTaskDetail` probing the project-scope route before the
+worktree-scope one.
+
+**Not run, and why** — the live model turn that creates three tasks from one task-less conversation
+(Done when 7). The automatic relation is covered by `tests/ApiHost.Tests/TaskCreationToolTests.cs`
+(auto provenance, the primary moving only when there was none, the relation following the live
+conversation identity rather than a captured one, and the created task still reported with a
+`relationWarning` when the relation write fails), and the projection and set routes were exercised
+against the running app above; what remains unproven is that wiring end to end inside a live turn.
+
+**Corrections made while executing** — the design's promotion SQL filtered its group on `is_primary = 0`
+alone, which would have promoted the second relation of a conversation that already had a primary and
+then failed the migration at index creation; it now also requires `SUM(is_primary) = 0`, and the design
+records the correction. The design also named `WorkbenchApiState.Logs` for the `graph-unavailable`
+entry; the stream is `CompatibilityRuntimeState.Logs`, and the design now says so.
+
+**Environment** — the verification ran against the user's real workbench and then restored it: the
+session file it rewrote has its `taskId`/`taskProvenance` back, and all three workbenches'
+`engineering.db` files were restored from the pre-run copies in
+`%TEMP%\dsh-115-backup-20261009-000855`, so the primary checkout's `master` build opens them again. The
+one residual difference is that conversation's `updatedAt`, which the verification's write advanced.
+

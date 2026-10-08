@@ -66,7 +66,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 | [014](014-scoped-evidence-read-touches-only-staged-objects.md) | A scoped evidence read touches only the staged objects | done | 010 | `src/Mcp.Engineering/Adapter/TiaV17Adapter.cs` |
 | [015](015-one-source-path-form-for-task-bookkeeping.md) | One source path form for task bookkeeping | done | 012 | `src/Agent/Workbench/SourcePathForms.cs`, `src/ApiHost/WorkbenchApiModels.cs` |
 | [016](016-knowledge-freshness-check-and-refresh.md) | The knowledge agent checks freshness and refreshes the database before answering | done | — | `src/ApiHost/KnowledgeStatusTool.cs`, `src/Agent/Workbench/WorkbenchCoordinator.cs`, `src/Agent/Chat/SystemPrompt.cs` |
-| [017](017-session-task-relations-as-a-graph-owned-set.md) | A conversation is related to every task it creates, and the row menu edits the relation set | pending | ADR-0014 accepted | `docs/adr/ADR-0014-session-task-relations-belong-to-the-graph.md`, `src/ApiHost/TaskCreationTool.cs`, `src/Agent/Workbench/EngineeringGraph/EngineeringGraphService.cs`, `studio/src/studio/workbench/WorkbenchNavigator.tsx` |
+| [017](017-session-task-relations-as-a-graph-owned-set.md) | A conversation is related to every task it creates, and the row menu edits the relation set | done | ADR-0014 accepted | `docs/adr/ADR-0014-session-task-relations-belong-to-the-graph.md`, `src/ApiHost/TaskCreationTool.cs`, `src/Agent/Workbench/EngineeringGraph/EngineeringGraphService.cs`, `studio/src/studio/workbench/WorkbenchNavigator.tsx` |
 
 Items 002–005 implement the missing execution layer of an already accepted design: task-scoped
 source evidence (`docs/adr/ADR-0003-task-scoped-source-evidence.md`,

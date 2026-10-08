@@ -157,19 +157,28 @@ becomes 7; a `if (version < 7)` block runs in the same migration transaction as 
 (`EngineeringGraphSchema.cs:19-168`) and does exactly two things:
 
 ```sql
--- 1. Promote the only relation of every conversation that has exactly one. Idempotent: it filters on
---    is_primary = 0 and on the group count, so a second run inside the same transaction is a no-op.
-UPDATE graph_edges SET is_primary = 1
- WHERE edge_id IN (
-   SELECT MIN(edge_id) FROM graph_edges
-    WHERE relation_kind = 'task_session' AND from_kind = 'task' AND to_kind = 'session' AND is_primary = 0
-    GROUP BY to_id HAVING COUNT(*) = 1);
+-- 1. Promote the only relation of a conversation that has exactly one and no primary yet. Idempotent:
+--    the SUM(is_primary) = 0 condition excludes a conversation whose single edge is already primary,
+--    so a second run inside the same transaction is a no-op.
+UPDATE graph_edges SET is_primary = 1, updated_utc = $utc
+ WHERE relation_kind = 'task_session' AND from_kind = 'task' AND to_kind = 'session'
+   AND is_primary = 0
+   AND to_id IN (
+     SELECT to_id FROM graph_edges
+      WHERE relation_kind = 'task_session' AND from_kind = 'task' AND to_kind = 'session'
+      GROUP BY to_id
+     HAVING COUNT(*) = 1 AND SUM(is_primary) = 0);
 -- 2. Mirror the commit index (EngineeringGraphSchema.cs:91-94).
 CREATE UNIQUE INDEX IF NOT EXISTS ux_graph_edges_primary_task_session
     ON graph_edges (to_kind, to_id)
     WHERE relation_kind = 'task_session' AND is_primary = 1
       AND from_kind = 'task' AND to_kind = 'session';
 ```
+
+The `SUM(is_primary) = 0` half of the group condition is what the promotion must not omit: filtering the
+group on `is_primary = 0` alone makes a conversation that already has two relations *and* a primary look
+like a one-relation conversation, promotes the other edge, and then fails at index creation — aborting a
+migration that had nothing wrong with it (found while implementing issue 115).
 
 Promotion runs before index creation and inside one transaction, so a database that already violates
 the invariant (two primary `task_session` edges for one conversation, which no shipped code path can
@@ -285,9 +294,10 @@ existing positional construction (there is one, `SessionManager.cs:336-350`) sti
 
 **When the graph cannot be opened.** The list routes wrap graph I/O in a local guard: a failure yields an
 empty relation set on every row (`taskId: null`, `taskProvenance: null`, `taskRelations: []`) and a
-`graph-unavailable` entry on the existing log stream (`WorkbenchApiState.Logs`, the channel
-`CompatibilityEndpoints.cs:958-965` already writes to and the confirmation poller filters by kind,
-`MainStudio.tsx:1630`). The list stays complete and usable (AC-007); the cost is that a bound
+`graph-unavailable` entry on the existing log stream (`CompatibilityRuntimeState.Logs` — the stream
+`GET /api/logs` serves and the confirmation poller filters by kind,
+`MainStudio.tsx:1630`; implementing the design corrected this document's earlier naming of
+`WorkbenchApiState`, which has no log member). The list stays complete and usable (AC-007); the cost is that a bound
 conversation reads as task-less until the graph is readable again, which is recorded under Material
 Risks. The failure is never reported as a 5xx, and it is never reported as a read failure of the
 conversation files.
