@@ -15,25 +15,25 @@ const mockVcState = (overrides: {
   activeTask?: api.EngineeringTask | null
   commitTasks?: api.EngineeringTask[]
 } = {}) => {
-  vi.spyOn(api, 'getWorktreeVcStatus').mockResolvedValue({
+  const status = vi.spyOn(api, 'getWorktreeVcStatus').mockResolvedValue({
     repoPath: 'C:/repos/demo',
     branch: 'feature-a',
     entries: overrides.entries ?? [],
   })
-  vi.spyOn(api, 'getWorktreeVcLog').mockResolvedValue({
+  const log = vi.spyOn(api, 'getWorktreeVcLog').mockResolvedValue({
     repoPath: 'C:/repos/demo',
     commits: overrides.commits ?? [],
   })
-  vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue(overrides.timeline ?? {
+  const timeline = vi.spyOn(api, 'getWorktreeVersionControlTimeline').mockResolvedValue(overrides.timeline ?? {
     gitCommits: [],
     svnRevisions: [],
     hasMore: false,
   })
-  vi.spyOn(api, 'getWorktreeSavepoints').mockResolvedValue(overrides.savepoints ?? [])
+  const savepoints = vi.spyOn(api, 'getWorktreeSavepoints').mockResolvedValue(overrides.savepoints ?? [])
   const activeTask = vi.spyOn(api, 'getActiveWorktreeTask').mockResolvedValue({ activeTask: overrides.activeTask ?? null })
   vi.spyOn(api, 'listGraphWorktreeTasks').mockResolvedValue(overrides.commitTasks ?? [])
   vi.spyOn(api, 'setActiveWorktreeTask').mockResolvedValue({ activeTask: null })
-  return { activeTask }
+  return { status, log, timeline, savepoints, activeTask }
 }
 
 const worktreeTask = (overrides: Partial<api.EngineeringTask> = {}): api.EngineeringTask => ({
@@ -62,6 +62,10 @@ const render = async (element: React.ReactNode) => {
   return { host, root }
 }
 
+const rerender = async (root: ReturnType<typeof createRoot>, element: React.ReactNode) => {
+  await act(async () => root.render(element))
+}
+
 const click = async (element: Element) => {
   await act(async () => {
     element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -73,24 +77,74 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('VersionControlPanel (worktree dock)', () => {
-  it('renders the two-page tab bar, compare action, and branch block', async () => {
+describe('VersionControlPanel (right dock page content)', () => {
+  it('renders the changes half with its compare action and branch block, and no page tab strip', async () => {
     mockVcState()
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
-    expect(host.querySelector('[data-testid="vc-tab-changes"]')).toBeTruthy()
-    expect(host.querySelector('[data-testid="vc-tab-history"]')).toBeTruthy()
+    // The rail owns the page switch now; the panel no longer renders its own tab bar.
+    expect(host.querySelector('[data-testid="vc-tab-changes"]')).toBeNull()
+    expect(host.querySelector('[data-testid="vc-tab-history"]')).toBeNull()
+    expect(host.querySelector('nav[aria-label="Version control sections"]')).toBeNull()
+
+    expect(host.querySelector('[data-testid="version-control-changes"]')).toBeTruthy()
     expect(host.querySelector('[data-testid="vc-compare-open"]')?.textContent).toContain('Compare')
     expect(host.querySelector('[data-testid="vc-compare-open"]')?.textContent).not.toContain('Compare with TIA')
     expect(host.querySelector('[data-testid="vc-branch-name"]')?.textContent).toBe('feature-a')
     expect(host.textContent).toContain('master')
   })
 
+  it('renders the compare controls in the changes half and none of them in the history half', async () => {
+    mockVcState()
+    const changes = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
+
+    expect(changes.host.querySelector('[data-testid="vc-compare-open"]')).toBeTruthy()
+    expect(changes.host.querySelector('[data-testid="vc-compare-mode"]')).toBeTruthy()
+    expect(changes.host.querySelector('[data-testid="vc-compare-mode-full"]')).toBeTruthy()
+    expect(changes.host.querySelector('[data-testid="vc-compare-mode-task"]')).toBeTruthy()
+    expect(changes.host.querySelector('[data-testid="vc-verify-hardware"]')).toBeTruthy()
+
+    const history = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" />)
+
+    expect(history.host.querySelector('[data-testid="version-control-history"]')).toBeTruthy()
+    expect(history.host.querySelector('[data-testid="vc-compare-open"]')).toBeNull()
+    expect(history.host.querySelector('[data-testid="vc-compare-mode"]')).toBeNull()
+    expect(history.host.querySelector('[data-testid="vc-compare-mode-full"]')).toBeNull()
+    expect(history.host.querySelector('[data-testid="vc-compare-mode-task"]')).toBeNull()
+    expect(history.host.querySelector('[data-testid="vc-verify-hardware"]')).toBeNull()
+    expect(history.host.querySelector('[data-testid="vc-compare-task-unavailable"]')).toBeNull()
+  })
+
+  it('reads only the data the history half shows', async () => {
+    const { status, log, timeline, savepoints, activeTask } = mockVcState()
+    const onCount = vi.fn()
+    await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" onUncommittedCountChange={onCount} />)
+
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(timeline).toHaveBeenCalledTimes(1)
+    expect(savepoints).toHaveBeenCalledTimes(1)
+    expect(status).not.toHaveBeenCalled()
+    // The task scope decides a comparison, which the history half never runs.
+    expect(activeTask).not.toHaveBeenCalled()
+    // The rail badge belongs to the changes half; the history instance never clears it.
+    expect(onCount).not.toHaveBeenCalled()
+  })
+
+  it('reads the worktree status and the timeline markers the changes half shows', async () => {
+    const { status, log, timeline } = mockVcState()
+    await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
+
+    expect(status).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledTimes(1)
+    // The savepoint warning's untrackable flag exists only on the timeline route.
+    expect(timeline).toHaveBeenCalledTimes(1)
+  })
+
   it('shows the clean-state hero and the snapshot area on the changes page', async () => {
     mockVcState({
       savepoints: [{ sha: 'abc', message: 'snap', svnUrl: null, svnRevision: 3, projectChecksum: null, compileStatus: null, fSignature: null }],
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     expect(host.querySelector('[data-testid="vc-changes-empty"]')?.textContent).toContain('No changes on this branch')
     expect(host.querySelector('[data-testid="vc-snapshot-revision"]')?.textContent).toBe('r3')
@@ -118,12 +172,12 @@ describe('VersionControlPanel (worktree dock)', () => {
       commits: [commit('new-3'), commit('new-2'), commit('new-1'), commit('snapshot-r3'), commit('old-r2')],
       savepoints: [savepoint('new-3', 3), savepoint('new-2', 3), savepoint('new-1', 3), savepoint('snapshot-r3', 3), savepoint('old-r2', 2)],
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     expect(host.querySelector('[data-testid="vc-snapshot-drift"]')?.textContent).toContain('3 commits since')
   })
 
-  it('switches to the history timeline through the tab bar', async () => {
+  it('renders the history timeline and opens a commit detail', async () => {
     mockVcState({
       savepoints: [{ sha: 'abcdef1234567890', message: 'native savepoint', svnUrl: '^/native/main', svnRevision: 4, projectChecksum: 'PLC_1:AA BB', compileStatus: 'SUCCESS', fSignature: null }],
       timeline: {
@@ -147,11 +201,8 @@ describe('VersionControlPanel (worktree dock)', () => {
         hasMore: false,
       },
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" />)
 
-    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
-
-    expect(host.querySelector('[data-testid="vc-tab-history"]')?.getAttribute('aria-pressed')).toBe('true')
     expect(host.querySelector('[data-testid="commit-abcdef1"]')).toBeTruthy()
     expect(host.querySelector('[data-testid="savepoint-r4"]')).toBeTruthy()
 
@@ -159,7 +210,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.querySelector('[data-testid="timeline-detail"]')?.textContent).not.toContain('PLC_1:AA BB')
   })
 
-  it('executes the TIA comparison directly from the header action', async () => {
+  it('executes the TIA comparison directly from the changes action', async () => {
     mockVcState()
     const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue({
       comparisonId: 'comparison-1',
@@ -170,7 +221,7 @@ describe('VersionControlPanel (worktree dock)', () => {
       differences: [],
     })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
 
@@ -192,7 +243,7 @@ describe('VersionControlPanel (worktree dock)', () => {
       hardwareChecked: false,
     })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     const checkbox = host.querySelector<HTMLInputElement>('[data-testid="vc-verify-hardware"]')!
     expect(checkbox.checked).toBe(true)
@@ -217,7 +268,7 @@ describe('VersionControlPanel (worktree dock)', () => {
       }],
     })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
 
@@ -226,7 +277,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(host.textContent).not.toContain('TIA differs from master')
   })
 
-  it('does not re-run the TIA comparison when switching between pages', async () => {
+  it('keeps the comparison result when the history page mounts beside it', async () => {
     mockVcState()
     const compare = vi.spyOn(api, 'compareMasterWithTia').mockResolvedValue({
       comparisonId: 'comparison-1',
@@ -237,17 +288,20 @@ describe('VersionControlPanel (worktree dock)', () => {
       differences: [],
     })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(
+      <>
+        <div data-testid="changes-page"><VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" /></div>
+        <div data-testid="history-page"><VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" /></div>
+      </>,
+    )
 
-    await click(host.querySelector('[data-testid="vc-compare-open"]')!)
+    await click(host.querySelector('[data-testid="changes-page"] [data-testid="vc-compare-open"]')!)
     expect(compare).toHaveBeenCalledTimes(1)
 
-    // Switching to history and back keeps the result instead of comparing again.
-    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
-    await click(host.querySelector('[data-testid="vc-tab-changes"]')!)
-
+    // The other page keeps its own mounted surface without re-running the changes comparison.
+    expect(host.querySelector('[data-testid="history-page"] [data-testid="version-control-history"]')).toBeTruthy()
+    expect(host.querySelector('[data-testid="changes-page"] [data-testid="vc-clean-state"]')?.textContent).toContain('TIA matches master')
     expect(compare).toHaveBeenCalledTimes(1)
-    expect(host.querySelector('[data-testid="vc-clean-state"]')?.textContent).toContain('TIA matches master')
   })
 
   const logCommit = (sha: string): api.VcCommitEntry => ({
@@ -288,9 +342,7 @@ describe('VersionControlPanel (worktree dock)', () => {
         hasMore: false,
       },
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
-
-    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" />)
 
     expect(host.querySelector('[data-testid="vc-untrackable-marker"]')?.textContent).toContain('untrackable')
   })
@@ -311,9 +363,7 @@ describe('VersionControlPanel (worktree dock)', () => {
         hasMore: false,
       },
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
-
-    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" />)
 
     expect(host.querySelector('[data-testid="vc-safety-change-marker"]')?.textContent).toContain('Safety change')
     expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')?.textContent).toContain('Safety signature unavailable')
@@ -335,9 +385,7 @@ describe('VersionControlPanel (worktree dock)', () => {
         hasMore: false,
       },
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
-
-    await click(host.querySelector('[data-testid="vc-tab-history"]')!)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" />)
 
     expect(host.querySelector('[data-testid="vc-safety-change-marker"]')).toBeNull()
     expect(host.querySelector('[data-testid="vc-safety-unavailable-marker"]')).toBeNull()
@@ -353,7 +401,7 @@ describe('VersionControlPanel (worktree dock)', () => {
         hasMore: false,
       },
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     expect(host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')).toBeTruthy()
   })
@@ -368,7 +416,7 @@ describe('VersionControlPanel (worktree dock)', () => {
         hasMore: false,
       },
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     expect(host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')).toBeNull()
   })
@@ -382,7 +430,7 @@ describe('VersionControlPanel (worktree dock)', () => {
         hasMore: false,
       },
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     expect(host.querySelector('[data-testid="vc-untrackable-savepoint-warning"]')).toBeTruthy()
   })
@@ -412,7 +460,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     const { activeTask } = mockVcState({ activeTask: worktreeTask() })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
     vi.spyOn(api, 'listTaskSourceStages').mockResolvedValue([taskStage('dev-1:Main')])
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     expect(activeTask).toHaveBeenCalledWith('wb-1', 'wt-1')
     expect(host.querySelector('[data-testid="vc-compare-mode-full"]')?.textContent).toContain('Full scan')
@@ -426,7 +474,7 @@ describe('VersionControlPanel (worktree dock)', () => {
 
   it('falls back to the project-wide scan when no task can scope a comparison', async () => {
     mockVcState()
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     expect(host.querySelector('[data-testid="vc-compare-mode-full"]')?.getAttribute('data-state')).toBe('on')
     expect(host.querySelector('[data-testid="vc-compare-mode-task"]')?.getAttribute('data-state')).toBe('off')
@@ -438,7 +486,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     const projectCompare = vi.spyOn(api, 'compareMasterWithTia')
     const taskCompare = vi.spyOn(api, 'compareTaskWithTia')
     const stages = vi.spyOn(api, 'listTaskSourceStages')
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     await click(host.querySelector('button[aria-label="Task only"]')!)
 
@@ -457,7 +505,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
     vi.spyOn(api, 'listTaskSourceStages').mockResolvedValue([])
     const taskCompare = vi.spyOn(api, 'compareTaskWithTia')
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     await click(host.querySelector('button[aria-label="Task only"]')!)
 
@@ -470,7 +518,7 @@ describe('VersionControlPanel (worktree dock)', () => {
   it('keeps Task only unavailable for an active task that cannot own stages', async () => {
     mockVcState({ activeTask: worktreeTask({ scope: 'project', worktreeId: null, title: 'Project task' }) })
     const stages = vi.spyOn(api, 'listTaskSourceStages')
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     await click(host.querySelector('button[aria-label="Task only"]')!)
 
@@ -482,7 +530,7 @@ describe('VersionControlPanel (worktree dock)', () => {
   it('keeps Task only unavailable for an active task with no PLC binding', async () => {
     mockVcState({ activeTask: worktreeTask({ deviceId: null, title: 'Hardware task' }) })
     const stages = vi.spyOn(api, 'listTaskSourceStages')
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     await click(host.querySelector('button[aria-label="Task only"]')!)
 
@@ -497,7 +545,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     vi.spyOn(api, 'listTaskSourceStages').mockResolvedValue([taskStage('dev-1:Main')])
     const projectCompare = vi.spyOn(api, 'compareMasterWithTia')
     const taskCompare = vi.spyOn(api, 'compareTaskWithTia').mockResolvedValue(taskResult())
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     await click(host.querySelector('button[aria-label="Task only"]')!)
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
@@ -528,7 +576,7 @@ describe('VersionControlPanel (worktree dock)', () => {
         fingerprintComponents: { Code: { stored: 'old', live: 'new', matches: false } },
       }],
     }))
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
 
     await click(host.querySelector('button[aria-label="Task only"]')!)
     await click(host.querySelector('[data-testid="vc-compare-open"]')!)
@@ -547,7 +595,7 @@ describe('VersionControlPanel (worktree dock)', () => {
       activeTask: worktreeTask(),
       commitTasks: [worktreeTask(), worktreeTask({ taskId: 'task-2', title: 'Tune drive' })],
     })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
     await act(async () => {})
 
     const select = host.querySelector<HTMLSelectElement>('[data-testid="vc-commit-task"]')
@@ -564,7 +612,7 @@ describe('VersionControlPanel (worktree dock)', () => {
     })
     const setActive = vi.spyOn(api, 'setActiveWorktreeTask')
       .mockResolvedValue({ activeTask: worktreeTask({ taskId: 'task-2', title: 'Tune drive' }) })
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" />)
     await act(async () => {})
 
     const select = host.querySelector<HTMLSelectElement>('[data-testid="vc-commit-task"]')!
@@ -577,17 +625,64 @@ describe('VersionControlPanel (worktree dock)', () => {
     expect(activeTask).toHaveBeenCalledTimes(2)
   })
 
-  it('reads the worktree active task on mount and re-reads it when the state is refreshed', async () => {
+  it('reads the worktree active task on mount and re-reads it when the header refresh signal changes', async () => {
     const { activeTask } = mockVcState({ activeTask: worktreeTask() })
     vi.spyOn(api, 'getWorktreeEngineeringState').mockRejectedValue(new Error('no state'))
     vi.spyOn(api, 'listTaskSourceStages').mockResolvedValue([taskStage('dev-1:Main')])
-    const { host } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" />)
+    const { root } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" refreshSignal={0} />)
 
     // The default scope needs the active task, so it is read without waiting for a scope switch.
     expect(activeTask).toHaveBeenCalledTimes(1)
 
-    await click(host.querySelector('button[aria-label="Refresh version control"]')!)
+    await rerender(root, <VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" refreshSignal={1} />)
 
     expect(activeTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-reads the changes data when the header refresh signal changes', async () => {
+    const { status, log } = mockVcState()
+    const { root } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" refreshSignal={0} />)
+
+    expect(status).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledTimes(1)
+
+    await rerender(root, <VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" refreshSignal={1} />)
+
+    expect(status).toHaveBeenCalledTimes(2)
+    expect(log).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-reads the history data when the header refresh signal changes', async () => {
+    const { log, timeline } = mockVcState()
+    const { root } = await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" refreshSignal={0} />)
+
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(timeline).toHaveBeenCalledTimes(1)
+
+    await rerender(root, <VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="history" refreshSignal={1} />)
+
+    expect(log).toHaveBeenCalledTimes(2)
+    expect(timeline).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports the visible uncommitted object count, and zero when the branch is clean', async () => {
+    mockVcState({
+      entries: [
+        vcEntry('devices/PLC_1/source/Blocks/Main.xml'),
+        vcEntry('devices/PLC_1/source/Blocks/FB_Speed.xml'),
+        // Not a source object, so it is not part of the count the rail badges.
+        vcEntry('README.md'),
+      ],
+    })
+    const onCount = vi.fn()
+    await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" onUncommittedCountChange={onCount} />)
+
+    expect(onCount).toHaveBeenLastCalledWith(2)
+
+    mockVcState()
+    const onCleanCount = vi.fn()
+    await render(<VersionControlPanel workbenchId="wb-1" worktreeId="wt-1" section="changes" onUncommittedCountChange={onCleanCount} />)
+
+    expect(onCleanCount).toHaveBeenLastCalledWith(0)
   })
 })

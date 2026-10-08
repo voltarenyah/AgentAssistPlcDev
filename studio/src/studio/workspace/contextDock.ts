@@ -1,30 +1,28 @@
-// Pure derivation of the right context dock: what (if anything) the dock shows
-// for the current selection and focused workspace view. Focus follows the
-// selected tab of the ACTIVE FlexLayout tabset (WorkspaceService), so after
-// splits this mapping just re-runs with the new focused kind. When landing or
-// hardware pages are shown the workspace is not visible and focusedView may be
-// stale — the rules below keep the device dock out of those states.
+// Derivation of the right dock's content: which properties panel the `Properties`
+// page shows for the current selection, and which page a session opens when the
+// stored layout holds no page preference (ADR-0015).
 //
-// Version control is a worktree-level concept: on the worktree landing page
-// (no device selected) the right dock hosts the version control panel.
+// The dock itself no longer has a visibility matrix: the shell renders the rail on
+// every surface, so no selection or focus combination resolves to "no dock". A
+// selection that has no properties panel leaves the page on its named empty state.
 //
-// A device on a chat or source view has no dock at all: the AI sessions page
-// that used to fill it is gone, and the conversations it listed live in the
-// navigator's SESSIONS section.
+// Focus follows the selected tab of the ACTIVE FlexLayout tabset (WorkspaceService),
+// so after splits this mapping just re-runs with the new focused kind. When landing
+// or hardware pages are shown the workspace is not visible and focusedView may be
+// stale — the rules below keep a stale focus from choosing a panel for a selection
+// that no longer exists.
 
+import type { RightDockPage } from '../shellLayout'
 import type { WorkspaceViewKind } from './workspaceTypes'
 
-export type ContextDockContent =
-  | { kind: 'none' }
-  | { kind: 'hardware' }
-  | { kind: 'device' }
-  | { kind: 'knowledge' }
-  | { kind: 'version-control' }
+/** Which properties panel the `Properties` page renders for the current selection. */
+export type PropertiesDockKind = 'hardware' | 'device' | 'knowledge'
 
 export type ContextDockState = {
-  /** Whether the dock shell (resize handle + panel) renders at all. */
-  visible: boolean
-  content: ContextDockContent
+  /** The `Properties` page's panel, or null when the page shows its empty state. */
+  properties: PropertiesDockKind | null
+  /** The page a session opens before the user has chosen one. */
+  defaultPage: RightDockPage
 }
 
 export type ContextDockInputs = {
@@ -36,34 +34,27 @@ export type ContextDockInputs = {
   hasKnowledgeContext: boolean
 }
 
-const none: ContextDockContent = { kind: 'none' }
+/** A selected device owns the page on every focus; knowledge wins only with a selection of its own. */
+const resolveProperties = (inputs: ContextDockInputs): PropertiesDockKind | null => {
+  const { worktreeId, deviceId, mainViewKind, hardwarePage, focusedView, hasKnowledgeContext } = inputs
+  if (!worktreeId) return null
+  if (deviceId !== null) {
+    return focusedView === 'knowledge' && hasKnowledgeContext ? 'knowledge' : 'device'
+  }
+  // The hardware tree page shows the worktree's hardware target with no device selected. The BOM and
+  // network pages clear the shell's hardware view, so their node selection has nothing to describe
+  // and the page keeps its empty state.
+  return mainViewKind === 'hardware' && hardwarePage === 'tree' ? 'hardware' : null
+}
 
 export const resolveContextDock = (inputs: ContextDockInputs): ContextDockState => {
-  const { worktreeId, deviceId, mainViewKind, hardwarePage, focusedView, hasKnowledgeContext } = inputs
-
-  const visible = Boolean(worktreeId)
-    && (deviceId !== null || mainViewKind === 'hardware' || mainViewKind === 'worktree')
-  if (!visible) return { visible: false, content: none }
-
-  // Worktree landing page: the version control panel is the worktree-level dock.
-  if (deviceId === null && mainViewKind === 'worktree') {
-    return { visible, content: { kind: 'version-control' } }
-  }
-  // Hardware page without a device: the properties dock wins.
-  if (deviceId === null && mainViewKind === 'hardware' && hardwarePage === 'tree') {
-    return { visible, content: { kind: 'hardware' } }
-  }
-  if (deviceId !== null && focusedView === 'overview') {
-    return { visible, content: { kind: 'device' } }
-  }
-  if (deviceId !== null && focusedView === 'knowledge') {
-    return hasKnowledgeContext
-      ? { visible, content: { kind: 'knowledge' } }
-      : { visible, content: none }
-  }
-  // A device on a chat, source, inspector or stale focus resolves to no dock at all, so neither the
-  // dock shell nor its resize handle renders: an empty one would reserve room for a list that is not
-  // there, because the AI sessions page that used to fill this state is gone.
-  if (deviceId !== null) return { visible: false, content: none }
-  return { visible, content: none }
+  const properties = resolveProperties(inputs)
+  // A selection with properties opens that page, which is what the equivalent surface shows today
+  // (a device page shows device properties). A worktree with no device opens its working tree, which
+  // is what the worktree landing page shows today. Nothing selected falls back to the page that
+  // explains what to select.
+  const defaultPage: RightDockPage = properties !== null
+    ? 'properties'
+    : inputs.worktreeId ? 'changes' : 'properties'
+  return { properties, defaultPage }
 }

@@ -110,7 +110,9 @@ describe('MainStudio API key entrance', () => {
     act(() => host.querySelector<HTMLButtonElement>('[data-dock-toggle="right"]')?.click())
 
     expect(host.querySelector('[data-dock="left"]')?.getAttribute('data-dock-state')).toBe('closed')
-    expect(host.querySelector('[data-dock="right"]')).toBeNull()
+    // The right column keeps its element so its width can animate, so the collapsed state — not the
+    // element's absence — is what "collapsed" means (ADR-0015).
+    expect(host.querySelector('[data-dock="right"]')?.getAttribute('data-dock-state')).toBe('closed')
     expect(host.querySelector('[data-status-bar]')).not.toBeNull()
 
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click())
