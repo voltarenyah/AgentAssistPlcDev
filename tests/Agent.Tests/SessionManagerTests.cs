@@ -166,6 +166,49 @@ public sealed class SessionManagerTests : IDisposable
     }
 
     [Fact]
+    public void ListSessions_lists_only_the_conversations_the_device_owns()
+    {
+        var device = CreateDeviceContext("dev-1");
+        var otherDevice = CreateDeviceContext("dev-2");
+        var settings = new ChatRequestSettings();
+        var mine = SessionManager.CreateNewSession(device, settings, "mine");
+        var theirs = SessionManager.CreateNewSession(otherDevice, settings, "theirs");
+
+        var listed = Assert.Single(SessionManager.ListSessions(device));
+
+        Assert.Equal(mine.Header.SessionId, listed.SessionId);
+        Assert.Equal("dev-1", listed.DeviceId);
+        var worktreeWide = SessionManager.ListSessions(device.WorktreeRoot);
+        Assert.Equal(2, worktreeWide.Count);
+        Assert.Contains(worktreeWide, info => info.SessionId == theirs.Header.SessionId);
+    }
+
+    [Fact]
+    public void ListSessions_omits_a_conversation_that_names_no_device()
+    {
+        var device = CreateDeviceContext();
+        var sessionId = SessionManager.NewSessionId();
+        var directory = SessionManager.SessionsDirectory(device);
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, $"{sessionId}.json"), $$"""
+            {
+              "header": {
+                "sessionId": "{{sessionId}}",
+                "projectName": "legacy-project",
+                "createdAt": "2026-01-01T00:00:00.0000000+00:00",
+                "updatedAt": "2026-01-01T00:00:00.0000000+00:00",
+                "settings": { "model": "legacy" }
+              },
+              "messages": [],
+              "roundUsages": []
+            }
+            """);
+
+        Assert.Empty(SessionManager.ListSessions(device));
+        Assert.Single(SessionManager.ListSessions(device.WorktreeRoot));
+    }
+
+    [Fact]
     public void RenameSession_trims_and_persists_title()
     {
         var device = CreateDeviceContext();
@@ -441,15 +484,15 @@ public sealed class SessionManagerTests : IDisposable
         });
     }
 
-    private DeviceContext CreateDeviceContext()
+    private DeviceContext CreateDeviceContext(string deviceId = "dev-1")
     {
         var workbenchRoot = Path.Combine(tempRoot, "workbench");
         var worktreeRoot = Path.Combine(workbenchRoot, "worktrees", "feature-a");
-        var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+        var deviceRoot = Path.Combine(worktreeRoot, "devices", deviceId);
         return new DeviceContext(
             "wb-1",
             "wt-1",
-            "dev-1",
+            deviceId,
             workbenchRoot,
             worktreeRoot,
             deviceRoot,

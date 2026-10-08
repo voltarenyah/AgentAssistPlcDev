@@ -39,13 +39,25 @@ public static class SessionManager
     public static string NewSessionId() => Guid.NewGuid().ToString("N");
 
     /// <summary>
-    /// List all sessions for a device worktree, ordered by creation time descending.
+    /// List the sessions one device owns, ordered by update time descending.
+    ///
+    /// A worktree stores every conversation in one directory, so a device's list is the worktree's list
+    /// filtered to the conversations whose header names that device. Without the filter every device of
+    /// the worktree was handed the same list, and a surface that lists a worktree's conversations once
+    /// per device showed each of them once per device.
+    ///
+    /// A session that names no device — a legacy project-name session — belongs to none, so it is listed
+    /// under none; it stays reachable through <see cref="LoadLegacySession"/>.
     /// </summary>
-    public static List<ChatSessionInfo> ListSessions(DeviceContext device) =>
-        ListSessions(device?.WorktreeRoot
-            ?? throw new ArgumentNullException(nameof(device)));
+    public static List<ChatSessionInfo> ListSessions(DeviceContext device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        return ListSessions(device.WorktreeRoot)
+            .Where(info => string.Equals(info.DeviceId, device.DeviceId, StringComparison.Ordinal))
+            .ToList();
+    }
 
-    /// <summary>List all sessions beneath an explicit worktree root.</summary>
+    /// <summary>List every session beneath an explicit worktree root, whichever device owns it.</summary>
     public static List<ChatSessionInfo> ListSessions(string worktreeRoot)
     {
         var directory = SessionsDirectory(worktreeRoot);
