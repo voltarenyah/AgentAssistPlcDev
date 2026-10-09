@@ -296,15 +296,29 @@
     transition: opacity 180ms ease-out 70ms, transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .dock-shell-left[data-dock-state='closed'] > * {
+  /*
+   * The right column's rail model (ADR-0015): the shell's width animates between the rail alone and
+   * rail + page, and only the page's track translates and fades. The rail is a direct child of the
+   * same shell but must stay put, so the closed state targets the track rather than every child.
+   * The track clips instead of reflowing: the page keeps its layout at the target width inside it.
+   */
+  .dock-page-track {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    justify-content: flex-end;
+    overflow: hidden;
+  }
+
+  .dock-shell-right[data-dock-state='closed'] > .dock-page-track {
     opacity: 0;
-    transform: translateX(-10px);
+    transform: translateX(10px);
     transition-delay: 0ms;
   }
 
-  .dock-shell-right[data-dock-state='closed'] > * {
+  .dock-shell-left[data-dock-state='closed'] > * {
     opacity: 0;
-    transform: translateX(10px);
+    transform: translateX(-10px);
     transition-delay: 0ms;
   }
 

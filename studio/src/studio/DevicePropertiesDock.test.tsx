@@ -145,4 +145,28 @@ describe('DevicePropertiesDock', () => {
 
     expect(host.querySelector('[data-testid="device-safety-section"]')).toBeNull()
   })
+
+  it('renders no title of its own, because the page frame names the panel', async () => {
+    const { host } = await render(<DevicePropertiesDock meta={meta} info={info} hidden={false} />)
+
+    expect(host.querySelector('h2')).toBeNull()
+    expect(host.textContent).not.toContain('Device properties')
+    expect(host.textContent).toContain('Device')
+    expect(host.textContent).toContain('TIA project')
+    expect(host.textContent).toContain('Paths')
+  })
+
+  it('accepts a shell refresh signal without changing what it renders', async () => {
+    const { host, root } = await render(
+      <DevicePropertiesDock meta={meta} info={info} hidden={false} refreshSignal={0} />,
+    )
+    const before = host.textContent
+
+    await act(async () => {
+      root.render(<DevicePropertiesDock meta={meta} info={info} hidden={false} refreshSignal={1} />)
+    })
+
+    expect(host.textContent).toBe(before)
+    expect(host.textContent).toContain('TestPLCExportDemo')
+  })
 })

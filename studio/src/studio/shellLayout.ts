@@ -1,44 +1,116 @@
 export type DockSide = 'left' | 'right'
 
+/** The right dock's pages, in the order the rail presents them. */
+export const RIGHT_DOCK_PAGES = ['properties', 'changes', 'history'] as const
+export type RightDockPage = (typeof RIGHT_DOCK_PAGES)[number]
+
 export type ShellLayout = {
-  version: 1
+  version: 2
   leftOpen: boolean
-  rightOpen: boolean
   leftWidth: number
-  rightWidth: number
+  /** Whether the whole right column, rail included, is shown. The title bar's toggle owns it. */
+  rightColumnOpen: boolean
+  /** The open page's width. The rail and the resize handle are added to it (ADR-0015). */
+  rightPanelWidth: number
+  /**
+   * The page the rail marks, or `null` before the user has ever chosen one — `null` lets the first
+   * session follow the selection instead of forcing a page nobody picked.
+   */
+  rightPanel: RightDockPage | null
+  /** Whether that page is collapsed to the rail. Kept apart from the page so the rail can mark it. */
+  rightPanelCollapsed: boolean
 }
 
-export const SHELL_LAYOUT_STORAGE_KEY = 'plc-studio.shell-layout.v1'
+export const SHELL_LAYOUT_STORAGE_KEY = 'plc-studio.shell-layout.v2'
+const LEGACY_SHELL_LAYOUT_STORAGE_KEY = 'plc-studio.shell-layout.v1'
+
+/** The rail is a fixed strip inside the right column, so only the page is resized. */
+export const RIGHT_DOCK_RAIL_WIDTH = 44
+
+const MIN_DOCK_WIDTH = 240
+const MAX_DOCK_WIDTH = 420
 
 export const DEFAULT_SHELL_LAYOUT: ShellLayout = {
-  version: 1,
+  version: 2,
   leftOpen: true,
-  rightOpen: true,
   leftWidth: 310,
-  rightWidth: 360,
+  rightColumnOpen: true,
+  // The default column keeps the 310 px it held before the rail existed: 44 px rail + 266 px page.
+  rightPanelWidth: 310 - RIGHT_DOCK_RAIL_WIDTH,
+  rightPanel: null,
+  rightPanelCollapsed: false,
 }
 
 export const clampDockWidth = (_side: DockSide, value: number) =>
-  Math.round(Math.max(240, Math.min(420, value)))
+  Math.round(Math.max(MIN_DOCK_WIDTH, Math.min(MAX_DOCK_WIDTH, value)))
+
+const isRightPage = (value: unknown): value is RightDockPage =>
+  (RIGHT_DOCK_PAGES as readonly string[]).includes(value as string)
+
+const finiteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value)
+
+/** Reads the current shape, or null when the payload is not one. Raises on unparseable input. */
+const readV2 = (raw: string): ShellLayout | null => {
+  const parsed = JSON.parse(raw) as Partial<ShellLayout>
+  if (parsed.version !== 2
+    || typeof parsed.leftOpen !== 'boolean'
+    || typeof parsed.rightColumnOpen !== 'boolean'
+    || typeof parsed.rightPanelCollapsed !== 'boolean'
+    || !finiteNumber(parsed.leftWidth)
+    || !finiteNumber(parsed.rightPanelWidth)
+    || (parsed.rightPanel != null && !isRightPage(parsed.rightPanel))) {
+    return null
+  }
+  return {
+    version: 2,
+    leftOpen: parsed.leftOpen,
+    leftWidth: clampDockWidth('left', parsed.leftWidth),
+    rightColumnOpen: parsed.rightColumnOpen,
+    rightPanelWidth: clampDockWidth('right', parsed.rightPanelWidth),
+    rightPanel: parsed.rightPanel ?? null,
+    rightPanelCollapsed: parsed.rightPanelCollapsed,
+  }
+}
+
+/**
+ * A v1 layout stores the right dock as one column with no rail, so its width is the page's width
+ * plus the rail. Migrating subtracts the rail, which keeps the column's total width — and so the
+ * workspace — exactly where the user left it.
+ */
+const readV1 = (raw: string): ShellLayout | null => {
+  const parsed = JSON.parse(raw) as {
+    version?: number
+    leftOpen?: boolean
+    leftWidth?: number
+    rightOpen?: boolean
+    rightWidth?: number
+  }
+  if (parsed.version !== 1
+    || typeof parsed.leftOpen !== 'boolean'
+    || typeof parsed.rightOpen !== 'boolean'
+    || !finiteNumber(parsed.leftWidth)
+    || !finiteNumber(parsed.rightWidth)) {
+    return null
+  }
+  return {
+    version: 2,
+    leftOpen: parsed.leftOpen,
+    leftWidth: clampDockWidth('left', parsed.leftWidth),
+    rightColumnOpen: parsed.rightOpen,
+    rightPanelWidth: clampDockWidth('right', parsed.rightWidth - RIGHT_DOCK_RAIL_WIDTH),
+    rightPanel: null,
+    rightPanelCollapsed: false,
+  }
+}
 
 export const readShellLayout = (storage: Storage | null): ShellLayout => {
   if (!storage) return DEFAULT_SHELL_LAYOUT
   try {
     const raw = storage.getItem(SHELL_LAYOUT_STORAGE_KEY)
-    if (!raw) return DEFAULT_SHELL_LAYOUT
-    const parsed = JSON.parse(raw) as Partial<ShellLayout>
-    if (parsed.version !== 1 || typeof parsed.leftOpen !== 'boolean' || typeof parsed.rightOpen !== 'boolean') {
-      return DEFAULT_SHELL_LAYOUT
-    }
-    if (typeof parsed.leftWidth !== 'number' || typeof parsed.rightWidth !== 'number'
-      || !Number.isFinite(parsed.leftWidth) || !Number.isFinite(parsed.rightWidth)) return DEFAULT_SHELL_LAYOUT
-    return {
-      version: 1,
-      leftOpen: parsed.leftOpen,
-      rightOpen: parsed.rightOpen,
-      leftWidth: clampDockWidth('left', parsed.leftWidth),
-      rightWidth: clampDockWidth('right', parsed.rightWidth),
-    }
+    if (raw) return readV2(raw) ?? DEFAULT_SHELL_LAYOUT
+    const legacy = storage.getItem(LEGACY_SHELL_LAYOUT_STORAGE_KEY)
+    return legacy ? readV1(legacy) ?? DEFAULT_SHELL_LAYOUT : DEFAULT_SHELL_LAYOUT
   } catch {
     return DEFAULT_SHELL_LAYOUT
   }
@@ -46,10 +118,12 @@ export const readShellLayout = (storage: Storage | null): ShellLayout => {
 
 export const writeShellLayout = (storage: Storage | null, layout: ShellLayout) => {
   storage?.setItem(SHELL_LAYOUT_STORAGE_KEY, JSON.stringify({
-    version: 1,
+    version: 2,
     leftOpen: layout.leftOpen,
-    rightOpen: layout.rightOpen,
     leftWidth: clampDockWidth('left', layout.leftWidth),
-    rightWidth: clampDockWidth('right', layout.rightWidth),
+    rightColumnOpen: layout.rightColumnOpen,
+    rightPanelWidth: clampDockWidth('right', layout.rightPanelWidth),
+    rightPanel: layout.rightPanel ?? null,
+    rightPanelCollapsed: layout.rightPanelCollapsed,
   }))
 }

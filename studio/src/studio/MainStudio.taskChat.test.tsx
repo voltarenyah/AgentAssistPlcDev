@@ -206,10 +206,12 @@ it('opens a navigator conversation without dropping the selected device or its t
   expect(host.querySelector('[data-task-selected="true"]')?.textContent).toContain('Inspect startup sequence')
   expect(host.querySelector('[data-session="s1"]')).not.toBeNull()
   expect(host.querySelector('[data-session-pane="s1"]')).not.toBeNull()
-  // The device is on its chat view, which has no right dock any more: the sessions page is retired,
-  // so neither the dock shell nor its resize handle is left behind.
-  expect(host.querySelector('[data-dock="right"]')).toBeNull()
-  expect(host.querySelector('[aria-label="Resize context dock"]')).toBeNull()
+  // The device is on its chat view. The dock used to disappear here; the rail keeps it, with the
+  // device's own properties page open, which is the surface this state had no way to reach before.
+  expect(host.querySelector('[data-dock="right"]')).not.toBeNull()
+  expect(host.querySelector('[data-dock="right"]')?.getAttribute('data-page-state')).toBe('open')
+  expect(host.querySelector('[data-testid="right-dock-rail-properties"]')?.getAttribute('aria-selected')).toBe('true')
+  expect(host.querySelector('[aria-label="Resize context dock"]')).not.toBeNull()
   await act(async () => root.unmount())
 })
 

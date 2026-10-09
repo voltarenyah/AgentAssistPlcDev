@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 // Item 001: no user action opens the right dock by itself. Selecting a worktree
-// and starting a conversation from the chat empty state both leave
-// `shellLayout.rightOpen` exactly as the user left it, in either direction.
+// and starting a conversation from the chat empty state both leave the column
+// exactly as the user left it, in either direction. ADR-0015 later made the column
+// exist on every surface, so the same guarantee is now also observable on the view
+// itself: `data-dock-state` is the column's visibility, and the rail is always
+// inside it.
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -99,19 +102,22 @@ const clickText = async (host: HTMLElement, text: string) => {
 const dockState = (host: HTMLElement) =>
   host.querySelector('[data-dock="right"]')?.getAttribute('data-dock-state')
 
+const pageState = (host: HTMLElement) =>
+  host.querySelector('[data-dock="right"]')?.getAttribute('data-page-state')
+
+const railItem = (host: HTMLElement, page: 'properties' | 'changes' | 'history') =>
+  host.querySelector<HTMLElement>(`[data-testid="right-dock-rail-${page}"]`)
+
 const toggleRightDock = async (host: HTMLElement) => {
   const toggle = host.querySelector<HTMLButtonElement>('[data-dock-toggle="right"]')
   expect(toggle).not.toBeNull()
   await act(async () => { toggle!.click() })
 }
 
-/**
- * The persisted layout — the state this item is actually about. It stays observable on a view that
- * renders no dock at all, which is what the retired AI sessions page left the device chat view as.
- */
-const persistedRightOpen = () => {
+/** The persisted layout — the state this item is actually about. */
+const persistedRightColumn = () => {
   const raw = window.localStorage.getItem(SHELL_LAYOUT_STORAGE_KEY)
-  return raw ? (JSON.parse(raw) as { rightOpen?: boolean }).rightOpen : undefined
+  return raw ? (JSON.parse(raw) as { rightColumnOpen?: boolean }).rightColumnOpen : undefined
 }
 
 /** Selects the device whose workspace hosts the chat empty state. */
@@ -183,17 +189,17 @@ describe('MainStudio right dock is never opened by an action', () => {
     await selectDevice(host)
     await toggleRightDock(host)
     expect(dockState(host)).toBe('closed')
-    expect(persistedRightOpen()).toBe(false)
+    expect(persistedRightColumn()).toBe(false)
 
     await focusChatView(host)
     await startConversationFromEmptyState(host)
 
     expect(api.newChatSession).toHaveBeenCalledTimes(1)
-    // The retired AI sessions page leaves a device on the chat view with no right dock at all, so
-    // the state the user chose is asserted where it lives rather than on a rendered attribute: the
-    // conversation started without reopening anything.
-    expect(host.querySelector('[data-dock="right"]')).toBeNull()
-    expect(persistedRightOpen()).toBe(false)
+    // The column is rendered on every surface now, so the state the user chose is asserted on it
+    // rather than on its absence: starting a conversation reopened nothing (ADR-0015).
+    expect(host.querySelector('[data-dock="right"]')).not.toBeNull()
+    expect(dockState(host)).toBe('closed')
+    expect(persistedRightColumn()).toBe(false)
   })
 
   it('keeps an open right dock open when a conversation starts from the chat empty state', async () => {
@@ -202,13 +208,42 @@ describe('MainStudio right dock is never opened by an action', () => {
 
     await selectDevice(host)
     expect(dockState(host)).toBe('open')
-    expect(persistedRightOpen()).toBe(true)
+    expect(persistedRightColumn()).toBe(true)
+    // A device selection opens the properties page: the surface the device page showed before the
+    // rail existed is now the page the rail opens by default.
+    expect(railItem(host, 'properties')?.getAttribute('aria-selected')).toBe('true')
 
     await focusChatView(host)
     await startConversationFromEmptyState(host)
 
     expect(api.newChatSession).toHaveBeenCalledTimes(1)
-    expect(host.querySelector('[data-dock="right"]')).toBeNull()
-    expect(persistedRightOpen()).toBe(true)
+    expect(host.querySelector('[data-dock="right"]')).not.toBeNull()
+    expect(dockState(host)).toBe('open')
+    expect(pageState(host)).toBe('open')
+    expect(persistedRightColumn()).toBe(true)
+  })
+
+  it('opens, switches and collapses a page from the rail', async () => {
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+
+    await clickText(host, 'DemoWB')
+    await clickText(host, 'master')
+    await act(async () => {})
+    // The worktree landing page opens its working tree, which is what it showed before the rail.
+    expect(railItem(host, 'changes')?.getAttribute('aria-selected')).toBe('true')
+    expect(pageState(host)).toBe('open')
+
+    await act(async () => { railItem(host, 'history')!.click() })
+    expect(railItem(host, 'history')?.getAttribute('aria-selected')).toBe('true')
+
+    // Clicking the open page's own item collapses the page and leaves the rail marked.
+    await act(async () => { railItem(host, 'history')!.click() })
+    expect(pageState(host)).toBe('collapsed')
+    expect(railItem(host, 'history')?.getAttribute('aria-selected')).toBe('true')
+    expect(host.querySelector<HTMLElement>('[data-dock="right"]')?.style.width).toBe('44px')
+
+    await act(async () => { railItem(host, 'history')!.click() })
+    expect(pageState(host)).toBe('open')
   })
 })

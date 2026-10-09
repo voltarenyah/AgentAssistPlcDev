@@ -207,9 +207,11 @@ operations that already exist — the row menu only gives them their entry point
 `WorkbenchNavigator` gains a section, and `MainStudio` gains the load and the callbacks it needs — open,
 rename, export, bind, delete, and one to start a conversation. The session data itself is already
 available per device, so showing the conversations involves no API, graph, or storage change; the delete
-those rows offer is a separate decision with its own architecture impact (ADR-0010), and the retired dock
-page takes its `sessions` content kind with it, so `contextDock` resolves a device on a chat or source
-view to no dock at all.
+those rows offer is a separate decision with its own architecture impact (ADR-0010). The retired dock
+page takes its `sessions` content kind with it, so `contextDock` no longer has a sessions content to
+resolve. That the dock then resolved a device on a chat or source view to *no dock at all* was
+superseded on 2026-10-08 by `ADR-0015`: the right dock is a shell-owned rail that exists on every
+surface, and `contextDock` derives each of its pages' content instead of the dock's visibility.
 
 ## Implementation Guidance
 
@@ -270,6 +272,7 @@ reachable.
 | 2026-10-03 | 1.1 | The right dock's "AI sessions" page is retired, so this section becomes the only surface listing a device's conversations. Its row menu gains the export and task binding operations that page alone offered — binding from a picker over the worktree's tasks rather than an id prompt — and its header action starts a conversation in the scope the section is showing, including the device-scoped, task-less state, instead of only while a task is selected. |
 | 2026-10-05 | 1.2 | The task selection is cleared whenever the selected target changes, and activating the target that is already selected clears it too: a target selection names no task, so the section returns to the selected device's task-less conversations and a conversation no task owns stays reachable after a task has been opened. The open task detail closes with that selection, so the picked scope is what the main area shows. A task that owns no conversation starts its first one from its own detail page, whose `Sessions` header carries the section's creation action — closing the first of the two gaps the negative consequences recorded. |
 | 2026-10-08 | 1.3 | A conversation may be related to several tasks, so the row menu's binding becomes a set: a searchable picker with one check per task, where a second click clears that binding and the set is applied in one operation. The content rule is unchanged — the section still lists the selected task's conversations, and a conversation several tasks share is now listed by each of them — and the task-less case remains the conversation with no relation at all. This answers the first condition this ADR recorded under **Reconsider when**; the relation itself, its ownership by the engineering graph and the primary relation are [ADR-0014](ADR-0014-session-task-relations-belong-to-the-graph.md). |
+| 2026-10-08 | 1.4 | The amendment's clause that a device on a chat or source view resolves to no dock at all is superseded by `ADR-0015`: the right dock is a shell-owned icon rail that exists on every surface, so this section is still the only surface that *lists* a device's conversations, but its absence is no longer what the dock expresses. |
 
 ## Related Information
 
