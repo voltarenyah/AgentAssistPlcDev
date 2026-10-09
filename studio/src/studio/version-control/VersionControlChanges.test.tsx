@@ -3,6 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/api/client'
+import { toast } from 'sonner'
 import VersionControlChanges, { type VersionControlSourceEntry } from './VersionControlChanges'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -20,7 +21,24 @@ const entry = (overrides: Partial<VersionControlSourceEntry> = {}): VersionContr
 
 const snapshot = { revision: 3, commitsSince: 2, hardwareDiffers: false }
 
-const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false, onBeginOperation?: (kind: string, label: string) => string, operationStatus?: api.OperationStatus | null, branch = 'master') => {
+const commitTask = (taskId: string, title: string): api.EngineeringTask => ({
+  taskId,
+  workbenchId: 'wb-1',
+  scope: 'worktree',
+  worktreeId: 'wt-1',
+  title,
+  type: 'issue',
+  status: 'todo',
+  priority: 0,
+  intent: '',
+  expectedResult: '',
+  description: null,
+  createdUtc: '2026-10-06T00:00:00.000Z',
+  updatedUtc: '2026-10-06T00:00:00.000Z',
+  deviceId: 'dev-1',
+})
+
+const render = async (entries: VersionControlSourceEntry[], snapshotOverride = snapshot, compareSignal = 0, untrackablePendingSavepoint = false, onBeginOperation?: (kind: string, label: string) => string, operationStatus?: api.OperationStatus | null, branch = 'master', commitTarget?: { tasks: api.EngineeringTask[]; taskId: string | null; switching?: boolean; onChanged?: (taskId: string) => void }) => {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -36,10 +54,21 @@ const render = async (entries: VersionControlSourceEntry[], snapshotOverride = s
         untrackablePendingSavepoint={untrackablePendingSavepoint}
         onBeginOperation={onBeginOperation}
         operationStatus={operationStatus}
+        commitTasks={commitTarget?.tasks ?? []}
+        commitTaskId={commitTarget?.taskId ?? null}
+        switchingCommitTask={commitTarget?.switching ?? false}
+        onCommitTaskChanged={commitTarget?.onChanged}
       />,
     )
   })
   return { host, root }
+}
+
+const selectValue = async (select: HTMLSelectElement, value: string) => {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!.call(select, value)
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
 }
 
 const click = async (element: Element) => {
@@ -88,6 +117,61 @@ describe('VersionControlChanges', () => {
     const { host } = await render([entry()], snapshot, 0, false, undefined, status)
 
     expect(host.querySelector('[data-testid="vc-commit-controls"]')).toBeNull()
+  })
+
+  it('shows which task the commit is linked to and lets it be changed', async () => {
+    const onChanged = vi.fn()
+    const { host } = await render([entry()], snapshot, 0, false, undefined, null, 'master', {
+      tasks: [commitTask('task-1', 'Fix Main'), commitTask('task-2', 'Tune drive')],
+      taskId: 'task-1',
+      onChanged,
+    })
+
+    const select = host.querySelector<HTMLSelectElement>('[data-testid="vc-commit-task"]')!
+    expect(select.value).toBe('task-1')
+    expect(Array.from(select.options).map(option => option.textContent)).toEqual(['Fix Main', 'Tune drive'])
+    expect(host.querySelector('[data-testid="vc-commit-task-note"]')?.textContent).toContain('linked to this task')
+
+    await selectValue(select, 'task-2')
+
+    expect(onChanged).toHaveBeenCalledWith('task-2')
+  })
+
+  it('reports a task-target change in flight instead of accepting another commit', async () => {
+    const { host } = await render([entry()], snapshot, 0, false, undefined, null, 'master', {
+      tasks: [commitTask('task-1', 'Fix Main'), commitTask('task-2', 'Tune drive')],
+      taskId: 'task-1',
+      switching: true,
+    })
+
+    expect(host.querySelector<HTMLSelectElement>('[data-testid="vc-commit-task"]')!.disabled).toBe(true)
+    expect(host.querySelector('[data-testid="vc-commit-task-note"]')?.textContent).toContain('Switching the worktree task')
+  })
+
+  it('shows no task target when no worktree task can take the commit', async () => {
+    const { host } = await render([entry()])
+
+    expect(host.querySelector('[data-testid="vc-commit-controls"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="vc-commit-task"]')).toBeNull()
+  })
+
+  it('surfaces an evidence warning the commit result carried', async () => {
+    // The commit landed but a follow-up evidence write did not: the warning is the only place the
+    // user learns the task's baseline did not advance.
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => '')
+    vi.spyOn(api, 'commitVcPaths').mockResolvedValue({
+      sha: 'abc',
+      message: 'change A',
+      files: ['devices/PLC_1/source/Blocks/A.xml'],
+      evidenceWarnings: ['Commit succeeded, but staged task evidence was not recorded: TIA is busy'],
+    })
+    const { host } = await render([entry({ filePath: 'devices/PLC_1/source/Blocks/A.xml', objectName: 'A' })])
+
+    await click(host.querySelectorAll('[data-testid="plc-source-row"]')[0])
+    await type(host.querySelector('textarea[aria-label="Commit message"]')!, 'change A')
+    await click(host.querySelector('[data-testid="vc-commit-selected"]')!)
+
+    expect(warning).toHaveBeenCalledWith('Commit succeeded, but staged task evidence was not recorded: TIA is busy')
   })
 
   it('groups PLC objects into collapsible folders and selects rows on click', async () => {
@@ -174,6 +258,23 @@ describe('VersionControlChanges', () => {
     expect(host.querySelector('[data-testid="vc-snapshot-revision"]')?.textContent).toBe('r3')
     expect(host.querySelector('[data-testid="vc-snapshot-drift"]')?.textContent).toContain('2 commits since')
     expect(host.querySelector('[data-testid="vc-hardware-differs"]')?.textContent).toContain('hardware different')
+  })
+
+  it('directs a refused savepoint at the Full scan it needs', async () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '')
+    vi.spyOn(api, 'createSvnSavepoint').mockRejectedValue(new api.WorkbenchApiError(
+      400,
+      'SVN_SAVEPOINT_SCAN_REQUIRED',
+      'A native savepoint must record a TIA state that a Full scan compared against this commit. '
+        + 'Run Compare with TIA as a Full scan, commit or resolve every source difference it reports, then compare again.',
+    ))
+    const { host } = await render([entry()])
+
+    await type(host.querySelector('input[aria-label="Description for TIA snapshot"]')!, 'before IP change')
+    await click(host.querySelector('[data-testid="vc-create-snapshot"]')!)
+
+    expect(error).toHaveBeenCalled()
+    expect(String(error.mock.calls[0][0])).toContain('Full scan')
   })
 
   it('creates a TIA snapshot only with a description', async () => {

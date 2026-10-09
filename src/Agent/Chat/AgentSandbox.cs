@@ -112,6 +112,13 @@ public sealed class AgentSandbox
                 sessionGranted.Add(call.Name);
                 audit?.Record(call.Name, "destructive", "allow-session", Summarize(call.ArgumentsJson));
                 return null;
+            case ToolConfirmation.Expired:
+                // Its own code and wording: reporting an unanswered card as a user rejection sent a real
+                // investigation after a denial nobody made, and it tells the model to re-ask rather than
+                // to stop asking.
+                return Block(call, "destructive", "SANDBOX_CONFIRMATION_EXPIRED",
+                    $"The approval card for '{call.Name}' expired unanswered, so the call was not run.",
+                    "Ask the user to confirm it now; a new card is raised with a fresh deadline.");
             default:
                 return Block(call, "destructive", "SANDBOX_USER_DENIED",
                     $"The user denied the destructive tool '{call.Name}'.",

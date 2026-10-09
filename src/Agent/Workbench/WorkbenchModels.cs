@@ -138,10 +138,47 @@ public sealed record DeviceImportRecord(
     IReadOnlyList<string> Warnings,
     string? Error);
 
+/// <summary>
+/// The freshness of one device's knowledge database, as the device chat and the device routes report
+/// it. Every knowledge tool answers from this database, so a caller has to know whether those answers
+/// still describe the current PLC source before it relies on them.
+///
+/// <see cref="State"/> is derived from the database's existence, the persisted staleness flags, and a
+/// hash comparison of every managed source XML against the hashes the last successful update applied.
+/// The hash half is what makes an edit the app did not perform detectable: such an edit sets no flag
+/// (ADR-0012), and only the applied hashes show that the database is behind.
+/// </summary>
+public sealed record DeviceKnowledgeStatus(
+    string State,
+    string DbPath,
+    string? UpdatedAt,
+    bool FlaggedStale,
+    bool BaselineStale,
+    bool RequiresRebuild,
+    IReadOnlyList<string> ChangedPaths,
+    IReadOnlyList<string> AddedPaths,
+    IReadOnlyList<string> RemovedPaths)
+{
+    /// <summary>No database exists for this device yet.</summary>
+    public const string MissingState = "missing";
+
+    /// <summary>The database exists but does not describe the current PLC source.</summary>
+    public const string StaleState = "stale";
+
+    /// <summary>The database exists and describes the current PLC source.</summary>
+    public const string CurrentState = "current";
+
+    public bool IsCurrent => string.Equals(State, CurrentState, StringComparison.Ordinal);
+
+    /// <summary>Source components the database is behind by: changed, added, or no longer present.</summary>
+    public int PendingComponentCount => ChangedPaths.Count + AddedPaths.Count + RemovedPaths.Count;
+}
+
 public sealed record TiaSynchronizationResult(
     string ComparisonId,
     IReadOnlyList<string> PendingPaths,
-    string? CommitSha = null);
+    string? CommitSha = null,
+    IReadOnlyList<string>? EvidenceWarnings = null);
 
 public sealed record WorkbenchCommitResult(
     string Sha,
@@ -239,6 +276,18 @@ public sealed record DeviceContext(
     string SourceRoot,
     string StagingRoot,
     string KnowledgeDbPath);
+
+/// <summary>Outcome of showing a worktree's registered TIA project in TIA Portal.</summary>
+/// <param name="ProjectName">Project name TIA reported, when it reported one.</param>
+/// <param name="ProjectPath">Project file path TIA reported as the active project.</param>
+/// <param name="ReusedRunningSession">True when an already-running TIA Portal that shows this project
+/// was attached instead of a new TIA Portal instance being started.</param>
+/// <param name="WithUI">Always true today: the action's purpose is a visible TIA Portal.</param>
+public sealed record OpenTiaProjectResult(
+    string? ProjectName,
+    string ProjectPath,
+    bool ReusedRunningSession,
+    bool WithUI);
 
 public sealed record HardwareConfigurationReloadResult(
     string RootPath,

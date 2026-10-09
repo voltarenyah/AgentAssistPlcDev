@@ -131,6 +131,14 @@ public sealed record SessionCreateApiRequest(Agent.Chat.ChatRequestSettings Sett
 public sealed record SessionSaveApiRequest(ChatSessionData Session);
 public sealed record SessionTaskApiRequest(string? TaskId);
 
+/// <summary>
+/// One request replaces a conversation's whole relation set, so the conversation is never observable
+/// half-linked (UI Spec AC-019). <c>PrimaryTaskId</c> is honoured when it names a task in
+/// <c>TaskIds</c>; otherwise the conversation's current primary is kept when it is still in the set,
+/// and the first requested id becomes the primary when it is not.
+/// </summary>
+public sealed record SessionTasksApiRequest(string[]? TaskIds, string? PrimaryTaskId = null);
+
 public sealed class WorkbenchApiState
 {
     private readonly WorkbenchCatalog catalog;
@@ -1243,14 +1251,29 @@ public static class WorkbenchEndpoints
                     var task = graphScope.Service.FindTask(taskId);
                     if (task is null || task.WorktreeId != worktreeId)
                         throw new EngineeringGraphConstraintException("The requested task is not in this worktree.", "TASK_NOT_FOUND");
-                    var stagedPaths = graphScope.Service.ListActiveStages(task.TaskId)
+                    var stagedObjects = graphScope.Service.ListActiveStages(task.TaskId)
                         .Select(stage => graphScope.Service.GetEntity(GraphEntityKind.SourceObject, stage.SourceObjectId)?.ExternalRef)
                         .Where(path => !string.IsNullOrWhiteSpace(path))
-                        .Select(path => path!.Replace('\\', '/'))
-                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        .Select(path => path!)
+                        .ToArray();
+                    // A stage records its object relative to the device's source root while a commit
+                    // selects paths relative to the worktree; comparing one form against the other
+                    // rejected every legitimate task commit (015).
+                    var sourceRoot = Path.GetRelativePath(
+                        root, s.Device(workbenchId, worktreeId, task.DeviceId!).Context.SourceRoot);
                     var requestedPaths = body.Paths.Select(path => path.Replace('\\', '/')).ToArray();
-                    if (requestedPaths.Length == 0 || requestedPaths.Any(path => !stagedPaths.Contains(path)))
-                        throw new EngineeringGraphConstraintException("A task commit may contain only active staged source objects.", "TASK_COMMIT_STAGE_MISMATCH");
+                    // A message-only commit (an untrackable or safety change) carries no paths and still
+                    // belongs to its task, so only a requested path outside the task's active stages is a
+                    // mismatch. The refusal names those paths and the task that currently owns them, so
+                    // the selection can be corrected instead of guessed at.
+                    var outsideStages = requestedPaths
+                        .Where(path => !stagedObjects.Any(objectPath => SourcePathForms.Matches(sourceRoot, objectPath, path)))
+                        .ToArray();
+                    if (outsideStages.Length > 0)
+                        throw new EngineeringGraphConstraintException(
+                            "A task commit may contain only active staged source objects. Not staged on this task: "
+                            + DescribeUnstagedPaths(outsideStages, worktreeId, sourceRoot, graphScope.Service),
+                            "TASK_COMMIT_STAGE_MISMATCH");
                 }
             }
             var hasExistingSource = body.Paths.Any(path =>
@@ -1414,17 +1437,32 @@ public static class WorkbenchEndpoints
             string worktreeId,
             string comparisonId,
             TiaSynchronizationAcceptApiRequest body,
+            WorkbenchApiState s,
             WorkbenchCoordinator coordinator,
+            EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks,
             OperationStatusRegistry operations,
             HttpContext http,
             CancellationToken ct) =>
-            await RunOperationAsync(
+        {
+            // The accepted objects become the worktree's active task's new stage baseline, exactly as
+            // they would for a /vc/commit (ADR-0003), so the commit has to name that task.
+            string? commitTaskId;
+            using (var graphScope = graphs.Open(s.Workbench(workbenchId)))
+            {
+                var activeTask = activeTasks.Get(graphScope.Service, worktreeId);
+                commitTaskId = activeTask is { ScopeKind: GraphTaskScopeKind.Worktree } ? activeTask.TaskId : null;
+            }
+
+            return await RunOperationAsync(
                 http,
                 operations,
                 "accept-tia-synchronization",
                 "Applying selected TIA source to the active worktree...",
-                progress => coordinator.ApplyTiaSynchronizationAsync(workbenchId, worktreeId, comparisonId, body.Paths, body.Message, ct, progress),
-                "Selected TIA source committed to the active worktree.").ConfigureAwait(false));
+                progress => coordinator.ApplyTiaSynchronizationAsync(
+                    workbenchId, worktreeId, comparisonId, body.Paths, body.Message, ct, progress, commitTaskId),
+                "Selected TIA source committed to the active worktree.").ConfigureAwait(false);
+        });
         app.MapPost("/api/workbenches/{workbenchId}/vc/comparisons/{comparisonId}/push-to-tia", async (
             string workbenchId,
             string comparisonId,
@@ -1861,6 +1899,9 @@ public static class WorkbenchEndpoints
                     allowCompile,
                     body?.CommitMessage),
                 "All PLC contexts generated.").ConfigureAwait(false));
+        app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/status", (
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s, WorkbenchCoordinator c) =>
+            c.ReadKnowledgeStatus(s.Device(workbenchId, worktreeId, device).Context));
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/knowledge/update", async (
             string workbenchId, string worktreeId, string device, WorkbenchApiState s,
             WorkbenchCoordinator c, OperationStatusRegistry operations, HttpContext http, CancellationToken ct) =>
@@ -1940,26 +1981,37 @@ public static class WorkbenchEndpoints
                 progress => c.PushSourceObjectToTiaAsync(
                     s.Device(workbenchId, worktreeId, device).Context, comparisonId, ct, progress),
                 "Local source imported into TIA.").ConfigureAwait(false));
+        // A conversation's relation set is projected from the engineering graph, which is the
+        // relation's only authority (ADR-0014): one query for the page, and a graph that cannot be
+        // opened degrades to an empty set instead of hiding the conversations (AC-006, AC-007).
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions", (
-            string workbenchId, string worktreeId, string device, WorkbenchApiState s) =>
-            SessionManager.ListSessions(s.Device(workbenchId, worktreeId, device).Context));
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, CompatibilityRuntimeState runtime) =>
+        {
+            var sessions = SessionManager.ListSessions(s.Device(workbenchId, worktreeId, device).Context);
+            var relations = SessionGraphOperations.ReadRelations(
+                graphs, s.Workbench(workbenchId), sessions.Select(item => item.SessionId).ToArray(), runtime);
+            return SessionGraphOperations.ProjectSessions(sessions, relations);
+        });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions", (
             string workbenchId, string worktreeId, string device, SessionCreateApiRequest r, WorkbenchApiState s,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
+            var context = s.Device(workbenchId, worktreeId, device).Context;
             var taskId = ResolveSessionTaskId(s, graphs, activeTasks, workbenchId, worktreeId, r.TaskId);
-            var session = SessionManager.CreateNewSession(
-                s.Device(workbenchId, worktreeId, device).Context, r.Settings, r.RuntimeContext, taskId,
-                string.IsNullOrWhiteSpace(taskId) ? null : "default");
+            var session = SessionManager.CreateNewSession(context, r.Settings, r.RuntimeContext);
             using var graph = graphs.Open(s.Workbench(workbenchId));
-            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default); }
-            catch { SessionManager.DeleteSession(s.Device(workbenchId, worktreeId, device).Context, session.Header.SessionId); throw; }
-            return session;
+            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default, taskId); }
+            catch { SessionManager.DeleteSession(context, session.Header.SessionId); throw; }
+            return SessionGraphOperations.Project(session, graph.Service.ListSessionTaskRelations([session.Header.SessionId]));
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
-            string workbenchId, string worktreeId, string device, string session, WorkbenchApiState s) =>
+            string workbenchId, string worktreeId, string device, string session, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, CompatibilityRuntimeState runtime) =>
             SessionManager.LoadSession(s.Device(workbenchId, worktreeId, device).Context, session) is { } value
-                ? Results.Ok(value) : Results.NotFound());
+                ? Results.Ok(SessionGraphOperations.Project(value, SessionGraphOperations.ReadRelations(
+                    graphs, s.Workbench(workbenchId), [session], runtime)))
+                : Results.NotFound());
         // Deleting a conversation removes it from both stores, so the device it belongs to is named
         // rather than resolved from the current selection (ADR-0010).
         app.MapDelete("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
@@ -1975,17 +2027,18 @@ public static class WorkbenchEndpoints
         });
         app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
             string workbenchId, string worktreeId, string device, string session,
-            SessionSaveApiRequest r, WorkbenchApiState s, EngineeringGraphApiFactory graphs,
-            ActiveTaskContextService activeTasks) =>
+            SessionSaveApiRequest r, WorkbenchApiState s, EngineeringGraphApiFactory graphs) =>
         {
             if (r.Session.Header.SessionId != session) return Results.BadRequest();
             var context = s.Device(workbenchId, worktreeId, device).Context;
             var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             var candidate = SessionGraphOperations.ValidateCandidate(context, current, r.Session);
             using var graph = graphs.Open(s.Workbench(workbenchId));
-            var updatedSession = SessionGraphOperations.ApplyWithPersistence(graph.Service, candidate, candidate.Header.TaskId,
-                value => value with { Header = value.Header with { TaskProvenance = string.IsNullOrWhiteSpace(value.Header.TaskId) ? null : "manual" } },
-                value => SessionManager.SaveSession(context, value));
+            // The header is no longer a relation input, so this write only imports the legacy value
+            // the persisted file still carries, before that write clears it (AC-008). Importing the
+            // incoming header instead would let an echoed response inject a binding.
+            SessionGraphOperations.ImportLegacy(graph.Service, current);
+            SessionManager.SaveSession(context, candidate);
             return Results.NoContent();
         });
         app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}/task", (
@@ -1995,8 +2048,21 @@ public static class WorkbenchEndpoints
             var context = s.Device(workbenchId, worktreeId, device).Context;
             var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             using var graph = graphs.Open(s.Workbench(workbenchId));
-            var updated = SessionGraphOperations.ApplyWithPersistence(graph.Service, current, request.TaskId,
-                value => value with { Header = value.Header with { TaskId = request.TaskId, TaskProvenance = string.IsNullOrWhiteSpace(request.TaskId) ? null : "manual", UpdatedAt = DateTimeOffset.UtcNow.ToString("O") } },
+            var updated = SessionGraphOperations.SetPrimary(
+                graph.Service, current, request.TaskId, value => SessionManager.SaveSession(context, value));
+            return Results.Ok(updated);
+        });
+        // One request replaces the whole relation set, so a conversation is never observable
+        // half-linked; the two /task routes above stay as "set the primary relation" (AC-012).
+        app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}/tasks", (
+            string workbenchId, string worktreeId, string device, string session, SessionTasksApiRequest request,
+            WorkbenchApiState s, EngineeringGraphApiFactory graphs) =>
+        {
+            var context = s.Device(workbenchId, worktreeId, device).Context;
+            var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
+            using var graph = graphs.Open(s.Workbench(workbenchId));
+            var updated = SessionGraphOperations.ApplySet(
+                graph.Service, current, request.TaskIds, request.PrimaryTaskId,
                 value => SessionManager.SaveSession(context, value));
             return Results.Ok(updated);
         });
@@ -2093,6 +2159,9 @@ public static class WorkbenchEndpoints
                     "Refresh applied.")
                 .ConfigureAwait(false);
         });
+        app.MapGet("/api/devices/{device}/knowledge/status", (
+            string device, WorkbenchApiState s, WorkbenchCoordinator c) =>
+            c.ReadKnowledgeStatus(s.Device(device).Context));
         app.MapPost("/api/devices/{device}/knowledge/update", async (
             string device,
             WorkbenchApiState s,
@@ -2179,22 +2248,38 @@ public static class WorkbenchEndpoints
                     workbenchId, source, r.TargetWorktreeId, progress: progress),
                 "Worktree merged.").ConfigureAwait(false);
         });
-        app.MapGet("/api/devices/{device}/sessions", (string device, WorkbenchApiState s) => SessionManager.ListSessions(s.Device(device).Context));
+        app.MapGet("/api/devices/{device}/sessions", (string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, CompatibilityRuntimeState runtime) =>
+        {
+            var context = s.Device(device).Context;
+            var sessions = SessionManager.ListSessions(context);
+            var relations = SessionGraphOperations.ReadRelations(
+                graphs, s.Workbench(context.WorkbenchId), sessions.Select(item => item.SessionId).ToArray(), runtime);
+            return SessionGraphOperations.ProjectSessions(sessions, relations);
+        });
         app.MapPost("/api/devices/{device}/sessions", (string device, SessionCreateApiRequest r, WorkbenchApiState s,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var selection = s.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
+            var context = s.Device(device).Context;
             var taskId = ResolveSessionTaskId(s, graphs, activeTasks, selection.WorkbenchId, selection.WorktreeId, r.TaskId);
-            var session = SessionManager.CreateNewSession(s.Device(device).Context, r.Settings, r.RuntimeContext, taskId,
-                string.IsNullOrWhiteSpace(taskId) ? null : "default");
+            var session = SessionManager.CreateNewSession(context, r.Settings, r.RuntimeContext);
             using var graph = graphs.Open(s.Workbench(selection.WorkbenchId));
-            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default); }
-            catch { SessionManager.DeleteSession(s.Device(device).Context, session.Header.SessionId); throw; }
-            return session;
+            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default, taskId); }
+            catch { SessionManager.DeleteSession(context, session.Header.SessionId); throw; }
+            return SessionGraphOperations.Project(session, graph.Service.ListSessionTaskRelations([session.Header.SessionId]));
         });
-        app.MapGet("/api/devices/{device}/sessions/{session}", (string device, string session, WorkbenchApiState s) => SessionManager.LoadSession(s.Device(device).Context, session) is { } value ? Results.Ok(value) : Results.NotFound());
+        app.MapGet("/api/devices/{device}/sessions/{session}", (string device, string session, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, CompatibilityRuntimeState runtime) =>
+        {
+            var context = s.Device(device).Context;
+            return SessionManager.LoadSession(context, session) is { } value
+                ? Results.Ok(SessionGraphOperations.Project(value, SessionGraphOperations.ReadRelations(
+                    graphs, s.Workbench(context.WorkbenchId), [session], runtime)))
+                : Results.NotFound();
+        });
         app.MapPut("/api/devices/{device}/sessions/{session}", (string device, string session, SessionSaveApiRequest r, WorkbenchApiState s,
-            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+            EngineeringGraphApiFactory graphs) =>
         {
             if (r.Session.Header.SessionId != session) return Results.BadRequest();
             var selection = s.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
@@ -2202,9 +2287,8 @@ public static class WorkbenchEndpoints
             var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             var candidate = SessionGraphOperations.ValidateCandidate(context, current, r.Session);
             using var graph = graphs.Open(s.Workbench(selection.WorkbenchId));
-            var updatedSession = SessionGraphOperations.ApplyWithPersistence(graph.Service, candidate, candidate.Header.TaskId,
-                value => value with { Header = value.Header with { TaskProvenance = string.IsNullOrWhiteSpace(value.Header.TaskId) ? null : "manual" } },
-                value => SessionManager.SaveSession(context, value));
+            SessionGraphOperations.ImportLegacy(graph.Service, current);
+            SessionManager.SaveSession(context, candidate);
             return Results.NoContent();
         });
         return app;
@@ -2444,6 +2528,33 @@ public static class WorkbenchEndpoints
             throw new EngineeringGraphConstraintException(
                 "The selected task is not compatible with the current project or Workbench context.");
         return task.TaskId;
+    }
+
+    /// <summary>
+    /// Names the selected source paths that are not staged on the committing task — and, for each one
+    /// another task of this worktree owns, that task — so a refused task commit says what to release
+    /// instead of only that something was wrong. Both recorded path forms are resolved (015).
+    /// </summary>
+    private static string DescribeUnstagedPaths(
+        IReadOnlyList<string> paths,
+        string worktreeId,
+        string sourceRoot,
+        EngineeringGraphService graph)
+    {
+        var owners = graph.ListWorktreeActiveStages(worktreeId)
+            .Select(item => new
+            {
+                item.TaskTitle,
+                ObjectPath = graph.GetEntity(GraphEntityKind.SourceObject, item.Stage.SourceObjectId)?.ExternalRef,
+            })
+            .Where(item => !string.IsNullOrWhiteSpace(item.ObjectPath) && !string.IsNullOrWhiteSpace(item.TaskTitle))
+            .ToArray();
+
+        return string.Join(", ", paths.Select(path =>
+        {
+            var owner = owners.FirstOrDefault(item => SourcePathForms.Matches(sourceRoot, item.ObjectPath!, path));
+            return owner is null ? path : $"{path} (staged on '{owner.TaskTitle}')";
+        }));
     }
 
     private static IResult ToEngineeringTaskDetailResult(EngineeringGraphService graph, string taskId)

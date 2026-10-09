@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import {
   AlertCircle,
   Boxes,
@@ -30,6 +30,7 @@ import WorkspaceHost, { type WorkspaceChatProps, type WorkspaceViewKind } from '
 import ChatWorkspace from '@/studio/chat/ChatWorkspace'
 import { WorkspaceService } from '@/studio/workspace/WorkspaceService'
 import { resolveContextDock } from '@/studio/workspace/contextDock'
+import RightDock from '@/studio/workspace/RightDock'
 import { readWorkspaceLayout, writeWorkspaceLayout } from '@/studio/workspace/workspaceLayoutStorage'
 import VersionControlPanel from '@/studio/version-control/VersionControlPanel'
 import WorkbenchNavigator, {
@@ -80,6 +81,7 @@ import {
   readShellLayout,
   writeShellLayout,
   type DockSide,
+  type RightDockPage,
   type ShellLayout,
 } from '@/studio/shellLayout'
 import {
@@ -552,6 +554,10 @@ export default function MainStudio() {
     startX: number
     startWidth: number
   } | null>(null)
+  /** Bumped by a page's header refresh; the panels that read their own data follow it. */
+  const [dockRefreshSignal, setDockRefreshSignal] = useState(0)
+  /** The selected worktree's uncommitted object count, reported by the changes page, for the rail. */
+  const [dockUncommitted, setDockUncommitted] = useState<number | null>(null)
   const [knowledgeSelection, setKnowledgeSelection] = useState<{
     node: api.GraphNode | null
     edge: api.GraphEdge | null
@@ -624,13 +630,17 @@ export default function MainStudio() {
   const toggleDock = useCallback((side: DockSide) => {
     setShellLayout(previous => side === 'left'
       ? { ...previous, leftOpen: !previous.leftOpen }
-      : { ...previous, rightOpen: !previous.rightOpen })
+      : { ...previous, rightColumnOpen: !previous.rightColumnOpen })
   }, [])
 
+  /** Stable, because the changes page reports into it from an effect. */
+  const reportUncommitted = useCallback((count: number) => setDockUncommitted(count), [])
+
   const startDockResize = useCallback((side: DockSide, startX: number) => {
-    const startWidth = side === 'left' ? shellLayout.leftWidth : shellLayout.rightWidth
+    // The rail is fixed, so a drag on the right changes the page's width, not the column's.
+    const startWidth = side === 'left' ? shellLayout.leftWidth : shellLayout.rightPanelWidth
     dockResizeRef.current = { side, startX, startWidth }
-  }, [shellLayout.leftWidth, shellLayout.rightWidth])
+  }, [shellLayout.leftWidth, shellLayout.rightPanelWidth])
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -642,7 +652,7 @@ export default function MainStudio() {
         : resize.startWidth - delta
       setShellLayout(previous => resize.side === 'left'
         ? { ...previous, leftWidth: clampDockWidth('left', nextWidth) }
-        : { ...previous, rightWidth: clampDockWidth('right', nextWidth) })
+        : { ...previous, rightPanelWidth: clampDockWidth('right', nextWidth) })
     }
     const handlePointerUp = () => { dockResizeRef.current = null }
     window.addEventListener('pointermove', handlePointerMove)
@@ -899,7 +909,7 @@ export default function MainStudio() {
           message: displayError(error),
         })
       })
-  }, [hardwarePage, selection.deviceId, selection.workbenchId, selection.worktreeId])
+  }, [hardwarePage, selection.deviceId, selection.workbenchId, selection.worktreeId, dockRefreshSignal])
 
   useEffect(() => {
     const requestId = ++hardwareBomRequestId.current
@@ -1028,10 +1038,25 @@ export default function MainStudio() {
     }
   }, [])
 
+  /**
+   * Closes the open task detail and invalidates a read still in flight, so a detail the user has
+   * navigated away from cannot reappear when its load settles. The detail renders ahead of every other
+   * view, so a scope selection that left it open showed nothing of the scope the user picked — which is
+   * how selecting a device appeared to change nothing while the task it had opened stayed selected.
+   */
+  const closeTaskDetail = () => {
+    taskDetailRequestId.current += 1
+    setTaskDetail(null)
+    setTaskDetailTask(null)
+    setTaskDetailError(null)
+    setTaskDetailLoading(false)
+  }
+
   const selectWorkbench = (workbench: api.Workbench) => {
     const requestId = ++selectionRequestId.current
     // Local focus changes must not wait for the shared runtime acknowledgement.
     // The workbench runtime effect refreshes the assistant state after this render.
+    closeTaskDetail()
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null, targetKind: null })
     setMainView({ kind: 'project' })
     setDeviceSelection(null)
@@ -1073,6 +1098,7 @@ export default function MainStudio() {
     const requestId = ++selectionRequestId.current
     // Selecting a worktree is local UI state. Let the landing page fetch its
     // own details while the shared runtime acknowledgement happens in parallel.
+    closeTaskDetail()
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null, targetKind: null })
     setMainView({ kind: 'worktree', tab: 'overview' })
     setDeviceSelection(null)
@@ -1107,6 +1133,7 @@ export default function MainStudio() {
     const requestId = ++selectionRequestId.current
     // Selection is a pure metadata operation: apply it instantly. The snapshot
     // (per-block manifest work) loads in the background and fills the view.
+    closeTaskDetail()
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId, targetKind: 'device' })
     setTaskChatContext(null)
     setMainView({ kind: 'device' })
@@ -1187,6 +1214,7 @@ export default function MainStudio() {
     worktree: api.WorkbenchRegistration,
     page: 'tree' | 'bom' | 'network',
   ) => {
+    closeTaskDetail()
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null, targetKind: 'hardware' })
     setMainView({ kind: 'hardware', page })
     setDeviceSelection(null)
@@ -1497,6 +1525,17 @@ export default function MainStudio() {
   }
 
   /**
+   * Starts a conversation for the task whose detail is open. The detail renders ahead of every other
+   * view, so it yields the main area first — otherwise the new conversation would be created behind it.
+   * The navigator keeps that task selected, exactly as it does when a conversation is opened from the
+   * task's own session rows (AC-015, AC-018).
+   */
+  const startTaskSessionFromDetail = async (task: api.EngineeringTask) => {
+    closeTaskDetail()
+    await createChatSessionForTask(task)
+  }
+
+  /**
    * Starts the conversation the `SESSIONS` section's header offers: bound to the task it names, or —
    * with no task selected — the device's own, owned by no task, which is exactly the list the section
    * is showing then.
@@ -1509,7 +1548,18 @@ export default function MainStudio() {
     await createChatSession(true)
   }
 
-  const setChatSessionTask = async (session: api.ChatSessionInfo, taskId: string | null) => {
+  /**
+   * Writes a conversation's whole task relation set through the one route that replaces it, so the
+   * conversation is never observable half-linked (ADR-0014, AC-019). The device the conversation
+   * belongs to is selected first, because the write is resolved in that device's context; the tab
+   * update and the session refresh that follow are the ones every conversation change already goes
+   * through.
+   */
+  const setChatSessionTasks = async (
+    session: api.ChatSessionInfo,
+    taskIds: string[],
+    primaryTaskId?: string | null,
+  ) => {
     const { workbenchId, worktreeId, deviceId } = session
     if (!workbenchId || !worktreeId || !deviceId) {
       showErrorToast('This conversation is not available in the device context that owns it.')
@@ -1518,7 +1568,7 @@ export default function MainStudio() {
     setChatBusy(true)
     try {
       await api.selectDevice(workbenchId, worktreeId, deviceId)
-      const updated = await api.setChatSessionTask(session.sessionId, taskId)
+      const updated = await api.setChatSessionTasks(session.sessionId, taskIds, primaryTaskId)
       setChatTabs(previous => openTab(previous, updated))
       await refreshChatSessions({ workbenchId, worktreeId, deviceId })
     } catch (error) {
@@ -1947,6 +1997,7 @@ export default function MainStudio() {
       await api.deleteWorkbench(workbench.workbenchId, op.id)
       setDeleteWorkbenchFor(null)
       if (selection.workbenchId === workbench.workbenchId) {
+        closeTaskDetail()
         setSelection({ workbenchId: null, worktreeId: null, deviceId: null })
         setMainView({ kind: 'project' })
         setDeviceSelection(null)
@@ -2076,6 +2127,7 @@ export default function MainStudio() {
       await api.deleteWorktree(workbench.workbenchId, worktree.worktreeId, op.id)
       setDeleteWorktreeFor(null)
       if (selection.workbenchId === workbench.workbenchId && selection.worktreeId === worktree.worktreeId) {
+        closeTaskDetail()
         setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
         setMainView({ kind: 'project' })
         setDeviceSelection(null)
@@ -2155,6 +2207,113 @@ export default function MainStudio() {
     focusedView,
     hasKnowledgeContext: knowledgeContext !== null,
   })
+
+  // The rail's page state: the page the user last chose, or — until they choose one — the page the
+  // current selection implies, so the dock follows the context the way it did before the rail existed
+  // (a device selection shows its properties, a worktree shows its changes). The first rail click
+  // stores a page and the dock stops following: a selection change must never move a page the user
+  // picked. Collapsing keeps the page, which is what lets the rail keep marking it.
+  const markedRightPage: RightDockPage = shellLayout.rightPanel ?? contextDock.defaultPage
+  // While the startup read is still in flight the selection is not known yet, so a first run keeps the
+  // rail collapsed rather than showing a page that is about to be replaced.
+  const followsSelection = shellLayout.rightPanel === null && loading
+  const openRightPage: RightDockPage | null = followsSelection || shellLayout.rightPanelCollapsed
+    ? null
+    : markedRightPage
+
+  /**
+   * Opens the clicked page, or collapses the page when it is already the open one. The toggle reads
+   * the *effective* page rather than the stored one, because the stored one is null until the first
+   * click and a first click on the page that is already showing must still collapse it.
+   */
+  const selectRightPage = (page: RightDockPage) => {
+    setShellLayout(previous => ({
+      ...previous,
+      rightPanel: page,
+      rightPanelCollapsed: openRightPage === page,
+    }))
+  }
+
+  const refreshRightDockPage = (page: RightDockPage) => {
+    setDockRefreshSignal(signal => signal + 1)
+    // The properties page's device panel renders the snapshot the shell read when the device was
+    // selected, so refreshing it means re-reading that snapshot. The hardware and knowledge panels
+    // own their reads and follow the signal instead.
+    if (page === 'properties' && selection.workbenchId && selection.worktreeId && selection.deviceId) {
+      void reloadDeviceSnapshot({
+        workbenchId: selection.workbenchId,
+        worktreeId: selection.worktreeId,
+        deviceId: selection.deviceId,
+      })
+    }
+  }
+
+  const rightDockScopes: Partial<Record<RightDockPage, string | null>> = {
+    properties: activeWorktree
+      ? [activeWorktree.branch, contextDock.properties === 'device' ? deviceName : null].filter(Boolean).join(' · ')
+      : null,
+    // The changes page carries the worktree's branch row itself, so its header names the page only.
+    changes: null,
+    history: activeWorktree?.branch ?? null,
+  }
+
+  const rightDockEmptyState = (message: string) => (
+    <div className="grid h-full place-items-center px-5 text-center text-[11px] leading-relaxed text-muted-foreground">
+      <div>
+        <Boxes className="mx-auto mb-2 h-5 w-5" />
+        {message}
+      </div>
+    </div>
+  )
+
+  const rightDockPages: Record<RightDockPage, ReactNode> = {
+    properties: contextDock.properties === 'device'
+      ? <DevicePropertiesDock meta={deviceMeta} info={deviceInfo} hidden={false} refreshSignal={dockRefreshSignal} />
+      : contextDock.properties === 'hardware'
+        ? <HardwarePropertiesDock node={hardwareSelectedNode} tags={hardwareView?.tags ?? []} hidden={false} />
+        : contextDock.properties === 'knowledge' && knowledgeContext
+          ? (
+            <KnowledgePropertiesDock
+              context={knowledgeContext}
+              node={knowledgeSelection.node}
+              edge={knowledgeSelection.edge}
+              hidden={false}
+              refreshSignal={dockRefreshSignal}
+            />
+          )
+          : rightDockEmptyState('Select a device, a hardware object, or a knowledge node to inspect its properties.'),
+    changes: selection.workbenchId && selection.worktreeId
+      ? (
+        <VersionControlPanel
+          section="changes"
+          workbenchId={selection.workbenchId}
+          worktreeId={selection.worktreeId}
+          refreshSignal={dockRefreshSignal}
+          onUncommittedCountChange={reportUncommitted}
+          onBeginOperation={(kind, label) => beginOperation(kind, label).id}
+          operationStatus={activeOperation && ['compare-tia', 'accept-tia-synchronization', 'vc-commit', 'svn-savepoint'].includes(activeOperation.kind)
+            ? activeOperation.status
+            : null}
+          onNavigateEntity={(kind, id) => setTraceabilityTarget({ kind, id })}
+          selectedTraceabilityTarget={traceabilityTarget}
+          onNavigateTask={taskId => { if (selection.workbenchId) void openTaskDetail({ taskId, workbenchId: selection.workbenchId, scope: 'project', worktreeId: null, title: taskId, type: 'feature', status: 'todo', priority: 0, intent: '', expectedResult: '', description: null, createdUtc: '', updatedUtc: '' }) }}
+        />
+      )
+      : rightDockEmptyState('Select a worktree to see the source changes waiting to be committed.'),
+    history: selection.workbenchId && selection.worktreeId
+      ? (
+        <VersionControlPanel
+          section="history"
+          workbenchId={selection.workbenchId}
+          worktreeId={selection.worktreeId}
+          refreshSignal={dockRefreshSignal}
+          onNavigateEntity={(kind, id) => setTraceabilityTarget({ kind, id })}
+          selectedTraceabilityTarget={traceabilityTarget}
+          onNavigateTask={taskId => { if (selection.workbenchId) void openTaskDetail({ taskId, workbenchId: selection.workbenchId, scope: 'project', worktreeId: null, title: taskId, type: 'feature', status: 'todo', priority: 0, intent: '', expectedResult: '', description: null, createdUtc: '', updatedUtc: '' }) }}
+        />
+      )
+      : rightDockEmptyState('Select a worktree to see its commits and SVN savepoints.'),
+  }
 
   // In the desktop shell the header doubles as the window caption: dragging
   // empty header space moves the borderless window, double-click toggles
@@ -2486,11 +2645,11 @@ export default function MainStudio() {
           <button
             data-dock-toggle="right"
             className="icon-button"
-            aria-label={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
-            title={shellLayout.rightOpen ? 'Hide context dock' : 'Show context dock'}
+            aria-label={shellLayout.rightColumnOpen ? 'Hide context dock' : 'Show context dock'}
+            title={shellLayout.rightColumnOpen ? 'Hide context dock' : 'Show context dock'}
             onClick={() => toggleDock('right')}
           >
-            {shellLayout.rightOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
+            {shellLayout.rightColumnOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
           </button>
           <ThemeToggle />
           <WindowControls />
@@ -2547,9 +2706,7 @@ export default function MainStudio() {
               setMainView({ kind: 'project' })
               setDeviceSelection(null)
               setChatTabs(emptyChatTabs())
-              setTaskDetail(null)
-              setTaskDetailTask(null)
-              setTaskDetailError(null)
+              closeTaskDetail()
             }}
             onCreateWorkbench={openCreateWorkbench}
             onCreateWorktree={setCreateWorktreeFor}
@@ -2590,7 +2747,7 @@ export default function MainStudio() {
             onRenameSession={(session, title) => void renameChatSession(session.sessionId, title)}
             onDeleteSession={session => void deleteNavigatorSession(session)}
             onExportSession={session => void exportChatSession(session)}
-            onSetSessionTask={(session, taskId) => void setChatSessionTask(session, taskId)}
+            onSetSessionTasks={(session, taskIds, primaryTaskId) => void setChatSessionTasks(session, taskIds, primaryTaskId)}
             onAddSession={task => void startConversationFromNavigator(task)}
             onSelectHardware={selectHardware}
             onReloadHardware={(workbench, worktree) => void reloadHardware(workbench, worktree)}
@@ -2664,7 +2821,7 @@ export default function MainStudio() {
               </div>
             </div>
           ) : taskDetail || taskDetailLoading || taskDetailError ? (
-            <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div>
+            <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => closeTaskDetail()}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStartSession={task => void startTaskSessionFromDetail(task)} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div>
           ) : !selection.deviceId && selection.worktreeId ? (
             mainView.kind === 'task-chat' ? (
               <div className="flex min-h-0 flex-1 flex-col">
@@ -2714,7 +2871,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div> : worktreeSurface
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => closeTaskDetail()}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStartSession={task => void startTaskSessionFromDetail(task)} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div> : worktreeSurface
             )
           ) : !selection.deviceId && selection.workbenchId ? (
             <ProjectLandingPage
@@ -2834,61 +2991,25 @@ export default function MainStudio() {
             />
           )}
         </main>
-        {contextDock.visible && (
-          <>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize context dock"
-              className="dock-resize-handle"
-              data-dock-state={shellLayout.rightOpen ? 'open' : 'closed'}
-              onPointerDown={event => startDockResize('right', event.clientX)}
-            />
-            <div
-              data-dock="right"
-              data-dock-state={shellLayout.rightOpen ? 'open' : 'closed'}
-              aria-hidden={!shellLayout.rightOpen}
-              className="dock-shell dock-shell-right min-h-0 shrink-0 bg-sidebar"
-              style={{ width: shellLayout.rightOpen ? shellLayout.rightWidth : 0 }}
-            >
-              {contextDock.content.kind === 'hardware' && (
-                <HardwarePropertiesDock
-                  node={hardwareSelectedNode}
-                  tags={hardwareView?.tags ?? []}
-                  hidden={false}
-                />
-              )}
-              {contextDock.content.kind === 'device' && (
-                <DevicePropertiesDock
-                  meta={deviceMeta}
-                  info={deviceInfo}
-                  hidden={false}
-                />
-              )}
-              {contextDock.content.kind === 'knowledge' && knowledgeContext && (
-                <KnowledgePropertiesDock
-                  context={knowledgeContext}
-                  node={knowledgeSelection.node}
-                  edge={knowledgeSelection.edge}
-                  hidden={false}
-                />
-              )}
-              {contextDock.content.kind === 'version-control' && selection.workbenchId && selection.worktreeId && (
-                <VersionControlPanel
-                  workbenchId={selection.workbenchId}
-                  worktreeId={selection.worktreeId}
-                  onBeginOperation={(kind, label) => beginOperation(kind, label).id}
-                  operationStatus={activeOperation && ['compare-tia', 'accept-tia-synchronization', 'vc-commit', 'svn-savepoint'].includes(activeOperation.kind)
-                    ? activeOperation.status
-                    : null}
-                  onNavigateEntity={(kind, id) => setTraceabilityTarget({ kind, id })}
-                  selectedTraceabilityTarget={traceabilityTarget}
-                  onNavigateTask={taskId => { if (selection.workbenchId) void openTaskDetail({ taskId, workbenchId: selection.workbenchId, scope: 'project', worktreeId: null, title: taskId, type: 'feature', status: 'todo', priority: 0, intent: '', expectedResult: '', description: null, createdUtc: '', updatedUtc: '' }) }}
-                />
-              )}
-            </div>
-          </>
-        )}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize context dock"
+          className="dock-resize-handle"
+          data-dock-state={shellLayout.rightColumnOpen ? 'open' : 'closed'}
+          onPointerDown={event => startDockResize('right', event.clientX)}
+        />
+        <RightDock
+          page={openRightPage}
+          markedPage={markedRightPage}
+          pageWidth={shellLayout.rightPanelWidth}
+          columnOpen={shellLayout.rightColumnOpen}
+          changesBadge={dockUncommitted}
+          scopes={rightDockScopes}
+          onSelectPage={selectRightPage}
+          onRefresh={refreshRightDockPage}
+          pages={rightDockPages}
+        />
       </div>}
 
       <footer data-status-bar className="studio-status-bar">

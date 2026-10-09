@@ -214,6 +214,58 @@ describe('MainStudio device selection resilience', () => {
     expect(api.getDeviceInfo).not.toHaveBeenCalled()
   })
 
+  it('makes a device\'s task-less conversations reachable again after a task has been opened (AC-015)', async () => {
+    const taskless: api.ChatSessionInfo = {
+      sessionId: 'session-adhoc', title: 'Ad-hoc question', projectName: null, workbenchId: 'wb1', worktreeId: 'wt1',
+      deviceId: 'dev1', createdAt: '2026-08-02T00:00:00Z', updatedAt: '2026-08-02T00:00:00Z',
+      messageCount: 1, turnCount: 1, firstUserMessage: null, taskId: null,
+    }
+    vi.mocked(api.listDeviceSessions).mockResolvedValue([taskless])
+    // clearAllMocks keeps implementations, so the preceding case's hanging detail read is replaced.
+    vi.mocked(api.getEngineeringTaskDetail).mockResolvedValue({
+      task, sessions: [], commits: [], sourceObjects: [], svnRevisions: [],
+    } as api.EngineeringTaskDetail)
+
+    const { host } = render(<MainStudio />)
+    await act(async () => {})
+    clickText(host, 'DemoWB')
+    await act(async () => {})
+    clickText(host, 'master')
+    await act(async () => {})
+    act(() => {
+      host.querySelector<HTMLElement>('[data-device-target="dev1"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    // No task is selected, so the section is the device's own conversation that no task owns.
+    expect(host.textContent).toContain('No task')
+    expect(host.textContent).toContain('Ad-hoc question')
+
+    // Opening a task's detail takes the task selection, and a task that owns no conversation then takes
+    // the whole section with it: this is the state in which the task-less conversation was unreachable.
+    act(() => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="Open task Inspect startup sequence"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    expect(host.textContent).toContain('Task fields')
+    expect(host.textContent).not.toContain('Ad-hoc question')
+
+    // Selecting the device again is the way back: the detail yields the main area, the task row stops
+    // being current, and the conversation no task owns is listed again.
+    act(() => {
+      host.querySelector<HTMLElement>('[data-device-target="dev1"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    expect(host.textContent).not.toContain('Task fields')
+    expect(host.querySelector('[data-task-selected="true"]')).toBeNull()
+    expect(host.textContent).toContain('No task')
+    expect(host.textContent).toContain('Ad-hoc question')
+
+    vi.mocked(api.listDeviceSessions).mockResolvedValue([])
+  })
+
   it('refreshes the open task detail in place instead of blanking the page', async () => {
     // A stage change refreshes the detail; it must not replace the page the reader is looking at.
     // clearAllMocks keeps implementations, so the previous test's hanging stubs are replaced here.

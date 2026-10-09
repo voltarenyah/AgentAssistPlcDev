@@ -100,7 +100,7 @@ public sealed class ArchiveProjectSandboxTests : IDisposable
         public SourceObjectImportResult ImportSourceObject(string relativePath, string xmlFilePath, string? plcName = null) => new();
         public CompileResult CompileBlock(string blockName, string? plcName = null) => new();
         public CompileResult CompilePlc(string? plcName = null) => new();
-        public void OpenBlockInEditor(string blockName) { }
+        public void OpenBlockInEditor(string blockName, string? plcName = null) { }
         public OpenInEditorResult OpenSourceObjectInEditor(string name, string category, string? plcName = null) => new();
         public void Dispose() { }
     }

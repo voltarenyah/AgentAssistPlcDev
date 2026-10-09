@@ -93,4 +93,30 @@ describe('KnowledgePropertiesDock', () => {
 
     expect(host.textContent).toContain('boom')
   })
+
+  it('re-reads node properties when the shell refresh signal changes', async () => {
+    const { host, root } = await render(
+      <KnowledgePropertiesDock context={context} node={node} edge={null} hidden={false} refreshSignal={0} />,
+    )
+    expect(mocked.getKnowledgeNodeProperties).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      root.render(
+        <KnowledgePropertiesDock context={context} node={node} edge={null} hidden={false} refreshSignal={1} />,
+      )
+    })
+
+    expect(mocked.getKnowledgeNodeProperties).toHaveBeenCalledTimes(2)
+    expect(mocked.getKnowledgeNodeProperties).toHaveBeenLastCalledWith(context, 'node:OB:Main')
+    expect(host.textContent).toContain('LAD')
+  })
+
+  it('shows the empty property list for a node that has no properties', async () => {
+    mocked.getKnowledgeNodeProperties.mockResolvedValue({ properties: [] })
+    const { host } = await render(
+      <KnowledgePropertiesDock context={context} node={node} edge={null} hidden={false} />,
+    )
+
+    expect(host.textContent).toContain('No properties')
+  })
 })

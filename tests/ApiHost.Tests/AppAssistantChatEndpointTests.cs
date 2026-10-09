@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Agent.Mcp;
 using Agent.Workbench;
 using Agent.Workbench.EngineeringGraph;
+using Contracts.Engineering;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -43,9 +45,21 @@ public sealed class AppAssistantChatEndpointTests
         out WorkbenchApiState state,
         out string workbenchId,
         bool withModel = false,
-        AssistantModelHandler? model = null)
+        AssistantModelHandler? model = null,
+        Func<IServiceProvider, WorkbenchCoordinator>? coordinator = null)
     {
         var factory = withModel ? FactoryWithModel(model) : Factory();
+        if (coordinator is not null)
+        {
+            // The managed TIA actions run through the coordinator; a test that drives one replaces it
+            // so the engineering side is scripted instead of reaching for a real TIA Portal.
+            factory = factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<WorkbenchCoordinator>();
+                services.AddSingleton(coordinator);
+            }));
+        }
+
         state = factory.Services.GetRequiredService<WorkbenchApiState>();
         var catalog = factory.Services.GetRequiredService<WorkbenchCatalog>();
         var root = Path.Combine(Path.GetTempPath(), rootPrefix + Guid.NewGuid().ToString("N"));
@@ -258,6 +272,28 @@ public sealed class AppAssistantChatEndpointTests
     }
 
     [Fact]
+    public async Task AssistantDeclaresTheAllowedTaskTypesInTheCreateTaskSchema()
+    {
+        var model = new AssistantModelHandler();
+        await using var factory = FactoryWithModel(model);
+        using var client = factory.CreateClient();
+
+        await client.PostAsJsonAsync("/api/app-assistant/chat", new { message = "hello" });
+
+        // The loop validates a tool call against the schema that call was advertised with, so an
+        // invalid type is refused before the approval card rather than after the user approves it —
+        // which is exactly how the device chat's sibling tool failed a live turn with type "bug".
+        using var request = JsonDocument.Parse(Assert.Single(model.RequestBodies));
+        var createTask = request.RootElement.GetProperty("tools").EnumerateArray()
+            .Select(tool => tool.GetProperty("function"))
+            .Single(function => function.GetProperty("name").GetString() == "assistant_create_task");
+        var declared = createTask.GetProperty("parameters").GetProperty("properties").GetProperty("type")
+            .GetProperty("enum").EnumerateArray().Select(value => value.GetString()).ToArray();
+
+        Assert.Equal(new[] { "Issue", "Improvement", "Feature" }, declared);
+    }
+
+    [Fact]
     public async Task AssistantCreatesADeviceTaskOnlyAfterApproval()
     {
         const string worktreeId = "wt-1";
@@ -355,6 +391,58 @@ public sealed class AppAssistantChatEndpointTests
     }
 
     [Fact]
+    public async Task AssistantOpensTheSelectedWorktreesProjectInTiaWithoutAnApprovalCard()
+    {
+        const string worktreeId = "wt-1";
+        const string deviceId = "dev-1";
+        const string projectPath = @"C:\Projects\Line.ap17";
+        var model = new AssistantModelHandler("assistant_open_tia_project");
+        var engineering = new QueuedCaller()
+            .Fail("get_project_info", "NOT_CONNECTED", "No project connected. Call connect first.")
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo { Name = "Line", Path = projectPath });
+        await using var factory = FactoryWithWorkbench("Open TIA", "assistant-open-tia-",
+            out var state, out var workbenchId, withModel: true, model,
+            coordinator: services => new WorkbenchCoordinator(
+                engineering,
+                new QueuedCaller(),
+                new QueuedCaller(),
+                services.GetRequiredService<WorkbenchCatalog>(),
+                services.GetRequiredService<AtomicJsonStore>(),
+                new DeviceReconciler(),
+                new DeviceSourceResolver(_ => { })));
+        using var client = factory.CreateClient();
+        var catalog = factory.Services.GetRequiredService<WorkbenchCatalog>();
+        var store = factory.Services.GetRequiredService<AtomicJsonStore>();
+        var workbench = catalog.RegisterWorktree(state.Workbench(workbenchId),
+            new WorkbenchWorktreeRegistration(worktreeId, "master", "master", "master"));
+        var worktreeRoot = Path.Combine(workbench.RootPath, "worktrees", "master");
+        var deviceRoot = Path.Combine(worktreeRoot, "devices", "PLC_1");
+        Directory.CreateDirectory(deviceRoot);
+        store.Write(Path.Combine(worktreeRoot, "worktree.json"), new WorktreeMetadata(
+            "1.2", worktreeId, workbenchId, "master", "master",
+            DateTimeOffset.UtcNow.ToString("O"), "head-1", "project-1", projectPath, [deviceId], null));
+        store.Write(Path.Combine(deviceRoot, "device.json"), new DeviceMetadata(
+            "1.2", deviceId, worktreeId, "PLC_1", "PLC:1", null, null, null,
+            new KnowledgeState(false, new Dictionary<string, string>(), null, false), []));
+        state.Refresh(workbenchId);
+        state.Select(workbenchId, worktreeId, deviceId);
+        model.Arguments = JsonSerializer.Serialize(new { workbenchId, worktreeId });
+
+        var response = await client.PostAsJsonAsync("/api/app-assistant/chat", new { message = "Open the project in TIA" });
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.DoesNotContain("event: error", body);
+        // Opening TIA is write-tier: the request completes without parking on an approval card.
+        Assert.DoesNotContain("confirmation", await client.GetStringAsync("/api/logs"));
+        Assert.Equal(["get_project_info", "list_sessions", "connect", "get_project_info"], engineering.Calls);
+        var connect = Assert.Single(engineering.CallArgs["connect"]);
+        Assert.Equal(projectPath, Property<string>(connect, "projectPath"));
+        Assert.True(Property<bool>(connect, "withUI"));
+    }
+
+    [Fact]
     public async Task BootstrapWithASelectedDeviceReturnsASessionIdBeforeTheFirstChatTurn()
     {
         await using var factory = FactoryWithWorkbench("Assistant Session", "assistant-session-", out var state, out var workbenchId);
@@ -400,6 +488,60 @@ public sealed class AppAssistantChatEndpointTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
         Assert.Equal("in-process", body!["service"]?.ToString());
+    }
+
+    private static T Property<T>(object value, string name) =>
+        (T)value.GetType().GetProperty(name)!.GetValue(value)!;
+
+    /// <summary>Queued scripted engineering caller: one response per call, every call recorded.</summary>
+    private sealed class QueuedCaller : IMcpToolCaller
+    {
+        private readonly Dictionary<string, Queue<Func<object, object>>> scripts =
+            new(StringComparer.Ordinal);
+
+        public List<string> Calls { get; } = new();
+        public Dictionary<string, List<object>> CallArgs { get; } = new(StringComparer.Ordinal);
+
+        public QueuedCaller Respond<T>(string tool, T response) where T : notnull
+        {
+            Queue(tool).Enqueue(_ => response);
+            return this;
+        }
+
+        public QueuedCaller Fail(string tool, string code, string message)
+        {
+            Queue(tool).Enqueue(_ => throw new ToolCallException(code, message, null));
+            return this;
+        }
+
+        public Task<T> CallAsync<T>(string tool, object args, CancellationToken cancellationToken = default)
+        {
+            Calls.Add(tool);
+            if (!CallArgs.TryGetValue(tool, out var recorded))
+            {
+                recorded = new List<object>();
+                CallArgs[tool] = recorded;
+            }
+
+            recorded.Add(args is JsonElement element ? element.Clone() : args);
+            if (!scripts.TryGetValue(tool, out var queue) || queue.Count == 0)
+            {
+                throw new InvalidOperationException($"QueuedCaller: no scripted response for '{tool}'.");
+            }
+
+            return Task.FromResult((T)queue.Dequeue()(args));
+        }
+
+        private Queue<Func<object, object>> Queue(string tool)
+        {
+            if (!scripts.TryGetValue(tool, out var queue))
+            {
+                queue = new Queue<Func<object, object>>();
+                scripts[tool] = queue;
+            }
+
+            return queue;
+        }
     }
 
     private sealed class AssistantModelClientFactory(AssistantModelHandler model) : IHttpClientFactory

@@ -7,6 +7,8 @@ type Props = {
   node: api.GraphNode | null
   edge: api.GraphEdge | null
   hidden: boolean
+  /** The shell's refresh counter; a changed value re-reads the selected node's and edge's properties. */
+  refreshSignal?: number
 }
 
 type PropertiesState = {
@@ -15,7 +17,12 @@ type PropertiesState = {
   error: string | null
 }
 
-function useProperties(kind: 'node' | 'edge', context: api.KnowledgeGraphContext, id: string | null): PropertiesState {
+function useProperties(
+  kind: 'node' | 'edge',
+  context: api.KnowledgeGraphContext,
+  id: string | null,
+  refreshSignal: number | undefined,
+): PropertiesState {
   const [properties, setProperties] = useState<api.GraphProperty[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -38,7 +45,7 @@ function useProperties(kind: 'node' | 'edge', context: api.KnowledgeGraphContext
       .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load properties') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [kind, context, id])
+  }, [kind, context, id, refreshSignal])
 
   return { properties, loading, error }
 }
@@ -54,29 +61,29 @@ function PropertySection({ title, badge, badgeColor, subtitle, state }: {
     <section className="rounded-md border bg-background" style={{ borderColor: 'var(--border)' }}>
       <div className="border-b px-2 py-1.5" style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-center gap-1.5">
-          <span className="rounded px-1 text-[8px] font-medium"
+          <span className="rounded px-1 text-[10px] font-medium"
             style={{ background: `${badgeColor}22`, color: badgeColor }}>
             {badge}
           </span>
-          <span className="min-w-0 flex-1 truncate text-[10px] font-medium">{title}</span>
+          <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{title}</span>
         </div>
-        <div className="mt-0.5 truncate font-mono text-[8px] text-muted-foreground">{subtitle}</div>
+        <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{subtitle}</div>
       </div>
       {state.loading ? (
         <div className="flex items-center gap-2 px-2 py-3">
           <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-          <span className="text-[9px] text-muted-foreground">Loading properties...</span>
+          <span className="text-[11px] text-muted-foreground">Loading properties...</span>
         </div>
       ) : state.error ? (
-        <div className="px-2 py-3 text-[9px]" style={{ color: 'var(--destructive)' }}>{state.error}</div>
+        <div className="px-2 py-3 text-[11px]" style={{ color: 'var(--destructive)' }}>{state.error}</div>
       ) : state.properties.length === 0 ? (
-        <div className="px-2 py-3 text-[9px] text-muted-foreground">No properties</div>
+        <div className="px-2 py-3 text-[11px] text-muted-foreground">No properties</div>
       ) : (
         <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
           {state.properties.map(property => (
             <div key={property.name} className="px-2 py-1.5">
-              <div className="text-[8px] uppercase tracking-[0.12em] text-muted-foreground">{property.name}</div>
-              <div className="mt-0.5 break-all font-mono text-[10px]">{property.value}</div>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{property.name}</div>
+              <div className="mt-0.5 break-all font-mono text-[11px]">{property.value}</div>
             </div>
           ))}
         </div>
@@ -85,23 +92,15 @@ function PropertySection({ title, badge, badgeColor, subtitle, state }: {
   )
 }
 
-export default function KnowledgePropertiesDock({ context, node, edge, hidden }: Props) {
-  const nodeState = useProperties('node', context, node?.id ?? null)
-  const edgeState = useProperties('edge', context, edge?.id ?? null)
+export default function KnowledgePropertiesDock({ context, node, edge, hidden, refreshSignal }: Props) {
+  const nodeState = useProperties('node', context, node?.id ?? null, refreshSignal)
+  const edgeState = useProperties('edge', context, edge?.id ?? null, refreshSignal)
 
   return (
-    <aside
-      hidden={hidden}
-      className="flex h-full w-full shrink-0 flex-col border-l bg-sidebar"
-      style={{ borderColor: 'var(--border)' }}
-    >
-      <div className="flex h-12 items-center gap-2 border-b px-3" style={{ borderColor: 'var(--border)' }}>
-        <Database className="h-3.5 w-3.5 text-chart-3" />
-        <h2 className="text-[10px] font-semibold">Properties</h2>
-      </div>
+    <div hidden={hidden} className="flex h-full min-h-0 w-full flex-col">
       <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-2">
         {!node && !edge ? (
-          <div className="grid h-full place-items-center px-5 text-center text-[10px] text-muted-foreground">
+          <div className="grid h-full place-items-center px-5 text-center text-[11px] text-muted-foreground">
             <div>
               <Database className="mx-auto mb-2 h-5 w-5" />
               Select a node or edge to inspect its properties
@@ -130,6 +129,6 @@ export default function KnowledgePropertiesDock({ context, node, edge, hidden }:
           </div>
         )}
       </div>
-    </aside>
+    </div>
   )
 }

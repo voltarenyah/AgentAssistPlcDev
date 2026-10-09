@@ -24,4 +24,60 @@ internal static class PlcTypeEnumerator
                 yield return item;
         }
     }
+
+    /// <summary>
+    /// Finds one UDT by its manifest source path by descending only the groups that path names; see
+    /// <see cref="BlockEnumerator.TryFindBySourcePath"/>. False means the caller must fall back to the
+    /// complete enumeration.
+    /// </summary>
+    public static bool TryFindBySourcePath(
+        PlcTypeGroup root,
+        string? groupPath,
+        string name,
+        out PlcType type,
+        out string? foundGroupPath)
+    {
+        var group = root;
+        string? path = null;
+        var segments = groupPath?.Split('/');
+        if (segments is not null)
+        {
+            foreach (var segment in segments)
+            {
+                PlcTypeUserGroup? next = null;
+                foreach (PlcTypeUserGroup candidate in group.Groups)
+                {
+                    if (string.Equals(candidate.Name, segment, StringComparison.Ordinal))
+                    {
+                        next = candidate;
+                        break;
+                    }
+                }
+
+                if (next is null)
+                {
+                    type = null!;
+                    foundGroupPath = null;
+                    return false;
+                }
+
+                group = next;
+                path = path is null ? next.Name : path + "/" + next.Name;
+            }
+        }
+
+        foreach (PlcType candidate in group.Types)
+        {
+            if (!string.Equals(candidate.Name, name, StringComparison.Ordinal))
+                continue;
+
+            type = candidate;
+            foundGroupPath = path;
+            return true;
+        }
+
+        type = null!;
+        foundGroupPath = null;
+        return false;
+    }
 }

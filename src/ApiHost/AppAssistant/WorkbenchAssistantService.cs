@@ -155,6 +155,7 @@ internal sealed class WorkbenchAssistantService(
             "assistant_list_branch_start_points", "assistant_present_choices",
         }) tiers[name] = SandboxTier.Read;
         tiers["assistant_select_scope"] = SandboxTier.Write;
+        tiers["assistant_open_tia_project"] = SandboxTier.Write;
         foreach (var name in new[] { "assistant_create_workbench", "assistant_create_worktree", "assistant_create_task" })
             tiers[name] = SandboxTier.Destructive;
         var sandbox = new AgentSandbox(new SandboxPolicy(tiers), 20, request =>
@@ -209,6 +210,26 @@ internal sealed class WorkbenchAssistantService(
             properties = required.Concat(optional).ToDictionary(name => name, _ => new { type = "string" }, StringComparer.Ordinal),
             required,
         });
+        // The allowed task types travel in the schema: the agent loop validates every call against it
+        // before dispatch, so a synonym is refused as a correctable argument error instead of parking
+        // the turn on an approval card and failing after the user has approved it (the device chat's
+        // sibling tool failed exactly that way with a live "bug").
+        static JsonElement TaskCreationSchema() => JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new
+            {
+                workbenchId = new { type = "string" },
+                worktreeId = new { type = "string" },
+                deviceId = new { type = "string" },
+                title = new { type = "string" },
+                type = new { type = "string", @enum = new[] { "Issue", "Improvement", "Feature" } },
+                intent = new { type = "string" },
+                expectedResult = new { type = "string" },
+                description = new { type = "string" },
+            },
+            required = new[] { "workbenchId", "worktreeId", "deviceId", "title", "type", "intent", "expectedResult" },
+        });
         return
         [
             new("assistant_list_workbenches", "List available workbench projects and their IDs.", Schema(), caller, "workbench"),
@@ -220,9 +241,10 @@ internal sealed class WorkbenchAssistantService(
             new("assistant_list_branch_start_points", "List eligible and ineligible native savepoints or Git start points for a managed linked worktree.", Schema("workbenchId"), caller, "workbench"),
             new("assistant_select_scope", "Select an existing workbench, optionally one of its worktrees and one registered device, so subsequent tools have that context.", Fields(["workbenchId"], "worktreeId", "deviceId"), caller, "workbench"),
             new("assistant_present_choices", "Show the user selectable answer options for one necessary question. Use option values from real tool results where applicable.", JsonSerializer.SerializeToElement(new { type = "object", properties = new { question = new { type = "string" }, options = new { type = "array", items = new { type = "object", properties = new { value = new { type = "string" }, label = new { type = "string" }, description = new { type = "string" } }, required = new[] { "value", "label" } } } }, required = new[] { "question", "options" } }), caller, "workbench"),
+            new("assistant_open_tia_project", "Open one worktree's registered TIA project in TIA Portal with its user interface, so live TIA work can continue. Attaches to a running TIA Portal that already shows the project instead of starting a second one. Opening TIA can take a minute or two.", Schema("workbenchId", "worktreeId"), caller, "workbench"),
             new("assistant_create_workbench", "Create a managed workbench with its initial master worktree from exactly one open TIA session or existing .ap17 file. Requires user approval.", Fields(["name"], "rootPath", "engineeringSessionId", "engineeringProjectPath"), caller, "workbench"),
             new("assistant_create_worktree", "Create a managed linked worktree from an eligible native savepoint or Git start point. Requires user approval.", Fields(["workbenchId", "name", "branch"], "startPoint", "sourceWorktreeId", "sourceGitSha"), caller, "workbench"),
-            new("assistant_create_task", "Create a device-bound worktree task with a goal and expected result. Requires user approval.", Fields(["workbenchId", "worktreeId", "deviceId", "title", "type", "intent", "expectedResult"], "description"), caller, "workbench"),
+            new("assistant_create_task", "Create a device-bound worktree task with a goal and expected result. Requires user approval. type must be exactly Issue (a defect in the code), Improvement, or Feature.", TaskCreationSchema(), caller, "workbench"),
         ];
     }
 
@@ -269,6 +291,10 @@ internal sealed class WorkbenchAssistantService(
         Improvement, or Feature), goal (intent), and expected result; infer type when obvious.
         Use assistant_list_tasks if an existing task may already cover the request, then use
         assistant_create_task. Do not create a duplicate or ask for optional descriptions.
+
+        Use assistant_open_tia_project to open a worktree's registered project in TIA Portal when
+        live TIA work is needed; it reuses a running TIA Portal that already shows the project, so
+        do not tell the user to open it by hand.
 
         Creation tools require approval. The user sees the approval card before the tool runs;
         do not ask for an additional approval in prose. After approval, report the actual result
@@ -337,6 +363,7 @@ internal sealed class WorkbenchAssistantService(
                 "assistant_list_branch_start_points" => await ListStartPoints(Required("workbenchId"), cancellationToken),
                 "assistant_select_scope" => SelectScope(Required("workbenchId"), Optional("worktreeId"), Optional("deviceId")),
                 "assistant_present_choices" => PresentChoices(input),
+                "assistant_open_tia_project" => await OpenTiaProject(Required("workbenchId"), Required("worktreeId"), cancellationToken),
                 "assistant_create_workbench" => await CreateWorkbench(Required("name"), Optional("rootPath"), Optional("engineeringSessionId"), Optional("engineeringProjectPath"), cancellationToken),
                 "assistant_create_worktree" => await CreateWorktree(Required("workbenchId"), Required("name"), Required("branch"), Optional("startPoint"), Optional("sourceWorktreeId"), Optional("sourceGitSha"), cancellationToken),
                 "assistant_create_task" => CreateTask(Required("workbenchId"), Required("worktreeId"), Required("deviceId"), Required("title"), Required("type"), Required("intent"), Required("expectedResult"), Optional("description")),
@@ -386,6 +413,20 @@ internal sealed class WorkbenchAssistantService(
         {
             coordinator.RegisterWorkbench(state.Workbench(workbenchId));
             return await coordinator.ListBranchStartPointsAsync(workbenchId, ct);
+        }
+
+        private async Task<object> OpenTiaProject(string workbenchId, string worktreeId, CancellationToken ct)
+        {
+            var worktree = state.Worktree(workbenchId, worktreeId);
+            var result = await coordinator.ShowWorktreeProjectInTiaAsync(worktree, ct).ConfigureAwait(false);
+            return new
+            {
+                opened = true,
+                projectName = result.ProjectName,
+                projectPath = result.ProjectPath,
+                reusedRunningSession = result.ReusedRunningSession,
+                withUI = result.WithUI,
+            };
         }
 
         private async Task<object> CreateWorktree(string workbenchId, string name, string branch,

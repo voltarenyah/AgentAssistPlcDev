@@ -15,6 +15,7 @@ using System.Net;
 using Contracts.Engineering;
 using Contracts.Knowledge;
 using Xunit;
+using GraphTaskStatus = Agent.Workbench.EngineeringGraph.GraphTaskStatus;
 
 public sealed class WorkbenchEndpointsTests : IDisposable
 {
@@ -205,10 +206,14 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal("GRAPH_PRIMARY_RELATIONSHIP_EXISTS", (await primaryConflict.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
         var reassignedSession = await fixture.Client.PutAsJsonAsync($"/api/workbenches/{wb}/tasks/{otherTaskId}/relationships/session/session-a", new { isPrimary = false });
         Assert.Equal(HttpStatusCode.OK, reassignedSession.StatusCode);
+        // A session target is a relation like any other now: the second task gains the relation and the
+        // first task keeps its own (ADR-0014), instead of the pair being moved between tasks.
         detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/tasks/{taskId}");
-        Assert.Equal(0, detail.GetProperty("sessions").GetArrayLength());
+        Assert.Equal("session-a", Assert.Single(detail.GetProperty("sessions").EnumerateArray()).GetProperty("id").GetString());
+        Assert.Equal("default", detail.GetProperty("sessions")[0].GetProperty("provenance").GetString());
         detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/tasks/{otherTaskId}");
         Assert.Equal("session-a", detail.GetProperty("sessions")[0].GetProperty("id").GetString());
+        Assert.Equal("manual", detail.GetProperty("sessions")[0].GetProperty("provenance").GetString());
         var crossTaskResponse = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/worktrees/wt-2/tasks", new { title = "Cross", details = "cross", deviceId = fixture.DeviceId });
         var crossTaskId = (await crossTaskResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
         var cross = await fixture.Client.PostAsJsonAsync($"/api/workbenches/{wb}/tasks/{crossTaskId}/relationships", new { targetKind = "session", targetId = "session-a" });
@@ -573,7 +578,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task SessionTaskApiReassignsAndClearsWithManualProvenance()
+    public async Task SessionTaskApiSetsThePrimaryRelationWithoutDeletingTheOthers()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
         var wb = fixture.Context.WorkbenchId;
@@ -591,20 +596,40 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskId}");
         Assert.Equal(sessionId, detail.GetProperty("sessions")[0].GetProperty("id").GetString());
         Assert.Equal("manual", detail.GetProperty("sessions")[0].GetProperty("provenance").GetString());
+        Assert.True(detail.GetProperty("sessions")[0].GetProperty("isPrimary").GetBoolean());
+        // Naming a second task makes it the primary and keeps the first relation: the route is "set the
+        // primary relation", never a replacement of the whole set (AC-012).
         Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}/task", new { taskId = taskBId })).StatusCode);
         detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskId}");
-        Assert.Equal(0, detail.GetProperty("sessions").GetArrayLength());
+        Assert.Equal(sessionId, Assert.Single(detail.GetProperty("sessions").EnumerateArray()).GetProperty("id").GetString());
+        Assert.False(detail.GetProperty("sessions")[0].GetProperty("isPrimary").GetBoolean());
         detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskBId}");
         Assert.Equal(sessionId, detail.GetProperty("sessions")[0].GetProperty("id").GetString());
         Assert.Equal("manual", detail.GetProperty("sessions")[0].GetProperty("provenance").GetString());
+        Assert.True(detail.GetProperty("sessions")[0].GetProperty("isPrimary").GetBoolean());
         var reloadedB = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
         Assert.Equal(taskBId, reloadedB.GetProperty("header").GetProperty("taskId").GetString());
         Assert.Equal("manual", reloadedB.GetProperty("header").GetProperty("taskProvenance").GetString());
+        var listedB = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        Assert.Equal(2, Assert.Single(listedB!, item => item.GetProperty("sessionId").GetString() == sessionId)
+            .GetProperty("taskRelations").GetArrayLength());
+        // A request naming no task removes the primary relation; the other relation survives and
+        // becomes the primary, which is also how the row menu's picker moves one.
         Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}/task", new { taskId = (string?)null })).StatusCode);
         var reloadedCleared = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
-        Assert.Equal(JsonValueKind.Null, reloadedCleared.GetProperty("header").GetProperty("taskId").ValueKind);
-        Assert.Equal(JsonValueKind.Null, reloadedCleared.GetProperty("header").GetProperty("taskProvenance").ValueKind);
+        Assert.Equal(taskId, reloadedCleared.GetProperty("header").GetProperty("taskId").GetString());
+        Assert.Equal("manual", reloadedCleared.GetProperty("header").GetProperty("taskProvenance").GetString());
         detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskBId}");
+        Assert.Equal(0, detail.GetProperty("sessions").GetArrayLength());
+        // With nothing left to keep, the same request clears the conversation's relations entirely.
+        Assert.Equal(HttpStatusCode.OK, (await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}/task", new { taskId = (string?)null })).StatusCode);
+        var reloadedEmpty = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
+        Assert.Equal(JsonValueKind.Null, reloadedEmpty.GetProperty("header").GetProperty("taskId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, reloadedEmpty.GetProperty("header").GetProperty("taskProvenance").ValueKind);
+        var listedEmpty = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        Assert.Empty(Assert.Single(listedEmpty!, item => item.GetProperty("sessionId").GetString() == sessionId)
+            .GetProperty("taskRelations").EnumerateArray());
+        detail = await fixture.Client.GetFromJsonAsync<JsonElement>($"/api/workbenches/{wb}/worktrees/{wt}/tasks/{taskId}");
         Assert.Equal(0, detail.GetProperty("sessions").GetArrayLength());
 
         await fixture.Client.PostAsync($"/api/workbenches/{wb}/worktrees/wt-2/devices/dev-1/select", null);
@@ -675,6 +700,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var edge = Assert.Single(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId));
         Assert.Equal(taskId, edge.FromId);
         Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Default, edge.Provenance);
+        Assert.True(edge.IsPrimary);
     }
 
     [Fact]
@@ -706,8 +732,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Equal(taskId, active.GetProperty("activeTask").GetProperty("taskId").GetString());
         using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
         var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == wt);
-        Assert.Equal(taskId, Assert.Single(graph.GetIncomingEdges(
-            Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId!)).FromId);
+        var edge = Assert.Single(graph.GetIncomingEdges(
+            Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId!));
+        Assert.Equal(taskId, edge.FromId);
+        Assert.True(edge.IsPrimary);
     }
 
     [Fact]
@@ -749,7 +777,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
             new { paths = new[] { "devices/PLC_1/source/Unstaged.xml" }, message = "wrong file", untrackableChange = false });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("TASK_COMMIT_STAGE_MISMATCH", await response.Content.ReadAsStringAsync());
+        var refusal = await response.Content.ReadAsStringAsync();
+        Assert.Contains("TASK_COMMIT_STAGE_MISMATCH", refusal);
+        // The refusal names the path, so the selection can be corrected instead of guessed at.
+        Assert.Contains("devices/PLC_1/source/Unstaged.xml", refusal);
         Assert.DoesNotContain("vc_commit_selected", fixture.VersionControl.Calls);
 
         var other = await fixture.Client.PostAsJsonAsync(
@@ -764,10 +795,108 @@ public sealed class WorkbenchEndpointsTests : IDisposable
                 untrackableChange = false, taskId = otherTaskId });
         Assert.Equal(HttpStatusCode.BadRequest, mismatch.StatusCode);
         Assert.Contains("TASK_COMMIT_TASK_MISMATCH", await mismatch.Content.ReadAsStringAsync());
+
+        // The same object staged on the other task: the refusal names its current owner, which is the
+        // task a take-over would have to release first.
+        using (var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == wt);
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject, "dev-1:Unstaged", wb, wt,
+                fixture.DeviceId, "Unstaged.xml"));
+            graph.StageSourceObject(otherTaskId!, "dev-1:Unstaged", null);
+        }
+        var owned = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
+            new { paths = new[] { "devices/PLC_1/source/Unstaged.xml" }, message = "owned elsewhere", untrackableChange = false });
+        Assert.Equal(HttpStatusCode.BadRequest, owned.StatusCode);
+        Assert.Contains("staged on 'Other task'", await owned.Content.ReadAsStringAsync());
     }
 
     [Fact]
-    public async Task GenericDeviceSessionRoutesPersistManualTaskProvenanceAndGraphEdge()
+    public async Task ActiveTaskCommitAcceptsAStagedObjectInItsRegisteredPathForm()
+    {
+        // The graph records a source object relative to the device's source root ("Blocks/Main [OB1].xml")
+        // while a commit selects paths relative to the worktree. The guard has to resolve both forms, or
+        // it rejects every legitimate task commit (015).
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        fixture.WriteGraphManifest();
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var created = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Registered path form", type = "issue", status = "inProgress", deviceId = fixture.DeviceId,
+                intent = "Commit a staged object", expectedResult = "One commit" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        (await fixture.Client.PutAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/active-task", new { taskId })).EnsureSuccessStatusCode();
+        using (var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot))
+        {
+            var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == wt);
+            // Registered the way the staging route does: the object path relative to the device's source
+            // root, while the commit below selects the worktree-relative path.
+            graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+                Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject,
+                $"{fixture.DeviceId}:ob-main", wb, wt, fixture.DeviceId, "Blocks/Main [OB1].xml"));
+            graph.StageSourceObject(taskId!, $"{fixture.DeviceId}:ob-main", null);
+        }
+
+        // A staged object with content to commit, so the route reaches the guarded commit itself.
+        File.WriteAllText(
+            Path.Combine(fixture.Context.SourceRoot, "Blocks", "Main [OB1].xml"),
+            "<Document><SW.Blocks.OB ID=\"1\" /></Document>");
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
+            new { paths = new[] { "devices/PLC_1/source/Blocks/Main [OB1].xml" }, message = "staged in its own form",
+                untrackableChange = false });
+
+        var body = await response.Content.ReadAsStringAsync();
+
+        // The task guard resolved both path forms and let the commit through; whatever it reports next
+        // is the commit's own verdict, not a stage mismatch. Before 015 this returned
+        // TASK_COMMIT_STAGE_MISMATCH / "Not staged on this task" for every legitimate task commit.
+        Assert.DoesNotContain("TASK_COMMIT_STAGE_MISMATCH", body);
+        Assert.DoesNotContain("Not staged on this task", body);
+    }
+
+    [Fact]
+    public async Task MessageOnlyCommitStillBelongsToTheActiveTask()
+    {
+        // A commit that carries no paths — an untrackable TIA change — is still a task commit: the task
+        // guard rejects only a requested path outside the task's stages, never an empty selection.
+        await using var fixture = await SelectedApiFixture.CreateAsync(
+            Path.Combine(root, Guid.NewGuid().ToString("N")),
+            databaseExists: true,
+            versionControlJson: """
+                {"Sha":"commit-1","Message":"TIA change git cannot track","Files":[],"Commits":[{"Sha":"head-1"}]}
+                """);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var created = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Untrackable under a task", type = "issue", status = "inProgress", deviceId = fixture.DeviceId,
+                intent = "Record a native-only change", expectedResult = "One attributed commit" });
+        created.EnsureSuccessStatusCode();
+        var taskId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString();
+        (await fixture.Client.PutAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/active-task", new { taskId })).EnsureSuccessStatusCode();
+
+        var response = await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/vc/commit",
+            new { paths = Array.Empty<string>(), message = "TIA change git cannot track", untrackableChange = true });
+        response.EnsureSuccessStatusCode();
+
+        var commitIndex = fixture.VersionControl.Calls.IndexOf("vc_commit_selected");
+        Assert.True(commitIndex >= 0);
+        var args = fixture.VersionControl.Arguments[commitIndex];
+        Assert.Empty(args.GetProperty("paths").EnumerateArray());
+        Assert.True(args.GetProperty("untrackableChange").GetBoolean());
+    }
+
+    [Fact]
+    public async Task GenericDeviceSessionRoutesProjectTheRegisteredDefaultRelationAndTheFileNeverCarriesIt()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
         var wb = fixture.Context.WorkbenchId;
@@ -779,21 +908,30 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         created.EnsureSuccessStatusCode();
         var session = await created.Content.ReadFromJsonAsync<JsonElement>();
         var sessionId = session.GetProperty("header").GetProperty("sessionId").GetString()!;
+        // The create response projects the primary the route just registered; the file itself holds no
+        // relation, which is what makes the graph its only authority (ADR-0014 Decision 1).
         Assert.Equal(taskId, session.GetProperty("header").GetProperty("taskId").GetString());
         Assert.Equal("default", session.GetProperty("header").GetProperty("taskProvenance").GetString());
+        var persisted = File.ReadAllText(SessionManager.ResolveSessionPath(fixture.Context, sessionId)!);
+        Assert.DoesNotContain("taskId", persisted, StringComparison.Ordinal);
+        Assert.DoesNotContain("taskProvenance", persisted, StringComparison.Ordinal);
         using var defaultStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
         var defaultGraph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(defaultStore, wb, id => id == fixture.Context.WorktreeId);
-        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Default, Assert.Single(defaultGraph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId)).Provenance);
+        var registered = Assert.Single(defaultGraph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId));
+        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Default, registered.Provenance);
+        Assert.True(registered.IsPrimary);
+        // The incoming header is not a relation input any more, so a client echoing the response back
+        // cannot inject or re-type the binding: the session PUT only retires the legacy field.
         var node = System.Text.Json.Nodes.JsonNode.Parse(session.GetRawText())!;
         node["header"]!["taskId"] = taskId;
         var saved = await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}", new { session = node });
         Assert.Equal(HttpStatusCode.NoContent, saved.StatusCode);
         var loaded = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
         Assert.Equal(taskId, loaded.GetProperty("header").GetProperty("taskId").GetString());
-        Assert.Equal("manual", loaded.GetProperty("header").GetProperty("taskProvenance").GetString());
+        Assert.Equal("default", loaded.GetProperty("header").GetProperty("taskProvenance").GetString());
         using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
         var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id == fixture.Context.WorktreeId);
-        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Manual,
+        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Default,
             Assert.Single(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId)).Provenance);
     }
 
@@ -869,7 +1007,10 @@ public sealed class WorkbenchEndpointsTests : IDisposable
             graphStore, workbenchId, id => id == fixture.Context.WorktreeId);
         var edge = Assert.Single(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId));
         Assert.Equal(taskId, edge.FromId);
-        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Manual, edge.Provenance);
+        // The PUT no longer re-types the relation from the header it receives: the relation the create
+        // route registered with `default` provenance is the one that survives the update.
+        Assert.Equal(Agent.Workbench.EngineeringGraph.GraphProvenance.Default, edge.Provenance);
+        Assert.True(edge.IsPrimary);
     }
 
     private static async Task AssertSessionCreationRegistrationFailureIsCompensatedAsync(
@@ -910,7 +1051,7 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task SessionGraphReplacementRestoresOldEdgeWhenPersistenceFails()
+    public async Task SetRoutesKeepThePreviousRelationSetWhenTheFileWriteFails()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
         var wb = fixture.Context.WorkbenchId;
@@ -926,20 +1067,23 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         SessionManager.SaveSessionOverride = (_, _) => throw new IOException("injected persistence failure");
         try
         {
+            // The file write happens before the graph write, so a persistence failure can only leave
+            // the requested change unapplied — it can never fabricate or resurrect a relation.
             await Assert.ThrowsAsync<IOException>(() => fixture.Client.PutAsJsonAsync(
-                $"/api/workbenches/{wb}/worktrees/{fixture.Context.WorktreeId}/devices/dev-1/sessions/{id}/task",
-                new { taskId = taskB }));
+                $"{route}/{id}/tasks", new { taskIds = new[] { taskB }, primaryTaskId = taskB }));
+            await Assert.ThrowsAsync<IOException>(() => fixture.Client.PutAsJsonAsync(
+                $"{route}/{id}/task", new { taskId = taskB }));
         }
         finally { SessionManager.SaveSessionOverride = null; }
-        Assert.Throws<IOException>(() => SessionGraphOperations.ApplyWithPersistence(graph, current, taskB,
-            value => value with { Header = value.Header with { TaskId = taskB } },
+        Assert.Throws<IOException>(() => SessionGraphOperations.ApplySet(graph, current, [taskB], taskB,
             _ => throw new IOException("injected persistence failure")));
         Assert.Equal(taskA, Assert.Single(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, id)).FromId);
-        Assert.Equal(taskA, SessionManager.LoadSession(fixture.Context, id)!.Header.TaskId);
+        var reloaded = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{id}");
+        Assert.Equal(taskA, reloaded.GetProperty("header").GetProperty("taskId").GetString());
     }
 
     [Fact]
-    public async Task SessionSaveRejectsTaskIdOutsideCurrentGraphContext()
+    public async Task AnIncompatibleTaskCannotBeBoundThroughTheSessionHeaderOrTheSetRoute()
     {
         await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false, includeSecondWorktree: true);
         var wb = fixture.Context.WorkbenchId;
@@ -957,12 +1101,439 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         var sessionId = session["header"]!["sessionId"]!.GetValue<string>();
         session["header"]!["taskId"] = taskId;
 
-        var response = await fixture.Client.PutAsJsonAsync(
-            $"{route}/{sessionId}", new { session });
+        // The header is not a relation input any more: echoing a task id into it binds nothing.
+        var response = await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}", new { session });
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         var persisted = await fixture.Client.GetFromJsonAsync<JsonElement>($"{route}/{sessionId}");
         Assert.Equal(JsonValueKind.Null, persisted.GetProperty("header").GetProperty("taskId").ValueKind);
+        // The relation's own write paths keep refusing it, with the same code and nothing written.
+        var refused = await fixture.Client.PutAsJsonAsync(
+            $"{route}/{sessionId}/tasks", new { taskIds = new[] { taskId }, primaryTaskId = taskId });
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(graphStore, wb, id => id is "wt-1" or "wt-2");
+        Assert.Empty(graph.GetIncomingEdges(Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, sessionId));
+    }
+
+    [Fact]
+    public async Task CompatibilitySessionTaskRouteSetsThePrimaryWithoutDeletingSiblings()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.DeviceId;
+        var ids = new List<string>();
+        foreach (var title in new[] { "Compat A", "Compat B" })
+        {
+            ids.Add((await (await fixture.Client.PostAsJsonAsync(
+                $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+                new { title, deviceId = device, intent = "i", expectedResult = "r" })).Content
+                .ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!);
+        }
+        (await fixture.Client.PostAsync($"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/select", null))
+            .EnsureSuccessStatusCode();
+        var created = await fixture.Client.PostAsJsonAsync("/api/chat/session/new", new { taskId = ids[0] });
+        created.EnsureSuccessStatusCode();
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("sessionId").GetString()!;
+
+        var reassigned = await fixture.Client.PutAsJsonAsync(
+            "/api/chat/session/task", new { sessionId, taskId = ids[1] });
+
+        Assert.Equal(HttpStatusCode.OK, reassigned.StatusCode);
+        Assert.Equal(ids[1], (await reassigned.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("taskId").GetString());
+        var list = await fixture.Client.GetFromJsonAsync<JsonElement[]>("/api/chat/sessions");
+        var row = Assert.Single(list!, item => item.GetProperty("sessionId").GetString() == sessionId);
+        var relations = row.GetProperty("taskRelations").EnumerateArray().ToArray();
+        Assert.Equal(2, relations.Length);
+        Assert.Equal(ids[1], relations[0].GetProperty("taskId").GetString());
+        Assert.True(relations[0].GetProperty("isPrimary").GetBoolean());
+        Assert.Equal(ids[0], relations[1].GetProperty("taskId").GetString());
+    }
+
+    [Fact]
+    public async Task CompatibilitySessionTasksRouteReplacesTheWholeSetInOneRequest()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.DeviceId;
+        var ids = new List<string>();
+        foreach (var title in new[] { "Set A", "Set B", "Set C" })
+        {
+            ids.Add((await (await fixture.Client.PostAsJsonAsync(
+                $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+                new { title, deviceId = device, intent = "i", expectedResult = "r" })).Content
+                .ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!);
+        }
+        (await fixture.Client.PostAsync($"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/select", null))
+            .EnsureSuccessStatusCode();
+        var created = await fixture.Client.PostAsJsonAsync("/api/chat/session/new", new { taskId = ids[0] });
+        created.EnsureSuccessStatusCode();
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("sessionId").GetString()!;
+
+        var applied = await fixture.Client.PutAsJsonAsync(
+            "/api/chat/session/tasks", new { sessionId, taskIds = ids.ToArray(), primaryTaskId = ids[1] });
+
+        Assert.Equal(HttpStatusCode.OK, applied.StatusCode);
+        var list = await fixture.Client.GetFromJsonAsync<JsonElement[]>("/api/chat/sessions");
+        var row = Assert.Single(list!, item => item.GetProperty("sessionId").GetString() == sessionId);
+        Assert.Equal(3, row.GetProperty("taskRelations").GetArrayLength());
+        Assert.Equal(ids[1], row.GetProperty("taskId").GetString());
+        Assert.Equal(ids[1], row.GetProperty("taskRelations")[0].GetProperty("taskId").GetString());
+    }
+
+    [Fact]
+    public async Task EverySessionListProjectsTheRelationSetAndThePrimary()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.DeviceId;
+        var taskA = (await (await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Task A", deviceId = device, intent = "i", expectedResult = "r" })).Content
+            .ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var taskB = (await (await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Task B", deviceId = device, intent = "i", expectedResult = "r" })).Content
+            .ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var route = $"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null });
+        created.EnsureSuccessStatusCode();
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("sessionId").GetString()!;
+        var applied = await fixture.Client.PutAsJsonAsync(
+            $"{route}/{sessionId}/tasks", new { taskIds = new[] { taskA, taskB }, primaryTaskId = taskB });
+        Assert.Equal(HttpStatusCode.OK, applied.StatusCode);
+
+        // The device list, its typed sibling and the compat twin all answer the same set, and the
+        // primary is projected into taskId/taskProvenance so every current reader keeps working.
+        foreach (var listRoute in new[] { route, $"/api/devices/{device}/sessions", "/api/chat/sessions" })
+        {
+            var list = await fixture.Client.GetFromJsonAsync<JsonElement[]>(listRoute);
+            var row = Assert.Single(list!, item => item.GetProperty("sessionId").GetString() == sessionId);
+            Assert.Equal(taskB, row.GetProperty("taskId").GetString());
+            Assert.Equal("manual", row.GetProperty("taskProvenance").GetString());
+            var relations = row.GetProperty("taskRelations").EnumerateArray().ToArray();
+            Assert.Equal(2, relations.Length);
+            Assert.Equal(taskB, relations[0].GetProperty("taskId").GetString());
+            Assert.True(relations[0].GetProperty("isPrimary").GetBoolean());
+            Assert.Equal("manual", relations[0].GetProperty("provenance").GetString());
+            Assert.Equal(taskA, relations[1].GetProperty("taskId").GetString());
+            Assert.False(relations[1].GetProperty("isPrimary").GetBoolean());
+            Assert.False(string.IsNullOrWhiteSpace(relations[0].GetProperty("edgeId").GetString()));
+        }
+        // The single-conversation routes project the primary onto the conversation they return.
+        foreach (var singleRoute in new[] { $"{route}/{sessionId}", $"/api/devices/{device}/sessions/{sessionId}" })
+        {
+            var single = await fixture.Client.GetFromJsonAsync<JsonElement>(singleRoute);
+            Assert.Equal(taskB, single.GetProperty("header").GetProperty("taskId").GetString());
+            Assert.Equal("manual", single.GetProperty("header").GetProperty("taskProvenance").GetString());
+        }
+        var loaded = await fixture.Client.PostAsJsonAsync("/api/chat/session/load", new { sessionId });
+        Assert.Equal(taskB, (await loaded.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("taskId").GetString());
+    }
+
+    [Fact]
+    public async Task SessionListsStayCompleteAndAnswerTwoHundredWhenTheGraphCannotBeRead()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.DeviceId;
+        var route = $"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null });
+        created.EnsureSuccessStatusCode();
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("sessionId").GetString()!;
+        // A file that is not a database at all: the store cannot be opened, which is the condition a
+        // session list has to survive (AC-007).
+        var databasePath = Path.Combine(fixture.Context.WorkbenchRoot, ".automation", "engineering.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        await File.WriteAllTextAsync(databasePath, "not a database");
+
+        foreach (var listRoute in new[] { route, $"/api/devices/{device}/sessions", "/api/chat/sessions" })
+        {
+            var response = await fixture.Client.GetAsync(listRoute);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var list = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+            var row = Assert.Single(list!, item => item.GetProperty("sessionId").GetString() == sessionId);
+            Assert.Equal(JsonValueKind.Null, row.GetProperty("taskId").ValueKind);
+            Assert.Equal(JsonValueKind.Null, row.GetProperty("taskProvenance").ValueKind);
+            Assert.Empty(row.GetProperty("taskRelations").EnumerateArray());
+        }
+        // The degradation is recorded on the shared log stream, never answered as a 5xx and never as a
+        // read failure of the conversation files. `/api/logs` answers raw log lines.
+        var logs = await fixture.Client.GetFromJsonAsync<string[]>("/api/logs");
+        Assert.Contains(logs!, line =>
+        {
+            using var entry = JsonDocument.Parse(line);
+            return entry.RootElement.TryGetProperty("kind", out var kind) && kind.GetString() == "graph-unavailable";
+        });
+    }
+
+    [Fact]
+    public async Task ALegacyHeaderIsImportedOnceByTheNextWriteAndNeverByARead()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.DeviceId;
+        var taskId = (await (await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Legacy task", deviceId = device, intent = "i", expectedResult = "r" })).Content
+            .ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var route = $"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null });
+        created.EnsureSuccessStatusCode();
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("sessionId").GetString()!;
+        WriteLegacyTaskHeader(fixture.Context, sessionId, taskId, "manual");
+
+        // A read never imports: the header is not state any more.
+        var firstList = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        var firstRow = Assert.Single(firstList!, item => item.GetProperty("sessionId").GetString() == sessionId);
+        Assert.Equal(JsonValueKind.Null, firstRow.GetProperty("taskId").ValueKind);
+        Assert.Empty(firstRow.GetProperty("taskRelations").EnumerateArray());
+
+        // The next write imports it once, and the file afterwards carries neither field.
+        var renamed = await fixture.Client.PostAsJsonAsync("/api/chat/session/rename", new { sessionId, title = "Imported" });
+        renamed.EnsureSuccessStatusCode();
+        var afterWrite = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        var importedRow = Assert.Single(afterWrite!, item => item.GetProperty("sessionId").GetString() == sessionId);
+        Assert.Equal(taskId, importedRow.GetProperty("taskId").GetString());
+        Assert.Equal("manual", importedRow.GetProperty("taskProvenance").GetString());
+        Assert.True(Assert.Single(importedRow.GetProperty("taskRelations").EnumerateArray()).GetProperty("isPrimary").GetBoolean());
+        var persisted = File.ReadAllText(SessionManager.ResolveSessionPath(fixture.Context, sessionId)!);
+        Assert.DoesNotContain("taskId", persisted, StringComparison.Ordinal);
+
+        // A later write does not import anything again.
+        var renamedAgain = await fixture.Client.PostAsJsonAsync("/api/chat/session/rename", new { sessionId, title = "Imported twice" });
+        renamedAgain.EnsureSuccessStatusCode();
+        var afterSecondWrite = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        var stableRow = Assert.Single(afterSecondWrite!, item => item.GetProperty("sessionId").GetString() == sessionId);
+        Assert.Equal(1, stableRow.GetProperty("taskRelations").GetArrayLength());
+        Assert.Equal(taskId, stableRow.GetProperty("taskId").GetString());
+
+        // A cleared set on a legacy-header file sticks: the field the import came from is gone, so no
+        // later write can resurrect the relation the user removed (AC-009).
+        WriteLegacyTaskHeader(fixture.Context, sessionId, taskId, "manual");
+        var cleared = await fixture.Client.PutAsJsonAsync($"{route}/{sessionId}/tasks", new { taskIds = Array.Empty<string>() });
+        Assert.Equal(HttpStatusCode.OK, cleared.StatusCode);
+        (await fixture.Client.PostAsJsonAsync("/api/chat/session/rename", new { sessionId, title = "Cleared" }))
+            .EnsureSuccessStatusCode();
+        var afterClear = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        var clearedRow = Assert.Single(afterClear!, item => item.GetProperty("sessionId").GetString() == sessionId);
+        Assert.Empty(clearedRow.GetProperty("taskRelations").EnumerateArray());
+        Assert.Equal(JsonValueKind.Null, clearedRow.GetProperty("taskId").ValueKind);
+    }
+
+    [Fact]
+    public async Task TheSetRouteMovesOneThreeAndZeroRelationsInOneRequestEach()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.DeviceId;
+        var ids = new List<string>();
+        foreach (var title in new[] { "One", "Two", "Three" })
+        {
+            ids.Add((await (await fixture.Client.PostAsJsonAsync(
+                $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+                new { title, deviceId = device, intent = "i", expectedResult = "r" })).Content
+                .ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!);
+        }
+        var route = $"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null });
+        created.EnsureSuccessStatusCode();
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("sessionId").GetString()!;
+        var sessionRoute = $"{route}/{sessionId}/tasks";
+
+        // One request moves the conversation from nothing to one relation, then to three, then to
+        // none: the whole set is applied at once, so it is never observable half-linked (AC-012).
+        var one = await fixture.Client.PutAsJsonAsync(sessionRoute, new { taskIds = new[] { ids[0] } });
+        Assert.Equal(HttpStatusCode.OK, one.StatusCode);
+        Assert.Equal(ids[0], (await one.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("taskId").GetString());
+
+        var three = await fixture.Client.PutAsJsonAsync(
+            sessionRoute, new { taskIds = ids.ToArray(), primaryTaskId = ids[2] });
+        Assert.Equal(HttpStatusCode.OK, three.StatusCode);
+        var applied = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        var row = Assert.Single(applied!, item => item.GetProperty("sessionId").GetString() == sessionId);
+        Assert.Equal(3, row.GetProperty("taskRelations").GetArrayLength());
+        Assert.Equal(ids[2], row.GetProperty("taskId").GetString());
+        Assert.Equal(ids[2], row.GetProperty("taskRelations")[0].GetProperty("taskId").GetString());
+
+        var none = await fixture.Client.PutAsJsonAsync(sessionRoute, new { taskIds = Array.Empty<string>() });
+        Assert.Equal(HttpStatusCode.OK, none.StatusCode);
+        var cleared = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        var clearedRow = Assert.Single(cleared!, item => item.GetProperty("sessionId").GetString() == sessionId);
+        Assert.Empty(clearedRow.GetProperty("taskRelations").EnumerateArray());
+        Assert.Equal(JsonValueKind.Null, clearedRow.GetProperty("taskId").ValueKind);
+    }
+
+    [Fact]
+    public async Task TheSetRouteRefusesAnUnknownTaskWithoutWritingAnything()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.DeviceId;
+        var taskId = (await (await fixture.Client.PostAsJsonAsync(
+            $"/api/workbenches/{wb}/worktrees/{wt}/engineering-tasks",
+            new { title = "Kept", deviceId = device, intent = "i", expectedResult = "r" })).Content
+            .ReadFromJsonAsync<JsonElement>()).GetProperty("taskId").GetString()!;
+        var route = $"/api/workbenches/{wb}/worktrees/{wt}/devices/{device}/sessions";
+        var created = await fixture.Client.PostAsJsonAsync(route, new { settings = new { }, runtimeContext = (string?)null });
+        created.EnsureSuccessStatusCode();
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("header").GetProperty("sessionId").GetString()!;
+        var sessionRoute = $"{route}/{sessionId}/tasks";
+        (await fixture.Client.PutAsJsonAsync(sessionRoute, new { taskIds = new[] { taskId } })).EnsureSuccessStatusCode();
+
+        var refused = await fixture.Client.PutAsJsonAsync(
+            sessionRoute, new { taskIds = new[] { taskId, "no-such-task" } });
+
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        Assert.Contains("TASK_NOT_FOUND", await refused.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        // Every id is validated before the first write, so the approved set is exactly what was asked.
+        var applied = await fixture.Client.GetFromJsonAsync<JsonElement[]>(route);
+        var row = Assert.Single(applied!, item => item.GetProperty("sessionId").GetString() == sessionId);
+        Assert.Equal(taskId, Assert.Single(row.GetProperty("taskRelations").EnumerateArray()).GetProperty("taskId").GetString());
+    }
+
+    [Fact]
+    public async Task TheModelTaskContextNamesThePrimaryInFullAndTheOthersByTitleAndStatus()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.Context.DeviceId;
+        using var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id == wt);
+        var primary = graph.CreateTask("ctx-primary", Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree, wt,
+            "Primary finding", Agent.Workbench.EngineeringGraph.GraphTaskType.Issue, GraphTaskStatus.InProgress,
+            "## Background\n\nThe interlock is missing.", 0, "Stop the door opening", "Gate closed", device);
+        var sibling = graph.CreateTask("ctx-sibling", Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree, wt,
+            "Sibling finding", Agent.Workbench.EngineeringGraph.GraphTaskType.Improvement, GraphTaskStatus.Todo,
+            null, 0, "Tidy the naming", "Consistent names", device);
+        graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+            Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, "ctx-session", wb, wt, device));
+        graph.AddSessionTask("ctx-session", primary.TaskId, Agent.Workbench.EngineeringGraph.GraphProvenance.Manual, makePrimaryIfNone: true);
+        graph.AddSessionTask("ctx-session", sibling.TaskId, Agent.Workbench.EngineeringGraph.GraphProvenance.Auto);
+
+        var context = ApiChatService.TaskContext(graph, fixture.Context, "ctx-session");
+
+        // The primary's five lines are byte-identical to what this always produced.
+        Assert.Equal(string.Join('\n',
+            $"Active task: {primary.Title} ({primary.TaskId})",
+            $"Task type: {primary.Type}; status: {primary.Status}",
+            $"Task goal: {primary.Intent}",
+            $"Expected result: {primary.ExpectedResult}",
+            $"Task context: {primary.Description}",
+            $"Related tasks: {sibling.Title} ({sibling.TaskId}) — {sibling.Type}, {sibling.Status}"),
+            context);
+        // No other task's full content reaches the model.
+        Assert.DoesNotContain(sibling.Intent, context!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheModelTaskContextSkipsDanglingAndDeviceMismatchedRelationsWithoutFailingTheTurn()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.Context.DeviceId;
+        using var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id == wt);
+        var primary = graph.CreateTask("ctx-primary", Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree, wt,
+            "Primary finding", Agent.Workbench.EngineeringGraph.GraphTaskType.Issue, GraphTaskStatus.Todo,
+            null, 0, "goal", "result", device);
+        graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+            Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, "ctx-session", wb, wt, device));
+        graph.AddSessionTask("ctx-session", primary.TaskId, Agent.Workbench.EngineeringGraph.GraphProvenance.Manual, makePrimaryIfNone: true);
+        // A task of another device, related through a session entity that names that device, so the
+        // relation itself was legal when it was written.
+        var foreign = graph.CreateTask("ctx-foreign", Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree, wt,
+            "Foreign device finding", Agent.Workbench.EngineeringGraph.GraphTaskType.Feature, GraphTaskStatus.Todo,
+            null, 0, "goal", "result", "dev-2");
+        graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+            Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, "ctx-foreign-session", wb, wt, "dev-2"));
+        graph.AddSessionTask("ctx-foreign-session", foreign.TaskId, Agent.Workbench.EngineeringGraph.GraphProvenance.Manual);
+        graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+            Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, "ctx-session", wb, wt, device));
+        using (var insert = store.Connection.CreateCommand())
+        {
+            insert.CommandText = "INSERT INTO graph_edges (edge_id,from_kind,from_id,to_kind,to_id,relation_kind,provenance,is_primary,created_utc,updated_utc) VALUES ('ctx-dangling','task','ctx-gone','session','ctx-session','task_session','manual',0,$now,$now);";
+            insert.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+            insert.ExecuteNonQuery();
+        }
+
+        // Neither a dangling relation nor a device-mismatched one aborts the turn: both are skipped and
+        // the primary still arrives in full (AC-011).
+        var context = ApiChatService.TaskContext(graph, fixture.Context, "ctx-session");
+
+        Assert.Contains($"Active task: {primary.Title} ({primary.TaskId})", context!, StringComparison.Ordinal);
+        Assert.DoesNotContain("ctx-gone", context!, StringComparison.Ordinal);
+        Assert.DoesNotContain("Foreign device finding", context!, StringComparison.Ordinal);
+        Assert.DoesNotContain("Related tasks:", context!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheModelTaskContextBoundsTheRelatedListAndCountsTheRest()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        var wb = fixture.Context.WorkbenchId;
+        var wt = fixture.Context.WorktreeId;
+        var device = fixture.Context.DeviceId;
+        using var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(store, wb, id => id == wt);
+        graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+            Agent.Workbench.EngineeringGraph.GraphEntityKind.Session, "ctx-session", wb, wt, device));
+        for (var index = 0; index < 15; index++)
+        {
+            var task = graph.CreateTask($"ctx-{index:00}", Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree, wt,
+                $"Finding {index:00}", Agent.Workbench.EngineeringGraph.GraphTaskType.Issue, GraphTaskStatus.Todo,
+                null, 0, "goal", "result", device);
+            graph.AddSessionTask("ctx-session", task.TaskId, Agent.Workbench.EngineeringGraph.GraphProvenance.Auto,
+                makePrimaryIfNone: index == 0);
+        }
+
+        var context = ApiChatService.TaskContext(graph, fixture.Context, "ctx-session")!;
+        var relatedLine = context.Split('\n').Single(line => line.StartsWith("Related tasks:", StringComparison.Ordinal));
+
+        // At most ten other tasks are named and the rest are counted, because this line is injected on
+        // every turn.
+        Assert.Equal(10, relatedLine.Split("; ").Length);
+        Assert.EndsWith("(and 4 more)", relatedLine, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheModelTaskContextIsAbsentForAConversationWithNoResolvableRelation()
+    {
+        await using var fixture = await SelectedApiFixture.CreateAsync(root, databaseExists: false);
+        using var store = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Context.WorkbenchRoot);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(
+            store, fixture.Context.WorkbenchId, id => id == fixture.Context.WorktreeId);
+
+        Assert.Null(ApiChatService.TaskContext(graph, fixture.Context, "ctx-none"));
+        Assert.Null(ApiChatService.TaskContext(graph, fixture.Context, null));
+    }
+
+    private static void WriteLegacyTaskHeader(DeviceContext context, string sessionId, string taskId, string provenance)
+    {
+        var path = SessionManager.ResolveSessionPath(context, sessionId)!;
+        var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        node["header"]!["taskId"] = taskId;
+        node["header"]!["taskProvenance"] = provenance;
+        File.WriteAllText(path, node.ToJsonString());
     }
 
     [Fact]
@@ -2401,6 +2972,28 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task AnExpiredConfirmationNeverRunsTheDestructiveTool()
+    {
+        var caller = new RecordingToolCaller();
+        var gateway = new ApiMcpGateway(caller, caller, caller, caller);
+        var pending = new PendingToolActions();
+        var executor = new SandboxedToolExecutor(
+            new SandboxPolicy(),
+            new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { })),
+            gateway,
+            pending);
+        var requested = await executor.RequestAsync("vc_restore", new Dictionary<string, object?>(), Context(), "requester", CancellationToken.None);
+        var id = requested!.GetType().GetProperty("_confirmationId")!.GetValue(requested)!.ToString()!;
+
+        // Expired is what the pending action receives when the card's deadline passes: it must fail
+        // closed like a refusal, and it must not be reported as one.
+        var expired = await pending.ResolveAsync(id, ToolConfirmation.Expired, DeviceContextIdentity.Key(Context()), "requester");
+
+        Assert.Equal("expired", expired!.GetType().GetProperty("status")!.GetValue(expired)!.ToString());
+        Assert.Empty(caller.Calls);
+    }
+
+    [Fact]
     public void ChatIdentitySeparatesSameDeviceIdAcrossWorktrees()
     {
         var first = Context();
@@ -2490,6 +3083,139 @@ public sealed class WorkbenchEndpointsTests : IDisposable
         Assert.Throws<ArgumentException>(() => binder.Bind(
             "src_validate", new Dictionary<string, object?> { ["xmlFilePath"] = Path.Combine(root, "foreign.xml") }, context));
     }
+
+    /// <summary>
+    /// The conversation's own device answers <c>plcName</c> for the engineering tools that act on
+    /// exactly one PLC. Without it a multi-PLC project fails every one of them with
+    /// <c>AMBIGUOUS_PLC</c> and the model has no argument that changes the outcome: the runtime context
+    /// carries the conversation's device id, never TIA's own name for the device.
+    /// </summary>
+    [Theory]
+    [InlineData("list_blocks")]
+    [InlineData("capture_source_evidence")]
+    [InlineData("compare_source_evidence")]
+    [InlineData("export_source_object")]
+    [InlineData("create_block")]
+    [InlineData("delete_block")]
+    [InlineData("compile_block")]
+    [InlineData("compile_plc")]
+    [InlineData("open_block_in_editor")]
+    [InlineData("open_source_object_in_editor")]
+    public void SingleDeviceToolsTakeTheSelectedDevicesPlcName(string tool)
+    {
+        var context = Context();
+        SeedDeviceMetadata(context, "PLC_1");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var bound = binder.Bind(tool, new Dictionary<string, object?>(), context);
+
+        Assert.Equal("PLC_1", bound["plcName"]);
+    }
+
+    /// <summary>
+    /// The import tools need an existing source path as well; the PLC name arrives with it.
+    /// </summary>
+    [Fact]
+    public void ImportToolsTakeTheSelectedDevicesPlcNameWithTheirBoundPath()
+    {
+        var context = Context();
+        SeedDeviceMetadata(context, "PLC_1");
+        var source = Path.Combine(context.SourceRoot, "Blocks", "A.xml");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "<a/>");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var import = binder.Bind(
+            "import_block",
+            new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
+            context);
+        Assert.Equal("PLC_1", import["plcName"]);
+        Assert.Equal(source, import["xmlFilePath"]);
+
+        var sourceObject = binder.Bind(
+            "import_source_object",
+            new Dictionary<string, object?> { ["relativePath"] = "Blocks/A.xml" },
+            context);
+        Assert.Equal("PLC_1", sourceObject["plcName"]);
+        Assert.Equal("Blocks/A.xml", sourceObject["relativePath"]);
+    }
+
+    /// <summary>
+    /// Tools that read <c>plcName == null</c> as "every PLC" keep their project-wide meaning: one
+    /// conversation's device must not silently narrow them to itself. <c>export_tag_tables</c> and
+    /// <c>export_udts</c> belong to this group too, but the binder refuses them outright
+    /// (STAGED_REFRESH_REQUIRED), so they are covered by the staged-refresh tests instead.
+    /// </summary>
+    [Theory]
+    [InlineData("get_plc_checksums")]
+    [InlineData("sync_export")]
+    [InlineData("rebuild_export")]
+    [InlineData("get_context_status")]
+    [InlineData("compare_context")]
+    public void ProjectWideToolsAreNotBoundToTheSelectedDevicesPlcName(string tool)
+    {
+        var context = Context();
+        SeedDeviceMetadata(context, "PLC_1");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var bound = binder.Bind(tool, new Dictionary<string, object?>(), context);
+
+        Assert.False(bound.ContainsKey("plcName"));
+    }
+
+    /// <summary>
+    /// Naming another device is a conflict, not an override: the conversation is bound to one device,
+    /// so aiming a call elsewhere is a model-fixable argument error. The name matches the way
+    /// <c>PlcSoftwareResolver</c> matches it.
+    /// </summary>
+    [Fact]
+    public void PlcNameBindingAcceptsTheSelectedDeviceAndRejectsAnotherDevice()
+    {
+        var context = Context();
+        SeedDeviceMetadata(context, "PLC_1");
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var same = binder.Bind(
+            "open_block_in_editor",
+            new Dictionary<string, object?> { ["blockName"] = "Main", ["plcName"] = "plc_1" },
+            context);
+        Assert.Equal("PLC_1", same["plcName"]);
+
+        Assert.Throws<ArgumentException>(() => binder.Bind(
+            "open_block_in_editor",
+            new Dictionary<string, object?> { ["blockName"] = "Main", ["plcName"] = "PLC_2" },
+            context));
+    }
+
+    /// <summary>
+    /// A device whose metadata cannot be read degrades to the caller's own argument — including the
+    /// argument's absence — instead of failing every single-device tool.
+    /// </summary>
+    [Fact]
+    public void UnreadableDeviceMetadataLeavesPlcNameToTheCaller()
+    {
+        var context = Context();
+        var binder = new DeviceToolArgumentBinder(new DeviceSourceResolver(_ => { }));
+
+        var bound = binder.Bind("open_block_in_editor", new Dictionary<string, object?>(), context);
+
+        Assert.False(bound.ContainsKey("plcName"));
+    }
+
+    private static void SeedDeviceMetadata(DeviceContext context, string plcName) =>
+        new AtomicJsonStore().Write(
+            Path.Combine(context.DeviceRoot, "device.json"),
+            new DeviceMetadata(
+                WorkbenchSchema.CurrentVersion,
+                context.DeviceId,
+                context.WorktreeId,
+                plcName,
+                plcName,
+                null,
+                null,
+                null,
+                new KnowledgeState(false, new Dictionary<string, string>(), null, false),
+                []));
 
     [Fact]
     public void ImportBlockBindsToExistingModifiedSourceOnly()
@@ -2641,17 +3367,22 @@ public sealed class WorkbenchEndpointsTests : IDisposable
     }
 
     [Fact]
-    public async Task ExpiryActivelyDeniesWaitingConfirmation()
+    public async Task ExpiryActivelyReleasesTheWaitingConfirmationAsExpired()
     {
         var pending = new PendingToolActions(TimeProvider.System, TimeSpan.FromMilliseconds(30));
         var released = new TaskCompletionSource<ToolConfirmation>(TaskCreationOptions.RunContinuationsAsynchronously);
-        pending.Add("context", "requester", (decision, _) =>
+        var id = pending.Add("context", "requester", (decision, _) =>
         {
             released.TrySetResult(decision);
             return Task.FromResult<object?>(null);
         });
 
-        Assert.Equal(ToolConfirmation.Deny, await released.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        // The waiting caller is released, and with the reason it actually has: a deadline, not a
+        // refusal. Reporting a timeout as "the user denied it" once sent an investigation after a
+        // denial nobody made, and it tells the model to stop asking about a call nobody rejected.
+        Assert.Equal(ToolConfirmation.Expired, await released.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            pending.ResolveAsync(id, ToolConfirmation.AllowOnce, "context", "requester"));
     }
 
     [Fact]
