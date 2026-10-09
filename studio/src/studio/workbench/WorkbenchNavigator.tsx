@@ -172,6 +172,31 @@ const knowledgeDotClass = (state: 'current' | 'stale' | 'missing' | 'failed') =>
       : state === 'failed' ? 'text-red-500'
         : 'text-muted-foreground'
 
+/** Every section the navigator can show, in the order the cascade puts them in. */
+const navigatorSectionIds = ['projects', 'worktree', 'device', 'tasks', 'sessions']
+/**
+ * The scope a selection names. It is what the cascade is built from, and it decides which sections the
+ * accordion below leaves open.
+ */
+type NavigatorScope = 'project' | 'worktree' | 'device' | 'target'
+/**
+ * The sections a scope selection leaves open. Picking a scope folds the section it was picked from and
+ * opens the one below it, so the levels already chosen stop competing for height with the ones being
+ * worked in — which is what gives the sections at the bottom, and the conversation list among them,
+ * the room to be read. `TASKS` and `SESSIONS` are the pair that stays open together: a device is
+ * selected both to work on its tasks and to read its conversations, and folding either would hide what
+ * the other is about.
+ */
+const accordionDefaults: Record<NavigatorScope, string[]> = {
+  project: ['projects'],
+  worktree: ['worktree'],
+  device: ['device'],
+  target: ['tasks', 'sessions'],
+}
+/** Every section a scope's selection folds: all of them but the ones it leaves open. */
+const foldedSectionsByScope = (scope: NavigatorScope) =>
+  new Set(navigatorSectionIds.filter(id => !accordionDefaults[scope].includes(id)))
+
 type NavigatorSectionProps = {
   /** Stable section identity, used for the header/body pairing and for test and style hooks. */
   id: string
@@ -187,6 +212,10 @@ type NavigatorSectionProps = {
    * follows its content.
    */
   fillsRemainingSpace?: boolean
+  /** Whether the section is folded. The navigator owns this, because scope selection moves it. */
+  collapsed: boolean
+  /** The header was activated: fold the section, or open it again. */
+  onToggle: () => void
   children: ReactNode
 }
 
@@ -200,7 +229,9 @@ const SECTION_MIN_HEIGHT = 72
  * One collapsible navigator section.
  *
  * The header is a native button that owns this section's collapse state, so activating one header
- * changes only that section. The header sits outside the body's scroll region, so a scrolling
+ * changes only that section. The state itself lives in the navigator rather than here, because a scope
+ * selection also moves it: the accordion folds the level the user just picked from. The header sits
+ * outside the body's scroll region, so a scrolling
  * section can never carry a header out of view.
  *
  * The box is `flex: 0 1 auto`, so its height follows its content instead of taking an equal share of
@@ -209,8 +240,7 @@ const SECTION_MIN_HEIGHT = 72
  * what the box measures; when the dock cannot give it that much, the box shrinks to its floor and the
  * body scrolls.
  */
-function NavigatorSection({ id, title, action, height = null, fillsRemainingSpace = false, children }: NavigatorSectionProps) {
-  const [collapsed, setCollapsed] = useState(false)
+function NavigatorSection({ id, title, action, height = null, fillsRemainingSpace = false, collapsed, onToggle, children }: NavigatorSectionProps) {
   const bodyId = `navigator-section-${id}`
   // A collapsed section releases its height even when it is the deepest one: folding it is a request
   // for less room, not for a header on top of an empty box.
@@ -229,7 +259,7 @@ function NavigatorSection({ id, title, action, height = null, fillsRemainingSpac
           type="button"
           aria-expanded={!collapsed}
           aria-controls={bodyId}
-          onClick={() => setCollapsed(current => !current)}
+          onClick={onToggle}
           className="flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left text-[9px] font-semibold tracking-[0.18em] text-muted-foreground transition-colors hover:text-foreground"
         >
           {collapsed
@@ -559,11 +589,31 @@ export default function WorkbenchNavigator({
   )
   const [clickedTaskId, setClickedTaskId] = useState<string | null>(null)
   /**
+   * The scope the selection names, which is what the accordion's defaults are read from. A worktree
+   * whose own row is the deepest selection names no target yet, so its `DEVICE` list is what the user
+   * is about to pick from; the hardware row is a target like a device.
+   */
+  const selectionScope: NavigatorScope =
+    !selection.workbenchId ? 'project'
+      : !selection.worktreeId ? 'worktree'
+        : selection.deviceId || selection.targetKind === 'hardware' ? 'target'
+          : 'device'
+  /**
+   * Which sections are folded. A scope selection folds the section it was picked from and opens the
+   * one below it, so the levels already chosen stop taking height from the ones being worked in; a
+   * header click overrides that until the next scope selection. This is what keeps the bottom of the
+   * dock — the conversation list, once a device is selected — readable rather than a sliver.
+   */
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
+    () => foldedSectionsByScope(selectionScope),
+  )
+  /**
    * Which target the remembered task was picked under. Selecting a device, the hardware row, a worktree
    * or a workbench is the navigator's "no task in particular" state, so the task selection is dropped:
    * the `SESSIONS` section then falls back to the selected device's conversations that no task owns,
    * which is the only way back to one. Without that reset the selection was sticky — it had no way out
    * at all — and a task that owns no conversation took the whole section off screen with it (AC-015).
+   * The same event is what re-applies the accordion's defaults, so both are keyed on one identity.
    */
   const selectionKey = `${selection.workbenchId ?? ''}:${selection.worktreeId ?? ''}:${selection.deviceId ?? selection.targetKind ?? ''}`
   const lastSelectionKey = useRef(selectionKey)
@@ -571,7 +621,15 @@ export default function WorkbenchNavigator({
     if (lastSelectionKey.current === selectionKey) return
     lastSelectionKey.current = selectionKey
     setClickedTaskId(null)
-  }, [selectionKey])
+    setCollapsedSections(foldedSectionsByScope(selectionScope))
+  }, [selectionKey, selectionScope])
+  /** The user's own fold or unfold of one section, which lasts until the scope selection moves again. */
+  const toggleSection = (id: string) => setCollapsedSections(current => {
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
   /**
    * A task detail opened from the worktree's own task surface is adopted as the navigator's selection,
    * so the highlighted row and the `SESSIONS` section follow the detail that is open. Adopting it also
@@ -795,6 +853,8 @@ export default function WorkbenchNavigator({
         title="DEVICE"
         height={sectionHeights.device ?? null}
         fillsRemainingSpace={isDeepestSection('device')}
+        collapsed={collapsedSections.has('device')}
+        onToggle={() => toggleSection('device')}
         action={(
           <Button variant="ghost" size="icon-xs" aria-label="Refresh devices" title="Refresh devices" onClick={onRefresh}>
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -940,6 +1000,8 @@ export default function WorkbenchNavigator({
         title="TASKS"
         height={sectionHeights.tasks ?? null}
         fillsRemainingSpace={isDeepestSection('tasks')}
+        collapsed={collapsedSections.has('tasks')}
+        onToggle={() => toggleSection('tasks')}
         action={(
           <Button
             variant="ghost"
@@ -993,6 +1055,8 @@ export default function WorkbenchNavigator({
         title="SESSIONS"
         height={sectionHeights.sessions ?? null}
         fillsRemainingSpace={isDeepestSection('sessions')}
+        collapsed={collapsedSections.has('sessions')}
+        onToggle={() => toggleSection('sessions')}
         action={(
           <Button
             variant="ghost"
@@ -1064,6 +1128,8 @@ export default function WorkbenchNavigator({
           title="PROJECTS"
           height={sectionHeights.projects ?? null}
           fillsRemainingSpace={isDeepestSection('projects')}
+          collapsed={collapsedSections.has('projects')}
+          onToggle={() => toggleSection('projects')}
           action={(
             <Button variant="ghost" size="icon-xs" aria-label="Create workbench" title="Create workbench" onClick={onCreateWorkbench}>
               <Plus className="h-3.5 w-3.5" />
@@ -1183,6 +1249,8 @@ export default function WorkbenchNavigator({
             title="WORKTREE"
             height={sectionHeights.worktree ?? null}
             fillsRemainingSpace={isDeepestSection('worktree')}
+            collapsed={collapsedSections.has('worktree')}
+            onToggle={() => toggleSection('worktree')}
             action={!filterActive && selectedWorkbench ? (
               <Button
                 variant="ghost"

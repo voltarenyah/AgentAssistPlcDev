@@ -116,6 +116,22 @@ const sectionBody = (host: HTMLElement, id: string) => host.querySelector(`#navi
 const sessionGroup = (host: HTMLElement, key: string) =>
   section(host, 'sessions').querySelector(`[data-session-group="${key}"]`) as HTMLElement
 
+/** The sections whose bodies are showing, in the order the cascade puts them in. */
+const expandedIds = (host: HTMLElement) => sectionIds(host)
+  .filter(id => sectionHeader(host, id).getAttribute('aria-expanded') === 'true')
+
+/**
+ * Opens every folded section, so a case about something other than the accordion — the sizing and
+ * separator mechanics — starts from the state it is about rather than from whatever the selected scope
+ * folded. The accordion itself is covered on its own below.
+ */
+const expandAll = async (host: HTMLElement) => {
+  for (const id of sectionIds(host)) {
+    const header = sectionHeader(host, id)
+    if (header.getAttribute('aria-expanded') === 'false') await act(async () => header.click())
+  }
+}
+
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('WorkbenchNavigator tag projection', () => {
@@ -365,6 +381,7 @@ describe('WorkbenchNavigator target cascade', () => {
       devicesByWorktree,
       tasksByWorktree: targetTasks,
     })
+    await expandAll(host)
 
     // Content-sized: a section carries its floor but no height of its own until the user drags one,
     // so it is exactly as tall as its rows rather than an equal share of the dock.
@@ -504,6 +521,7 @@ describe('WorkbenchNavigator section sizing', () => {
 
   it('resizes exactly the two sections a separator sits between (AC-012)', async () => {
     const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    await expandAll(host)
     mockHeights(host, { projects: 200, worktree: 400 })
 
     await dragSeparator(host, 'Resize PROJECTS section', 100, 140)
@@ -519,6 +537,7 @@ describe('WorkbenchNavigator section sizing', () => {
 
   it('clamps a resize at the minimum height and announces the split (AC-012)', async () => {
     const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    await expandAll(host)
     mockHeights(host, { projects: 200, worktree: 400 })
 
     // Dragging far past the lower section's floor must stop at it, not take the section away.
@@ -538,6 +557,7 @@ describe('WorkbenchNavigator section sizing', () => {
 
   it('resizes the same pair from the keyboard (AC-012)', async () => {
     const first = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    await expandAll(first.host)
     mockHeights(first.host, { projects: 200, worktree: 400 })
     const handle = first.host.querySelector('[role="separator"][aria-label="Resize PROJECTS section"]') as HTMLElement
 
@@ -548,6 +568,7 @@ describe('WorkbenchNavigator section sizing', () => {
 
     // A section already near the floor cannot be shrunk past it.
     const second = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    await expandAll(second.host)
     mockHeights(second.host, { projects: 80, worktree: 400 })
     const clamped = second.host.querySelector('[role="separator"][aria-label="Resize PROJECTS section"]') as HTMLElement
 
@@ -1187,6 +1208,12 @@ describe('WorkbenchNavigator sessions section', () => {
 })
 
 describe('WorkbenchNavigator section cascade', () => {
+  /** The one-device worktree every accordion case below walks down. */
+  const deviceSelection = {
+    workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: 'plc-1', targetKind: 'device' as const,
+  }
+  const overrides = { devicesByWorktree, tasksByWorktree: targetTasks }
+
   it('lists every workbench as a flat PROJECTS row and creates a workbench from the section header (AC-001)', async () => {
     const onCreateWorkbench = vi.fn()
     const { host, root } = await renderNavigator(null, false, {
@@ -1255,6 +1282,71 @@ describe('WorkbenchNavigator section cascade', () => {
     await act(async () => root.unmount())
   })
 
+  it('folds the level a scope was picked from and opens the one below it (AC-007)', async () => {
+    const { host, root } = await renderNavigator(null, false, {
+      selection: { workbenchId: null, worktreeId: null, deviceId: null }, ...overrides,
+    })
+    // Nothing is selected, so there is no level to fold and PROJECTS is what the user picks from.
+    expect(expandedIds(host)).toEqual(['projects'])
+
+    // Selecting a workbench folds PROJECTS and opens WORKTREE.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: 'wb-direct', worktreeId: null, deviceId: null }, ...overrides,
+      })} />,
+    ))
+    expect(expandedIds(host)).toEqual(['worktree'])
+    expect(sectionBody(host, 'projects').hasAttribute('hidden')).toBe(true)
+
+    // Selecting a worktree folds WORKTREE and opens DEVICE.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null }, ...overrides,
+      })} />,
+    ))
+    expect(expandedIds(host)).toEqual(['device'])
+    expect(sectionBody(host, 'worktree').hasAttribute('hidden')).toBe(true)
+
+    // Selecting a device folds DEVICE and opens TASKS — and leaves SESSIONS open with it, because the
+    // device is selected both to work on its tasks and to read its conversations.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({ selection: deviceSelection, ...overrides })} />,
+    ))
+    expect(expandedIds(host)).toEqual(['tasks', 'sessions'])
+    expect(sectionBody(host, 'device').hasAttribute('hidden')).toBe(true)
+
+    // The hardware row is a target too, and it has no conversation list to leave open.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null, targetKind: 'hardware' },
+        ...overrides,
+      })} />,
+    ))
+    expect(expandedIds(host)).toEqual(['tasks'])
+
+    await act(async () => root.unmount())
+  })
+
+  it('keeps a header the user opened until the scope selection moves again (AC-007)', async () => {
+    const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
+    expect(expandedIds(host)).toEqual(['tasks', 'sessions'])
+
+    // Reading the worktree's projects again is the user's own move, and nothing takes it back until
+    // the scope selection changes.
+    await act(async () => sectionHeader(host, 'projects').click())
+    expect(expandedIds(host)).toEqual(['projects', 'tasks', 'sessions'])
+
+    // Picking another device is that change: the accordion's defaults come back.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { ...deviceSelection, deviceId: 'plc-2' }, ...overrides,
+      })} />,
+    ))
+    expect(expandedIds(host)).toEqual(['tasks', 'sessions'])
+
+    await act(async () => root.unmount())
+  })
+
   it('collapses only the activated section and keeps its body addressable (AC-007)', async () => {
     const { host, root } = await renderNavigator(null, false, {
       selection: { workbenchId: 'wb-direct', worktreeId: null, deviceId: null },
@@ -1265,10 +1357,12 @@ describe('WorkbenchNavigator section cascade', () => {
     const projectsBody = sectionBody(host, 'projects')
     const worktreeBody = sectionBody(host, 'worktree')
 
-    expect(projectsHeader.getAttribute('aria-expanded')).toBe('true')
+    // Selecting the workbench folds the level it was picked from and opens the one below it, so the
+    // case starts from PROJECTS folded and WORKTREE open.
+    expect(projectsHeader.getAttribute('aria-expanded')).toBe('false')
     expect(projectsHeader.getAttribute('aria-controls')).toBe(projectsBody.id)
+    expect(projectsBody.hasAttribute('hidden')).toBe(true)
     expect(worktreeHeader.getAttribute('aria-expanded')).toBe('true')
-    expect(projectsBody.hasAttribute('hidden')).toBe(false)
     expect(worktreeBody.hasAttribute('hidden')).toBe(false)
 
     // The header must sit outside the body's scroll region, otherwise a long section could
@@ -1278,16 +1372,18 @@ describe('WorkbenchNavigator section cascade', () => {
 
     await act(async () => projectsHeader.click())
 
-    expect(projectsHeader.getAttribute('aria-expanded')).toBe('false')
-    expect(projectsBody.hasAttribute('hidden')).toBe(true)
+    // Activating one header changes that section alone: the other keeps the state it had.
+    expect(projectsHeader.getAttribute('aria-expanded')).toBe('true')
+    expect(projectsBody.hasAttribute('hidden')).toBe(false)
     expect(worktreeHeader.getAttribute('aria-expanded')).toBe('true')
     expect(worktreeBody.hasAttribute('hidden')).toBe(false)
 
     await act(async () => projectsHeader.click())
 
-    expect(projectsHeader.getAttribute('aria-expanded')).toBe('true')
-    expect(projectsBody.hasAttribute('hidden')).toBe(false)
+    expect(projectsHeader.getAttribute('aria-expanded')).toBe('false')
+    expect(projectsBody.hasAttribute('hidden')).toBe(true)
     expect(worktreeHeader.getAttribute('aria-expanded')).toBe('true')
+    expect(worktreeBody.hasAttribute('hidden')).toBe(false)
     await act(async () => root.unmount())
   })
 })

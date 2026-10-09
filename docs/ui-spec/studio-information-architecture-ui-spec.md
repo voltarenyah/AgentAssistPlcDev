@@ -12,12 +12,12 @@
 - PRD or requirement carrier: `docs/adr/ADR-0006-studio-navigator-ownership-and-shape.md`,
   `docs/adr/ADR-0009-navigator-sessions-section.md`, `docs/adr/ADR-0010-deleting-a-task-conversation.md`,
   `docs/adr/ADR-0014-session-task-relations-belong-to-the-graph.md`
-- Explicit exclusions: main-area view or tab-strip ownership; relocating row action menus; automatic
-  cross-section collapse; reordering sections; persisting a dragged height across sessions;
-  a session-level scope below a task; a worktree-wide conversation list inside the navigator, which is
-  the worktree surface's own tab rather than a section this cascade scopes;
-  recovering a deleted conversation; the contents of any feature page, other than the conversation
-  creation a task's own page carries for the case the `SESSIONS` section cannot cover.
+- Explicit exclusions: main-area view or tab-strip ownership, other than the worktree conversation tab
+  this specification names; relocating row action menus; reordering sections; persisting a dragged
+  height or a folded section across sessions; a session-level scope below a task; a worktree-wide
+  conversation list inside the navigator, which is the worktree surface's own tab rather than a section
+  this cascade scopes; recovering a deleted conversation; the contents of any feature page, other than
+  the conversation creation a task's own page carries.
 
 ## Design Evidence
 
@@ -53,6 +53,7 @@
 | Session row menu | Any conversation row's 3-dots | Offers opening, renaming, exporting, binding the conversation to any of the worktree's tasks or clearing any of those bindings, and deleting it. Binding opens a searchable picker with one check per task that can own a conversation — a click sets a binding, a second click clears it — and the set is applied in one operation; deleting asks for confirmation first. | AC-008, AC-015, AC-017, AC-019 |
 | Tag filter active | The user types in the tag filter | Only `PROJECTS` and `WORKTREE` are shown; the unbound-task group, `DEVICE`, `TASKS` and `SESSIONS` are hidden. | AC-006 |
 | Section collapse | The user activates a section header | That section alone collapses or expands; the others keep their state, and a collapsed section releases its height so the sections below move up. | AC-007, AC-013 |
+| Scope-driven collapse | The user selects a workbench, a worktree, a device or the `Hardware` row | The section the selection was picked from — and every section above it — folds, and the section below it opens, so the levels already chosen stop taking height from the one being worked in. `TASKS` and `SESSIONS` are the pair that stays open together while a PLC device is selected, because the device is selected both to work on its tasks and to read its conversations. A header the user then opens stays open until the scope selection moves again. | AC-007, AC-021 |
 | Section height | Always | Every section but the deepest is as tall as its content, so a section holding one row is one row tall and no section reserves height it does not use. The deepest section on screen takes the dock's remaining height, so its lower boundary is the dock's lower boundary. | AC-013 |
 | Deepest section | A target or worktree is selected | The deepest section reaches the bottom of the dock, and its body shows no scrollbar while its rows fit that room. Folding it releases the room, so the dock's bottom is then unused. | AC-013 |
 | Section separator | The user drags the separator between two adjacent sections, or focuses it and presses `ArrowUp`/`ArrowDown` | The upper section grows and the lower one shrinks by the same amount, each within its minimum height; the sections below the pair do not move. | AC-012 |
@@ -93,6 +94,7 @@
 
 | Component | State or condition | Display | Recovery / transition | Source |
 |---|---|---|---|---|
+| Any section | A workbench, worktree, device or the `Hardware` row is selected | The section the selection was picked from, and every section above it, folds; the section below opens. A device selection opens `TASKS` and `SESSIONS` together. | Opening a header the selection folded keeps it open until the scope selection changes, which re-applies the defaults. | AC-007, AC-021 |
 | `WORKTREE` section | No worktree selected | Section absent; `PROJECTS` is the only list. | Selecting a workbench reveals it. | AC-002 |
 | `TASKS` section | No device selected | Section absent; `DEVICE` prompts selection. | Selecting a device reveals the bound tasks. | AC-005 |
 | `TASKS` section | Selected device has no task | Empty list with the existing `Add task` affordance. | Creating a task populates the list. | AC-005 |
@@ -147,6 +149,7 @@
 | AC-005 | `TASKS` section | Selecting a device reveals its bound tasks, and its header action opens creation with that device preselected. |
 | AC-006 | Tag filter | While filtering, only `PROJECTS` and `WORKTREE` are present in the navigator. |
 | AC-007 | Section collapse | Collapsing one section leaves the others' expanded state and scroll position unchanged. |
+| AC-021 | Scope-driven collapse | Selecting a workbench folds `PROJECTS` and opens `WORKTREE`; selecting a worktree folds `WORKTREE` and opens `DEVICE`; selecting a PLC device folds `DEVICE` and opens `TASKS` with `SESSIONS` still open; selecting the `Hardware` row folds `DEVICE` and opens `TASKS`, which is the only leaf a hardware target has. A header the user opens afterwards stays open until the next scope selection re-applies those defaults, so a section the accordion folded is one click away and no level becomes unreachable. |
 | AC-008 | Row 3-dots menus | Every section row exposes a 3-dots menu with that object's operations, and the device menu offers the operations the removed subtree held. |
 | AC-009 | `Hardware` row in `DEVICE` | The hardware row opens the hardware configuration page (unreachable today), and its `TASKS` list shows only hardware-bound tasks. |
 | AC-010 | Task creation from the `Hardware` row | The created task appears under the `Hardware` row's `TASKS` list, not in the unbound-task group. |
@@ -166,8 +169,7 @@
 
 | Decision | Effect on current UI |
 |---|---|
-| Automatic collapse of shallower sections, keeping one level above the active scope | Confirmed as desirable but deferred. The sections now size to their content and release their height when collapsed, so the deferred behaviour needs a rule for when to collapse, not a layout change. |
-| Persisting a dragged section height across sessions | Deferred. The override is session state, which mirrors how the task list's dragged column widths behave; persistence would add a stored layout shape. |
+| Persisting a dragged section height, or a folded section, across sessions | Deferred. Both are session state, which mirrors how the task list's dragged column widths behave; persistence would add a stored layout shape. |
 
 ## Update History
 
@@ -187,3 +189,4 @@
 | 2026-10-08 | 1.11 | A conversation can be related to several tasks, so the row menu's binding becomes a set: the picker carries one check per task that can own a conversation, a second click on a checked task clears that binding, and the set is applied in one operation (AC-019). `SESSIONS` membership is set membership, so a conversation several tasks share is listed by each of them, and a relation the conversation established by creating the task appears without the user binding anything (AC-015). The confirmation a delete shows speaks of the links it loses (AC-017). Per ADR-0014 and ADR-0009 v1.3. |
 | 2026-10-09 | 1.12 | A selected device shows its whole conversation list, grouped by the task each conversation is related to — the conversations no task is related to first — instead of only those no task owns, so a task-bound conversation is reachable without opening its task first. The section is now present whenever a PLC device is the selected target and says so when its list is empty, so its absence no longer has to be interpreted and its header action is always available (AC-015, AC-016). Per ADR-0009 v1.5. |
 | 2026-10-09 | 1.13 | The worktree surface's tab strip gains a `Sessions` tab listing every conversation the worktree holds, in the same `Cards`/`List` duality as its `Tasks` tab, with a search and the same per-row operations; it reads a new worktree-level conversation list, which is the only list that can reach a conversation whose header names no device (AC-020). The conversation operations are shared with the navigator's rows rather than duplicated (AC-019). Per ADR-0009 v1.6. |
+| 2026-10-09 | 1.14 | The navigator folds as the user picks a scope: a workbench, worktree, device or `Hardware` selection folds the section it was picked from and every section above it, and opens the one below — with `TASKS` and `SESSIONS` open together for a device — so the levels already chosen stop taking height from the one being worked in and the conversation list at the bottom is readable (AC-021). A header the user opens stays open until the scope selection moves again. This is the collapse behaviour the specification had recorded as desirable but deferred, and ADR-0006's "independently collapsible" claim becomes "independently collapsible between scope selections". |

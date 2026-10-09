@@ -127,5 +127,12 @@ device-scoped groups. Keep the top bar and tag filter as fixed regions outside t
 - `docs/ui-spec/studio-information-architecture-ui-spec.md` — the approved surface and interactions
 - `docs/design/studio-information-architecture-design.md` — the implementation approach
 - `docs/adr/ADR-0007-task-target-model.md` — the hardware target that the `DEVICE` section presents
+
+## Update History
+
+| Date | Version | Changes |
+|---|---|---|
+| 2026-10-09 | 1.1 | The sections stay independently collapsible *between scope selections*, not at every moment: picking a workbench, worktree, device or the `Hardware` row folds the section it was picked from and every section above it, and opens the one below, so the levels already chosen stop taking height from the one being worked in. A header the user then opens keeps its state until the next scope selection. The flat five-section cascade, the per-section scroll container and the derived content this ADR decided are unchanged; the collapse behaviour is specified by AC-021 of `docs/ui-spec/studio-information-architecture-ui-spec.md`. |
+
 - `docs/ui-spec/task-device-navigation-ui-spec.md` — AC-002 and AC-004 superseded by this decision
 - `studio/src/studio/workbench/WorkbenchNavigator.tsx` — the component that changes responsibility
