@@ -24,7 +24,7 @@ stays lighter than `docs/plans/` and `docs/design/`.
 2. Choose the **lowest-numbered item whose `Status` is `pending`**, unless the human named a
    specific item. Run exactly one item per work unit; do not bundle two items.
 3. Check `git status --short` first and preserve unrelated uncommitted work. Create the item's own
-   branch (`codex/<issue-or-item>-<slug>`) or worktree when the item leads to a commit, per the root
+   branch (`dsh/<issue-or-item>-<slug>`) or worktree when the item leads to a commit, per the root
    `AGENTS.md` parallel-development rules.
 4. Execute the item's **Goal** inside its **Constraints**. Every rule in the root `AGENTS.md`
    applies unchanged: scope control, validation, UI evidence, commits, PR, no merge.

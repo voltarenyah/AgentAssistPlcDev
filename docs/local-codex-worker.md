@@ -23,12 +23,13 @@ permission pass the trigger trust check; this is a GitHub permission check, not
 an instruction to grant Codex or Kimi broader filesystem access. The wrapper,
 not Kimi, commits, pushes, labels, opens PRs, or deploys.
 
-Every issue uses a branch named `codex/<issue-number>-<slug>` and a worktree
-below the repository's `.worktrees` directory. The primary checkout is not an
-automation worktree and must remain clean or retain its pre-existing user
-changes. Do not reset, clean, stash, force-push, rewrite shared history, delete
-remote branches, or merge automatically. All published changes are draft PRs
-for human review.
+Every issue this worker runs uses a branch named `codex/<issue-number>-<slug>` and a
+worktree below the repository's `.worktrees` directory; work started by an interactive
+agent follows the `dsh/<issue-number>-<short-description>` convention in the root
+`AGENTS.md`. The primary checkout is not an automation worktree and must remain clean or
+retain its pre-existing user changes. Do not reset, clean, stash, force-push, rewrite
+shared history, delete remote branches, or merge automatically. All published changes
+are draft PRs for human review.
 
 ## Prerequisites and installation
 
