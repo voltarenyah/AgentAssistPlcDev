@@ -126,8 +126,9 @@ public interface IEngineeringPlatform : IDisposable
     CompileResult CompileBlock(string blockName, string? plcName = null);
     CompileResult CompilePlc(string? plcName = null);
 
-    /// <summary>Open a block in the TIA Portal editor window. Requires a UI-connected session.</summary>
-    void OpenBlockInEditor(string blockName);
+    /// <summary>Open a block in the TIA Portal editor window. Requires a UI-connected session.
+    /// The PLC name may be omitted only when the project contains a single PLC.</summary>
+    void OpenBlockInEditor(string blockName, string? plcName = null);
 
     /// <summary>Open a block (category OB/FB/FC/DB), tag table (Tags), or UDT in the TIA Portal
     /// editor window. Requires a UI-connected session.</summary>

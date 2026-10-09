@@ -75,23 +75,14 @@ const taskStageProblemText: Record<string, { title: string; detail: string }> = 
   },
 }
 
-const taskCandidateReasonLabel = (reason: string): string => ({
-  'new': 'New in TIA',
-  'removed': 'Removed from TIA',
-  'fingerprint-changed': 'Fingerprint changed',
-  'tag-timestamp-changed': 'Tag timestamp changed',
-  'evidence-unreadable': 'Evidence unreadable in TIA',
-  'f-signature-changed': 'Safety signature changed',
-  'evidence-kind-changed': 'Evidence kind changed',
-}[reason] ?? reason)
-
 type TaskStageProblemState = { code: string; message: string }
 
 export default function VersionControlCompare({ workbenchId, worktreeId, branch, signal, mode = 'full', taskId = null, taskTitle = null, verifyHardware = true, commitMessage, onSelectionChanged, onComparisonStateChanged, selectionResetSignal = 0, onCommitted, onBeginOperation, operationStatus = null, onComparisonBusyChanged }: Props) {
   const [started, setStarted] = useState(false)
   const [comparison, setComparison] = useState<api.WorkbenchConsistencyResult | null>(null)
-  const [taskComparison, setTaskComparison] = useState<api.TaskSourceComparison | null>(null)
-  const [taskProblem, setTaskProblem] = useState<TaskStageProblemState | null>(null)
+  // A stage-scope failure that arrives as a request error — an empty or foreign stage list — which no
+  // comparison result can carry, because the request never produced one.
+  const [requestProblem, setRequestProblem] = useState<TaskStageProblemState | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectedSafety, setSelectedSafety] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
@@ -134,23 +125,25 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   }
 
   /**
-   * Compares only the active task's staged source objects. The result is scoped to that task, so it
-   * never reports a project-wide verdict, never feeds the project commit selection and never
-   * produces a savepoint: `onSelectionChanged(null, [])` clears any project selection the user made
-   * before, because a task result cannot stand in for one.
+   * Compares only the active task's staged source objects. The result is a task-scoped comparison —
+   * the same selectable, committable difference rows a project-wide scan produces — so the user
+   * reviews and commits from it exactly as they do for a full scan. It never claims the project is
+   * clean, and the backend refuses to certify the managed-source baseline from it (ADR-0003).
    */
   const compareActiveTask = async () => {
     if (!taskId) return
-    setBusy(true); onComparisonBusyChanged?.(true); setError(null); setTaskProblem(null); setNeedsCompileConfirmation(false)
+    setBusy(true); onComparisonBusyChanged?.(true); setError(null); setRequestProblem(null); setNeedsCompileConfirmation(false)
     const operationId = onBeginOperation?.('compare-tia', 'Comparing this task’s staged source objects with TIA Portal...')
     try {
       const nextComparison = await api.compareTaskWithTia(workbenchId, worktreeId, taskId, operationId)
-      setTaskComparison(nextComparison)
-      onSelectionChanged?.(null, [])
-      onComparisonStateChanged?.(nextComparison.problems.length > 0 || nextComparison.candidates.length > 0)
+      setComparison(nextComparison)
+      setSelected(new Set())
+      setSelectedSafety(new Set())
+      onSelectionChanged?.(nextComparison.comparisonId, [])
+      onComparisonStateChanged?.((nextComparison.stageProblems?.length ?? 0) > 0 || nextComparison.differences.length > 0)
     } catch (reason) {
       if (reason instanceof api.WorkbenchApiError && taskStageProblemText[reason.code]) {
-        setTaskProblem({ code: reason.code, message: reason.message })
+        setRequestProblem({ code: reason.code, message: reason.message })
       } else {
         setError(displayError(reason))
       }
@@ -179,11 +172,15 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     previousMode.current = mode
     previousTaskId.current = taskId
     setComparison(null)
-    setTaskComparison(null)
-    setTaskProblem(null)
+    setRequestProblem(null)
     setStarted(false)
     setError(null)
     setNeedsCompileConfirmation(false)
+    // A comparison belongs to the task it covered: the parent must not keep offering its selection
+    // for a commit once the worktree moved to another task.
+    setSelected(new Set())
+    setSelectedSafety(new Set())
+    onSelectionChanged?.(null, [])
     onComparisonBusyChanged?.(false)
     onComparisonStateChanged?.(false)
     // Only a scope or covered-task change resets, so the parent callbacks stay render-local handlers.
@@ -195,8 +192,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
     setSelected(new Set())
     setSelectedSafety(new Set())
     setComparison(null)
-    setTaskComparison(null)
-    setTaskProblem(null)
+    setRequestProblem(null)
     setStarted(false)
     onComparisonBusyChanged?.(false)
     setError(null)
@@ -249,19 +245,22 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
   if (!started) return null
 
   const taskMode = mode === 'task'
-  const hardwareDiffers = comparison?.hardware != null && comparison.hardware.state !== 'in-sync'
+  const hardware = comparison?.hardware ?? null
+  const hardwareDiffers = hardware != null && hardware.state !== 'in-sync'
   const hardwareChecked = comparison?.hardwareChecked !== false
+  const fastGatePassed = comparison?.fastGatePassed ?? false
   const safetyChanges = comparison?.safety?.filter(entry => entry.changed) ?? []
   const differences = comparison?.differences ?? []
+  const timings = comparison?.timings ?? []
   const titleMissing = commitMessage.trim().length === 0
-  const taskProblems = taskComparison?.problems ?? []
-  const taskCandidates = taskComparison?.candidates ?? []
-  const taskExports = taskComparison?.candidateExports ?? []
-  const taskProblemGroups = new Map<string, string[]>()
-  for (const problem of taskProblems) {
-    taskProblemGroups.set(problem.code, [...(taskProblemGroups.get(problem.code) ?? []), problem.sourceObjectId])
+  const stageProblems = comparison?.stageProblems ?? []
+  const stageProblemGroups = new Map<string, string[]>()
+  for (const problem of stageProblems) {
+    stageProblemGroups.set(problem.code, [...(stageProblemGroups.get(problem.code) ?? []), problem.sourceObjectId])
   }
-  const taskClean = taskComparison !== null && taskProblems.length === 0 && taskCandidates.length === 0
+  // A task-scoped result is in sync only when nothing was left uncompared. With a stage problem the
+  // problems are the verdict — "in sync" would claim something the comparison never established.
+  const taskClean = taskMode && stageProblems.length === 0 && requestProblem === null
 
   return (
     <div className="shrink-0" data-testid="vc-compare-result">
@@ -299,19 +298,21 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
           </div>
         )}
 
-        {taskMode && !busy && (taskComparison !== null || taskProblem !== null) && (
-          <div className="space-y-2" data-testid="vc-task-compare-result">
-            <div className="text-[10px] font-medium" data-testid="vc-task-compare-heading">
-              Task compare{taskTitle ? `: ${taskTitle}` : ''}
-            </div>
-            {taskProblem && (
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600" data-testid="vc-task-problem" data-problem-code={taskProblem.code}>
-                <div className="font-medium">{taskStageProblemText[taskProblem.code]?.title ?? taskProblem.message}</div>
-                {taskStageProblemText[taskProblem.code] && <div className="mt-1 text-[9px]">{taskStageProblemText[taskProblem.code].detail}</div>}
-                <div className="mt-1 break-all font-mono text-[8px] text-muted-foreground">{taskProblem.code}</div>
+        {!busy && (comparison !== null || (taskMode && requestProblem !== null)) && (
+          <div className="space-y-2" data-testid="vc-compare-differences">
+            {taskMode && (
+              <div className="text-[10px] font-medium" data-testid="vc-task-compare-heading">
+                Task compare{taskTitle ? `: ${taskTitle}` : ''}
               </div>
             )}
-            {[...taskProblemGroups.entries()].map(([code, sourceObjectIds]) => (
+            {taskMode && requestProblem && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600" data-testid="vc-task-problem" data-problem-code={requestProblem.code}>
+                <div className="font-medium">{taskStageProblemText[requestProblem.code]?.title ?? requestProblem.message}</div>
+                {taskStageProblemText[requestProblem.code] && <div className="mt-1 text-[9px]">{taskStageProblemText[requestProblem.code].detail}</div>}
+                <div className="mt-1 break-all font-mono text-[8px] text-muted-foreground">{requestProblem.code}</div>
+              </div>
+            )}
+            {[...stageProblemGroups.entries()].map(([code, sourceObjectIds]) => (
               <div key={code} className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600" data-testid="vc-task-problem" data-problem-code={code}>
                 <div className="font-medium">{taskStageProblemText[code]?.title ?? 'This staged object could not be compared with TIA'}</div>
                 <div className="mt-1 text-[9px]">{taskStageProblemText[code]?.detail ?? 'The staged object could not be compared with TIA.'}</div>
@@ -320,42 +321,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                 </ul>
               </div>
             ))}
-            {taskCandidates.length > 0 && (
-              <div className="space-y-1" data-testid="vc-task-candidates">
-                <div className="text-[10px] font-medium text-foreground">
-                  {taskCandidates.length} staged source object{taskCandidates.length === 1 ? '' : 's'} differ{taskCandidates.length === 1 ? 's' : ''} from the committed baseline
-                </div>
-                {taskCandidates.map(candidate => {
-                  const exported = taskExports.find(item => item.id === candidate.id)
-                  return (
-                    <div key={candidate.id} className="rounded-lg border p-2" style={{ borderColor: 'var(--border)' }} data-testid="vc-task-candidate">
-                      <div className="text-[10px] font-medium">{taskCandidateReasonLabel(candidate.reason)}</div>
-                      <div className="break-all font-mono text-[9px] text-muted-foreground">{exported?.sourcePath || candidate.id}</div>
-                      {candidate.isSafetyDifference && <div className="mt-1 text-[8px] text-amber-500">Safety program difference</div>}
-                      {exported?.export.success === false && <div className="mt-1 text-[8px] text-destructive">The XML export for this object failed.</div>}
-                    </div>
-                  )
-                })}
-                {taskExports.length > 0 && (
-                  <div className="text-[9px] text-muted-foreground" data-testid="vc-task-candidate-exports">
-                    Exported {taskExports.filter(item => item.export.success).length} of {taskExports.length} changed object{taskExports.length === 1 ? '' : 's'} as XML.
-                  </div>
-                )}
-              </div>
-            )}
-            {taskClean && (
-              <div className="px-3.5 py-5 text-center text-[10px] text-muted-foreground" data-testid="vc-task-clean-state">
-                <div className="font-medium text-emerald-600">This task is in sync</div>
-                <div className="mt-1 text-[9px]">Every staged source object matches the baseline recorded in the task.</div>
-                <div className="mt-1 text-[9px]">Only this task’s staged objects were compared; nothing else was checked.</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {!taskMode && comparison && !busy && (
-          <div className="space-y-2">
-            {comparison.timings && comparison.timings.length > 0 && (
+            {timings.length > 0 && (
               <section className="rounded-lg border border-border/70 bg-muted/25 p-2.5 text-[9px]" data-comparison-timings aria-label="TIA comparison timings">
                 <button
                   type="button"
@@ -366,11 +332,11 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                 >
                   {timingsCollapsed ? <ChevronRight className="h-3 w-3" aria-hidden="true" /> : <ChevronDown className="h-3 w-3" aria-hidden="true" />}
                   <span>Comparison timings</span>
-                  <span className="ml-auto font-normal normal-case tracking-normal">{comparison.timings.length}</span>
+                  <span className="ml-auto font-normal normal-case tracking-normal">{timings.length}</span>
                 </button>
                 {!timingsCollapsed && (
                   <ol className="mt-1 space-y-1" data-comparison-timings-list>
-                    {comparison.timings.map((timing, index) => (
+                    {timings.map((timing, index) => (
                       <li key={`${timing.phase}:${timing.plcName ?? 'project'}:${index}`} className="flex items-start gap-2">
                         <span className="min-w-0 flex-1">
                           <span className="block text-foreground">{timing.purpose}</span>
@@ -419,10 +385,10 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
               </div>
             )}
 
-            {hardwareDiffers && comparison.hardware && (
+            {hardwareDiffers && hardware && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[10px] text-amber-600">
                 <div className="font-medium">Project hardware differs from TIA</div>
-                <div className="mt-1 text-[9px]">{comparison.hardware.message}</div>
+                <div className="mt-1 text-[9px]">{hardware.message}</div>
                 <button
                   type="button"
                   aria-label="Accept TIA hardware configuration"
@@ -437,21 +403,7 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
               </div>
             )}
 
-            {differences.length === 0 ? (
-              <div className="px-3.5 py-5 text-center text-[10px] text-muted-foreground" data-testid="vc-clean-state">
-                <div className={`font-medium ${hardwareDiffers || safetyChanges.length > 0 ? 'text-muted-foreground' : 'text-emerald-600'}`}>
-                  {!hardwareChecked ? 'Managed source and safety match master' : hardwareDiffers || safetyChanges.length > 0 ? 'Tracked PLC source matches master' : 'TIA matches master'}
-                </div>
-                <div className="mt-1 text-[9px]">
-                  {!hardwareChecked
-                    ? 'Hardware configuration was not checked.'
-                    : comparison.fastGatePassed ? 'All device checksums match; no full object scan was required.' : 'A full object scan found no remaining differences.'}
-                </div>
-                <div className="mt-1 text-[9px]">
-                  {safetyChanges.length > 0 ? 'Select Safety change items to commit their F-signature evidence.' : 'Some TIA changes leave no git diff — tick “Untrackable change” above to record a message-only commit.'}
-                </div>
-              </div>
-            ) : (
+            {differences.length > 0 ? (
               <>
                 {differences.map(diff => {
                   const path = diff.relativePath
@@ -512,6 +464,30 @@ export default function VersionControlCompare({ workbenchId, worktreeId, branch,
                   <div className="text-[9px] text-muted-foreground">Type a commit message above to commit the selected TIA sources to the active worktree.</div>
                 )}
               </>
+            ) : taskMode ? (
+              // A task-scoped result is in sync only when every staged object was compared. With a
+              // stage problem on screen the problems are the verdict, so no clean claim is made.
+              taskClean && (
+                <div className="px-3.5 py-5 text-center text-[10px] text-muted-foreground" data-testid="vc-task-clean-state">
+                  <div className="font-medium text-emerald-600">This task is in sync</div>
+                  <div className="mt-1 text-[9px]">Every staged source object matches the baseline recorded in the task.</div>
+                  <div className="mt-1 text-[9px]">Only this task’s staged objects were compared; nothing else was checked.</div>
+                </div>
+              )
+            ) : (
+              <div className="px-3.5 py-5 text-center text-[10px] text-muted-foreground" data-testid="vc-clean-state">
+                <div className={`font-medium ${hardwareDiffers || safetyChanges.length > 0 ? 'text-muted-foreground' : 'text-emerald-600'}`}>
+                  {!hardwareChecked ? 'Managed source and safety match master' : hardwareDiffers || safetyChanges.length > 0 ? 'Tracked PLC source matches master' : 'TIA matches master'}
+                </div>
+                <div className="mt-1 text-[9px]">
+                  {!hardwareChecked
+                    ? 'Hardware configuration was not checked.'
+                    : fastGatePassed ? 'All device checksums match; no full object scan was required.' : 'A full object scan found no remaining differences.'}
+                </div>
+                <div className="mt-1 text-[9px]">
+                  {safetyChanges.length > 0 ? 'Select Safety change items to commit their F-signature evidence.' : 'Some TIA changes leave no git diff — tick “Untrackable change” above to record a message-only commit.'}
+                </div>
+              </div>
             )}
 
             {branch && branch.toLowerCase() !== 'master' && (

@@ -190,6 +190,48 @@ it('re-reads the worktree task list after a device-chat turn', async () => {
   expect(host.querySelector(`[aria-label="Open task ${created.title}"]`)).not.toBeNull()
 })
 
+it('re-reads the conversation list after a turn, so the task the conversation created lists it', async () => {
+  // Before the turn the conversation is related to nothing, so the navigator shows it in the device's
+  // task-less list.
+  const taskless: api.ChatSessionInfo = {
+    sessionId: 's1', title: 'New chat', projectName: null, workbenchId: 'wb1', worktreeId: 'wt1',
+    deviceId: 'dev1', createdAt: '2026-08-01T00:00:00Z', updatedAt: '2026-08-01T00:00:00Z',
+    messageCount: 1, turnCount: 0, firstUserMessage: null, taskId: null,
+  }
+  vi.mocked(api.listDeviceSessions).mockResolvedValue([taskless])
+  const { host } = await openDeviceChat()
+  expect(host.querySelector('[data-session-group="unbound"]')).not.toBeNull()
+
+  // The turn's own create_task call relates the conversation to the task it created, with provenance
+  // auto, so the list the row belongs to changes without the user binding anything (AC-010, AC-015).
+  const created: api.EngineeringTask = {
+    taskId: 'task-new', workbenchId: 'wb1', scope: 'worktree', worktreeId: 'wt1', deviceId: 'dev1',
+    title: 'Door 202 opens without the safety gate closed', type: 'issue', status: 'todo', priority: 0,
+    intent: 'Prevent the door from opening while the gate is open',
+    expectedResult: 'Door 202 only opens when the gate reports closed',
+    description: '## Evidence\n\nNetwork 3 has no interlock.',
+    createdUtc: '2026-08-02T00:00:00Z', updatedUtc: '2026-08-02T00:00:00Z',
+  }
+  const related: api.ChatSessionInfo = {
+    ...taskless, taskId: created.taskId, taskProvenance: 'auto',
+    taskRelations: [{ taskId: created.taskId, edgeId: 'edge-auto', provenance: 'auto', isPrimary: true }],
+  }
+  vi.mocked(api.listGraphWorktreeTasks).mockResolvedValue([created])
+  vi.mocked(api.listDeviceSessions).mockResolvedValue([related])
+  vi.mocked(api.listDeviceSessions).mockClear()
+  await submitTurn(host, 'Record this finding as a task.')
+
+  // The relation belongs to the graph, so the conversation list is re-read after the turn: the
+  // conversation has left the task-less list and is what the created task now lists.
+  expect(api.listDeviceSessions).toHaveBeenCalledWith('wb1', 'wt1', 'dev1')
+  expect(host.querySelector('[data-session-group="unbound"]')).toBeNull()
+
+  clickAriaLabel(host, `Open task ${created.title}`)
+  await act(async () => {})
+  expect(host.querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe(created.taskId)
+  expect(host.querySelector('[data-session="s1"]')).not.toBeNull()
+})
+
 it('keeps the chat turn alive when the task-list refresh fails', async () => {
   const { host } = await openDeviceChat()
 

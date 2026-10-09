@@ -1028,10 +1028,25 @@ export default function MainStudio() {
     }
   }, [])
 
+  /**
+   * Closes the open task detail and invalidates a read still in flight, so a detail the user has
+   * navigated away from cannot reappear when its load settles. The detail renders ahead of every other
+   * view, so a scope selection that left it open showed nothing of the scope the user picked — which is
+   * how selecting a device appeared to change nothing while the task it had opened stayed selected.
+   */
+  const closeTaskDetail = () => {
+    taskDetailRequestId.current += 1
+    setTaskDetail(null)
+    setTaskDetailTask(null)
+    setTaskDetailError(null)
+    setTaskDetailLoading(false)
+  }
+
   const selectWorkbench = (workbench: api.Workbench) => {
     const requestId = ++selectionRequestId.current
     // Local focus changes must not wait for the shared runtime acknowledgement.
     // The workbench runtime effect refreshes the assistant state after this render.
+    closeTaskDetail()
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null, targetKind: null })
     setMainView({ kind: 'project' })
     setDeviceSelection(null)
@@ -1073,6 +1088,7 @@ export default function MainStudio() {
     const requestId = ++selectionRequestId.current
     // Selecting a worktree is local UI state. Let the landing page fetch its
     // own details while the shared runtime acknowledgement happens in parallel.
+    closeTaskDetail()
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null, targetKind: null })
     setMainView({ kind: 'worktree', tab: 'overview' })
     setDeviceSelection(null)
@@ -1107,6 +1123,7 @@ export default function MainStudio() {
     const requestId = ++selectionRequestId.current
     // Selection is a pure metadata operation: apply it instantly. The snapshot
     // (per-block manifest work) loads in the background and fills the view.
+    closeTaskDetail()
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId, targetKind: 'device' })
     setTaskChatContext(null)
     setMainView({ kind: 'device' })
@@ -1187,6 +1204,7 @@ export default function MainStudio() {
     worktree: api.WorkbenchRegistration,
     page: 'tree' | 'bom' | 'network',
   ) => {
+    closeTaskDetail()
     setSelection({ workbenchId: workbench.workbenchId, worktreeId: worktree.worktreeId, deviceId: null, targetKind: 'hardware' })
     setMainView({ kind: 'hardware', page })
     setDeviceSelection(null)
@@ -1497,6 +1515,17 @@ export default function MainStudio() {
   }
 
   /**
+   * Starts a conversation for the task whose detail is open. The detail renders ahead of every other
+   * view, so it yields the main area first — otherwise the new conversation would be created behind it.
+   * The navigator keeps that task selected, exactly as it does when a conversation is opened from the
+   * task's own session rows (AC-015, AC-018).
+   */
+  const startTaskSessionFromDetail = async (task: api.EngineeringTask) => {
+    closeTaskDetail()
+    await createChatSessionForTask(task)
+  }
+
+  /**
    * Starts the conversation the `SESSIONS` section's header offers: bound to the task it names, or —
    * with no task selected — the device's own, owned by no task, which is exactly the list the section
    * is showing then.
@@ -1509,7 +1538,18 @@ export default function MainStudio() {
     await createChatSession(true)
   }
 
-  const setChatSessionTask = async (session: api.ChatSessionInfo, taskId: string | null) => {
+  /**
+   * Writes a conversation's whole task relation set through the one route that replaces it, so the
+   * conversation is never observable half-linked (ADR-0014, AC-019). The device the conversation
+   * belongs to is selected first, because the write is resolved in that device's context; the tab
+   * update and the session refresh that follow are the ones every conversation change already goes
+   * through.
+   */
+  const setChatSessionTasks = async (
+    session: api.ChatSessionInfo,
+    taskIds: string[],
+    primaryTaskId?: string | null,
+  ) => {
     const { workbenchId, worktreeId, deviceId } = session
     if (!workbenchId || !worktreeId || !deviceId) {
       showErrorToast('This conversation is not available in the device context that owns it.')
@@ -1518,7 +1558,7 @@ export default function MainStudio() {
     setChatBusy(true)
     try {
       await api.selectDevice(workbenchId, worktreeId, deviceId)
-      const updated = await api.setChatSessionTask(session.sessionId, taskId)
+      const updated = await api.setChatSessionTasks(session.sessionId, taskIds, primaryTaskId)
       setChatTabs(previous => openTab(previous, updated))
       await refreshChatSessions({ workbenchId, worktreeId, deviceId })
     } catch (error) {
@@ -1947,6 +1987,7 @@ export default function MainStudio() {
       await api.deleteWorkbench(workbench.workbenchId, op.id)
       setDeleteWorkbenchFor(null)
       if (selection.workbenchId === workbench.workbenchId) {
+        closeTaskDetail()
         setSelection({ workbenchId: null, worktreeId: null, deviceId: null })
         setMainView({ kind: 'project' })
         setDeviceSelection(null)
@@ -2076,6 +2117,7 @@ export default function MainStudio() {
       await api.deleteWorktree(workbench.workbenchId, worktree.worktreeId, op.id)
       setDeleteWorktreeFor(null)
       if (selection.workbenchId === workbench.workbenchId && selection.worktreeId === worktree.worktreeId) {
+        closeTaskDetail()
         setSelection({ workbenchId: workbench.workbenchId, worktreeId: null, deviceId: null })
         setMainView({ kind: 'project' })
         setDeviceSelection(null)
@@ -2547,9 +2589,7 @@ export default function MainStudio() {
               setMainView({ kind: 'project' })
               setDeviceSelection(null)
               setChatTabs(emptyChatTabs())
-              setTaskDetail(null)
-              setTaskDetailTask(null)
-              setTaskDetailError(null)
+              closeTaskDetail()
             }}
             onCreateWorkbench={openCreateWorkbench}
             onCreateWorktree={setCreateWorktreeFor}
@@ -2590,7 +2630,7 @@ export default function MainStudio() {
             onRenameSession={(session, title) => void renameChatSession(session.sessionId, title)}
             onDeleteSession={session => void deleteNavigatorSession(session)}
             onExportSession={session => void exportChatSession(session)}
-            onSetSessionTask={(session, taskId) => void setChatSessionTask(session, taskId)}
+            onSetSessionTasks={(session, taskIds, primaryTaskId) => void setChatSessionTasks(session, taskIds, primaryTaskId)}
             onAddSession={task => void startConversationFromNavigator(task)}
             onSelectHardware={selectHardware}
             onReloadHardware={(workbench, worktree) => void reloadHardware(workbench, worktree)}
@@ -2664,7 +2704,7 @@ export default function MainStudio() {
               </div>
             </div>
           ) : taskDetail || taskDetailLoading || taskDetailError ? (
-            <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div>
+            <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => closeTaskDetail()}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStartSession={task => void startTaskSessionFromDetail(task)} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div>
           ) : !selection.deviceId && selection.worktreeId ? (
             mainView.kind === 'task-chat' ? (
               <div className="flex min-h-0 flex-1 flex-col">
@@ -2714,7 +2754,7 @@ export default function MainStudio() {
               </div>
             </>
             ) : (
-              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => { setTaskDetail(null); setTaskDetailTask(null); setTaskDetailError(null) }}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div> : worktreeSurface
+              taskDetail || taskDetailLoading || taskDetailError ? <div className="scrollbar-sleek min-h-0 flex-1 overflow-y-auto p-5"><button type="button" className="secondary-button mb-3 h-7 text-[9px]" onClick={() => closeTaskDetail()}>Back to tasks</button><TaskDetail detail={taskDetail} deviceName={taskDetailDeviceName} loading={taskDetailLoading} error={taskDetailError} saving={taskDetailSaving} onSave={saveTaskDetail} onRetry={() => { if (taskDetailTask) void openTaskDetail(taskDetailTask) }} onRemove={(kind, item) => void removeTaskDetailRelation(kind, item)} onNavigate={navigateTaskDetail} onStartSession={task => void startTaskSessionFromDetail(task)} onStagesChanged={() => void reloadTaskDetail()} stagesRefreshToken={taskStagesRefreshToken} /></div> : worktreeSurface
             )
           ) : !selection.deviceId && selection.workbenchId ? (
             <ProjectLandingPage

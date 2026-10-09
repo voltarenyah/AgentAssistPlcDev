@@ -60,12 +60,15 @@ describe('version-control workflow API sequence', () => {
       requestPath = String(input)
       requestMethod = init?.method ?? ''
       return new Response(JSON.stringify({
-        taskId: 'task-1',
-        deviceId: 'dev-1',
-        candidates: [],
-        candidateExports: [],
-        problems: [],
-        observedSoftwareChecksum: null,
+        comparisonId: 'comparison-1',
+        masterSha: 'master-1',
+        fastGatePassed: false,
+        state: 'Different',
+        liveChecksums: {},
+        differences: [],
+        hardwareChecked: false,
+        comparedTaskId: 'task-1',
+        stageProblems: [],
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }))
 
@@ -74,7 +77,10 @@ describe('version-control workflow API sequence', () => {
     expect(requestPath).toContain('/workbenches/wb-1/worktrees/wt-1/tasks/task-1/compare-tia')
     expect(requestPath).not.toContain('/vc/compare-tia')
     expect(requestMethod).toBe('POST')
-    expect(result.taskId).toBe('task-1')
+    // The task route answers with a normal comparison, so the same selection and accept path
+    // commits what it found.
+    expect(result.comparedTaskId).toBe('task-1')
+    expect(result.comparisonId).toBe('comparison-1')
   })
 
   it('sends the required commit title when accepting TIA synchronization', async () => {

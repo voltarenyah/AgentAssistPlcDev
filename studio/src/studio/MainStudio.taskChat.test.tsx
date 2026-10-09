@@ -58,7 +58,7 @@ vi.mock('@/api/client', async importOriginal => {
     } satisfies api.EngineeringTaskDetail)),
     loadDeviceChatSession: vi.fn(async () => session),
     renameChatSession: vi.fn(async () => session),
-    setChatSessionTask: vi.fn(async () => session),
+    setChatSessionTasks: vi.fn(async () => session),
     exportChatSession: vi.fn(async () => ({ path: 'C:/wb/s1.md' })),
     deleteChatSession: vi.fn(async () => {}),
     deleteDeviceSession: vi.fn(async () => {}),
@@ -289,6 +289,37 @@ it('drops a conversation deleted from its SESSIONS row menu', async () => {
   await act(async () => root.unmount())
 })
 
+it('starts a conversation for the open task from its detail page', async () => {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => root.render(<MainStudio />))
+  const clickText = async (text: string) => {
+    const target = Array.from(host.querySelectorAll<HTMLElement>('div, span, button'))
+      .filter(element => element.textContent?.trim() === text).pop()
+    expect(target).toBeDefined()
+    await act(async () => target!.click())
+  }
+  await clickText('DemoWB')
+  await clickText('master')
+  await clickText('Tasks')
+  await act(async () => host
+    .querySelector<HTMLButtonElement>('[aria-label="Open task detail Inspect startup sequence"]')!.click())
+  expect(host.textContent).toContain('Task fields')
+
+  // The task's own page starts the conversation, so the task is not carried by a selection at all.
+  const start = host.querySelector<HTMLButtonElement>('[aria-label="New chat for Inspect startup sequence"]')!
+  expect(start).not.toBeNull()
+  await act(async () => start.click())
+
+  expect(api.newChatSession).toHaveBeenCalledWith(undefined, 'task1')
+  // The detail renders ahead of every other view, so it yields the main area to the conversation.
+  expect(host.textContent).not.toContain('Task fields')
+  expect(host.querySelector('[data-session-pane="s1"] textarea')).not.toBeNull()
+
+  await act(async () => root.unmount())
+})
+
 it('exports a conversation and binds a task-less one from the SESSIONS row menu', async () => {
   // The only conversation belongs to no task, so the section lists the device's task-less one.
   vi.mocked(api.listDeviceSessions).mockResolvedValue([{ ...sessionInfo(), taskId: null }])
@@ -315,17 +346,25 @@ it('exports a conversation and binds a task-less one from the SESSIONS row menu'
   await act(async () => exportItem.dispatchEvent(new MouseEvent('click', { bubbles: true })))
   expect(api.exportChatSession).toHaveBeenCalledWith('s1')
 
-  // Binding picks from the worktree's tasks rather than asking for a task id.
-  const attachItem = await rowMenuItem(host, 'New chat', 'Attach task')
-  await act(async () => attachItem.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+  // Relating the conversation to a task is one checked set, applied in one operation (AC-019): the
+  // keyboard checks the task, and the apply is what writes the set.
+  const relateItem = await rowMenuItem(host, 'New chat', 'Tasks…')
+  await act(async () => relateItem.dispatchEvent(new MouseEvent('click', { bubbles: true })))
   const search = document.body.querySelector<HTMLInputElement>('input[aria-label="Search this worktree\'s tasks"]')
   expect(search).not.toBeNull()
   await act(async () => {
     search!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
     search!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   })
+  const apply = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Apply')!
+  await act(async () => apply.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 
-  expect(api.setChatSessionTask).toHaveBeenCalledWith('s1', 'task1')
+  expect(api.setChatSessionTasks).toHaveBeenCalledTimes(1)
+  const [relateSessionId, relateTaskIds, relatePrimary] = vi.mocked(api.setChatSessionTasks).mock.calls[0]!
+  expect(relateSessionId).toBe('s1')
+  expect(relateTaskIds).toEqual(['task1'])
+  // The conversation had no primary to keep, so the set's own resolution decides it.
+  expect(relatePrimary).toBeUndefined()
   expect(prompt).not.toHaveBeenCalled()
   vi.unstubAllGlobals()
   await act(async () => root.unmount())

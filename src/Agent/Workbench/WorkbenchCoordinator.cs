@@ -44,15 +44,6 @@ public sealed record CreateWorktreeRequest(
 
 public sealed record SourceSavepointSelection(string WorktreeId, string GitSha);
 
-public sealed record TaskStageProblem(string SourceObjectId, string Code, string Message);
-public sealed record TaskSourceComparisonResult(
-    string TaskId,
-    string DeviceId,
-    IReadOnlyList<Contracts.Engineering.SourceEvidenceCandidate> Candidates,
-    IReadOnlyList<Contracts.Engineering.SourceEvidenceCandidateExport> CandidateExports,
-    IReadOnlyList<TaskStageProblem> Problems,
-    string? ObservedSoftwareChecksum);
-
 public sealed record BranchStartPoint(
     string WorktreeId, string WorktreeName, string Branch, string GitSha, string Message,
     string? SvnUrl, long? SvnRevision, string? ProjectChecksum, string? CompileStatus,
@@ -251,6 +242,116 @@ public sealed class WorkbenchCoordinator
             upgrade,
             authenticationMode);
     }
+
+    /// <summary>
+    /// Shows a worktree's registered TIA project in TIA Portal. This is the device chat's
+    /// <c>open_tia_project</c> action and the Workbench Assistant's sibling tool: unlike
+    /// <see cref="OpenProjectInTiaAsync"/>, it first looks for a running TIA Portal that already shows
+    /// the project and attaches to it by session id, so a project the user can already see is never
+    /// opened a second time in a second TIA instance.
+    /// </summary>
+    public async Task<OpenTiaProjectResult> ShowWorktreeProjectInTiaAsync(
+        DeviceContext device,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var worktree = store.Read<WorktreeMetadata>(
+            Path.Combine(device.WorktreeRoot, "worktree.json"));
+        return await ShowWorktreeProjectInTiaAsync(worktree, cancellationToken, progress)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>The registration flavor, for callers that hold the worktree metadata rather than a
+    /// device context (the Workbench Assistant's selected scope).</summary>
+    public async Task<OpenTiaProjectResult> ShowWorktreeProjectInTiaAsync(
+        WorktreeMetadata worktree,
+        CancellationToken cancellationToken = default,
+        IOperationProgress? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(worktree);
+        var projectPath = OperationalProjectPath(worktree);
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            throw new WorkbenchCatalogException(
+                "ENGINEERING_PROJECT_PATH_MISSING",
+                $"No engineering project path is registered for worktree '{worktree.WorktreeId}'.");
+        }
+
+        await engineeringSession.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var activeProject = await ReadActiveProjectAsync(cancellationToken).ConfigureAwait(false);
+            var sessions = await engineering.CallAsync<SessionInfo[]>(
+                "list_sessions", new { }, cancellationToken).ConfigureAwait(false);
+            // Only a session with a user interface can serve a "show me the project" request; a
+            // headless portal that holds the project is released and replaced below.
+            var visibleSession = sessions.FirstOrDefault(session =>
+                !string.IsNullOrWhiteSpace(session.ProjectPath)
+                && ProjectPathsEqual(session.ProjectPath, projectPath)
+                && IsUserInterfaceSession(session));
+            var alreadyVisible = visibleSession is not null
+                && activeProject?.Path is not null
+                && ProjectPathsEqual(activeProject.Path, projectPath);
+
+            if (!alreadyVisible)
+            {
+                // Release the current handle (never the project or the user's TIA instance) before
+                // attaching or opening, exactly as the other project-switch paths do.
+                if (activeProject?.Path is not null)
+                {
+                    await engineering.CallAsync<object>("disconnect", new { }, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                if (visibleSession is not null)
+                {
+                    progress?.Report($"Attaching to the running TIA Portal session {visibleSession.Id}...");
+                    await engineering.CallAsync<object>(
+                        "connect", new { sessionId = visibleSession.Id }, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    progress?.Report("Opening the registered project in TIA Portal...");
+                    await engineering.CallAsync<object>(
+                        "connect", new { projectPath, withUI = true }, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                activeProject = await ReadActiveProjectAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (string.IsNullOrWhiteSpace(activeProject?.Path))
+            {
+                throw new WorkbenchLifecycleException(
+                    "ENGINEERING_PROJECT_NOT_ACTIVE",
+                    "TIA did not report an active project after opening the selected project.");
+            }
+
+            if (!ProjectPathsEqual(projectPath, activeProject.Path))
+            {
+                throw new WorkbenchLifecycleException(
+                    "ENGINEERING_PROJECT_MISMATCH",
+                    $"TIA did not switch to the selected project '{projectPath}'. "
+                    + $"The active project is still '{activeProject.Path}'.");
+            }
+
+            progress?.Report($"TIA Portal shows '{activeProject.Name ?? activeProject.Path}'.");
+            return new OpenTiaProjectResult(
+                activeProject.Name,
+                activeProject.Path,
+                visibleSession is not null,
+                true);
+        }
+        finally
+        {
+            engineeringSession.Release();
+        }
+    }
+
+    private static bool IsUserInterfaceSession(SessionInfo session) =>
+        session.Mode.Contains("WithUserInterface", StringComparison.OrdinalIgnoreCase);
 
     private async Task OpenProjectPathInTiaAsync(
         string projectPath,
@@ -2487,6 +2588,82 @@ public sealed class WorkbenchCoordinator
             },
             token);
 
+    /// <summary>
+    /// The freshness of one device's knowledge database: the database's existence, the persisted
+    /// staleness flags, and a hash comparison of every managed source XML against the hashes the last
+    /// successful update applied. Reads only; it never writes the database or the device metadata.
+    ///
+    /// It answers the question the knowledge tools cannot: whether the graph they read still describes
+    /// the current PLC source. The hash comparison is the load-bearing half — a TIA accept sets
+    /// BaselineStale, but an edit made outside the app sets no flag at all (ADR-0012), and only the
+    /// applied hashes show that the database is behind.
+    /// </summary>
+    public DeviceKnowledgeStatus ReadKnowledgeStatus(DeviceContext device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        var metadata = ReadDevice(device);
+        var applied = metadata.Knowledge.AppliedOverlayHashes;
+        var databaseExists = File.Exists(device.KnowledgeDbPath);
+        var changed = new List<string>();
+        var added = new List<string>();
+        IReadOnlyList<string> removed = Array.Empty<string>();
+        if (databaseExists)
+        {
+            var relativePaths = sourceResolver.EnumerateSource(device);
+            foreach (var path in relativePaths)
+            {
+                var hash = HashFile(WorkbenchPaths.ResolveRelative(device.SourceRoot, path));
+                if (!applied.TryGetValue(path, out var appliedHash))
+                {
+                    added.Add(path);
+                }
+                else if (!string.Equals(hash, appliedHash, StringComparison.Ordinal))
+                {
+                    changed.Add(path);
+                }
+            }
+
+            var present = relativePaths.ToHashSet(StringComparer.Ordinal);
+            removed = applied.Keys
+                .Where(path => !present.Contains(path))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        // The states the partial update cannot repair, so the answer is a full rebuild: a source file
+        // the database has no component for (update_components refuses an identity it does not hold —
+        // this covers a brand-new block and a database with no applied hashes at all), and a component
+        // whose source file is gone (update_components only replaces the components a live file names,
+        // so the orphan would keep the device stale forever). A missing database and a stale baseline
+        // are the ingest cases UpdateKnowledgeAsync already knew.
+        var requiresRebuild = !databaseExists
+            || metadata.Knowledge.BaselineStale
+            || removed.Count > 0
+            || added.Count > 0;
+        var state = !databaseExists
+            ? DeviceKnowledgeStatus.MissingState
+            : metadata.Knowledge.Stale || requiresRebuild || changed.Count > 0
+                ? DeviceKnowledgeStatus.StaleState
+                : DeviceKnowledgeStatus.CurrentState;
+        return new DeviceKnowledgeStatus(
+            state,
+            device.KnowledgeDbPath,
+            metadata.Knowledge.UpdatedAt,
+            metadata.Knowledge.Stale,
+            metadata.Knowledge.BaselineStale,
+            requiresRebuild,
+            changed,
+            added,
+            removed);
+    }
+
+    /// <summary>
+    /// Brings one device's knowledge database up to date with its PLC source: a full rebuild when
+    /// <see cref="DeviceKnowledgeStatus.RequiresRebuild"/> says the partial update cannot repair the
+    /// difference, and a transactional component replacement for plain content changes. Either way the
+    /// applied hashes, the staleness flags and the projected device facts are written together, which
+    /// is what lets <see cref="ReadKnowledgeStatus"/> report <c>current</c> afterwards.
+    /// </summary>
     public Task<KnowledgeUpdateResult> UpdateKnowledgeAsync(
         DeviceContext device,
         CancellationToken token,
@@ -2496,12 +2673,17 @@ public sealed class WorkbenchCoordinator
             async cancellationToken =>
             {
                 progress?.Report("Checking PLC source changes...");
-                var relativePaths = sourceResolver.EnumerateSource(device).ToArray();
+                // One freshness rule: the status decides what is behind and how it can be repaired, and
+                // this method repairs exactly that. A second copy of the rule here is how an added
+                // component used to be sent to a partial update that refuses an identity the database
+                // does not hold.
+                var status = ReadKnowledgeStatus(device);
                 var before = ReadDevice(device);
                 KnowledgeUpdateResult result;
                 IReadOnlyDictionary<string, string> hashesToPersist;
-                if (!File.Exists(device.KnowledgeDbPath) || before.Knowledge.BaselineStale)
+                if (status.RequiresRebuild)
                 {
+                    var relativePaths = sourceResolver.EnumerateSource(device).ToArray();
                     progress?.Report("Ingesting device source into knowledge...");
                     var ingest = await knowledge.CallAsync<IngestResult>(
                         "ingest_source",
@@ -2518,49 +2700,47 @@ public sealed class WorkbenchCoordinator
                         Array.Empty<string>());
                     hashesToPersist = result.AppliedHashes;
                 }
+                else if (status.ChangedPaths.Count == 0)
+                {
+                    // Nothing to replace: the state was flagged stale without a content difference, and
+                    // the write below clears the flag.
+                    progress?.Report("Device knowledge is already current.");
+                    result = new KnowledgeUpdateResult(
+                        device.KnowledgeDbPath,
+                        Array.Empty<string>(),
+                        before.Knowledge.AppliedOverlayHashes,
+                        Array.Empty<string>());
+                    hashesToPersist = new Dictionary<string, string>(StringComparer.Ordinal);
+                }
                 else
                 {
-                    var stalePaths = relativePaths.Where(path =>
-                    {
-                        var hash = HashFile(WorkbenchPaths.ResolveRelative(
-                            device.SourceRoot,
-                            path));
-                        return !before.Knowledge.AppliedOverlayHashes.TryGetValue(path, out var applied)
-                            || !string.Equals(hash, applied, StringComparison.Ordinal);
-                    }).ToArray();
-                    if (stalePaths.Length == 0)
-                    {
-                        progress?.Report("Device knowledge is already current.");
-                        result = new KnowledgeUpdateResult(
-                            device.KnowledgeDbPath,
-                            Array.Empty<string>(),
-                            before.Knowledge.AppliedOverlayHashes,
-                            Array.Empty<string>());
-                        hashesToPersist = new Dictionary<string, string>(StringComparer.Ordinal);
-                    }
-                    else
-                    {
-                        progress?.Report("Updating changed knowledge components...");
-                        result = await knowledge.CallAsync<KnowledgeUpdateResult>(
-                            "update_components",
-                            new
-                            {
-                                sourceRoot = device.SourceRoot,
-                                dbPath = device.KnowledgeDbPath,
-                                relativePaths = stalePaths,
-                            },
-                            cancellationToken).ConfigureAwait(false);
-                        hashesToPersist = HashOverlays(device, stalePaths);
-                    }
-                }
-                var appliedHashes = new Dictionary<string, string>(
-                    before.Knowledge.AppliedOverlayHashes,
-                    StringComparer.Ordinal);
-                foreach (var applied in hashesToPersist)
-                {
-                    appliedHashes[applied.Key] = applied.Value;
+                    progress?.Report("Updating changed knowledge components...");
+                    result = await knowledge.CallAsync<KnowledgeUpdateResult>(
+                        "update_components",
+                        new
+                        {
+                            sourceRoot = device.SourceRoot,
+                            dbPath = device.KnowledgeDbPath,
+                            relativePaths = status.ChangedPaths.ToArray(),
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                    hashesToPersist = HashOverlays(device, status.ChangedPaths);
                 }
 
+                // A full rebuild read the whole source tree, so the applied set is exactly that tree:
+                // carrying a hash forward for a component the source no longer has would leave the
+                // device permanently stale. A partial update replaces only the components it sent, so
+                // its hashes merge into the set the database still holds.
+                var appliedHashes = new Dictionary<string, string>(
+                    status.RequiresRebuild ? hashesToPersist : before.Knowledge.AppliedOverlayHashes,
+                    StringComparer.Ordinal);
+                if (!status.RequiresRebuild)
+                {
+                    foreach (var applied in hashesToPersist)
+                    {
+                        appliedHashes[applied.Key] = applied.Value;
+                    }
+                }
                 var metadata = ReadDevice(device) with
                 {
                     Knowledge = new KnowledgeState(
@@ -3304,7 +3484,8 @@ public sealed class WorkbenchCoordinator
         IReadOnlyList<string> paths,
         string message,
         CancellationToken token = default,
-        IOperationProgress? progress = null)
+        IOperationProgress? progress = null,
+        string? commitTaskId = null)
     {
         if (string.IsNullOrWhiteSpace(message))
             throw new ArgumentException("A commit title is required.", nameof(message));
@@ -3408,9 +3589,13 @@ public sealed class WorkbenchCoordinator
                 message.Trim(),
                 token,
                 recordTiaState: false,
-                managedSourceConsistent: CoversAllManagedSourceDifferences(
-                    comparison,
-                    selected.ToHashSet(StringComparer.Ordinal)),
+                // A task-scoped comparison covers one device's staged objects, so accepting every
+                // difference it reports is not evidence that the whole managed source matches Git.
+                // Only a project-wide comparison can certify that baseline (ADR-0003).
+                managedSourceConsistent: comparison.ComparedTaskId is null
+                    && CoversAllManagedSourceDifferences(
+                        comparison,
+                        selected.ToHashSet(StringComparer.Ordinal)),
                 progress: progress)
             .ConfigureAwait(false);
 
@@ -3451,10 +3636,22 @@ public sealed class WorkbenchCoordinator
         }
 
         var remaining = writePolicy.ReadPending(targetRoot, target.WorktreeId).Sources;
+        // ADR-0003: the objects this commit contained become their task's new stage baseline, so the
+        // next task compare measures against what was committed instead of the pre-change content.
+        // This is deliberately separate from the commit-bound validation tag CommitSourceAsync records
+        // above: whether a task commit should also replace that whole-project snapshot with sparse
+        // per-object evidence is a genuine ADR-0001-versus-ADR-0003 question, not decided here.
+        var stageWarning = commitTaskId is null
+            ? null
+            : await TryRecordCommittedStageEvidenceAsync(
+                    workbench, target, targetRoot, targetRegistration.RelativePath,
+                    commitTaskId, selected, token, progress)
+                .ConfigureAwait(false);
         return new TiaSynchronizationResult(
             comparisonId,
             remaining.Select(item => item.RelativePath).ToArray(),
-            commit.Sha);
+            commit.Sha,
+            stageWarning is null ? null : new[] { stageWarning });
     }
 
     /// <summary>
@@ -3690,9 +3887,9 @@ public sealed class WorkbenchCoordinator
                     workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha,
                     managedSourceConsistent, captured: null, token, progress)
                 .ConfigureAwait(false)
-            : await TryRecordTaskStageEvidenceAsync(
-                    workbench, worktree, worktreeRoot, registration.RelativePath, result.Sha,
-                    taskEvidenceTaskId, token, progress)
+            : await TryRecordCommittedStageEvidenceAsync(
+                    workbench, worktree, worktreeRoot, registration.RelativePath,
+                    taskEvidenceTaskId, selected, token, progress)
                 .ConfigureAwait(false);
         if (managedSourceWarning is not null)
             evidenceWarnings.Add(managedSourceWarning);
@@ -3753,6 +3950,22 @@ public sealed class WorkbenchCoordinator
             throw new WorkbenchLifecycleException(
                 "SVN_SAVEPOINT_SOURCE_UNCOMMITTED",
                 "Commit or resolve every changed PLC source object before creating a project SVN savepoint.");
+
+        // Design AC-004: the savepoint is the complete restore point, so it requires a project-wide
+        // TIA comparison against this commit that found nothing unresolved. A TIA-only change outside
+        // every task's stages leaves no Git trace for the check above, and a task-scoped comparison
+        // never looked at it; only a Full scan can certify that nothing was missed. Feature worktrees
+        // are excluded because a project-wide comparison is baselined on master's source tree, so no
+        // existing comparison certifies a feature worktree's own commit.
+        if (string.Equals(worktree.Branch, "master", StringComparison.OrdinalIgnoreCase))
+        {
+            var masterHead = await ReadMasterHeadAsync(worktreeRoot, token).ConfigureAwait(false);
+            if (consistency.FindCleanProjectWideComparison(workbench, worktree.WorktreeId, masterHead) is null)
+                throw new WorkbenchLifecycleException(
+                    "SVN_SAVEPOINT_SCAN_REQUIRED",
+                    "A native savepoint must record a TIA state that a Full scan compared against this commit. "
+                    + "Run Compare with TIA as a Full scan, commit or resolve every source difference it reports, then compare again.");
+        }
 
         return await CommitCombinedAsync(
                 workbench, worktree, worktreeRoot, registration.RelativePath,
@@ -3861,9 +4074,14 @@ public sealed class WorkbenchCoordinator
         }
     }
 
-    /// <summary>Compares only this task's staged source identities. The returned checksum is an
-    /// observation of the capture, never a project-wide clean verdict.</summary>
-    public async Task<TaskSourceComparisonResult> CompareTaskWithTiaAsync(
+    /// <summary>
+    /// Compares only this task's staged source objects and persists the outcome as a task-scoped
+    /// comparison, so the version-control surface renders the same selectable, commit-ready
+    /// difference rows a project-wide scan produces. The result is never a project-wide verdict: it
+    /// covers one device's staged objects, checks no hardware, and cannot certify the managed-source
+    /// baseline (ADR-0003).
+    /// </summary>
+    public async Task<WorkbenchConsistencyResult> CompareTaskWithTiaAsync(
         string workbenchId, string worktreeId, string taskId, CancellationToken token = default,
         IOperationProgress? progress = null)
     {
@@ -3879,6 +4097,8 @@ public sealed class WorkbenchCoordinator
         if (stages.Count == 0)
             throw new WorkbenchLifecycleException("TASK_STAGE_EMPTY", "Add at least one source object to the task before comparing it with TIA.");
 
+        var master = LoadRegisteredWorktree(workbench, workbench.Worktrees
+            .Single(item => string.Equals(item.Branch, "master", StringComparison.OrdinalIgnoreCase)).WorktreeId);
         var problems = new List<TaskStageProblem>();
         var baselineObjects = new List<ManagedSourceEvidenceObject>();
         foreach (var stage in stages)
@@ -3893,35 +4113,31 @@ public sealed class WorkbenchCoordinator
                 problems.Add(new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_BASELINE_INVALID", "This staged object's fingerprint baseline cannot be read."));
             else baselineObjects.Add(evidence);
         }
+        // No staged object carries a comparable baseline, so nothing is read from TIA. The
+        // comparison still records which objects it could not include, which is its whole verdict.
         if (problems.Count > 0)
-            return new TaskSourceComparisonResult(taskId, task.DeviceId, [], [], problems, null);
+            return await consistency.CompareTaskScopeAsync(
+                    workbench, master, worktreeId, taskId, device: null,
+                    baselineObjects: [], stagedObjects: [], problems: problems, cancellationToken: token)
+                .ConfigureAwait(false);
 
         var device = LoadWorktreeDeviceContexts(workbench, worktree,
                 workbench.Worktrees.Single(item => item.WorktreeId == worktreeId).RelativePath)
             .Single(item => item.Metadata.DeviceId == task.DeviceId);
         var prefix = task.DeviceId + ":";
-        var ids = stages.Select(stage => stage.SourceObjectId.StartsWith(prefix, StringComparison.Ordinal)
-                ? stage.SourceObjectId[prefix.Length..]
+        var stagedObjects = stages.Select(stage => stage.SourceObjectId.StartsWith(prefix, StringComparison.Ordinal)
+                ? (SourceObjectId: stage.SourceObjectId, LiveId: stage.SourceObjectId[prefix.Length..])
                 : throw new WorkbenchLifecycleException("TASK_STAGE_INVALID", "A staged source object is outside the task device."))
             .ToArray();
-        var candidateRoot = Path.Combine(device.Context.StagingRoot, ".task-candidates-" + Guid.NewGuid().ToString("N")[..8]);
         progress?.Report("Comparing staged source fingerprints with TIA...");
         await engineeringSession.WaitAsync(token).ConfigureAwait(false);
         try
         {
             await EnsureActiveProjectMatchesWorktreeAsync(device.Context, token, progress).ConfigureAwait(false);
-            var capture = await engineering.CallAsync<SourceEvidenceCaptureResult>("compare_source_evidence", new
-            {
-                baseline = new SourceEvidenceSnapshot { PlcName = device.Metadata.PlcName, Objects = baselineObjects },
-                outputDir = candidateRoot,
-                plcName = device.Metadata.PlcName,
-                sourceObjectIds = ids,
-            }, token).ConfigureAwait(false);
-            var liveIds = capture.Snapshot.Objects.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
-            problems.AddRange(stages.Where(stage => !liveIds.Contains(stage.SourceObjectId[prefix.Length..]))
-                .Select(stage => new TaskStageProblem(stage.SourceObjectId, "TASK_STAGE_MISSING", "The staged object is missing, renamed, or unreadable in TIA.")));
-            return new TaskSourceComparisonResult(taskId, task.DeviceId, capture.Candidates, capture.CandidateExports,
-                problems, capture.Snapshot.Checksum.SoftwareChecksum);
+            return await consistency.CompareTaskScopeAsync(
+                    workbench, master, worktreeId, taskId, (device.Metadata, device.Context),
+                    baselineObjects, stagedObjects, problems, token)
+                .ConfigureAwait(false);
         }
         finally { engineeringSession.Release(); }
     }
@@ -4543,13 +4759,20 @@ public sealed class WorkbenchCoordinator
     /// write a new whole-project validation snapshot: another task may have live, uncommitted
     /// edits whose fingerprints must remain compared with its previous Git baseline.
     /// </summary>
-    private async Task<string?> TryRecordTaskStageEvidenceAsync(
+    /// <summary>
+    /// Records the live TIA evidence of the source objects one commit actually contained — and only
+    /// those. ADR-0003 binds a task's stage baseline to the object's committed Git content, so
+    /// advancing the baseline of a staged object the commit did not contain would mark uncommitted
+    /// live work as clean. A commit that contained none of this task's staged objects reads nothing
+    /// from TIA and records nothing.
+    /// </summary>
+    private async Task<string?> TryRecordCommittedStageEvidenceAsync(
         WorkbenchMetadata workbench,
         WorktreeMetadata worktree,
         string worktreeRoot,
         string worktreeRelativePath,
-        string commitSha,
         string taskId,
+        IReadOnlyCollection<string> committedPaths,
         CancellationToken token,
         IOperationProgress? progress)
     {
@@ -4561,21 +4784,31 @@ public sealed class WorkbenchCoordinator
             var task = graph.FindTask(taskId);
             if (task is null || task.WorktreeId != worktree.WorktreeId || string.IsNullOrWhiteSpace(task.DeviceId))
                 throw new WorkbenchLifecycleException("TASK_NOT_FOUND", "The source task is no longer available for evidence recording.");
-            var stages = graph.ListActiveStages(taskId);
-            if (stages.Count == 0)
-                throw new WorkbenchLifecycleException("TASK_STAGE_EMPTY", "The task has no active staged source objects.");
-
             var device = LoadWorktreeDeviceContexts(workbench, worktree, worktreeRelativePath)
                 .SingleOrDefault(item => item.Metadata.DeviceId == task.DeviceId);
             if (device.Context is null)
                 throw new WorkbenchLifecycleException("TASK_DEVICE_NOT_FOUND", "The task device is no longer registered in this worktree.");
+            // A stage records its object relative to the device's source root while a commit selects
+            // paths relative to the worktree. Matching one form against the other matched nothing at all
+            // and advanced no baseline (015), so both are resolved into the commit's form.
+            var sourceRoot = Path.GetRelativePath(worktreeRoot, device.Context.SourceRoot);
+            var committed = committedPaths
+                .Select(path => path.Replace('\\', '/'))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var stages = graph.ListActiveStages(taskId)
+                .Where(stage => graph.GetEntity(GraphEntityKind.SourceObject, stage.SourceObjectId)?.ExternalRef
+                    is { } path && committed.Any(commitPath => SourcePathForms.Matches(sourceRoot, path, commitPath)))
+                .ToArray();
+            if (stages.Length == 0)
+                return null;
+
             var prefix = task.DeviceId + ":";
             var ids = stages.Select(stage => stage.SourceObjectId.StartsWith(prefix, StringComparison.Ordinal)
                     ? stage.SourceObjectId[prefix.Length..]
                     : throw new WorkbenchLifecycleException("TASK_STAGE_INVALID", "A staged source object does not belong to the task device."))
                 .ToArray();
 
-            progress?.Report("Capturing staged source evidence from TIA...");
+            progress?.Report("Capturing committed staged source evidence from TIA...");
             await engineeringSession.WaitAsync(token).ConfigureAwait(false);
             try
             {
@@ -4587,7 +4820,7 @@ public sealed class WorkbenchCoordinator
                     var rawId = stage.SourceObjectId[prefix.Length..];
                     var evidence = capture.Snapshot.Objects.SingleOrDefault(item => item.Id == rawId);
                     if (evidence is null)
-                        throw new WorkbenchLifecycleException("TASK_STAGE_MISSING", $"Staged source '{stage.SourceObjectId}' is missing or unreadable in TIA.");
+                        throw new WorkbenchLifecycleException("TASK_STAGE_MISSING", $"Committed source '{stage.SourceObjectId}' is missing or unreadable in TIA.");
                     graph.UpdateStageEvidence(taskId, stage.SourceObjectId, System.Text.Json.JsonSerializer.Serialize(evidence));
                 }
             }

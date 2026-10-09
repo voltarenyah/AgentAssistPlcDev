@@ -304,6 +304,59 @@ public sealed class MasterSynchronizationTests : IDisposable
     }
 
     [Fact]
+    public async Task ApplyNeverCertifiesTheManagedSourceBaselineFromATaskScopedComparison()
+    {
+        // A task-scoped comparison covers only the objects staged on that task, so accepting every
+        // difference it reports says nothing about the rest of the project. Only a project-wide
+        // comparison may record the managed-source baseline as consistent (ADR-0003).
+        var comparisonPath = SyncFixture.ComparisonPathFor(fixture.Root);
+        var comparison = fixture.Store.Read<WorkbenchConsistencyResult>(comparisonPath);
+        fixture.Store.Write(comparisonPath, comparison with
+        {
+            ComparedTaskId = "task-1",
+            // Every difference this comparison reports is accepted by the call below, which is the
+            // state a project-wide comparison would certify.
+            Differences = [comparison.Differences[0]],
+        });
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("export_source_object", new Contracts.Engineering.ExportResult { Success = true })
+            .Respond("capture_source_evidence", new Contracts.Engineering.SourceEvidenceCaptureResult
+            {
+                Snapshot = new Contracts.Engineering.SourceEvidenceSnapshot
+                {
+                    PlcName = "PLC_1",
+                    Checksum = new Contracts.Engineering.PlcChecksumInfo
+                    {
+                        PlcName = "PLC_1",
+                        ProjectIdentity = "project-1",
+                        SoftwareChecksum = "checksum-1",
+                    },
+                    Objects = Array.Empty<Contracts.Engineering.ManagedSourceEvidenceObject>(),
+                },
+            });
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        await coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Accept one staged task object",
+            CancellationToken.None);
+
+        var evidence = fixture.VersionControl.ValidationEvidence;
+        Assert.NotNull(evidence);
+        // The commit is recorded, but never as covering the managed source it did not compare.
+        Assert.False(evidence!.ManagedSourceConsistent ?? false);
+    }
+
+    [Fact]
     public async Task MasterCommitAllowsADirectLocalEdit()
     {
         var coordinator = fixture.CreateCoordinator();
@@ -661,6 +714,162 @@ public sealed class MasterSynchronizationTests : IDisposable
         Assert.Equal("PLC_1", Property<string>(imports[0], "plcName"));
     }
 
+    [Fact]
+    public async Task TaskCommitAdvancesOnlyTheCommittedObjectsStageBaseline()
+    {
+        // ADR-0003: a stage baseline is bound to the object's committed Git content. Committing one of
+        // a task's staged objects must not advance another's, or an object with uncommitted live TIA
+        // work would read as clean on the next task compare.
+        var (taskId, baselineA, baselineB) = SeedTaskWithTwoStages();
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("export_source_object", new Contracts.Engineering.ExportResult { Success = true })
+            // The commit-bound whole-project snapshot ADR-0001 requires reads every object...
+            .Respond("capture_source_evidence", args => CaptureResult(args))
+            // ...and the stage-baseline refresh reads exactly the committed ones.
+            .Respond("capture_source_evidence", args => CaptureResult(args));
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        await coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Commit one staged object",
+            CancellationToken.None,
+            progress: null,
+            commitTaskId: taskId);
+
+        var stages = ReadStages(taskId);
+        var stageA = stages.Single(stage => stage.SourceObjectId == "device-1:a");
+        var stageB = stages.Single(stage => stage.SourceObjectId == "device-1:b");
+        Assert.Contains("LIVE-a", stageA.BaselineEvidenceJson);
+        Assert.Equal(baselineB, stageB.BaselineEvidenceJson);
+
+        var scoped = engineering.CallArgs["capture_source_evidence"].Last();
+        Assert.Equal(new[] { "a" }, (string[])scoped.GetType().GetProperty("sourceObjectIds")!.GetValue(scoped)!);
+    }
+
+    [Fact]
+    public async Task AcceptWithoutATaskLeavesStageBaselinesAlone()
+    {
+        var (taskId, baselineA, _) = SeedTaskWithTwoStages();
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new Contracts.Engineering.ProjectInfo
+            {
+                Name = "Line",
+                Path = SyncFixture.ProjectPath,
+                PlcDevices = ["PLC_1"],
+            })
+            .Respond("export_source_object", new Contracts.Engineering.ExportResult { Success = true })
+            .Respond("capture_source_evidence", args => CaptureResult(args));
+        var coordinator = fixture.CreateCoordinator(engineering);
+
+        await coordinator.ApplyTiaSynchronizationAsync(
+            fixture.Workbench.WorkbenchId,
+            fixture.Master.WorktreeId,
+            fixture.ComparisonId,
+            [fixture.Path("Blocks/A.xml")],
+            "Commit without a task",
+            CancellationToken.None);
+
+        var stageA = ReadStages(taskId).Single(stage => stage.SourceObjectId == "device-1:a");
+        Assert.Equal(baselineA, stageA.BaselineEvidenceJson);
+        // One capture only: the commit-bound snapshot. Nothing scoped a stage baseline.
+        Assert.Single(engineering.CallArgs["capture_source_evidence"]);
+    }
+
+    /// <summary>Registers a task with two staged objects whose baselines are distinguishable, so a
+    /// commit of one can be told apart from a commit of both.</summary>
+    private (string TaskId, string BaselineA, string BaselineB) SeedTaskWithTwoStages()
+    {
+        using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Root);
+        var graph = new Agent.Workbench.EngineeringGraph.EngineeringGraphService(
+            graphStore, SyncFixture.WorkbenchId, id => id == SyncFixture.WorktreeId);
+        var task = graph.CreateTask(
+            "task-committed-evidence",
+            Agent.Workbench.EngineeringGraph.GraphTaskScopeKind.Worktree,
+            SyncFixture.WorktreeId,
+            "Committed evidence scope",
+            Agent.Workbench.EngineeringGraph.GraphTaskType.Feature,
+            intent: "Commit one object",
+            expectedResult: "Scoped baseline",
+            deviceId: SyncFixture.DeviceId);
+        // Registered exactly as the staging route does: relative to the device's source root, while the
+        // commit below selects the worktree-relative path (015).
+        RegisterStagedObject(graph, "device-1:a", "Blocks/A.xml");
+        RegisterStagedObject(graph, "device-1:b", "Blocks/B.xml");
+        var baselineA = BaselineJson("a");
+        var baselineB = BaselineJson("b");
+        graph.StageSourceObject(task.TaskId, "device-1:a", baselineA);
+        graph.StageSourceObject(task.TaskId, "device-1:b", baselineB);
+        return (task.TaskId, baselineA, baselineB);
+    }
+
+    private static void RegisterStagedObject(
+        Agent.Workbench.EngineeringGraph.EngineeringGraphService graph,
+        string sourceObjectId,
+        string path) =>
+        graph.RegisterEntity(new Agent.Workbench.EngineeringGraph.GraphEntity(
+            Agent.Workbench.EngineeringGraph.GraphEntityKind.SourceObject,
+            sourceObjectId,
+            SyncFixture.WorkbenchId,
+            SyncFixture.WorktreeId,
+            SyncFixture.DeviceId,
+            path));
+
+    private static string BaselineJson(string id) =>
+        "{\"Id\":\"" + id + "\",\"Name\":\"" + id + "\",\"SourcePath\":\"Blocks/" + id
+        + "\",\"Kind\":\"standard-block\",\"Fingerprints\":{\"Code\":\"STAGED-" + id + "\"}}";
+
+    private IReadOnlyList<Agent.Workbench.EngineeringGraph.TaskSourceStage> ReadStages(string taskId)
+    {
+        using var graphStore = new Agent.Workbench.EngineeringGraph.EngineeringGraphStore(fixture.Root);
+        return new Agent.Workbench.EngineeringGraph.EngineeringGraphService(
+            graphStore, SyncFixture.WorkbenchId, id => id == SyncFixture.WorktreeId).ListActiveStages(taskId);
+    }
+
+    /// <summary>Answers a capture with one object per requested id; the whole-project capture (no ids)
+    /// answers with a compiled checksum and no objects, which is all the validation tag needs.</summary>
+    private static Contracts.Engineering.SourceEvidenceCaptureResult CaptureResult(object args)
+    {
+        var ids = args.GetType().GetProperty("sourceObjectIds")?.GetValue(args) as IEnumerable<string>;
+        var requested = ids?.ToArray() ?? Array.Empty<string>();
+        return new Contracts.Engineering.SourceEvidenceCaptureResult
+        {
+            Snapshot = new Contracts.Engineering.SourceEvidenceSnapshot
+            {
+                PlcName = "PLC_1",
+                Checksum = new Contracts.Engineering.PlcChecksumInfo
+                {
+                    PlcName = "PLC_1",
+                    ProjectIdentity = "project-1",
+                    SoftwareChecksum = "checksum-1",
+                },
+                Objects = requested.Select(id => new Contracts.Engineering.ManagedSourceEvidenceObject
+                {
+                    Id = id,
+                    Name = id,
+                    SourcePath = $"Blocks/{id}",
+                    Kind = Contracts.Engineering.ManagedSourceEvidenceKind.StandardBlock,
+                    ReadState = Contracts.Engineering.ManagedSourceEvidenceReadState.Readable,
+                    Fingerprints = new Contracts.Engineering.FingerprintSet { ["Code"] = $"LIVE-{id}" },
+                }).ToArray(),
+            },
+        };
+    }
+
     private static T Property<T>(object value, string name) =>
         (T)value.GetType().GetProperty(name)!.GetValue(value)!;
 
@@ -687,22 +896,25 @@ public sealed class MasterSynchronizationTests : IDisposable
         public SyncVersionControlCaller VersionControl { get; }
         public string ComparisonId => "comparison-1";
         public const string ProjectPath = @"C:\Projects\Line.ap17";
+        public const string WorkbenchId = "wb-1";
+        public const string WorktreeId = "master-1";
+        public const string DeviceId = "device-1";
 
         public static SyncFixture Create()
         {
             var root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "master-sync-tests", Guid.NewGuid().ToString("N"));
             var store = new AtomicJsonStore();
             var workbench = new WorkbenchMetadata(
-                "1.0", "wb-1", "wb", "now", root, System.IO.Path.Combine(root, "repository.git"), "project-1", null,
-                new[] { new WorkbenchWorktreeRegistration("master-1", "master", "master", "master") });
+                "1.0", WorkbenchId, "wb", "now", root, System.IO.Path.Combine(root, "repository.git"), "project-1", null,
+                new[] { new WorkbenchWorktreeRegistration(WorktreeId, "master", "master", "master") });
             var master = new WorktreeMetadata(
-                "1.0", "master-1", "wb-1", "master", "master", "now", "head-1", "project-1", ProjectPath,
-                new[] { "device-1" }, null);
+                "1.0", WorktreeId, WorkbenchId, "master", "master", "now", "head-1", "project-1", ProjectPath,
+                new[] { DeviceId }, null);
             var masterRoot = System.IO.Path.Combine(root, "worktrees", "master");
             Directory.CreateDirectory(masterRoot);
             store.Write(System.IO.Path.Combine(root, "workbench.json"), workbench);
             store.Write(System.IO.Path.Combine(masterRoot, "worktree.json"), master);
-            var context = WorkbenchPaths.ResolveDevice("wb-1", root, "master-1", "master", "device-1", "PLC_1");
+            var context = WorkbenchPaths.ResolveDevice(WorkbenchId, root, WorktreeId, "master", DeviceId, "PLC_1");
             Directory.CreateDirectory(System.IO.Path.Combine(context.SourceRoot, "Blocks"));
             Directory.CreateDirectory(System.IO.Path.Combine(context.StagingRoot, "Blocks"));
             File.WriteAllText(System.IO.Path.Combine(context.SourceRoot, "Blocks", "A.xml"), "old A");
@@ -710,7 +922,7 @@ public sealed class MasterSynchronizationTests : IDisposable
             File.WriteAllText(System.IO.Path.Combine(context.StagingRoot, "Blocks", "A.xml"), "new A");
             File.WriteAllText(System.IO.Path.Combine(context.StagingRoot, "Blocks", "B.xml"), "new B");
             store.Write(System.IO.Path.Combine(context.DeviceRoot, "device.json"), new DeviceMetadata(
-                "1.0", "device-1", "master-1", "PLC_1", "project-1", null, null, null,
+                "1.0", DeviceId, WorktreeId, "PLC_1", "project-1", null, null, null,
                 new KnowledgeState(false, new Dictionary<string, string>(), null), Array.Empty<DeviceImportRecord>()));
 
             var comparison = new WorkbenchConsistencyResult(

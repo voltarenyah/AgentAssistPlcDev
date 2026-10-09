@@ -199,9 +199,15 @@ public sealed class EngineeringGraphService
     public bool DeleteTask(string taskId)
     {
         using var tx = _store.Connection.BeginTransaction();
+        // The task's node row, its property rows and every edge that references it go first: the graph
+        // has no foreign key on graph_edges, so leaving them behind left each conversation that related
+        // to the task naming a task FindTask can no longer resolve. One relation per conversation made
+        // that a latent dangling reference; a conversation with several relations multiplies it
+        // (ADR-0014, closely-related cleanup).
+        RemoveEntityWithin(tx, Kind(GraphEntityKind.Task), taskId);
         using var command = _store.Connection.CreateCommand();
         command.Transaction = tx;
-        command.CommandText = "DELETE FROM task_source_stages WHERE task_id=$id; DELETE FROM tasks WHERE task_id=$id AND workbench_id=$wb; DELETE FROM graph_entities WHERE entity_kind='task' AND entity_id=$id;";
+        command.CommandText = "DELETE FROM task_source_stages WHERE task_id=$id; DELETE FROM tasks WHERE task_id=$id AND workbench_id=$wb;";
         command.Parameters.AddWithValue("$id", taskId); command.Parameters.AddWithValue("$wb", _workbenchId);
         var removed = command.ExecuteNonQuery() > 0;
         tx.Commit();
@@ -262,8 +268,8 @@ public sealed class EngineeringGraphService
             throw new EngineeringGraphConstraintException("A worktree-scoped task can only link within its Worktree.");
         if (fromKind == GraphEntityKind.Task && from.DeviceId is not null && to.DeviceId is not null && from.DeviceId != to.DeviceId)
             throw new EngineeringGraphConstraintException("A task can only link records from its bound PLC device.", "TASK_DEVICE_MISMATCH");
-        if (isPrimary && relation != GraphRelationKind.TaskCommit)
-            throw new EngineeringGraphConstraintException("Only task-to-commit relationships may be primary.");
+        if (isPrimary && relation is not (GraphRelationKind.TaskCommit or GraphRelationKind.TaskSession))
+            throw new EngineeringGraphConstraintException("Only task-to-commit and task-to-session relationships may be primary.");
         var now = DateTimeOffset.UtcNow;
         var edge = new GraphEdge(Guid.NewGuid().ToString("N"), fromKind, fromId, toKind, toId, relation, provenance, isPrimary, now, now);
         try
@@ -297,17 +303,23 @@ public sealed class EngineeringGraphService
         var target = FindEntity(targetKind, targetId) ?? throw new EngineeringGraphConstraintException("Target entity was not registered in the current Workbench.", "GRAPH_TARGET_NOT_FOUND");
         if (targetKind == GraphEntityKind.Task || !Relations.ContainsKey((GraphEntityKind.Task, targetKind)))
             throw new EngineeringGraphConstraintException("The target kind is not a supported task relationship.");
-        if (isPrimary && targetKind != GraphEntityKind.GitCommit)
-            throw new EngineeringGraphConstraintException("Only task-to-commit relationships may be primary.");
+        if (isPrimary && targetKind is not (GraphEntityKind.GitCommit or GraphEntityKind.Session))
+            throw new EngineeringGraphConstraintException("Only task-to-commit and task-to-session relationships may be primary.");
         if (task.ScopeKind == GraphTaskScopeKind.Worktree && task.WorktreeId != target.WorktreeId)
             throw new EngineeringGraphConstraintException("A worktree-scoped task can only link within its Worktree.");
         if (task.DeviceId is not null && target.DeviceId is not null && task.DeviceId != target.DeviceId)
             throw new EngineeringGraphConstraintException("A task can only link records from its bound PLC device.", "TASK_DEVICE_MISMATCH");
+        // A conversation holds several relations (ADR-0014), so a session target is added rather than
+        // replaced, and the route keeps its "this is the primary now" meaning through PromoteSessionTask.
+        // Every other target keeps the pair-replacement behaviour below.
+        if (targetKind == GraphEntityKind.Session)
+        {
+            var added = AddSessionTask(targetId, taskId, provenance);
+            return isPrimary ? PromoteSessionTask(targetId, taskId) : added;
+        }
         using var tx = _store.Connection.BeginTransaction();
-        var deleteSql = targetKind == GraphEntityKind.Session
-            ? "DELETE FROM graph_edges WHERE from_kind='task' AND to_kind='session' AND to_id=$target;"
-            : "DELETE FROM graph_edges WHERE from_kind='task' AND from_id=$task AND to_kind=$kind AND to_id=$target;";
-        Execute(tx, deleteSql, ("$task", taskId), ("$kind", Kind(targetKind)), ("$target", targetId));
+        Execute(tx, "DELETE FROM graph_edges WHERE from_kind='task' AND from_id=$task AND to_kind=$kind AND to_id=$target;",
+            ("$task", taskId), ("$kind", Kind(targetKind)), ("$target", targetId));
         var now = DateTimeOffset.UtcNow;
         var edge = new GraphEdge(Guid.NewGuid().ToString("N"), GraphEntityKind.Task, taskId, targetKind, targetId,
             Relations[(GraphEntityKind.Task, targetKind)], provenance, isPrimary, now, now);
@@ -1028,35 +1040,196 @@ public sealed class EngineeringGraphService
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
-    public GraphEdge? ReplaceSessionTask(string sessionId, string? taskId, GraphProvenance provenance)
+    /// <summary>
+    /// Relates one conversation to one task. A relation is an insert, not a replacement: a conversation
+    /// holds as many as it has tasks it worked on (ADR-0014). An existing pair is returned unchanged
+    /// rather than deleted and re-inserted, so its provenance and creation time survive a repeated call.
+    /// <paramref name="makePrimaryIfNone"/> promotes the new relation only when the conversation has no
+    /// primary yet; the partial unique index keeps that race-free, and the automatic association in
+    /// <c>create_task</c> is the caller that relies on it.
+    /// </summary>
+    public GraphEdge AddSessionTask(string sessionId, string taskId,
+        GraphProvenance provenance = GraphProvenance.Manual, bool makePrimaryIfNone = false)
+    {
+        ValidateSessionTaskPair(sessionId, taskId);
+        if (FindSessionTaskEdge(sessionId, taskId) is { } existing) return existing;
+
+        var now = DateTimeOffset.UtcNow;
+        var edge = new GraphEdge(Guid.NewGuid().ToString("N"), GraphEntityKind.Task, taskId,
+            GraphEntityKind.Session, sessionId, GraphRelationKind.TaskSession, provenance, false, now, now);
+        try
+        {
+            ExecuteNonQuery("INSERT INTO graph_edges (edge_id,from_kind,from_id,to_kind,to_id,relation_kind,provenance,is_primary,created_utc,updated_utc) VALUES ($edge,'task',$task,'session',$session,'task_session',$prov,0,$created,$updated)",
+                ("$edge", edge.EdgeId), ("$task", taskId), ("$session", sessionId),
+                ("$prov", Provenance(provenance)), ("$created", now.ToString("O")), ("$updated", now.ToString("O")));
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode is 19)
+        {
+            // Another writer inserted the same pair between the read and the write. Its edge is the one
+            // that exists, so report that one instead of failing a call the user already approved.
+            if (FindSessionTaskEdge(sessionId, taskId) is { } raced) return raced;
+            throw;
+        }
+
+        if (makePrimaryIfNone) PromoteSessionTaskIfNone(sessionId, edge.EdgeId);
+        return FindSessionTaskEdge(sessionId, taskId) ?? edge;
+    }
+
+    /// <summary>Removes one relation. A conversation that loses its primary keeps its other relations
+    /// and no primary: the primary is established when a conversation gains its first relation, so
+    /// nothing is promoted here (ADR-0014). Returns whether a relation was removed.</summary>
+    public bool RemoveSessionTask(string sessionId, string taskId)
+    {
+        if (FindSessionTaskEdge(sessionId, taskId) is not { } edge) return false;
+        RemoveEdge(edge.EdgeId);
+        return true;
+    }
+
+    /// <summary>
+    /// Replaces a conversation's whole relation set in one transaction: the pairs that are no longer
+    /// requested are deleted, the missing ones inserted, the kept ones left as they are — so an edge id,
+    /// its provenance and its creation time survive a set write that keeps it.
+    /// <para>The primary resolves in this order: the requested <paramref name="primaryTaskId"/> when it
+    /// is in the set; otherwise the conversation's current primary when it is still in the set;
+    /// otherwise the first requested id; and no primary when the set is empty. Every requested id is
+    /// validated before the first write, so a refused call writes nothing.</para>
+    /// </summary>
+    public IReadOnlyList<GraphEdge> SetSessionTasks(string sessionId,
+        IReadOnlyCollection<string>? taskIds, string? primaryTaskId = null)
     {
         var session = FindEntity(GraphEntityKind.Session, sessionId)
             ?? throw new EngineeringGraphConstraintException("Session was not registered in the current Workbench.");
-        GraphTask? task = null;
-        if (!string.IsNullOrWhiteSpace(taskId))
-        {
-            task = FindTask(taskId) ?? throw new EngineeringGraphConstraintException("The selected task was not found in the current Workbench.");
-            if (task.ScopeKind == GraphTaskScopeKind.Worktree && task.WorktreeId != session.WorktreeId)
-                throw new EngineeringGraphConstraintException("The selected task is not compatible with the current project or Workbench context.");
-            if (task.DeviceId is not null && session.DeviceId is not null && task.DeviceId != session.DeviceId)
-                throw new EngineeringGraphConstraintException("The selected task is not compatible with the selected PLC device.", "TASK_DEVICE_MISMATCH");
-        }
-        using var tx = _store.Connection.BeginTransaction();
-        Execute(tx, "DELETE FROM graph_edges WHERE to_kind='session' AND to_id=$session", ("$session", sessionId));
-        if (task is null)
-        {
-            tx.Commit();
-            return null;
-        }
+        var requested = (taskIds ?? Array.Empty<string>())
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        foreach (var taskId in requested) ValidateSessionTaskPair(sessionId, taskId);
+
+        var current = SessionTaskEdges(sessionId);
+        var keep = new HashSet<string>(requested, StringComparer.Ordinal);
+        var primary = ResolvePrimary(requested, primaryTaskId, current);
         var now = DateTimeOffset.UtcNow;
-        var edge = new GraphEdge(Guid.NewGuid().ToString("N"), GraphEntityKind.Task, task.TaskId,
-            GraphEntityKind.Session, sessionId, GraphRelationKind.TaskSession, provenance, false, now, now);
-        Execute(tx, "INSERT INTO graph_edges (edge_id,from_kind,from_id,to_kind,to_id,relation_kind,provenance,is_primary,created_utc,updated_utc) VALUES ($edge,'task',$task,'session',$session,'task_session',$prov,0,$created,$updated)",
-            ("$edge", edge.EdgeId), ("$task", task.TaskId), ("$session", sessionId),
-            ("$prov", provenance.ToString().ToLowerInvariant()), ("$created", now.ToString("O")), ("$updated", now.ToString("O")));
-        tx.Commit();
-        return edge;
+        using (var tx = _store.Connection.BeginTransaction())
+        {
+            foreach (var edge in current.Where(edge => !keep.Contains(edge.FromId)))
+                Execute(tx, "DELETE FROM graph_edges WHERE edge_id=$edge", ("$edge", edge.EdgeId));
+            foreach (var taskId in requested.Where(taskId => !current.Any(edge => string.Equals(edge.FromId, taskId, StringComparison.Ordinal))))
+                Execute(tx, "INSERT INTO graph_edges (edge_id,from_kind,from_id,to_kind,to_id,relation_kind,provenance,is_primary,created_utc,updated_utc) VALUES ($edge,'task',$task,'session',$session,'task_session','manual',0,$created,$updated)",
+                    ("$edge", Guid.NewGuid().ToString("N")), ("$task", taskId), ("$session", sessionId),
+                    ("$created", now.ToString("O")), ("$updated", now.ToString("O")));
+            // Demote before promote: the partial unique index is checked per statement, so promoting
+            // first would collide with the primary this write is moving.
+            Execute(tx, "UPDATE graph_edges SET is_primary=0 WHERE relation_kind='task_session' AND from_kind='task' AND to_kind='session' AND to_id=$session AND is_primary=1;",
+                ("$session", sessionId));
+            if (primary is not null)
+                Execute(tx, "UPDATE graph_edges SET is_primary=1, updated_utc=$utc WHERE relation_kind='task_session' AND from_kind='task' AND to_kind='session' AND to_id=$session AND from_id=$task;",
+                    ("$utc", now.ToString("O")), ("$session", sessionId), ("$task", primary));
+            tx.Commit();
+        }
+        return SessionTaskEdges(sessionId);
     }
+
+    /// <summary>
+    /// One conversation's relations, primary first and then by creation, so a reader never has to sort
+    /// them. This is also the one-query read a page of conversations uses:
+    /// <see cref="ListSessionTaskRelations"/> answers the whole page at once.
+    /// </summary>
+    public IReadOnlyList<SessionTaskRelation> ListSessionTaskRelations(IReadOnlyCollection<string>? sessionIds)
+    {
+        var ids = (sessionIds ?? Array.Empty<string>())
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (ids.Length == 0) return Array.Empty<SessionTaskRelation>();
+
+        using var command = _store.Connection.CreateCommand();
+        command.CommandText =
+            $"SELECT edge_id,from_id,to_id,provenance,is_primary FROM graph_edges WHERE relation_kind='task_session' AND from_kind='task' AND to_kind='session' AND to_id IN ({Placeholders(ids, "$s")}) ORDER BY to_id, is_primary DESC, created_utc, from_id;";
+        for (var index = 0; index < ids.Length; index++)
+            command.Parameters.AddWithValue("$s" + index, ids[index]);
+        var result = new List<SessionTaskRelation>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            result.Add(new SessionTaskRelation(reader.GetString(2), reader.GetString(1), reader.GetString(0),
+                ParseProvenance(reader.GetString(3)), reader.GetInt32(4) != 0));
+        return result;
+    }
+
+    /// <summary>The per-link validation the single-relation path enforced, unchanged: the conversation
+    /// must be registered, the task must exist, a worktree task must live in that worktree, and a
+    /// device-bound task must belong to the conversation's own device.</summary>
+    private void ValidateSessionTaskPair(string sessionId, string taskId)
+    {
+        var session = FindEntity(GraphEntityKind.Session, sessionId)
+            ?? throw new EngineeringGraphConstraintException("Session was not registered in the current Workbench.");
+        var task = FindTask(taskId)
+            ?? throw new EngineeringGraphConstraintException("The selected task was not found in the current Workbench.", "TASK_NOT_FOUND");
+        if (task.ScopeKind == GraphTaskScopeKind.Worktree && task.WorktreeId != session.WorktreeId)
+            throw new EngineeringGraphConstraintException("The selected task is not compatible with the current project or Workbench context.");
+        if (task.DeviceId is not null && session.DeviceId is not null && task.DeviceId != session.DeviceId)
+            throw new EngineeringGraphConstraintException("The selected task is not compatible with the selected PLC device.", "TASK_DEVICE_MISMATCH");
+    }
+
+    /// <summary>Promotes one existing relation, but only while the conversation has none. A single
+    /// statement, so two concurrent promotions cannot both win: the second one's subquery sees the
+    /// first one's primary and promotes nothing.</summary>
+    private void PromoteSessionTaskIfNone(string sessionId, string edgeId)
+    {
+        try
+        {
+            ExecuteNonQuery(
+                "UPDATE graph_edges SET is_primary=1, updated_utc=$utc WHERE edge_id=$edge AND NOT EXISTS (SELECT 1 FROM graph_edges WHERE relation_kind='task_session' AND from_kind='task' AND to_kind='session' AND to_id=$session AND is_primary=1);",
+                ("$utc", DateTimeOffset.UtcNow.ToString("O")), ("$edge", edgeId), ("$session", sessionId));
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode is 19)
+        {
+            // Another writer promoted a relation of the same conversation in between; that primary is
+            // the state the caller asked for, so there is nothing left to do.
+        }
+    }
+
+    /// <summary>Promotes one relation unconditionally, demoting the conversation's current primary
+    /// first. The generic relationship route keeps its "this is the primary now" meaning through this
+    /// (ADR-0014); the automatic association uses <see cref="PromoteSessionTaskIfNone"/> instead.</summary>
+    private GraphEdge PromoteSessionTask(string sessionId, string taskId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        using (var tx = _store.Connection.BeginTransaction())
+        {
+            Execute(tx, "UPDATE graph_edges SET is_primary=0 WHERE relation_kind='task_session' AND from_kind='task' AND to_kind='session' AND to_id=$session AND is_primary=1;",
+                ("$session", sessionId));
+            Execute(tx, "UPDATE graph_edges SET is_primary=1, updated_utc=$utc WHERE relation_kind='task_session' AND from_kind='task' AND to_kind='session' AND to_id=$session AND from_id=$task;",
+                ("$utc", now.ToString("O")), ("$session", sessionId), ("$task", taskId));
+            tx.Commit();
+        }
+        return FindSessionTaskEdge(sessionId, taskId)
+            ?? throw new EngineeringGraphConstraintException("The selected task was not found in the current Workbench.");
+    }
+
+    /// <summary>The conversation's relations, ordered primary first then by creation, which is the order
+    /// both the projection and the set resolution read them in.</summary>
+    private IReadOnlyList<GraphEdge> SessionTaskEdges(string sessionId) =>
+        GetIncomingEdges(GraphEntityKind.Session, sessionId)
+            .Where(edge => edge.RelationKind == GraphRelationKind.TaskSession && edge.FromKind == GraphEntityKind.Task)
+            .OrderByDescending(edge => edge.IsPrimary)
+            .ThenBy(edge => edge.CreatedUtc)
+            .ThenBy(edge => edge.FromId, StringComparer.Ordinal)
+            .ToArray();
+
+    private GraphEdge? FindSessionTaskEdge(string sessionId, string taskId) =>
+        SessionTaskEdges(sessionId).FirstOrDefault(edge => string.Equals(edge.FromId, taskId, StringComparison.Ordinal));
+
+    private static string? ResolvePrimary(IReadOnlyCollection<string> requested, string? primaryTaskId, IReadOnlyList<GraphEdge> current)
+    {
+        if (requested.Count == 0) return null;
+        if (!string.IsNullOrWhiteSpace(primaryTaskId) && requested.Contains(primaryTaskId, StringComparer.Ordinal))
+            return primaryTaskId;
+        var existing = current.FirstOrDefault(edge => edge.IsPrimary)?.FromId;
+        if (existing is not null && requested.Contains(existing, StringComparer.Ordinal)) return existing;
+        return requested.First();
+    }
+
+    private static string Provenance(GraphProvenance provenance) => provenance.ToString().ToLowerInvariant();
 
     public int CountEdges() => Convert.ToInt32(Scalar("SELECT COUNT(*) FROM graph_edges;"));
     public void RecordFileEvidence(string commitSha, string relativePath)
@@ -1139,7 +1312,7 @@ public sealed class EngineeringGraphService
     private static GraphEntityKind ParseKind(string value)=>value switch { "git_commit"=>GraphEntityKind.GitCommit,"source_object"=>GraphEntityKind.SourceObject,"svn_revision"=>GraphEntityKind.SvnRevision,"session"=>GraphEntityKind.Session,"device"=>GraphEntityKind.Device,"worktree"=>GraphEntityKind.Worktree,_=>GraphEntityKind.Task };
     private static string Relation(GraphRelationKind k)=>k switch { GraphRelationKind.TaskSession=>"task_session",GraphRelationKind.TaskCommit=>"task_commit",GraphRelationKind.TaskSourceObject=>"task_source_object",GraphRelationKind.TaskSvnRevision=>"task_svn_revision",GraphRelationKind.CommitSourceObject=>"commit_source_object", _=>"commit_svn_revision" };
     private static GraphRelationKind ParseRelation(string value)=>value switch { "task_session"=>GraphRelationKind.TaskSession,"task_commit"=>GraphRelationKind.TaskCommit,"task_source_object"=>GraphRelationKind.TaskSourceObject,"task_svn_revision"=>GraphRelationKind.TaskSvnRevision,"commit_source_object"=>GraphRelationKind.CommitSourceObject,_=>GraphRelationKind.CommitSvnRevision };
-    private static GraphProvenance ParseProvenance(string value)=>value switch { "default"=>GraphProvenance.Default,"evidence"=>GraphProvenance.Evidence,_=>GraphProvenance.Manual };
+    private static GraphProvenance ParseProvenance(string value)=>value switch { "default"=>GraphProvenance.Default,"auto"=>GraphProvenance.Auto,"evidence"=>GraphProvenance.Evidence,_=>GraphProvenance.Manual };
     private static string TargetKind(GraphTaskTargetKind k)=>k switch { GraphTaskTargetKind.Hardware=>"hardware", _=>"device" };
     private static GraphTaskTargetKind ParseTargetKind(string? value)=>value switch { "hardware"=>GraphTaskTargetKind.Hardware, _=>GraphTaskTargetKind.Device };
     private sealed record TaskMetadata(int Priority, string Intent, string ExpectedResult);

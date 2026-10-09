@@ -46,18 +46,25 @@ internal sealed class TaskCreationTool(
         + "networks, tags and tool results that show the problem) and proposedSolutions (the candidate "
         + "fixes you can defend). Never invent evidence: state what a tool result or the source showed, "
         + "and name the block and network ids you used. Omit a section the conversation has nothing for. "
-        + "Do not ask the user to restate facts the conversation already established. intent is the goal "
-        + "and expectedResult is the completion criterion; both are required.";
+        + "Do not ask the user to restate facts the conversation already established. type must be "
+        + "exactly Issue (a defect in the code), Improvement, or Feature — not bug, defect or fix. "
+        + "intent is the goal and expectedResult is the completion criterion; both are required.";
 
     public static JsonElement InputSchema { get; } = JsonSerializer.SerializeToElement(new
     {
         type = "object",
         properties = new
         {
-            title = new { type = "string" },
-            type = new { type = "string" },
-            intent = new { type = "string" },
-            expectedResult = new { type = "string" },
+            title = new { type = "string", minLength = 1 },
+            // The allowed values travel in the schema, not only in this class's parser: the agent loop
+            // validates every call against the schema *before* dispatching it, so a synonym the model
+            // reaches for naturally (a live turn sent "bug") is refused with a correctable argument
+            // error instead of parking the turn on an approval card and failing after the user approves.
+            type = new { type = "string", @enum = new[] { "Issue", "Improvement", "Feature" } },
+            // minLength keeps the empty case on the same side of the approval card as the enum: an
+            // empty goal would otherwise be approved and then refused by this class.
+            intent = new { type = "string", minLength = 1 },
+            expectedResult = new { type = "string", minLength = 1 },
             background = new { type = "string" },
             evidence = new { type = "string" },
             proposedSolutions = new { type = "string" },
@@ -66,11 +73,13 @@ internal sealed class TaskCreationTool(
     });
 
     /// <summary>The agent-visible spec. <paramref name="device"/> resolves the conversation's device at
-    /// call time, so the tool always acts on the current context rather than a stale one.</summary>
-    public static AgentToolSpec CreateSpec(TaskCreationTool tool, Func<DeviceContext?> device) =>
-        new(ToolName, Description, InputSchema, new Caller(tool, device), ServerName);
+    /// call time and <paramref name="sessionId"/> the conversation's own live identity, so the tool
+    /// always acts on the current context rather than a stale one — the device chat swaps its
+    /// conversation in place while the loop and this catalog are reused.</summary>
+    public static AgentToolSpec CreateSpec(TaskCreationTool tool, Func<DeviceContext?> device, Func<string?> sessionId) =>
+        new(ToolName, Description, InputSchema, new Caller(tool, device, sessionId), ServerName);
 
-    public object Create(DeviceContext device, JsonElement input)
+    public object Create(DeviceContext device, JsonElement input, string? sessionId)
     {
         var title = Required(input, "title");
         var type = TaskType(Required(input, "type"));
@@ -92,6 +101,24 @@ internal sealed class TaskCreationTool(
             device.WorktreeId, title, type, GraphTaskStatus.Todo, brief, 0, intent, expectedResult,
             device.DeviceId);
 
+        // The conversation created this task by doing the work, so it is related to it with provenance
+        // `auto`, and the primary moves only when the conversation had none (ADR-0014 Decision 2). The
+        // user approved a creation: if only the relation fails, the task exists and is reported, with
+        // the failure named rather than thrown — the relation can be set from the row menu afterwards.
+        string? relationWarning = null;
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            try
+            {
+                SessionGraphOperations.RelateAutomatically(scope.Service, device, sessionId, task.TaskId);
+            }
+            catch (Exception exception)
+            {
+                relationWarning = "The task was created, but this conversation could not be related to it: "
+                    + exception.Message;
+            }
+        }
+
         return new
         {
             taskId = task.TaskId,
@@ -102,6 +129,7 @@ internal sealed class TaskCreationTool(
             deviceId = task.DeviceId,
             intent = task.Intent,
             expectedResult = task.ExpectedResult,
+            relationWarning,
         };
     }
 
@@ -148,8 +176,9 @@ internal sealed class TaskCreationTool(
             ? value.GetString()!.Trim()
             : null;
 
-    /// <summary>Dispatches the single creation tool, bound to the conversation's current device.</summary>
-    private sealed class Caller(TaskCreationTool tool, Func<DeviceContext?> device) : IMcpToolCaller
+    /// <summary>Dispatches the single creation tool, bound to the conversation's current device and
+    /// its current conversation identity.</summary>
+    private sealed class Caller(TaskCreationTool tool, Func<DeviceContext?> device, Func<string?> sessionId) : IMcpToolCaller
     {
         public Task<T> CallAsync<T>(string name, object args, CancellationToken cancellationToken = default)
         {
@@ -159,7 +188,7 @@ internal sealed class TaskCreationTool(
                 ?? throw new ToolCallException("DEVICE_SELECTION_REQUIRED",
                     $"'{ToolName}' needs a selected device.", "Select a registered device, then call the tool again.");
             var input = args is JsonElement element ? element : JsonSerializer.SerializeToElement(args);
-            var result = tool.Create(current, input);
+            var result = tool.Create(current, input, sessionId());
             return Task.FromResult(JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(result))!);
         }
     }

@@ -110,6 +110,27 @@ public sealed class AgentLoopSandboxTests
     }
 
     [Fact]
+    public async Task DestructiveCardThatExpiresIsReportedAsExpiredNotAsAUserDenial()
+    {
+        var harness = Harness.Create();
+        harness.Endpoint
+            .RespondJson(SseToolCall("c1", "save_project", "{}"))
+            .RespondJson(SseText("the card timed out"));
+        harness.Confirmations.Enqueue(ToolConfirmation.Expired);
+
+        await harness.Loop.RunAsync("save the project");
+
+        Assert.Empty(harness.Caller.Calls);
+        Assert.Single(harness.ConfirmationRequests);
+        var message = harness.LastToolMessageContent();
+        // The model has to be told the card was never answered: "the user denied it" would make it stop
+        // asking about a call the user never rejected.
+        Assert.Contains("SANDBOX_CONFIRMATION_EXPIRED", message);
+        Assert.DoesNotContain("SANDBOX_USER_DENIED", message);
+        Assert.Contains(harness.Progress, line => line.Contains("⛔") && line.Contains("expired"));
+    }
+
+    [Fact]
     public async Task DestructiveAllowOnceExecutes()
     {
         var harness = Harness.Create();

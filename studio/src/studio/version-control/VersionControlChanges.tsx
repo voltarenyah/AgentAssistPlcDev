@@ -36,6 +36,14 @@ export type VersionControlChangesProps = {
   activeTaskId?: string | null
   /** Names the covered task in the task-compare result heading. */
   activeTaskTitle?: string | null
+  /** Device-bound worktree tasks the commit can be linked to (defaults to the active task). */
+  commitTasks?: api.EngineeringTask[]
+  /** The task this commit will be linked to — the worktree's active task. */
+  commitTaskId?: string | null
+  /** True while a task-target change is being persisted. */
+  switchingCommitTask?: boolean
+  /** Changes the worktree task the commit belongs to (and with it the active task). */
+  onCommitTaskChanged?: (taskId: string) => void
   verifyHardware?: boolean
   snapshot: VersionControlSnapshotInfo
   /** True when an untrackable-change commit exists that no SVN savepoint covers yet. */
@@ -70,7 +78,7 @@ const groupLabel = (entry: VersionControlSourceEntry) =>
 
 const displayError = (error: unknown) => error instanceof Error ? error.message : 'Unexpected operation failure'
 
-export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, compareMode = 'full', activeTaskId = null, activeTaskTitle = null, verifyHardware = true, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation, operationStatus = null }: VersionControlChangesProps) {
+export default function VersionControlChanges({ workbenchId, worktreeId, branch, entries, compareSignal, compareMode = 'full', activeTaskId = null, activeTaskTitle = null, commitTasks = [], commitTaskId = null, switchingCommitTask = false, onCommitTaskChanged, verifyHardware = true, snapshot, untrackablePendingSavepoint = false, onCommitted, onBeginOperation, operationStatus = null }: VersionControlChangesProps) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [tiaSelection, setTiaSelection] = useState<{ comparisonId: string; paths: string[]; safetyPaths: string[] } | null>(null)
   const [tiaHasDifferences, setTiaHasDifferences] = useState<boolean | null>(null)
@@ -135,6 +143,9 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
       let committedFiles: string[] = []
       let tiaCommitSha: string | null = null
       let localCommitSha: string | null = null
+      // The commit landed; a follow-up evidence write may not have. Those warnings are the only place
+      // the difference is visible, so they are shown rather than dropped.
+      const evidenceWarnings: string[] = []
       const committedTiaPaths = tiaPaths.length > 0
       const committedLocalChanges = localPaths.length > 0 || untrackable || safetyPaths.length > 0
       const operationId = onBeginOperation?.('vc-commit', 'Committing selected changes...')
@@ -144,6 +155,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
           : await api.acceptTiaSynchronization(workbenchId, worktreeId, tiaSelection.comparisonId, tiaPaths, message.trim())
         committedFiles = [...committedFiles, ...tiaPaths]
         tiaCommitSha = result.commitSha ?? null
+        evidenceWarnings.push(...(result.evidenceWarnings ?? []))
         setTiaSelection(null)
       }
       if (localPaths.length > 0 || untrackable || safetyPaths.length > 0) {
@@ -156,6 +168,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
             : await api.commitVcPaths(workbenchId, worktreeId, localPaths, message.trim(), untrackable)
         committedFiles = [...committedFiles, ...result.files]
         localCommitSha = result.sha
+        evidenceWarnings.push(...(result.evidenceWarnings ?? []))
       }
       const committed = new Set(committedFiles)
       setAllCommitted((committedFiles.length > 0 || untrackable || safetyPaths.length > 0) && entries.every(entry => committed.has(entry.filePath)))
@@ -171,6 +184,7 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
       } else if (localCommitSha) {
         toast.success(`Committed to ${branch || 'this worktree'} (${localCommitSha.slice(0, 8)})`)
       }
+      for (const warning of evidenceWarnings) toast.warning(warning)
       await onCommitted?.()
     } catch (cause) {
       showErrorToast(`Commit failed: ${displayError(cause)}`)
@@ -223,6 +237,30 @@ export default function VersionControlChanges({ workbenchId, worktreeId, branch,
         ) : (
           <>
             {!comparisonInProgress && <div data-testid="vc-commit-controls" className="px-3.5 pt-2.5">
+              {commitTasks.length > 0 && (
+                <div className="pb-1.5">
+                  <label className="block pb-1 text-[9px] text-muted-foreground">
+                    Commit to task
+                    <select
+                      aria-label="Commit to task"
+                      data-testid="vc-commit-task"
+                      className="mt-0.5 w-full rounded border bg-background px-2 py-1 text-[10px]"
+                      style={{ borderColor: 'var(--border)' }}
+                      value={commitTaskId ?? ''}
+                      disabled={switchingCommitTask || busy}
+                      onChange={event => { if (event.currentTarget.value) onCommitTaskChanged?.(event.currentTarget.value) }}
+                    >
+                      {!commitTaskId && <option value="">No task selected</option>}
+                      {commitTasks.map(task => <option key={task.taskId} value={task.taskId}>{task.title}</option>)}
+                    </select>
+                  </label>
+                  <div className="text-[9px] text-muted-foreground" data-testid="vc-commit-task-note">
+                    {switchingCommitTask
+                      ? 'Switching the worktree task...'
+                      : 'The commit is linked to this task. Choosing another makes it this worktree’s active task, which also sets what Task only compares.'}
+                  </div>
+                </div>
+              )}
               <textarea
                 aria-label="Commit message"
                 placeholder="Message"

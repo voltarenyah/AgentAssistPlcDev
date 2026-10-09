@@ -116,6 +116,20 @@ export type ChatMessage = {
   timestamp: string | null
 }
 
+/**
+ * One task a conversation is related to. The relation belongs to the engineering graph and nothing
+ * else; `edgeId` is the graph edge that carries it, and `isPrimary` marks the one relation that is
+ * "the task this conversation is working on" (ADR-0014). `provenance` is the graph's own lowercase
+ * name — `default`, `manual` or `auto` — and `auto` is the relation a conversation established by
+ * creating the task itself.
+ */
+export type SessionTaskRelation = {
+  taskId: string
+  edgeId: string
+  provenance: string
+  isPrimary: boolean
+}
+
 export type ChatSessionInfo = {
   sessionId: string
   title: string
@@ -128,8 +142,15 @@ export type ChatSessionInfo = {
   messageCount: number
   turnCount: number
   firstUserMessage: string | null
+  /** The projected primary relation's task, or null. */
   taskId?: string | null
-  taskProvenance?: 'default' | 'manual' | null
+  taskProvenance?: 'default' | 'manual' | 'auto' | null
+  /**
+   * Every task this conversation is related to. Optional on the wire: a payload that omits it is read
+   * through `sessionTaskIds`, which falls back to the projected primary, so an older row is never
+   * read as a conversation with no relation at all.
+   */
+  taskRelations?: SessionTaskRelation[]
 }
 
 export type ChatSessionHeader = {
@@ -141,9 +162,22 @@ export type ChatSessionHeader = {
   deviceId?: string | null
   createdAt: string
   updatedAt: string
+  /** The projected primary relation's task, or null. */
   taskId?: string | null
-  taskProvenance?: 'default' | 'manual' | null
+  taskProvenance?: 'default' | 'manual' | 'auto' | null
 }
+
+/**
+ * The tasks a conversation row is related to, which is what every membership question is asked of.
+ * `taskRelations` is the graph's relation set projected onto a list row, and `taskId` is that set's
+ * primary relation as a scalar, so a row carrying only the scalar — a payload from before the set
+ * existed, or a fixture that predates it — is read as that one relation rather than as no relation at
+ * all. An empty set with no projected primary is related to nothing, which is the task-less case.
+ */
+export const sessionTaskIds = (session: Pick<ChatSessionInfo, 'taskId' | 'taskRelations'>): string[] =>
+  session.taskRelations?.length
+    ? session.taskRelations.map(relation => relation.taskId)
+    : session.taskId ? [session.taskId] : []
 
 export type ChatUsage = {
   promptTokens: number
@@ -647,6 +681,11 @@ export type WorkbenchConsistencyResult = {
   timings?: ComparisonTiming[] | null
   untrackableChange?: boolean
   comparedWorktreeId?: string | null
+  /** Set when the comparison covered only that device-bound task's staged source objects. */
+  comparedTaskId?: string | null
+  /** Staged objects a task-scoped comparison could not include; each code is explained in place,
+   * and a result carrying one is never a clean verdict. */
+  stageProblems?: TaskStageProblem[] | null
 }
 
 export type ComparisonTiming = {
@@ -661,6 +700,8 @@ export type PendingSynchronizationResult = {
   comparisonId: string
   pendingPaths: string[]
   commitSha?: string | null
+  /** The commit landed, but a follow-up evidence write did not; each entry says what was not recorded. */
+  evidenceWarnings?: string[] | null
 }
 
 export type RollbackFeatureResult = {
@@ -980,6 +1021,14 @@ const jsonRequest = (method: string, body?: unknown): RequestInit => ({
   headers: { 'Content-Type': 'application/json' },
   body: body === undefined ? undefined : JSON.stringify(body),
 })
+
+/**
+ * The body of a relation-set write. `primaryTaskId` is sent only when the caller names one: a caller
+ * that omits it leaves the primary to the server's own resolution, which keeps the conversation's
+ * current primary while it is still in the set and otherwise takes the first task of the set.
+ */
+const sessionTasksBody = (taskIds: string[], primaryTaskId?: string | null) =>
+  primaryTaskId === undefined ? { taskIds } : { taskIds, primaryTaskId }
 
 const withOperation = (init: RequestInit, operationId?: string): RequestInit => {
   if (!operationId) return init
@@ -1386,6 +1435,22 @@ export const listDeviceSessions = (workbenchId: string, worktreeId: string, devi
 /** Deletes a conversation from the device it belongs to, naming that device rather than the selection. */
 export const deleteDeviceSession = (workbenchId: string, worktreeId: string, deviceId: string, sessionId: string) =>
   workbenchRequest<void>(`${devicePath(workbenchId, worktreeId, deviceId)}/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+/**
+ * Writes the conversation's whole task relation set in one request, naming the device that owns it
+ * rather than the current selection. The workbench-scoped twin of `setChatSessionTasks`.
+ */
+export const setDeviceChatSessionTasks = (
+  workbenchId: string,
+  worktreeId: string,
+  deviceId: string,
+  sessionId: string,
+  taskIds: string[],
+  primaryTaskId?: string | null,
+) =>
+  workbenchRequest<ChatSessionData>(
+    `${devicePath(workbenchId, worktreeId, deviceId)}/sessions/${encodeURIComponent(sessionId)}/tasks`,
+    jsonRequest('PUT', sessionTasksBody(taskIds, primaryTaskId)),
+  )
 export const getOperationStatus = (operationId: string) =>
   workbenchRequest<OperationStatus>(`/operations/${encodeURIComponent(operationId)}`)
 export const dismissOperationStatus = (operationId: string) =>
@@ -1438,11 +1503,11 @@ export const releaseTaskSourceObject = (workbenchId: string, worktreeId: string,
 export type WorktreeSourceStage = { taskId: string; taskTitle: string; sourceObjectId: string; deviceId: string; baselineEvidenceJson: string | null; stagedUtc: string }
 export const listWorktreeSourceStages = (workbenchId: string, worktreeId: string) =>
   workbenchRequest<WorktreeSourceStage[]>(`${worktreePath(workbenchId, worktreeId)}/source-stages`)
-export type TaskSourceEvidenceCandidate = { id: string; reason: string; requiresXmlExport: boolean; isSafetyDifference: boolean }
-export type TaskSourceEvidenceCandidateExport = { id: string; sourcePath: string; export: { success: boolean; path: string | null } }
-export type TaskSourceComparison = { taskId: string; deviceId: string; candidates: TaskSourceEvidenceCandidate[]; candidateExports: TaskSourceEvidenceCandidateExport[]; problems: { sourceObjectId: string; code: string; message: string }[]; observedSoftwareChecksum: string | null }
+export type TaskStageProblem = { sourceObjectId: string; code: string; message: string }
+/** Compares only the active task's staged source objects. The result is a normal comparison — the
+ * same selectable difference rows a project-wide scan produces — scoped to that one task. */
 export const compareTaskWithTia = (workbenchId: string, worktreeId: string, taskId: string, operationId?: string) =>
-  workbenchRequest<TaskSourceComparison>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/compare-tia`, withOperation(jsonRequest('POST'), operationId))
+  workbenchRequest<WorkbenchConsistencyResult>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}/compare-tia`, withOperation(jsonRequest('POST'), operationId))
 export const getWorktreeTaskDetail = (workbenchId: string, worktreeId: string, taskId: string) =>
   workbenchRequest<EngineeringTaskDetail>(`${worktreePath(workbenchId, worktreeId)}/tasks/${encodeURIComponent(taskId)}`)
 export const getEngineeringTaskDetail = async (workbenchId: string, taskId: string, worktreeId?: string | null) => {
@@ -1990,12 +2055,33 @@ export async function newChatSession(_projectName?: string, taskId?: string | nu
   return res.json()
 }
 
+/** Sets the conversation's primary relation, leaving its other relations alone. */
 export async function setChatSessionTask(sessionId: string, taskId: string | null): Promise<ChatSessionData> {
   const res = await fetch(`${BASE}/chat/session/task`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId, taskId }),
   })
   if (!res.ok) throw new Error((await res.text()) || `Session task update failed: ${res.status}`)
+  return res.json()
+}
+
+/**
+ * Writes the conversation's whole task relation set in one request, so it is never observable
+ * half-linked (ADR-0014). `primaryTaskId` names the relation that is "the task this conversation is
+ * working on" while it is in `taskIds`; omitting it leaves the server to keep the current primary when
+ * it is still in the set, and otherwise to take the set's first task. An empty `taskIds` clears every
+ * relation.
+ */
+export async function setChatSessionTasks(
+  sessionId: string,
+  taskIds: string[],
+  primaryTaskId?: string | null,
+): Promise<ChatSessionData> {
+  const res = await fetch(`${BASE}/chat/session/tasks`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, ...sessionTasksBody(taskIds, primaryTaskId) }),
+  })
+  if (!res.ok) throw new Error((await res.text()) || `Session tasks update failed: ${res.status}`)
   return res.json()
 }
 
@@ -2215,7 +2301,7 @@ export const getWorktreeVcDiff = (workbenchId: string, worktreeId: string, fileP
   return workbenchRequest<VcDiffResult>(`/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/diff?${params}`)
 }
 export const commitVcPaths = (workbenchId: string, worktreeId: string, paths: string[], message: string, untrackableChange = false, safetyChange = false, operationId?: string) =>
-  workbenchRequest<{ sha: string; message: string; files: string[] }>(
+  workbenchRequest<{ sha: string; message: string; files: string[]; evidenceWarnings?: string[] | null }>(
     `/workbenches/${encodeURIComponent(workbenchId)}/worktrees/${encodeURIComponent(worktreeId)}/vc/commit`,
     withOperation(jsonRequest('POST', { paths, message, untrackableChange, safetyChange }), operationId),
   )

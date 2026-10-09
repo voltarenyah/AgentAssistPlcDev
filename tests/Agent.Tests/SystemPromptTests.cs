@@ -129,6 +129,55 @@ public sealed class SystemPromptTests
     }
 
     [Fact]
+    public void PromptMakesTheCurrentToolListBeatAStaleClaimFromAnEarlierTurn()
+    {
+        var prompt = SystemPrompt.Build();
+
+        // A live conversation with the assistant's own older "I have no task-creation tool" answer in
+        // its history refused to call create_task after the tool had shipped: the earlier statement won
+        // over both the tool list and this prompt's create_task rule, so the rule has to say which of
+        // the two is authoritative.
+        Assert.Contains("Your tool list arrives with every request and is authoritative", prompt);
+        Assert.Contains("Check the current tool list again before reporting a tool as unavailable", prompt);
+    }
+
+    [Fact]
+    public void PromptSaysTheSelectedDevicesPlcNameIsHostBound()
+    {
+        var prompt = SystemPrompt.Build();
+
+        // A live conversation stalled on open_block_in_editor: the tool had no plcName argument at all,
+        // the two-PLC project failed with AMBIGUOUS_PLC, and the runtime context named the device by its
+        // internal id — so neither the model nor the tool could name the PLC to open.
+        Assert.Contains("PLC identity is host-bound", prompt);
+        Assert.Contains("open_block_in_editor", prompt);
+        Assert.Contains("Never ask the user which PLC to use", prompt);
+        Assert.Contains("a plcName that names a different device is refused", prompt);
+    }
+
+    [Fact]
+    public void PromptRequiresTheKnowledgeFreshnessCheckBeforeAnsweringAboutAChange()
+    {
+        var prompt = SystemPrompt.Build();
+
+        // A live conversation edited and committed a program, asked the knowledge agent about it, and
+        // was told the change was not there — the knowledge database was stale and nothing said so. The
+        // rule has to name the trigger (the user reporting a change), the check, the repair, and the
+        // forbidden conclusion.
+        Assert.Contains("Knowledge freshness comes before knowledge answers", prompt);
+        Assert.Contains("knowledge_status", prompt);
+        Assert.Contains("refresh_knowledge", prompt);
+        Assert.Contains("changed, edited, imported, or committed a program block", prompt);
+        Assert.Contains("before the first knowledge-DB query of the turn", prompt);
+        Assert.Contains("Never conclude that a program change is missing, unchanged, or ineffective", prompt);
+        // The raw knowledge tools stay off-limits from the chat: they update the graph without recording
+        // the applied hashes, so the device keeps reporting stale knowledge afterwards.
+        Assert.Contains("Do not call ingest_source or update_components directly", prompt);
+        Assert.DoesNotContain("run update_components before reuse", prompt);
+        Assert.DoesNotContain("Suggest update_components afterwards", prompt);
+    }
+
+    [Fact]
     public void ContextMessageCarriesMarkerAndBody()
     {
         var message = ChatMessage.User(SystemPrompt.ContextMessage("Knowledge DB: C:\\db\\k.db"));

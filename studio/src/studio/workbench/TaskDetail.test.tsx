@@ -72,6 +72,32 @@ describe('TaskDetail', () => {
     expect(host.querySelector('[aria-label="Source objects"]')).toBeNull()
     expect(host.textContent).toContain('Source objects are staged by a device-bound worktree task, and this is a project-scope task with no device to stage them from.')
   })
+  it('starts a conversation for the task from the Sessions header', async () => {
+    const start = vi.fn()
+    const host = await render({ detail, deviceName: 'Line 4 conveyor PLC', onStartSession: start })
+    const action = host.querySelector<HTMLButtonElement>('[aria-label="New chat for Motor update"]')
+    expect(action).not.toBeNull()
+    await act(async () => action?.click())
+    expect(start).toHaveBeenCalledWith(detail.task)
+
+    // A task that owns no conversation says how to start its first one, since the control lives here.
+    document.body.innerHTML = ''
+    const empty = await render({ detail: { ...detail, sessions: [] }, onStartSession: vi.fn() })
+    expect(empty.textContent).toContain('Start one with New chat.')
+  })
+  it('offers no conversation to start for a task that cannot own one', async () => {
+    const project = await render({
+      detail: { ...detail, task: { ...detail.task, scope: 'project', worktreeId: null, deviceId: null } },
+      onStartSession: vi.fn(),
+    })
+    expect(project.querySelector('[aria-label="New chat for Motor update"]')).toBeNull()
+    document.body.innerHTML = ''
+    const hardware = await render({
+      detail: { ...detail, task: { ...detail.task, deviceId: null, targetKind: 'hardware' } },
+      onStartSession: vi.fn(),
+    })
+    expect(hardware.querySelector('[aria-label="New chat for Motor update"]')).toBeNull()
+  })
   it('carries the exact source-object identifier through navigation', async () => {
     const navigate = vi.fn()
     const host = await render({ detail: { ...detail, sourceObjects: [{ id: 'device-7/Blocks/Main', edgeId: 'edge-source', provenance: 'manual', isPrimary: false }] }, onNavigate: navigate })
@@ -98,5 +124,30 @@ describe('TaskDetail', () => {
   })
   it('labels manual relationships with an accessible remove action', async () => {
     const remove = vi.fn(); const host = await render({ detail, onRemove: remove }); const button = host.querySelector<HTMLButtonElement>('[aria-label="Remove SVN revision r42"]'); expect(button).not.toBeNull(); await act(async () => button?.click()); expect(remove).toHaveBeenCalledWith('svnRevision', detail.svnRevisions[0])
+  })
+  it('labels an automatic relation and lets it be cleared, while a default link offers no removal (AC-019)', async () => {
+    const remove = vi.fn()
+    const sessions: EngineeringTaskDetail['sessions'] = [
+      { id: 'session-auto', edgeId: 'edge-auto', provenance: 'auto', isPrimary: true, title: 'Created here' },
+      { id: 'session-default', edgeId: 'edge-default', provenance: 'default', isPrimary: false, title: 'Related by default' },
+      { id: 'session-manual', edgeId: 'edge-manual', provenance: 'manual', isPrimary: false, title: 'Linked by hand' },
+    ]
+    const host = await render({ detail: { ...detail, sessions }, onRemove: remove })
+
+    // An automatic relation says the conversation created the task, instead of reading as an
+    // unclassified link the way an unknown provenance does.
+    expect(host.textContent).toContain('Created by this conversation')
+    expect(host.textContent).not.toContain('Unassigned')
+
+    // It is clearable exactly like a manual link — a relation the conversation made must have a way
+    // back — while a default link is cleared from the conversation's own picker instead.
+    const auto = host.querySelector<HTMLButtonElement>('[aria-label="Remove Sessions session-auto"]')
+    expect(auto).not.toBeNull()
+    expect(host.querySelector('[aria-label="Remove Sessions session-manual"]')).not.toBeNull()
+    expect(host.querySelector('[aria-label="Remove Sessions session-default"]')).toBeNull()
+
+    await act(async () => auto?.click())
+    expect(remove).toHaveBeenCalledWith('session',
+      expect.objectContaining({ id: 'session-auto', edgeId: 'edge-auto', provenance: 'auto', isPrimary: true }))
   })
 })

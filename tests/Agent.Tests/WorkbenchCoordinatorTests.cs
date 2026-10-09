@@ -414,6 +414,140 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task ShowWorktreeProjectInTiaReusesTheRunningUiSessionThatAlreadyShowsIt()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Other",
+                Path = @"C:\Projects\Other.ap17",
+            })
+            .Respond("list_sessions", new[]
+            {
+                new SessionInfo
+                {
+                    Id = 4242,
+                    Mode = "WithUserInterface",
+                    ProjectPath = @"C:\Projects\Line.ap17",
+                },
+            })
+            .Respond("disconnect", new object())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var result = await coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None);
+
+        Assert.True(result.ReusedRunningSession);
+        Assert.True(result.WithUI);
+        Assert.Equal("Line", result.ProjectName);
+        Assert.Equal(@"C:\Projects\Line.ap17", result.ProjectPath);
+        // Attached by session id: TIA must not start a second instance for a project a running UI already shows.
+        var connect = Assert.Single(engineering.CallArgs["connect"]);
+        Assert.Equal(4242, Property<int>(connect, "sessionId"));
+        Assert.Equal(
+            ["get_project_info", "list_sessions", "disconnect", "connect", "get_project_info"],
+            engineering.Calls);
+    }
+
+    [Fact]
+    public async Task ShowWorktreeProjectInTiaStartsTiaWhenNoRunningSessionShowsTheProject()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller()
+            .Fail("get_project_info", "NOT_CONNECTED", "No project connected. Call connect first.")
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var result = await coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None);
+
+        Assert.False(result.ReusedRunningSession);
+        var connect = Assert.Single(engineering.CallArgs["connect"]);
+        Assert.Equal(@"C:\Projects\Line.ap17", Property<string>(connect, "projectPath"));
+        Assert.True(Property<bool>(connect, "withUI"));
+        Assert.Equal(["get_project_info", "list_sessions", "connect", "get_project_info"], engineering.Calls);
+    }
+
+    [Fact]
+    public async Task ShowWorktreeProjectInTiaDoesNotReconnectWhenTheProjectIsAlreadyVisible()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller()
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Line",
+                Path = @"C:\Projects\Line.ap17",
+            })
+            .Respond("list_sessions", new[]
+            {
+                new SessionInfo
+                {
+                    Id = 4242,
+                    Mode = "WithUserInterface",
+                    ProjectPath = @"C:\Projects\Line.ap17",
+                },
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var result = await coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None);
+
+        Assert.True(result.ReusedRunningSession);
+        Assert.Equal(["get_project_info", "list_sessions"], engineering.Calls);
+    }
+
+    [Fact]
+    public async Task ShowWorktreeProjectInTiaReportsTheProjectTiaActuallyOpenedWhenItDiffers()
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\Line.ap17");
+        var engineering = new FakeToolCaller()
+            .Fail("get_project_info", "NOT_CONNECTED", "No project connected. Call connect first.")
+            .Respond("list_sessions", Array.Empty<SessionInfo>())
+            .Respond("connect", new { connected = true })
+            .Respond("get_project_info", new ProjectInfo
+            {
+                Name = "Other",
+                Path = @"C:\Projects\Other.ap17",
+            });
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var error = await Assert.ThrowsAsync<WorkbenchLifecycleException>(
+            () => coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("ENGINEERING_PROJECT_MISMATCH", error.Code);
+        Assert.Contains("Line.ap17", error.Message);
+        Assert.Contains("Other.ap17", error.Message);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task ShowWorktreeProjectInTiaRejectsMissingRegisteredProjectBeforeEngineeringCall(
+        string? sourceProjectPath)
+    {
+        var fixture = Fixture.Create(root, sourceProjectPath: sourceProjectPath);
+        var engineering = new FakeToolCaller();
+        var coordinator = Create(fixture, engineering: engineering);
+
+        var error = await Assert.ThrowsAsync<WorkbenchCatalogException>(
+            () => coordinator.ShowWorktreeProjectInTiaAsync(fixture.Context, CancellationToken.None));
+
+        Assert.Equal("ENGINEERING_PROJECT_PATH_MISSING", error.Code);
+        Assert.Empty(engineering.CallArgs);
+    }
+
+    [Fact]
     public async Task ReloadHardwareRejectsWhenAttachedTiaProjectDoesNotMatchSelectedWorktree()
     {
         var fixture = Fixture.Create(root, sourceProjectPath: @"C:\Projects\ProjectB.ap17");
@@ -2171,6 +2305,9 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         var fixture = Fixture.Create(root, knowledgeStale: true);
         File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
+        fixture.WriteModified("Blocks/A.xml", "<original />");
+        // The database holds this component already, so the edited content is a plain replacement.
+        fixture.MarkAppliedHashes("Blocks/A.xml");
         fixture.WriteModified("Blocks/A.xml", "<modified />");
         var calls = new List<string>();
         var knowledge = Caller(calls).Respond(
@@ -2205,6 +2342,8 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
     {
         var fixture = Fixture.Create(root, knowledgeStale: true);
         File.WriteAllText(fixture.Context.KnowledgeDbPath, "exists");
+        fixture.WriteModified("Blocks/A.xml", "<original />");
+        fixture.MarkAppliedHashes("Blocks/A.xml");
         fixture.WriteModified("Blocks/A.xml", "<modified />");
         var update = new KnowledgeUpdateResult(
             fixture.Context.KnowledgeDbPath,
@@ -3795,6 +3934,28 @@ public sealed class WorkbenchCoordinatorTests : IDisposable
             Write(Context.StagingRoot, relative, content);
         public void WriteModified(string relative, string content) =>
             Write(Context.SourceRoot, relative, content);
+
+        /// <summary>Record the applied hashes for the named source files — the bookkeeping a successful
+        /// update leaves behind. A database whose device.json carries no hash for a source file has no
+        /// component to replace, so the coordinator rebuilds it instead of updating it in place.</summary>
+        public void MarkAppliedHashes(params string[] relativePaths)
+        {
+            var path = Path.Combine(Context.DeviceRoot, "device.json");
+            var metadata = store.Read<DeviceMetadata>(path);
+            var hashes = new Dictionary<string, string>(
+                metadata.Knowledge.AppliedOverlayHashes,
+                StringComparer.Ordinal);
+            foreach (var relative in relativePaths)
+            {
+                hashes[relative] = Convert.ToHexString(SHA256.HashData(
+                    File.ReadAllBytes(Path.Combine(Context.SourceRoot, relative)))).ToLowerInvariant();
+            }
+
+            store.Write(path, metadata with
+            {
+                Knowledge = metadata.Knowledge with { AppliedOverlayHashes = hashes },
+            });
+        }
 
         public DeviceContext AddDevice(string deviceId, string plcName)
         {

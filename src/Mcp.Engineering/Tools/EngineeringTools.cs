@@ -325,8 +325,9 @@ public sealed class EngineeringTools
     [McpServerTool(Name = "open_block_in_editor")]
     [Description("Open a block in the TIA Portal editor window. Requires a UI-connected TIA session.")]
     public CallToolResult OpenBlockInEditor(
-        [Description("Block name to open.")] string blockName)
-        => Invoke("open_block_in_editor", () => { _adapter.OpenBlockInEditor(blockName); return true; });
+        [Description("Block name to open.")] string blockName,
+        [Description("PLC device name; optional for single-PLC projects and required when the project contains multiple PLCs.")] string? plcName = null)
+        => Invoke("open_block_in_editor", () => { _adapter.OpenBlockInEditor(blockName, plcName); return true; });
 
     [McpServerTool(Name = "open_source_object_in_editor")]
     [Description("Open a block (OB/FB/FC/DB), tag table (Tags), or UDT in the TIA Portal editor window. Requires a UI-connected TIA session.")]
