@@ -58,6 +58,21 @@ describe('RightDock', () => {
     expect(host.querySelector('[role="tablist"]')?.getAttribute('aria-orientation')).toBe('vertical')
   })
 
+  it('overrides the vertical-tab skin so the item is a centred 30 px square', async () => {
+    // The `Tabs` primitive ships `group-data-[orientation=vertical]/tabs:w-full` and `…:justify-start`
+    // for labelled vertical tabs. Those selectors beat a plain `w-[30px]` / `justify-center`, so a rail
+    // item that does not override the same variant stretches across the whole rail and leaves its icon
+    // flush against the inner edge (measured in the running app: item 43 px wide, icon left gap 0,
+    // right gap 27). happy-dom has no layout, so the contract is asserted on the class list.
+    const { host } = await setup()
+
+    for (const name of ['properties', 'changes', 'history'] as const) {
+      const className = rail(host, name)?.className ?? ''
+      expect(className, name).toContain('group-data-[orientation=vertical]/tabs:w-[30px]')
+      expect(className, name).toContain('group-data-[orientation=vertical]/tabs:justify-center')
+    }
+  })
+
   it('shows only the open page among the pages that have been opened', async () => {
     const { host, root } = await setup({ page: 'changes' })
     const show = async (next: 'properties' | 'changes' | 'history') => {

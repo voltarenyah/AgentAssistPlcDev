@@ -45,6 +45,13 @@ export default function RightDockRail({ openPage, changesBadge = null, onSelectP
                   onClick={() => onSelectPage(page)}
                   className={cn(
                     'relative h-[30px] w-[30px] flex-none rounded-md border-0 p-0',
+                    // The `Tabs` primitive ships a vertical-tab skin —
+                    // `group-data-[orientation=vertical]/tabs:w-full` and `…:justify-start` — for
+                    // labelled vertical tabs, and those selectors beat a plain `w-[30px]` /
+                    // `justify-center`. A rail item must override the same variant, or the button
+                    // stretches across the whole rail and its icon sits flush against the inner edge.
+                    'group-data-[orientation=vertical]/tabs:w-[30px]',
+                    'group-data-[orientation=vertical]/tabs:justify-center',
                     'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
                     'data-[state=active]:bg-accent data-[state=active]:text-foreground',
                     'dark:data-[state=active]:bg-accent dark:data-[state=active]:text-foreground',
