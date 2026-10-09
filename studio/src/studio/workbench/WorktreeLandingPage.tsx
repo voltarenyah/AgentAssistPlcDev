@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, Cpu, FileCode2, GitBranch, LayoutDashboard, ListTodo, Loader2 } from 'lucide-react'
+import { AlertCircle, Cpu, FileCode2, GitBranch, LayoutDashboard, ListTodo, Loader2, MessageSquareText } from 'lucide-react'
 import * as api from '@/api/client'
 import { showErrorToast } from '@/components/ui/toast'
 import InlineEdit from './InlineEdit'
@@ -7,9 +7,10 @@ import StatusBadge from './StatusBadge'
 import TagChip from './tags/TagChip'
 import TagPicker from './tags/TagPicker'
 import WorktreeTasksPanel, { type TaskViewMode } from './WorktreeTasksPanel'
+import WorktreeSessionsPanel, { type SessionViewMode } from './WorktreeSessionsPanel'
 import { rememberDeviceSnapshot } from '@/studio/deviceSnapshot'
 
-export type WorktreeLandingTab = 'overview' | 'tasks'
+export type WorktreeLandingTab = 'overview' | 'tasks' | 'sessions'
 
 type Props = {
   workbenchId: string
@@ -23,6 +24,14 @@ type Props = {
   onOpenTaskSession?: (task: api.EngineeringTask, sessionId: string) => void
   taskViewMode: TaskViewMode
   onTaskViewModeChange: (mode: TaskViewMode) => void
+  sessionViewMode: SessionViewMode
+  onSessionViewModeChange: (mode: SessionViewMode) => void
+  /** Opens a conversation of this worktree from its own conversation list. */
+  onOpenSession?: (session: api.ChatSessionInfo) => void
+  onRenameSession?: (session: api.ChatSessionInfo, title: string) => void
+  onExportSession?: (session: api.ChatSessionInfo) => void
+  onSetSessionTasks?: (session: api.ChatSessionInfo, taskIds: string[], primaryTaskId?: string | null) => void
+  onDeleteSession?: (session: api.ChatSessionInfo) => void
 }
 
 type ModifiedDevice = {
@@ -42,9 +51,10 @@ const formatDate = (value: string | null) =>
 const worktreeTabs: Array<{ id: WorktreeLandingTab; label: string; icon: typeof GitBranch }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
+  { id: 'sessions', label: 'Sessions', icon: MessageSquareText },
 ]
 
-export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail, onStartTaskChat, onOpenTaskInTia, onOpenTaskSession, taskViewMode, onTaskViewModeChange }: Props) {
+export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTabChange, onSelectDevice, onOpenTaskDetail, onStartTaskChat, onOpenTaskInTia, onOpenTaskSession, taskViewMode, onTaskViewModeChange, sessionViewMode, onSessionViewModeChange, onOpenSession, onRenameSession, onExportSession, onSetSessionTasks, onDeleteSession }: Props) {
   const [detail, setDetail] = useState<api.WorktreeDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(true)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -126,7 +136,9 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
   }, [workbenchId, worktreeId])
 
   useEffect(() => {
-    if (tab !== 'tasks') return
+    // The Sessions tab names the tasks each conversation is related to and offers them in its picker,
+    // so it reads the same task list the Tasks tab does.
+    if (tab !== 'tasks' && tab !== 'sessions') return
     let cancelled = false
     setTasksLoading(true)
     setTasksError(null)
@@ -424,6 +436,23 @@ export default function WorktreeLandingPage({ workbenchId, worktreeId, tab, onTa
               onOpenTaskSession={onOpenTaskSession}
               viewMode={taskViewMode}
               onViewModeChange={onTaskViewModeChange}
+            />
+          )}
+
+          {tab === 'sessions' && (
+            <WorktreeSessionsPanel
+              workbenchId={workbenchId}
+              worktreeId={worktreeId}
+              // The worktree's own tasks first, then the project's, so a conversation related to either
+              // is named rather than shown by id. The picker itself offers only the device-bound ones.
+              tasks={[...tasks, ...projectTasks]}
+              viewMode={sessionViewMode}
+              onViewModeChange={onSessionViewModeChange}
+              onOpenSession={onOpenSession}
+              onRenameSession={onRenameSession}
+              onExportSession={onExportSession}
+              onSetSessionTasks={onSetSessionTasks}
+              onDeleteSession={onDeleteSession}
             />
           )}
         </div>

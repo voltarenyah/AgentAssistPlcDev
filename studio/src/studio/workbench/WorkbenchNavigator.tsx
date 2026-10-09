@@ -1,6 +1,5 @@
 import {
   Archive,
-  Check,
   ChevronDown,
   ChevronRight,
   CircleDot,
@@ -31,6 +30,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ChatSessionInfo, DeviceSummary, EngineeringTask, EngineeringTaskTargetKind, TaskTarget, Workbench, WorkbenchRegistration, WorkbenchTagSearchResults, WorktreeTaskStatus } from '@/api/client'
 import { sessionTaskIds, taskTargetKind } from '@/api/client'
+import { conversationTitle, useSessionOperations } from './SessionOperations'
 import { formatRelativeTime } from './TaskSessionsDisclosure'
 import {
   ContextMenu,
@@ -41,7 +41,6 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { Button } from '@/components/ui/button'
-import { CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
@@ -172,9 +171,6 @@ const knowledgeDotClass = (state: 'current' | 'stale' | 'missing' | 'failed') =>
     : state === 'stale' ? 'text-amber-500'
       : state === 'failed' ? 'text-red-500'
         : 'text-muted-foreground'
-/** The title a conversation shows, falling back the way its task surface already does. */
-const conversationTitle = (session: ChatSessionInfo) =>
-  session.title?.trim() || session.firstUserMessage?.trim() || 'Untitled conversation'
 
 type NavigatorSectionProps = {
   /** Stable section identity, used for the header/body pairing and for test and style hooks. */
@@ -590,17 +586,6 @@ export default function WorkbenchNavigator({
   const [sectionHeights, setSectionHeights] = useState<Record<string, number>>({})
   const [renameTask, setRenameTask] = useState<{ workbench: Workbench; worktree: WorkbenchRegistration; task: EngineeringTask } | null>(null)
   const [renameTitle, setRenameTitle] = useState('')
-  const [renameSession, setRenameSession] = useState<ChatSessionInfo | null>(null)
-  const [renameSessionTitle, setRenameSessionTitle] = useState('')
-  /** The conversation whose task relations the picker below is choosing, or null while it is closed. */
-  const [bindTaskSession, setBindTaskSession] = useState<ChatSessionInfo | null>(null)
-  const [bindTaskQuery, setBindTaskQuery] = useState('')
-  /**
-   * The checks the picker is showing, in the order they were set. It starts as the conversation's
-   * current relations and is written as a whole set when the picker is applied, so the conversation is
-   * never left half-linked (AC-019).
-   */
-  const [bindTaskSelection, setBindTaskSelection] = useState<string[]>([])
   const matchingWorkbenchIds = new Set(filteredResults?.workbenches.map(result => result.entityId) ?? [])
   const matchingWorktrees = new Map(
     (filteredResults?.worktrees ?? []).map(result => [result.entityId, result]),
@@ -628,28 +613,6 @@ export default function WorkbenchNavigator({
     if (!renameTask || !renameTitle.trim()) return
     onUpdateTask(renameTask.workbench, renameTask.worktree, renameTask.task, { title: renameTitle.trim() })
     setRenameTask(null)
-  }
-  const openRenameSession = (session: ChatSessionInfo) => {
-    setRenameSessionTitle(conversationTitle(session))
-    setRenameSession(session)
-  }
-  const saveSessionRename = () => {
-    if (!renameSession || !renameSessionTitle.trim()) return
-    onRenameSession(renameSession, renameSessionTitle.trim())
-    setRenameSession(null)
-  }
-  /**
-   * Deleting a related conversation also removes the graph edges that record which tasks it belonged
-   * to, so say what it costs. A conversation no task is related to has no such links to lose, and one
-   * several tasks share loses all of them (AC-017).
-   */
-  const confirmDeleteSession = (session: ChatSessionInfo) => {
-    const named = conversationTitle(session)
-    const cost = sessionTaskIds(session).length === 0
-      ? ' A deleted conversation cannot be recovered.'
-      : ' Its links to the tasks it is related to are lost, and a deleted conversation cannot be recovered.'
-    if (!window.confirm(`Delete "${named}"?${cost}`)) return
-    onDeleteSession(session)
   }
 
   // The cascade's tail: which target below the selected worktree is showing, and what it owns.
@@ -748,45 +711,16 @@ export default function WorkbenchNavigator({
     ].filter(group => group.sessions.length > 0)
   const sessionRowCount = sessionGroups.reduce((total, group) => total + group.sessions.length, 0)
   /**
-   * The tasks a conversation can be related to: the worktree's own, minus the ones that cannot own a
-   * conversation at all. A session resolves through a device, so a hardware or untargeted task is
-   * never a valid relation (ADR-0009). The picker asks for a choice from that list rather than for a
-   * raw id, so binding a conversation never needs an out-of-band prompt.
+   * What a conversation row's own menu performs, held once by `useSessionOperations` so the worktree's
+   * own conversation list cannot offer a diverging copy of it: renaming the conversation, editing the
+   * set of tasks it is related to, and deleting it under ADR-0010 (AC-017, AC-019).
    */
-  const bindableTasks = selectedTasks.filter(task => task.deviceId)
-  /**
-   * Opens the picker on the conversation's current relations, so every check reflects a relation the
-   * conversation already has, an apply that changes nothing writes the same set back, and a relation
-   * the picker cannot offer — which the write path would refuse to create — is preserved instead of
-   * being dropped by a set that never showed it.
-   */
-  const openBindTaskPicker = (session: ChatSessionInfo) => {
-    setBindTaskQuery('')
-    setBindTaskSelection(sessionTaskIds(session))
-    setBindTaskSession(session)
-  }
-  /** A click sets a check; a second click on a checked task clears it (AC-019). */
-  const toggleBindTask = (taskId: string) => {
-    setBindTaskSelection(previous => previous.includes(taskId)
-      ? previous.filter(id => id !== taskId)
-      : [...previous, taskId])
-  }
-  const closeBindTaskPicker = () => {
-    setBindTaskSession(null)
-    setBindTaskSelection([])
-  }
-  /**
-   * One apply writes the whole set. The primary the conversation already had is named only while it is
-   * still checked, so unchecking it hands the primary to the set's own resolution — which is how the
-   * user moves it — and an apply that leaves it checked keeps it where it was (ADR-0014, AC-019).
-   */
-  const applyBindTasks = () => {
-    if (!bindTaskSession) return
-    const primary = bindTaskSession.taskId
-    const keepPrimary = primary && bindTaskSelection.includes(primary) ? primary : undefined
-    onSetSessionTasks(bindTaskSession, bindTaskSelection, keepPrimary)
-    closeBindTaskPicker()
-  }
+  const sessionOperations = useSessionOperations({
+    tasks: selectedTasks,
+    onRename: onRenameSession,
+    onSetTasks: onSetSessionTasks,
+    onDelete: onDeleteSession,
+  })
 
   const selectRowTask = (workbench: Workbench, worktree: WorkbenchRegistration, task: EngineeringTask) => {
     setClickedTaskId(task.taskId)
@@ -1090,10 +1024,10 @@ export default function WorkbenchNavigator({
                 session={session}
                 current={session.sessionId === activeSessionId}
                 onOpen={onOpenSession}
-                onRename={openRenameSession}
+                onRename={sessionOperations.openRename}
                 onExport={onExportSession}
-                onBindTask={openBindTaskPicker}
-                onDelete={confirmDeleteSession}
+                onBindTask={sessionOperations.openBindTasks}
+                onDelete={sessionOperations.confirmDelete}
               />
             ))}
           </div>
@@ -1454,67 +1388,12 @@ export default function WorkbenchNavigator({
         </form>
       </DialogContent>
     </Dialog>
-    <Dialog open={renameSession !== null} onOpenChange={open => { if (!open) setRenameSession(null) }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Rename conversation</DialogTitle>
-          <DialogDescription>Choose the title this conversation shows in the navigator and on its task.</DialogDescription>
-        </DialogHeader>
-        <form className="space-y-4" onSubmit={event => { event.preventDefault(); saveSessionRename() }}>
-          <Input aria-label="Conversation title" value={renameSessionTitle} onChange={event => setRenameSessionTitle(event.target.value)} autoFocus />
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setRenameSession(null)}>Cancel</Button>
-            <Button type="submit">Save</Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
     {/*
-      The conversation's task relations are chosen from this worktree's tasks, never typed in. One
-      check per task that can own a conversation: a click sets it, a second click clears it, and one
-      apply writes the whole set (ADR-0014, AC-019). The footer sits inside the dialog's cmdk root but
-      outside its list, so it takes no part in the search and stays put while the list scrolls.
+      The conversation operations the rows above offer — rename, the task-relation picker and the
+      confirmed delete — are the shared ones, so the worktree's own conversation list performs them the
+      same way this section does (ADR-0014, AC-017, AC-019).
     */}
-    <CommandDialog
-      open={bindTaskSession !== null}
-      onOpenChange={open => { if (!open) closeBindTaskPicker() }}
-      title="Conversation tasks"
-      description={bindTaskSession
-        ? `Choose the tasks “${conversationTitle(bindTaskSession)}” is related to.`
-        : 'Choose the tasks this conversation is related to.'}
-    >
-      <CommandInput
-        value={bindTaskQuery}
-        onValueChange={setBindTaskQuery}
-        placeholder="Search this worktree's tasks"
-        aria-label="Search this worktree's tasks"
-      />
-      <CommandList>
-        <CommandEmpty>No matching tasks.</CommandEmpty>
-        {bindableTasks.map(task => {
-          const checked = bindTaskSelection.includes(task.taskId)
-          return (
-            <CommandItem
-              key={task.taskId}
-              value={`${task.title} ${task.taskId}`}
-              onSelect={() => toggleBindTask(task.taskId)}
-              aria-checked={checked}
-              aria-label={`${checked ? 'Uncheck' : 'Check'} ${task.title}`}
-            >
-              <Check className={`h-3.5 w-3.5 shrink-0 ${checked ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
-              {task.title}
-            </CommandItem>
-          )
-        })}
-      </CommandList>
-      <div className="flex items-center gap-2 border-t px-3 py-2" style={{ borderColor: 'var(--border)' }}>
-        <span className="mr-auto text-xs text-muted-foreground" role="status">
-          {bindTaskSelection.length === 0 ? 'No tasks checked' : `${bindTaskSelection.length} checked`}
-        </span>
-        <Button type="button" variant="outline" size="sm" onClick={closeBindTaskPicker}>Cancel</Button>
-        <Button type="button" size="sm" onClick={applyBindTasks}>Apply</Button>
-      </div>
-    </CommandDialog>
+    {sessionOperations.dialogs}
     </>
   )
 }

@@ -6,8 +6,9 @@
   sections — `PROJECTS`, `WORKTREE`, an unbound-task group when present, `DEVICE`, `TASKS`, `SESSIONS` —
   instead of one global project tree, and each section carries its own creation action in its header.
 - Scope: the left navigator's sections, their appearance conditions, header actions, collapse and
-  scroll behaviour, how their vertical space is allocated and overridden, and their interaction with
-  the existing tag filter.
+  scroll behaviour, how their vertical space is allocated and overridden, their interaction with the
+  existing tag filter, and where a conversation is listed — the navigator's `SESSIONS` section and the
+  worktree surface's own `Sessions` tab.
 - PRD or requirement carrier: `docs/adr/ADR-0006-studio-navigator-ownership-and-shape.md`,
   `docs/adr/ADR-0009-navigator-sessions-section.md`, `docs/adr/ADR-0010-deleting-a-task-conversation.md`,
   `docs/adr/ADR-0014-session-task-relations-belong-to-the-graph.md`
@@ -62,6 +63,7 @@
 | Device row menu | A `DEVICE` row's 3-dots | Offers the device operations the removed subtree used to hold. | AC-008 |
 | `Hardware` row | Selecting it in the `DEVICE` section | Opens the worktree's hardware configuration page and reveals its own `TASKS` list. | AC-009 |
 | Worktree `Tasks` tab | A worktree is selected | Unchanged: the worktree tab strip keeps its Tasks view for judging and acting on many items at once. | Preserved behaviour |
+| Worktree `Sessions` tab | A worktree is selected | Lists every conversation the worktree holds, whichever device owns each one, in the same `Cards`/`List` duality the Tasks tab offers, with a search over them and the same per-conversation row operations. Each card and row names the tasks the conversation is related to, or states that it is related to none. | AC-020 |
 
 ## Components and Interactions
 
@@ -84,6 +86,8 @@
 | Hardware row | Restored | selected worktree | Adds the hardware target the navigator lost: it opens the shell's hardware pages and lists that target's tasks. | AC-009 |
 | Hardware row 3-dots | Restored | existing hardware callbacks | Carries the select / reload / compare hardware operations the removed subtree held. | AC-009 |
 | Worktree `Tasks` view | Preserved unchanged | existing worktree tab strip | The navigator is a quick-selection aid; it does not replace the main view, which shows fields the navigator does not. | Preserved behaviour |
+| Worktree `Sessions` view | New, in `WorktreeSessionsPanel` | the worktree's whole conversation list (`GET …/worktrees/{wt}/sessions`), the worktree's tasks, its devices | Lists the worktree's conversations in cards or in a table, filters them by a search over the title and the first user message, and offers each row the same open, rename, export, task-relation and delete operations the navigator's conversation rows offer. | AC-020 |
+| Worktree conversation operations | Extend, shared with the navigator in `SessionOperations` | the conversation, the worktree's tasks that can own a conversation, the conversation's current relations | The rename dialog, the task-relation picker and the confirmed delete are held once and used by both surfaces, so the worktree's list and the navigator's rows can never disagree about what an operation does. | AC-019 |
 
 ### State / Display Detail (When Applicable)
 
@@ -156,6 +160,7 @@
 | AC-018 | Opening a conversation from a row | Opening it leaves the navigator's workbench, worktree, device and task selection unchanged, with the section's list and the selected task row still on screen, and shows the conversation in the chat view of that scope; a conversation whose device is not the selected one opens in the worktree-level chat view instead. |
 | AC-019 | Conversation row menu operations | The row's menu offers exporting the conversation and binding it to any of the worktree's tasks. Binding opens a searchable picker with one check per task that can own a conversation — never a free-form task-id prompt, and a task that cannot own a conversation, one with no device, is not offered — in which a click sets that binding, a second click on a checked task clears it, and the resulting set is applied in one operation so the conversation is never left half-linked. |
 | Preserved behaviour | Worktree `Tasks` tab | The main-area Tasks view still renders in the worktree tab strip and is unchanged. |
+| AC-020 | Worktree `Sessions` tab | The worktree surface's tab strip carries a `Sessions` tab beside `Overview` and `Tasks`. It lists every conversation the worktree holds, whichever device owns each one and including one whose header names no device, and offers the `Cards`/`List` duality, a search over the conversation's title and first user message, and the same per-row operations the navigator's conversation rows carry. Each row names the tasks the conversation is related to, or states that it is related to none, and the tab numbers what it is showing against the whole list. It fails visibly: a conversation list that could not be read says so instead of showing an empty worktree. |
 
 ## Open User Decisions
 
@@ -181,3 +186,4 @@
 | 2026-10-05 | 1.10 | Selecting a scope names no task: a device, the `Hardware` row, a worktree or a project clears the task selection — including when the scope already selected is chosen again — so `SESSIONS` returns to the selected device's conversations that no task owns and stays reachable after a task has been opened. The open task detail closes with that selection, so the picked scope is what the main area shows. A task that owns no conversation starts its first one from its own `Sessions` header (AC-015, AC-016). Per ADR-0009 v1.2. |
 | 2026-10-08 | 1.11 | A conversation can be related to several tasks, so the row menu's binding becomes a set: the picker carries one check per task that can own a conversation, a second click on a checked task clears that binding, and the set is applied in one operation (AC-019). `SESSIONS` membership is set membership, so a conversation several tasks share is listed by each of them, and a relation the conversation established by creating the task appears without the user binding anything (AC-015). The confirmation a delete shows speaks of the links it loses (AC-017). Per ADR-0014 and ADR-0009 v1.3. |
 | 2026-10-09 | 1.12 | A selected device shows its whole conversation list, grouped by the task each conversation is related to — the conversations no task is related to first — instead of only those no task owns, so a task-bound conversation is reachable without opening its task first. The section is now present whenever a PLC device is the selected target and says so when its list is empty, so its absence no longer has to be interpreted and its header action is always available (AC-015, AC-016). Per ADR-0009 v1.5. |
+| 2026-10-09 | 1.13 | The worktree surface's tab strip gains a `Sessions` tab listing every conversation the worktree holds, in the same `Cards`/`List` duality as its `Tasks` tab, with a search and the same per-row operations; it reads a new worktree-level conversation list, which is the only list that can reach a conversation whose header names no device (AC-020). The conversation operations are shared with the navigator's rows rather than duplicated (AC-019). Per ADR-0009 v1.6. |

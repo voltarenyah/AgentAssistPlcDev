@@ -13,6 +13,13 @@ and each bound session is also a graph entity joined by a `TaskSession` edge
 (`WorktreeTasksPanel.tsx:399` filters a device's sessions by `session.taskId`, and
 `TaskSessionsDisclosure` renders them with a relative timestamp).
 
+A worktree can also accumulate more conversations than any device-scoped cascade can present: they are
+one directory, they outlive the task they were recorded against, and a worktree that is lived in has
+dozens of them. A worktree surface therefore carries its own conversation list — the `Sessions` tab of
+the worktree's tab strip — read from a worktree-level list route. That surface is not a scope in this
+cascade and does not replace the section: it is what a user browses and searches a worktree's
+conversations from, and the section stays what the currently selected scope is working in.
+
 The left navigator does not show them at all. Its cascade is the four sections ADR-0006 fixed —
 `PROJECTS`, `WORKTREE`, `DEVICE`, `TASKS` — and a task's conversations are reachable only by opening a
 task's card or detail view. The user asked for a section below `TASKS` that shows the conversations
@@ -20,10 +27,13 @@ each task is carrying.
 
 Repository evidence that constrains the choice:
 
-- **No worktree-level session list exists.** Sessions are listed per device
-  (`GET …/worktrees/{wt}/devices/{device}/sessions`, `WorkbenchApiModels.cs:1850`) and per task (the
-  task detail's `sessions`). A worktree-wide list would need a new endpoint or a fan-out over the
-  worktree's devices, which the task panel already performs (`WorktreeTasksPanel.tsx:292-301`).
+- **No worktree-level session list existed when this section was decided.** Sessions were listed per
+  device (`GET …/worktrees/{wt}/devices/{device}/sessions`, `WorkbenchApiModels.cs:1850`) and per task
+  (the task detail's `sessions`), so a worktree-wide list needed either a new endpoint or a fan-out over
+  the worktree's devices, which the task panel already performs
+  (`WorktreeTasksPanel.tsx:292-301`). The endpoint was added with the worktree surface's own
+  conversation tab: `GET …/worktrees/{wt}/sessions` reads the worktree's session directory itself, which
+  is the one list that can also reach a conversation whose header names no device.
 - **A hardware task can never own a conversation.** `createChatSessionForTask` refuses a task with no
   `deviceId` (`MainStudio.tsx:1391-1392`), because a session needs a device context to resolve.
 - **Conversations without a task are normal, not exceptional.** In the live workbench, `master` holds
@@ -122,6 +132,7 @@ behind it.
 | **Row menu** | The conversation's only entry point, so it holds open, rename, export, bind it to one or more tasks or clear any of those bindings, and delete. Binding is a searchable picker over the worktree's tasks that can own a conversation — never a prompt for a raw task id — with one check per task: a click sets that binding, a second click clears it, and the resulting set is applied in one operation (ADR-0014). |
 | **Row open** | Opens the conversation in the chat view of the scope that is already selected, and leaves the workbench, worktree, device and task selection untouched. A conversation whose device is not the selected one — which the worktree's own task surface can ask for — has no device workspace to open in, so it opens in the worktree-level chat view, the one scope without a device. |
 | **Row contents** | The section is a view of the device's conversation list, not a copy of it: it is re-read wherever that list changes, so a conversation renamed, deleted or re-bound in any surface is reflected in the section without a reload. Its menu is visible without hovering, like the navigator's other row menus. |
+| **Worktree conversation tab** | The worktree surface's tab strip carries a `Sessions` tab listing every conversation the worktree holds, in the cards/list duality its `Tasks` tab already offers, with a search over them and the same row operations. It reads `GET …/worktrees/{wt}/sessions`, not a device's list, so a conversation whose header names no device is reachable there and nowhere else. It complements this section rather than replacing it: the section is what the selected scope is working in, and the tab is what the worktree holds. |
 | **Why this** | It keeps the cascade one section per scope level, keeps every list bounded and scrollable on its own, and makes the list say exactly what the row above it says is selected, without reopening the nesting ADR-0006 removed. |
 | **Known unknowns** | Whether the section needs a cap once a device accumulates many conversations or many groups, and whether a conversation related to several tasks needs an indication of that in its row. |
 | **Reconsider when** | A conversation has to be reachable without naming its device at all — a worktree-wide list, which is the worktree surface's own concern and not this cascade's, whose every section is scoped by the row above it. The two conditions this list carried before were met and answered: conversations belonging to several tasks at once by ADR-0014 v1.0, and reaching a conversation without selecting the task that owns it by v1.5 above. |
@@ -231,6 +242,15 @@ resolve. That the dock then resolved a device on a chat or source view to *no do
 superseded on 2026-10-08 by `ADR-0015`: the right dock is a shell-owned rail that exists on every
 surface, and `contextDock` derives each of its pages' content instead of the dock's visibility.
 
+The worktree surface's own conversation tab adds one read-only route, `GET
+/api/workbenches/{wb}/worktrees/{wt}/sessions`, which lists the worktree's session directory and
+projects the same graph relations the per-device list does. It is additive: no existing route changes,
+nothing persisted changes, and the delete, rename and relation operations keep going through the
+device-scoped routes they already use. `WorktreeSessionsPanel` owns its own load, as the worktree's task
+panel does, and the conversation operations it shares with the navigator's rows live in one place
+(`studio/src/studio/workbench/SessionOperations.tsx`) so two surfaces cannot offer diverging copies of
+them.
+
 ## Implementation Guidance
 
 Load the conversations the way the task surface already does: fan out the existing per-device list over
@@ -294,6 +314,7 @@ reachable.
 | 2026-10-08 | 1.3 | A conversation may be related to several tasks, so the row menu's binding becomes a set: a searchable picker with one check per task, where a second click clears that binding and the set is applied in one operation. The content rule is unchanged — the section still lists the selected task's conversations, and a conversation several tasks share is now listed by each of them — and the task-less case remains the conversation with no relation at all. This answers the first condition this ADR recorded under **Reconsider when**; the relation itself, its ownership by the engineering graph and the primary relation are [ADR-0014](ADR-0014-session-task-relations-belong-to-the-graph.md). |
 | 2026-10-08 | 1.4 | The amendment's clause that a device on a chat or source view resolves to no dock at all is superseded by `ADR-0015`: the right dock is a shell-owned icon rail that exists on every surface, so this section is still the only surface that *lists* a device's conversations, but its absence is no longer what the dock expresses. |
 | 2026-10-09 | 1.5 | A selected device no longer shows only its task-less conversations: the section shows every conversation the device owns, grouped by the task each one is related to, with the conversations no task owns first. The task selection keeps its single list, and selecting a device — which names no task — is what widens the list. The section is now rendered whenever a PLC device is the selected target, including with nothing to list, where it says so, so its presence no longer has to be interpreted and its creation action is always available. This answers the section's second recorded gap and the second condition under **Reconsider when**. |
+| 2026-10-09 | 1.6 | The worktree surface gains its own conversation list: a `Sessions` tab beside `Tasks`, in the same cards/list duality, with a search and the same row operations, reading a new read-only `GET …/worktrees/{wt}/sessions`. It is the surface for a worktree that has accumulated many conversations, and the only list that can reach a conversation whose header names no device — which the per-device routes must keep omitting. This section stays the scope-scoped list; the tab is the worktree's. The row operations are now held once, in `SessionOperations.tsx`, and used by both. |
 
 ## Related Information
 

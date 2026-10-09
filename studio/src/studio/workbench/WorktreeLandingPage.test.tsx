@@ -106,6 +106,19 @@ vi.mock('@/api/client', async importOriginal => {
     })),
     listWorktreeTasks: vi.fn(async () => taskList),
     listProjectTasks: vi.fn(async () => [projectGraphTask]),
+    // The worktree's own conversation list: one bound to a task, one related to none.
+    listWorktreeSessions: vi.fn(async () => [
+      {
+        sessionId: 'session-bound', title: 'Interlock review', workbenchId: 'wb1', worktreeId: 'wt1',
+        deviceId: 'dev1', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z',
+        messageCount: 4, turnCount: 2, firstUserMessage: null, taskId: 'graph-task-1',
+      },
+      {
+        sessionId: 'session-adhoc', title: 'Ad-hoc question', workbenchId: 'wb1', worktreeId: 'wt1',
+        deviceId: 'dev2', createdAt: '2026-10-02T00:00:00Z', updatedAt: '2026-10-02T00:00:00Z',
+        messageCount: 2, turnCount: 1, firstUserMessage: null, taskId: null,
+      },
+    ] as api.ChatSessionInfo[]),
     listGraphWorktreeTasks: vi.fn(async () => [...taskList.tasks.map(item => ({
       ...item, workbenchId: 'wb1', scope: 'worktree' as const, worktreeId: 'wt1', type: 'feature' as const,
       priority: 0, intent: 'intent', expectedResult: 'result', updatedUtc: item.createdUtc,
@@ -151,6 +164,8 @@ const renderPage = async (overrides: Partial<React.ComponentProps<typeof Worktre
       onSelectDevice={onSelectDevice}
       taskViewMode="cards"
       onTaskViewModeChange={vi.fn()}
+      sessionViewMode="cards"
+      onSessionViewModeChange={vi.fn()}
       {...overrides}
     />,
   ))
@@ -322,6 +337,36 @@ describe('WorktreeLandingPage', () => {
   it('renders a Start chat action for each task', async () => {
     const { host, root } = await renderPage({ tab: 'tasks', onStartTaskChat: vi.fn() })
     expect(host.querySelector('button[aria-label="New chat for Open task"]')).not.toBeNull()
+    await act(async () => root.unmount())
+  })
+
+  it('offers the worktree\'s conversations on a tab of its own, beside Overview and Tasks', async () => {
+    const onTabChange = vi.fn()
+    const { host, root } = await renderPage({ onTabChange })
+    expect([...host.querySelectorAll('button')]
+      .map(button => button.textContent?.trim())
+      .filter(text => text === 'Overview' || text === 'Tasks' || text === 'Sessions'))
+      .toEqual(['Overview', 'Tasks', 'Sessions'])
+
+    // Selecting it is the shell's to apply; the tab itself only reports the choice.
+    const sessionsTab = [...host.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Sessions')!
+    await act(async () => sessionsTab.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onTabChange).toHaveBeenCalledWith('sessions')
+
+    await act(async () => root.unmount())
+  })
+
+  it('lists every conversation of the worktree on the sessions tab', async () => {
+    const { host, root } = await renderPage({ tab: 'sessions', onOpenSession: vi.fn() })
+
+    // The task content is not on this tab, and the conversation list is.
+    expect(host.querySelector('[data-testid="worktree-context"]')).toBeNull()
+    expect(host.querySelectorAll('[data-testid="session-card"]')).toHaveLength(2)
+    expect(host.textContent).toContain('Interlock review')
+    expect(host.textContent).toContain('Ad-hoc question')
+    expect(host.textContent).toContain('No task')
+    expect(host.textContent).toContain('PLC · PLC_Two')
+
     await act(async () => root.unmount())
   })
 
