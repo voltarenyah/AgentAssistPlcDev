@@ -293,6 +293,50 @@ describe('WorktreeTasksPanel', () => {
     await act(async () => root.unmount())
   })
 
+  it('counts a conversation related to several tasks in each of them (AC-015)', async () => {
+    const deviceTask = (taskId: string, title: string): api.EngineeringTask => ({
+      taskId, workbenchId: 'wb1', scope: 'worktree', worktreeId: 'wt1', deviceId: 'device-1',
+      title, type: 'improvement', status: 'inProgress',
+      priority: 1, intent: 'Goal', expectedResult: 'Result', description: '',
+      createdUtc: '2026-08-01T00:00:00Z', updatedUtc: '2026-08-01T00:00:00Z',
+    })
+    const session = (sessionId: string, title: string, taskRelations: api.SessionTaskRelation[]): api.ChatSessionInfo => ({
+      sessionId, title, projectName: null, workbenchId: 'wb1', worktreeId: 'wt1', deviceId: 'device-1',
+      createdAt: '2026-08-01T00:00:00Z', updatedAt: '2026-08-01T00:00:00Z', messageCount: 2, turnCount: 1,
+      firstUserMessage: null, taskId: taskRelations.find(relation => relation.isPrimary)?.taskId ?? null,
+      taskRelations,
+    })
+    // One conversation is related to both tasks — one relation the user made, one it created itself —
+    // and a second one only to the first, so each task's count is decided by the set alone.
+    vi.mocked(api.listDeviceSessions).mockResolvedValueOnce([
+      session('s-shared', 'Shared finding', [
+        { taskId: 'task-first', edgeId: 'edge-first', provenance: 'manual', isPrimary: true },
+        { taskId: 'task-second', edgeId: 'edge-second', provenance: 'auto', isPrimary: false },
+      ]),
+      session('s-first', 'First only', [
+        { taskId: 'task-first', edgeId: 'edge-only', provenance: 'default', isPrimary: true },
+      ]),
+    ])
+    const { host, root } = await renderPanel({ tasks: [deviceTask('task-first', 'First task'), deviceTask('task-second', 'Second task')] })
+    await act(async () => {})
+
+    // Each card discloses its own count, and the shared conversation is in both of them.
+    expect(host.querySelector('button[aria-label="Show 2 sessions for First task"]')).not.toBeNull()
+    const secondDisclosure = host.querySelector('button[aria-label="Show 1 sessions for Second task"]')!
+    expect(secondDisclosure).not.toBeNull()
+    await act(async () => secondDisclosure.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(host.textContent).toContain('Shared finding')
+    expect(host.textContent).not.toContain('First only')
+
+    // The list view's count column reads the same membership.
+    await act(async () => host.querySelector('button[aria-label="List view"]')!.click())
+    expect(Array.from(host.querySelectorAll('[data-testid="task-list-item"]'))
+      .map(row => [row.querySelector('th')?.textContent, row.querySelectorAll('td')[3].textContent]))
+      .toEqual([['First task', '2'], ['Second task', '1']])
+
+    await act(async () => root.unmount())
+  })
+
   it('renders an exact graph task response description without legacy fields', async () => {
     const graphTask: api.EngineeringTask = {
       taskId: 'graph-1', workbenchId: 'wb1', scope: 'project', worktreeId: null,

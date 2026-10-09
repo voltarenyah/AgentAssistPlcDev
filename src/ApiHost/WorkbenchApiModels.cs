@@ -131,6 +131,14 @@ public sealed record SessionCreateApiRequest(Agent.Chat.ChatRequestSettings Sett
 public sealed record SessionSaveApiRequest(ChatSessionData Session);
 public sealed record SessionTaskApiRequest(string? TaskId);
 
+/// <summary>
+/// One request replaces a conversation's whole relation set, so the conversation is never observable
+/// half-linked (UI Spec AC-019). <c>PrimaryTaskId</c> is honoured when it names a task in
+/// <c>TaskIds</c>; otherwise the conversation's current primary is kept when it is still in the set,
+/// and the first requested id becomes the primary when it is not.
+/// </summary>
+public sealed record SessionTasksApiRequest(string[]? TaskIds, string? PrimaryTaskId = null);
+
 public sealed class WorkbenchApiState
 {
     private readonly WorkbenchCatalog catalog;
@@ -1973,26 +1981,37 @@ public static class WorkbenchEndpoints
                 progress => c.PushSourceObjectToTiaAsync(
                     s.Device(workbenchId, worktreeId, device).Context, comparisonId, ct, progress),
                 "Local source imported into TIA.").ConfigureAwait(false));
+        // A conversation's relation set is projected from the engineering graph, which is the
+        // relation's only authority (ADR-0014): one query for the page, and a graph that cannot be
+        // opened degrades to an empty set instead of hiding the conversations (AC-006, AC-007).
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions", (
-            string workbenchId, string worktreeId, string device, WorkbenchApiState s) =>
-            SessionManager.ListSessions(s.Device(workbenchId, worktreeId, device).Context));
+            string workbenchId, string worktreeId, string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, CompatibilityRuntimeState runtime) =>
+        {
+            var sessions = SessionManager.ListSessions(s.Device(workbenchId, worktreeId, device).Context);
+            var relations = SessionGraphOperations.ReadRelations(
+                graphs, s.Workbench(workbenchId), sessions.Select(item => item.SessionId).ToArray(), runtime);
+            return SessionGraphOperations.ProjectSessions(sessions, relations);
+        });
         app.MapPost("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions", (
             string workbenchId, string worktreeId, string device, SessionCreateApiRequest r, WorkbenchApiState s,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
+            var context = s.Device(workbenchId, worktreeId, device).Context;
             var taskId = ResolveSessionTaskId(s, graphs, activeTasks, workbenchId, worktreeId, r.TaskId);
-            var session = SessionManager.CreateNewSession(
-                s.Device(workbenchId, worktreeId, device).Context, r.Settings, r.RuntimeContext, taskId,
-                string.IsNullOrWhiteSpace(taskId) ? null : "default");
+            var session = SessionManager.CreateNewSession(context, r.Settings, r.RuntimeContext);
             using var graph = graphs.Open(s.Workbench(workbenchId));
-            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default); }
-            catch { SessionManager.DeleteSession(s.Device(workbenchId, worktreeId, device).Context, session.Header.SessionId); throw; }
-            return session;
+            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default, taskId); }
+            catch { SessionManager.DeleteSession(context, session.Header.SessionId); throw; }
+            return SessionGraphOperations.Project(session, graph.Service.ListSessionTaskRelations([session.Header.SessionId]));
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
-            string workbenchId, string worktreeId, string device, string session, WorkbenchApiState s) =>
+            string workbenchId, string worktreeId, string device, string session, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, CompatibilityRuntimeState runtime) =>
             SessionManager.LoadSession(s.Device(workbenchId, worktreeId, device).Context, session) is { } value
-                ? Results.Ok(value) : Results.NotFound());
+                ? Results.Ok(SessionGraphOperations.Project(value, SessionGraphOperations.ReadRelations(
+                    graphs, s.Workbench(workbenchId), [session], runtime)))
+                : Results.NotFound());
         // Deleting a conversation removes it from both stores, so the device it belongs to is named
         // rather than resolved from the current selection (ADR-0010).
         app.MapDelete("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
@@ -2008,17 +2027,18 @@ public static class WorkbenchEndpoints
         });
         app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}", (
             string workbenchId, string worktreeId, string device, string session,
-            SessionSaveApiRequest r, WorkbenchApiState s, EngineeringGraphApiFactory graphs,
-            ActiveTaskContextService activeTasks) =>
+            SessionSaveApiRequest r, WorkbenchApiState s, EngineeringGraphApiFactory graphs) =>
         {
             if (r.Session.Header.SessionId != session) return Results.BadRequest();
             var context = s.Device(workbenchId, worktreeId, device).Context;
             var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             var candidate = SessionGraphOperations.ValidateCandidate(context, current, r.Session);
             using var graph = graphs.Open(s.Workbench(workbenchId));
-            var updatedSession = SessionGraphOperations.ApplyWithPersistence(graph.Service, candidate, candidate.Header.TaskId,
-                value => value with { Header = value.Header with { TaskProvenance = string.IsNullOrWhiteSpace(value.Header.TaskId) ? null : "manual" } },
-                value => SessionManager.SaveSession(context, value));
+            // The header is no longer a relation input, so this write only imports the legacy value
+            // the persisted file still carries, before that write clears it (AC-008). Importing the
+            // incoming header instead would let an echoed response inject a binding.
+            SessionGraphOperations.ImportLegacy(graph.Service, current);
+            SessionManager.SaveSession(context, candidate);
             return Results.NoContent();
         });
         app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}/task", (
@@ -2028,8 +2048,21 @@ public static class WorkbenchEndpoints
             var context = s.Device(workbenchId, worktreeId, device).Context;
             var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             using var graph = graphs.Open(s.Workbench(workbenchId));
-            var updated = SessionGraphOperations.ApplyWithPersistence(graph.Service, current, request.TaskId,
-                value => value with { Header = value.Header with { TaskId = request.TaskId, TaskProvenance = string.IsNullOrWhiteSpace(request.TaskId) ? null : "manual", UpdatedAt = DateTimeOffset.UtcNow.ToString("O") } },
+            var updated = SessionGraphOperations.SetPrimary(
+                graph.Service, current, request.TaskId, value => SessionManager.SaveSession(context, value));
+            return Results.Ok(updated);
+        });
+        // One request replaces the whole relation set, so a conversation is never observable
+        // half-linked; the two /task routes above stay as "set the primary relation" (AC-012).
+        app.MapPut("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/sessions/{session}/tasks", (
+            string workbenchId, string worktreeId, string device, string session, SessionTasksApiRequest request,
+            WorkbenchApiState s, EngineeringGraphApiFactory graphs) =>
+        {
+            var context = s.Device(workbenchId, worktreeId, device).Context;
+            var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
+            using var graph = graphs.Open(s.Workbench(workbenchId));
+            var updated = SessionGraphOperations.ApplySet(
+                graph.Service, current, request.TaskIds, request.PrimaryTaskId,
                 value => SessionManager.SaveSession(context, value));
             return Results.Ok(updated);
         });
@@ -2215,22 +2248,38 @@ public static class WorkbenchEndpoints
                     workbenchId, source, r.TargetWorktreeId, progress: progress),
                 "Worktree merged.").ConfigureAwait(false);
         });
-        app.MapGet("/api/devices/{device}/sessions", (string device, WorkbenchApiState s) => SessionManager.ListSessions(s.Device(device).Context));
+        app.MapGet("/api/devices/{device}/sessions", (string device, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, CompatibilityRuntimeState runtime) =>
+        {
+            var context = s.Device(device).Context;
+            var sessions = SessionManager.ListSessions(context);
+            var relations = SessionGraphOperations.ReadRelations(
+                graphs, s.Workbench(context.WorkbenchId), sessions.Select(item => item.SessionId).ToArray(), runtime);
+            return SessionGraphOperations.ProjectSessions(sessions, relations);
+        });
         app.MapPost("/api/devices/{device}/sessions", (string device, SessionCreateApiRequest r, WorkbenchApiState s,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
             var selection = s.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
+            var context = s.Device(device).Context;
             var taskId = ResolveSessionTaskId(s, graphs, activeTasks, selection.WorkbenchId, selection.WorktreeId, r.TaskId);
-            var session = SessionManager.CreateNewSession(s.Device(device).Context, r.Settings, r.RuntimeContext, taskId,
-                string.IsNullOrWhiteSpace(taskId) ? null : "default");
+            var session = SessionManager.CreateNewSession(context, r.Settings, r.RuntimeContext);
             using var graph = graphs.Open(s.Workbench(selection.WorkbenchId));
-            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default); }
-            catch { SessionManager.DeleteSession(s.Device(device).Context, session.Header.SessionId); throw; }
-            return session;
+            try { SessionGraphOperations.Register(graph.Service, session, GraphProvenance.Default, taskId); }
+            catch { SessionManager.DeleteSession(context, session.Header.SessionId); throw; }
+            return SessionGraphOperations.Project(session, graph.Service.ListSessionTaskRelations([session.Header.SessionId]));
         });
-        app.MapGet("/api/devices/{device}/sessions/{session}", (string device, string session, WorkbenchApiState s) => SessionManager.LoadSession(s.Device(device).Context, session) is { } value ? Results.Ok(value) : Results.NotFound());
+        app.MapGet("/api/devices/{device}/sessions/{session}", (string device, string session, WorkbenchApiState s,
+            EngineeringGraphApiFactory graphs, CompatibilityRuntimeState runtime) =>
+        {
+            var context = s.Device(device).Context;
+            return SessionManager.LoadSession(context, session) is { } value
+                ? Results.Ok(SessionGraphOperations.Project(value, SessionGraphOperations.ReadRelations(
+                    graphs, s.Workbench(context.WorkbenchId), [session], runtime)))
+                : Results.NotFound();
+        });
         app.MapPut("/api/devices/{device}/sessions/{session}", (string device, string session, SessionSaveApiRequest r, WorkbenchApiState s,
-            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+            EngineeringGraphApiFactory graphs) =>
         {
             if (r.Session.Header.SessionId != session) return Results.BadRequest();
             var selection = s.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
@@ -2238,9 +2287,8 @@ public static class WorkbenchEndpoints
             var current = SessionManager.LoadSession(context, session) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             var candidate = SessionGraphOperations.ValidateCandidate(context, current, r.Session);
             using var graph = graphs.Open(s.Workbench(selection.WorkbenchId));
-            var updatedSession = SessionGraphOperations.ApplyWithPersistence(graph.Service, candidate, candidate.Header.TaskId,
-                value => value with { Header = value.Header with { TaskProvenance = string.IsNullOrWhiteSpace(value.Header.TaskId) ? null : "manual" } },
-                value => SessionManager.SaveSession(context, value));
+            SessionGraphOperations.ImportLegacy(graph.Service, current);
+            SessionManager.SaveSession(context, candidate);
             return Results.NoContent();
         });
         return app;

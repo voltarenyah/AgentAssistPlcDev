@@ -1548,7 +1548,18 @@ export default function MainStudio() {
     await createChatSession(true)
   }
 
-  const setChatSessionTask = async (session: api.ChatSessionInfo, taskId: string | null) => {
+  /**
+   * Writes a conversation's whole task relation set through the one route that replaces it, so the
+   * conversation is never observable half-linked (ADR-0014, AC-019). The device the conversation
+   * belongs to is selected first, because the write is resolved in that device's context; the tab
+   * update and the session refresh that follow are the ones every conversation change already goes
+   * through.
+   */
+  const setChatSessionTasks = async (
+    session: api.ChatSessionInfo,
+    taskIds: string[],
+    primaryTaskId?: string | null,
+  ) => {
     const { workbenchId, worktreeId, deviceId } = session
     if (!workbenchId || !worktreeId || !deviceId) {
       showErrorToast('This conversation is not available in the device context that owns it.')
@@ -1557,7 +1568,7 @@ export default function MainStudio() {
     setChatBusy(true)
     try {
       await api.selectDevice(workbenchId, worktreeId, deviceId)
-      const updated = await api.setChatSessionTask(session.sessionId, taskId)
+      const updated = await api.setChatSessionTasks(session.sessionId, taskIds, primaryTaskId)
       setChatTabs(previous => openTab(previous, updated))
       await refreshChatSessions({ workbenchId, worktreeId, deviceId })
     } catch (error) {
@@ -2736,7 +2747,7 @@ export default function MainStudio() {
             onRenameSession={(session, title) => void renameChatSession(session.sessionId, title)}
             onDeleteSession={session => void deleteNavigatorSession(session)}
             onExportSession={session => void exportChatSession(session)}
-            onSetSessionTask={(session, taskId) => void setChatSessionTask(session, taskId)}
+            onSetSessionTasks={(session, taskIds, primaryTaskId) => void setChatSessionTasks(session, taskIds, primaryTaskId)}
             onAddSession={task => void startConversationFromNavigator(task)}
             onSelectHardware={selectHardware}
             onReloadHardware={(workbench, worktree) => void reloadHardware(workbench, worktree)}

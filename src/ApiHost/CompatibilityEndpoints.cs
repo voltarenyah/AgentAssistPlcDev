@@ -109,6 +109,21 @@ public static class CompatibilityEndpoints
             return Device(state);
         }
 
+        // The device a session list is projected on. Resolving it costs a graph read (the active task
+        // decides the device), so an unreadable graph degrades to the selected device instead of
+        // failing a list that must stay usable when the graph cannot be opened (AC-007).
+        static DeviceContext ChatListDevice(WorkbenchApiState state, EngineeringGraphApiFactory graphs,
+            ActiveTaskContextService activeTasks)
+        {
+            // The selection precondition is checked first, so the guard below can only be the graph
+            // being unreadable and never a missing selection reported as one.
+            if (state.Selection?.WorktreeId is null)
+                throw new InvalidOperationException("DEVICE_SELECTION_REQUIRED");
+            try { return ChatDevice(state, graphs, activeTasks); }
+            catch (Exception exception) when (SessionGraphOperations.IsGraphUnavailable(exception))
+            { return Device(state); }
+        }
+
         static string ExportSessionFile(DeviceContext device, string sessionId, ChatSessionData session)
         {
             var path = ChatSessionExporter.ResolveSessionExportPath(
@@ -463,7 +478,14 @@ public static class CompatibilityEndpoints
             });
         });
         app.MapGet("/api/chat/sessions", (WorkbenchApiState state, EngineeringGraphApiFactory graphs,
-            ActiveTaskContextService activeTasks) => SessionManager.ListSessions(ChatDevice(state, graphs, activeTasks)));
+            ActiveTaskContextService activeTasks, CompatibilityRuntimeState runtime) =>
+        {
+            var device = ChatListDevice(state, graphs, activeTasks);
+            var sessions = SessionManager.ListSessions(device);
+            var relations = SessionGraphOperations.ReadRelations(
+                graphs, state.Workbench(device.WorkbenchId), sessions.Select(item => item.SessionId).ToArray(), runtime);
+            return SessionGraphOperations.ProjectSessions(sessions, relations);
+        });
         app.MapPost("/api/chat/session/new", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
         {
@@ -477,12 +499,12 @@ public static class CompatibilityEndpoints
             var taskId = string.IsNullOrWhiteSpace(requestedTaskId)
                 ? activeTasks.Get(scope.Service, selection.WorktreeId)?.TaskId
                 : requestedTaskId;
-            var session = chat.CreateSession(device, taskId, string.IsNullOrWhiteSpace(taskId) ? null : "default", assistantScope);
-            try { SessionGraphOperations.Register(scope.Service, session, GraphProvenance.Default); }
+            var session = chat.CreateSession(device, taskId, scope: assistantScope);
+            try { SessionGraphOperations.Register(scope.Service, session, GraphProvenance.Default, taskId); }
             catch { chat.DeleteSession(device, session.Header.SessionId, assistantScope); throw; }
             if (!string.IsNullOrWhiteSpace(taskId))
                 activeTasks.Select(scope.Service, selection.WorktreeId, taskId);
-            return session;
+            return SessionGraphOperations.Project(session, scope.Service.ListSessionTaskRelations([session.Header.SessionId]));
         });
         app.MapPut("/api/chat/session/task", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
@@ -494,17 +516,46 @@ public static class CompatibilityEndpoints
             var current = chat.LoadSession(device, id, assistantScope) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
             var selection = state.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
             using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
-            var updated = SessionGraphOperations.ApplyWithPersistence(scope.Service, current, taskId,
-                value => value with { Header = value.Header with { TaskId = taskId, TaskProvenance = string.IsNullOrWhiteSpace(taskId) ? null : "manual", UpdatedAt = DateTimeOffset.UtcNow.ToString("O") } },
-                value => SessionManager.SaveSession(device, value));
+            var updated = SessionGraphOperations.SetPrimary(
+                scope.Service, current, taskId, value => SessionManager.SaveSession(device, value));
+            chat.LoadSession(device, id, assistantScope);
+            return Results.Ok(updated);
+        });
+        // The compat twin of the typed set route: one request replaces the whole relation set, so the
+        // conversation is never observable half-linked (AC-012, UI Spec AC-019).
+        app.MapPut("/api/chat/session/tasks", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+        {
+            var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
+            var taskIds = body.TryGetProperty("taskIds", out var requested) && requested.ValueKind == JsonValueKind.Array
+                ? requested.EnumerateArray()
+                    .Where(item => item.ValueKind == JsonValueKind.String)
+                    .Select(item => item.GetString()!)
+                    .ToArray()
+                : null;
+            var primaryTaskId = body.TryGetProperty("primaryTaskId", out var primary) && primary.ValueKind == JsonValueKind.String
+                ? primary.GetString()
+                : null;
+            var device = ChatDevice(state, graphs, activeTasks);
+            var assistantScope = Scope(body, null);
+            var current = chat.LoadSession(device, id, assistantScope) ?? throw new KeyNotFoundException("SESSION_NOT_FOUND");
+            var selection = state.Selection ?? throw new InvalidOperationException("WORKBENCH_SELECTION_REQUIRED");
+            using var scope = graphs.Open(state.Workbench(selection.WorkbenchId));
+            var updated = SessionGraphOperations.ApplySet(
+                scope.Service, current, taskIds, primaryTaskId, value => SessionManager.SaveSession(device, value));
             chat.LoadSession(device, id, assistantScope);
             return Results.Ok(updated);
         });
         app.MapPost("/api/chat/session/load", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
-            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
+            EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks,
+            CompatibilityRuntimeState runtime) =>
         {
             var id = body.GetProperty("sessionId").GetString() ?? throw new ArgumentException("sessionId is required.");
-            return chat.LoadSession(ChatDevice(state, graphs, activeTasks), id, Scope(body, null)) is { } session ? Results.Ok(session) : Results.NotFound();
+            var device = ChatDevice(state, graphs, activeTasks);
+            return chat.LoadSession(device, id, Scope(body, null)) is { } session
+                ? Results.Ok(SessionGraphOperations.Project(session, SessionGraphOperations.ReadRelations(
+                    graphs, state.Workbench(device.WorkbenchId), [id], runtime)))
+                : Results.NotFound();
         });
         app.MapPost("/api/chat/session/rename", (JsonElement body, WorkbenchApiState state, ApiChatService chat,
             EngineeringGraphApiFactory graphs, ActiveTaskContextService activeTasks) =>
@@ -828,10 +879,45 @@ internal sealed class ApiChatService(
     {
         var key = ScopeKey(device, scope);
         if (!chats.TryGetValue(key, out var active)) return;
+        ImportLegacyBeforeWrite(device, active.Session);
         active.Loop.ClearHistory();
-        var cleared = active.Session with { Messages = [], RoundUsages = [] };
+        var cleared = active.Session with
+        {
+            Messages = [],
+            RoundUsages = [],
+            Header = active.Session.Header with { TaskId = null, TaskProvenance = null },
+        };
         SessionManager.SaveSession(device, cleared);
         chats[key] = active with { Session = cleared };
+    }
+
+    /// <summary>
+    /// Imports a legacy session-header task id once, before the write that clears it (AC-008). The
+    /// value is read from the persisted file, never from the in-memory session: the file is what the
+    /// write clears, and a cached header left over from before a set-replace would otherwise re-import
+    /// a relation the user just removed (AC-009). The in-memory guard makes a post-change session pay
+    /// nothing, and neither a graph that cannot be opened nor a value that can no longer become a
+    /// relation may fail the user's write — the write is what retires the field.
+    /// </summary>
+    private void ImportLegacyBeforeWrite(DeviceContext device, ChatSessionData session)
+    {
+        if (string.IsNullOrWhiteSpace(session.Header.TaskId)) return;
+        var persisted = SessionManager.LoadSession(device, session.Header.SessionId);
+        if (persisted is null || string.IsNullOrWhiteSpace(persisted.Header.TaskId)) return;
+        try
+        {
+            using var graph = graphs.Open(workbenches.Workbench(device.WorkbenchId));
+            SessionGraphOperations.ImportLegacy(graph.Service, persisted);
+        }
+        catch (Exception exception) when (SessionGraphOperations.IsGraphUnavailable(exception))
+        {
+            state.Logs.Enqueue(JsonSerializer.Serialize(new
+            {
+                kind = "graph-unavailable",
+                message = "The engineering graph could not be read; a conversation's legacy task link was not imported.",
+                detail = exception.Message,
+            }));
+        }
     }
     public void DeleteSession(DeviceContext device, string sessionId, string scope = ChatScopes.Device)
     {
@@ -846,12 +932,18 @@ internal sealed class ApiChatService(
         SessionManager.DeleteSession(device, sessionId);
     }
 
+    /// <summary>
+    /// Creates the empty conversation file. <paramref name="taskId"/>/<paramref name="taskProvenance"/>
+    /// stay the caller's statement of the relation this conversation is created for; the file no longer
+    /// has a field to carry it, so the route that calls this establishes the relation in the graph
+    /// instead (ADR-0014 Decision 1).
+    /// </summary>
     public ChatSessionData CreateSession(DeviceContext device, string? taskId = null, string? taskProvenance = null, string scope = ChatScopes.Device)
     {
         var key = ScopeKey(device, scope);
         sessionRequired.TryRemove(key, out _);
         chats.TryRemove(key, out _);
-        var session = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null, taskId, taskProvenance);
+        var session = SessionManager.CreateNewSession(device, new ChatRequestSettings(), null);
         pendingSessions[key] = session;
         return session;
     }
@@ -877,6 +969,10 @@ internal sealed class ApiChatService(
         string title,
         string scope = ChatScopes.Device)
     {
+        var current = SessionManager.LoadSession(device, sessionId);
+        if (current is null)
+            return null;
+        ImportLegacyBeforeWrite(device, current);
         var session = SessionManager.RenameSession(device, sessionId, title);
         if (session is null)
             return null;
@@ -943,8 +1039,15 @@ internal sealed class ApiChatService(
                 ? restored
                 : SessionManager.CreateNewSession(device, Settings(configuration, state), null);
             var discovered = await McpToolCatalog.BuildAsync(runtime.Host, token);
+            // Both closures read the live conversation for this scope key rather than a captured id:
+            // the chat is swapped in place when the user loads another conversation, so a captured id
+            // would read the previous conversation's task context and attribute a created task's
+            // relation to it (ADR-0014 Implementation Guidance).
+            string? LiveSessionId() => chats.TryGetValue(contextKey, out var live)
+                ? live.Session.Header.SessionId
+                : session.Header.SessionId;
             var catalog = BuildToolCatalog(
-                discovered, binder, device, workbenches, graphs, activeTasks, tasks, coordinator);
+                discovered, binder, device, workbenches, graphs, activeTasks, tasks, coordinator, LiveSessionId);
             var sandbox = new AgentSandbox(policy, 20, request =>
             {
                 var completion = new TaskCompletionSource<ToolConfirmation>(
@@ -968,10 +1071,7 @@ internal sealed class ApiChatService(
             var loop = new AgentLoop(
                 new DeepSeekClient(apiKey, configuration["DeepSeek:BaseUrl"] ?? "https://api.deepseek.com"),
                 catalog,
-                () => RuntimeContext(
-                    device,
-                    TaskContext(device, chats.TryGetValue(contextKey, out var current)
-                        ? current.Session.Header.TaskId : session.Header.TaskId)),
+                () => RuntimeContext(device, TaskContext(device, LiveSessionId())),
                 Settings(configuration, state),
                 sandbox);
             loop.Apply(LoopPolicy(configuration, state));
@@ -996,7 +1096,8 @@ internal sealed class ApiChatService(
         EngineeringGraphApiFactory graphs,
         ActiveTaskContextService activeTasks,
         WorktreeTaskStore tasks,
-        WorkbenchCoordinator coordinator) =>
+        WorkbenchCoordinator coordinator,
+        Func<string?> sessionId) =>
         new(discovered.Tools.Select(spec => spec with
         {
             Caller = new BoundMcpCaller(spec.Caller, binder, device),
@@ -1008,7 +1109,8 @@ internal sealed class ApiChatService(
             () => device))
           .Append(TaskCreationTool.CreateSpec(
             new TaskCreationTool(workbenches, graphs, tasks),
-            () => device))
+            () => device,
+            sessionId))
           .Append(OpenTiaProjectTool.CreateSpec(
             new OpenTiaProjectTool(workbenches, coordinator),
             () => device))
@@ -1126,25 +1228,90 @@ internal sealed class ApiChatService(
                         + "before answering whether a program change is present, because only it "
                         + "compares the source hashes";
 
-    private string? TaskContext(DeviceContext device, string? taskId)
+    /// <summary>
+    /// The conversation's task context, read from the graph per turn. The graph is the relation's only
+    /// authority, but an unreadable store must not fail the turn: the conversation is answered without
+    /// task lines rather than not at all.
+    /// </summary>
+    private string? TaskContext(DeviceContext device, string? sessionId)
     {
-        if (string.IsNullOrWhiteSpace(taskId)) return null;
-        using var graph = graphs.Open(workbenches.Workbench(device.WorkbenchId));
-        var task = graph.Service.FindTask(taskId);
-        if (task is null || (task.ScopeKind == GraphTaskScopeKind.Worktree
-            && (task.WorktreeId != device.WorktreeId || task.DeviceId != device.DeviceId)))
-            throw new EngineeringGraphConstraintException("The chat task is no longer bound to this device.", "TASK_DEVICE_MISMATCH");
-        return string.Join('\n',
-            $"Active task: {task.Title} ({task.TaskId})",
-            $"Task type: {task.Type}; status: {task.Status}",
-            $"Task goal: {task.Intent}",
-            $"Expected result: {task.ExpectedResult}",
-            string.IsNullOrWhiteSpace(task.Description) ? null : $"Task context: {task.Description}");
+        if (string.IsNullOrWhiteSpace(sessionId)) return null;
+        try
+        {
+            using var graph = graphs.Open(workbenches.Workbench(device.WorkbenchId));
+            return TaskContext(graph.Service, device, sessionId);
+        }
+        catch (Exception exception) when (SessionGraphOperations.IsGraphUnavailable(exception))
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The context body: the primary relation's task in full — byte-identical to the five lines this
+    /// always produced — and one bounded line naming the other related tasks by title and status.
+    /// Resolution is per link (AC-011): a relation whose task is gone, or whose worktree-scoped task no
+    /// longer matches the conversation's worktree or device, is skipped instead of throwing
+    /// <c>TASK_DEVICE_MISMATCH</c> and aborting the turn. A dangling primary is skipped like any other
+    /// relation and is never promoted to a "related" row; a conversation with nothing resolvable gets
+    /// no task lines at all, exactly as a task-less one does.
+    /// </summary>
+    internal static string? TaskContext(EngineeringGraphService graph, DeviceContext device, string? sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId)) return null;
+        var relations = graph.ListSessionTaskRelations([sessionId]);
+        if (relations.Count == 0) return null;
+
+        var lines = new List<string>();
+        var primary = relations.FirstOrDefault(relation => relation.IsPrimary);
+        if (primary is not null && ResolveTask(graph, device, primary.TaskId) is { } active)
+        {
+            lines.Add($"Active task: {active.Title} ({active.TaskId})");
+            lines.Add($"Task type: {active.Type}; status: {active.Status}");
+            lines.Add($"Task goal: {active.Intent}");
+            lines.Add($"Expected result: {active.ExpectedResult}");
+            if (!string.IsNullOrWhiteSpace(active.Description))
+                lines.Add($"Task context: {active.Description}");
+        }
+
+        var related = relations
+            .Where(relation => !relation.IsPrimary)
+            .Select(relation => ResolveTask(graph, device, relation.TaskId))
+            .Where(task => task is not null)
+            .Select(task => task!)
+            .ToArray();
+        if (related.Length > 0)
+        {
+            var named = related.Take(RelatedTaskLimit)
+                .Select(task => $"{task.Title} ({task.TaskId}) — {task.Type}, {task.Status}");
+            var line = "Related tasks: " + string.Join("; ", named);
+            if (related.Length > RelatedTaskLimit)
+                line += $" (and {related.Length - RelatedTaskLimit} more)";
+            lines.Add(line);
+        }
+
+        return lines.Count == 0 ? null : string.Join('\n', lines);
+    }
+
+    /// <summary>At most this many other related tasks are named; the rest are counted.</summary>
+    private const int RelatedTaskLimit = 10;
+
+    /// <summary>One relation's task, or null when it no longer resolves or no longer belongs to this
+    /// conversation's worktree and device.</summary>
+    private static GraphTask? ResolveTask(EngineeringGraphService graph, DeviceContext device, string taskId)
+    {
+        var task = graph.FindTask(taskId);
+        if (task is null) return null;
+        if (task.ScopeKind == GraphTaskScopeKind.Worktree
+            && (task.WorktreeId != device.WorktreeId || task.DeviceId != device.DeviceId))
+            return null;
+        return task;
     }
 
     private void SaveActiveSession(DeviceContext device, ActiveChat active, string message, string scope)
     {
         var contextKey = ScopeKey(device, scope);
+        ImportLegacyBeforeWrite(device, active.Session);
         var updated = active.Session with
         {
             Messages = active.Loop.History.ToList(),
@@ -1155,6 +1322,10 @@ internal sealed class ApiChatService(
                 Title = SessionManager.IsDefaultTitle(active.Session.Header.Title)
                     ? SessionManager.DeriveTitle(message)
                     : active.Session.Header.Title,
+                // The file no longer carries the relation, so the cached conversation must not either:
+                // a value left here would be re-imported by a later write.
+                TaskId = null,
+                TaskProvenance = null,
             },
         };
         SessionManager.SaveSession(device, updated);
