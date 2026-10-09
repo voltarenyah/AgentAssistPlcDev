@@ -76,8 +76,8 @@ type Props = {
   tasksByWorktree?: Record<string, EngineeringTask[]>
   /**
    * The selected worktree's conversations, fanned out over its devices. The `SESSIONS` section lists
-   * the selected task's, or — while no task is selected — the selected device's conversations that no
-   * task owns, which is the state selecting that device puts the section in.
+   * the selected task's, or — while no task is selected — every one the selected device owns, grouped
+   * by the task that owns each and with the conversations no task owns first.
    */
   sessionsByWorktree?: Record<string, ChatSessionInfo[]>
   activeTaskId?: string | null
@@ -688,25 +688,65 @@ export default function WorkbenchNavigator({
    */
   const selectedTaskId = clickedTaskId ?? activeTaskId
   /**
-   * The task the `TASKS` section shows as selected — the same expression that marks its row — and the
-   * conversations the `SESSIONS` section is about: that task's while one is selected, and otherwise the
-   * selected device's conversations that no task owns (AC-015). One list at a time, so the section can
-   * never show a task the user is not working in. Membership is set membership (ADR-0014): a
-   * conversation related to several tasks is listed by each of them, and the task-less list is the
-   * conversation with no relation at all.
+   * The task the `TASKS` section shows as selected — the same expression that marks its row — and,
+   * while one is selected, the one list `SESSIONS` is about (AC-015). Membership is set membership
+   * (ADR-0014): a conversation related to several tasks is listed by each of them, and the task-less
+   * group is the conversation with no relation at all.
    */
   const selectedWorktreeTask = targetTasks.find(task => task.taskId === selectedTaskId) ?? null
-  const sessionsSectionVisible = !filterActive && selectedTargetKind !== 'hardware'
-  const selectedSessions = selectedWorktreeKey ? sessionsByWorktree[selectedWorktreeKey] ?? [] : []
-  const sessionRows = !sessionsSectionVisible
+  /**
+   * The section exists exactly while a PLC device is the selected target: the hardware target cannot
+   * own a conversation at all, and a worktree or a project on its own names no device to scope one to.
+   */
+  const sessionsSectionVisible = !filterActive && selectedTargetKind === 'device'
+  /**
+   * Every conversation the selected device owns, whichever task it is related to. This section is the
+   * only surface that lists a device's conversations (ADR-0009), so it reads the device's whole list
+   * and groups it below rather than leaving the conversations of tasks the user has not opened out of
+   * reach. The worktree's conversations are fanned out over its devices when it is selected, so the
+   * device is what selects from a list that is already the worktree's.
+   */
+  const deviceSessions = selection.deviceId
+    ? (selectedWorktreeKey ? sessionsByWorktree[selectedWorktreeKey] ?? [] : [])
+      .filter(session => session.deviceId === selection.deviceId)
+    : []
+  /** The conversations of one task: membership is set membership, so a shared one is listed by each. */
+  const sessionsOfTask = (taskId: string) =>
+    deviceSessions.filter(session => sessionTaskIds(session).includes(taskId))
+  /**
+   * The groups the section shows, in order. A selected task is the whole list, which is the rule the
+   * section was built on. A selected device with no task selected is the device's entire list: the
+   * conversations no task is related to first, under `No task`, then one group per task that owns one.
+   * The owning tasks are the selected device's own — the order `TASKS` lists them in — followed by any
+   * other task of the worktree that owns one of them, which re-binding a conversation can produce. So
+   * every group a device's list can produce is present and no conversation it holds is unreachable.
+   */
+  const tasksOwningDeviceSessions = [
+    ...targetTasks.map(task => task.taskId),
+    ...[...new Set(deviceSessions.flatMap(session => sessionTaskIds(session)))]
+      .filter(taskId => !targetTasks.some(task => task.taskId === taskId)),
+  ]
+  const sessionGroups: { key: string; title: string; sessions: ChatSessionInfo[] }[] = !sessionsSectionVisible
     ? []
     : selectedWorktreeTask
-      ? selectedSessions.filter(session => sessionTaskIds(session).includes(selectedWorktreeTask.taskId))
-      : selection.deviceId
-        ? selectedSessions.filter(session => sessionTaskIds(session).length === 0 && session.deviceId === selection.deviceId)
-        : []
-  /** What the list is, said above it: the task that owns these conversations, or that no task does. */
-  const sessionsHeading = selectedWorktreeTask ? selectedWorktreeTask.title : 'No task'
+      ? [{
+        key: selectedWorktreeTask.taskId,
+        title: selectedWorktreeTask.title,
+        sessions: sessionsOfTask(selectedWorktreeTask.taskId),
+      }]
+      : [
+      {
+        key: 'unbound',
+        title: 'No task',
+        sessions: deviceSessions.filter(session => sessionTaskIds(session).length === 0),
+      },
+      ...tasksOwningDeviceSessions.map(taskId => ({
+        key: taskId,
+        title: selectedTasks.find(task => task.taskId === taskId)?.title ?? taskId,
+        sessions: sessionsOfTask(taskId),
+      })),
+    ].filter(group => group.sessions.length > 0)
+  const sessionRowCount = sessionGroups.reduce((total, group) => total + group.sessions.length, 0)
   /**
    * The tasks a conversation can be related to: the worktree's own, minus the ones that cannot own a
    * conversation at all. A session resolves through a device, so a hardware or untargeted task is
@@ -778,7 +818,7 @@ export default function WorkbenchNavigator({
     ...(showWorktreeSection ? ['worktree'] : []),
     ...(deviceSectionVisible ? ['device'] : []),
     ...(tasksSectionVisible ? ['tasks'] : []),
-    ...(sessionRows.length > 0 ? ['sessions'] : []),
+    ...(sessionsSectionVisible ? ['sessions'] : []),
   ]
   const applySectionHeights = (upperId: string, upperHeight: number, lowerId: string, lowerHeight: number) =>
     setSectionHeights(current => ({
@@ -1001,13 +1041,18 @@ export default function WorkbenchNavigator({
 
   /**
    * `SESSIONS`: the conversations of the task the user has selected, or — while no task is selected —
-   * the selected device's conversations that no task owns, which is what selecting a device shows.
-   * Its header starts a conversation in the scope the list itself is showing: bound to the selected
-   * task, or the device's own and owned by no task while none is selected. The hardware target never
-   * reaches this section: it cannot own a conversation at all.
+   * every conversation of the selected device, its task-less ones first and then one group per task
+   * that owns one. Its header starts a conversation in the scope the list itself is showing: bound to
+   * the selected task, or the device's own and owned by no task while none is selected. The hardware
+   * target never reaches this section: it cannot own a conversation at all.
+   *
+   * The section is present whenever a device is the selected target, including when its list is empty:
+   * its absence would otherwise mean "this device has no conversations", "they are still loading" and
+   * "this task owns none" at once, and it is the only place the device's conversations can be started
+   * or reached from (ADR-0009).
    */
   const renderSessionsSection = () => {
-    if (!selectedWorktreeRow || sessionRows.length === 0) return null
+    if (!selectedWorktreeRow || !sessionsSectionVisible) return null
     return (
       <NavigatorSection
         id="sessions"
@@ -1028,23 +1073,31 @@ export default function WorkbenchNavigator({
           </Button>
         )}
       >
-        <div data-session-group={selectedWorktreeTask?.taskId ?? 'unbound'}>
-          <div className="truncate px-1 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={sessionsHeading}>
-            {sessionsHeading}
+        {sessionRowCount === 0 ? (
+          <div className="px-2 py-2 text-xs leading-4 text-muted-foreground" data-session-group="unbound" data-session-empty>
+            {selectedWorktreeTask
+              ? 'No conversations for this task yet.'
+              : 'No conversations for this device yet.'}
           </div>
-          {sessionRows.map(session => (
-            <SessionRow
-              key={session.sessionId}
-              session={session}
-              current={session.sessionId === activeSessionId}
-              onOpen={onOpenSession}
-              onRename={openRenameSession}
-              onExport={onExportSession}
-              onBindTask={openBindTaskPicker}
-              onDelete={confirmDeleteSession}
-            />
-          ))}
-        </div>
+        ) : sessionGroups.map(group => (
+          <div key={group.key} data-session-group={group.key}>
+            <div className="truncate px-1 pb-1 text-[9px] font-semibold tracking-[0.18em] text-muted-foreground" title={group.title}>
+              {group.title}
+            </div>
+            {group.sessions.map(session => (
+              <SessionRow
+                key={session.sessionId}
+                session={session}
+                current={session.sessionId === activeSessionId}
+                onOpen={onOpenSession}
+                onRename={openRenameSession}
+                onExport={onExportSession}
+                onBindTask={openBindTaskPicker}
+                onDelete={confirmDeleteSession}
+              />
+            ))}
+          </div>
+        ))}
       </NavigatorSection>
     )
   }

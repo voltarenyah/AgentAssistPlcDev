@@ -112,6 +112,10 @@ const sectionHeader = (host: HTMLElement, id: string) =>
 
 const sectionBody = (host: HTMLElement, id: string) => host.querySelector(`#navigator-section-${id}`) as HTMLElement
 
+/** One group of the `SESSIONS` section, by the task it names or `unbound` for the task-less one. */
+const sessionGroup = (host: HTMLElement, key: string) =>
+  section(host, 'sessions').querySelector(`[data-session-group="${key}"]`) as HTMLElement
+
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('WorkbenchNavigator tag projection', () => {
@@ -224,7 +228,7 @@ describe('WorkbenchNavigator tag projection', () => {
       })} />,
     ))
 
-    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks', 'sessions'])
     expect(host.textContent).toContain('Review motor interlock')
     await act(async () => root.unmount())
   })
@@ -377,7 +381,7 @@ describe('WorkbenchNavigator target cascade', () => {
     expect(section(host, 'projects').style.height).toBe('')
     expect(sectionBody(host, 'projects').hasAttribute('hidden')).toBe(true)
     expect(sectionHeader(host, 'worktree').getAttribute('aria-expanded')).toBe('true')
-    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks', 'sessions'])
 
     await act(async () => root.unmount())
   })
@@ -473,9 +477,11 @@ describe('WorkbenchNavigator section sizing', () => {
 
   it('offers a separator between adjacent sections only, and one per pair (AC-012)', async () => {
     const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
-    expect(separators(host)).toEqual(['Resize PROJECTS section', 'Resize WORKTREE section', 'Resize DEVICE section'])
+    expect(separators(host)).toEqual([
+      'Resize PROJECTS section', 'Resize WORKTREE section', 'Resize DEVICE section', 'Resize TASKS section',
+    ])
 
-    // Reaching the worktree but not a target drops TASKS, and its separator with it.
+    // Reaching the worktree but not a target drops TASKS and SESSIONS, and their separators with them.
     await act(async () => root.render(
       <WorkbenchNavigator {...navigatorProps({
         selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null, targetKind: null },
@@ -557,8 +563,8 @@ describe('WorkbenchNavigator section sizing', () => {
       .map(node => node.getAttribute('data-navigator-section'))
 
     const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
-    // Nothing sits below TASKS, so TASKS reaches the dock's bottom instead of leaving it unused.
-    expect(fills(host)).toEqual(['tasks'])
+    // Nothing sits below SESSIONS, so it reaches the dock's bottom instead of leaving that room unused.
+    expect(fills(host)).toEqual(['sessions'])
 
     // Reaching the worktree but no target leaves DEVICE deepest, and it takes that room instead.
     await act(async () => root.render(
@@ -583,15 +589,15 @@ describe('WorkbenchNavigator section sizing', () => {
 
   it('releases the deepest section\'s room when it is collapsed (AC-013)', async () => {
     const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
-    expect(host.querySelector('[data-section-fills]')?.getAttribute('data-navigator-section')).toBe('tasks')
+    expect(host.querySelector('[data-section-fills]')?.getAttribute('data-navigator-section')).toBe('sessions')
 
     // Folding the deepest section asks for less room, not for a header over an empty box.
-    await act(async () => sectionHeader(host, 'tasks').click())
+    await act(async () => sectionHeader(host, 'sessions').click())
     expect(host.querySelector('[data-section-fills]')).toBeNull()
-    expect(sectionBody(host, 'tasks').hasAttribute('hidden')).toBe(true)
+    expect(sectionBody(host, 'sessions').hasAttribute('hidden')).toBe(true)
 
-    await act(async () => sectionHeader(host, 'tasks').click())
-    expect(host.querySelector('[data-section-fills]')?.getAttribute('data-navigator-section')).toBe('tasks')
+    await act(async () => sectionHeader(host, 'sessions').click())
+    expect(host.querySelector('[data-section-fills]')?.getAttribute('data-navigator-section')).toBe('sessions')
 
     await act(async () => root.unmount())
   })
@@ -629,42 +635,51 @@ describe('WorkbenchNavigator sessions section', () => {
     await act(async () => root.unmount())
   })
 
-  it('lists the device\'s task-less conversations while no task is selected (AC-015)', async () => {
+  it('lists every conversation of the selected device, its task-less ones first (AC-015)', async () => {
     const { host, root } = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
 
     const sessions = section(host, 'sessions')
     expect(sessions).toBeTruthy()
-    // Nothing is selected in TASKS, so the list is the conversations no task owns, and it says so.
+    // Nothing is selected in TASKS, so the device's whole list is what the section shows: the
+    // conversations no task owns under `No task`, then one group per task that owns one.
+    const groups = Array.from(sessions.querySelectorAll('[data-session-group]'))
+      .map(node => node.getAttribute('data-session-group'))
+    expect(groups).toEqual(['unbound', 'task-device'])
     expect(sessions.textContent).toContain('No task')
     expect(sessions.textContent).toContain('Ad-hoc question')
-    expect(sessions.textContent).not.toContain('Interlock review')
-    expect(sessions.querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('unbound')
+    expect(sessions.textContent).toContain('Device task')
+    expect(sessions.textContent).toContain('Interlock review')
+    // Nothing named the untargeted task, which no device conversation can be related to here.
+    expect(sessions.textContent).not.toContain('Hardware task')
 
     await act(async () => root.unmount())
   })
 
-  it('shows no SESSIONS section when the list its rule yields is empty (AC-015)', async () => {
-    const boundOnly = { 'wb-direct:wt-descendant': sessionsByWorktree['wb-direct:wt-descendant'].filter(item => item.taskId) }
-    // No task selected, and every conversation belongs to one: there is no task-less list to show.
+  it('keeps the SESSIONS section present while a device is selected, even with nothing to list (AC-015)', async () => {
+    const empty = { 'wb-direct:wt-descendant': [] }
+    // A device with no conversation at all: the section is still there, saying so, with its action.
     const { host, root } = await renderNavigator(null, false, {
       selection: deviceSelection,
       devicesByWorktree,
       tasksByWorktree: targetTasks,
-      sessionsByWorktree: boundOnly,
+      sessionsByWorktree: empty,
     })
-    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks', 'sessions'])
+    expect(section(host, 'sessions').textContent).toContain('No conversations for this device yet.')
+    expect(host.querySelector('button[aria-label="Start a conversation for this device"]')).not.toBeNull()
 
-    // A selected task with no conversation of its own is the same absence.
+    // The same holds for a selected task that owns none, which used to take the whole section with it.
     await act(async () => root.render(
       <WorkbenchNavigator {...navigatorProps({
         selection: deviceSelection,
-        activeTaskId: 'task-unbound',
+        activeTaskId: 'task-device',
         devicesByWorktree,
         tasksByWorktree: targetTasks,
-        sessionsByWorktree: boundOnly,
+        sessionsByWorktree: empty,
       })} />,
     ))
-    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks', 'sessions'])
+    expect(section(host, 'sessions').textContent).toContain('No conversations for this task yet.')
 
     // The hardware target cannot own a conversation at all, so it has neither the section nor its action.
     await act(async () => root.render(
@@ -672,6 +687,15 @@ describe('WorkbenchNavigator sessions section', () => {
     ))
     expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device', 'tasks'])
     expect(host.querySelector('button[aria-label^="Start a conversation"]')).toBeNull()
+
+    // A worktree whose own row is the deepest selection has no device to scope a list to either.
+    await act(async () => root.render(
+      <WorkbenchNavigator {...navigatorProps({
+        selection: { workbenchId: 'wb-direct', worktreeId: 'wt-descendant', deviceId: null },
+        ...overrides,
+      })} />,
+    ))
+    expect(sectionIds(host)).toEqual(['projects', 'worktree', 'device'])
 
     await act(async () => root.unmount())
   })
@@ -709,8 +733,11 @@ describe('WorkbenchNavigator sessions section', () => {
     const back = section(host, 'sessions')
     expect(back.textContent).toContain('No task')
     expect(back.textContent).toContain('Ad-hoc question')
-    expect(back.textContent).not.toContain('Interlock review')
     expect(back.querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('unbound')
+    // The device's whole list is back, so the conversation the dropped task owned is listed too — under
+    // that task's own group, because the device names no task and the row above it is not current.
+    expect(back.textContent).toContain('Device task')
+    expect(back.textContent).toContain('Interlock review')
 
     await act(async () => root.unmount())
   })
@@ -741,7 +768,9 @@ describe('WorkbenchNavigator sessions section', () => {
     const sessions = section(host, 'sessions')
     expect(sessions.textContent).toContain('No task')
     expect(sessions.textContent).toContain('Ad-hoc question')
-    expect(sessions.textContent).not.toContain('Interlock review')
+    // The device's whole list is what a device selection shows, so the bound conversation is listed
+    // under its task again rather than being hidden behind the task the row no longer names.
+    expect(sessions.textContent).toContain('Interlock review')
 
     await act(async () => root.unmount())
   })
@@ -1013,13 +1042,14 @@ describe('WorkbenchNavigator sessions section', () => {
     expect(section(host, 'sessions').textContent).toContain('Shared finding')
     expect(section(host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('task-alarm')
 
-    // With no task selected the task-less list is the conversation with no relation at all, so the
-    // shared one is not in it — it is related, even though it is not the task on screen.
+    // With no task selected the device's whole list is shown, and the shared conversation sits under
+    // each task that owns it — never under `No task`, which is the conversation with no relation.
     await act(async () => root.unmount())
     const taskless = await renderNavigator(null, false, { selection: deviceSelection, ...props })
-    expect(section(taskless.host, 'sessions').textContent).toContain('No task')
-    expect(section(taskless.host, 'sessions').textContent).toContain('Ad-hoc question')
-    expect(section(taskless.host, 'sessions').textContent).not.toContain('Shared finding')
+    expect(sessionGroup(taskless.host, 'unbound').textContent).toContain('Ad-hoc question')
+    expect(sessionGroup(taskless.host, 'unbound').textContent).not.toContain('Shared finding')
+    expect(sessionGroup(taskless.host, 'task-device').textContent).toContain('Shared finding')
+    expect(sessionGroup(taskless.host, 'task-alarm').textContent).toContain('Shared finding')
 
     await act(async () => taskless.root.unmount())
   })
@@ -1040,11 +1070,12 @@ describe('WorkbenchNavigator sessions section', () => {
     expect(section(bound.host, 'sessions').textContent).toContain('Ad-hoc question')
     await act(async () => bound.root.unmount())
 
-    // Cleared: the same conversation is out of that task's list and back in the device's task-less one.
+    // Cleared: with the device selected and no task named, the cleared conversation is back in the
+    // device's task-less group while the bound one sits under its own task's group.
     const cleared = await renderNavigator(null, false, { selection: deviceSelection, ...overrides })
-    expect(section(cleared.host, 'sessions').querySelector('[data-session-group]')?.getAttribute('data-session-group')).toBe('unbound')
-    expect(section(cleared.host, 'sessions').textContent).toContain('Ad-hoc question')
-    expect(section(cleared.host, 'sessions').textContent).not.toContain('Interlock review')
+    expect(sessionGroup(cleared.host, 'unbound').textContent).toContain('Ad-hoc question')
+    expect(sessionGroup(cleared.host, 'unbound').textContent).not.toContain('Interlock review')
+    expect(sessionGroup(cleared.host, 'task-device').textContent).toContain('Interlock review')
     await act(async () => cleared.root.unmount())
   })
 
