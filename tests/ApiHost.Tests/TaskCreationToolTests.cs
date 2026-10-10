@@ -230,7 +230,7 @@ public sealed class TaskCreationToolTests : IDisposable
     }
 
     [Fact]
-    public async Task CreatingATaskRelatesTheConversationThatCalledItWithAutoProvenance()
+    public async Task CreatingATaskRelatesTheConversationThatCalledItWithoutAssigningIt()
     {
         var fixture = TaskCreationFixture.Create(root, sessionId: "session-1");
 
@@ -238,13 +238,38 @@ public sealed class TaskCreationToolTests : IDisposable
             {"title": "Add a guard", "type": "Issue", "intent": "goal", "expectedResult": "result"}
             """);
 
-        // The conversation created this task by doing the work, so the relation is `auto` and, with no
-        // primary present, it becomes the primary (ADR-0014 Decision 2, AC-010).
+        // The conversation created this task by doing the work, so the relation is `auto`. Recording
+        // what it found is not the user assigning the conversation to a task, so a conversation that had
+        // no task keeps none (ADR-0014 Decision 2, AC-010).
         var relation = Assert.Single(fixture.ReadRelations());
         Assert.Equal(ResultTaskId(result), relation.TaskId);
         Assert.Equal(GraphProvenance.Auto, relation.Provenance);
-        Assert.True(relation.IsPrimary);
+        Assert.False(relation.IsPrimary);
         Assert.Null(result.GetProperty("relationWarning").GetString());
+    }
+
+    [Fact]
+    public async Task CreatingTwoTasksFromATaskLessConversationLeavesItAssignedToNeither()
+    {
+        var fixture = TaskCreationFixture.Create(root, sessionId: "session-1");
+
+        var first = await fixture.InvokeAsync("""
+            {"title": "First finding", "type": "Issue", "intent": "goal", "expectedResult": "result"}
+            """);
+        var second = await fixture.InvokeAsync("""
+            {"title": "Second finding", "type": "Issue", "intent": "goal", "expectedResult": "result"}
+            """);
+
+        // The reported defect: the first creation used to become the conversation's primary, which the
+        // next turn read as "Active task: …" and which the user never chose. Both relations arrive, and
+        // neither is an assignment.
+        var relations = fixture.ReadRelations();
+        Assert.Equal(2, relations.Count);
+        Assert.Equal(
+            new[] { ResultTaskId(first), ResultTaskId(second) }.OrderBy(id => id, StringComparer.Ordinal),
+            relations.Select(relation => relation.TaskId).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.All(relations, relation => Assert.Equal(GraphProvenance.Auto, relation.Provenance));
+        Assert.All(relations, relation => Assert.False(relation.IsPrimary));
     }
 
     [Fact]

@@ -1045,8 +1045,9 @@ public sealed class EngineeringGraphService
     /// holds as many as it has tasks it worked on (ADR-0014). An existing pair is returned unchanged
     /// rather than deleted and re-inserted, so its provenance and creation time survive a repeated call.
     /// <paramref name="makePrimaryIfNone"/> promotes the new relation only when the conversation has no
-    /// primary yet; the partial unique index keeps that race-free, and the automatic association in
-    /// <c>create_task</c> is the caller that relies on it.
+    /// primary yet; the partial unique index keeps that race-free. The callers that use it are the two
+    /// places a conversation arrives already assigned to a task — created for it, or restored from a
+    /// legacy header that carried it — because an automatic association never assigns one.
     /// </summary>
     public GraphEdge AddSessionTask(string sessionId, string taskId,
         GraphProvenance provenance = GraphProvenance.Manual, bool makePrimaryIfNone = false)
@@ -1089,13 +1090,17 @@ public sealed class EngineeringGraphService
     /// Replaces a conversation's whole relation set in one transaction: the pairs that are no longer
     /// requested are deleted, the missing ones inserted, the kept ones left as they are — so an edge id,
     /// its provenance and its creation time survive a set write that keeps it.
-    /// <para>The primary resolves in this order: the requested <paramref name="primaryTaskId"/> when it
+    /// <para>The primary resolves in this order: <paramref name="unassigned"/> makes the conversation
+    /// assigned to none of its relations; the requested <paramref name="primaryTaskId"/> when it
     /// is in the set; otherwise the conversation's current primary when it is still in the set;
     /// otherwise the first requested id; and no primary when the set is empty. Every requested id is
     /// validated before the first write, so a refused call writes nothing.</para>
+    /// <para>Being assigned to a task is the user's statement about the conversation, so a caller that
+    /// has decided the assignment — including deciding there is none — says so with
+    /// <paramref name="unassigned"/> rather than relying on the fallback above.</para>
     /// </summary>
     public IReadOnlyList<GraphEdge> SetSessionTasks(string sessionId,
-        IReadOnlyCollection<string>? taskIds, string? primaryTaskId = null)
+        IReadOnlyCollection<string>? taskIds, string? primaryTaskId = null, bool unassigned = false)
     {
         var session = FindEntity(GraphEntityKind.Session, sessionId)
             ?? throw new EngineeringGraphConstraintException("Session was not registered in the current Workbench.");
@@ -1107,7 +1112,7 @@ public sealed class EngineeringGraphService
 
         var current = SessionTaskEdges(sessionId);
         var keep = new HashSet<string>(requested, StringComparer.Ordinal);
-        var primary = ResolvePrimary(requested, primaryTaskId, current);
+        var primary = ResolvePrimary(requested, primaryTaskId, current, unassigned);
         var now = DateTimeOffset.UtcNow;
         using (var tx = _store.Connection.BeginTransaction())
         {
@@ -1219,9 +1224,12 @@ public sealed class EngineeringGraphService
     private GraphEdge? FindSessionTaskEdge(string sessionId, string taskId) =>
         SessionTaskEdges(sessionId).FirstOrDefault(edge => string.Equals(edge.FromId, taskId, StringComparison.Ordinal));
 
-    private static string? ResolvePrimary(IReadOnlyCollection<string> requested, string? primaryTaskId, IReadOnlyList<GraphEdge> current)
+    private static string? ResolvePrimary(IReadOnlyCollection<string> requested, string? primaryTaskId, IReadOnlyList<GraphEdge> current, bool unassigned = false)
     {
-        if (requested.Count == 0) return null;
+        // A set write that decides the assignment leaves the conversation related to its tasks and
+        // assigned to none of them when it names no task — the state a conversation that created tasks
+        // without ever being assigned one is in, and a state the picker has to be able to return to.
+        if (requested.Count == 0 || unassigned) return null;
         if (!string.IsNullOrWhiteSpace(primaryTaskId) && requested.Contains(primaryTaskId, StringComparer.Ordinal))
             return primaryTaskId;
         var existing = current.FirstOrDefault(edge => edge.IsPrimary)?.FromId;

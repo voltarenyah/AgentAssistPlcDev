@@ -102,9 +102,10 @@ internal sealed class TaskCreationTool(
             device.DeviceId);
 
         // The conversation created this task by doing the work, so it is related to it with provenance
-        // `auto`, and the primary moves only when the conversation had none (ADR-0014 Decision 2). The
-        // user approved a creation: if only the relation fails, the task exists and is reported, with
-        // the failure named rather than thrown — the relation can be set from the row menu afterwards.
+        // `auto`, and nothing more: recording what it found never assigns a conversation to a task, so
+        // one that had no task keeps none (ADR-0014 Decision 2). The user approved a creation: if only
+        // the relation fails, the task exists and is reported, with the failure named rather than
+        // thrown — the relation can be set from the row menu afterwards.
         string? relationWarning = null;
         if (!string.IsNullOrWhiteSpace(sessionId))
         {

@@ -136,8 +136,12 @@ public sealed record SessionTaskApiRequest(string? TaskId);
 /// half-linked (UI Spec AC-019). <c>PrimaryTaskId</c> is honoured when it names a task in
 /// <c>TaskIds</c>; otherwise the conversation's current primary is kept when it is still in the set,
 /// and the first requested id becomes the primary when it is not.
+/// <para><c>Unassigned</c> is the caller's own decision that the conversation is assigned to none of
+/// the tasks it is related to — the state a conversation that recorded tasks without ever being
+/// assigned one is in, and one the picker offers as "None". It wins over <c>PrimaryTaskId</c>, because
+/// a caller that decided the assignment cannot also be leaving it to the resolution above.</para>
 /// </summary>
-public sealed record SessionTasksApiRequest(string[]? TaskIds, string? PrimaryTaskId = null);
+public sealed record SessionTasksApiRequest(string[]? TaskIds, string? PrimaryTaskId = null, bool Unassigned = false);
 
 public sealed class WorkbenchApiState
 {
@@ -2076,7 +2080,7 @@ public static class WorkbenchEndpoints
             using var graph = graphs.Open(s.Workbench(workbenchId));
             var updated = SessionGraphOperations.ApplySet(
                 graph.Service, current, request.TaskIds, request.PrimaryTaskId,
-                value => SessionManager.SaveSession(context, value));
+                value => SessionManager.SaveSession(context, value), request.Unassigned);
             return Results.Ok(updated);
         });
         app.MapGet("/api/workbenches/{workbenchId}/worktrees/{worktreeId}/devices/{device}/vc/status", async (

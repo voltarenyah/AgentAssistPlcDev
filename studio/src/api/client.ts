@@ -1026,9 +1026,11 @@ const jsonRequest = (method: string, body?: unknown): RequestInit => ({
  * The body of a relation-set write. `primaryTaskId` is sent only when the caller names one: a caller
  * that omits it leaves the primary to the server's own resolution, which keeps the conversation's
  * current primary while it is still in the set and otherwise takes the first task of the set.
+ * `unassigned` is the caller's own decision that the conversation is assigned to none of its tasks,
+ * which a `null` primary cannot express because `null` is what "resolve one" looks like.
  */
-const sessionTasksBody = (taskIds: string[], primaryTaskId?: string | null) =>
-  primaryTaskId === undefined ? { taskIds } : { taskIds, primaryTaskId }
+const sessionTasksBody = (taskIds: string[], primaryTaskId?: string | null, unassigned = false) =>
+  primaryTaskId === undefined && !unassigned ? { taskIds } : { taskIds, primaryTaskId: primaryTaskId ?? null, unassigned }
 
 const withOperation = (init: RequestInit, operationId?: string): RequestInit => {
   if (!operationId) return init
@@ -1446,10 +1448,11 @@ export const setDeviceChatSessionTasks = (
   sessionId: string,
   taskIds: string[],
   primaryTaskId?: string | null,
+  unassigned = false,
 ) =>
   workbenchRequest<ChatSessionData>(
     `${devicePath(workbenchId, worktreeId, deviceId)}/sessions/${encodeURIComponent(sessionId)}/tasks`,
-    jsonRequest('PUT', sessionTasksBody(taskIds, primaryTaskId)),
+    jsonRequest('PUT', sessionTasksBody(taskIds, primaryTaskId, unassigned)),
   )
 export const getOperationStatus = (operationId: string) =>
   workbenchRequest<OperationStatus>(`/operations/${encodeURIComponent(operationId)}`)
@@ -2078,16 +2081,18 @@ export async function setChatSessionTask(sessionId: string, taskId: string | nul
  * half-linked (ADR-0014). `primaryTaskId` names the relation that is "the task this conversation is
  * working on" while it is in `taskIds`; omitting it leaves the server to keep the current primary when
  * it is still in the set, and otherwise to take the set's first task. An empty `taskIds` clears every
- * relation.
+ * relation. `unassigned` says the caller has decided the conversation is related to its tasks and
+ * assigned to none of them, which is the one state the server's own resolution cannot be asked for.
  */
 export async function setChatSessionTasks(
   sessionId: string,
   taskIds: string[],
   primaryTaskId?: string | null,
+  unassigned = false,
 ): Promise<ChatSessionData> {
   const res = await fetch(`${BASE}/chat/session/tasks`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, ...sessionTasksBody(taskIds, primaryTaskId) }),
+    body: JSON.stringify({ sessionId, ...sessionTasksBody(taskIds, primaryTaskId, unassigned) }),
   })
   if (!res.ok) throw new Error((await res.text()) || `Session tasks update failed: ${res.status}`)
   return res.json()

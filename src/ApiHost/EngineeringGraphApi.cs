@@ -179,29 +179,33 @@ public static class SessionGraphOperations
 
     /// <summary>
     /// Relates a conversation's own task creation to the task it created, with provenance
-    /// <c>auto</c>: the conversation created it by doing the work. The primary moves only when the
-    /// conversation had none (ADR-0014 Decision 2, AC-010). The session entity may not exist yet — an
-    /// implicit chat has none — so it is registered here.
+    /// <c>auto</c>: the conversation created it by doing the work. It adds a relation and nothing else:
+    /// the primary is not moved, and a conversation that had none keeps none, because being assigned to
+    /// a task is a statement the user makes about the conversation rather than a side effect of the
+    /// conversation recording what it found (ADR-0014 Decision 2, AC-010). The session entity may not
+    /// exist yet — an implicit chat has none — so it is registered here.
     /// </summary>
     public static void RelateAutomatically(EngineeringGraphService graph, DeviceContext device, string sessionId, string taskId)
     {
         AutomaticRelationOverride?.Invoke(graph, sessionId, taskId);
         graph.RegisterEntity(new GraphEntity(GraphEntityKind.Session, sessionId,
             device.WorkbenchId, device.WorktreeId, device.DeviceId));
-        graph.AddSessionTask(sessionId, taskId, GraphProvenance.Auto, makePrimaryIfNone: true);
+        graph.AddSessionTask(sessionId, taskId, GraphProvenance.Auto);
     }
 
     /// <summary>
     /// Registers the session entity idempotently and replaces its whole relation set in one graph
     /// transaction, answering with the conversation and its projected primary.
+    /// <paramref name="unassigned"/> is the set write's own statement that the conversation is assigned
+    /// to none of its relations, which is what the picker offers as "None".
     /// </summary>
     public static ChatSessionData SetTasks(
         EngineeringGraphService graph, ChatSessionData session,
-        IReadOnlyCollection<string>? taskIds, string? primaryTaskId)
+        IReadOnlyCollection<string>? taskIds, string? primaryTaskId, bool unassigned = false)
     {
         graph.RegisterEntity(new GraphEntity(GraphEntityKind.Session, session.Header.SessionId,
             session.Header.WorkbenchId, session.Header.WorktreeId, session.Header.DeviceId));
-        graph.SetSessionTasks(session.Header.SessionId, taskIds, primaryTaskId);
+        graph.SetSessionTasks(session.Header.SessionId, taskIds, primaryTaskId, unassigned);
         return Project(session, graph.ListSessionTaskRelations([session.Header.SessionId]));
     }
 
@@ -215,12 +219,12 @@ public static class SessionGraphOperations
     public static ChatSessionData ApplySet(
         EngineeringGraphService graph, ChatSessionData current,
         IReadOnlyCollection<string>? taskIds, string? primaryTaskId,
-        Action<ChatSessionData> persist)
+        Action<ChatSessionData> persist, bool unassigned = false)
     {
         ImportLegacy(graph, current);
         var written = Touch(current);
         persist(written);
-        return SetTasks(graph, written, taskIds, primaryTaskId);
+        return SetTasks(graph, written, taskIds, primaryTaskId, unassigned);
     }
 
     /// <summary>
